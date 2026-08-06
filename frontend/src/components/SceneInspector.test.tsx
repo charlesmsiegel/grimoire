@@ -15,7 +15,7 @@ vi.mock("../api/client", async () => {
       getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
       listAppearances: vi.fn(), listEntityImages: vi.fn(),
-      listEntities: vi.fn(), setSceneLocation: vi.fn(),
+      listEntities: vi.fn(), setSceneLocation: vi.fn(), sceneBriefing: vi.fn(),
       addToCast: vi.fn(), removeFromCast: vi.fn(),
       campaignImageUrl: () => "/img",
       entityImageUrl: () => "/loc-img",
@@ -81,7 +81,13 @@ beforeEach(() => {
   (api.listEntityImages as any).mockResolvedValue([]);
   (api.listEntities as any).mockResolvedValue([]);
   (api.setSceneLocation as any).mockResolvedValue({ ok: true, moved: true, name: "" });
+  // Empty by default, so the briefing section renders nothing and the suites
+  // that predate it assert on the same rail they always did (#118).
+  (api.sceneBriefing as any).mockResolvedValue(EMPTY_BRIEFING);
 });
+
+const EMPTY_BRIEFING = {
+  focus: [], plot: [], commitments: [], relationships: [], last_time: null };
 
 function renderInspector(onSceneChanged: () => void = () => {}) {
   render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={onSceneChanged} />);
@@ -445,4 +451,97 @@ test("percentages use the smaller of the budget and the model window", async () 
   renderInspector();
   await screen.findByText("50%");              // 100 of the model's 200, not of 1000
   await screen.findByText(/100 \/ 200 tok/);
+});
+
+// ---- the pre-scene briefing (#118) ----------------------------------------
+
+const BRIEFING = {
+  focus: ["Winifred Vance"],
+  plot: [{ id: "the-ledger", title: "Find the ledger", status: "open",
+           last_scene: "s0", latest_beat: "She named it aloud.",
+           involves: ["Winifred Vance"] },
+         { id: "the-tide", title: "The tide turns", status: "advanced",
+           last_scene: "s0", latest_beat: "", involves: [] }],
+  commitments: [{ id: "the-deadline", title: "Seraphine's midnight deadline",
+                  kind: "threat", status: "open", due: "midnight",
+                  last_scene: "s0", latest_beat: "Sworn in front of her.",
+                  involves: ["Winifred Vance"] }],
+  relationships: ["Winifred Vance distrusts Seraphine."],
+  last_time: { id: "s0", one_line: "They argued.", title: "First Night",
+               date: "5 Harvestmoon" },
+};
+
+function renderWithBriefing(posts?: number) {
+  (api.sceneBriefing as any).mockResolvedValue(BRIEFING);
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}}
+                         posts={posts} />);
+}
+
+test("the briefing lists what is open, what came before, and who it involves", async () => {
+  renderWithBriefing();
+  await screen.findByText("Find the ledger");
+  expect(api.sceneBriefing).toHaveBeenCalledWith("c", "s");
+  expect(screen.getByText("Seraphine's midnight deadline")).toBeInTheDocument();
+  expect(screen.getByText("due midnight")).toBeInTheDocument();
+  expect(screen.getByText("They argued.")).toBeInTheDocument();
+  expect(screen.getByText(/First Night/)).toBeInTheDocument();
+  expect(screen.getByText("Winifred Vance distrusts Seraphine.")).toBeInTheDocument();
+  // The flag names who, so a scene with two players can tell whose thread it is.
+  expect(screen.getAllByText("involves Winifred Vance")).toHaveLength(2);
+});
+
+test("an unflagged row still lists — narrowing is ordering, not filtering", async () => {
+  renderWithBriefing();
+  await screen.findByText("The tide turns");
+});
+
+test("the briefing section is absent when there is nothing to brief", async () => {
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await screen.findByText("Seraphine");                  // the rail has loaded...
+  expect(screen.queryByText("Briefing")).not.toBeInTheDocument();   // ...without it
+});
+
+test("the briefing survives a failed load as the empty state", async () => {
+  (api.sceneBriefing as any).mockRejectedValue(new Error("nope"));
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await screen.findByText("Seraphine");
+  expect(screen.queryByText("Briefing")).not.toBeInTheDocument();
+});
+
+test("the briefing opens itself on a fresh scene and not on a long one", async () => {
+  renderWithBriefing(0);
+  await screen.findByText("Find the ledger");
+  expect(screen.getByRole("button", { name: /Briefing/ })).toHaveAttribute("aria-expanded", "true");
+});
+
+test("a scene already several posts in gets the briefing collapsed", async () => {
+  renderWithBriefing(20);
+  const head = await screen.findByRole("button", { name: /Briefing/ });
+  expect(head).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByText("Find the ledger")).not.toBeInTheDocument();
+});
+
+test("an explicit toggle outlives the post count that set the default", async () => {
+  renderWithBriefing(20);
+  fireEvent.click(await screen.findByRole("button", { name: /Briefing/ }));
+  await screen.findByText("Find the ledger");           // opened by hand...
+  expect(JSON.parse(localStorage.getItem("grimoire.inspector.sections")!).briefing)
+    .toBe(false);                                       // ...and remembered as open
+});
+
+test("a briefing never renders under a different campaign's scene of the same id", async () => {
+  // The route is /campaigns/:cid with no `key`, so React Router reuses
+  // CampaignView across campaigns, and scene ids are per-campaign — so two
+  // campaigns sitting on "s" would have matched on sid alone, showing one
+  // game's commitments under the other's name (Codex review).
+  (api.sceneBriefing as any).mockResolvedValue(BRIEFING);
+  const { rerender } = render(
+    <SceneInspector cid="a" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await screen.findByText("Find the ledger");
+
+  // Campaign b's request never settles, so anything on screen is a's.
+  (api.sceneBriefing as any).mockReturnValue(new Promise(() => {}));
+  rerender(<SceneInspector cid="b" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await waitFor(() =>
+    expect(screen.queryByText("Find the ledger")).not.toBeInTheDocument());
 });

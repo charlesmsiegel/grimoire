@@ -1,0 +1,21 @@
+{
+  "001--the-tide-comes-in": {
+    "absorbed": "2026-01-01T09:08:00Z",
+    "id": "001--the-tide-comes-in",
+    "keywords": [
+      "ledger",
+      "salt"
+    ],
+    "one_line": "Winifred touched the ledger.",
+    "summary": "Winifred came to Tidewatch Keep and put a hand on the tide ledger; Seraphine asked for salt."
+  },
+  "2026-01-02-the-long-quay": {
+    "absorbed": "2026-01-01T09:12:00Z",
+    "id": "2026-01-02-the-long-quay",
+    "keywords": [
+      "quay"
+    ],
+    "one_line": "Winifred found Mara on the quay.",
+    "summary": "A short meeting on the Long Quay."
+  }
+}

@@ -1167,7 +1167,7 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
         transcript, facts,
         store.absorb.state_snapshot(cid, sid), store.absorb.relationships_snapshot(cid, sid),
         store.absorb.plot_snapshot(cid), store.absorb.group_snapshot(cid),
-        store.absorb.commitment_snapshot(cid))
+        store.absorb.commitment_snapshot(cid), store.absorb.fact_snapshot(cid, sid))
     budget = _Budget(store.config.absorb_budget())
     try:
         text = await budget.run(client.complete(messages, conn))
@@ -1176,7 +1176,11 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
         # produced yet, so there is nothing to degrade to.
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     parsed = store.absorb.parse_output(text)
-    edits = store.absorb.materialize(cid, sid, parsed)
+    # The SAME messages the prompt was rendered from, not a fresh read: the
+    # citations in `parsed` are claims about that transcript, and a reroll or an
+    # append landing while the call was in flight would otherwise judge them
+    # against text the model never saw.
+    edits = store.absorb.materialize(cid, sid, parsed, scene["messages"])
     # Phase 2: propose each present NPC's refreshed campaign dossier -- staged, not
     # written (never raises -- see _stage_dossiers' own failure boundary).
     dossier_edits, dossiers = await _stage_dossiers(cid, sid, transcript, client, conn, budget)
@@ -1399,6 +1403,21 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
         result = {**record, "applied": applied, "failures": started + failures}
         store.commits.record(cid, body.commit_token, result, fp, sid)
     return result
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/briefing")
+def get_scene_briefing(cid: str, sid: str):
+    """The pre-scene briefing (#118): open threads and commitments flagged with
+    which of this scene's cast they involve, the relationships between the
+    people on stage, and the fact that came immediately before.
+
+    Thin on purpose — the join, the tolerance and the lock all live in
+    `store.briefing`, whose docstring carries the argument for each. Declared
+    ahead of `GET /scenes/{sid}/cast/{kind}/{id}` for the reason every specific
+    scene route here is: a generic path segment would otherwise swallow it.
+    """
+    _require_scene(cid, sid)
+    return store.briefing.build(cid, sid)
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/cast")

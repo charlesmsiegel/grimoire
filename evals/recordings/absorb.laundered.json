@@ -3,6 +3,7 @@
   "summary": null,
   "keywords": "ledger, pier",
   "timeline_events": [],
+  "facts": [],
   "character_state_edits": [
     {"id": "characters/seraphine-vale",
      "current_state": "Rattled. Winifred knows about the ledger."}

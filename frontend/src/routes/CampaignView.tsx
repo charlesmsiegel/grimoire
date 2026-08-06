@@ -86,7 +86,35 @@ const PHASE_LABELS: Record<AbsorbPhase["name"], string> = {
 // Staged edit kinds whose payload stamps the scene the beat came from, and so
 // have to follow a scene rename made while the review is open — see
 // `reviewSceneRenamed`.
-const SCENE_STAMPED: StagedEdit["kind"][] = ["plot", "commitment"];
+const SCENE_STAMPED: StagedEdit["kind"][] = ["plot", "commitment", "fact"];
+
+// What the backend proved about a proposal's cited speaker (#112), said the way
+// a reviewer would say it. The wire names are tiers; these are the reason the
+// row is banded where it is, which is the only thing worth a chip.
+const AUTHORITY_LABELS: Record<NonNullable<StagedEdit["review"]>["authority"], string> = {
+  narration: "narrated",
+  self: "said of themself",
+  other: "said by someone else",
+  // Not "speaker not in this scene": the tier also covers a name TWO speakers
+  // answer to, and telling a reviewer their model invented a citation it did
+  // not invent is a worse error than the vaguer wording.
+  unattributed: "no one speaker matches",
+  uncited: "nothing cited",
+};
+
+// A row's band, with the fallback that keeps the pre-#110 behaviour intact:
+// dossier, voice and sheet proposals are staged after the extraction and rest
+// on no citation, so they route as `medium` — shown, and pre-approved.
+function editBand(e: StagedEdit): NonNullable<StagedEdit["review"]>["band"] {
+  return e.review?.band ?? "medium";
+}
+
+// Only `low` starts unticked. Withholding a default approval is the safe
+// direction and the only relaxation of the review-everything invariant this
+// ships: nothing is applied that the reviewer did not tick and Save.
+function approvedByDefault(e: StagedEdit): boolean {
+  return editBand(e) !== "low";
+}
 
 // The dossier phase has five distinguishable bad endings and the wording has to
 // match the edit list beside it: "prepared", never "refreshed" (a dossier is
@@ -393,6 +421,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [absorbing, setAbsorbing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editRows, setEditRows] = useState<(StagedEdit & { approved: boolean })[]>([]);
+  // Whether the collapsed low-confidence rows are showing (#110). Rows stay in
+  // `editRows` at their original index either way: the conflict verdicts the
+  // server sends back are bound to positions in the submitted batch, so the
+  // routing is a rendering decision and never a reordering one.
+  const [showLow, setShowLow] = useState(false);
   const [editFailures, setEditFailures] = useState<
     { id: string; reason: string; kind: "conflict" | "error"; label: string }[]>([]);
   // Rows the server refused because their target moved since the scene was
@@ -798,9 +831,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   //   - `absorbSid`, the id an open review's save and audit retry POST;
   //   - `payload.scene` on each staged plot or commitment edit, which
   //     absorb.materialize embedded and apply_edits passes straight to
-  //     plot.set_movement / commitments.set_movement — so a save after a rename
-  //     would append beats pointing at a scene that is gone. Both kinds, because
-  //     both stamp the beat with the scene it came from (#115);
+  //     plot.set_movement / commitments.set_movement / facts.record — so a save
+  //     after a rename would file the movement under a scene that is gone. All
+  //     three kinds, because each stamps its record with the scene it came from
+  //     (#115, #114). A fact row needs nothing beyond its payload: its staged
+  //     `before` is a `conflicts.fact_line`, which carries no scene id at all —
+  //     deliberately, so that the whole class of staleness the commitment
+  //     fingerprint forces on this function cannot arise for facts;
   //   - the staged CONFLICT BASIS of a commitment row. `conflicts.commitment_line`
   //     ends `[N beats, last moved in <scene>]`, and `scene_refs.repoint` rewrites
   //     that scene id in the stored record — so a row left holding the old id no
@@ -1712,7 +1749,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       }
       setAbsorb(a);
       setAbsorbSid(activeId);
-      setEditRows(a.edits.map((e) => ({ ...e, approved: true })));
+      setEditRows(a.edits.map((e) => ({ ...e, approved: approvedByDefault(e) })));
+      setShowLow(false);
     } catch (err: any) {
       fail(err);
     } finally {
@@ -1766,6 +1804,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           .map((c) => ({ row: approvedIdx[c.index] ?? -1, conflict: c }))
           .filter((p) => p.row >= 0);
         setConflicts(rows);
+        // A refusal on a collapsed row has to be answerable, and the save is
+        // refused whole -- so leaving the section shut would leave the panel
+        // insisting something is unanswered with nothing on screen to answer.
+        // Latched here rather than derived from `conflicts`: a derived flag
+        // goes false the instant the reviewer clicks Keep stored (which
+        // unapproves the row and drops its verdict), collapsing the section
+        // and the row they are looking at out from under them.
+        if (rows.some(({ row }) => editBand(editRows[row]) === "low")) setShowLow(true);
         setSaveError(null);
         return;
       }
@@ -1786,6 +1832,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     return out;
   }, [conflicts, editRows]);
 
+  // The low-confidence rows, each carrying the index it holds in `editRows`
+  // (#110). Kept as pairs rather than filtered into a second array: every
+  // handler on a row addresses it positionally, and a row rendered under its
+  // position in the FILTERED list would edit whichever row happened to sit
+  // there in the real one.
+  const lowRows = useMemo(
+    () => editRows.flatMap((e, i) => (editBand(e) === "low" ? [[e, i] as const] : [])),
+    [editRows]);
   // The reviewer's answer to one conflict. **keep** is not here: it unapproves
   // the row, which drops it from the batch entirely -- the stored value wins by
   // the edit never being sent. `replace` keeps the staged text, `merge` swaps in
@@ -1829,7 +1883,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           : p)) } : a));
       setEditRows((rows) => [
         ...rows.filter((r) => r.kind !== "sheet"),
-        ...res.edits.map((e) => ({ ...e, approved: true })),
+        ...res.edits.map((e) => ({ ...e, approved: approvedByDefault(e) })),
       ]);
       // Conflicts are bound to row numbers, and this rebuilds the array — so
       // any that survived a refusal would now point at whichever row inherited
@@ -1839,6 +1893,132 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     } catch (err: any) {
       fail(err);
     }
+  }
+
+
+  // One staged-edit row. Lifted out of the list because #110 renders the rows
+  // in two places -- the ordinary list, and the collapsed low-confidence
+  // section under it -- and both must render an identical row bound to the
+  // SAME index. `i` is the row's position in `editRows`, which is what the
+  // conflict verdicts (#111) and the submitted batch are both keyed on, so it
+  // is passed in rather than recomputed from either list's own ordering.
+  function renderEditRow(e: StagedEdit & { approved: boolean }, i: number) {
+    const isNewRecord = e.kind === "new_character" || e.kind === "new_location" || e.kind === "new_lore";
+    const conflict = conflictByRow.get(i);
+    const setPayload = (patch: Record<string, unknown>) =>
+      setEditRows((rows) => rows.map((r, j) =>
+        j === i ? { ...r, payload: { ...r.payload, ...patch } } : r));
+    return (
+      <div className={"absorb-edit" + (e.authored ? " authored" : "")} key={e.id}>
+        <label>
+          <input type="checkbox" aria-label={`Approve ${e.label}`} checked={e.approved}
+                 onChange={() => setEditRows((rows) => rows.map((r, j) =>
+                   j === i ? { ...r, approved: !r.approved } : r))} />
+          {e.label}{e.authored ? " · card edit" : ""}
+          {e.review && (
+            <span className={`chip absorb-band absorb-band-${e.review.band}`}
+                  title={`certainty ${e.review.certainty ?? "not given"}` +
+                         ` · score ${e.review.score}`}>
+              {e.review.band} · {AUTHORITY_LABELS[e.review.authority] ?? e.review.authority}
+            </span>)}
+          {conflict && <span className="chip on absorb-conflict-badge">Changed</span>}
+        </label>
+        {/* Under the label rather than the diff for the rows whose "diff" is an
+            editable textarea: the citation is what the proposal RESTS on, and a
+            reviewer weighing the row needs it before they start rewriting the
+            text. Display only — the server never reads it back. */}
+        {e.review && (e.review.quote || e.review.speaker) && (
+          <p className="field-hint absorb-evidence">
+            {e.review.quote && <q>{e.review.quote}</q>}
+            {e.review.speaker && (e.review.quote ? ` — ${e.review.speaker}` : e.review.speaker)}
+          </p>)}
+        {conflict && (
+          <div className="absorb-conflict">
+            <p className="field-hint">{conflict.reason} — it now reads:</p>
+            <div className="absorb-stored">{conflict.stored}</div>
+            <div className="form-actions">
+              <button className="subtle" aria-label={`Keep stored ${e.label}`}
+                      onClick={() => setEditRows((rows) => rows.map((r, j) =>
+                        j === i ? { ...r, approved: false } : r))}>
+                Keep stored</button>
+              <button className="subtle" aria-label={`Replace stored ${e.label}`}
+                      onClick={() => resolveConflict(i, conflict, "replace")}>
+                Replace</button>
+              {conflict.mergeable && (
+                <button className="subtle" aria-label={`Merge stored ${e.label}`}
+                        onClick={() => resolveConflict(i, conflict, "merge",
+                                                      conflict.merged)}>
+                  Merge</button>)}
+            </div>
+          </div>)}
+        {isNewRecord && (
+          <input aria-label={`Name ${e.label}`} value={(e.payload?.name as string) ?? ""}
+                 onChange={(ev) => setPayload({ name: ev.target.value })} />
+        )}
+        {e.kind === "sheet" ? (
+          <>
+            {e.before && <div className="absorb-before">{e.before}</div>}
+            <div className="absorb-after">{e.after}</div>
+            {typeof e.payload?.note === "string" && e.payload.note && (
+              <p className="field-hint">{e.payload.note}</p>
+            )}
+          </>
+        ) : e.kind === "relationship" || e.kind === "bond" ? (
+          <div className="absorb-diff">
+            {e.before && <span className="absorb-before">{e.before}</span>}
+            <span className="absorb-after">{e.after}</span>
+          </div>
+        ) : (
+          <>
+            {e.before && <div className="absorb-before">{e.before}</div>}
+            <textarea aria-label={`After ${e.label}`} rows={2} value={e.after}
+                      onChange={(ev) => setEditRows((rows) => rows.map((r, j) =>
+                        j === i ? { ...r, after: ev.target.value } : r))} />
+          </>
+        )}
+        {e.kind === "new_character" && (
+          <>
+            <textarea aria-label={`Personality ${e.label}`} rows={2}
+                      placeholder="Personality"
+                      value={(e.payload?.personality as string) ?? ""}
+                      onChange={(ev) => setPayload({ personality: ev.target.value })} />
+            <textarea aria-label={`Example dialogue ${e.label}`} rows={2}
+                      placeholder="Example dialogue"
+                      value={(e.payload?.mes_example as string) ?? ""}
+                      onChange={(ev) => setPayload({ mes_example: ev.target.value })} />
+            <textarea aria-label={`Evidence ${e.label}`} rows={2}
+                      placeholder="Evidence"
+                      value={(e.payload?.evidence as string) ?? ""}
+                      onChange={(ev) => setPayload({ evidence: ev.target.value })} />
+            <select aria-label={`Confidence ${e.label}`}
+                    value={(e.payload?.confidence as string) ?? "thin"}
+                    onChange={(ev) => setPayload({ confidence: ev.target.value })}>
+              <option value="thin">Thin</option>
+              <option value="sketched">Sketched</option>
+              <option value="established">Established</option>
+            </select>
+            <textarea aria-label={`Open questions ${e.label}`} rows={2}
+                      placeholder="Open questions"
+                      value={(e.payload?.open_questions as string) ?? ""}
+                      onChange={(ev) => setPayload({ open_questions: ev.target.value })} />
+          </>
+        )}
+        {(e.kind === "new_character" || e.kind === "new_location") && (
+          <input aria-label={`Suggested image prompt ${e.label}`}
+                 placeholder="Suggested image prompt"
+                 value={(e.payload?.sd_prompt as string) ?? ""}
+                 onChange={(ev) => setPayload({ sd_prompt: ev.target.value })} />
+        )}
+        {e.kind === "new_location" && !absorb?.location && (
+          <label>
+            <input type="checkbox" aria-label={`This is where the scene happened ${e.label}`}
+                   checked={!!e.payload?.current_setting}
+                   onChange={(ev) => setPayload({ current_setting: ev.target.checked })} />
+            This is where the scene happened
+          </label>
+        )}
+      </div>
+    );
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
@@ -2185,109 +2365,23 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             {editRows.length > 0 && (
               <div className="absorb-edits">
                 <h5>Proposed changes</h5>
-                {editRows.map((e, i) => {
-                  const isNewRecord = e.kind === "new_character" || e.kind === "new_location" || e.kind === "new_lore";
-                  const conflict = conflictByRow.get(i);
-                  const setPayload = (patch: Record<string, unknown>) =>
-                    setEditRows((rows) => rows.map((r, j) =>
-                      j === i ? { ...r, payload: { ...r.payload, ...patch } } : r));
-                  return (
-                    <div className={"absorb-edit" + (e.authored ? " authored" : "")} key={e.id}>
-                      <label>
-                        <input type="checkbox" aria-label={`Approve ${e.label}`} checked={e.approved}
-                               onChange={() => setEditRows((rows) => rows.map((r, j) =>
-                                 j === i ? { ...r, approved: !r.approved } : r))} />
-                        {e.label}{e.authored ? " · card edit" : ""}
-                        {conflict && <span className="chip on absorb-conflict-badge">Changed</span>}
-                      </label>
-                      {conflict && (
-                        <div className="absorb-conflict">
-                          <p className="field-hint">{conflict.reason} — it now reads:</p>
-                          <div className="absorb-stored">{conflict.stored}</div>
-                          <div className="form-actions">
-                            <button className="subtle" aria-label={`Keep stored ${e.label}`}
-                                    onClick={() => setEditRows((rows) => rows.map((r, j) =>
-                                      j === i ? { ...r, approved: false } : r))}>
-                              Keep stored</button>
-                            <button className="subtle" aria-label={`Replace stored ${e.label}`}
-                                    onClick={() => resolveConflict(i, conflict, "replace")}>
-                              Replace</button>
-                            {conflict.mergeable && (
-                              <button className="subtle" aria-label={`Merge stored ${e.label}`}
-                                      onClick={() => resolveConflict(i, conflict, "merge",
-                                                                    conflict.merged)}>
-                                Merge</button>)}
-                          </div>
-                        </div>)}
-                      {isNewRecord && (
-                        <input aria-label={`Name ${e.label}`} value={(e.payload?.name as string) ?? ""}
-                               onChange={(ev) => setPayload({ name: ev.target.value })} />
-                      )}
-                      {e.kind === "sheet" ? (
-                        <>
-                          {e.before && <div className="absorb-before">{e.before}</div>}
-                          <div className="absorb-after">{e.after}</div>
-                          {typeof e.payload?.note === "string" && e.payload.note && (
-                            <p className="field-hint">{e.payload.note}</p>
-                          )}
-                        </>
-                      ) : e.kind === "relationship" || e.kind === "bond" ? (
-                        <div className="absorb-diff">
-                          {e.before && <span className="absorb-before">{e.before}</span>}
-                          <span className="absorb-after">{e.after}</span>
-                        </div>
-                      ) : (
-                        <>
-                          {e.before && <div className="absorb-before">{e.before}</div>}
-                          <textarea aria-label={`After ${e.label}`} rows={2} value={e.after}
-                                    onChange={(ev) => setEditRows((rows) => rows.map((r, j) =>
-                                      j === i ? { ...r, after: ev.target.value } : r))} />
-                        </>
-                      )}
-                      {e.kind === "new_character" && (
-                        <>
-                          <textarea aria-label={`Personality ${e.label}`} rows={2}
-                                    placeholder="Personality"
-                                    value={(e.payload?.personality as string) ?? ""}
-                                    onChange={(ev) => setPayload({ personality: ev.target.value })} />
-                          <textarea aria-label={`Example dialogue ${e.label}`} rows={2}
-                                    placeholder="Example dialogue"
-                                    value={(e.payload?.mes_example as string) ?? ""}
-                                    onChange={(ev) => setPayload({ mes_example: ev.target.value })} />
-                          <textarea aria-label={`Evidence ${e.label}`} rows={2}
-                                    placeholder="Evidence"
-                                    value={(e.payload?.evidence as string) ?? ""}
-                                    onChange={(ev) => setPayload({ evidence: ev.target.value })} />
-                          <select aria-label={`Confidence ${e.label}`}
-                                  value={(e.payload?.confidence as string) ?? "thin"}
-                                  onChange={(ev) => setPayload({ confidence: ev.target.value })}>
-                            <option value="thin">Thin</option>
-                            <option value="sketched">Sketched</option>
-                            <option value="established">Established</option>
-                          </select>
-                          <textarea aria-label={`Open questions ${e.label}`} rows={2}
-                                    placeholder="Open questions"
-                                    value={(e.payload?.open_questions as string) ?? ""}
-                                    onChange={(ev) => setPayload({ open_questions: ev.target.value })} />
-                        </>
-                      )}
-                      {(e.kind === "new_character" || e.kind === "new_location") && (
-                        <input aria-label={`Suggested image prompt ${e.label}`}
-                               placeholder="Suggested image prompt"
-                               value={(e.payload?.sd_prompt as string) ?? ""}
-                               onChange={(ev) => setPayload({ sd_prompt: ev.target.value })} />
-                      )}
-                      {e.kind === "new_location" && !absorb?.location && (
-                        <label>
-                          <input type="checkbox" aria-label={`This is where the scene happened ${e.label}`}
-                                 checked={!!e.payload?.current_setting}
-                                 onChange={(ev) => setPayload({ current_setting: ev.target.checked })} />
-                          This is where the scene happened
-                        </label>
-                      )}
-                    </div>
-                  );
-                })}
+                {editRows.map((e, i) => (editBand(e) === "low" ? null : renderEditRow(e, i)))}
+                {lowRows.length > 0 && (
+                  <div className="absorb-low">
+                    {/* The count is stated whether or not the section is open:
+                        a proposal withheld from the default approval has to be
+                        visible AS withheld, or routing becomes a silent drop. */}
+                    <button className="subtle" aria-expanded={showLow}
+                            onClick={() => setShowLow((v) => !v)}>
+                      {showLow ? "Hide" : "Show"} {lowRows.length} low-confidence
+                      {lowRows.length === 1 ? " change" : " changes"}
+                    </button>
+                    {!showLow && (
+                      <p className="field-hint">
+                        Not approved by default — the transcript does not clearly support them.
+                      </p>)}
+                    {showLow && lowRows.map(([e, i]) => renderEditRow(e, i))}
+                  </div>)}
               </div>
             )}
             {saveError && (
@@ -2621,7 +2715,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                             onSceneChanged={() => selectScene(activeId)}
                             onSceneRenamed={sceneRenamed} pcless={activePcless}
                             sceneLocked={sceneLocked}
-                            onRenaming={markRenaming} />
+                            onRenaming={markRenaming}
+                            posts={messages.length} />
           )}
         </div>
       )}

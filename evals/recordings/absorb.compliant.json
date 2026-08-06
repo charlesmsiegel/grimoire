@@ -5,6 +5,10 @@
   "timeline_events": [
     {"date": "2026-07-05", "text": "Winifred tells Seraphine she knows the ledger exists."}
   ],
+  "facts": [
+    {"text": "Winifred knows the ledger exists, and Seraphine knows she knows.",
+     "date": "2026-07-05", "supersedes": ""}
+  ],
   "character_state_edits": [
     {"id": "characters/seraphine-vale",
      "current_state": "Rattled. Winifred knows about the ledger and she no longer has the option of pretending otherwise.",

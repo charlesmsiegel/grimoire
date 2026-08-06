@@ -1,0 +1,26 @@
+{
+  "characters/mara": {
+    "base": "76e5e66b66874a0f983bad2bf45e8aa6d664218e4f092c91c15b666f7d84e2dc",
+    "role": "npc",
+    "scenes": [
+      "2026-01-02-the-long-quay"
+    ],
+    "version": "default"
+  },
+  "characters/seraphine": {
+    "base": "901825a317dc33d67eae7737648b68b98315084316b6dad581ed621ee6ed2e8e",
+    "role": "npc",
+    "scenes": [
+      "001--the-tide-comes-in"
+    ],
+    "version": "default"
+  },
+  "pcs/winifred": {
+    "base": "",
+    "role": "player",
+    "scenes": [
+      "001--the-tide-comes-in"
+    ],
+    "version": "default"
+  }
+}

@@ -110,7 +110,14 @@ async def run_absorb(cid: str, sid: str, client: LLMClient, conn: dict) -> dict:
         # what ingest extracts rather than a fix to this one. Commitments are
         # named so a later imported scene can resolve one an earlier import
         # opened instead of filing a duplicate.
-        commitment_snapshot=absorb.commitment_snapshot(cid))
+        #
+        # Standing facts for that same reason, and it matters most here: an
+        # import walks a whole campaign log scene by scene, so without the
+        # snapshot every scene's facts land as new and nothing can ever be
+        # superseded -- the ledger accumulates a stack of mutually contradicting
+        # facts on the highest-volume path there is (#114).
+        commitment_snapshot=absorb.commitment_snapshot(cid),
+        fact_snapshot=absorb.fact_snapshot(cid, sid))
     text = await client.complete(messages, conn)
     parsed = absorb.parse_output(text)
     edits = absorb.materialize(cid, sid, parsed)

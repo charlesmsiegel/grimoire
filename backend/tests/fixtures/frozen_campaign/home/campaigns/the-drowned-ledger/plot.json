@@ -1,0 +1,28 @@
+{
+  "the-debt": {
+    "beats": [
+      {
+        "scene": "001--the-tide-comes-in",
+        "text": "Winifred's name is in the ledger and she will not say why."
+      },
+      {
+        "scene": "2026-01-02-the-long-quay",
+        "text": "Mara knows what the debt was for."
+      }
+    ],
+    "last_scene": "2026-01-02-the-long-quay",
+    "status": "open",
+    "title": "The debt in salt"
+  },
+  "the-tide-table": {
+    "beats": [
+      {
+        "scene": "001--the-tide-comes-in",
+        "text": "The table was copied out and hung by the door."
+      }
+    ],
+    "last_scene": "001--the-tide-comes-in",
+    "status": "closed",
+    "title": "The tide table"
+  }
+}

@@ -49,6 +49,7 @@ vi.mock("../api/client", async () => {
       absorbScene: vi.fn(), saveChronicle: vi.fn(), getChronicle: vi.fn(), retryAudit: vi.fn(),
       // consumed by the embedded SceneInspector
       getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
+      sceneBriefing: vi.fn(),
       // Resolves to "no weather" so the widget renders nothing: these suites
       // assert on the rest of the inspector, not the sky.
       getSceneWeather: vi.fn(() => Promise.resolve({ weather: null, location: null, native: null })),
@@ -136,6 +137,10 @@ beforeEach(() => {
   (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });
   (api.getSceneContext as any).mockResolvedValue({ model: "m", total_tokens: 0,
     dropped_tokens: 0, budget_tokens: 0, sections: [] });
+  // Empty, so the inspector's Briefing section (#118) renders nothing here and
+  // these suites keep asserting on the rail they were written against.
+  (api.sceneBriefing as any).mockResolvedValue({
+    focus: [], plot: [], commitments: [], relationships: [], last_time: null });
   (api.getCalendarConfig as any).mockResolvedValue({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
     secondary: null, confirmed: true });
@@ -168,7 +173,7 @@ beforeEach(() => {
     applied: [], failures: [] });
   (api.getChronicle as any).mockResolvedValue([]);
   (api.campaignChanges as any).mockResolvedValue([]);
-  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], chronicle: [] });
+  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
   (api.listResponsePresets as any).mockResolvedValue([]);
 });
 
@@ -4577,8 +4582,44 @@ test("renaming the reviewed scene repoints its staged commitment edits too", asy
   expect(saved.edits[0].payload.scene).toBe("s1-renamed");
 });
 
+test("renaming the reviewed scene repoints its staged fact edits too", async () => {
+  // The third `payload.scene` kind (#114): apply_edits hands it to facts.record,
+  // so a rename that moved only `absorbSid` would file the fact under a scene id
+  // that is gone. Nothing else on the row needs repointing — a fact's staged
+  // `before` is a `conflicts.fact_line`, which carries no scene id at all.
+  const FACT_EDIT = {
+    id: "fact:f1", kind: "fact", target: { kind: "facts", id: "f1" },
+    label: "Fact superseded", field: "text",
+    before: "active — The bridge stands.", after: "The bridge is rubble.",
+    authored: false,
+    payload: { text: "The bridge is rubble.", date: "", supersedes: "f1", scene: "s1" },
+  };
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.renameScene as any).mockResolvedValue({ id: "s1-renamed", title: "New" });
+  absorbWithPhases(PHASES_NONE_CUT, { edits: [FACT_EDIT] });
+  (api.saveChronicle as any).mockResolvedValue({ id: "s1-renamed", one_line: "o", summary: "s",
+    keywords: [], cast: [], location: "", date: "", absorbed: "t", applied: [], failures: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Review scene summary");
+
+  fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+  const input = screen.getByDisplayValue("Old");
+  fireEvent.change(input, { target: { value: "New" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+  const saved = (api.saveChronicle as any).mock.calls[0][2];
+  expect(saved.edits[0].payload.scene).toBe("s1-renamed");
+  expect(saved.edits[0].before).toBe("active — The bridge stands.");   // untouched
+});
+
 test("the Ledger button opens the continuity ledger", async () => {
-  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], chronicle: [] });
+  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
   renderCampaign();
   fireEvent.click(await screen.findByRole("button", { name: "Ledger" }));
   expect(await screen.findByText(/Nothing on the ledger yet/)).toBeInTheDocument();
@@ -4592,7 +4633,7 @@ test("renaming a scene re-reads an open ledger", async () => {
   // no absorb saved. Without the revision bump the panel keeps the old title
   // until the user selects a scene or closes and reopens it.
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], chronicle: [] });
+  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
   (api.renameScene as any).mockResolvedValue({ id: "s1-renamed", title: "New" });
   renderCampaign();
   fireEvent.click(await screen.findByRole("button", { name: "Ledger" }));
@@ -4615,7 +4656,7 @@ test("a rename that keeps the scene id still re-reads an open ledger", async () 
   // `adoptSceneId`'s same-id guard for that reason: everything else in that
   // function is about the id, and this one thing is not.
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], chronicle: [] });
+  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
   (api.renameScene as any).mockResolvedValue({ id: "s1", title: "OLD" });
   renderCampaign();
   fireEvent.click(await screen.findByRole("button", { name: "Ledger" }));
@@ -4637,7 +4678,7 @@ test("deleting a scene re-reads an open ledger", async () => {
   // deleting an inactive scene selects nothing, and deleting the last one
   // clears the view instead.
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], chronicle: [] });
+  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
   vi.spyOn(window, "confirm").mockReturnValue(true);
   renderCampaign();
   fireEvent.click(await screen.findByRole("button", { name: "Ledger" }));
@@ -4984,4 +5025,120 @@ test("renaming the scene keeps a failed reroll's Retry a reroll", async () => {
   expect(api.retry).not.toHaveBeenCalled();
   expect((api.regenerate as any).mock.calls[1][1]).toBe("s1-renamed");
   expect((api.regenerate as any).mock.calls[1][3]).toBe("darker this time");
+});
+
+// ------------------------------------------ #110/#112: confidence routing
+
+/** A review whose three rows land in the three bands. */
+const ROUTED_REVIEW = {
+  ...LORE_REVIEW,
+  edits: [
+    { id: "character_state:seraphine", kind: "character_state",
+      target: { kind: "characters", id: "seraphine" },
+      label: "Seraphine — current state", field: "current_state",
+      before: "Wary.", after: "Bleeding.", authored: false,
+      review: { certainty: 0.95, quote: "She pressed a hand to her side.",
+                speaker: "Grimoire", authority: "narration", score: 0.95,
+                band: "high" } },
+    { id: "lore:the-pact", kind: "lore", target: { kind: "lore", id: "the-pact" },
+      label: "The Pact — lore", field: "body", authored: false,
+      before: "Signed at dusk.", after: "Signed at dusk.\n\nBroken by morning.",
+      review: { certainty: 0.6, quote: "They broke it by morning.",
+                speaker: "Mara", authority: "other", score: 0.3, band: "medium" } },
+    { id: "plot:the-forged-map", kind: "plot", target: { kind: "plot", id: "the-forged-map" },
+      label: "The forged map — open", field: "beat", authored: false,
+      before: "", after: "Somebody forged it.",
+      payload: { id: "the-forged-map", title: "The forged map", status: "open", scene: "s1" },
+      review: { certainty: 0.9, quote: "I drew it myself.", speaker: "The Harbourmaster",
+                authority: "unattributed", score: 0.27, band: "low" } },
+  ],
+};
+
+async function openRoutedReview(review: any = ROUTED_REVIEW) {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockResolvedValue(review);
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Proposed changes");
+}
+
+test("a low-confidence proposal is collapsed and starts unapproved", async () => {
+  await openRoutedReview();
+  // Out of the list, but counted out loud — a withheld approval the reviewer
+  // cannot see is a silent drop, which is the failure this must not become.
+  expect(screen.queryByLabelText(/Approve The forged map/)).toBeNull();
+  const toggle = screen.getByRole("button", { name: /Show 1 low-confidence change/ });
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+  fireEvent.click(toggle);
+  const box = screen.getByLabelText(/Approve The forged map/) as HTMLInputElement;
+  expect(box.checked).toBe(false);
+  // ...and the other two are pre-approved exactly as every row was before.
+  expect((screen.getByLabelText(/Approve Seraphine/) as HTMLInputElement).checked).toBe(true);
+  expect((screen.getByLabelText(/Approve The Pact/) as HTMLInputElement).checked).toBe(true);
+});
+
+test("a low-confidence proposal the reviewer ticks is saved like any other", async () => {
+  await openRoutedReview();
+  fireEvent.click(screen.getByRole("button", { name: /Show 1 low-confidence change/ }));
+  fireEvent.click(screen.getByLabelText(/Approve The forged map/));
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+  const sent = (api.saveChronicle as any).mock.calls[0][2].edits;
+  expect(sent.map((e: any) => e.id)).toEqual(
+    ["character_state:seraphine", "lore:the-pact", "plot:the-forged-map"]);
+});
+
+test("an unticked low-confidence proposal is never sent", async () => {
+  await openRoutedReview();
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+  expect((api.saveChronicle as any).mock.calls[0][2].edits.map((e: any) => e.id))
+    .toEqual(["character_state:seraphine", "lore:the-pact"]);
+});
+
+test("each routed row shows its band, why it was banded, and its citation", async () => {
+  await openRoutedReview();
+  expect(screen.getByText(/high · narrated/)).toBeTruthy();
+  expect(screen.getByText(/medium · said by someone else/)).toBeTruthy();
+  expect(screen.getByText("She pressed a hand to her side.")).toBeTruthy();
+  expect(screen.getByText(/— Grimoire/)).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: /Show 1 low-confidence/ }));
+  expect(screen.getByText(/low · no one speaker matches/)).toBeTruthy();
+});
+
+test("rows the extraction did not stage carry no band and stay pre-approved", async () => {
+  // Dossier, voice and sheet proposals are staged after the extraction and rest
+  // on no citation. Absent routing must read as "unrated", not as "low".
+  await openRoutedReview({ ...ROUTED_REVIEW, edits: [
+    { id: "dossier:mara", kind: "dossier", target: { kind: "characters", id: "mara" },
+      label: "Mara — dossier", field: "body", before: "", after: "A fortune-teller.",
+      authored: false }] });
+  expect((screen.getByLabelText(/Approve Mara/) as HTMLInputElement).checked).toBe(true);
+  expect(screen.queryByText(/low-confidence/)).toBeNull();
+});
+
+test("a conflict on a collapsed row opens the section so it can be answered", async () => {
+  // The save is refused whole. Left collapsed, the panel would insist something
+  // is unanswered with nothing on screen to answer.
+  const { ApiError } = await vi.importActual<typeof import("../api/client")>("../api/client");
+  (api.saveChronicle as any).mockRejectedValueOnce(new ApiError(
+    409, "some proposed changes no longer match what is stored", "edit_conflicts",
+    { conflicts: [{ id: "plot:the-forged-map", label: "The forged map — open",
+                    kind: "plot", field: "beat", before: "", after: "Somebody forged it.",
+                    stored: "open — someone else forged it",
+                    reason: "this plot thread changed since the scene was absorbed",
+                    mergeable: false, merged: "Somebody forged it.", index: 2 }] }));
+  await openRoutedReview();
+  fireEvent.click(screen.getByRole("button", { name: /Show 1 low-confidence/ }));
+  fireEvent.click(screen.getByLabelText(/Approve The forged map/));
+  fireEvent.click(screen.getByRole("button", { name: /Hide 1 low-confidence/ }));
+  expect(screen.queryByLabelText(/Approve The forged map/)).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await screen.findByText(/no longer match/);
+  expect(screen.getByRole("button", { name: /Keep stored The forged map/ })).toBeTruthy();
 });

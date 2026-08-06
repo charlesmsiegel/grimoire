@@ -1,11 +1,13 @@
 """GET /campaigns/{cid}/ledger — the continuity ledger view (#117).
 
-One route, three sections, and a tolerance contract: a garbled plot.json or
-commitments.json empties its own section and nothing else. The panel is a pure
-render of this, so anything it must not crash on has to be answered here.
+One route, four sections, and a tolerance contract: a garbled plot.json,
+commitments.json or facts.json empties its own section and nothing else. The
+panel is a pure render of this, so anything it must not crash on has to be
+answered here.
 """
 
 import importlib
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -30,10 +32,10 @@ def test_unknown_campaign_is_404(client):
     assert client.get("/api/campaigns/nope/ledger").status_code == 404
 
 
-def test_empty_campaign_returns_three_empty_sections(client):
+def test_empty_campaign_returns_four_empty_sections(client):
     cid = _campaign(client)
     assert client.get(f"/api/campaigns/{cid}/ledger").json() == {
-        "plot": [], "commitments": [], "chronicle": []}
+        "plot": [], "commitments": [], "facts": [], "chronicle": []}
 
 
 def test_open_threads_and_commitments_carry_their_scene(client):
@@ -80,21 +82,23 @@ def test_the_chronicle_section_is_capped(client):
 
 
 @pytest.mark.parametrize("filename,section", [("plot.json", "plot"),
-                                              ("commitments.json", "commitments")])
+                                              ("commitments.json", "commitments"),
+                                              ("facts.json", "facts")])
 def test_a_garbled_file_empties_only_its_own_section(client, filename, section):
     cid = _campaign(client)
     sid = store.scenes.create_scene(cid, "Now")
     store.chronicle.absorb(cid, {"id": sid, "one_line": "It happened.", "date": ""})
     store.plot.set_movement(cid, "t", "A thread", "open", "beat", sid)
     store.commitments.set_movement(cid, "c", "A promise", "promise", "open", "", "beat", sid)
+    store.facts.record(cid, "The pier is condemned.", "the third night", sid)
     (store.campaigns.campaign_root(cid) / filename).write_text("{ not json", encoding="utf-8")
 
     r = client.get(f"/api/campaigns/{cid}/ledger")
     assert r.status_code == 200                      # never a 500
     body = r.json()
     assert body[section] == []                       # the broken one is empty
-    other = "commitments" if section == "plot" else "plot"
-    assert len(body[other]) == 1                     # its neighbour is untouched
+    for other in {"plot", "commitments", "facts"} - {section}:
+        assert len(body[other]) == 1                 # its neighbours are untouched
     assert len(body["chronicle"]) == 1
 
 
@@ -272,3 +276,34 @@ def test_the_three_sections_are_read_under_one_campaign_lock(client, monkeypatch
     assert client.get(f"/api/campaigns/{cid}/ledger").status_code == 200
     assert held == {"scenes": True, "chronicle": True,
                     "plot": True, "commitments": True}
+
+
+def test_standing_facts_carry_the_scene_that_recorded_them(client):
+    """"recorded in", not "last moved in": a fact's text never changes after it
+    is written, and a fact that stopped being true is retired off this list
+    rather than rewritten — so the scene it carries is its first one, and the
+    ledger can be read as dated."""
+    cid = _campaign(client)
+    sid = store.scenes.create_scene(cid, "The Pier at Dusk")
+    store.chronicle.absorb(cid, {"id": sid, "one_line": "They met.", "date": "2026-07-05"})
+    gone = store.facts.record(cid, "The pier is open to traffic.", "the first night", sid)
+    store.facts.record(cid, "The pier is condemned.", "the third night", sid, supersedes=gone)
+
+    rows = client.get(f"/api/campaigns/{cid}/ledger").json()["facts"]
+    assert [f["text"] for f in rows] == ["The pier is condemned."]   # the retired one is gone
+    assert rows[0]["date"] == "the third night"
+    assert rows[0]["scene"] == {"id": sid, "title": "The Pier at Dusk", "date": "2026-07-05"}
+
+
+def test_a_fact_whose_scene_is_the_wrong_shape_loses_its_label_not_the_view(client):
+    """The projections run outside `_tolerant`, so an unhashable `scene` reaching
+    `scenes_by_id.get` would 500 the whole view rather than costing one label."""
+    cid = _campaign(client)
+    (store.campaigns.campaign_root(cid) / "facts.json").write_text(
+        json.dumps({"f1": {"text": "The pier is condemned.", "date": "the third night",
+                           "scene": ["nope"], "status": "active"}}), encoding="utf-8")
+    r = client.get(f"/api/campaigns/{cid}/ledger")
+    assert r.status_code == 200
+    (row,) = r.json()["facts"]
+    assert row["text"] == "The pier is condemned."
+    assert row["scene"] == {"id": "", "title": "", "date": ""}

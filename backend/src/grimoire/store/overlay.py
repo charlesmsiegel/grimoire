@@ -14,31 +14,45 @@ the world live. Rules:
 - sync.md holds base hashes for materialized records only. Tombstones live in
   <campaign>/deleted.json (a sorted JSON list of refs); a tombstoned id counts
   as taken for uniquify, so nothing ever resurrects under a reused id.
+- <campaign>/detached.json (same shape) holds the third state: a campaign copy
+  whose world original was DELETED, so it shares only a slug with whatever
+  claims that id next. Records, sidecars and assets all stop resolving through
+  for it -- see `detached()`.
 
 Which records inherit, and which do not, is the whole content of the rule, so
 it is declared below as data (INHERITED_KINDS / INHERITED_FILES) rather than
 only in prose: `tests/test_overlay_guard.py` reads those names to check that
 nothing outside this module resolves an inheritable record off a raw campaign
 root. Everything else under <campaign> is campaign-local by definition and is
-read directly: campaign.md, sync.md, deleted.json, appearances.json,
+read directly: campaign.md, sync.md, deleted.json, detached.json, appearances.json,
 calendar.json, changes.json, chronicle.json, timeline.md, sheet_baselines.json,
 the climate default (store/campaign_climate.py owns that filename), scenes/,
 sheets/, proposals/, and the per-actor sidecars filed inside an actor dir
 (dossier.md, state.md, voice_drift.md). tagline.md and voice_anchor.md are the
 exceptions among sidecars -- both are world-level identity, so both overlay per
 file, via `tagline()` / `voice_anchor()` below.
+
+Campaign-local, though, does not mean campaign-lifetime: those sidecars are
+filed under a record id, and an id outlives the record it named. Deleting a
+record frees its slug, so the next create hands the same id back -- which is
+what `forget_world_record` (at the bottom) exists to get in front of.
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
 
 from . import (assets, atomic, cards, characters, entities, failsoft, greetings,
-               groupstate, pcs, taglines, voice_anchors)
+               pcs, taglines, voice_anchors)
 from .campaigns import paths as campaigns_paths, read as campaigns_read
-from .paths import natural_key
+from .paths import natural_key, safe_id
+from .worlds import paths as worlds_paths
+
+log = logging.getLogger(__name__)
 
 #: Record kinds a campaign inherits from its world. A `<campaign>/<kind>/...`
 #: read for one of these is only correct through this module (or after the
@@ -64,6 +78,17 @@ def wroot_of(cid: str) -> Path:
 
 # ---- tombstones ----
 
+def _refs_in(refs) -> set[str]:
+    """The string entries of a ledger, and only those.
+
+    `failsoft.read_json` checks the OUTER type, so `[1]` reads as a perfectly
+    good list and every `ref.startswith(...)` downstream then raises
+    `AttributeError` -- a 500 out of a read whose entire contract is to fail
+    soft (Codex review). A non-string entry is an entry nothing can match, and
+    dropping just that one keeps the rest of a hand-edited ledger working."""
+    return {r for r in (refs or []) if isinstance(r, str)}
+
+
 def _deleted_path(cid: str) -> Path:
     return campaigns_paths.campaign_root(cid) / "deleted.json"
 
@@ -82,17 +107,101 @@ def deleted(cid: str) -> set[str]:
         _deleted_path(cid), list,
         f"campaign {cid} reads as having no deletions, so records deleted here "
         "will reappear, inherited from the world")
-    return set(refs) if refs else set()
+    return _refs_in(refs)
 
 
 def add_deleted(cid: str, ref: str) -> None:
     atomic.write_text(_deleted_path(cid), json.dumps(sorted(deleted(cid) | {ref}), indent=2) + "\n")
 
 
+def _drop_deleted(cid: str, refs: set[str]) -> None:
+    keep = deleted(cid) - refs
+    if keep != deleted(cid):
+        atomic.write_text(_deleted_path(cid), json.dumps(sorted(keep), indent=2) + "\n")
+
+
+# ---- detached refs ----
+
+def _detached_path(cid: str) -> Path:
+    return campaigns_paths.campaign_root(cid) / "detached.json"
+
+
+def detached(cid: str) -> set[str]:
+    """Refs the campaign owns outright, sharing only a slug with the world.
+
+    The third state a record can be in here, after "campaign copy" and
+    "tombstone". A tombstone says *absent*; this says **mine, and nothing filed
+    under that id in the world applies to it** — which is what a campaign copy
+    becomes when the world record it was copied from is deleted. The id is then
+    free, and the next world record to claim it is a stranger that would
+    otherwise supply this campaign's record with its sync updates, its avatar,
+    its tagline and its voice anchor, all by coincidence of slug (#225).
+
+    Detaching is one-way and per record: the campaign copy already exists, so
+    there is nothing to fall through *to* that could be right.
+
+    Fail-soft in the same direction as `deleted`, and warned about for the same
+    reason: reading empty means "still attached", so a corrupt file quietly
+    resumes inheriting from an unrelated record. Failure *adds* content, which
+    is the one direction a user cannot spot by looking.
+    """
+    refs = failsoft.read_json(
+        _detached_path(cid), list,
+        f"campaign {cid} reads as having no detached records, so a record whose "
+        "world original was deleted will inherit from whatever now holds its id")
+    return _refs_in(refs)
+
+
+def add_detached(cid: str, ref: str) -> None:
+    """Mark `ref` detached.
+
+    Read-modify-write, and deliberately unserialized: two concurrent world
+    deletes whose campaigns both own a copy can each read this file and each
+    replace it, losing one marker (Codex review). That is true, and it is the
+    same shape as `add_deleted` beside it and `campaigns.paths.write_manifest`
+    below it -- the latter is named in `locks.OUTSIDE_DOMAIN` as exactly this
+    known gap, and `overlay` sits in `locks.UNREVIEWED` because nothing here
+    serializes. Giving this one file a lock its two siblings do not have would
+    not make the campaign ledger safe; it would only make the gap harder to
+    find. Closing it is the review that takes `overlay` out of that backlog."""
+    atomic.write_text(_detached_path(cid),
+                      json.dumps(sorted(detached(cid) | {ref}), indent=2) + "\n")
+
+
+def _undetach(cid: str, ref: str) -> None:
+    """Drop a detachment when the record it describes goes.
+
+    Detachment is a statement about a *record*, not about an id: it says this
+    campaign's copy is its own. Delete that copy and the statement has no
+    subject -- but it would keep suppressing the per-file resolvers, so a later
+    world record of the same slug would list in the campaign with its images
+    and sidecars hidden (Codex review)."""
+    keep = detached(cid) - {ref}
+    if keep != detached(cid):
+        atomic.write_text(_detached_path(cid), json.dumps(sorted(keep), indent=2) + "\n")
+    # Images deleted while detached tombstoned SLOTS of a record that is now
+    # gone. Reattaching without clearing them inherits the world's replacement
+    # with its avatar still hidden (Codex review) -- the same reasoning as the
+    # sweep's own clearing, at the other end of a detachment.
+    _drop_deleted(cid, {r for r in deleted(cid) if r.startswith(f"assets/{ref}/")})
+
+
 # ---- flat records (locations / lore; greetings + plotmap join in Task 2) ----
 
 def _flat_ref(kind: str, eid: str) -> str:
     return f"{kind}/{eid}"
+
+
+def _inherits_world(cid: str, ref: str) -> bool:
+    """Would this campaign read the world's record of that id, if it had none?
+
+    False once the ref is tombstoned, and false once it is detached. The second
+    is what keeps a delete honest: a tombstone exists to stop the world's copy
+    showing through, and a detached record has no world copy to stop -- whatever
+    holds the id now is a stranger. Tombstoning on its way out would hide that
+    stranger from the campaign permanently, which deleting an un-detached
+    campaign-local record never does (Codex review)."""
+    return ref not in deleted(cid) and ref not in detached(cid)
 
 
 def _flat_path(root: Path, kind: str, eid: str) -> Path:
@@ -207,7 +316,11 @@ def create_entity(cid: str, kind: str, name: str, body: str = "", keys: str = ""
     wroot, gone = wroot_of(cid), deleted(cid)
 
     def taken(eid: str) -> bool:
-        return _flat_path(wroot, kind, eid).exists() or _flat_ref(kind, eid) in gone
+        # the world's record DIRECTORY counts: a sweep that could not remove it
+        # leaves assets this campaign would inherit through the overlay the
+        # moment it claimed the slug (Codex review)
+        return (_flat_path(wroot, kind, eid).exists() or _record_dir(wroot, kind, eid).is_dir()
+                or _flat_ref(kind, eid) in gone)
 
     return entities.create_entity(croot_of(cid), kind, name, body, keys, owners,
                                   sd_prompt=sd_prompt, taken=taken, fields=fields)
@@ -224,7 +337,7 @@ def update_entity(cid: str, kind: str, eid: str, *, name: str | None = None,
 
 def delete_entity(cid: str, kind: str, eid: str) -> None:
     ref = _flat_ref(kind, eid)
-    in_world = _flat_path(wroot_of(cid), kind, eid).exists() and ref not in deleted(cid)
+    in_world = _inherits_world(cid, ref) and _flat_path(wroot_of(cid), kind, eid).exists()
     try:
         entities.delete_entity(croot_of(cid), kind, eid)
         _drop_manifest_ref(cid, ref)
@@ -233,19 +346,8 @@ def delete_entity(cid: str, kind: str, eid: str) -> None:
             raise
     if in_world:
         add_deleted(cid, ref)   # keep the world's copy from showing through
-    if kind == "groups":
-        _delete_group_state(cid, eid)
-
-
-def _delete_group_state(cid: str, gid: str) -> None:
-    """Campaign-local state.md is never inherited from the world (state is
-    campaign-local by definition), so it must die with the group record —
-    otherwise a same-slug recreate silently reattaches the dead group's
-    Secrets to scene context."""
-    p = groupstate.state_path(croot_of(cid), gid)
-    p.unlink(missing_ok=True)
-    if p.parent.exists() and not any(p.parent.iterdir()):
-        p.parent.rmdir()
+    _drop_record_dir(croot_of(cid), kind, eid)
+    _undetach(cid, ref)
 
 
 # ---- greetings + plot map ----
@@ -276,7 +378,9 @@ def create_greeting(cid: str, name: str, character: str, version: str, body: str
     wroot, gone = wroot_of(cid), deleted(cid)
 
     def taken(gid: str) -> bool:
-        return _flat_path(wroot, "greetings", gid).exists() or _flat_ref("greetings", gid) in gone
+        return (_flat_path(wroot, "greetings", gid).exists()
+                or _record_dir(wroot, "greetings", gid).is_dir()
+                or _flat_ref("greetings", gid) in gone)
 
     # #137: bake {{char}} here, not inside greetings.create_greeting -- a thin
     # campaign's character commonly still lives only in the world, and
@@ -300,7 +404,7 @@ def update_greeting(cid: str, gid: str, **kwargs) -> None:
 
 def delete_greeting(cid: str, gid: str) -> None:
     ref = _flat_ref("greetings", gid)
-    in_world = _flat_path(wroot_of(cid), "greetings", gid).exists() and ref not in deleted(cid)
+    in_world = _inherits_world(cid, ref) and _flat_path(wroot_of(cid), "greetings", gid).exists()
     if in_world:
         materialize_plotmap(cid)   # edge cleanup must land campaign-side
     try:
@@ -312,13 +416,34 @@ def delete_greeting(cid: str, gid: str) -> None:
         greetings.remove_from_plotmap(croot_of(cid), gid)
     if in_world:
         add_deleted(cid, ref)
+    _drop_record_dir(croot_of(cid), "greetings", gid)
+    _undetach(cid, ref)
 
 
 def read_plotmap(cid: str) -> dict:
     croot = croot_of(cid)
     if (croot / "plotmap.json").exists() or "plotmap" in deleted(cid):
+        # The campaign's OWN map. Its nodes and edges name the campaign's own
+        # greetings, detached or not, and filtering them would delete plot
+        # relationships the campaign authored (Codex review).
         return greetings.read_plotmap(croot)
-    return greetings.read_plotmap(wroot_of(cid))
+    return _without_detached(cid, greetings.read_plotmap(wroot_of(cid)))
+
+
+def _without_detached(cid: str, plotmap: dict) -> dict:
+    """Drop detached greetings from a plot map, node and inbound edges alike.
+
+    Only ever applied to an INHERITED map. A campaign that owns a greeting copy
+    but no plot map of its own reads the WORLD's, and the world is where the
+    recreated slug's edges are. Materializing a campaign map to clean would fork
+    it off the world's over an unrelated record's delete, and would fix only the
+    campaigns that had already been swept (Codex review)."""
+    gone = {r.partition("/")[2] for r in detached(cid) if r.startswith("greetings/")}
+    if not gone:
+        return plotmap
+    return {gid: {k: [x for x in v if x not in gone] if isinstance(v, list) else v
+                  for k, v in edges.items()}
+            for gid, edges in plotmap.items() if gid not in gone}
 
 
 def materialize_plotmap(cid: str) -> None:
@@ -466,7 +591,8 @@ def create_character(cid: str, name: str, version_name: str = "default",
     wroot, gone = wroot_of(cid), deleted(cid)
 
     def taken(aid: str) -> bool:
-        return (wroot / "characters" / aid / "character.md").exists() or _flat_ref("characters", aid) in gone
+        return ((wroot / "characters" / aid).is_dir()
+                or _flat_ref("characters", aid) in gone)
 
     return characters.create_character(croot_of(cid), name, version_name, card, taken=taken)
 
@@ -476,7 +602,7 @@ def create_pc(cid: str, name: str, tags: list[str], version_name: str = "default
     wroot, gone = wroot_of(cid), deleted(cid)
 
     def taken(pid: str) -> bool:
-        return (wroot / "pcs" / pid / "pc.md").exists() or _flat_ref("pcs", pid) in gone
+        return (wroot / "pcs" / pid).is_dir() or _flat_ref("pcs", pid) in gone
 
     return pcs.create_pc(croot_of(cid), name, tags, version_name, persona, taken=taken)
 
@@ -489,6 +615,8 @@ def _asset_ref(base: str, aid: str, vid: str, name: str) -> str:
 
 def list_images(cid: str, aid: str, vid: str, base: str = "characters") -> list[dict]:
     mine = assets.list_images(croot_of(cid), aid, vid, base)
+    if _flat_ref(base, aid) in detached(cid):
+        return sorted(mine, key=lambda i: i["name"])   # the world's id-mate is a stranger
     have = {i["name"] for i in mine}
     gone = deleted(cid)
     inherited = [i for i in assets.list_images(wroot_of(cid), aid, vid, base)
@@ -504,7 +632,8 @@ def image_root(cid: str, aid: str, vid: str, name: str, base: str = "characters"
     # A per-asset tombstone or a whole-record tombstone (the record was deleted
     # campaign-side; only its <base>/<aid> ref is written) both hide the image:
     # return croot so the serve route 404s instead of falling through to the world.
-    if _asset_ref(base, aid, vid, name) in gone or _flat_ref(base, aid) in gone:
+    if (_asset_ref(base, aid, vid, name) in gone or _flat_ref(base, aid) in gone
+            or _flat_ref(base, aid) in detached(cid)):
         return croot
     return wroot_of(cid)
 
@@ -514,7 +643,8 @@ def read_focus(cid: str, aid: str, vid: str, base: str = "characters") -> int | 
     focus_file = croot / base / aid / "assets" / vid / assets.FOCUS_FILE
     if (assets.image_path(croot, aid, vid, assets.AVATAR, base) is not None
             or focus_file.exists()
-            or _asset_ref(base, aid, vid, assets.AVATAR) in deleted(cid)):
+            or _asset_ref(base, aid, vid, assets.AVATAR) in deleted(cid)
+            or _flat_ref(base, aid) in detached(cid)):
         return assets.read_focus(croot, aid, vid, base)
     return assets.read_focus(wroot_of(cid), aid, vid, base)
 
@@ -528,8 +658,9 @@ def delete_image(cid: str, aid: str, vid: str, name: str, base: str = "character
 def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characters") -> None:
     """Copy-up the named image and the current avatar, then swap campaign-side."""
     croot, wroot = croot_of(cid), wroot_of(cid)
+    inherits = _flat_ref(base, aid) not in detached(cid)
     for n in (name, assets.AVATAR):
-        if (assets.image_path(croot, aid, vid, n, base) is None
+        if (inherits and assets.image_path(croot, aid, vid, n, base) is None
                 and _asset_ref(base, aid, vid, n) not in deleted(cid)):
             src = assets.image_path(wroot, aid, vid, n, base)
             if src is not None:
@@ -540,7 +671,7 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
     # no campaign file at `name`, so the inherited image there would still show
     # through the overlay next to the new avatar. Tombstone it so promotion
     # moves the image out of the gallery instead of duplicating it.
-    if (assets.image_path(croot, aid, vid, name, base) is None
+    if (inherits and assets.image_path(croot, aid, vid, name, base) is None
             and assets.image_path(wroot, aid, vid, name, base) is not None):
         add_deleted(cid, _asset_ref(base, aid, vid, name))
 
@@ -556,7 +687,10 @@ def read_character(cid: str, char_id: str) -> dict:
 
 
 def tagline(cid: str, char_id: str) -> str:
-    return taglines.read(croot_of(cid), char_id) or taglines.read(wroot_of(cid), char_id)
+    mine = taglines.read(croot_of(cid), char_id)
+    if mine or _flat_ref("characters", char_id) in detached(cid):
+        return mine
+    return taglines.read(wroot_of(cid), char_id)
 
 
 def set_voice_anchor(cid: str, char_id: str, text: str) -> None:
@@ -589,7 +723,8 @@ def set_voice_anchor(cid: str, char_id: str, text: str) -> None:
     findings judged against the world's should stop applying here.
     """
     croot = croot_of(cid)
-    inherited = voice_anchors.read(wroot_of(cid), char_id)
+    inherited = ("" if _flat_ref("characters", char_id) in detached(cid)
+                 else voice_anchors.read(wroot_of(cid), char_id))
     mine = voice_anchors.read_record(croot, char_id)
     if not text.strip():
         # Tombstone unless this blank erased nothing at all. Each of the three
@@ -639,8 +774,8 @@ def voice_anchor_record(cid: str, char_id: str) -> dict:
     text campaign-side and the nonce world-side would fingerprint an anchor that
     exists nowhere."""
     mine = voice_anchors.read_record(croot_of(cid), char_id)
-    if mine["disabled"]:
-        return mine   # explicit campaign opt-out: the world's must not show through
+    if mine["disabled"] or _flat_ref("characters", char_id) in detached(cid):
+        return mine   # campaign opt-out, or a world id-mate that is a stranger
     return mine if mine["text"] else voice_anchors.read_record(wroot_of(cid), char_id)
 
 
@@ -654,3 +789,243 @@ def voice_anchor(cid: str, char_id: str) -> str:
     property), but a campaign that has materialized its own copy of the
     character is entitled to its own reference text -- or to none."""
     return voice_anchor_record(cid, char_id)["text"]
+
+
+# ---- world-side deletes: nothing outlives the record it was filed beside ----
+
+def _record_dir(root: Path, kind: str, rid: str) -> Path:
+    """`<root>/<kind>/<rid>/` — the directory a record's *neighbours* live in.
+
+    Flat records are a file (`<kind>/<rid>.md`) with a sibling directory; actors
+    are the directory. Either way this holds everything filed under the record's
+    id rather than inside it: an actor's campaign-local sidecars (state.md,
+    dossier.md, voice_drift.md), a group's state.md, and any kind's `assets/`.
+    """
+    return root / kind / rid
+
+
+def _drop_record_dir(root: Path, kind: str, rid: str) -> None:
+    """Remove `_record_dir`, if there is one.
+
+    The id is the only thing tying those files to their record, and ids are
+    handed out by slug (`entities.create_entity` / `characters.create_character`
+    uniquify against what exists *now*), so a record deleted and recreated under
+    the same name gets the same id back. Anything left behind is then adopted by
+    a new, unrelated record — for a group's state.md that means a dead group's
+    Secrets in a live scene's context (#225).
+
+    A failure to remove is logged rather than raised: the record itself is
+    already gone by the time this runs, and answering a delete that succeeded
+    with a 500 helps nobody. `rmtree` stops at its first error, so what survives
+    is a *part* of the directory rather than all of it — still strictly less
+    than the pre-#225 leftovers, but the warning says which path to look at
+    because "some of the dead record's sidecars" is not a state to leave a user
+    guessing about.
+    """
+    if kind not in INHERITED_KINDS or not safe_id(rid):
+        return
+    d = _record_dir(root, kind, rid)
+    if not d.is_dir():
+        return
+    try:
+        shutil.rmtree(d)
+    except OSError as exc:
+        log.warning("could not remove %s (%s) -- a record recreated under the id "
+                    "%r will inherit what is still in it", d, exc, rid)
+
+
+def _dependent_campaigns(wroot: Path) -> list[str]:
+    """Ids of the campaigns that inherit from `wroot`.
+
+    `world_refs`, not `list_campaigns`, because it reads each campaign.md
+    independently: `list_campaigns` raises out of its own loop on the first
+    undecodable one, and a single corrupt campaign — of *any* world — must not
+    cost every healthy dependent its sweep (Codex review).
+
+    That tolerance points the other way from `worlds.delete_world`'s in-use
+    check, which shares this enumeration. There, a campaign whose reference
+    could not be read counts as a user, because "we could not tell" must not
+    become "nothing uses this world". Here it is skipped for the same reason
+    read the other way: we would be deleting that campaign's state on a guess
+    that it depends on this world at all, and a sweep that does not happen only
+    leaves the pre-#225 behaviour.
+    """
+    out = []
+    for cid, _name, w in campaigns_read.world_refs():
+        if w is None:
+            log.warning("cannot read which world campaign %s belongs to -- leaving its "
+                        "state alone; a record recreated in %s may inherit it", cid, wroot)
+            continue
+        if worlds_paths.references_world(w, wroot) and campaigns_paths.campaign_exists(cid):
+            out.append(cid)
+    return out
+
+
+def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
+    """Sweep what a world-side delete of `<kind>/<rid>` leaves reachable only
+    by its id. Call it *after* the delete, from every world route that removes
+    an inheritable record.
+
+    Two places keep such leftovers:
+
+    - the world's own `_record_dir` — `entities.delete_entity` and
+      `greetings.delete_greeting` unlink the `.md` and nothing else, so the
+      record's images survive it — the actor deletes already `rmtree` the
+      directory, because for an actor the directory *is* the record;
+    - each dependent campaign's `_record_dir`, holding state the campaign filed
+      against a record it only ever *inherited*. That state is campaign-local by
+      definition, so no sync ever removes it, and a world-side delete leaves it
+      unreachable but intact — until the next same-name create hands the id
+      back and it re-attaches to a record it knows nothing about (#225).
+
+    A campaign that materialized its own copy keeps it: its record did not go
+    anywhere, so its state is still the state of something it has. Deleting a
+    world record has never removed a campaign's copy of it (`sync.incoming`
+    skips world-side deletions), and this is not the change that starts.
+
+    But that copy is no longer a copy *of* anything, and its `sync.md` base
+    still says otherwise — a base is the claim "this world record and mine share
+    an ancestor". Left standing, it is the same bug through a different door: a
+    recreated slug arrives as an `update`, and accepting it overwrites the
+    campaign's record with an unrelated one while its state.md stays put (Codex
+    review). So the base goes, which is exactly what makes a record
+    campaign-local — the state a campaign-side create leaves it in.
+
+    Two limits, both deliberate. What this does NOT reach is campaign-local
+    state keyed by the record id from *outside* the record's directory:
+    `sheets/`, `relationships.json`, `appearances.json`, and the `deleted.json`
+    tombstone that now hides a recreated record rather than adopting it. Each is
+    a separate store with its own semantics, and sweeping them is the dependents
+    design #52 carries.
+
+    And being driven by the delete, this only sees campaigns that exist when the
+    delete happens: state restored from a backup taken before it, or carried in
+    from a store that never saw it, re-attaches exactly as it used to. Closing
+    that needs identity rather than an event -- #225's other suggestion, a
+    creation nonce stamped into the record and its state -- which is a store
+    format change, and a much larger one than the bug in front of us.
+
+    The enumeration is best-effort for the same reason the removal is: a store
+    holding one campaign nobody can read must not make a world record
+    undeletable, and the delete has already happened by the time we get here.
+    """
+    if _record_present(wroot, kind, rid):
+        # Someone took the slug back between the delete and here. Everything
+        # below is aimed at a record that exists again, and cannot tell its
+        # state from the dead one's: sweeping would delete state written for
+        # the NEW record, and detach a campaign that just materialized it.
+        # Standing down leaves the pre-#225 behaviour, which is the harmless
+        # side of a race this module cannot serialize (Codex review).
+        log.warning("%s/%s was recreated before its delete could be swept -- "
+                    "dependent campaigns keep what they filed against the old "
+                    "record, and it may re-attach to the new one", kind, rid)
+        return
+    _drop_record_dir(wroot, kind, rid)
+    try:
+        cids = _dependent_campaigns(wroot)
+    except (OSError, UnicodeDecodeError) as exc:
+        log.warning("could not enumerate the campaigns of %s (%s) -- state they "
+                    "filed against %s/%s stays, and a record recreated under that "
+                    "id will inherit it", wroot, exc, kind, rid)
+        return
+    for cid in cids:
+        try:
+            _forget_in_campaign(cid, kind, rid, wroot)
+        except (OSError, ValueError) as exc:
+            # Per campaign, not per sweep: an unreadable sync.md used to raise
+            # through the loop, so one damaged campaign cost every LATER
+            # dependent its cleanup -- and the route 500'd on a delete that had
+            # already happened, whose retry 404s without sweeping (Codex review).
+            # ValueError, not UnicodeDecodeError: a malformed plotmap.json
+            # reaches `json.loads` here and raises JSONDecodeError, which is a
+            # ValueError and not a decode error (Codex review). The wider catch
+            # covers both, since both mean "this campaign's file is garbage".
+            log.warning("could not finish sweeping campaign %s after %s/%s was deleted "
+                        "(%s) -- a record recreated under that id may inherit its state",
+                        cid, kind, rid, exc)
+
+
+def _forget_in_campaign(cid: str, kind: str, rid: str, wroot: Path) -> None:
+    # Campaign ids are reusable, and the sweep mutates one campaign at a time:
+    # between the enumeration and this call the campaign could have been deleted
+    # and its slug taken by a new one on a different world, which never depended
+    # on `wroot` at all (Codex review). Re-asking is cheap; being wrong deletes
+    # a stranger's state.
+    try:
+        world = campaigns_read.read_campaign(cid)["meta"].get("world", "")
+    except campaigns_paths.CampaignNotFound:
+        return   # deleted between the enumeration and its turn: nothing to sweep
+    if not worlds_paths.references_world(world, wroot):
+        return
+    croot, ref = croot_of(cid), _flat_ref(kind, rid)
+    if _record_present(croot, kind, rid):
+        # The campaign owns a copy. It keeps it -- and stops sharing an identity
+        # with whatever claims the slug next, in BOTH directions the id reaches:
+        # the per-file overlays `detached` governs, and the sync base.
+        #
+        # Marker first, base second, the same ordering argument `_recorded_base`
+        # makes for #247: the two writes cannot be made one, so a crash between
+        # them has to land on the harmless side. *Marker, no base drop* -- sync
+        # already ignores a detached ref, so the stale base is inert. *Base
+        # dropped, no marker* -- the record looks campaign-local to sync while
+        # every per-file resolver still reads the world, so the next slug owner
+        # supplies its images, tagline and voice anchor with nothing to notice
+        # (Codex review).
+        add_detached(cid, ref)
+        _drop_manifest_ref(cid, ref)
+        return
+    _drop_record_dir(croot, kind, rid)
+    # Per-asset tombstones outlive the record they hid, and they hide by slot:
+    # `assets/characters/mara/default/avatar` would blank the NEXT Mara's avatar
+    # in this campaign, for a deletion aimed at a record that is gone (Codex
+    # review). The whole-record tombstone keeps its meaning and stays.
+    _drop_deleted(cid, {r for r in deleted(cid) if r.startswith(f"assets/{kind}/{rid}/")})
+    if kind == "greetings":
+        _drop_plotmap_edges(cid, croot, rid)
+
+
+def _record_present(root: Path, kind: str, rid: str) -> bool:
+    """Is there a record of this kind and id here *now*?
+
+    Asked again after the delete, because the sweep drops a whole directory and
+    these handlers hold no world-level lock: a concurrent create of the same
+    name takes the id back the instant the delete frees it, and publishes its
+    own `<kind>/<rid>/` for the sweep to remove -- reporting success for a
+    record that no longer exists (Codex review).
+
+    This narrows that window to the gap between the check and the `rmtree`
+    rather than closing it; closing it needs a world-record lock, which this
+    module does not have for anything (`locks.UNREVIEWED`). It costs nothing
+    and removes the destructive outcome for every interleaving but one.
+    """
+    if kind in ("characters", "pcs"):
+        return (root / kind / rid / _actor_meta(kind)).exists()
+    return _flat_path(root, kind, rid).exists()
+
+
+def _drop_plotmap_edges(cid: str, croot: Path, gid: str) -> None:
+    """Unwire a deleted greeting from a campaign's OWN plot map.
+
+    `greetings.delete_greeting` unwires it from the world's, and a campaign
+    without a plotmap.json reads that one — but a campaign that materialized its
+    map keeps a private copy `read_plotmap` prefers, and the deleted greeting's
+    node and every `leads_to`/`excludes` pointing at it survive there. Recreate
+    the slug and those edges are the new greeting's (Codex review).
+
+    Only for a campaign that already has its own map: materializing one here
+    would fork a campaign off the world's plot map as a side effect of a delete
+    it had nothing to do with.
+    """
+    if not (croot / "plotmap.json").exists():
+        return
+    greetings.remove_from_plotmap(croot, gid)
+    # A map that only ever matched the world's still matches it after both got
+    # the same edit -- but sync.md holds the pre-delete hash, so the campaign
+    # would be walked through a "conflict" whose two sides are identical (Codex
+    # review). Advance the base to what both now are.
+    wroot = wroot_of(cid)
+    manifest = campaigns_paths.read_manifest(cid)
+    world_h = greetings.plotmap_hash(wroot) if wroot.exists() else None
+    if "plotmap" in manifest and world_h is not None and greetings.plotmap_hash(croot) == world_h:
+        manifest["plotmap"] = world_h
+        campaigns_paths.write_manifest(cid, manifest)

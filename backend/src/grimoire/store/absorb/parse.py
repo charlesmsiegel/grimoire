@@ -9,8 +9,20 @@ than restating it, and `materializer.py` reads exactly these keys.
 from __future__ import annotations
 
 import json
+import math
 
 from .. import commitments, groupstate, plot
+
+#: The textual half of the routing inputs every edit row may carry (#110/#112).
+#: Kept as one tuple because `_cite` below is the ONLY place they are read out of
+#: a row: a section that forgets to call it silently loses both signals, and the
+#: reviewer sees an unrated row rather than an error.
+CITATION_TEXT = ("quote", "speaker")
+#: The whole per-edit routing contract, and what `evals` requires the prompt to
+#: still ask for -- these fields live INSIDE the sections, so the derived
+#: top-level contract (`parse_output("{}")`) cannot see them, and a template edit
+#: that dropped the ask would otherwise go unnoticed until a live run.
+CITATION_FIELDS = CITATION_TEXT + ("certainty",)
 
 
 def _int05(v) -> int:
@@ -27,6 +39,68 @@ def _truthy(v) -> bool:
 def _confidence(v: str) -> str:
     c = (v or "").strip().lower()
     return c if c in {"thin", "sketched", "established"} else "thin"
+
+
+def _certainty(v) -> float | None:
+    """The model's self-rated certainty for one edit, clamped to 0-1, or None
+    when it gave none this function can use (#110).
+
+    None rather than a default, for the same reason `knows`/`suspects` preserve
+    key presence: "the model said nothing about how sure it is" and "the model
+    said it is not sure" are different claims, and `routing` bands them
+    differently. Substituting a number here would erase the first.
+
+    Deliberately NOT named `_confidence` -- that name is taken, by the
+    thin/sketched/established scale a proposed NEW CHARACTER carries. The two
+    answer different questions (how solid is this person vs how sure am I of
+    this claim) and both ride on `new_characters` rows, so they cannot share a
+    key or a helper.
+
+    A numeric STRING is accepted because models emit `"0.8"` about as often as
+    `0.8`, and rejecting it would throw away a usable answer -- the same
+    tolerance `_int05` already extends. `bool` is refused ahead of the
+    conversion: it is an `int` subclass, so `True` would otherwise read as a
+    maximally certain 1.0 rather than as the nonsense it is. NaN is refused for
+    a harder reason -- it converts fine and then makes every comparison it
+    reaches False, so `max(0.0, min(1.0, nan))` returns whichever operand came
+    first and the band would depend on argument order. An infinity states a
+    direction and is simply clamped.
+    """
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        f = float(v.strip() if isinstance(v, str) else v)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(f):
+        return None
+    return max(0.0, min(1.0, f))
+
+
+def _cite(e: dict) -> dict:
+    """The routing fields on one edit row, present ONLY where the model gave a
+    usable value (#110/#112).
+
+    Key presence is the signal, exactly as it is for `knows`/`suspects`: an
+    absent `speaker` means the model cited nobody, which `routing` scores as
+    `uncited` -- distinct from a speaker it named that the transcript cannot
+    corroborate. Folding both into one shape (say, `speaker: ""`) would collapse
+    a row that followed the instructions onto one that ignored them.
+
+    Blank strings are dropped rather than kept: `"speaker": ""` and
+    `"speaker": null` are how a model writes "not applicable", and treating
+    either as a cited-but-empty speaker would report every such row as an
+    uncorroborated citation.
+    """
+    out: dict = {}
+    for f in CITATION_TEXT:
+        val = str(e.get(f) or "").strip()
+        if val:
+            out[f] = val
+    certainty = _certainty(e.get("certainty"))
+    if certainty is not None:
+        out["certainty"] = certainty
+    return out
 
 
 def extract_object(text: str) -> dict | None:
@@ -77,11 +151,12 @@ def parse_output(text: str) -> dict:
         # downstream. `.get(f) or ""` collapses null and absent to the same "".
         return str(e.get(f) or "").strip()
 
-    def _list(key, fields):
+    def _list(key, fields, cite=True):
         out = []
         for e in _rows(obj, key):
             if isinstance(e, dict):
-                out.append({f: _str(e, f) for f in fields})
+                row = {f: _str(e, f) for f in fields}
+                out.append(row | _cite(e) if cite else row)
         return out
 
     # Preserve key PRESENCE for knowledge: a field the model omitted must be left
@@ -95,7 +170,7 @@ def parse_output(text: str) -> dict:
         for k in ("knows", "suspects"):
             if k in e:
                 row[k] = _str(e, k)
-        cs_edits.append(row)
+        cs_edits.append(row | _cite(e))
 
     # Same key-presence rule as character_state_edits, for all five sections.
     gs_edits = []
@@ -106,14 +181,14 @@ def parse_output(text: str) -> dict:
         for k in groupstate.FIELDS:
             if k in e:
                 row[k] = _str(e, k)
-        gs_edits.append(row)
+        gs_edits.append(row | _cite(e))
 
     rel_deltas = []
     for e in _rows(obj, "relationship_deltas"):
         if isinstance(e, dict):
             rel_deltas.append({"from": _str(e, "from"), "to": _str(e, "to"),
                                "trust": _int05(e.get("trust")), "affection": _int05(e.get("affection")),
-                               "tension": _int05(e.get("tension")), "note": _str(e, "note")})
+                               "tension": _int05(e.get("tension")), "note": _str(e, "note")} | _cite(e))
 
     plot_moves = []
     for e in _rows(obj, "plot_movements"):
@@ -121,7 +196,7 @@ def parse_output(text: str) -> dict:
             status = _str(e, "status").lower()
             plot_moves.append({"id": _str(e, "id"), "title": _str(e, "title"),
                                "status": status if status in plot.STATUSES else "open",
-                               "beat": _str(e, "beat")})
+                               "beat": _str(e, "beat")} | _cite(e))
 
     # An absent or unrecognized kind/status normalizes to "", NOT to a default.
     # `commitments.set_movement` reads a blank as "keep what is stored" and
@@ -156,7 +231,7 @@ def parse_output(text: str) -> dict:
             # non-string (null, a number, an object) is treated as omission.
             if isinstance(e.get("due"), str):
                 row["due"] = e["due"].strip()
-            commitment_moves.append(row)
+            commitment_moves.append(row | _cite(e))
 
     new_characters = _list("new_characters",
                            ("name", "description", "history", "personality",
@@ -172,7 +247,7 @@ def parse_output(text: str) -> dict:
         new_locations.append({
             "name": _str(e, "name"), "body": _str(e, "body"), "keys": _str(e, "keys"),
             "sd_prompt": _str(e, "sd_prompt"), "current_setting": _truthy(e.get("current_setting")),
-        })
+        } | _cite(e))
 
     new_lore = _list("new_lore", ("name", "body", "keys"))
 
@@ -180,7 +255,23 @@ def parse_output(text: str) -> dict:
         "one_line": str(obj.get("one_line", "")).strip(),
         "summary": str(obj.get("summary", "")).strip(),
         "keywords": [str(k).strip() for k in _rows(obj, "keywords") if str(k).strip()],
-        "timeline_events": _list("timeline_events", ("date", "text")),
+        # `cite=False`: the routing fields are for STAGED EDITS, and a timeline
+        # event is not one -- it never reaches `materialize`, and the client
+        # sends the section straight back on save, so anything carried here is
+        # written into timeline.md rather than reviewed.
+        "timeline_events": _list("timeline_events", ("date", "text"), cite=False),
+        # The fact ledger (#114). `supersedes` is the id of a standing fact this
+        # one replaces, and a row with a `supersedes` and no `text` retires that
+        # fact outright -- so, unlike every other section here, a blank field is
+        # a meaningful instruction rather than nothing to say. `_list` is still
+        # the right normalizer: it collapses a JSON null to "", which is what
+        # the model writes for "no prior fact", and `materialize` reads the two
+        # blanks together (neither one alone stages anything).
+        #
+        # Cited like every other staged section (the `cite` default): a fact
+        # reaches the reviewer as a StagedEdit, so it is routed on the same
+        # evidence as the rest.
+        "facts": _list("facts", ("text", "date", "supersedes")),
         "character_state_edits": cs_edits,
         "group_state_edits": gs_edits,
         "lore_edits": _list("lore_edits", ("id", "append")),

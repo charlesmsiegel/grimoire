@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from .. import (cards, changes, characters, commitments, dossiers, entities, groupstate,
-                overlay, playstate, plot, relationships, voice_drift)
+from .. import (cards, changes, characters, commitments, dossiers, entities, facts,
+                groupstate, overlay, playstate, plot, relationships, voice_drift)
 from ..appearances import (paths as appearances_paths,
                            transitions as appearances_transitions,
                            versions as appearances_versions)
@@ -360,6 +360,99 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             commitments.set_movement(cid, mid, title, p.get("kind", ""),
                                      p.get("status", ""), p.get("due"),
                                      after, sid or p["scene"])
+        elif kind == "fact":
+            p = e["payload"]
+            # The TARGET id, not the payload's, for the reason the commitment
+            # branch gives at length: everything that judged this row read
+            # `target` -- `conflicts` surveyed it, `target_key` keyed the
+            # journal by it, the reviewer's basis describes it -- so the one
+            # write that can destroy something has to go where the checks went.
+            fid = target["id"]
+            # No staleness check here: `fact` is registered in
+            # `conflicts._REASONS`, so the one-pass gate in `apply_edits` has
+            # already refused this row if the fact it retires moved since it was
+            # staged.
+            text = after.strip()
+            # The row's INTENT comes from the staged payload, never from whether
+            # `after` happens to be blank -- the rule the voice_drift branch
+            # above keeps, and for the same reason. The reviewer can edit the
+            # text, and a replacement fact edited down to empty would otherwise
+            # reclassify itself as a bare retirement: the old fact would go off
+            # the ledger with nothing recorded in its place, which is a deletion
+            # nobody asked for. A retirement the reviewer typed a replacement
+            # INTO is the opposite case and is honoured -- they wrote the fact
+            # that replaces it, which is exactly what a supersession is.
+            if str(p.get("text", "")).strip() and not text:
+                return {"state": "failed", "id": eid, "kind": "error",
+                        "reason": "a fact cannot be blank — uncheck the row to skip it, "
+                                  "or leave the replacement text in place"}
+            if not text:
+                if not fid:
+                    return {"state": "skipped"}   # retires nothing, records nothing
+                if not facts.retire(cid, fid, sid or p.get("scene", "")):
+                    # Two ways in, and the message has to be true of both: an id
+                    # the ledger never held (a forged or hand-built body, or a
+                    # record deleted by hand), and a fact something else retired
+                    # first -- which the gate above refuses UNLESS the reviewer
+                    # answered for it, or the row carried no `before` to judge.
+                    # Reported rather than passed over: the end state they asked
+                    # for holds, but this scene is not what brought it about, and
+                    # a silent success would date the retirement to the wrong
+                    # scene in the reviewer's mind if not on the record.
+                    return {"state": "failed", "id": eid, "kind": "error",
+                            "reason": "that fact is not standing on this campaign's "
+                                      "ledger — it was already retired, or it is gone"}
+            else:
+                # A replacement that says what the fact already says is not a
+                # replacement. `materialize` drops the row when the MODEL writes
+                # one, but the reviewer can edit the text into a restatement
+                # afterwards and that path never goes back through it -- and
+                # this is the one that takes a client-supplied body. Left
+                # unchecked it retires a correctly dated fact and re-records the
+                # same sentence under this scene's later date, manufacturing a
+                # lifecycle change out of a truth that did not move.
+                #
+                # Reported rather than skipped: the reviewer approved a
+                # retirement, it is not going to happen, and #271's rule is that
+                # an approved change which does not land says so.
+                if fid and facts.restates(facts.get(cid, fid), text):
+                    return {"state": "failed", "id": eid, "kind": "error",
+                            "reason": "this says what the fact it replaces already says — "
+                                      "edit it to what is true now, or uncheck the row"}
+                scene = sid or p.get("scene", "")
+                # A row that retires nothing and whose text this scene already
+                # holds writes nothing at all: `facts.record` dedupes on
+                # (scene, text) and returns the id already there. Reported
+                # rather than passed over as applied, because the row promised a
+                # NEW entry with its own date and did not make one -- the
+                # duplicate-approval gap `materialize` closes for the text the
+                # MODEL wrote, reopened one layer down by the reviewer editing
+                # `after` into something already recorded, or editing two
+                # approved rows into the same sentence.
+                #
+                # Only when `fid` is empty. A row that also retires something
+                # did real work even when its text deduped onto an existing
+                # record -- that is the chain case `record` documents -- so
+                # calling it failed would be the opposite lie.
+                if not fid and facts.find(facts.read(cid), scene, text):
+                    return {"state": "failed", "id": eid, "kind": "error",
+                            "reason": "this scene already records that fact — edit it to "
+                                      "something else, or uncheck the row"}
+                # `sid` over the staged `payload.scene`, for the reason the plot
+                # branch gives: a retry after a rename must stamp the fact with
+                # the id the scene has now, since `facts.repoint_scenes` has
+                # already moved every stored reference onto it.
+                #
+                # A supersession whose predecessor something else already
+                # retired records the fact and leaves that retirement alone --
+                # first writer wins, and `record` is where that is enforced.
+                # The reviewer sees it coming: this is a conflict, and reaching
+                # here means they answered for it. Re-aiming `superseded_by` on
+                # their say-so would erase the only record of what actually
+                # replaced the fact first, to no gain -- both replacements are
+                # on the ledger either way, and a human can retire the one the
+                # story did not keep.
+                facts.record(cid, text, str(p.get("date", "")), scene, supersedes=fid)
         elif kind == "new_character":
             p = e["payload"]
             card = characters.blank_card(p["name"])

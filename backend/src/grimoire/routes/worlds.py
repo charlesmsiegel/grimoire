@@ -185,6 +185,9 @@ def post_world_instantiate(wid: str, kind: str, mid: str, content_id: str):
         except (store.modules.ModuleNotFound, store.sheets.SheetError) as e:
             # Sheet write failed after the entity was already created -- roll
             # it back so a failed instantiate leaves no sheetless orphan.
+            # Deliberately no `forget_world_record` here, unlike the delete
+            # routes: this restores the state before the create, and anything
+            # sitting under `eid` was already sitting there then (#225).
             store.entities.delete_entity(root, kind, eid)
             raise HTTPException(status_code=400, detail=str(e))
     return {"id": eid}
@@ -268,10 +271,12 @@ def put_world_pc(wid: str, pid: str, body: PCUpdate):
 
 @router.delete("/worlds/{wid}/pcs/{pid}")
 def delete_world_pc(wid: str, pid: str):
+    root = _world_root_or_404(wid)
     try:
-        store.pcs.delete_pc(_world_root_or_404(wid), pid)
+        store.pcs.delete_pc(root, pid)
     except store.pcs.PCNotFound:
         raise HTTPException(status_code=404, detail="pc not found")
+    store.overlay.forget_world_record(root, "pcs", pid)   # #225
     return {"ok": True}
 
 

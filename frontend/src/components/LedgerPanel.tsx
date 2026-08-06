@@ -5,7 +5,8 @@ import { api, type Commitment, type Ledger } from "../api/client";
 // editor CLAUDE.md prescribes for record pages: there is no record to open and
 // nothing to edit. Commitments come first — they are what the campaign still
 // owes, which is the question this view exists to answer; plot threads say what
-// is merely in motion, and the chronicle is the backdrop.
+// is merely in motion, standing facts say what is simply true, and the
+// chronicle is the backdrop.
 const KINDS: { kind: string; label: string }[] = [
   { kind: "promise", label: "Promises" },
   { kind: "threat", label: "Threats" },
@@ -13,7 +14,7 @@ const KINDS: { kind: string; label: string }[] = [
 ];
 
 // What a failed load degrades to: the empty state, never a stuck "Loading…".
-const EMPTY: Ledger = { plot: [], commitments: [], chronicle: [] };
+const EMPTY: Ledger = { plot: [], commitments: [], facts: [], chronicle: [] };
 
 function sceneNote(scene: { title: string; date: string }) {
   if (!scene.title) return null;
@@ -69,7 +70,8 @@ export function LedgerPanel({ cid, refreshKey = 0 }: { cid: string; refreshKey?:
   const ledger = loaded && loaded.cid === cid ? loaded.data : null;
   if (ledger === null) return <div className="ledger-panel">Loading…</div>;
 
-  const empty = !ledger.commitments.length && !ledger.plot.length && !ledger.chronicle.length;
+  const empty = !ledger.commitments.length && !ledger.plot.length
+    && !ledger.facts.length && !ledger.chronicle.length;
   if (empty)
     return (
       <div className="ledger-panel">
@@ -115,6 +117,30 @@ export function LedgerPanel({ cid, refreshKey = 0 }: { cid: string; refreshKey?:
               </div>
               {t.latest_beat && <p className="ledger-beat">{t.latest_beat}</p>}
               <p className="ledger-meta">{sceneNote(t.scene)}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {ledger.facts.length > 0 && (
+        <div className="side-section">
+          <h4>Standing facts</h4>
+          {ledger.facts.map((f) => (
+            <div key={f.id} className="ledger-row">
+              <p className="ledger-beat">{f.text}</p>
+              <p className="ledger-meta">
+                {f.date && <span className="chip on">{f.date}</span>}
+                {/* "recorded in", not the "last moved in" the two sections
+                    above use: a fact is written once and retired off this list
+                    rather than moved, so naming the scene as its latest
+                    movement would misdate every row. */}
+                {f.scene.title && (
+                  <span className="field-hint">
+                    {" · recorded in " + f.scene.title
+                      + (f.scene.date ? ` (${f.scene.date})` : "")}
+                  </span>
+                )}
+              </p>
             </div>
           ))}
         </div>

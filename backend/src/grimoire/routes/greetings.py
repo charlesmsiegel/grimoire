@@ -82,10 +82,22 @@ def put_world_greeting_edges(wid: str, gid: str, body: Edges):
 
 @router.delete("/worlds/{wid}/greetings/{gid}")
 def delete_world_greeting(wid: str, gid: str):
+    root = _world_root_or_404(wid)
+    # `delete_greeting` unlinks the record and THEN cleans the world plot map, so
+    # a malformed plotmap.json raises out of the second half with the record
+    # already gone. The sweep has to run for it anyway (#225, Codex review): a
+    # 500 that skipped it would leave every dependent campaign holding state for
+    # an id the world can hand out again, and the retry 404s without sweeping.
+    # Only the 404 path skips it -- there, nothing was removed.
+    absent = False
     try:
-        store.greetings.delete_greeting(_world_root_or_404(wid), gid)
+        store.greetings.delete_greeting(root, gid)
     except store.greetings.GreetingNotFound:
+        absent = True
         raise HTTPException(status_code=404, detail="greeting not found")
+    finally:
+        if not absent:
+            store.overlay.forget_world_record(root, "greetings", gid)
     return {"ok": True}
 
 

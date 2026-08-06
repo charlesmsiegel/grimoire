@@ -19,6 +19,7 @@ import pytest
 from grimoire.store import (audit, calendars, campaigns, dice, locks, proposals, rolls,
                             scenes, sheets, worlds)
 from grimoire.store.audit import apply as audit_apply, baselines as audit_baselines
+from grimoire.store.campaigns import read as campaigns_read
 from grimoire.store.scenes import locking as scenes_locking
 from grimoire.store.sheets import (advancement as sheets_advancement,
                                    creation as sheets_creation, writer as sheets_writer)
@@ -351,21 +352,25 @@ def test_module_edit_holds_every_campaign_lock_from_this_registry():
     assert "locks.hold_all(" in inspect.getsource(module_edit._campaign_locks)
 
 
-# ---- hold_all: one deadline, sorted order (#234) ----
+# ---- hold_all: one deadline, sorted order (#234, #267) ----
 #
 # Sorted order is what keeps the two multi-campaign holders from deadlocking
 # once these locks are cross-process.
 #
-# Note what these tests are and are not. The two holders already AGREE today:
-# module_edit._campaign_locks() iterates list_campaigns(), which walks
-# `sorted(base.iterdir())` and reports each directory name as the id, so it is
-# already cid-sorted -- the same key put_world_module sorts by. There is no
-# live inversion to fix.
+# This comment used to say the two holders already agreed, incidentally, and
+# that there was "no live inversion to fix" -- because list_campaigns() walks
+# `sorted(base.iterdir())`. It does, and then it ends on
+# `out.sort(key=updated, reverse=True)`, so what it returns is recency order
+# while put_world_module sorts by cid. The inversion was live (#267); hold_all
+# is what closes it, not a guarantee bolted onto an existing agreement.
 #
-# What is missing is any guarantee of that. The agreement is incidental,
-# undocumented, and one refactor of list_campaigns() (sort by name, by
-# `updated`, drop the sort) away from becoming a genuine cross-process
-# deadlock. hold_all() makes the rule explicit and these tests hold it there.
+# That mistake is also why the order tests below stamp `updated`. Campaigns
+# created back-to-back share one `updated` second, and a stable sort on equal
+# keys leaves them in iterdir order -- which IS cid order. Assert against that
+# fixture and the acquisition order comes from the input rather than from the
+# code: the test passes on an unsorted holder. Verified, not theorized -- with
+# module_edit reverted to its pre-fix raw `ExitStack` loop, the un-stamped
+# version of test_module_edit_acquires_campaign_locks_in_sorted_order passed.
 
 
 def test_hold_all_acquires_in_sorted_order(monkeypatch, tmp_path):
@@ -390,16 +395,46 @@ def test_hold_all_holds_every_named_lock(monkeypatch, tmp_path):
     assert not any(locks.campaign_lock(c)._is_owned() for c in ("a", "b", "c"))
 
 
+def _three_campaigns_in_reverse_recency(monkeypatch, tmp_path):
+    """Three campaigns whose recency order is the REVERSE of their id order.
+
+    The whole point of the fixture. `list_campaigns()` returns
+    `updated`-descending, so a holder that iterates it unsorted acquires
+    ['zulu', 'mike', 'alpha'] here while a sorted one acquires
+    ['alpha', 'mike', 'zulu'] -- the two are now distinguishable, which they
+    are not for campaigns created in one second (see the note above).
+
+    `touch` is the store's own writer for `updated`; only the clock it reads is
+    replaced, so the frontmatter is stamped the way production stamps it.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    for name in ("Zulu", "Alpha", "Mike"):
+        campaigns.create_campaign(name, wid, module="pool-basic")
+
+    real_now = campaigns_read.now_iso
+    for day, cid in enumerate(("alpha", "mike", "zulu"), start=1):
+        monkeypatch.setattr(campaigns_read, "now_iso",
+                            lambda day=day: f"2026-01-{day:02d}T00:00:00Z")
+        campaigns.touch(cid)
+    monkeypatch.setattr(campaigns_read, "now_iso", real_now)   # the route touches too
+
+    listed = [c["id"] for c in campaigns.list_campaigns()]
+    # Not an assertion about list_campaigns -- an assertion that this fixture
+    # can still tell a sorted holder from an unsorted one. If list_campaigns
+    # ever returns cid order again, every order test below goes vacuous, and
+    # this is what says so instead of quietly passing.
+    assert listed == ["zulu", "mike", "alpha"], listed
+    return wid
+
+
 def test_module_edit_acquires_campaign_locks_in_sorted_order(monkeypatch, tmp_path):
     """Behavioural, not a source grep: spy on the registry and assert the ORDER
     module_edit actually asks for. A source assertion would pass on a docstring
     mention and would not catch an alias."""
     from grimoire.store import module_edit
 
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds.create_world("Realm")
-    for name in ("Zulu", "Alpha", "Mike"):
-        campaigns.create_campaign(name, wid, module="pool-basic")
+    _three_campaigns_in_reverse_recency(monkeypatch, tmp_path)
 
     order = []
     real = locks.campaign_lock
@@ -412,15 +447,16 @@ def test_module_edit_acquires_campaign_locks_in_sorted_order(monkeypatch, tmp_pa
 
 
 def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
-    """Same guarantee for the other multi-lock holder, through the real route."""
+    """Same guarantee for the other multi-lock holder, through the real route.
+
+    Same fixture as module_edit's, deliberately: this route is the holder that
+    sorts by cid, so it is only distinguishable from the one that iterates
+    `list_campaigns()` when those two orders disagree."""
     from fastapi.testclient import TestClient
 
     from grimoire import main
 
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds.create_world("Realm")
-    for name in ("Zulu", "Alpha", "Mike"):
-        campaigns.create_campaign(name, wid, module="pool-basic")
+    wid = _three_campaigns_in_reverse_recency(monkeypatch, tmp_path)
 
     order = []
     real = locks.campaign_lock

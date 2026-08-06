@@ -78,8 +78,9 @@ def list_campaigns() -> list[dict]:
     return out
 
 
-def world_refs() -> list[tuple[str, str | None]]:
-    """(campaign name, referenced world id) for *every* campaign on disk.
+def world_refs() -> list[tuple[str, str, str | None]]:
+    """(campaign id, campaign name, referenced world id) for *every* campaign
+    on disk.
 
     Deliberately unfiltered, unlike `list_campaigns`. This backs
     `worlds.delete_world`'s in-use check, and a campaign that is unusable as an
@@ -94,8 +95,16 @@ def world_refs() -> list[tuple[str, str | None]]:
     file that cannot be read at all yields ``None``. Callers must treat that as
     "may reference anything" -- skipping it is how "we could not tell" turns
     into "nothing uses this world", which deletes it (#259 review).
+
+    The id comes first because the tolerance is the point: this is the only
+    enumeration that survives a campaign nobody can read, so anything that has
+    to act on *each* campaign of a world -- `overlay.forget_world_record`, as
+    well as the in-use check -- needs to address them from here. The two
+    consumers want opposite things from a campaign this cannot read, and both
+    have to be able to say so: the in-use check counts it as a user, the sweep
+    leaves it alone.
     """
-    out: list[tuple[str, str | None]] = []
+    out: list[tuple[str, str, str | None]] = []
     base = paths._campaigns_dir()
     if not base.exists():
         return out
@@ -109,13 +118,13 @@ def world_refs() -> list[tuple[str, str | None]]:
             try:   # frontmatter survives a bad byte in the body
                 text = mp.read_text(encoding="utf-8", errors="replace")
             except OSError:
-                out.append((d.name, None))
+                out.append((d.name, d.name, None))
                 continue
         except OSError:
-            out.append((d.name, None))
+            out.append((d.name, d.name, None))
             continue
         meta, _ = parse_frontmatter(text)
-        out.append((meta.get("name", d.name), meta.get("world", "")))
+        out.append((d.name, meta.get("name", d.name), meta.get("world", "")))
     return out
 
 

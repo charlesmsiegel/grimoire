@@ -66,15 +66,45 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
         _write(cid, data)
 
 
+def _field(value, fallback: str = "") -> str:
+    """A stored field as text, or `fallback` for anything that is not a string.
+
+    plot.json is hand-editable and read by a bare `json.loads`, so a record with
+    an object-valued `title` reads fine and every consumer inherits it. The two
+    that render (`routes.campaigns.get_ledger` -> `LedgerPanel`,
+    `routes.scenes.get_briefing` -> the inspector's Briefing section) pass these
+    straight to React, which refuses an object as a child and blanks the whole
+    panel -- a failure no `try` around the READ can catch, because the read
+    succeeds. `commitments._field` is the same helper for the same reason; the
+    ledger route carried a local copy of it for this module because this
+    projection did not coerce, and that copy is now belt-and-braces rather than
+    the only guard.
+    """
+    return value.strip() if isinstance(value, str) else fallback
+
+
 def open_threads(cid: str) -> list[dict]:
-    items = [(pid, t) for pid, t in read(cid).items() if t.get("status") != "closed"]
-    items.sort(key=lambda kt: (kt[1].get("last_scene", ""), kt[0]))
+    # `isinstance(t, dict)`, and `_field` inside the sort key: a record that is
+    # not a mapping has no `.get`, and a list-valued `last_scene` makes the
+    # comparison raise -- either one costs every OTHER thread its row, since the
+    # callers' tolerance is a `try` around the whole call. Mirrors
+    # `commitments.open_commitments`, which learned both the same way.
+    # Case-folded as well as stripped, the whole of `commitments`' rule rather
+    # than half of it: every status this module WRITES is already lower-case
+    # (`set_movement` only accepts a member of `STATUSES`), so folding can only
+    # rescue a hand-edited `"Closed"` and cannot reinterpret anything the
+    # pipeline produced. Stripping without folding was the gap that pass left.
+    items = [(pid, t) for pid, t in read(cid).items()
+             if isinstance(t, dict) and _field(t.get("status")).lower() != "closed"]
+    items.sort(key=lambda kt: (_field(kt[1].get("last_scene")), kt[0]))
     out = []
     for pid, t in items:
-        beats = t.get("beats") or []
-        out.append({"id": pid, "title": t.get("title", pid), "status": t.get("status", "open"),
-                    "last_scene": t.get("last_scene", ""),
-                    "latest_beat": beats[-1]["text"] if beats else ""})
+        beats = t.get("beats")
+        last = beats[-1] if isinstance(beats, list) and beats else None
+        out.append({"id": pid, "title": _field(t.get("title"), pid),
+                    "status": _field(t.get("status"), "open"),
+                    "last_scene": _field(t.get("last_scene")),
+                    "latest_beat": _field(last.get("text")) if isinstance(last, dict) else ""})
     return out
 
 

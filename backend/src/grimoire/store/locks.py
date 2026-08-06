@@ -48,10 +48,19 @@ Ordering rules (deadlock avoidance):
            ├─ audit baseline lock   (``store/audit/baselines.py``)
            └─ rolls lock            (``store/rolls.py``)
 
-- Every multi-campaign holder goes through ``hold_all``, which sorts. The two
-  that exist (module publication, the world-module rebind route) already
-  agreed before that existed, but only by accident — see ``hold_all``. No LLM
-  play flow ever holds more than its own campaign's lock.
+- **Every multi-campaign holder goes through** ``hold_all``, which sorts.
+  Nothing else may hold more than one campaign lock at a time. The two that
+  exist (module publication, the world-module rebind route) did **not** agree
+  before ``hold_all``, though this file used to say they did: the route sorted
+  by cid and module publication took ``list_campaigns()`` order, which is
+  recency (#267). No LLM play flow ever holds more than its own campaign's
+  lock.
+
+  Checked per holder, not structurally: ``test_locks_store.py`` spies on the
+  registry and asserts the order each of the two actually asks for. A THIRD
+  holder written tomorrow is checked by nothing, which is the gap #267 was
+  filed about and this paragraph does not close. Adding one means adding its
+  test beside those two.
 - campaign lock -> audit baseline lock, never reversed
   (``store/audit/baselines.py``).
 
@@ -129,6 +138,11 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # (#115), so it starts inside the exclusion rather than joining the
     # `UNREVIEWED` backlog `plot` sits in.
     "store.commitments",
+    # `facts.json` the same (#114), and with one reason of its own on top of
+    # the whole-file rewrite: `record` retires the superseded fact and writes
+    # its replacement in one read-modify-write, so an unlocked pair can also
+    # leave a fact retired by an id that never landed.
+    "store.facts",
     "store.sheets.tally",
     "store.sheets.writer",
     "store.audit.baselines",
@@ -418,14 +432,29 @@ def hold_all(cids):
     """Hold every named campaign lock, in sorted order, under ONE deadline.
 
     **Sorted order.** The two multi-campaign holders -- ``module_edit.
-    _campaign_locks`` and the world-module rebind route -- already agree
-    today, but only by accident: ``list_campaigns()`` walks
-    ``sorted(base.iterdir())`` and reports the directory name as the id, which
-    is the same key the route sorts by. Nothing states that, and one refactor
-    of ``list_campaigns`` (sort by name, by ``updated``, drop the sort) turns
-    the accident into a cross-process deadlock. Routing both holders through
-    here makes the rule explicit and enforced in one place instead of assumed
-    in two.
+    _campaign_locks`` and the world-module rebind route -- did NOT agree before
+    this function existed, though an earlier version of this docstring said
+    they did and called the agreement accidental. ``list_campaigns()`` does
+    walk ``sorted(base.iterdir())``, but it ends on
+    ``out.sort(key=updated, reverse=True)`` (``campaigns/read.py``), so what it
+    returns is recency order; the rebind route sorts by cid. Whenever those two
+    orders disagree -- the ordinary case, since ids are slugs and ``updated`` is
+    a clock -- the two holders acquire the same locks in opposite orders, and
+    two concurrent requests wedge permanently on each other (#267). Both
+    endpoints are plain ``def``, so FastAPI runs them in the threadpool and
+    they are genuinely concurrent.
+
+    So this is the fix rather than a formality: it is the ONLY place that
+    sorts, and no other caller may hold more than one campaign lock.
+
+    That last sentence is a rule, not a guarantee, and the difference is worth
+    stating because getting it wrong is the whole of #267. What enforces it is
+    two per-holder tests in ``test_locks_store.py``, one for each holder that
+    exists today. Nothing checks a holder nobody has written yet -- and #267
+    happened precisely because the second holder was written without knowledge
+    of the first, each carrying a comment calling itself the only one. If you
+    are adding a third, route it through here and add its test beside those
+    two; do not trust this paragraph to have stopped you.
 
     **One deadline**, not one per lock: applying ``LOCK_TIMEOUT`` to each of N
     locks while holding the earlier ones would give an N x LOCK_TIMEOUT convoy.

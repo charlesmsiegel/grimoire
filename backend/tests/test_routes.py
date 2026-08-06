@@ -1,4 +1,3 @@
-import asyncio
 import contextlib
 import importlib
 import io
@@ -12,15 +11,9 @@ from grimoire.store import atomic
 from grimoire import routes
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
-
-
-class FakeOpenRouter:
-    def __init__(self, deltas):
-        self.deltas = deltas
-
-    async def stream(self, messages, cfg):
-        for d in self.deltas:
-            yield d
+from tests.llm_fakes import (  # the shared gateway fakes (#204)
+    CapturingOpenRouter, FailingOpenRouter, FakeOpenRouter, FakeOpenRouterComplete,
+    QuietThenAnswers, StallingOpenRouter)
 
 
 @pytest.fixture
@@ -1459,16 +1452,6 @@ def test_cast_supplied_version_purged_campaign_side_404(client):
     assert "alt" not in versions   # not revived from the world
 
 
-class CapturingOpenRouter:
-    def __init__(self):
-        self.messages = None
-
-    async def stream(self, messages, cfg):
-        self.messages = messages
-        for d in ["ok"]:
-            yield d
-
-
 def test_chat_injects_system_message(client):
     wid = _world(client)
     sera = {"spec": "chara_card_v3", "spec_version": "3.0",
@@ -1523,40 +1506,6 @@ def test_chat_streams_and_persists(client):
 
 
 # ---- turn cancel / heartbeat / transactional post+response (#95) ----
-
-class FailingOpenRouter:
-    """Streams `deltas`, then fails upstream — a turn that dies part-way."""
-
-    def __init__(self, deltas=()):
-        self.deltas = list(deltas)
-
-    async def stream(self, messages, cfg):
-        for d in self.deltas:
-            yield d
-        raise LLMError("network", "connection reset")
-
-
-class StallingOpenRouter:
-    """Streams `deltas`, then holds the connection open — the model still
-    talking when the client walks away."""
-
-    def __init__(self, deltas=()):
-        self.deltas = list(deltas)
-
-    async def stream(self, messages, cfg):
-        for d in self.deltas:
-            yield d
-        await asyncio.sleep(30)  # bounded so a regression fails rather than hangs
-
-
-class QuietThenAnswers:
-    """Reports liveness with no text before answering — what the LLM facade
-    surfaces while it is still waiting on the provider."""
-
-    async def stream(self, messages, cfg):
-        yield ""
-        yield "At last."
-
 
 def _scene_with_a_pending_post(tmp_path, monkeypatch, content="and then?"):
     """A scene whose tail is an unanswered user post — the state `post_chat` is
@@ -3439,27 +3388,6 @@ def test_localize_endpoint_does_not_persist_when_nothing_localized(client, monke
     assert calls == []  # changed-gating skipped the write
 
 
-class FakeOpenRouterComplete:
-    """A completer whose reply can be a single string (existing single-call
-    tests) or a list consumed one-per-call, in order (multi-step flows, e.g.
-    absorb's extraction complete() followed by the audit's complete()).
-    `calls` counts total complete()/stream() invocations."""
-    def __init__(self, text):
-        self._texts = text if isinstance(text, list) else [text]
-        self.calls = 0
-
-    def _next(self) -> str:
-        i = min(self.calls, len(self._texts) - 1)
-        self.calls += 1
-        return self._texts[i]
-
-    async def stream(self, messages, cfg):
-        yield self._next()
-
-    async def complete(self, messages, cfg):
-        return self._next()
-
-
 def _world_char(client):
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters",
@@ -4331,7 +4259,7 @@ def test_a_failing_voice_check_does_not_fail_absorb(client):
             if self.calls >= 2:                  # the voice call, after extraction + dossier
                 self.calls += 1
                 raise LLMError("upstream", "the model exploded")
-            return self._next()
+            return await super().complete(messages, cfg)
 
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: Failing([_EXTRACTION, _DOSSIER])
@@ -6588,16 +6516,6 @@ def test_offscreen_greeting_rejects_a_scene_with_players(client):
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
                        json={"greeting": g}).status_code == 409
 
-
-class FakeCompleter:
-    def __init__(self, text):
-        self.text = text
-
-    async def complete(self, messages, cfg):
-        self.messages = messages
-        return self.text
-
-
 def test_offscreen_suggestions_filter_player_cast(client):
     wid, cid = _campaign(client)
     other = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Tavern"}).json()["id"]
@@ -6606,7 +6524,7 @@ def test_offscreen_suggestions_filter_player_cast(client):
     # seating vex copies him into the campaign, making his token valid for suggestions
     client.post(f"/api/campaigns/{cid}/scenes/{other}/cast", json={"kind": "characters", "id": "vex"})
     client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
-    fake = FakeCompleter(json.dumps({"suggestions": [{
+    fake = FakeOpenRouterComplete(json.dumps({"suggestions": [{
         "title": "Plot", "premise": "The cult schemes.",
         "cast": ["characters:vex", f"pcs:{pid}"], "location": ""}]}))
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
@@ -6626,7 +6544,7 @@ def test_offscreen_suggestions_rank_only_offscreen_greetings(client):
     client.post(f"/api/campaigns/{cid}/greetings", json={
         "name": "Normal", "character": "vex", "version": ver, "body": "y"})
     client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
-    fake = FakeCompleter(json.dumps({"suggestions": [], "greeting_picks": ["alpha", "beta"]}))
+    fake = FakeOpenRouterComplete(json.dumps({"suggestions": [], "greeting_picks": ["alpha", "beta"]}))
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     out = client.post(f"/api/campaigns/{cid}/scene-suggestions?offscreen=true").json()
     assert "Available greetings" in fake.messages[1]["content"]
@@ -6810,6 +6728,33 @@ def test_group_state_routes_round_trip(client):
     # unknown group -> 404 on both verbs
     assert client.get(f"/api/campaigns/{cid}/groups/no-such/state").status_code == 404
     assert client.put(f"/api/campaigns/{cid}/groups/no-such/state", json={}).status_code == 404
+
+
+def test_world_group_delete_leaves_no_state_for_the_next_group_of_that_name(client):
+    """#225: ids come back with the slug, so the campaign state of a group
+    deleted world-side must not greet the next group named the same way."""
+    wid, cid = _campaign(client)
+    gid = client.post(f"/api/worlds/{wid}/groups", json={"name": "Salt Circle"}).json()["id"]
+    client.put(f"/api/campaigns/{cid}/groups/{gid}/state", json={"secrets": "The abbot."})
+
+    assert client.delete(f"/api/worlds/{wid}/groups/{gid}").status_code == 200
+    again = client.post(f"/api/worlds/{wid}/groups", json={"name": "Salt Circle"}).json()["id"]
+    assert again == gid                      # the collision this is about
+    assert client.get(f"/api/campaigns/{cid}/groups/{gid}/state").json()["secrets"] == ""
+
+
+def test_world_character_delete_leaves_no_playstate_for_the_next_of_that_name(client):
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters",
+                       json={"name": "Winifred"}).json()["character"]
+    croot = store.campaigns.campaign_root(cid)
+    store.playstate.write_state(croot, chid, "## Knows\nWhere the ledger is hidden.")
+
+    assert client.delete(f"/api/worlds/{wid}/characters/{chid}").status_code == 200
+    again = client.post(f"/api/worlds/{wid}/characters",
+                        json={"name": "Winifred"}).json()["character"]
+    assert again == chid
+    assert store.playstate.read_state(croot, chid) is None
 
 
 # ---- modules (#160) ----
@@ -9394,3 +9339,68 @@ def test_clearing_a_campaign_override_opts_out_even_with_no_world_anchor(client)
 
     store.voice_anchors.write(store.worlds.world_root(wid), "mara", "Added later.")
     assert store.overlay.voice_anchor(cid, "mara") == ""    # still opted out
+
+def test_world_pc_and_greeting_deletes_sweep_their_leftovers_too(client):
+    """#225's other two world-route deletes of inheritable records."""
+    wid, cid = _campaign(client)
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Mara"}).json()["pc"]
+    chid = client.post(f"/api/worlds/{wid}/characters",
+                       json={"name": "Seraphine"}).json()["character"]
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Arrival", "character": chid,
+                            "version": "default", "body": "hi"}).json()["id"]
+    croot = store.campaigns.campaign_root(cid)
+    for kind, rid in (("pcs", pid), ("greetings", gid)):
+        (croot / kind / rid).mkdir(parents=True)
+        (croot / kind / rid / "leftover.md").write_text("stale\n", encoding="utf-8")
+
+    assert client.delete(f"/api/worlds/{wid}/pcs/{pid}").status_code == 200
+    assert client.delete(f"/api/worlds/{wid}/greetings/{gid}").status_code == 200
+    assert not (croot / "pcs" / pid).exists()
+    assert not (croot / "greetings" / gid).exists()
+
+
+def test_absorb_primes_the_extraction_with_the_campaigns_standing_facts(client):
+    """The route is the seam: `build_prompt` renders the block and `facts.json`
+    holds the rows, and both can be right while the call that joins them sends
+    nothing. Without the ids in the prompt no scene can ever supersede a fact,
+    so the ledger only grows (#114)."""
+    seen: list = []
+
+    class _Recording(FakeOpenRouterComplete):
+        async def complete(self, messages, cfg):
+            seen.append(messages)
+            return await super().complete(messages, cfg)
+
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We entered the crypt.")
+    store.facts.record(cid, "The crypt door has no lock.", "the third night", "000--earlier")
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: _Recording('{"one_line": "x"}')
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").status_code == 200
+
+    user = seen[0][1]["content"]
+    assert "Standing facts:" in user
+    assert "f1: The crypt door has no lock. (the third night)" in user
+
+
+def test_a_broken_world_plot_map_does_not_skip_the_greeting_sweep(client):
+    """#225: `delete_greeting` unlinks the record and then cleans the plot map,
+    so the second half can raise with the record already gone."""
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters",
+                       json={"name": "Seraphine"}).json()["character"]
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Arrival", "character": chid,
+                            "version": "default", "body": "hi"}).json()["id"]
+    croot = store.campaigns.campaign_root(cid)
+    (croot / "greetings" / gid).mkdir(parents=True)
+    (croot / "greetings" / gid / "leftover.md").write_text("stale\n", encoding="utf-8")
+    (store.worlds.world_root(wid) / "plotmap.json").write_text("{not json", encoding="utf-8")
+
+    # TestClient re-raises the handler's exception rather than rendering the 500
+    with pytest.raises(json.JSONDecodeError):
+        client.delete(f"/api/worlds/{wid}/greetings/{gid}")
+    assert not (croot / "greetings" / gid).exists()        # swept anyway

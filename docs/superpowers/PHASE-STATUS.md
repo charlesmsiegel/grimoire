@@ -67,7 +67,17 @@ extraction (`absorb.build_prompt` fed deterministic snapshots + `parse_output`) 
 injects a labeled, always-on, **tolerant** (omit-never-crash) section.
 
 `StagedEdit` shape (backend↔TS, fixed): `{id, kind, target:{kind,id}, label, field,
-before, after, authored, payload?}`.
+before, after, authored, payload?, review?}`.
+
+`review?` is the confidence routing added by #110/#112 (`store/absorb/routing.py`):
+`{certainty, quote, speaker, authority, score, band}`, present on the rows
+`materialize` staged from the extraction and absent on the ones the later phases
+(dossier, voice, sheet) stage, which rest on no transcript citation. It is
+**display and default-checkbox state only** — `apply_edits` never reads it, and a
+`low` row a reviewer ticks applies like any other. The review-everything
+invariant above therefore still holds: routing only ever *withholds* a default
+approval (a `low` row starts unchecked, behind a "show N low-confidence" toggle);
+it never grants one.
 
 ## Next: none — umbrella complete
 
@@ -93,6 +103,18 @@ worktree — the editable `backend/.venv` is pinned to this checkout). Progress 
   post-history corrective (`store/voice_drift.py`,
   `templates/scene/voice_correction.j2`).
 - Bond `since_scene` is stored but never populated (schema-ready; wire when useful).
+- #110's Option A asked the panel to **sort** by confidence; it partitions instead
+  (server order kept, `low` split off). Sorting numerically would scramble the
+  kind grouping the labels rely on, and the row's index in `editRows` is what the
+  #111 conflict verdicts are keyed on, so reordering is the one change with a
+  correctness cost. Revisit if the banding alone proves too coarse to scan.
+- #110's Option A also pre-checked only the HIGH rows; `medium` pre-checks too,
+  so the only behaviour change is that `low` rows stop being pre-approved.
+  Deliberate: withholding an approval is safe, granting one is not.
+- #112's Option A put the evidence in the StagedEdit `payload`; it rides in
+  `review` instead. `payload` is what `apply_edits` reads, and `new_character`
+  payloads already carry an `evidence` key meaning something else entirely (the
+  thin/sketched/established provenance sentence).
 - Phase-1 Minor: re-absorbing a scene re-appends `timeline.md` lines (no timeline reader
   yet; fix when one lands).
 - Relationship metrics are approve/reject only in review (no inline number editing yet).

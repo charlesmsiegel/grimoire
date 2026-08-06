@@ -396,13 +396,37 @@ export type SceneContext = {
 };
 export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
 export type TimelineEvent = { date: string; text: string };
+/** How much weight one staged proposal has earned (#110/#112), computed by
+ *  `store/absorb/routing.py`. Display and default-checkbox state only — the
+ *  server never reads it back on save, and a `low` row a reviewer ticks anyway
+ *  applies exactly like any other. */
+export type EditReview = {
+  /** The extractor's own 0-1 rating, or null when it gave none. Poorly
+   *  calibrated by construction, so it is shown and ordered by, never trusted
+   *  as a probability. */
+  certainty: number | null;
+  /** The excerpt it cited, and the transcript label it attributed them to.
+   *  Both "" when it cited nothing. */
+  quote: string; speaker: string;
+  /** What the transcript actually corroborates about that speaker, relative to
+   *  the record being changed. `unattributed` means the citation cannot be
+   *  checked — nobody spoke under that name, or two speakers answer to it. */
+  authority: "narration" | "self" | "other" | "unattributed" | "uncited";
+  /** `certainty` weighted by `authority`, and the band the panel routes on. */
+  score: number; band: "high" | "medium" | "low";
+};
 export type StagedEdit = {
   id: string; kind: "character_state" | "lore" | "authored" | "relationship" | "bond" | "plot"
-    | "commitment" | "new_character" | "new_location" | "new_lore" | "sheet" | "dossier"
-    | "voice_drift";
+    | "commitment" | "fact" | "new_character" | "new_location" | "new_lore" | "sheet"
+    | "dossier" | "voice_drift";
   target: { kind: string; id: string }; label: string; field: string;
   before: string; after: string; authored: boolean;
   payload?: Record<string, unknown>;
+  /** Present on the rows `absorb.materialize` staged from the extraction, and
+   *  absent on the ones staged by the later phases (dossier, voice, sheet),
+   *  which rest on no transcript citation to weigh. An absent block routes as
+   *  `medium`: shown and pre-approved, exactly as every row was before #110. */
+  review?: EditReview;
   /** Set once the reviewer has answered a conflict on this row (#111): the
    *  reviewer's authorization to write over a target that moved since the
    *  scene was absorbed. Both values authorize; they differ in whether `after`
@@ -509,9 +533,34 @@ export type PlotThread = {
   last_scene: string; latest_beat: string; scene: LedgerScene;
 };
 export type Commitment = PlotThread & { kind: string; due: string };
+/** A standing fact on the ledger (#114). `scene` is the scene that RECORDED it,
+ *  not one that last moved it: a fact's text never changes once written, and a
+ *  fact that stopped being true is retired off this list rather than rewritten. */
+export type StandingFact = {
+  id: string; text: string; date: string; scene: LedgerScene;
+};
 export type LedgerFact = { id: string; one_line: string; date: string; title: string };
 export type Ledger = {
-  plot: PlotThread[]; commitments: Commitment[]; chronicle: LedgerFact[];
+  plot: PlotThread[]; commitments: Commitment[]; facts: StandingFact[];
+  chronicle: LedgerFact[];
+};
+
+// pre-scene briefing (#118) — the ledger's per-scene sibling. The rows are the
+// ledger's, minus the `scene` label (this view is about who, not when) and plus
+// `involves`: the display names of the scene's cast this row can be traced to,
+// empty for a row it cannot. `focus` names who the flag was computed against —
+// the scene's players, or its whole cast when it is an offscreen scene with
+// none. Rows are ordered flagged-first and never filtered: an unflagged
+// commitment is still owed.
+export type BriefingRow = {
+  id: string; title: string; status: string;
+  last_scene: string; latest_beat: string; involves: string[];
+};
+export type BriefingCommitment = BriefingRow & { kind: string; due: string };
+export type BriefingFact = { id: string; one_line: string; title: string; date: string };
+export type Briefing = {
+  focus: string[]; plot: BriefingRow[]; commitments: BriefingCommitment[];
+  relationships: string[]; last_time: BriefingFact | null;
 };
 
 // lorebook import
@@ -1134,6 +1183,12 @@ export const api = {
 
   getSceneContext: (cid: string, sid: string) =>
     request<SceneContext>("GET", `/api/campaigns/${cid}/scenes/${sid}/context`),
+  // `fresh`, like `campaignLedger`: a briefing is a continuity view, and the
+  // one moment it is read is right after the previous scene's save — exactly
+  // when a cached copy would still be showing the commitment that save resolved.
+  sceneBriefing: (cid: string, sid: string) =>
+    request<Briefing>("GET", `/api/campaigns/${cid}/scenes/${sid}/briefing`,
+                      undefined, { fresh: true }),
   sceneSuggestions: (cid: string, after?: string, offscreen?: boolean) => {
     const params = new URLSearchParams();
     if (after) params.set("after", after);

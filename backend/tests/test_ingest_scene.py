@@ -1326,3 +1326,26 @@ def test_an_unreplayable_failure_survives_a_successful_retry(monkeypatch, tmp_pa
     assert result["failures"] == [stranded]
     assert "pending" not in result                            # and it is not replayable
     assert campaigns_store.campaign_root(cid).exists()
+
+
+def test_run_absorb_primes_the_prompt_with_standing_facts(monkeypatch, tmp_path):
+    """An import walks a whole campaign log scene by scene, so this is the path
+    where an unprimed prompt hurts most: without the ids, every imported scene's
+    facts land as new and nothing can ever be superseded — the ledger fills with
+    mutually contradicting facts (#114)."""
+    from grimoire.store import facts, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    sid = ingest_scene.build_scene(cid, {
+        "title": "The Reckoning",
+        "characters": [{"kind": "characters", "id": "marisol"}],
+        "turns": [{"role": "assistant", "speaker": "Marisol", "content": "\"You've grown bold.\""}],
+    })
+    facts.record(cid, "Marisol holds the stair.", "before midwinter", "000--earlier")
+
+    client = FakeClient("{}")
+    asyncio.run(ingest_scene.run_absorb(cid, sid, client, {"kind": "openrouter"}))
+    user_message = client.calls[0][0][1]["content"]
+    assert "Standing facts:" in user_message
+    assert "f1: Marisol holds the stair. (before midwinter)" in user_message

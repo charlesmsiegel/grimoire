@@ -8,12 +8,12 @@ materialize` would bind the function rather than the module.
 
 from __future__ import annotations
 
-from .. import (characters, commitments, entities, groupstate, overlay, pcs,
-                playstate, plot, relationships)
+from .. import (characters, commitments, entities, facts, groupstate, overlay,
+                pcs, playstate, plot, relationships)
 from ..appearances import paths as appearances_paths, versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..paths import slugify
-from . import conflicts, parse, weather
+from . import conflicts, parse, routing, weather
 
 _CARD_FIELDS = ("description", "personality", "scenario")
 
@@ -132,11 +132,63 @@ def _new_commitment_id(owed: dict, staged: dict, slug: str, title: str) -> str:
     return candidate
 
 
-def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
+def _recorded_here(ledger: dict, sid: str, text: str) -> bool:
+    """Whether this scene has EVER recorded this standing fact.
+
+    Ever, not "and it is still standing" -- the same rule `facts.record`'s own
+    dedup keeps, and for the reason spelled out there: a fact this scene
+    recorded and a LATER scene retired is invisible to an active-only lookup, so
+    re-absorbing this scene would stage the sentence again and put a truth the
+    later scene ended back on the ledger. The scene id is what separates a
+    re-extraction from a genuine re-establishment, so status has no work to do
+    in this predicate.
+
+    Case-insensitive, like `_new_commitment_id` compares titles: the two absorbs
+    of one scene are two model replies, and a re-extraction that differs only in
+    capitalisation is the same fact rather than a second one.
+    """
+    return bool(facts.find(ledger, sid, text))
+
+
+def _fact_label(text: str, supersedes: str, date: str) -> str:
+    """What a fact row is doing, in the reviewer's words.
+
+    Deliberately short and carrying no fact text of its own: the row's
+    before/after IS the two facts, rendered as a diff, so repeating either here
+    would only give the panel a second, truncated copy to disagree with.
+    """
+    label = "Fact retired" if not text else ("Fact superseded" if supersedes else "New fact")
+    return f"{label} — {date}" if date else label
+
+
+def materialize(cid: str, sid: str, parsed: dict,
+                messages: list[dict] | None = None) -> list[dict]:
     """Turn the parsed edit lists into before/after StagedEdits against the campaign
-    copies. Targets that don't exist are dropped (tolerated, not an error)."""
+    copies. Targets that don't exist are dropped (tolerated, not an error).
+
+    `messages` is the transcript the extraction call was SHOWN. Pass it whenever
+    the caller has it -- the citations are judged against it, and the scene can
+    move between rendering the prompt and this call (see `routing.speaker_index`).
+    """
     croot = campaigns_paths.campaign_root(cid)
     out: list[dict] = []
+    # Once per absorb, not once per edit: every row is checked against the same
+    # transcript, and the index costs a scene read and a cast read.
+    index = routing.speaker_index(cid, sid, messages)
+
+    def _staged(edit: dict, row: dict, *subjects: str) -> dict:
+        """One StagedEdit, stamped with the review block the panel routes on.
+
+        Every `out.append` in this function goes through this rather than
+        writing the key itself. A row that skipped it would arrive at the
+        reviewer looking like the rows that genuinely have no citation to check
+        -- the dossier, voice and sheet proposals staged elsewhere -- and so be
+        pre-approved on the strength of a signal that was actually present and
+        simply dropped. `subjects` are the actors the record BELONGS to (see
+        `routing.authority`); a record that belongs to nobody passes none.
+        """
+        edit["review"] = routing.review(index, row, subjects)
+        return edit
 
     for e in parsed.get("character_state_edits", []):
         raw_id = e.get("id", "")
@@ -173,11 +225,12 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         before = playstate.compose_body(st["current_state"], cur_knows, cur_suspects) if st else ""
         if before == after:
             continue
-        out.append({"id": f"character_state:{char_id}", "kind": "character_state",
-                    "target": {"kind": "characters", "id": char_id},
-                    "label": f"{_char_name(cid, char_id)} — current state",
-                    "field": "current_state",
-                    "before": before, "after": after, "authored": False})
+        out.append(_staged({"id": f"character_state:{char_id}", "kind": "character_state",
+                            "target": {"kind": "characters", "id": char_id},
+                            "label": f"{_char_name(cid, char_id)} — current state",
+                            "field": "current_state",
+                            "before": before, "after": after, "authored": False},
+                           e, f"characters:{char_id}"))
 
     for e in parsed.get("group_state_edits", []):
         raw_id = e.get("id", "")
@@ -200,10 +253,10 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         before = groupstate.compose_body(cur) if st else ""
         if before == after:
             continue
-        out.append({"id": f"group_state:{gid}", "kind": "group_state",
-                    "target": {"kind": "groups", "id": gid},
-                    "label": f"{name} — group state", "field": "group_state",
-                    "before": before, "after": after, "authored": False})
+        out.append(_staged({"id": f"group_state:{gid}", "kind": "group_state",
+                            "target": {"kind": "groups", "id": gid},
+                            "label": f"{name} — group state", "field": "group_state",
+                            "before": before, "after": after, "authored": False}, e))
 
     for e in parsed.get("lore_edits", []):
         eid, append = e.get("id", ""), (e.get("append", "") or "").strip()
@@ -215,9 +268,10 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         ent = overlay.read_entity(cid, kind, eid)
         before = ent["body"].strip()
         after = (before + "\n\n" + append).strip()
-        out.append({"id": f"lore:{eid}", "kind": "lore", "target": {"kind": kind, "id": eid},
-                    "label": f"{ent['meta'].get('name', eid)} — {kind}", "field": "body",
-                    "before": before, "after": after, "authored": False})
+        out.append(_staged({"id": f"lore:{eid}", "kind": "lore",
+                            "target": {"kind": kind, "id": eid},
+                            "label": f"{ent['meta'].get('name', eid)} — {kind}", "field": "body",
+                            "before": before, "after": after, "authored": False}, e))
 
     for e in parsed.get("authored_edits", []):
         char_id, field, text = e.get("id", ""), e.get("field", ""), (e.get("text", "") or "").strip()
@@ -233,10 +287,11 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
                                           char_id, vid)["data"].get(field, "").strip()
         except (characters.CharacterNotFound, characters.VersionNotFound):
             continue
-        out.append({"id": f"authored:{char_id}:{field}", "kind": "authored",
-                    "target": {"kind": "characters", "id": char_id},
-                    "label": f"{_char_name(cid, char_id)} — {field} (card edit)",
-                    "field": field, "before": before, "after": text, "authored": True})
+        out.append(_staged({"id": f"authored:{char_id}:{field}", "kind": "authored",
+                            "target": {"kind": "characters", "id": char_id},
+                            "label": f"{_char_name(cid, char_id)} — {field} (card edit)",
+                            "field": field, "before": before, "after": text, "authored": True},
+                           e, f"characters:{char_id}"))
 
     for e in parsed.get("relationship_deltas", []):
         frm, to = e.get("from", ""), e.get("to", "")
@@ -249,11 +304,15 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         before = relationships._render_feeling(cur) if cur else ""
         if before == after:
             continue
-        out.append({"id": f"feeling:{relationships.feeling_key(frm, to)}", "kind": "relationship",
-                    "target": {"kind": "relationships", "id": relationships.feeling_key(frm, to)},
-                    "label": f"{relationships.actor_name(cid, frm)} → {relationships.actor_name(cid, to)}",
-                    "field": "feeling", "before": before, "after": after, "authored": False,
-                    "payload": payload})
+        # `frm` alone is the subject: the feeling is the FROM side's, so the TO
+        # side describing it is a third party's read of somebody else's heart.
+        out.append(_staged({"id": f"feeling:{relationships.feeling_key(frm, to)}",
+                            "kind": "relationship",
+                            "target": {"kind": "relationships",
+                                       "id": relationships.feeling_key(frm, to)},
+                            "label": f"{relationships.actor_name(cid, frm)} → {relationships.actor_name(cid, to)}",
+                            "field": "feeling", "before": before, "after": after,
+                            "authored": False, "payload": payload}, e, frm))
 
     for e in parsed.get("bond_changes", []):
         a_tok, b_tok, typ = e.get("a", ""), e.get("b", ""), (e.get("type", "") or "").strip()
@@ -263,11 +322,15 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         before = cur["type"] if cur else ""
         if before == typ:
             continue
-        out.append({"id": f"bond:{relationships.bond_key(a_tok, b_tok)}", "kind": "bond",
-                    "target": {"kind": "relationships", "id": relationships.bond_key(a_tok, b_tok)},
-                    "label": f"{relationships.actor_name(cid, a_tok)} & {relationships.actor_name(cid, b_tok)}",
-                    "field": "bond", "before": before, "after": typ, "authored": False,
-                    "payload": {"a": a_tok, "b": b_tok, "type": typ}})
+        # Both ends are subjects, unlike a feeling: a bond is the pair's shared
+        # relationship type, so either of them naming it is first-hand.
+        out.append(_staged({"id": f"bond:{relationships.bond_key(a_tok, b_tok)}", "kind": "bond",
+                            "target": {"kind": "relationships",
+                                       "id": relationships.bond_key(a_tok, b_tok)},
+                            "label": f"{relationships.actor_name(cid, a_tok)} & {relationships.actor_name(cid, b_tok)}",
+                            "field": "bond", "before": before, "after": typ, "authored": False,
+                            "payload": {"a": a_tok, "b": b_tok, "type": typ}},
+                           e, a_tok, b_tok))
 
     try:
         threads = plot.read(cid)
@@ -299,11 +362,12 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
             disp_title = cur.get("title") or title or pid  # keep the stored title
         else:
             before, disp_title = "", title or pid
-        out.append({"id": f"plot:{pid}", "kind": "plot",
-                    "target": {"kind": "plot", "id": pid},
-                    "label": f"{disp_title} — {status}",
-                    "field": "beat", "before": before, "after": beat, "authored": False,
-                    "payload": {"id": pid, "title": disp_title, "status": status, "scene": sid}})
+        out.append(_staged({"id": f"plot:{pid}", "kind": "plot",
+                            "target": {"kind": "plot", "id": pid},
+                            "label": f"{disp_title} — {status}",
+                            "field": "beat", "before": before, "after": beat, "authored": False,
+                            "payload": {"id": pid, "title": disp_title, "status": status,
+                                        "scene": sid}}, e))
 
     # Same shape as plot_movements above, and deliberately a second block rather
     # than a parameterized shared one: the two record types agree on "id or a
@@ -402,12 +466,123 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         label = f"{disp_title} — {disp_kind}, {disp_status}"
         if disp_due:
             label += f", due {disp_due}"
-        out.append({"id": f"commitment:{mid}", "kind": "commitment",
-                    "target": {"kind": "commitments", "id": mid},
-                    "label": label,
-                    "field": "beat", "before": before, "after": beat, "authored": False,
-                    "payload": {"id": mid, "title": disp_title, "kind": kind,
-                                "status": status, "due": due, "scene": sid}})
+        out.append(_staged({"id": f"commitment:{mid}", "kind": "commitment",
+                            "target": {"kind": "commitments", "id": mid},
+                            "label": label,
+                            "field": "beat", "before": before, "after": beat, "authored": False,
+                            "payload": {"id": mid, "title": disp_title, "kind": kind,
+                                        "status": status, "due": due, "scene": sid}}, e))
+
+    # The fact ledger (#114). One section and one edit kind covering two
+    # operations, because a row does one thing to one record and only the row
+    # can say which: text RECORDS a standing fact -- retiring the fact it names,
+    # if it names one -- and a bare `supersedes` retires that fact outright,
+    # with nothing put in its place. Splitting them would double the contract
+    # the model has to hold, the branch `apply` has to write and the vocabulary
+    # the reviewer has to read, to distinguish two rows that already read
+    # differently in the diff.
+    try:
+        ledger = facts.read(cid)
+    except Exception:  # noqa: BLE001 — garbled facts.json: skip these, don't 500
+        ledger = None
+    if not isinstance(ledger, dict):
+        # An UNREADABLE ledger stages nothing, for the reason spelled out over
+        # `owed` above: falling back to {} would stage every supersession as an
+        # ordinary new fact, hiding the retirement the reviewer approved behind
+        # a row that claims to retire nothing.
+        ledger = None
+    retiring: set[str] = set()
+    staged_texts: set[str] = set()   # folded text of the new facts THIS batch stages
+    for n, e in enumerate(parsed.get("facts", []) if ledger is not None else []):
+        text, date = _text(e.get("text")), _text(e.get("date"))
+        sup = _text(e.get("supersedes"))
+        prior = ledger.get(sup) if sup else None
+        if text and facts.is_active(prior) and facts.restates(prior, text):
+            # A RESTATEMENT, not a supersession -- see `facts.restates` for what
+            # it costs. The prompt says not to report one and the model does
+            # anyway, which is why this is in code rather than only in the
+            # prompt. Nothing about the world moved, so the row does not either.
+            #
+            # `apply` checks again rather than trusting this: the reviewer can
+            # edit the replacement text into a restatement after the row was
+            # staged, and that path never comes back through here.
+            #
+            # `text and` guards the BARE RETIREMENT, whose "" would otherwise
+            # match a stored fact whose own text reads as "" -- which `record`
+            # never writes but a hand-edited or malformed record supplies, and
+            # that is exactly the record most worth being able to retire.
+            continue
+        if not facts.is_active(prior) or facts.recorded_after(prior, sid):
+            # A `supersedes` naming a fact that is retired, missing or malformed
+            # is dropped rather than obeyed. The snapshot offers only standing
+            # facts, so the model was never shown that record, and retiring an
+            # already-retired fact would overwrite the pointer saying what
+            # really replaced it.
+            #
+            # So is one recorded AFTER this scene, which `facts.record` will
+            # refuse to write (see `recorded_after`): the snapshot is scoped to
+            # this scene precisely so the model is not offered it, and a row
+            # that names one anyway has to be STAGED as what it will actually
+            # do. Left labelled a supersession, the reviewer approves a
+            # retirement that silently does not happen.
+            #
+            # The row's other half survives either way: what is left is an
+            # ordinary new fact, or -- when the row carried no text either --
+            # nothing, and it is dropped below.
+            sup, prior = "", None
+        if not text and not sup:
+            continue
+        if sup:
+            if sup in retiring:
+                continue   # one retirement per fact per scene: the second would
+            retiring.add(sup)   # retire a record the first already retired
+        elif text.casefold() in staged_texts or _recorded_here(ledger, sid, text):
+            # Two ways for a row to have nothing left to do, and both end as a
+            # duplicate the reviewer approves and does not get:
+            #
+            # - the scene ALREADY recorded this fact. Absorbing a scene twice is
+            #   supported (`POST .../absorb?force`) and re-proposes every fact
+            #   the first pass found -- the `timeline.md` re-append this ledger
+            #   exists to improve on.
+            # - this BATCH already stages it. A reply that says the same thing
+            #   in two rows is invisible to the check above, which reads a
+            #   ledger neither row has reached yet; `facts.record` would dedupe
+            #   the second onto the first at save time and report both as
+            #   applied, so two approvals produce one fact with nothing saying
+            #   so.
+            #
+            # `facts.record` dedupes as well and has to: this reads a snapshot
+            # that can be stale. What happens here is keeping the row off the
+            # panel in the first place.
+            continue
+        # Recorded for every row that survives, but CONSULTED only by rows that
+        # retire nothing. Two rows superseding two different facts with the same
+        # replacement text are both real work -- `facts.record` files one fact
+        # and each row retires its own predecessor onto it -- so dropping the
+        # second would leave a fact standing that the scene ended.
+        if text:
+            staged_texts.add(text.casefold())
+        # A row that retires something addresses THAT record, so that is what
+        # `target` names and what `conflicts` judges -- the write it authorizes
+        # is the retirement. Recording the new fact creates a record and
+        # overwrites nothing, so it needs no target and gets its id at save time
+        # (`new_character` stages the same way, and for the same reason).
+        # Through `_staged` like every other row: a fact reaches the reviewer as
+        # a StagedEdit, so it is routed on the same evidence as the rest. No
+        # subjects -- a standing truth about the world belongs to nobody, so no
+        # speaker can be first-hand about it (see `routing.authority`).
+        out.append(_staged({"id": f"fact:{sup}" if sup else f"fact:{sid}:{n}", "kind": "fact",
+                    "target": {"kind": "facts", "id": sup},
+                    "label": _fact_label(text, sup, date),
+                    "field": "text",
+                    # `before` is the retired fact's line, `after` the new
+                    # fact's text: the diff reads as the replacement it is, and
+                    # a retirement with nothing to replace it reads as the
+                    # deletion it is.
+                    "before": conflicts.fact_line(prior) if prior else "",
+                    "after": text, "authored": False,
+                    "payload": {"text": text, "date": date, "supersedes": sup,
+                                "scene": sid}}, e))
 
     existing_char_names = {c["name"].strip().lower() for c in overlay.list_characters(cid)}
     for e in parsed.get("new_characters", []):
@@ -427,16 +602,20 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         # staged diff shows the full text that lands in the card's description field.
         history = (e.get("history", "") or "").strip()
         after = f"{description}\n\n{history}" if history else description
-        out.append({"id": f"new_character:{candidate_id}", "kind": "new_character",
-                    "target": {"kind": "characters", "id": ""},
-                    "label": f"New character — {name}", "field": "description",
-                    "before": "", "after": after, "authored": False,
-                    "payload": {"name": name, "sd_prompt": e.get("sd_prompt", ""),
-                                "personality": e.get("personality", ""),
-                                "mes_example": e.get("mes_example", ""),
-                                "evidence": e.get("evidence", ""),
-                                "confidence": parse._confidence(e.get("confidence", "")),
-                                "open_questions": e.get("open_questions", "")}})
+        # No subject: the person has no record yet, so nothing they said in the
+        # scene can be first-hand ABOUT a record. Their own lines still
+        # corroborate the citation, which is what separates a proposal drawn
+        # from dialogue from one drawn from nowhere.
+        out.append(_staged({"id": f"new_character:{candidate_id}", "kind": "new_character",
+                            "target": {"kind": "characters", "id": ""},
+                            "label": f"New character — {name}", "field": "description",
+                            "before": "", "after": after, "authored": False,
+                            "payload": {"name": name, "sd_prompt": e.get("sd_prompt", ""),
+                                        "personality": e.get("personality", ""),
+                                        "mes_example": e.get("mes_example", ""),
+                                        "evidence": e.get("evidence", ""),
+                                        "confidence": parse._confidence(e.get("confidence", "")),
+                                        "open_questions": e.get("open_questions", "")}}, e))
 
     for kind, parsed_key, prefix, label_noun in (
         ("locations", "new_locations", "new_location", "location"),
@@ -460,13 +639,13 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
             if kind == "locations":
                 payload["sd_prompt"] = e.get("sd_prompt", "")
                 payload["current_setting"] = e.get("current_setting", False)
-            out.append({"id": f"{prefix}:{candidate_id}", "kind": prefix,
-                        "target": {"kind": kind, "id": ""},
-                        "label": f"New {label_noun} — {name}", "field": "body",
-                        "before": "", "after": body, "authored": False,
-                        "payload": payload})
+            out.append(_staged({"id": f"{prefix}:{candidate_id}", "kind": prefix,
+                                "target": {"kind": kind, "id": ""},
+                                "label": f"New {label_noun} — {name}", "field": "body",
+                                "before": "", "after": body, "authored": False,
+                                "payload": payload}, e))
 
-    out.extend(weather._weather_edits(cid, sid, parsed))
+    out.extend(weather._weather_edits(cid, sid, parsed, index))
     return out
 
 

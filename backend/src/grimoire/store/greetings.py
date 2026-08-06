@@ -99,8 +99,14 @@ def create_greeting(root: Path, name: str, character: str, version: str, body: s
     _greetings_dir(root).mkdir(parents=True, exist_ok=True)
 
     def exists(c: str) -> bool:
-        # `taken` widens the id namespace (overlay: world files + tombstones)
-        return _greeting_path(root, c).exists() or (taken is not None and taken(c))
+        # `taken` widens the id namespace (overlay: world files + tombstones).
+        # The record DIRECTORY counts too, as it does for entities and actors:
+        # it holds the previous greeting-of-that-slug's localized images and
+        # subjects.json, and the sweep that normally removes it is best-effort
+        # -- a locked file leaves it there for the next slug to adopt (#225,
+        # Codex review).
+        return (_greeting_path(root, c).exists() or _greetings_dir(root).joinpath(c).is_dir()
+                or (taken is not None and taken(c)))
 
     gid = uniquify(slugify(name), exists)
     meta = {"name": name, "character": character, "version": version,

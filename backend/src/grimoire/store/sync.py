@@ -35,8 +35,13 @@ def incoming(cid: str) -> list[dict]:
     # the passes -- each used to re-read all three per pass
     manifest = campaigns_paths.read_manifest(cid)
     locked = appearances_paths.record(cid)
+    # A detached record shares only a slug with whatever the world now holds
+    # under its id, so nothing there is an update to it (#225). Dropping the
+    # manifest ref covers the entity and unpicked-actor passes; a version lock
+    # keeps its base in appearances.json, so that pass has to be told.
+    gone = overlay.detached(cid)
 
-    refs: set[str] = set(manifest)
+    refs: set[str] = set(manifest) - gone
 
     out: list[dict] = []
     for ref in sorted(refs):
@@ -55,8 +60,8 @@ def incoming(cid: str) -> list[dict]:
                     "world": _entity_blob(wroot, kind, eid),
                     "mine": _entity_blob(croot, kind, eid)})
     return (out + _plotmap_incoming(wroot, croot, manifest)
-            + _actor_incoming(wroot, croot, locked)
-            + _unpicked_incoming(wroot, croot, manifest, locked))
+            + _actor_incoming(wroot, croot, locked, gone)
+            + _unpicked_incoming(wroot, croot, manifest, locked, gone))
 
 
 def _plotmap_blob(root: Path) -> dict:
@@ -85,9 +90,11 @@ def _actor_blob(root: Path, kind: str, actor_id: str, vid: str) -> dict:
     return {"name": persona.get("name", actor_id), "version": vid, "persona": persona}
 
 
-def _actor_incoming(wroot: Path, croot: Path, locked: dict) -> list[dict]:
+def _actor_incoming(wroot: Path, croot: Path, locked: dict, detached: set[str]) -> list[dict]:
     out: list[dict] = []
     for ref, rec in sorted(locked.items()):
+        if ref in detached:
+            continue  # the lock's base outlived its world actor; see overlay.detached
         kind, actor_id = ref.split("/", 1)
         vid = rec["version"]
         world_h = appearances_versions.actor_hash(wroot, kind, actor_id, vid)
@@ -114,10 +121,12 @@ def _actor_summary_blob(root: Path, kind: str, actor_id: str) -> dict:
     return {"name": detail["meta"].get("name", actor_id), "body": f"versions: {versions}"}
 
 
-def _unpicked_incoming(wroot: Path, croot: Path, manifest: dict, locked: dict) -> list[dict]:
+def _unpicked_incoming(wroot: Path, croot: Path, manifest: dict, locked: dict,
+                       detached: set[str]) -> list[dict]:
     """Whole-actor diffs for materialized actors with no version lock: one item per
     changed actor; accept dematerializes (revert to inherited), reject advances the base."""
-    refs = {r for r in manifest if r.partition("/")[0] in appearances_paths.ACTOR_KINDS}
+    refs = {r for r in manifest
+            if r.partition("/")[0] in appearances_paths.ACTOR_KINDS and r not in detached}
     out: list[dict] = []
     for ref in sorted(refs):
         if ref in locked:
@@ -157,6 +166,11 @@ def _advance_actor(cid: str, kind: str, actor_id: str, *, copy: bool) -> bool:
 
 
 def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
+    # `incoming` filters detached refs, but accept/reject take theirs from the
+    # request body -- a stale one submitted after the slug was recreated would
+    # dematerialize the very copy detaching preserved (Codex review).
+    gone = overlay.detached(cid)
+    refs = [r for r in refs if _ref_str(r["kind"], r["id"]) not in gone]
     wroot = campaigns_read.world_root_of(cid)
     croot = campaigns_paths.campaign_root(cid)
     manifest = campaigns_paths.read_manifest(cid)

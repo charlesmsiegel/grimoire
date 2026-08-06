@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import {
   api, type Actor, type SceneContext, type SceneLocation, type ChronicleEntry,
   type CalendarConfig, type RosterEntry, type SceneDatetime,
-  type CharacterSummary, type PCSummary,
+  type CharacterSummary, type PCSummary, type Briefing, type BriefingRow,
 } from "../api/client";
 import { getModels, type Model } from "../api/models";
 import { Portrait } from "./Portrait";
@@ -14,6 +14,13 @@ import { LOCKED_WHILE_GENERATING } from "./sceneLock";
 
 const SECTIONS_KEY = "grimoire.inspector.sections";
 
+/** Posts after which the briefing (#118) stops opening itself. It is a *pre*-scene
+ *  briefing: past a few exchanges the scene has said what it is about and the
+ *  section is just occupying the top of the rail. Only the DEFAULT moves — once
+ *  the reader toggles it, `collapsed.briefing` is set and their choice wins in
+ *  both directions forever, which auto-collapsing on a timer could not do. */
+const BRIEFING_OPEN_POSTS = 6;
+
 function loadSectionCollapse(): Record<string, boolean> {
   try {
     return JSON.parse(localStorage.getItem(SECTIONS_KEY) ?? "{}");
@@ -23,12 +30,19 @@ function loadSectionCollapse(): Record<string, boolean> {
 }
 
 function SideSection({ id, title, collapsed, onToggle, extra, children }: {
-  id: string; title: string; collapsed: boolean; onToggle: (id: string) => void;
+  id: string; title: string; collapsed: boolean;
+  /** Handed the state the reader is actually looking at, not just the id. Every
+   *  section but the briefing derives `collapsed` from the stored map, so for
+   *  those the two agree — but the briefing's default comes from the post count
+   *  (#118), and flipping the *stored* `undefined` there would write `true` on a
+   *  click meant to expand, leaving the section shut and the click inert. */
+  onToggle: (id: string, collapsed: boolean) => void;
   extra?: ReactNode; children: ReactNode;
 }) {
   return (
     <div className="side-section">
-      <button type="button" className="side-section-head" aria-expanded={!collapsed} onClick={() => onToggle(id)}>
+      <button type="button" className="side-section-head" aria-expanded={!collapsed}
+              onClick={() => onToggle(id, collapsed)}>
         <h4>{title}</h4>
         <span className="side-section-head-right">
           {extra}
@@ -40,8 +54,42 @@ function SideSection({ id, title, collapsed, onToggle, extra, children }: {
   );
 }
 
+/** What a failed briefing load degrades to: the empty state, never a stuck
+ *  "Loading…" and never a section that outlives the scene it described. */
+const NO_BRIEFING: Briefing = {
+  focus: [], plot: [], commitments: [], relationships: [], last_time: null,
+};
+
+// One component for threads and commitments: they differ by `due` alone, which
+// only commitments carry, so an optional field is the whole variation and a
+// second near-identical component would be repetition with a footnote.
+function BriefingRows({ label, rows }:
+  { label: string; rows: (BriefingRow & { due?: string })[] }) {
+  if (!rows.length) return null;
+  return (
+    <div className="ledger-group">
+      <h5>{label}</h5>
+      {rows.map((r) => (
+        <div className="ledger-row" key={r.id}>
+          <div className="ledger-row-head">
+            <strong>{r.title}</strong>
+            <span className="chip on">{r.status}</span>
+            {r.due && <span className="chip on">due {r.due}</span>}
+            {/* The flag the view exists for. Names rather than a tick, because a
+                scene with two players needs to know which of them it is. */}
+            {r.involves.length > 0 && (
+              <span className="chip on">involves {r.involves.join(", ")}</span>
+            )}
+          </div>
+          {r.latest_beat && <p className="ledger-beat">{r.latest_beat}</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRenamed, pcless,
-                                 sceneLocked, onRenaming }:
+                                 sceneLocked, onRenaming, posts }:
   { cid: string; sid: string; refreshKey: number; onSceneChanged: () => void;
     onSceneRenamed?: (id: string) => void; pcless?: boolean;
     /** A turn is streaming into this scene, so anything that can rename its
@@ -52,7 +100,14 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     /** Reports a scene-renaming request in and out of flight. The parent blocks
      *  new turns while one is pending: until the PUT answers, the scene's id is
      *  in doubt, and a turn handed the old one writes nowhere (#95). */
-    onRenaming?: (active: boolean) => void }) {
+    onRenaming?: (active: boolean) => void;
+    /** How many posts the scene already has, which is the only thing the
+     *  briefing's default open/closed state depends on (#118). Absent counts as
+     *  a fresh scene, so a caller that does not track it gets the briefing open.
+     *  The caller's count is windowed (#94) and so understates a long
+     *  transcript — which does not matter here, because a window is a whole page
+     *  and the only distinction this draws is "barely started or not". */
+    posts?: number }) {
   const [cast, setCast] = useState<Actor[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
@@ -60,6 +115,19 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [locImages, setLocImages] = useState<string[]>([]);
   const [ctx, setCtx] = useState<SceneContext | null>(null);
   const [recap, setRecap] = useState<ChronicleEntry[]>([]);
+  // Held with the campaign AND scene it came from, the way `LedgerPanel` holds
+  // its campaign: the inspector stays mounted across both switches, so a bare
+  // `Briefing` would go on flagging the previous scene's cast under the new
+  // scene's name until the new request settles. Comparing during render makes
+  // that window impossible rather than short.
+  //
+  // `cid` as well as `sid`, which this first got wrong (Codex review): the
+  // route is `/campaigns/:cid` with no `key`, so React Router REUSES
+  // `CampaignView` from one campaign to the next, and scene ids are per-campaign
+  // (`0001--…`) so they repeat freely across them. Two campaigns sitting on the
+  // same scene id would have matched on `sid` alone — showing one game's
+  // commitments, relationships and prior fact under the other's name.
+  const [brief, setBrief] = useState<{ cid: string; sid: string; data: Briefing } | null>(null);
   const [models, setModels] = useState<Model[]>([]);
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
   const [cfg, setCfg] = useState<CalendarConfig | null>(null);
@@ -71,9 +139,9 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [locPick, setLocPick] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadSectionCollapse);
-  const toggleSection = useCallback((id: string) => {
+  const toggleSection = useCallback((id: string, current: boolean) => {
     setCollapsed((prev) => {
-      const next = { ...prev, [id]: !prev[id] };
+      const next = { ...prev, [id]: !current };
       localStorage.setItem(SECTIONS_KEY, JSON.stringify(next));
       return next;
     });
@@ -159,6 +227,17 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     reloadCfg();
   }, [cid, sid, refreshKey, reloadWhen, reloadCfg, reloadCast]);
 
+  // Its own effect rather than a line in the load above, because it is the one
+  // request here whose late answer can be *wrong* rather than merely stale: a
+  // superseded briefing describes a different scene's cast. `live` drops it.
+  useEffect(() => {
+    let live = true;
+    api.sceneBriefing(cid, sid)
+      .then((b) => { if (live) setBrief({ cid, sid, data: b }); })
+      .catch(() => { if (live) setBrief({ cid, sid, data: NO_BRIEFING }); });
+    return () => { live = false; };
+  }, [cid, sid, refreshKey]);
+
   // the location section shows the primary image when the store has one
   useEffect(() => {
     const loc = setting?.current;
@@ -231,9 +310,53 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const pctNumber = (t: number) => (ctxLen > 0 ? Math.round((t / ctxLen) * 100) : 0);
   const nameOf = (a: Actor) => names[`${a.kind}/${a.id}`] ?? a.id;
 
+  // Deliberately keyed on cid+sid and NOT on `refreshKey`, which is the same
+  // call `LedgerPanel` makes and states its reason for: a refresh re-reads the
+  // SAME scene, so blanking on it would tear the section down and rebuild it
+  // after every save and every cast edit, shifting every section below it, to
+  // show mostly the same rows back. The cost is that a resolved commitment can
+  // linger for the length of one request (Codex review); the section is a hint
+  // surface whose rows are already "what was true when the scene opened", so a
+  // brief stale flag is inside its contract and a flicker on every save is not.
+  const briefing = brief && brief.cid === cid && brief.sid === sid ? brief.data : null;
+  // Rendered only when it has something to say. An empty briefing is the normal
+  // state of a brand-new campaign, and an always-present "Nothing yet" heading
+  // at the top of the rail would push the sections that do have content down for
+  // every scene of the first session.
+  const hasBriefing = !!briefing && (briefing.commitments.length > 0 || briefing.plot.length > 0
+    || briefing.relationships.length > 0 || !!briefing.last_time);
+
   return (
     <aside className="inspector">
       {error && <div className="banner">{error}</div>}
+      {hasBriefing && briefing && (
+        <SideSection id="briefing" title="Briefing"
+                     collapsed={collapsed.briefing ?? (posts ?? 0) > BRIEFING_OPEN_POSTS}
+                     onToggle={toggleSection}>
+          {briefing.last_time && (
+            <p className="ledger-beat">
+              <span className="field-hint">Last time · {briefing.last_time.title}
+                {briefing.last_time.date ? ` (${briefing.last_time.date})` : ""}</span>
+              <br />{briefing.last_time.one_line}
+            </p>
+          )}
+          {/* Commitments before threads, the order `LedgerPanel` argues for: what
+              the story still OWES is the question, and a thread is only in motion. */}
+          <BriefingRows label="Commitments" rows={briefing.commitments} />
+          <BriefingRows label="Open plot threads" rows={briefing.plot} />
+          {briefing.relationships.length > 0 && (
+            <div className="ledger-group">
+              <h5>Between them</h5>
+              {/* Index keys: two distinct pairs of same-named actors render the
+                  same line, and this list is replaced wholesale on every load
+                  and never reordered or edited — so position IS the identity. */}
+              {briefing.relationships.map((line, i) => (
+                <div className="field-hint" key={i}>{line}</div>
+              ))}
+            </div>
+          )}
+        </SideSection>
+      )}
       {pcless && (
         <SideSection id="offscreen" title="Offscreen scene" collapsed={!!collapsed.offscreen} onToggle={toggleSection}>
           <div className="field-hint">No player character — you direct the NPCs.</div>
