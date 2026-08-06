@@ -20,6 +20,9 @@ const LEDGER = {
     { id: "the-ledger", title: "Find the ledger", status: "advanced", last_scene: "s1",
       latest_beat: "Winifred named it aloud.", scene: SCENE },
   ],
+  facts: [
+    { id: "f1", text: "The pier is condemned.", date: "the third night", scene: SCENE },
+  ],
   chronicle: [
     { id: "s1", one_line: "They argued on the pier.", date: "12 Harvestmoon",
       title: "The Pier at Dusk" },
@@ -58,7 +61,7 @@ test("a commitment with an unrecognized kind is still listed", async () => {
 });
 
 test("shows an empty state when the campaign owes nothing yet", async () => {
-  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], chronicle: [] });
+  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
   render(<LedgerPanel cid="c1" />);
   expect(await screen.findByText(/Nothing on the ledger yet/)).toBeInTheDocument();
 });
@@ -73,7 +76,7 @@ test("a changed refreshKey re-reads the ledger", async () => {
   // The panel stays mounted across an absorb save (`cid` does not change), so
   // without this it would go on showing the state from before the scene that
   // just landed.
-  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], chronicle: [] });
+  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
   const { rerender } = render(<LedgerPanel cid="c1" refreshKey={0} />);
   await screen.findByText(/Nothing on the ledger yet/);
   expect(api.campaignLedger).toHaveBeenCalledTimes(1);
@@ -82,7 +85,7 @@ test("a changed refreshKey re-reads the ledger", async () => {
   expect(api.campaignLedger).toHaveBeenCalledTimes(1);
 
   (api.campaignLedger as any).mockResolvedValue({
-    plot: [], chronicle: [],
+    plot: [], facts: [], chronicle: [],
     commitments: [{ id: "the-debt", title: "Repay Winifred", kind: "promise", status: "open",
                     due: "", last_scene: "s1", latest_beat: "", scene: SCENE }],
   });
@@ -106,7 +109,7 @@ test("switching campaigns blanks the panel instead of showing the old one's rows
   expect(screen.queryByText("Repay Winifred")).not.toBeInTheDocument();
   expect(screen.getByText(/Loading/)).toBeInTheDocument();
 
-  resolveSecond({ plot: [], commitments: [], chronicle: [] });
+  resolveSecond({ plot: [], commitments: [], facts: [], chronicle: [] });
   expect(await screen.findByText(/Nothing on the ledger yet/)).toBeInTheDocument();
 });
 
@@ -132,7 +135,7 @@ test("a superseded response cannot overwrite a newer one", async () => {
   const { rerender } = render(<LedgerPanel cid="c1" refreshKey={0} />);
 
   (api.campaignLedger as any).mockResolvedValueOnce({
-    plot: [], chronicle: [],
+    plot: [], facts: [], chronicle: [],
     commitments: [{ id: "the-debt", title: "Repay Winifred", kind: "promise", status: "open",
                     due: "", last_scene: "s1", latest_beat: "", scene: SCENE }],
   });
@@ -140,7 +143,29 @@ test("a superseded response cannot overwrite a newer one", async () => {
   expect(await screen.findByText("Repay Winifred")).toBeInTheDocument();
 
   // the stale first request settles last, with the pre-refresh (empty) ledger
-  resolveFirst({ plot: [], commitments: [], chronicle: [] });
+  resolveFirst({ plot: [], commitments: [], facts: [], chronicle: [] });
   await new Promise((r) => setTimeout(r, 0));
   expect(screen.getByText("Repay Winifred")).toBeInTheDocument();   // not clobbered
+});
+
+test("lists standing facts with their date and the scene that recorded them", async () => {
+  (api.campaignLedger as any).mockResolvedValue(LEDGER);
+  render(<LedgerPanel cid="c1" />);
+  expect(await screen.findByText("Standing facts")).toBeInTheDocument();
+  expect(screen.getByText("The pier is condemned.")).toBeInTheDocument();
+  expect(screen.getByText("the third night")).toBeInTheDocument();
+  // "recorded in", not the "last moved in" the sections above use: a fact is
+  // written once and retired off the list rather than moved, so naming its
+  // scene as a latest movement would misdate every row.
+  expect(screen.getByText(/recorded in The Pier at Dusk/)).toBeInTheDocument();
+});
+
+test("a campaign with only standing facts is not the empty state", async () => {
+  (api.campaignLedger as any).mockResolvedValue({
+    plot: [], commitments: [], chronicle: [],
+    facts: [{ id: "f1", text: "The pier is condemned.", date: "", scene: SCENE }],
+  });
+  render(<LedgerPanel cid="c1" />);
+  expect(await screen.findByText("The pier is condemned.")).toBeInTheDocument();
+  expect(screen.queryByText(/Nothing on the ledger yet/)).not.toBeInTheDocument();
 });

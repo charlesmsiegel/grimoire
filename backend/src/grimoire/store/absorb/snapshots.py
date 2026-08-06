@@ -2,7 +2,7 @@
 
 Each one renders stored state the model must rewrite from rather than recall:
 present-cast feelings and bonds, open plot threads, unresolved commitments,
-every group's state, and the present NPCs' standing. All are read-only. Every
+standing facts, every group's state, and the present NPCs' standing. All are read-only. Every
 one but `state_snapshot` is tolerant of a garbled file -- a broken snapshot
 omits its block instead of failing the absorb; `state_snapshot` catches only a
 missing character record.
@@ -11,8 +11,8 @@ missing character record.
 from __future__ import annotations
 
 from ... import prompts
-from .. import (characters, commitments, groupstate, overlay, playstate, plot,
-                relationships)
+from .. import (characters, commitments, facts, groupstate, overlay, playstate,
+                plot, relationships)
 from ..appearances import cast as appearances_cast, paths as appearances_paths
 from ..campaigns import paths as campaigns_paths
 
@@ -40,6 +40,14 @@ def commitment_snapshot(cid: str) -> str:
     actually paid off rather than opening a duplicate. Campaign-wide (not
     scene-scoped); tolerant of a garbled commitments.json."""
     return "\n".join(commitments.render_open(cid, with_id=True))
+
+
+def fact_snapshot(cid: str) -> str:
+    """Rendered standing facts (id + text + date) — feeds the prompt so the
+    model can cite the id of a fact this scene made untrue rather than quietly
+    contradicting it. Campaign-wide (not scene-scoped); tolerant of a garbled
+    facts.json."""
+    return "\n".join(facts.render_active(cid))
 
 
 def group_snapshot(cid: str) -> str:

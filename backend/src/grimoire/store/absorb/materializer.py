@@ -8,8 +8,8 @@ materialize` would bind the function rather than the module.
 
 from __future__ import annotations
 
-from .. import (characters, commitments, entities, groupstate, overlay, pcs,
-                playstate, plot, relationships)
+from .. import (characters, commitments, entities, facts, groupstate, overlay,
+                pcs, playstate, plot, relationships)
 from ..appearances import paths as appearances_paths, versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..paths import slugify
@@ -130,6 +130,30 @@ def _new_commitment_id(owed: dict, staged: dict, slug: str, title: str) -> str:
         n += 1
         candidate = f"{slug}-{n}"
     return candidate
+
+
+def _recorded_here(ledger: dict, sid: str, text: str) -> bool:
+    """Whether this scene already recorded this standing fact.
+
+    Case-insensitive, like `_new_commitment_id` compares titles: the two absorbs
+    of one scene are two model replies, and a re-extraction that differs only in
+    capitalisation is the same fact rather than a second one.
+    """
+    want = text.casefold()
+    return any(facts.is_active(rec) and _text(rec.get("scene")) == sid
+               and _text(rec.get("text")).casefold() == want
+               for rec in ledger.values())
+
+
+def _fact_label(text: str, supersedes: str, date: str) -> str:
+    """What a fact row is doing, in the reviewer's words.
+
+    Deliberately short and carrying no fact text of its own: the row's
+    before/after IS the two facts, rendered as a diff, so repeating either here
+    would only give the panel a second, truncated copy to disagree with.
+    """
+    label = "Fact retired" if not text else ("Fact superseded" if supersedes else "New fact")
+    return f"{label} — {date}" if date else label
 
 
 def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
@@ -408,6 +432,71 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
                     "field": "beat", "before": before, "after": beat, "authored": False,
                     "payload": {"id": mid, "title": disp_title, "kind": kind,
                                 "status": status, "due": due, "scene": sid}})
+
+    # The fact ledger (#114). One section and one edit kind covering two
+    # operations, because a row does one thing to one record and only the row
+    # can say which: text RECORDS a standing fact -- retiring the fact it names,
+    # if it names one -- and a bare `supersedes` retires that fact outright,
+    # with nothing put in its place. Splitting them would double the contract
+    # the model has to hold, the branch `apply` has to write and the vocabulary
+    # the reviewer has to read, to distinguish two rows that already read
+    # differently in the diff.
+    try:
+        ledger = facts.read(cid)
+    except Exception:  # noqa: BLE001 — garbled facts.json: skip these, don't 500
+        ledger = None
+    if not isinstance(ledger, dict):
+        # An UNREADABLE ledger stages nothing, for the reason spelled out over
+        # `owed` above: falling back to {} would stage every supersession as an
+        # ordinary new fact, hiding the retirement the reviewer approved behind
+        # a row that claims to retire nothing.
+        ledger = None
+    retiring: set[str] = set()
+    for n, e in enumerate(parsed.get("facts", []) if ledger is not None else []):
+        text, date = _text(e.get("text")), _text(e.get("date"))
+        sup = _text(e.get("supersedes"))
+        prior = ledger.get(sup) if sup else None
+        if not facts.is_active(prior):
+            # A `supersedes` naming a fact that is retired, missing or
+            # malformed is dropped rather than obeyed. The snapshot offers only
+            # standing facts, so the model was never shown that record, and
+            # retiring an already-retired fact would overwrite the pointer
+            # saying what really replaced it. The row's other half survives:
+            # what is left is an ordinary new fact, or -- when the row carried
+            # no text either -- nothing, and it is dropped below.
+            sup, prior = "", None
+        if not text and not sup:
+            continue
+        if sup:
+            if sup in retiring:
+                continue   # one retirement per fact per scene: the second would
+            retiring.add(sup)   # retire a record the first already retired
+        elif _recorded_here(ledger, sid, text):
+            # Absorbing a scene twice is supported (`POST .../absorb?force`) and
+            # re-proposes every fact the first pass found. A fact this scene has
+            # already recorded, with nothing left to retire, is that replay and
+            # not a second fact -- staging it would put a row in front of the
+            # reviewer whose only possible effect is a duplicate. `facts.record`
+            # dedupes too; this is what keeps the row off the panel, and it
+            # reads a snapshot that can be stale, which is why both exist.
+            continue
+        # A row that retires something addresses THAT record, so that is what
+        # `target` names and what `conflicts` judges -- the write it authorizes
+        # is the retirement. Recording the new fact creates a record and
+        # overwrites nothing, so it needs no target and gets its id at save time
+        # (`new_character` stages the same way, and for the same reason).
+        out.append({"id": f"fact:{sup}" if sup else f"fact:{sid}:{n}", "kind": "fact",
+                    "target": {"kind": "facts", "id": sup},
+                    "label": _fact_label(text, sup, date),
+                    "field": "text",
+                    # `before` is the retired fact's line, `after` the new
+                    # fact's text: the diff reads as the replacement it is, and
+                    # a retirement with nothing to replace it reads as the
+                    # deletion it is.
+                    "before": conflicts.fact_line(prior) if prior else "",
+                    "after": text, "authored": False,
+                    "payload": {"text": text, "date": date, "supersedes": sup,
+                                "scene": sid}})
 
     existing_char_names = {c["name"].strip().lower() for c in overlay.list_characters(cid)}
     for e in parsed.get("new_characters", []):

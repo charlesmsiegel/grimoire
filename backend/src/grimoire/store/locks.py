@@ -129,6 +129,11 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # (#115), so it starts inside the exclusion rather than joining the
     # `UNREVIEWED` backlog `plot` sits in.
     "store.commitments",
+    # `facts.json` the same (#114), and with one reason of its own on top of
+    # the whole-file rewrite: `record` retires the superseded fact and writes
+    # its replacement in one read-modify-write, so an unlocked pair can also
+    # leave a fact retired by an id that never landed.
+    "store.facts",
     "store.sheets.tally",
     "store.sheets.writer",
     "store.audit.baselines",
