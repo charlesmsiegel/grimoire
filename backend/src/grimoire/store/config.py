@@ -158,7 +158,9 @@ def turnstate_depth() -> int:
 
 def promote_streak() -> int:
     """Consecutive recorded values that promote a transient field to canonical
-    character state. 0 disables promotion."""
+    character state. 0 disables promotion. `turnstate.streaks` clamps this to
+    the ledger's per-scene memory — the ceiling belongs where the retention
+    limit is, not here."""
     return _count("promote_streak", DEFAULT_PROMOTE_STREAK)
 
 

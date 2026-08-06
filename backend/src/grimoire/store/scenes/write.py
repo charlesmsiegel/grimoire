@@ -10,7 +10,7 @@ in a single write — see `turns._set_turn_sizes`.
 
 from __future__ import annotations
 
-from .. import atomic
+from .. import atomic, turnstate
 from ..appearances import cast
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import now_iso, safe_id
@@ -221,6 +221,24 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> dict:
     turns._set_turn_sizes(meta, sizes)
     atomic.write_text(p, dump_frontmatter(
         meta, serialize._serialize_messages(messages + tail)))
+    # Retire the transient-state ledger from the cut (#120). Here rather than in
+    # the callers, because there are two and they must not diverge: the reroll
+    # route, and `alternates.promote`, which swaps a parked take in through this
+    # same pair. Deleting the generation is what invalidates its recorded
+    # mood/intent/posture, so the invalidation belongs where the deletion is.
+    #
+    # `cut`, not the post-removal length: trailing transition lines are preserved
+    # and re-appended, so the replacement lands ABOVE where the old generation
+    # sat. Superseding from the new landing index would step over the dead entry
+    # and leave it describing what is now a transition line.
+    #
+    # Not fatal: the transcript is already written. A ledger that will not write
+    # must not turn a completed reroll into a failed one -- same judgement
+    # `_persist_reply` makes about this file.
+    try:
+        turnstate.supersede(cid, sid, cut)
+    except OSError:
+        pass
     # `kept` is the transcript this leaves behind, transitions excluded, and it
     # is what the restore checks it still sees: anything written since means the
     # tail is no longer the one this took from.

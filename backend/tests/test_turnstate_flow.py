@@ -190,6 +190,9 @@ def test_the_tracker_instruction_is_kept_off_the_opener(monkeypatch, tmp_path):
 # ---- promotion -------------------------------------------------------------
 
 def _reinforce(cid, sid, char_id, value, times=3, field="mood"):
+    # Promotion is gated on the feature being on, so every promotion test runs
+    # with it on — that is the only configuration it can happen in.
+    config.write_config(turnstate_depth="4")
     for _ in range(times):
         i = len(scenes.read_scene(cid, sid)["messages"])
         scenes.append_message(cid, sid, "assistant", f"beat {i}", speaker="Winifred Ash")
@@ -304,8 +307,71 @@ def test_promotion_is_bounded_by_the_callers_snapshot(monkeypatch, tmp_path):
     not contain it."""
     cid, sid, char_id = _scene(monkeypatch, tmp_path)
     _reinforce(cid, sid, char_id, "guarded", times=2)          # inside the snapshot
-    snapshot = len(scenes.read_scene(cid, sid)["messages"])
+    snapshot = turnstate.entries(cid, sid, len(scenes.read_scene(cid, sid)["messages"]))
     _reinforce(cid, sid, char_id, "guarded", times=1)          # landed mid-absorb
     # Live tail sees three and promotes; the snapshot saw two and does not.
     assert absorb.materialize(cid, sid, {}) != []
-    assert absorb.materialize(cid, sid, {}, tail=snapshot) == []
+    assert absorb.materialize(cid, sid, {}, ledger=snapshot) == []
+
+
+def test_promotion_stops_when_the_feature_is_switched_off(monkeypatch, tmp_path):
+    """`turnstate_depth = 0` is the whole feature's switch, and the
+    Configuration page says so. A retained ledger — or a block a model
+    volunteered while the feature was off all along — must not keep proposing
+    canonical state behind that promise."""
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    _reinforce(cid, sid, char_id, "guarded")
+    assert _state_edits(cid, sid) != []
+    config.write_config(turnstate_depth="0")
+    assert _state_edits(cid, sid) == []
+
+
+def test_a_streak_longer_than_the_ledger_can_hold_still_promotes(monkeypatch, tmp_path):
+    """A threshold above MAX_ENTRIES could never be met, and nothing in the UI
+    distinguishes "very strict" from "impossible" — so it saturates at the
+    memory the ledger actually has."""
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    config.write_config(promote_streak=str(turnstate.MAX_ENTRIES + 50))
+    _reinforce(cid, sid, char_id, "guarded", times=turnstate.MAX_ENTRIES)
+    assert _state_edits(cid, sid) != []
+
+
+def test_a_reroll_beneath_a_transition_line_still_retires_its_state(monkeypatch, tmp_path):
+    """`remove_trailing_assistant_run` preserves trailing transitions and
+    re-appends them, so the replacement lands ABOVE where the old generation
+    sat. Superseding from the new landing index would step straight over the
+    dead entry."""
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    config.write_config(turnstate_depth="4")
+    _persist_reply(cid, sid, "**Winifred Ash:** Get out.\n\n"
+                   + _block('{"Winifred Ash": {"mood": "furious"}}'))
+    scenes.append_message(cid, sid, "assistant", "— the hall —",
+                          speaker=scenes.TRANSITION_SPEAKER)
+    scenes.remove_trailing_assistant_run(cid, sid)          # steps over the transition
+    _persist_reply(cid, sid, "**Winifred Ash:** ...if you would.")   # no block
+    assert turnstate.entries(cid, sid) == []
+    assert "Transient state" not in _labels(cid, sid)
+
+
+def test_swapping_in_a_parked_alternate_does_not_keep_the_live_takes_state(
+        monkeypatch, tmp_path):
+    """`alternates.promote` swaps narration through the same remove/append pair
+    but knows nothing of this ledger, so the restored take would otherwise be
+    described by the mood of the take it replaced."""
+    from grimoire.store import alternates
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    config.write_config(turnstate_depth="4")
+    scenes.append_message(cid, sid, "user", "Where is the ledger?")
+    _persist_reply(cid, sid, "**Winifred Ash:** Get out.\n\n"
+                   + _block('{"Winifred Ash": {"mood": "furious"}}'))
+    # Exactly what the regenerate route does: archive, then remove, and let the
+    # replacement join the set when the next read reconciles.
+    alternates.archive(cid, sid, "")
+    scenes.remove_trailing_assistant_run(cid, sid)
+    _persist_reply(cid, sid, "**Winifred Ash:** Please, sit.\n\n"
+                   + _block('{"Winifred Ash": {"mood": "gracious"}}'))
+    assert len(alternates.state(cid, sid)["runs"]) == 2      # both takes parked
+    assert turnstate.entries(cid, sid)[0][1] == {
+        f"characters:{char_id}": {"mood": "gracious"}}       # the live take's
+    alternates.promote(cid, sid, 0)
+    assert turnstate.entries(cid, sid) == []

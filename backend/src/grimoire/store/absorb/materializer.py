@@ -170,7 +170,7 @@ def _character_state_edit(cid: str, char_id: str, before: str, after: str) -> di
             "before": before, "after": after, "authored": False}
 
 
-def _promote(cid: str, sid: str, out: list[dict], stage, tail: int | None) -> None:
+def _promote(cid: str, sid: str, out: list[dict], stage, ledger: list | None) -> None:
     """Fold #121's reinforced transient values into the staged character-state
     edits, in place.
 
@@ -199,14 +199,21 @@ def _promote(cid: str, sid: str, out: list[dict], stage, tail: int | None) -> No
     line nothing in the transcript ever quoted.
     """
     need = config.promote_streak()
-    if need <= 0:
+    # The feature switch, not just the promotion one. With `turnstate_depth` at
+    # 0 the tracker instruction and the prompt section are both gone, and the
+    # Configuration page says that turns the whole thing off -- so a retained
+    # ledger, or blocks a model volunteered while it was off all along, must not
+    # keep proposing canonical state behind that promise. `promote_streak` stays
+    # the narrower switch: promotion off, tracking still on.
+    if need <= 0 or config.turnstate_depth() <= 0:
         return
-    if tail is None:
+    if ledger is None:
         try:
             tail = len(scenes_read.read_scene(cid, sid)["messages"])
         except (scenes_paths.SceneNotFound, OSError, UnicodeDecodeError):
             return
-    promoted = turnstate.streaks(cid, sid, tail, need)
+        ledger = turnstate.entries(cid, sid, tail)
+    promoted = turnstate.streaks_from(ledger, need)
     if not promoted:
         return
     croot = campaigns_paths.campaign_root(cid)
@@ -245,7 +252,7 @@ def _promote(cid: str, sid: str, out: list[dict], stage, tail: int | None) -> No
 
 def materialize(cid: str, sid: str, parsed: dict,
                 messages: list[dict] | None = None,
-                tail: int | None = None) -> list[dict]:
+                ledger: list | None = None) -> list[dict]:
     """Turn the parsed edit lists into before/after StagedEdits against the campaign
     copies. Targets that don't exist are dropped (tolerated, not an error).
 
@@ -253,13 +260,14 @@ def materialize(cid: str, sid: str, parsed: dict,
     the caller has it -- the citations are judged against it, and the scene can
     move between rendering the prompt and this call (see `routing.speaker_index`).
 
-    `tail` is the transcript length the caller's review is being built from.
-    `post_absorb` snapshots the scene before awaiting the extraction call and
-    passes that snapshot's length here, so a turn landing while the request is
-    in flight cannot contribute a promoted value (#121) to a review whose
-    summary and edits were derived from a transcript that did not contain it.
-    Defaulting to the live tail keeps every other caller — the ingest script,
-    the tests — working off the scene as it stands.
+    `ledger` is the transient-state entries (#120) the caller's review is being
+    built from. `post_absorb` captures them WITH the scene, under one lock,
+    before awaiting the extraction call, so promotion (#121) measures the same
+    scene version the summary and the other edits describe. A length alone was
+    not enough: an edit or a reroll landing mid-absorb rewrites entries *below*
+    the tail, and only a copy taken at the same instant is immune to that.
+    Defaulting to a live read keeps every other caller — the ingest script, the
+    tests — working off the scene as it stands.
     """
     croot = campaigns_paths.campaign_root(cid)
     out: list[dict] = []
@@ -321,7 +329,7 @@ def materialize(cid: str, sid: str, parsed: dict,
 
     # After the model's own proposals, so a reinforced value merges onto the row
     # the reviewer would already have seen rather than opening a second one.
-    _promote(cid, sid, out, _staged, tail)
+    _promote(cid, sid, out, _staged, ledger)
 
     for e in parsed.get("group_state_edits", []):
         raw_id = e.get("id", "")

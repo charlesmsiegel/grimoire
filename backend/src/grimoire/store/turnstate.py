@@ -440,8 +440,18 @@ def current(cid: str, sid: str, tail: int, depth: int) -> dict[str, dict[str, st
 
 
 def streaks(cid: str, sid: str, tail: int, need: int) -> dict[str, dict[str, str]]:
+    """`streaks_from` over one scene's live ledger."""
+    return streaks_from(entries(cid, sid, tail), need)
+
+
+def streaks_from(recorded: list[tuple[int, dict]], need: int) -> dict[str, dict[str, str]]:
     """Values reinforced across at least `need` consecutive recorded entries
     (#121), as ``{token: {field: value}}``.
+
+    Takes the entries rather than reading them, so a caller working from a
+    snapshot — `post_absorb` captures the scene and this ledger under one lock
+    before awaiting the extraction call — measures the same scene version the
+    rest of its review describes.
 
     The run measured is the FINAL one. `current_state` is standing state, and a
     mood held for four posts in the middle of a scene and abandoned before the
@@ -452,11 +462,18 @@ def streaks(cid: str, sid: str, tail: int, need: int) -> dict[str, dict[str, str
     field) is SKIPPED, not streak-breaking. An NPC who did not act this turn
     has not changed her posture, and demanding literal index adjacency would
     make promotion unreachable in any scene with more than one NPC.
+
+    `need` is clamped to `MAX_ENTRIES`: the ledger keeps that many entries per
+    scene, so a larger threshold could never be met however many matching
+    replies landed. A setting that silently cannot fire is worse than one that
+    saturates at the memory the system actually has, and nothing in the UI
+    could tell the two apart.
     """
     if need <= 0:
         return {}
+    need = min(need, MAX_ENTRIES)
     runs: dict[str, dict[str, tuple[str, int]]] = {}
-    for _, actors in entries(cid, sid, tail):
+    for _, actors in recorded:
         for token, fields in actors.items():
             for field, value in fields.items():
                 held = runs.setdefault(token, {}).get(field)
