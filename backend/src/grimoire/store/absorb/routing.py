@@ -58,6 +58,21 @@ UNATTRIBUTED = "unattributed"
 #: fabricated one, because an absent citation says nothing either way.
 UNCITED = "uncited"
 
+#: Words a model reaches for when it means "the narration" rather than a
+#: speaker, folded. The two the transcript actually writes are in here by
+#: derivation; the rest are there because the prompt asking for "Grimoire" does
+#: not stop a model writing "narrator", and reading that as a citation nobody in
+#: the scene answers to would collapse EVERY narrated row in the review --
+#: turning the one tier that should sail through into the one that never does.
+#:
+#: Consulted only after the transcript's own labels have declined the name, so a
+#: character who really is called Narrator is matched as herself first: she
+#: spoke under that label, and a label that matched is never re-read as a word.
+NARRATION_WORDS: frozenset[str] = frozenset(
+    {label.casefold() for label in scenes_serialize.RESERVED_LABELS}
+    | {"narrator", "narration", "the narrator", "narrative", "gm",
+       "game master", "storyteller", "dm"})
+
 #: What each tier does to the model's own number. Chosen for the ORDER they
 #: impose and for two properties that hold at every certainty:
 #:
@@ -185,24 +200,31 @@ def authority(index: dict, speaker: str, subjects: tuple[str, ...] = ()) -> str:
     a character asserting something about the world is a third-party claim,
     which is exactly what #112 asks for.
 
-    Resolution runs transcript-first. The reserved labels are checked before
-    anything else because they are role labels rather than names and would
-    otherwise resolve against a cast member who happens to be called "You".
+    Resolution runs transcript-FIRST, and the order is the point: a name is
+    read as a speaker if this scene has one, and only otherwise as a word for
+    the narration. `match_name` gives the same exact-then-unambiguous-prefix
+    rule the transcript parser uses, so a model citing "Mara" for a line
+    labelled "Mara Cotgrave" still checks out, and one citing a name two
+    speakers answer to is declined rather than guessed at.
     """
     label = (speaker or "").strip()
     if not label:
         return UNCITED
-    if label in scenes_serialize.RESERVED_LABELS:
+    labels = index.get("labels", [])
+    refs = index.get("refs", {})
+    matched = scenes_serialize.match_name(label, labels)
+    if matched is None:
+        return NARRATION if label.casefold() in NARRATION_WORDS else UNATTRIBUTED
+    if matched in scenes_serialize.RESERVED_LABELS:
         return NARRATION
-    # Corroboration first: a name nobody in this transcript spoke under is an
-    # invented citation, whatever the cast list says. `match_name` gives the
-    # same exact-then-unambiguous-prefix rule the transcript parser uses, so a
-    # model citing "Mara" for a line labelled "Mara Cotgrave" still checks out.
-    if scenes_serialize.match_name(label, index.get("labels", [])) is None:
-        return UNATTRIBUTED
-    name = scenes_serialize.match_name(label, list(index.get("refs", {})))
-    ref = index.get("refs", {}).get(name) if name else None
-    return SELF if ref is not None and ref in subjects else OTHER
+    # The MATCHED label, not the citation, and its base as a fallback: a line
+    # stored as "Mara (aside)" renders under that label, so a model quoting it
+    # verbatim matches a label the cast list does not hold under that spelling.
+    for probe in (matched, scenes_serialize.speaker_base(matched)):
+        name = scenes_serialize.match_name(probe, list(refs))
+        if name:
+            return SELF if refs[name] in subjects else OTHER
+    return OTHER
 
 
 def review(index: dict, row: dict, subjects: tuple[str, ...] = ()) -> dict:
@@ -224,6 +246,14 @@ def review(index: dict, row: dict, subjects: tuple[str, ...] = ()) -> dict:
                  if isinstance(raw, (int, float)) and not isinstance(raw, bool)
                  and raw == raw else None)                # NaN != NaN
     tier = authority(index, speaker, subjects)
-    score = (ASSUMED_CERTAINTY if certainty is None else float(certainty)) * WEIGHTS[tier]
+    # Rounded BEFORE banding, not after. A band read off the raw product and a
+    # score reported to four places disagree at the edge -- 0.649999 bands
+    # medium and prints 0.65 -- which is a reader's afternoon gone. It also
+    # settles the boundary the weights are tuned to hit exactly:
+    # `ASSUMED_CERTAINTY * WEIGHTS[OTHER]` is 0.35 in arithmetic and a hair
+    # under it in binary floating point, so rounding is what makes the band
+    # follow the table rather than the representation.
+    score = round((ASSUMED_CERTAINTY if certainty is None else float(certainty))
+                  * WEIGHTS[tier], 4)
     return {"certainty": certainty, "quote": quote, "speaker": speaker,
-            "authority": tier, "score": round(score, 4), "band": band(score)}
+            "authority": tier, "score": score, "band": band(score)}

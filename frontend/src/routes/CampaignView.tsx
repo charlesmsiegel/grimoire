@@ -1919,7 +1919,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             <span className={`chip absorb-band absorb-band-${e.review.band}`}
                   title={`certainty ${e.review.certainty ?? "not given"}` +
                          ` · score ${e.review.score}`}>
-              {e.review.band} · {AUTHORITY_LABELS[e.review.authority]}
+              {e.review.band} · {AUTHORITY_LABELS[e.review.authority] ?? e.review.authority}
             </span>)}
           {conflict && <span className="chip on absorb-conflict-badge">Changed</span>}
         </label>
