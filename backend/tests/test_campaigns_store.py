@@ -452,11 +452,22 @@ def test_slim_interrupted_mid_prune_does_not_tombstone_what_it_pruned(monkeypatc
     assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "overlay"
 
 
+#: Interruption points the sweep below walks. Must exceed the number of
+#: operations a full migration performs -- pinned by
+#: `test_the_interruption_sweep_reaches_the_end_of_the_migration`.
+SWEEP_POINTS = 20
+
+
 def _fatter_campaign(monkeypatch, tmp_path):
     """`_fat_campaign` plus every other shape the migration classifies: a plot
-    map, a greeting, a PC, a locked actor, and a record the campaign owns."""
+    map, a greeting, a PC, a locked actor, a record the campaign owns, and a
+    *diverged* actor carrying a byte-identical asset copy — the one shape whose
+    absence hid an asset-tombstoning bug from the sweep below (Codex review)."""
     wroot, cid, same, diverged, removed, aid, vid = _fat_campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
+    dvid, dver = characters.create_character(wroot, "Mara")
+    assets.put_image(wroot, dvid, dver, "avatar", b"\x89PNG\r\n\x1a\nmara", "png")
+    shutil.copytree(wroot / "characters" / dvid, croot / "characters" / dvid)
     g = greetings.create_greeting(wroot, "Gala", aid, vid, body="Hi.")
     greetings.set_edges(wroot, g, leads_to=[], excludes=[])
     pid, _ = pcs.create_pc(wroot, "Elara", [])
@@ -472,16 +483,18 @@ def _fatter_campaign(monkeypatch, tmp_path):
     manifest[f"pcs/{pid}"] = pcs.dir_hash(wroot, pid)
     shutil.copytree(wroot / "characters" / lid, croot / "characters" / lid)
     manifest[f"characters/{lid}"] = characters.dir_hash(wroot, lid)
+    manifest[f"characters/{dvid}"] = characters.dir_hash(wroot, dvid)
     campaigns.write_manifest(cid, manifest)
     appearances.appear(cid, "s1", "characters", lid, lvid, "npc")   # locks, drops its ref
+    characters.update_version(croot, dvid, dver, characters.blank_card("Mara (edited)"))
     mine = entities.create_entity(croot, "lore", "Winifred", "Campaign only.")
     _stamp_full(cid)
     return dict(cid=cid, same=same, diverged=diverged, removed=removed, aid=aid,
-                g=g, pid=pid, lid=lid, mine=mine)
+                g=g, pid=pid, lid=lid, mine=mine, dvid=dvid, dver=dver)
 
 
 @pytest.mark.parametrize("what", ["write", "unlink"])
-@pytest.mark.parametrize("stop_at", range(14))
+@pytest.mark.parametrize("stop_at", range(SWEEP_POINTS))
 def test_no_interruption_of_the_migration_tombstones_a_live_record(monkeypatch, tmp_path,
                                                                    stop_at, what):
     """The invariant behind #270, swept: stop the migration at each of its
@@ -522,9 +535,12 @@ def test_no_interruption_of_the_migration_tombstones_a_live_record(monkeypatch, 
     dead = overlay.deleted(cid)
     for ref in (f"lore/{f['same']}", f"lore/{f['diverged']}", f"lore/{f['mine']}",
                 f"characters/{f['aid']}", f"characters/{f['lid']}", f"pcs/{f['pid']}",
-                f"greetings/{f['g']}", "plotmap"):
+                f"greetings/{f['g']}", f"characters/{f['dvid']}", "plotmap"):
         assert ref not in dead, f"{ref} tombstoned"
+    assert not [r for r in dead if r.startswith("assets/")], f"asset tombstoned: {sorted(dead)}"
     assert f"lore/{f['removed']}" in dead                              # the real deletion stands
+    # the world's image is still the campaign's, not hidden behind a tombstone
+    assert [i["name"] for i in overlay.list_images(cid, f["dvid"], f["dver"])] == ["avatar"]
     # …and every live record still reads, with the content it had
     assert overlay.read_entity(cid, "lore", f["same"])["body"] == "same"
     assert overlay.read_entity(cid, "lore", f["diverged"])["body"] == "campaign text"
@@ -534,6 +550,61 @@ def test_no_interruption_of_the_migration_tombstones_a_live_record(monkeypatch, 
     assert pcs.read_pc(overlay.pc_root(cid, f["pid"]), f["pid"])["meta"]["name"] == "Elara"
     assert overlay.read_greeting(cid, f["g"])["body"].strip() == "Hi."
     assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "overlay"
+
+
+def test_the_interruption_sweep_reaches_the_end_of_the_migration(monkeypatch, tmp_path):
+    """`SWEEP_POINTS` is only meaningful if it exceeds the number of operations
+    a full migration performs — otherwise the tail of the migration silently
+    stops being swept as the fixture grows, with no signal. That tail is where
+    the asset-tombstoning bug lived (Codex review)."""
+    f = _fatter_campaign(monkeypatch, tmp_path)
+    n = [0]
+    real_write, real_unlink = atomic.write_text, Path.unlink
+
+    def counted(real):
+        def spy(*args, **kwargs):
+            n[0] += 1
+            return real(*args, **kwargs)
+        return spy
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(atomic, "write_text", counted(real_write))
+        mp.setattr(Path, "unlink", counted(real_unlink))
+        campaigns.ensure_campaign_slim(f["cid"])
+    assert 0 < n[0] <= SWEEP_POINTS, f"migration takes {n[0]} operations; widen SWEEP_POINTS"
+
+
+def test_slim_sweep_keeps_an_untracked_copy_that_differs_from_the_world(monkeypatch, tmp_path):
+    """Byte-identity is the only thing between the sweep and a record the
+    campaign owns, so it needs a case where the world holds the ref and the
+    contents differ — the half `test_slim_sweep_keeps_a_campaign_local_record`
+    cannot reach, because its record has no world counterpart at all. Drop the
+    comparison and keep only "the world has this ref" and this fails (Codex
+    review)."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    eid = entities.create_entity(wroot, "lore", "Saltmarch", "World text.")
+    aid, ver = characters.create_character(wroot, "Mara")
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    (croot / "lore").mkdir()
+    (croot / "lore" / f"{eid}.md").write_text(
+        (wroot / "lore" / f"{eid}.md").read_text(encoding="utf-8"), encoding="utf-8")
+    entities.update_entity(croot, "lore", eid, body="Campaign text.")
+    shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)
+    characters.update_version(croot, aid, ver, characters.blank_card("Mara (edited)"))
+    campaigns.write_manifest(cid, {})            # …and nothing names either of them
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert (croot / "lore" / f"{eid}.md").exists()
+    assert (croot / "characters" / aid / "character.md").exists()
+    assert overlay.read_entity(cid, "lore", eid)["body"] == "Campaign text."
+    card = characters.read_card(overlay.char_root(cid, aid), aid, ver)
+    assert card["data"]["name"] == "Mara (edited)"   # the campaign's edit, not the world's card
+    assert campaigns.read_manifest(cid) == {}    # kept, and still not adopted
 
 
 def test_slim_does_not_tombstone_a_ref_the_fork_recorded_no_hash_for(monkeypatch, tmp_path):

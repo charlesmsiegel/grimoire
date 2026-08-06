@@ -464,49 +464,80 @@ def _stamp_full(cid: str) -> None:
     mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 
-def test_materialize_entity_records_the_base_after_the_copy_before_the_migration(monkeypatch, tmp_path):
-    """The ordering above inverts on a campaign slim has not reached yet
-    (#270). There a ref with no copy is not "not materialized" — it is a
-    record the user deleted, which the pending migration tombstones. So the
-    copy has to commit first, and the manifest name it only once it has."""
+def test_materialize_entity_reserves_the_base_before_the_copy_before_the_migration(monkeypatch, tmp_path):
+    """On a campaign slim has not reached, neither ordering is safe: a ref with
+    no copy is a record the pending migration tombstones, and a copy with no ref
+    is one it can stop recognizing as residue the moment the world moves. So the
+    base is reserved before the copy and recorded after it (#270)."""
     _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)
     _thin(cid, "lore", eid)
     _stamp_full(cid)
     seen = _at_commit(monkeypatch, cid, campaigns.campaign_root(cid) / "lore" / f"{eid}.md")
     overlay.materialize_entity(cid, "lore", eid)
-    assert f"lore/{eid}" not in seen["manifest"]                       # not named yet…
+    assert seen["manifest"][f"lore/{eid}"] == overlay.RESERVED_BASE     # named, not yet described
     assert campaigns.read_manifest(cid)[f"lore/{eid}"] == entities.entity_hash(wroot, "lore", eid)
 
 
-def test_materialize_actor_records_the_base_after_the_meta_before_the_migration(monkeypatch, tmp_path):
+def test_materialize_actor_reserves_the_base_before_the_meta_before_the_migration(monkeypatch, tmp_path):
     wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
     _stamp_full(cid)
     d = campaigns.campaign_root(cid) / "characters" / aid
     seen = _at_commit(monkeypatch, cid, d / "character.md")
     overlay.materialize_actor(cid, "characters", aid)
-    assert f"characters/{aid}" not in seen["manifest"]
+    assert seen["manifest"][f"characters/{aid}"] == overlay.RESERVED_BASE
     assert campaigns.read_manifest(cid)[f"characters/{aid}"] == characters.dir_hash(wroot, aid)
 
 
-def test_an_interrupted_copy_before_the_migration_is_not_read_as_a_deletion(monkeypatch, tmp_path):
-    """End to end: interrupt the materialization at its commit point on an
-    unmigrated campaign, then let the migration run. What it finds is a copy
-    sync.md does not name, which it sweeps — the record stays inherited and
-    readable instead of being tombstoned out of the campaign."""
-    _wid, _wroot, cid, eid = _pair(monkeypatch, tmp_path)
+def test_an_exception_after_the_copy_lands_redeems_the_reservation(monkeypatch, tmp_path):
+    """An asynchronous exception can arrive after the commit write returned.
+    The copy is then real, so the reservation describing it has to be redeemed
+    — the same reasoning that keeps the base past the migration."""
+    _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)
     _thin(cid, "lore", eid)
     _stamp_full(cid)
     croot = campaigns.campaign_root(cid)
     _fail_after_writing(monkeypatch, croot / "lore" / f"{eid}.md")
     with pytest.raises(KeyboardInterrupt):
         overlay.materialize_entity(cid, "lore", eid)
-    assert (croot / "lore" / f"{eid}.md").exists()                # the copy landed
-    assert f"lore/{eid}" not in campaigns.read_manifest(cid)      # the ref did not
+    assert (croot / "lore" / f"{eid}.md").exists()
+    assert campaigns.read_manifest(cid)[f"lore/{eid}"] == entities.entity_hash(wroot, "lore", eid)
+
+
+def test_a_reservation_with_no_copy_is_dropped_not_tombstoned(monkeypatch, tmp_path):
+    """The residue of a kill before the copy landed. Nothing was copied, so
+    there is nothing the user can have deleted: the migration drops the ref and
+    the record stays inherited."""
+    _wid, _wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    _thin(cid, "lore", eid)
+    campaigns.write_manifest(cid, {f"lore/{eid}": overlay.RESERVED_BASE})
+    _stamp_full(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
     assert f"lore/{eid}" not in overlay.deleted(cid)
+    assert f"lore/{eid}" not in campaigns.read_manifest(cid)
     assert overlay.read_entity(cid, "lore", eid)["body"] == "world text"
+
+
+def test_a_reservation_with_a_copy_survives_as_something_sync_still_sees(monkeypatch, tmp_path):
+    """The residue of a kill after the copy landed, and the reason reserving
+    beats swapping the writes: the ref keeps the record in front of sync even
+    when the world has moved on since. Swapping would leave a copy no ref names,
+    which the migration's sweep stops recognizing as residue the moment the
+    world content differs — silent permanent divergence (Codex review)."""
+    _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    overlay.materialize_entity(cid, "lore", eid)
+    campaigns.write_manifest(cid, {f"lore/{eid}": overlay.RESERVED_BASE})   # …killed before redeeming
+    _stamp_full(cid)
+    entities.update_entity(wroot, "lore", eid, body="world v2")             # world moves meanwhile
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert f"lore/{eid}" not in overlay.deleted(cid)
+    assert (croot / "lore" / f"{eid}.md").exists()
+    assert overlay.read_entity(cid, "lore", eid)["body"] == "world text"    # content kept
+    assert [p["status"] for p in sync.incoming(cid)] == ["conflict"]        # and still offered
 
 
 def test_materialize_entity_drops_the_base_again_when_the_copy_fails(monkeypatch, tmp_path):
