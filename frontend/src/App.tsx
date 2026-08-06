@@ -18,12 +18,19 @@ import SetupWizard from "./routes/SetupWizard";
 
 export default function App() {
   const [theme, setTheme] = useState<string | null>(null);
-  // Settled by the same boot fetch that supplies the theme, and the theme
-  // already gates the first render — so this needs no request of its own and
-  // no route is ever chosen against a not-yet-known answer (#194). It is state
-  // rather than a re-read because the wizard reports its own completion:
-  // refetching to notice would race the navigation away from it.
+  // The server's verdict, refreshed with the rest of the config on every
+  // navigation — a world created from WorldsView, or a data dir repointed at
+  // another library, both change the answer without this component hearing
+  // about it otherwise (#194).
   const [firstRun, setFirstRun] = useState(false);
+  // ...and a one-way latch for "this session has left setup". Without it the
+  // live verdict is a trap: `finish()` treats its `setup_done` write as
+  // best-effort so a failure can't strand anyone, and on a store that cannot
+  // record the flag the next refresh would answer first-run again and redirect
+  // straight back into the wizard, forever. The latch is what guarantees one
+  // exit is always enough.
+  const [leftSetup, setLeftSetup] = useState(false);
+  const inSetup = firstRun && !leftSetup;
   const [ready, setReady] = useState(false);
   const [activeLabel, setActiveLabel] = useState("NO CONNECTION");
 
@@ -53,6 +60,7 @@ export default function App() {
   useEffect(() => {
     api.getConfig().then((c) => {
       setReady(c.ready);
+      setFirstRun(c.first_run);
       setActiveLabel(c.active_connection ? c.active_connection.name.toUpperCase() : "NO CONNECTION");
     });
   }, [location.pathname]);
@@ -103,14 +111,14 @@ export default function App() {
         {/* A fresh install lands on the wizard instead of an empty campaigns
             list. Only `/` is redirected: every other route stays reachable, so
             the topbar is an escape hatch and a deep link is never hijacked.
-            The two guards are exact opposites of one `firstRun`, which is what
+            The two guards are exact opposites of one `inSetup`, which is what
             keeps them from bouncing a redirect back and forth. Gating
             `/welcome` too is what stops a reload part-way through the wizard —
             after a world exists, so the server no longer calls it a first run —
             from restarting at step one and creating a second world. */}
-        <Route path="/" element={firstRun ? <Navigate to="/welcome" replace /> : <CampaignsView />} />
+        <Route path="/" element={inSetup ? <Navigate to="/welcome" replace /> : <CampaignsView />} />
         <Route path="/welcome" element={
-          firstRun ? <SetupWizard onDone={() => setFirstRun(false)} /> : <Navigate to="/" replace />} />
+          inSetup ? <SetupWizard onDone={() => setLeftSetup(true)} /> : <Navigate to="/" replace />} />
         <Route path="/campaigns/new" element={<CampaignWizard ready={ready} />} />
         <Route path="/campaigns/:cid" element={
           <CampaignView ready={ready} topbarCollapsed={topbarCollapsed} onToggleTopbar={toggleTopbar} />} />

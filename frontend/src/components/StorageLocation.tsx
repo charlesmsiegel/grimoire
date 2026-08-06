@@ -14,10 +14,12 @@ import { ApiError, api, type DataDirInfo } from "../api/client";
  *  place the failure would have been shown, and anything written in the gap
  *  lands in whichever store the pointer still names — so the wizard holds its
  *  Next button until this settles. `onMoved` fires once the pointer has
- *  actually changed, for a caller whose own state describes the old store. */
+ *  actually changed, for a caller whose own state describes the old store; it
+ *  is awaited and counts as part of the move, so a caller that re-reads the new
+ *  store is finished re-reading before "pending" clears. */
 export function StorageLocation(
   { onPending, onMoved }:
-  { onPending?: (pending: boolean) => void; onMoved?: (info: DataDirInfo) => void },
+  { onPending?: (pending: boolean) => void; onMoved?: (info: DataDirInfo) => void | Promise<void> },
 ) {
   const [dataDir, setDataDir] = useState<DataDirInfo | null>(null);
   const [input, setInput] = useState("");
@@ -34,6 +36,10 @@ export function StorageLocation(
   }, []);
 
   async function saveDataDir(value: string | null) {
+    // Two pointer updates at once (Move, then Reset before it lands) would race
+    // over which store wins, and the first to return would clear `moving` while
+    // the other is still in flight.
+    if (moving) return;
     setMsg(null);
     setMoving(true);
     try {
@@ -41,7 +47,7 @@ export function StorageLocation(
       setDataDir(next);
       setInput(next.data_dir);
       setMsg({ kind: "ok", text: `Storage now at ${next.data_dir}` });
-      onMoved?.(next);
+      await onMoved?.(next);
     } catch (e) {
       const detail = e instanceof ApiError ? e.detail : "Could not update storage location";
       setMsg({ kind: "err", text: detail });
@@ -82,7 +88,7 @@ export function StorageLocation(
       )}
       {dataDir && dataDir.source !== "env" && !dataDir.is_default && (
         <p className="field-hint">
-          <button className="link" onClick={() => saveDataDir(null)}>
+          <button className="link" onClick={() => saveDataDir(null)} disabled={moving}>
             Reset to default ({dataDir.default})
           </button>
         </p>

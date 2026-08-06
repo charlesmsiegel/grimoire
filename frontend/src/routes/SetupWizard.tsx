@@ -67,12 +67,29 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
   // established collection.
   const [existingLibrary, setExistingLibrary] = useState(false);
 
+  /** Re-classify the store after step 1 has repointed at a different one, and
+   *  drop everything the earlier steps recorded about the old one — a
+   *  connection and a world live inside a store, so after a move they name
+   *  records the active store does not have.
+   *
+   *  The question is "does this store have a world", not "is it a first run":
+   *  an empty store whose setup was skipped before reports `first_run: false`
+   *  too, and treating that as stocked would hide the create form and offer a
+   *  campaign handoff into `CampaignWizard`, which cannot get past its first
+   *  step with no world to pick. */
   const recheckStore = useCallback(async () => {
+    setConnected(null);
+    setCreatedId(null);
+    setWorldId(null);
+    setWorldName("");
     try {
-      // putDataDir invalidated the config cache, so this reads the new store.
-      setExistingLibrary(!(await api.getConfig()).first_run);
-    } catch {
-      /* leave the verdict alone rather than guessing from a failed read */
+      setExistingLibrary((await api.listWorlds()).length > 0);
+    } catch (err: any) {
+      // Not a guess in either direction: say so, and leave the step showing the
+      // form, which is recoverable. Silently claiming "already stocked" would
+      // strand a fresh user with no way to make a world.
+      setExistingLibrary(false);
+      setError(err.detail ?? "Moved, but the new library could not be read.");
     }
   }, []);
 
@@ -292,9 +309,11 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
       {step !== 4 && (
         <p className="wizard-skip">
           {/* Disabled for the same reason the step's own Next is: leaving
-              mid-write races this step's config write against finish()'s. */}
+              mid-write races this step's config write against finish()'s.
+              `busy` covers the connection step's activation, which is a config
+              write like the theme's and was missed the first time round. */}
           <button className="link" onClick={() => finish("/")}
-                  disabled={movingStore || savingTheme}>
+                  disabled={busy || movingStore || savingTheme}>
             Skip setup
           </button>
           {" — you can do all of this later from Config."}
