@@ -115,12 +115,19 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [locImages, setLocImages] = useState<string[]>([]);
   const [ctx, setCtx] = useState<SceneContext | null>(null);
   const [recap, setRecap] = useState<ChronicleEntry[]>([]);
-  // Held with the scene it came FROM, the way `LedgerPanel` holds its campaign:
-  // the inspector stays mounted across a scene switch, so a bare `Briefing`
-  // would go on flagging the previous scene's cast under the new scene's name
-  // until the new request settles. Comparing during render makes that window
-  // impossible rather than short.
-  const [brief, setBrief] = useState<{ sid: string; data: Briefing } | null>(null);
+  // Held with the campaign AND scene it came from, the way `LedgerPanel` holds
+  // its campaign: the inspector stays mounted across both switches, so a bare
+  // `Briefing` would go on flagging the previous scene's cast under the new
+  // scene's name until the new request settles. Comparing during render makes
+  // that window impossible rather than short.
+  //
+  // `cid` as well as `sid`, which this first got wrong (Codex review): the
+  // route is `/campaigns/:cid` with no `key`, so React Router REUSES
+  // `CampaignView` from one campaign to the next, and scene ids are per-campaign
+  // (`0001--…`) so they repeat freely across them. Two campaigns sitting on the
+  // same scene id would have matched on `sid` alone — showing one game's
+  // commitments, relationships and prior fact under the other's name.
+  const [brief, setBrief] = useState<{ cid: string; sid: string; data: Briefing } | null>(null);
   const [models, setModels] = useState<Model[]>([]);
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
   const [cfg, setCfg] = useState<CalendarConfig | null>(null);
@@ -226,8 +233,8 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   useEffect(() => {
     let live = true;
     api.sceneBriefing(cid, sid)
-      .then((b) => { if (live) setBrief({ sid, data: b }); })
-      .catch(() => { if (live) setBrief({ sid, data: NO_BRIEFING }); });
+      .then((b) => { if (live) setBrief({ cid, sid, data: b }); })
+      .catch(() => { if (live) setBrief({ cid, sid, data: NO_BRIEFING }); });
     return () => { live = false; };
   }, [cid, sid, refreshKey]);
 
@@ -303,7 +310,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const pctNumber = (t: number) => (ctxLen > 0 ? Math.round((t / ctxLen) * 100) : 0);
   const nameOf = (a: Actor) => names[`${a.kind}/${a.id}`] ?? a.id;
 
-  const briefing = brief && brief.sid === sid ? brief.data : null;
+  const briefing = brief && brief.cid === cid && brief.sid === sid ? brief.data : null;
   // Rendered only when it has something to say. An empty briefing is the normal
   // state of a brand-new campaign, and an always-present "Nothing yet" heading
   // at the top of the rail would push the sections that do have content down for
