@@ -161,14 +161,20 @@ def _fact_label(text: str, supersedes: str, date: str) -> str:
     return f"{label} — {date}" if date else label
 
 
-def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
+def materialize(cid: str, sid: str, parsed: dict,
+                messages: list[dict] | None = None) -> list[dict]:
     """Turn the parsed edit lists into before/after StagedEdits against the campaign
-    copies. Targets that don't exist are dropped (tolerated, not an error)."""
+    copies. Targets that don't exist are dropped (tolerated, not an error).
+
+    `messages` is the transcript the extraction call was SHOWN. Pass it whenever
+    the caller has it -- the citations are judged against it, and the scene can
+    move between rendering the prompt and this call (see `routing.speaker_index`).
+    """
     croot = campaigns_paths.campaign_root(cid)
     out: list[dict] = []
     # Once per absorb, not once per edit: every row is checked against the same
     # transcript, and the index costs a scene read and a cast read.
-    index = routing.speaker_index(cid, sid)
+    index = routing.speaker_index(cid, sid, messages)
 
     def _staged(edit: dict, row: dict, *subjects: str) -> dict:
         """One StagedEdit, stamped with the review block the panel routes on.

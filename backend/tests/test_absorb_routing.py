@@ -628,3 +628,78 @@ def test_a_character_named_roll_keeps_her_own_lines(monkeypatch, tmp_path):
     # nobody — so corroborated, and never first-hand.
     assert routing.authority(index, "Roll", hers, "Winifred rolls Guile: 7.") \
         == routing.OTHER
+
+
+# ------------------------------- codex review round three: three ways to lose a label
+
+def test_a_departed_speaker_who_used_a_short_label_keeps_her_record(monkeypatch, tmp_path):
+    """The historical-cast widening matched a roster name only when it EQUALLED
+    a transcript label, while `authority` resolves labels by unambiguous prefix.
+    A character who spoke under "Seraphine" and then left was dropped from refs
+    on a spelling the matcher would have accepted."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _, _, _ = _scene(cid, wroot)
+    # Carded under her full name, but every line she speaks is labelled short —
+    # so her full name never enters `aliases` at all.
+    cordelia = characters.create_character(wroot, "Cordelia Ashgrove", "default",
+                                           characters.blank_card("Cordelia Ashgrove"))[0]
+    appearances.appear(cid, sid, "characters", cordelia, "default", "npc")
+    scenes.append_reply(cid, sid, [{"speaker": "Cordelia", "content": "I signed it."}])
+    appearances.leave(cid, sid, "characters", cordelia)
+    index = routing.speaker_index(cid, sid)
+
+    assert routing.authority(index, "Cordelia", (f"characters:{cordelia}",),
+                             "I signed it.") == routing.SELF
+
+
+def test_one_speaker_labelled_two_ways_by_case_is_one_speaker(monkeypatch, tmp_path):
+    """`canonical` deduped case-sensitively while `aliases` folded, so the two
+    spellings kept separate text buckets and the alias pointed at only the
+    first. A verbatim quote from the later message was read as invented."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _, mara, _ = _scene(cid, wroot)
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "I saw the ledger."},
+                                   {"speaker": "mara", "content": "And I kept the key."}])
+    index = routing.speaker_index(cid, sid)
+    hers = (f"characters:{mara}",)
+
+    assert routing.authority(index, "Mara", hers, "And I kept the key.") == routing.SELF
+    assert routing.authority(index, "mara", hers, "I saw the ledger.") == routing.SELF
+
+
+def test_the_index_is_built_from_the_transcript_the_model_was_shown(monkeypatch, tmp_path):
+    """`post_absorb` renders the prompt from a snapshot taken under the campaign
+    lock, then awaits the extraction call. Re-reading the scene afterwards
+    judges the model's citations against a transcript it never saw: a reroll
+    landing mid-call turns an honest quote into a fabrication, and new content
+    can corroborate evidence that was never in the prompt."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, sera, _, _ = _scene(cid, wroot)
+    shown = scenes.read_scene(cid, sid)["messages"]
+    # Somebody else appends while the extraction call is in flight.
+    scenes.append_reply(cid, sid, [{"speaker": "Seraphine Vale",
+                                    "content": "I never touched the ledger."}])
+
+    index = routing.speaker_index(cid, sid, shown)
+    subject = (f"characters:{sera}",)
+    assert routing.authority(index, "Seraphine Vale", subject, SAID) == routing.SELF
+    # The line the model could not have seen corroborates nothing.
+    assert routing.authority(index, "Seraphine Vale", subject,
+                             "I never touched the ledger.") == routing.UNATTRIBUTED
+
+
+def test_materialize_judges_against_the_snapshot_it_is_given(monkeypatch, tmp_path):
+    """The same guarantee at the seam the route actually uses."""
+    from grimoire.store import playstate
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, sera, _, _ = _scene(cid, wroot)
+    playstate.write_state(campaigns.campaign_root(cid), sera, "Wary.")
+    shown = scenes.read_scene(cid, sid)["messages"]
+    scenes.append_reply(cid, sid, [{"speaker": "Seraphine Vale",
+                                    "content": "I never touched the ledger."}])
+
+    parsed = {"character_state_edits": [
+        {"id": sera, "current_state": "Exhausted.", "speaker": "Seraphine Vale",
+         "quote": "I never touched the ledger.", "certainty": 0.9}]}
+    staged = {e["id"]: e for e in absorb.materialize(cid, sid, parsed, shown)}
+    assert staged[f"character_state:{sera}"]["review"]["authority"] == routing.UNATTRIBUTED
