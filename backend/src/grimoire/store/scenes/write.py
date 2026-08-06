@@ -235,14 +235,24 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> dict:
     # Not fatal: the transcript is already written. A ledger that will not write
     # must not turn a completed reroll into a failed one -- same judgement
     # `_persist_reply` makes about this file.
+    #
+    # Captured into the token BEFORE it is dropped, so `restore_trailing_
+    # assistant_run` can put it back with the reply. Reroll deletes before it
+    # generates, and a generation that then fails, is cancelled, or says nothing
+    # but a tracker block puts the original reply back -- restoring its
+    # narration while its recorded mood stayed deleted would leave the reply
+    # visibly present and silently unaccounted for in the next prompt.
+    parked: list = []
     try:
+        parked = [e for e in turnstate.entries(cid, sid) if e[0] >= cut]
         turnstate.supersede(cid, sid, cut)
     except OSError:
         pass
     # `kept` is the transcript this leaves behind, transitions excluded, and it
     # is what the restore checks it still sees: anything written since means the
     # tail is no longer the one this took from.
-    return {"messages": removed, "size": size, "kept": len(messages)}
+    return {"messages": removed, "size": size, "kept": len(messages),
+            "turnstate": parked}
 
 
 @locking._serialized
@@ -279,6 +289,17 @@ def restore_trailing_assistant_run(cid: str, sid: str, token: dict) -> bool:
     meta["updated"] = now_iso()
     turns._set_turn_sizes(meta, sizes)
     atomic.write_text(p, dump_frontmatter(meta, serialize._serialize_messages(body)))
+    # The transient state the removal parked, back at the indices it held. Safe
+    # to re-file at those exact indices because the restore is refused unless
+    # the transcript below the trailing transitions is still the one the removal
+    # left (`keep != token["kept"]`), so the reply goes back exactly where it
+    # came from. AFTER the write, and never fatal: the reply is what matters,
+    # and a ledger that will not write must not report the restore as refused.
+    try:
+        for idx, actors in token.get("turnstate") or []:
+            turnstate.record(cid, sid, idx, actors)
+    except OSError:
+        pass
     return True
 
 

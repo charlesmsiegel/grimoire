@@ -108,7 +108,12 @@ false rather than merely stale:
   and `alternates.promote`, which swaps a parked take in through the same
   remove/append pair) and they must not diverge. The cut index, not the
   post-removal length: trailing transition lines are preserved and re-appended,
-  so the replacement lands *above* where the old generation sat.
+  so the replacement lands *above* where the old generation sat. The dropped
+  entries ride back in the removal's token: reroll deletes before it generates,
+  and a generation that then fails, is cancelled, or says nothing but a tracker
+  block puts the reply back — restoring its narration while its recorded mood
+  stayed deleted would leave the reply visibly present and silently absent from
+  the next prompt.
 - `PUT .../messages/{index}` supersedes from that index too. An edit is the one
   transcript change no index-based filter can see: rewriting a furious exchange
   as a calm one leaves the entry at a perfectly valid index. Everything after
