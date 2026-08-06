@@ -285,8 +285,8 @@ def speaker_index(cid: str, sid: str) -> dict:
     # fifty lines does not look like fifty candidates.
     canonical: list[str] = []
     aliases: dict[str, str] = {}
-    synthetic: set[str] = set()
     said: dict[str, list[str]] = {}
+    roll_said: dict[str, list[str]] = {}
     for m in messages:
         if not isinstance(m, dict):
             continue
@@ -298,30 +298,34 @@ def speaker_index(cid: str, sid: str) -> dict:
             canonical.append(canon)
         for spelling in (label, canon):
             aliases.setdefault(spelling.casefold(), canon)
-        if label == scenes_serialize.ROLL_SPEAKER:
-            synthetic.add(canon)
-        said.setdefault(canon, []).append(_normalized(m.get("content")))
+        # Kept APART rather than flagging the canonical, because the visible
+        # `Roll` is also a writable character name. Marking the shared label
+        # synthetic took the real actor's identity with it -- she could never be
+        # first-hand about herself in any scene that also held a dice line. What
+        # is synthetic is the LINE, so that is what is recorded.
+        bucket = roll_said if label == scenes_serialize.ROLL_SPEAKER else said
+        bucket.setdefault(canon, []).append(_normalized(m.get("content")))
     # Joined with a separator no quote can straddle, so two adjacent messages
     # cannot be spliced into a sentence neither of them contains.
-    texts = {canon: "\n".join(parts) for canon, parts in said.items()}
-    return {"canonical": canonical, "aliases": aliases, "synthetic": synthetic,
-            "texts": texts, "refs": _refs(cid, sid, aliases)}
+    return {"canonical": canonical, "aliases": aliases,
+            "texts": {c: "\n".join(p) for c, p in said.items()},
+            "roll_texts": {c: "\n".join(p) for c, p in roll_said.items()},
+            "refs": _refs(cid, sid, aliases)}
 
 
-def _said_it(index: dict, canons, quote: str) -> bool:
-    """Does the cited excerpt actually appear under one of these labels?
+def _excerpt(quote: str) -> str:
+    """The cited words, ready to match. Empty when nothing usable was cited.
 
-    An empty quote passes: there is nothing to check, and refusing the tier for
-    a missing quote would punish the row twice over -- `UNCITED` already covers
-    a citation that says nothing. Surrounding quote marks are stripped off the
-    needle because a model wrapping its excerpt in them is quoting, not
-    misquoting.
+    Surrounding quote marks come off because a model wrapping its excerpt in
+    them is quoting, not misquoting.
     """
-    needle = _normalized(quote).strip("\"'")
-    if not needle:
-        return True
-    texts = index.get("texts", {})
-    return any(needle in texts.get(c, "") for c in canons)
+    return _normalized(quote).strip("\"'")
+
+
+def _found(index: dict, key: str, canons, excerpt: str) -> bool:
+    """Does the excerpt appear in one of these labels' lines, real or rolled?"""
+    texts = index.get(key, {})
+    return any(excerpt in texts.get(c, "") for c in canons)
 
 
 def _narration_canons(index: dict) -> list[str]:
@@ -351,6 +355,15 @@ def authority(index: dict, speaker: str, subjects: tuple[str, ...] = (),
     label = (speaker or "").strip()
     if not label:
         return UNCITED
+    # Half a citation is not a citation. A speaker with no excerpt used to earn
+    # the full tier on the name alone -- and the name is the cheap half, so
+    # `{"speaker": "Grimoire"}` banded high on a row nothing corroborated.
+    # `UNCITED` is the honest answer: it is what a row that answered nothing
+    # gets, it can never band high, and it still pre-checks, so the rows that
+    # legitimately have no speaker are unaffected.
+    excerpt = _excerpt(quote)
+    if not excerpt:
+        return UNCITED
     refs = index.get("refs", {})
     # Verbatim first, prefix second. An exact spelling the transcript holds is
     # not a guess and must not be put to `match_name`, whose prefix rule would
@@ -362,19 +375,22 @@ def authority(index: dict, speaker: str, subjects: tuple[str, ...] = (),
             return UNATTRIBUTED
         # A word for the narration rather than a label: check the excerpt
         # against every narrated line, since that is what the model meant by it.
-        return NARRATION if _said_it(index, _narration_canons(index), quote) else UNATTRIBUTED
+        return (NARRATION if _found(index, "texts", _narration_canons(index), excerpt)
+                else UNATTRIBUTED)
+    # A dice line first, and under the SAME visible label as any actor sharing
+    # the name: real transcript content, quotable, and spoken by nobody. So it
+    # is corroborated rather than a fabrication, and can never be first-hand --
+    # while the actor's own lines below still resolve to her.
+    if _found(index, "roll_texts", (matched,), excerpt):
+        return OTHER
     # The NAME is the cheapest part of a citation to get right -- every scene
     # has a `Grimoire`, and a present character's name is in the prompt's own
     # context block -- so a tier granted on the name alone is a tier a
     # confabulating model can claim by copying. The words have to be there too.
-    if not _said_it(index, (matched,), quote):
+    if not _found(index, "texts", (matched,), excerpt):
         return UNATTRIBUTED
     if matched in scenes_serialize.RESERVED_LABELS:
         return NARRATION
-    if matched in index.get("synthetic", set()):
-        # A roll line: real transcript content, quotable, and spoken by nobody.
-        # Corroborated, so not a fabrication -- but it can never be first-hand.
-        return OTHER
     names = list(refs)
     name = scenes_serialize.match_name(matched, names)
     # `confusable` asks the second question `match_name` cannot: not "where does
