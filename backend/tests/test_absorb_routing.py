@@ -198,7 +198,8 @@ def test_an_unreadable_scene_leaves_every_citation_uncorroborated(monkeypatch, t
     degrade to "nothing corroborates this", not to a 500."""
     cid, _ = _campaign(monkeypatch, tmp_path)
     index = routing.speaker_index(cid, "999--nope")
-    assert index == {"labels": [], "refs": {}}
+    assert index == {"canonical": [], "aliases": {}, "synthetic": set(),
+                     "texts": {}, "refs": {}}
     assert routing.authority(index, "Seraphine Vale") == routing.UNATTRIBUTED
 
 
@@ -268,7 +269,7 @@ def test_a_scene_transition_line_reads_as_narration(monkeypatch, tmp_path):
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, _, _, _ = _scene(cid, wroot)
     index = routing.speaker_index(cid, sid)
-    assert scenes.TRANSITION_SPEAKER not in index["labels"]
+    assert scenes.TRANSITION_SPEAKER not in index["canonical"]
     assert routing.authority(index, scenes.TRANSITION_SPEAKER) == routing.UNATTRIBUTED
 
 
@@ -339,6 +340,10 @@ def test_a_state_edit_cited_to_its_own_character_outranks_one_cited_to_another(
     croot = campaigns.campaign_root(cid)
     playstate.write_state(croot, sera, "Wary.")
     playstate.write_state(croot, mara, "Calm.")
+    # Said in the scene, so the citation checks out and the tier turns on the
+    # SUBJECT rather than on whether the quote was found.
+    scenes.append_reply(cid, sid, [{"speaker": "Seraphine Vale",
+                                    "content": "I have not slept in three days."}])
     cite = {"quote": "I have not slept in three days.", "certainty": 0.9}
 
     edits = _materialized(cid, sid, {"character_state_edits": [
@@ -359,6 +364,10 @@ def test_narrated_weather_rows_share_one_citation(monkeypatch, tmp_path):
     sid, _, _, _ = _scene(cid, wroot)
     lid = entities.create_entity(campaigns.campaign_root(cid), "locations", "Saltmarch Docks")
     scenes.set_location(cid, sid, lid)
+    # The narrated line the rows below cite, so the shared citation is a real
+    # one and both axes are scored off the same corroborated excerpt.
+    scenes.append_reply(cid, sid, [{"speaker": None,
+                                    "content": "A gale drove the rain sideways."}])
     sid = scenes.set_datetime(cid, sid, "2026-06-14T09:00").get("id", sid)
     edits = [e for e in absorb.materialize(cid, sid, {"weather_edits": [
         {"condition": "storm", "wind": "gale", "speaker": "Grimoire", "certainty": 0.95,
@@ -419,10 +428,12 @@ def test_a_malformed_card_name_does_not_take_the_absorb_down(monkeypatch, tmp_pa
                                           "role": "npc", "name": {"a": 1}}])
 
     poisoned = routing.speaker_index(cid, sid)
-    assert poisoned["refs"] == {}
+    # The bad card costs THAT actor its resolution and nothing else: no ref
+    # points at them, while the actors whose cards read fine are unaffected.
+    assert f"characters:{sera}" not in poisoned["refs"].values()
     # The transcript half is untouched, so the citation is still corroborated —
     # only the mapping from that speaker to a record is lost.
-    assert poisoned["labels"] == healthy["labels"]
+    assert poisoned["canonical"] == healthy["canonical"]
     assert routing.authority(poisoned, "Seraphine Vale",
                              (f"characters:{sera}",)) == routing.OTHER
 
@@ -437,3 +448,130 @@ def test_the_reported_score_is_the_one_the_band_was_read_off(monkeypatch, tmp_pa
         for spelling in ("Grimoire", "Seraphine Vale", "Nobody", ""):
             out = routing.review(index, {"speaker": spelling, "certainty": certainty})
             assert out["band"] == routing.band(out["score"]), (spelling, certainty)
+
+
+# ------------------------------------------------- codex review: the four label bugs
+
+def test_an_aside_does_not_make_its_own_speaker_ambiguous(monkeypatch, tmp_path):
+    """A line stored as "Seraphine Vale (aside)" files BOTH that label and its
+    base, and `match_name` counts candidates: a citation of "Seraphine" then
+    prefix-matched two entries, declined to guess, and reported the scene's most
+    quotable speaker as a fabrication. The two spellings are one speaker."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, sera, _, _ = _scene(cid, wroot)
+    scenes.append_reply(cid, sid, [
+        {"speaker": "Seraphine Vale (aside)", "content": "Not that he'd know."}])
+    index = routing.speaker_index(cid, sid)
+
+    assert routing.authority(index, "Seraphine", (f"characters:{sera}",)) == routing.SELF
+
+
+def test_a_roll_line_is_cited_by_the_label_the_transcript_shows(monkeypatch, tmp_path):
+    """`ROLL_SPEAKER` carries a leading U+2063 that renders invisibly, so the
+    model can only ever cite the visible "Roll". Indexed raw, that citation
+    matched nothing and a verbatim quote of a roll line banded low."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _, _, _ = _scene(cid, wroot)
+    scenes.append_message(cid, sid, "assistant", "Winifred rolls Guile: 7.",
+                          speaker=scenes.ROLL_SPEAKER)
+    index = routing.speaker_index(cid, sid)
+
+    assert routing.authority(index, "Roll") == routing.OTHER
+
+
+def test_a_departed_speaker_is_still_the_subject_of_their_own_line(monkeypatch, tmp_path):
+    """`leave()` drops the scene id from the appearance record while the lines
+    the actor already spoke stay in the transcript. Resolved against the CURRENT
+    cast, their own first-hand claim degrades to hearsay about themself."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, sera, _, _ = _scene(cid, wroot)
+    appearances.leave(cid, sid, "characters", sera)
+    index = routing.speaker_index(cid, sid)
+
+    assert routing.authority(index, "Seraphine Vale", (f"characters:{sera}",)) == routing.SELF
+
+
+def test_a_label_that_could_be_a_longer_name_resolves_to_neither(monkeypatch, tmp_path):
+    """`match_name` breaks a tie by exact match, so with "Mara" and "Mara
+    Cotgrave" both cast, a line labelled "Mara" lands on "Mara" cleanly and
+    possibly wrongly -- the model may have been shortening the longer name.
+    `scenes.confusable` is the existing answer for identity-sensitive readers."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _, mara, _ = _scene(cid, wroot)
+    longer = characters.create_character(wroot, "Mara Cotgrave", "default",
+                                         characters.blank_card("Mara Cotgrave"))[0]
+    appearances.appear(cid, sid, "characters", longer, "default", "npc")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "I saw the ledger."}])
+    index = routing.speaker_index(cid, sid)
+
+    # Corroborated as a speaker -- somebody said it -- but not pinned to an
+    # actor, so it can never be read as that actor speaking about themself.
+    assert routing.authority(index, "Mara", (f"characters:{mara}",)) == routing.OTHER
+
+
+# ------------------------------------------- codex review P1: the quote is checked too
+
+def test_a_quote_the_cited_speaker_really_said_keeps_its_tier(monkeypatch, tmp_path):
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, sera, _, _ = _scene(cid, wroot)
+    index = routing.speaker_index(cid, sid)
+
+    assert routing.authority(index, "Seraphine Vale", (f"characters:{sera}",),
+                             "Mine, until midnight.") == routing.SELF
+
+
+def test_an_invented_quote_under_a_real_name_is_not_first_hand(monkeypatch, tmp_path):
+    """The tier that matters: naming a speaker the scene really has is the
+    cheapest thing for a confabulating model to get right, so a citation whose
+    words that speaker never said must not buy `SELF` — it is exactly the
+    confident fabrication the low band exists to collapse."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, sera, _, _ = _scene(cid, wroot)
+    index = routing.speaker_index(cid, sid)
+
+    tier = routing.authority(index, "Seraphine Vale", (f"characters:{sera}",),
+                             "I burned the ledger myself.")
+    assert tier == routing.UNATTRIBUTED
+    assert routing.band(1.0 * routing.WEIGHTS[tier]) == "low"
+
+
+def test_an_invented_quote_cannot_hide_behind_the_narrator(monkeypatch, tmp_path):
+    """`Grimoire` appears in almost every scene, so a name-only check made the
+    top tier the easiest one to claim falsely."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _, _, _ = _scene(cid, wroot)
+    index = routing.speaker_index(cid, sid)
+
+    assert routing.authority(index, "Grimoire", (), "Fog rolls in off the water.") \
+        == routing.NARRATION
+    assert routing.authority(index, "Grimoire", (), "The pier caught fire.") \
+        == routing.UNATTRIBUTED
+    # ...and the same through a paraphrased word for the narration.
+    assert routing.authority(index, "narrator", (), "The pier caught fire.") \
+        == routing.UNATTRIBUTED
+
+
+def test_the_quote_match_ignores_casing_whitespace_and_smart_quotes(monkeypatch, tmp_path):
+    """A model re-wrapping a quote across lines, or a store that curled the
+    apostrophes, is not a fabrication — matching on the raw bytes would collapse
+    honest rows, which is the failure mode this check must not introduce."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, sera, _, _ = _scene(cid, wroot)
+    index = routing.speaker_index(cid, sid)
+    subject = (f"characters:{sera}",)
+
+    assert routing.authority(index, "Seraphine Vale", subject,
+                             "  mine,\n  UNTIL   midnight.  ") == routing.SELF
+    assert routing.authority(index, "Seraphine Vale", subject,
+                             '"Mine, until midnight."') == routing.SELF
+
+
+def test_a_citation_with_no_quote_is_still_judged_on_the_name(monkeypatch, tmp_path):
+    """There is nothing to verify, and refusing the tier for a missing quote
+    would punish the row twice — `uncited` already covers saying nothing."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, sera, _, _ = _scene(cid, wroot)
+    index = routing.speaker_index(cid, sid)
+
+    assert routing.authority(index, "Seraphine Vale", (f"characters:{sera}",), "") \
+        == routing.SELF
