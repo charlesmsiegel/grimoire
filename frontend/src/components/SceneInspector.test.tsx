@@ -745,3 +745,32 @@ test("going back to live discards a detail fetch still in flight", async () => {
   expect(screen.queryByText("the regenerate prompt")).toBeNull();
   expect(screen.queryByText(/What the model saw/)).toBeNull();
 });
+
+test("a frozen turn is not painted under a scene it does not belong to", async () => {
+  // The clearing effect runs AFTER render, so scoping has to happen during it —
+  // otherwise the first paint under the new scene still shows the old prompt.
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  const { rerender } = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+
+  rerender(<SceneInspector cid="c" sid="s2" refreshKey={0} onSceneChanged={() => {}} />);
+  // synchronously after the re-render, before effects have settled
+  expect(screen.queryByText("the lore as it stood then")).toBeNull();
+  expect(screen.queryByText(/What the model saw/)).toBeNull();
+});
+
+test("switching campaigns does not paint the other campaign's frozen turn", async () => {
+  // Scene ids repeat across campaigns, so `sid` alone would match here.
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  const { rerender } = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+
+  rerender(<SceneInspector cid="c2" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  expect(screen.queryByText("the lore as it stood then")).toBeNull();
+});

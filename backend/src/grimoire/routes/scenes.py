@@ -175,8 +175,15 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
         messages, breakdown = store.context.compose_director_turn(
             cid, sid, note, turn=_turn_override(turn),
             describe=store.prompt_log.capturing())
+        # AFTER the stream is constructed, not before. `_chat_stream` claims the
+        # turn under the campaign lock synchronously, before it returns -- so a
+        # contended campaign raises StoreBusy there and nothing is ever sent.
+        # Recording first would leave Turn history showing a request the model
+        # never saw. The generator body has not run at this point; only the
+        # claim has.
+        stream = _chat_stream(cid, sid, messages, conn, client)
         _record_prompt(cid, sid, "director", breakdown)
-        return _chat_stream(cid, sid, messages, conn, client)
+        return stream
     names = store.appearances.player_names(cid, sid)
     speaker = names[0] if len(names) == 1 else None
     if speaker:
@@ -188,7 +195,7 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
     posted_at = store.scenes.append_message(cid, sid, "user", content, speaker=speaker)
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(turn), describe=store.prompt_log.capturing())
-    _record_prompt(cid, sid, "chat", breakdown)
+
     # The post has to precede the stream — `build_messages` renders history out
     # of the transcript, so a turn the model never sees is a turn it cannot
     # answer — which is exactly what makes a failed generation able to strand
@@ -196,9 +203,11 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
     # the turn produces nothing at all, the post comes back off. `posted_at`
     # travels with it because nothing holds a lock across the stream, so by the
     # time the undo runs the tail may belong to a different turn entirely.
-    return _chat_stream(cid, sid, messages, conn, client,
-                        undo_user_post=lambda: store.scenes.remove_trailing_user_post(
-                            cid, sid, posted_at, content))
+    stream = _chat_stream(cid, sid, messages, conn, client,   # claims the turn; see above
+                          undo_user_post=lambda: store.scenes.remove_trailing_user_post(
+                              cid, sid, posted_at, content))
+    _record_prompt(cid, sid, "chat", breakdown)
+    return stream
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/retry")
@@ -217,8 +226,9 @@ def post_retry(cid: str, sid: str, body: RetryBody | None = None,
         store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(body), describe=store.prompt_log.capturing())
+    stream = _chat_stream(cid, sid, messages, conn, client)   # claims the turn; see above
     _record_prompt(cid, sid, "retry", breakdown)
-    return _chat_stream(cid, sid, messages, conn, client)
+    return stream
 
 
 def _restore_reroll(cid: str, sid: str, removed: dict):
@@ -419,7 +429,6 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     # statement, so a recorded turn is one that was really attempted. `record`
     # cannot raise, so this adds no failure of its own to a path that has just
     # passed its last one.
-    _record_prompt(cid, sid, "regenerate", breakdown)
     # The old reply had to go before the context was built — the builders read
     # the transcript, so the model cannot be asked to replace something it can
     # still see. That leaves a window where the scene is one reply short and the
@@ -442,7 +451,13 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     # stop deleting ahead of the replacement at all — remove the old run inside
     # `finalize`, under the same lock that writes the new reply — which is
     # tracked with the other transcript-identity work rather than bolted on.
-    return _chat_stream(cid, sid, messages, conn, client, restore_removed=restore)
+    stream = _chat_stream(cid, sid, messages, conn, client, restore_removed=restore)
+    # Last of all: after `supersede` (which can refuse and unwind the reroll) AND
+    # after the turn claim inside `_chat_stream` (which can raise StoreBusy on a
+    # contended campaign). Both would leave Turn history showing a regeneration
+    # the model never saw.
+    _record_prompt(cid, sid, "regenerate", breakdown)
+    return stream
 
 
 _PREVIEW_CHARS = 200

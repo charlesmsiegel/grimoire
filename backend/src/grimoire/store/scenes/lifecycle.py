@@ -148,6 +148,16 @@ def delete_scene(cid: str, sid: str) -> None:
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         raise paths.SceneNotFound(sid)
+    # FIRST, ahead of every destructive step, because it is the one here that can
+    # refuse. Ids are recycled, so prompt snapshots left behind are adopted by the
+    # next scene to take this id and listed as its own -- and unlike the sidecar
+    # below, this is rows inside a shared index, so "the delete half-worked" is not
+    # a state it can be left in. It therefore raises rather than swallowing, which
+    # is only safe from here: run after `retire_scene` or the sidecar unlink, a
+    # refusal would report a FAILED delete while the surviving scene had already
+    # lost its commit-ledger state and its parked alternates for good. Failing at
+    # the top costs nothing but the request.
+    prompt_log.forget_scene(cid, sid)
     # A scene id is recycled -- the numbering reuses the highest deleted number,
     # so remaking a scene under the same title can hand it this very id (see
     # _already_absorbed). Retire the commit ledger's state for it, or a review
@@ -185,11 +195,4 @@ def delete_scene(cid: str, sid: str) -> None:
         # which does not always reach errno.
         if exc.errno != errno.ENAMETOOLONG and getattr(exc, "winerror", None) != 206:
             raise
-    # Before the unlink, and allowed to refuse it, for exactly the reason the
-    # sidecar above is: ids are recycled, so prompt snapshots left behind are
-    # adopted by the next scene to take this id and listed as its own. Unlike
-    # the sidecar this is not a per-scene file that can simply be deleted — it
-    # is rows inside a shared index — so "the delete half-worked" is not a state
-    # it can be left in. Failing here leaves the scene and its id intact.
-    prompt_log.forget_scene(cid, sid)
     p.unlink()

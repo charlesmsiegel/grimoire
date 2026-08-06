@@ -167,9 +167,7 @@ def _read_index(cid: str, strict: bool = False) -> dict:
     # ValueError, through the same hole. `_MAX_ID_DIGITS` is far past any id
     # this module could ever have written, so anything longer is corruption by
     # definition. A row failing any of the three is dropped, like any other.
-    entries = [e for e in data["entries"]
-               if isinstance(e, dict) and safe_id(e.get("id"))
-               and str(e["id"]).isdigit() and len(str(e["id"])) <= _MAX_ID_DIGITS]
+    entries = [e for e in data["entries"] if _well_formed_row(e)]
     try:
         nxt = int(data.get("next", 1))
     except (TypeError, ValueError):
@@ -178,6 +176,31 @@ def _read_index(cid: str, strict: bool = False) -> dict:
     # reissues a live id and two turns share one payload file.
     return {"next": max(nxt, *(int(e["id"]) + 1 for e in entries)) if entries else max(nxt, 1),
             "entries": entries}
+
+
+#: An index row's UI-facing fields and their types. `SceneInspector` renders
+#: `TASK_LABELS[t.task] ?? t.task` and `whenLabel(t.ts)` straight into the DOM,
+#: and React throws outright on an object child -- so a hand-edited row carrying
+#: `"task": {}` would take the whole inspector down the moment Turn history is
+#: opened. Same judgement as `_well_formed` makes for a payload: being strict
+#: here is what lets the frontend stay trusting.
+_ROW_FIELD_TYPES = {"scene": str, "task": str, "ts": str, "model": str,
+                    "total_tokens": int, "dropped_tokens": int, "budget_tokens": int}
+
+
+def _well_formed_row(e: object) -> bool:
+    """Whether an index row can be listed without risking the panel.
+
+    The id carries three extra requirements of its own: path-safe (it names a
+    file), numeric and short (`next` is derived from it, and `int()` refuses a
+    string over 4300 digits -- see the module's other guards).
+    """
+    if not isinstance(e, dict):
+        return False
+    eid = e.get("id")
+    if not (safe_id(eid) and str(eid).isdigit() and len(str(eid)) <= _MAX_ID_DIGITS):
+        return False
+    return all(isinstance(e.get(k), t) for k, t in _ROW_FIELD_TYPES.items())
 
 
 def _write_index(cid: str, index: dict) -> None:
