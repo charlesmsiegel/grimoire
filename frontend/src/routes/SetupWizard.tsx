@@ -37,6 +37,12 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Two writes this component starts and then lets the user walk away from.
+  // `PUT /api/config` is a read-modify-write of one file, so an in-flight theme
+  // save overlapping the `setup_done` save can lose whichever landed first —
+  // holding the step until it settles is what keeps them ordered.
+  const [movingStore, setMovingStore] = useState(false);
+  const [savingTheme, setSavingTheme] = useState(false);
 
   // step 2 — the connection, unsaved until "Save connection"
   const [form, setForm] = useState<ConnectionFormValue>(BLANK_CONNECTION);
@@ -68,8 +74,16 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
     navigate(to, { replace: true });
   }
 
+  // Mirrors the backend's `_connection_ready`: a connection missing the field
+  // its kind needs saves fine and then reports `ready: false`, so accepting one
+  // here would put "Connected ✓" on a connection that cannot generate.
+  const connectionUsable = form.name.trim() !== "" && (
+    form.kind === "claude" ? true
+      : form.kind === "openrouter" ? key.trim() !== ""
+      : form.base_url.trim() !== "");
+
   async function saveConnection() {
-    if (!form.name.trim() || busy) return;
+    if (!connectionUsable || busy) return;
     setError(null);
     setBusy(true);
     try {
@@ -87,10 +101,13 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
   async function pickTheme(next: string) {
     setTheme(next);            // apply immediately; the wizard is the preview
     setError(null);
+    setSavingTheme(true);
     try {
       await api.putConfig({ theme: next });
     } catch (err: any) {
       setError(err.detail ?? String(err));
+    } finally {
+      setSavingTheme(false);
     }
   }
 
@@ -135,10 +152,12 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
             Everything you make stays yours, as plain files. The default is fine —
             change it now only if you would rather it lived elsewhere.
           </p>
-          <StorageLocation />
+          <StorageLocation onPending={setMovingStore} />
           <div className="wizard-footer">
             <span />
-            <button className="btn-accent" onClick={() => setStep(2)}>Next ▸</button>
+            {/* Label stays "Next" — the Move button is already saying
+                "Moving…", and two controls with one name is a worse hint. */}
+            <button className="btn-accent" onClick={() => setStep(2)} disabled={movingStore}>Next ▸</button>
           </div>
         </div>
       )}
@@ -167,7 +186,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
                 <span className="wizard-actions">
                   <button className="subtle" onClick={() => setStep(3)} disabled={busy}>Skip</button>
                   <button className="btn-accent" onClick={saveConnection}
-                          disabled={busy || !form.name.trim()}>
+                          disabled={busy || !connectionUsable}>
                     {busy ? "Saving…" : "Save connection"}
                   </button>
                 </span>
@@ -184,8 +203,10 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
           </p>
           <ThemePicker value={theme} onPick={pickTheme} />
           <div className="wizard-footer">
-            <button className="subtle" onClick={() => setStep(2)}>Back</button>
-            <button className="btn-accent" onClick={() => setStep(4)}>Next ▸</button>
+            <button className="subtle" onClick={() => setStep(2)} disabled={savingTheme}>Back</button>
+            <button className="btn-accent" onClick={() => setStep(4)} disabled={savingTheme}>
+              {savingTheme ? "Saving…" : "Next ▸"}
+            </button>
           </div>
         </div>
       )}
@@ -233,7 +254,12 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
           Step 4's footer always offers one, so it does not need this too. */}
       {step !== 4 && (
         <p className="wizard-skip">
-          <button className="link" onClick={() => finish("/")}>Skip setup</button>
+          {/* Disabled for the same reason the step's own Next is: leaving
+              mid-write races this step's config write against finish()'s. */}
+          <button className="link" onClick={() => finish("/")}
+                  disabled={movingStore || savingTheme}>
+            Skip setup
+          </button>
           {" — you can do all of this later from Config."}
         </p>
       )}
