@@ -60,7 +60,9 @@ reuse, and exact-matching would have persisted the dialogue while silently
 dropping all of its state. Injected into `resolve` rather than imported:
 `scenes` imports `turnstate` (for `drop_scene`), so reaching back would close
 a cycle, and injection keeps the rule in one place. Ambiguous labels resolve
-to nobody, which is what `match_name` already says about them. Fields are exactly `mood`, `intent`, `posture`; other keys are
+to nobody, which is what `match_name` already says about them. The `{"state": {…}}` envelope is told apart from a character literally named
+`state` by the shape one level down — an envelope's values are field maps, a
+character's are field values. Fields are exactly `mood`, `intent`, `posture`; other keys are
 dropped; values are collapsed to one line and dropped above 80 characters,
 which is #121's "constrain the tracked fields to short values so streaks are
 detectable".
@@ -75,6 +77,17 @@ narration after it by construction.
 Both fences accept `\r?\n`. A provider returning CRLF otherwise matched
 neither boundary, and that failure is silent and total: the block persists into
 the transcript as narration and its state is never recorded.
+
+The redactor withholds only at a **line boundary**, which is what `_OPEN`
+requires. An inline fence (`Use ```state …`) is not a block, so persistence
+keeps it — withholding it detached it from the very context that disqualified
+it, and the end-of-stream `split_block` then saw it starting at `^` and
+stripped it, cutting the streamed reply short until a refresh restored it.
+
+Tracker values are macro-expanded once at persist time, exactly as narration
+is: every rendered section is expanded again on each context build, so a stored
+`{{random}}` would re-roll every prompt — and a value that never holds still
+could never streak into a promotion either.
 
 The redactor resolves everything it withheld through `split_block` at end of
 stream, held prefixes included. A stream that stops exactly after `` ```state ``
