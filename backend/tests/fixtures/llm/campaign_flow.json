@@ -1,0 +1,41 @@
+{
+  "note": "One cassette covering every kind of call a played campaign makes: the scene turn itself, then the absorb pass and the refreshes that hang off it, plus the two JSON side-calls (scene suggestions, tagline). Entries are matched on a phrase from the prompt that OWNS that call — see tests/test_llm_fakes.py, which renders each template and fails if its phrase has moved. Replies are hand-authored, never recorded from a provider, and are written against the frozen campaign in fixtures/frozen_campaign (ids: the-debt, salt-owed, seraphine, winifred).",
+  "entries": [
+    {
+      "when": {"system_contains": "You are absorbing a completed role-play scene"},
+      "reply": "{\"one_line\": \"Winifred paid the salt she owed.\", \"summary\": \"Winifred returned to Tidewatch Keep with the salt Seraphine had asked for, and the keeper wrote the payment into the tide ledger without comment.\", \"keywords\": [\"salt\", \"ledger\", \"payment\"], \"timeline_events\": [{\"date\": \"2026-01-05\", \"text\": \"The salt was paid into the tide ledger.\"}], \"plot_movements\": [{\"id\": \"the-debt\", \"status\": \"advanced\", \"beat\": \"A first payment lands against the debt, and Seraphine still will not say what it was for.\"}], \"commitment_movements\": [{\"id\": \"salt-owed\", \"status\": \"fulfilled\", \"beat\": \"The salt arrived before the stated day.\"}]}"
+    },
+    {
+      "when": {"system_contains": "You are auditing a completed role-play scene"},
+      "reply": "{\"warnings\": [], \"sheet_deltas\": []}"
+    },
+    {
+      "when": {"system_contains": "You are updating a game master's dossier"},
+      "reply": "Keeps the tide ledger and now holds a first payment against Winifred's debt. Still refuses to name what the debt was for."
+    },
+    {
+      "when": {"system_contains": "You are writing a VOICE ANCHOR"},
+      "reply": "Speaks in short declaratives, almost never contracts, and answers a question with the ledger entry it corresponds to. Under pressure the sentences get shorter, not louder."
+    },
+    {
+      "when": {"system_contains": "You are checking one character's dialogue"},
+      "reply": "{\"verdict\": \"consistent\", \"note\": \"Short declaratives throughout; no contractions.\"}"
+    },
+    {
+      "when": {"system_contains": "propose 3-4 DISTINCT scene openings"},
+      "reply": "{\"suggestions\": [{\"title\": \"The ledger reopened\", \"premise\": \"Seraphine sends word that the tide ledger has an entry Winifred has not seen. The keep is reachable for two hours either side of low water.\", \"cast\": [\"characters:seraphine\", \"pcs:winifred\"], \"location\": \"tidewatch-keep\"}]}"
+    },
+    {
+      "when": {"system_contains": "Summarize this character in a single vivid sentence"},
+      "reply": "A keeper who measures every debt in salt and has never left the keep to collect one."
+    },
+    {
+      "when": {"system_contains": "Write your reply as a script"},
+      "reply": [
+        "**Seraphine:** \"Salt first,\" she says again, ",
+        "and turns the ledger so the wet page faces you.\n\n",
+        "**Grimoire:** The tide is already over the lower step."
+      ]
+    }
+  ]
+}
