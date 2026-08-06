@@ -20,7 +20,7 @@ from typing import NamedTuple
 
 from ... import prompts
 from .. import (characters, commitments, config, entities, length_drift, lengths,
-                overlay, pcs, plot, response_presets, styles, turnstate)
+                locks, overlay, pcs, plot, response_presets, styles, turnstate)
 from ..appearances import (cast as appearances_cast, paths as appearances_paths,
                            versions as appearances_versions)
 from ..campaigns import paths as campaigns_paths, read as campaigns_read
@@ -73,7 +73,16 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     selects the full story-so-far variant over the compact recap. `turn` is a
     one-shot, unpersisted override (e.g. a per-turn response-length chip) that
     outranks every stored scope in response_presets.resolve -- see build_messages."""
-    scene = scenes_read.read_scene(cid, sid)
+    # The transcript and the transient-state ledger, read together (#120).
+    # `_persist_reply` appends the reply and files its tracker entry under one
+    # hold of this lock precisely so the two are never seen apart; a reader that
+    # took neither could land between them and send the new narration paired
+    # with the PREVIOUS turn's mood, or with none. Two file reads long, and the
+    # lock is reentrant, so a caller already holding it pays nothing.
+    with locks.campaign_lock(cid):
+        scene = scenes_read.read_scene(cid, sid)
+        live_turnstate = turnstate.current(cid, sid, len(scene["messages"]),
+                                           config.turnstate_depth())
     history = [dict(m) for m in scene["messages"]]
     croot = campaigns_paths.campaign_root(cid)          # campaign-local: dossiers, calendar, group state
     aroot = appearances_paths.locked_actor_root(cid)    # cast/roster actors are locked, so campaign-side
@@ -169,9 +178,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # the cast record: `npc_names`/`player_names` here are one name each and
         # the wrong one for it (see `world_state._actor_aliases`).
         "states": world_state._character_states(aroot, cid, cast, pcless),
-        # `history` is the whole transcript, so its length is the post index the
-        # ledger's decay window measures back from.
-        "transient_states": world_state._transient_states(cid, sid, cast, len(history)),
+        "transient_states": world_state._transient_states(cast, live_turnstate),
         "transient_tracker": config.turnstate_depth() > 0,
         "transient_fields": list(turnstate.FIELDS),
         "relationship_lines": story._relationship_lines(cid, cast),
