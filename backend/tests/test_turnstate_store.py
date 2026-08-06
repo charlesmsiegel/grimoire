@@ -459,3 +459,48 @@ def test_expand_values_resolves_once_and_recleans():
 
 def test_expand_values_drops_a_character_left_with_nothing():
     assert turnstate.expand_values({"W": {"mood": "{{gone}}"}}, lambda v: "") == {}
+
+
+def test_a_wide_window_still_shows_every_entry_the_cap_kept(monkeypatch, tmp_path):
+    """`depth` counts posts and `MAX_ENTRIES` counts entries, and entries are
+    sparse. Clamping the window to the cap would drop an actor tracked at post
+    0 from a 1001-post window she is inside AND still retained — a real loss,
+    to guard a dense case the cap has already decided."""
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 0, {"characters:early": {"mood": "wary"}})
+    turnstate.record(cid, "s1", 1000, {"characters:w": {"mood": "calm"}})
+    live = turnstate.current(cid, "s1", tail=1001, depth=1001)
+    assert set(live) == {"characters:early", "characters:w"}
+
+
+def test_a_narrow_window_still_decays(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 0, {"characters:early": {"mood": "wary"}})
+    turnstate.record(cid, "s1", 1000, {"characters:w": {"mood": "calm"}})
+    assert set(turnstate.current(cid, "s1", tail=1001, depth=4)) == {"characters:w"}
+
+
+def test_drop_scene_refuses_rather_than_pretending_on_an_unreadable_ledger(
+        monkeypatch, tmp_path):
+    """`read` turns an unreadable file into {} — right everywhere else, and
+    exactly wrong here: `delete_scene` would take that as "nothing to purge"
+    and free the id for a scene that then inherits these moods."""
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 0, {"characters:w": {"mood": "guarded"}})
+    path = campaigns.campaign_root(cid) / "turnstate.json"
+
+    def _boom(*a, **k):
+        raise OSError("sharing violation")
+
+    monkeypatch.setattr(type(path), "read_text", _boom)
+    with pytest.raises(OSError):
+        turnstate.drop_scene(cid, "s1")
+
+
+def test_drop_scene_tolerates_an_unparseable_ledger(monkeypatch, tmp_path):
+    """Nothing in a corrupt file can be inherited either, so this one is not
+    worth refusing a delete over."""
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 0, {"characters:w": {"mood": "guarded"}})
+    (campaigns.campaign_root(cid) / "turnstate.json").write_text("{ nope", encoding="utf-8")
+    turnstate.drop_scene(cid, "s1")           # does not raise

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from .. import (calendars, characters, config, groupstate, overlay, pcs, playstate,
+from .. import (calendars, characters, groupstate, overlay, pcs, playstate,
                 turnstate, weather)
 from ..appearances import versions as appearances_versions
 from ..scenes import read as scenes_read
@@ -1044,8 +1044,14 @@ def _character_states(aroot, cid: str, cast, pcless: bool) -> list[dict]:
         return []
 
 
-def _transient_states(cid: str, sid: str, cast, tail: int) -> list[dict]:
+def _transient_states(cast, live: dict) -> list[dict]:
     """The transient per-turn ledger, decayed to what is still live (#120).
+
+    Takes the already-read map rather than reading it, so `_assemble` can pair
+    it with the transcript under one campaign-lock hold — `_persist_reply`
+    writes the reply and its entry under that same lock, and a reader that
+    fetched them separately could see the new narration beside the previous
+    turn's mood.
 
     Labelled with the CAST name — the locked card's `data.name`, which is what
     the character-description section shows, what the transcript's
@@ -1060,10 +1066,6 @@ def _transient_states(cid: str, sid: str, cast, tail: int) -> list[dict]:
     `turnstate.read` already swallows an unparseable file; this covers the rest.
     """
     try:
-        depth = config.turnstate_depth()
-        if depth <= 0:
-            return []
-        live = turnstate.current(cid, sid, tail, depth)
         out = []
         for a in cast:
             if a.get("role") != "npc" or a.get("kind") != "characters":
