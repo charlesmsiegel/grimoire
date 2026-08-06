@@ -2,7 +2,8 @@ import shutil
 
 import pytest
 
-from grimoire.store import appearances, assets, campaigns, characters, entities, greetings, overlay, pcs, worlds
+from grimoire.store import (appearances, assets, atomic, campaigns, characters, entities,
+                            greetings, overlay, pcs, worlds)
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 
@@ -424,7 +425,7 @@ def test_slim_interrupted_mid_prune_does_not_tombstone_what_it_pruned(monkeypatc
     had already dropped indistinguishable from a record the user had deleted.
     Its own next run then tombstoned them, hiding inherited records from a
     campaign whose only misfortune was being interrupted."""
-    wroot, cid, same, diverged, removed, aid, _vid = _fat_campaign(monkeypatch, tmp_path)
+    _wroot, cid, same, diverged, removed, aid, _vid = _fat_campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
 
     class Interrupted(Exception):
@@ -447,6 +448,52 @@ def test_slim_interrupted_mid_prune_does_not_tombstone_what_it_pruned(monkeypatc
     assert overlay.read_entity(cid, "lore", same)["body"] == "same"   # still inherited
     assert f"lore/{removed}" in overlay.deleted(cid)           # the real deletion survives
     assert (croot / "lore" / f"{diverged}.md").exists()        # divergence untouched
+    assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "overlay"
+
+
+@pytest.mark.parametrize("what", ["write", "drop"])
+@pytest.mark.parametrize("stop_at", range(6))
+def test_no_interruption_of_the_migration_tombstones_a_live_record(monkeypatch, tmp_path,
+                                                                   stop_at, what):
+    """The invariant behind #270, swept: stop the migration at each of its
+    writes and each of its copy drops in turn, let it run again, and no record
+    the user did not delete may end up tombstoned. Every one of these points
+    tombstones something before the fix."""
+    _wroot, cid, same, diverged, removed, aid, _vid = _fat_campaign(monkeypatch, tmp_path)
+
+    class Interrupted(Exception):
+        pass
+
+    n = [0]
+    real_write, real_drop = atomic.write_text, overlay.dematerialize
+
+    def counted(kind, real):
+        def spy(*args):
+            if kind == what and n[0] == stop_at:
+                raise Interrupted
+            n[0] += 1
+            return real(*args)
+        return spy
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(atomic, "write_text", counted("write", real_write))
+        mp.setattr(overlay, "dematerialize", counted("drop", real_drop))
+        try:
+            campaigns.ensure_campaign_slim(cid)
+        except Interrupted:
+            pass
+
+    campaigns.ensure_campaign_slim(cid)
+    campaigns.ensure_campaign_slim(cid)   # and again: the recovery is idempotent
+
+    dead = overlay.deleted(cid)
+    assert f"lore/{same}" not in dead
+    assert f"lore/{diverged}" not in dead
+    assert f"characters/{aid}" not in dead
+    assert f"lore/{removed}" in dead                                   # the real deletion stands
+    assert overlay.read_entity(cid, "lore", same)["body"] == "same"
+    assert overlay.read_entity(cid, "lore", diverged)["body"] == "campaign text"
+    assert overlay.read_character(cid, aid)["meta"]["name"] == "Hero"
     assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "overlay"
 
 
