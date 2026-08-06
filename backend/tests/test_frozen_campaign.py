@@ -59,9 +59,17 @@ def frozen_home(monkeypatch, tmp_path):
 
 
 def _digest(home: Path) -> dict[str, str]:
-    """Every file's content hash, keyed by store-relative path."""
-    return {p.relative_to(home).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in sorted(home.rglob("*")) if p.is_file()}
+    """Every entry's content hash, keyed by store-relative path.
+
+    Directories are recorded too, with a sentinel in place of a hash. An empty
+    directory is observable store state rather than nothing — actor-id
+    allocation treats an existing actor directory as taken (`characters.
+    create_character`'s `uniquify`), so a read that left one behind would change
+    what the next write is allowed to be called while every file hash stayed
+    put."""
+    return {p.relative_to(home).as_posix():
+            hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else "<dir>"
+            for p in sorted(home.rglob("*"))}
 
 
 def _snapshot() -> dict:
@@ -169,6 +177,15 @@ def test_the_read_only_sweep_writes_nothing(frozen_home):
     after = _digest(frozen_home)
     changed = {k for k in set(before) | set(after) if before.get(k) != after.get(k)}
     assert not changed, f"the read-only sweep wrote to: {sorted(changed)}"
+
+
+def test_the_digest_notices_a_bare_directory(frozen_home):
+    """Teeth for the assertion above: an empty directory changes no file hash,
+    and is still a write — it is enough to make the next character created here
+    get a different id."""
+    before = _digest(frozen_home)
+    (frozen_home / "worlds" / "saltmarch" / "characters" / "seraphine-2").mkdir()
+    assert _digest(frozen_home) != before
 
 
 def test_the_assembled_prompt_still_carries_the_campaign_state(frozen_home):

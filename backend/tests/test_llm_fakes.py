@@ -10,6 +10,7 @@ what stops the fixtures rotting the day a system prompt is reworded.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -62,6 +63,16 @@ async def test_an_injected_error_arrives_after_the_deltas_it_was_given():
 
 async def test_a_quiet_turn_yields_the_facades_empty_liveness_frame_first():
     assert await _drain(llm_fakes.QuietThenAnswers()) == ["", "At last."]
+
+
+async def test_a_stall_holds_complete_too_not_just_stream():
+    """`complete()` goes through `stream()` for this reason. A stalling fake
+    that answered a completing route (absorb, dossier, tagline, suggestions)
+    instantly would let a timeout or cancellation test pass without the stall
+    it was written for ever happening."""
+    fake = llm_fakes.StallingOpenRouter(["half "])
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(fake.complete([], CONN), timeout=0.05)
 
 
 async def test_a_failing_call_still_records_what_the_caller_sent():
