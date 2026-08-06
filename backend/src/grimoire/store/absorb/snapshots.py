@@ -42,12 +42,31 @@ def commitment_snapshot(cid: str) -> str:
     return "\n".join(commitments.render_open(cid, with_id=True))
 
 
+#: How many standing facts the extraction prompt is primed with. The one
+#: snapshot here that needs a ceiling: a plot thread closes and a commitment
+#: resolves, so those lists are self-limiting, but a fact leaves the standing
+#: list only when a later scene explicitly contradicts it -- and most never are.
+#: Nothing else bounds this. The absorb budget is wall-clock (`_Budget` in
+#: routes/scenes.py), not tokens, so an uncapped snapshot would grow by a few
+#: lines every absorb for the life of the campaign until the extraction call
+#: stopped fitting in the model's context -- at which point every absorb fails
+#: and the only way out is editing facts.json by hand.
+#:
+#: Set high rather than tight on purpose. It is a backstop against that runaway,
+#: not a context-packing policy: a fact past the cap can no longer be superseded,
+#: so a number small enough to bite an ordinary campaign would trade a real
+#: failure for a quiet one. A library that genuinely stands 200 uncontradicted
+#: facts wants retrieval or a retirement pass (#111's contradiction detection is
+#: the natural home), not a larger constant.
+FACT_SNAPSHOT_LIMIT = 200
+
+
 def fact_snapshot(cid: str) -> str:
     """Rendered standing facts (id + text + date) — feeds the prompt so the
     model can cite the id of a fact this scene made untrue rather than quietly
-    contradicting it. Campaign-wide (not scene-scoped); tolerant of a garbled
-    facts.json."""
-    return "\n".join(facts.render_active(cid))
+    contradicting it. Campaign-wide (not scene-scoped), most recent
+    `FACT_SNAPSHOT_LIMIT` only; tolerant of a garbled facts.json."""
+    return "\n".join(facts.render_active(cid, FACT_SNAPSHOT_LIMIT))
 
 
 def group_snapshot(cid: str) -> str:

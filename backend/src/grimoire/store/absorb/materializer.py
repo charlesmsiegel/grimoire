@@ -452,10 +452,26 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         # a row that claims to retire nothing.
         ledger = None
     retiring: set[str] = set()
+    staged_texts: set[str] = set()   # folded text of the new facts THIS batch stages
     for n, e in enumerate(parsed.get("facts", []) if ledger is not None else []):
         text, date = _text(e.get("text")), _text(e.get("date"))
         sup = _text(e.get("supersedes"))
         prior = ledger.get(sup) if sup else None
+        if (text and facts.is_active(prior)
+                and _text(prior.get("text")).casefold() == text.casefold()):
+            # A RESTATEMENT, not a supersession. The prompt says not to report
+            # one and the model does anyway, which is the whole reason this is
+            # in code: honoured, it retires a correctly dated fact and records
+            # an identically worded one under this later scene's date, so the
+            # ledger claims the fact changed when nothing did and the date it
+            # really became true is off the standing list. Nothing about the
+            # world moved, so the row does not either.
+            #
+            # `text and` guards the BARE RETIREMENT, whose "" would otherwise
+            # match a stored fact whose own text reads as "" -- which `record`
+            # never writes but a hand-edited or malformed record supplies, and
+            # that is exactly the record most worth being able to retire.
+            continue
         if not facts.is_active(prior):
             # A `supersedes` naming a fact that is retired, missing or
             # malformed is dropped rather than obeyed. The snapshot offers only
@@ -471,15 +487,32 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
             if sup in retiring:
                 continue   # one retirement per fact per scene: the second would
             retiring.add(sup)   # retire a record the first already retired
-        elif _recorded_here(ledger, sid, text):
-            # Absorbing a scene twice is supported (`POST .../absorb?force`) and
-            # re-proposes every fact the first pass found. A fact this scene has
-            # already recorded, with nothing left to retire, is that replay and
-            # not a second fact -- staging it would put a row in front of the
-            # reviewer whose only possible effect is a duplicate. `facts.record`
-            # dedupes too; this is what keeps the row off the panel, and it
-            # reads a snapshot that can be stale, which is why both exist.
+        elif text.casefold() in staged_texts or _recorded_here(ledger, sid, text):
+            # Two ways for a row to have nothing left to do, and both end as a
+            # duplicate the reviewer approves and does not get:
+            #
+            # - the scene ALREADY recorded this fact. Absorbing a scene twice is
+            #   supported (`POST .../absorb?force`) and re-proposes every fact
+            #   the first pass found -- the `timeline.md` re-append this ledger
+            #   exists to improve on.
+            # - this BATCH already stages it. A reply that says the same thing
+            #   in two rows is invisible to the check above, which reads a
+            #   ledger neither row has reached yet; `facts.record` would dedupe
+            #   the second onto the first at save time and report both as
+            #   applied, so two approvals produce one fact with nothing saying
+            #   so.
+            #
+            # `facts.record` dedupes as well and has to: this reads a snapshot
+            # that can be stale. What happens here is keeping the row off the
+            # panel in the first place.
             continue
+        # Recorded for every row that survives, but CONSULTED only by rows that
+        # retire nothing. Two rows superseding two different facts with the same
+        # replacement text are both real work -- `facts.record` files one fact
+        # and each row retires its own predecessor onto it -- so dropping the
+        # second would leave a fact standing that the scene ended.
+        if text:
+            staged_texts.add(text.casefold())
         # A row that retires something addresses THAT record, so that is what
         # `target` names and what `conflicts` judges -- the write it authorizes
         # is the retirement. Recording the new fact creates a record and

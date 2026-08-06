@@ -18,6 +18,15 @@ def _char(root, name):
     return characters.create_character(root, name, "main", card)[0]  # (cid, vid) -> cid
 
 
+def test_build_prompt_includes_the_standing_fact_snapshot():
+    """Without it the model has no id to cite in `supersedes`, so no scene can
+    ever end a fact and the ledger only ever grows."""
+    user = absorb.build_prompt("**You:** hi", {}, fact_snapshot="f1: The bridge stands.")[1]["content"]
+    assert "Standing facts:" in user and "f1: The bridge stands." in user
+    # ...and it is omitted entirely when the campaign has none
+    assert "Standing facts:" not in absorb.build_prompt("**You:** hi", {})[1]["content"]
+
+
 def test_build_prompt_includes_facts_transcript_and_state():
     msgs = absorb.build_prompt("**You:** hi",
                                {"location": "The Crypt", "date": "2026-01-01", "cast": ["characters/seraphine"]},
@@ -2311,3 +2320,119 @@ def test_a_fact_edit_follows_a_scene_renamed_between_absorb_and_save(monkeypatch
     (edit,) = _fact_row(cid, sid, text="The bridge stands.")
     absorb.apply_edits(cid, [edit], "002--renamed")
     assert facts.active(cid)[0]["scene"] == "002--renamed"
+
+
+def test_a_restatement_of_a_standing_fact_stages_nothing(monkeypatch, tmp_path):
+    """The system prompt says not to report one; the model does anyway. Honoured,
+    it retires a correctly dated fact and re-records the same sentence under this
+    scene's date — so the ledger claims the world changed when nothing did, and
+    the date the fact really became true drops off the standing list."""
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The ambassador trusts the party.", "night one", "s1")
+    assert _fact_row(cid, "s9", text="  the AMBASSADOR trusts the party.  ",
+                     date="night nine", supersedes=old) == []
+    assert facts.get(cid, old) == {
+        "text": "The ambassador trusts the party.", "date": "night one", "scene": "s1",
+        "status": "active", "superseded_by": "", "retired_scene": ""}
+
+
+def test_a_bare_retirement_of_a_fact_with_unreadable_text_still_stages(monkeypatch, tmp_path):
+    """The restatement check compares text, and a malformed record's text reads
+    as "" — the same "" a bare retirement carries. That record is the one most
+    worth being able to retire, so the check must not swallow it."""
+    cid = _campaign(monkeypatch, tmp_path)
+    (campaigns.campaign_root(cid) / "facts.json").write_text(
+        json.dumps({"f1": {"text": ["not a string"], "scene": "s1", "status": "active"}}),
+        encoding="utf-8")
+    (edit,) = _fact_row(cid, "s9", supersedes="f1")
+    assert edit["label"] == "Fact retired" and edit["target"]["id"] == "f1"
+
+
+def test_one_fact_said_twice_in_a_batch_is_staged_once(monkeypatch, tmp_path):
+    """`facts.record` would dedupe the second onto the first and report both as
+    applied, so two approvals produce one fact with nothing saying so."""
+    cid = _campaign(monkeypatch, tmp_path)
+    parsed = absorb.parse_output(json.dumps({"facts": [
+        {"text": "The bridge stands."}, {"text": "  the BRIDGE stands.  "}]}))
+    edits = absorb.materialize(cid, "s9", parsed)
+    assert [e["after"] for e in edits] == ["The bridge stands."]
+
+
+def test_a_new_fact_repeating_what_a_supersession_stages_is_dropped(monkeypatch, tmp_path):
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The bridge stands.", "", "s1")
+    parsed = absorb.parse_output(json.dumps({"facts": [
+        {"text": "The bridge is rubble.", "supersedes": old},
+        {"text": "The bridge is rubble."}]}))
+    edits = absorb.materialize(cid, "s9", parsed)
+    assert [e["target"]["id"] for e in edits] == [old]
+
+
+def test_two_facts_ended_by_one_replacement_both_stage(monkeypatch, tmp_path):
+    """Same replacement text, two different predecessors: both rows are real
+    work. `facts.record` files one fact and each row retires its own predecessor
+    onto it — dropping the second as a duplicate would leave a fact standing
+    that the scene ended."""
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    a = facts.record(cid, "The north span is passable.", "", "s1")
+    b = facts.record(cid, "The south span is passable.", "", "s1")
+    parsed = absorb.parse_output(json.dumps({"facts": [
+        {"text": "The bridge is rubble.", "supersedes": a},
+        {"text": "The bridge is rubble.", "supersedes": b}]}))
+    edits = absorb.materialize(cid, "s9", parsed)
+    assert [e["target"]["id"] for e in edits] == [a, b]
+
+    applied, failures = absorb.apply_edits(cid, edits, "s9")
+    assert len(applied) == 2 and failures == []
+    (landed,) = facts.active(cid)
+    assert landed["text"] == "The bridge is rubble."
+    # named explicitly rather than compared to each other: two blanks would
+    # satisfy that, and two blanks is exactly what a lost link looks like
+    assert facts.get(cid, a)["superseded_by"] == landed["id"]
+    assert facts.get(cid, b)["superseded_by"] == landed["id"]
+
+
+def test_retiring_a_fact_deleted_by_hand_is_a_conflict_the_reviewer_answers(monkeypatch, tmp_path):
+    """A record removed from facts.json between absorb and save. Reported rather
+    than passed over: the retirement the reviewer approved cannot happen, and a
+    silent success would leave them believing the ledger no longer stands it."""
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The bridge stands.", "", "s1")
+    (edit,) = _fact_row(cid, "s9", supersedes=old)
+    (campaigns.campaign_root(cid) / "facts.json").write_text("{}", encoding="utf-8")
+
+    (row,) = absorb.check_conflicts(cid, [edit])
+    assert row["stored"] == ""
+    applied, failures = absorb.apply_edits(cid, [edit], "s9")
+    assert applied == [] and failures[0]["kind"] == "conflict"
+
+
+def test_the_fact_snapshot_is_capped(monkeypatch, tmp_path):
+    """Nothing else bounds it: a fact leaves the standing list only when a later
+    scene contradicts it, and the absorb budget is wall-clock rather than tokens
+    — so an uncapped snapshot grows every absorb until the extraction call stops
+    fitting in the model's context and every absorb fails."""
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    for n in range(absorb.FACT_SNAPSHOT_LIMIT + 5):
+        facts.record(cid, f"Standing fact {n}.", "", f"{n:04d}--s")
+    lines = absorb.fact_snapshot(cid).splitlines()
+    assert len(lines) == absorb.FACT_SNAPSHOT_LIMIT
+    # the OLDEST go: they are what play has moved furthest past, and a fact
+    # established this scene is the one most likely to be contradicted next
+    assert lines[-1].endswith(f"Standing fact {absorb.FACT_SNAPSHOT_LIMIT + 4}.")
+    assert "Standing fact 0." not in absorb.fact_snapshot(cid)
+
+
+def test_the_ledger_view_is_not_capped_by_the_prompt_limit(monkeypatch, tmp_path):
+    """The cap is a prompt-side backstop, not a truth about the ledger — a human
+    reading what the campaign stands on must see all of it."""
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    for n in range(absorb.FACT_SNAPSHOT_LIMIT + 5):
+        facts.record(cid, f"Standing fact {n}.", "", f"{n:04d}--s")
+    assert len(facts.active(cid)) == absorb.FACT_SNAPSHOT_LIMIT + 5
