@@ -503,9 +503,23 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // short of the threshold answers `refreshed: false` having reached no
   // provider. Not awaited, and its rejection swallowed — none of these actions
   // should fail because a summary could not be written.
+  //
+  // Bounded like the turn, roll and check paths, and for the same reason: the
+  // fold must not swallow a player post the transition did not include, because
+  // the reply that answers it is an APPEND and would stay out of the "current"
+  // summary until another threshold. This panel does not know the transcript's
+  // length — the transition endpoints return a result, not a count — so it asks
+  // for it, and the read's `total` is the bound.
+  //
+  // Honest about the residue: a post landing between that read and the POST is
+  // still inside the bound. The window shrinks from a whole provider round trip
+  // to two adjacent calls, which is worth having; closing it entirely would mean
+  // the four transition endpoints reporting their resulting length, a wider
+  // change than this one should make.
   function askRolling() {
     const key = `${cid}/${sid}`;
-    api.refreshRollingSummary(cid, sid)
+    api.getRollingSummary(cid, sid)
+      .then((seen) => api.refreshRollingSummary(cid, sid, false, seen.total))
       .then((data) => {
         if (currentKey.current !== key || !data.refreshed) return;
         writeSeq.current += 1;

@@ -1509,6 +1509,18 @@ async def post_rolling_summary(cid: str, sid: str, force: bool = False,
     if upto is not None:
         if upto < 0:
             raise HTTPException(status_code=400, detail="upto must not be negative")
+        # A bounded request that a NEWER fold has already overtaken is finished
+        # before it starts, and this is checked against the unclamped scene
+        # because clamping is what would hide it: stored coverage of 20 against a
+        # transcript clamped to 10 reads as `at > total`, i.e. stale, which resets
+        # `base` to zero and buys a whole-transcript refold -- one that
+        # `_rolling_commit` then refuses as superseded, after the provider has
+        # been paid. Review caught it there: the refusal was in the right place
+        # to protect the STORE and the wrong place to protect the bill.
+        ahead = _rolling_view(cid, sid, scene, store.chronicle.scene_facts(cid, sid))
+        if ahead["summary"] and not ahead["stale"] and ahead["at"] >= upto:
+            return {**_rolling_body(ahead, store.config.rolling_summary_every()),
+                    "refreshed": False}
         # Clamped here and nowhere else: every decision below -- due, base,
         # digest, what gets folded, what `covered` records -- then works from the
         # same bounded transcript, rather than each having to remember the bound.
