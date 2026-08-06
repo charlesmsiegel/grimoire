@@ -463,6 +463,26 @@ def test_one_malformed_cast_entry_does_not_unflag_every_row(client):
     assert body["last_time"]["one_line"] == "It happened."
 
 
+def test_a_cast_member_with_a_non_string_name_does_not_500_the_endpoint(client):
+    """`cast._actor_name` only falls back to the id for a FALSY name, so a
+    hand-edited `"name": ["A", "B"]` reaches the briefing intact — and
+    `_flagged` puts these in a set, where an unhashable value raises. That
+    happens outside the tolerant reads, so it took the whole endpoint down."""
+    wid, cid = _campaign(client)
+    card = store.characters.blank_card("Seraphine")
+    card["data"]["name"] = ["A", "B"]
+    aid, vid = store.characters.create_character(
+        store.worlds.world_root(wid), "Seraphine", card=card)
+    now = store.scenes.create_scene(cid, "The Counting House", pcless=True)
+    store.appearances.appear(cid, now, "characters", aid, vid, "npc")
+    store.plot.set_movement(cid, "the-ledger", "Find the ledger", "open", "beat", now)
+
+    body = _brief(client, cid, now)                    # a 500 before this fix
+    assert body["focus"] == [aid]                      # falls back to the id
+    assert body["plot"][0]["involves"] == [aid]
+    assert all(isinstance(n, str) for n in body["focus"])
+
+
 def test_a_record_that_is_not_a_dict_is_skipped(client):
     _wid, cid = _campaign(client)
     sid = store.scenes.create_scene(cid, "The Counting House")

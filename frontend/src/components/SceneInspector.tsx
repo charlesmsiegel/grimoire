@@ -310,6 +310,14 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const pctNumber = (t: number) => (ctxLen > 0 ? Math.round((t / ctxLen) * 100) : 0);
   const nameOf = (a: Actor) => names[`${a.kind}/${a.id}`] ?? a.id;
 
+  // Deliberately keyed on cid+sid and NOT on `refreshKey`, which is the same
+  // call `LedgerPanel` makes and states its reason for: a refresh re-reads the
+  // SAME scene, so blanking on it would tear the section down and rebuild it
+  // after every save and every cast edit, shifting every section below it, to
+  // show mostly the same rows back. The cost is that a resolved commitment can
+  // linger for the length of one request (Codex review); the section is a hint
+  // surface whose rows are already "what was true when the scene opened", so a
+  // brief stale flag is inside its contract and a flicker on every save is not.
   const briefing = brief && brief.cid === cid && brief.sid === sid ? brief.data : null;
   // Rendered only when it has something to say. An empty briefing is the normal
   // state of a brand-new campaign, and an always-present "Nothing yet" heading

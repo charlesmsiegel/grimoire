@@ -218,7 +218,15 @@ def build(cid: str, sid: str) -> dict:
         # read is treated as an ordinary one, which is the narrower reading.
         pcless = _tolerant(lambda: scenes_read.is_pcless(cid, sid), False)
         focus = _focus(present, pcless)
-        names = {f"{a['kind']}/{a['id']}": a.get("name") or a["id"] for a in focus}
+        # `_text`, not the raw name (Codex review). `cast._actor_name` returns
+        # whatever the card's `name` holds when that value is TRUTHY -- its
+        # `or actor_id` fallback only catches a falsy one -- so a hand-edited
+        # `"name": ["A", "B"]` arrives here intact. `_flagged` then puts it in a
+        # set, where an unhashable value RAISES; and that runs outside the
+        # tolerant reads, so the whole endpoint 500s. This is the boundary those
+        # values cross, so it is where they are made text.
+        names = {f"{a['kind']}/{a['id']}": _text(a.get("name")) or _text(a.get("id"))
+                 for a in focus}
         stage = _tolerant(lambda: _stage_history(cid, set(names)), {})
         # Two reads of one file, both inside the hold: `open_threads` projects
         # the rows and `_touched_scenes` needs the beats it drops.
