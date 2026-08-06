@@ -1073,6 +1073,9 @@ test("moving the scene asks whether the summary is due", async () => {
                    { target: { value: "dock" } });
   fireEvent.click(screen.getByRole("button", { name: "Move to" }));
   await waitFor(() => expect(api.setSceneLocation).toHaveBeenCalled());
-  // without `force`: the server still decides whether to spend a call
-  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith("c", "s"));
+  // Without `force` — the server still decides whether to spend a call — and
+  // bounded by the transcript length the panel just read, so the fold cannot
+  // swallow a post the transition did not include.
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith(
+    "c", "s", false, 0));
 });

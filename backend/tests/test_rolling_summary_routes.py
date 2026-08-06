@@ -524,6 +524,43 @@ def test_an_upto_past_the_end_is_harmless(client):
     assert body["refreshed"] is True and body["at"] == 10
 
 
+def test_a_bounded_request_a_newer_fold_overtook_pays_for_nothing(client):
+    """Two bounded requests can arrive out of order. The older one's bound makes
+    the stored coverage look like `at > total` — i.e. stale — which resets the
+    base and buys a whole-transcript refold that the commit then refuses as
+    superseded. The refusal protects the store; it does not protect the bill."""
+    _key(client)
+    _use(client, _summarizer("The newer summary, covering twenty."))
+    cid, sid = _scene(client, posts=20)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?upto=20")
+
+    llm = _use(client, _summarizer("An older fold nobody wants."))
+    body = client.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?upto=10").json()
+
+    assert llm.calls == 0, "the overtaken request reached the provider"
+    assert body["refreshed"] is False
+    assert body["summary"] == "The newer summary, covering twenty." \
+        and body["stale"] is False
+    assert store.scenes.get_rolling_summary(cid, sid)["at"] == 20
+
+
+def test_a_bounded_request_beyond_the_stored_coverage_still_runs(client):
+    """The negative: a bound PAST what is stored is the ordinary case and must
+    not be mistaken for an overtaken one."""
+    _key(client)
+    _use(client, _summarizer("Covering ten."))
+    cid, sid = _scene(client, posts=10)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?upto=10")
+
+    for n in range(10, 25):
+        store.scenes.append_message(cid, sid, "user", f"Post {n}.")
+    llm = _use(client, _summarizer("Covering twenty-five."))
+    body = client.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?upto=25").json()
+    assert llm.calls == 1 and body["refreshed"] is True and body["at"] == 25
+
+
 # ---- POST: failure never reaches the turn loop ----
 def test_no_connection_is_a_409_not_a_500(client):
     llm = _use(client, _summarizer())
