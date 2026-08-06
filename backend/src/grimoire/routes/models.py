@@ -26,6 +26,8 @@ class ConfigUpdate(BaseModel):
     archive_depth: str | None = None
     setup_done: str | None = None
     prompt_log_depth: str | None = None
+    turnstate_depth: str | None = None
+    promote_streak: str | None = None
 
 
 class ConnectionCreate(BaseModel):

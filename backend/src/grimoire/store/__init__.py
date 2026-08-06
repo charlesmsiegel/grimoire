@@ -24,7 +24,7 @@ from . import (
     image_subjects, length_drift, lengths, llm_connections, localize, locks, lorebook, migrations, module_edit, modules, overlay, pcs, playing,
     playstate, plot, prompt_log, proposals, relationships, response_presets, rolls, scene_ids, scene_refs, scenes, sheets,
     styles, suggest,
-    sync, tags, taglines, thumbs, voice_anchors, voice_drift, worlds,
+    sync, tags, taglines, thumbs, turnstate, voice_anchors, voice_drift, worlds,
 )
 # `module_display` was never exported here: it was bound as an attribute of
 # this package only as a side effect of the flat `modules.py` importing it.
@@ -103,6 +103,7 @@ __all__ = [
     "sync",
     "scenes",
     "SceneNotFound",
+    "turnstate",
     "appearances",
     "AppearError",
     "tags",

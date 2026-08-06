@@ -1,0 +1,220 @@
+"""Transient state end to end: the tracker block never reaches a transcript
+(#120), the ledger follows a scene's id through rename and delete, the prompt
+sections come and go with the setting, and a reinforced value is offered as a
+character-state edit at absorb (#121)."""
+
+from grimoire.routes.streaming import _persist_reply
+from grimoire.store import (absorb, appearances, campaigns, characters, config, context,
+                            playstate, scenes, turnstate, worlds)
+
+
+def _scene(monkeypatch, tmp_path, name="Winifred Ash"):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Run", wid)
+    croot = campaigns.campaign_root(cid)
+    card = characters.blank_card(name)
+    card["data"]["description"] = "The house steward."
+    char_id, _ = characters.create_character(croot, name, "default", card)
+    sid = scenes.create_scene(cid, "Saltmarch")
+    appearances.appear(cid, sid, "characters", char_id, "default", "npc")
+    return cid, sid, char_id
+
+
+def _block(payload: str) -> str:
+    return f"```state\n{payload}\n```"
+
+
+# ---- the persist path ------------------------------------------------------
+
+def test_the_block_is_stripped_from_the_transcript_and_filed_at_the_last_post(
+        monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    _persist_reply(cid, sid, "**Winifred Ash:** I have nothing to say.\n\n"
+                   + _block('{"Winifred Ash": {"mood": "guarded"}}'))
+    messages = scenes.read_scene(cid, sid)["messages"]
+    assert len(messages) == 1
+    assert "state" not in messages[0]["content"] and "```" not in messages[0]["content"]
+    assert turnstate.entries(cid, sid) == [(0, {f"characters:{char_id}": {"mood": "guarded"}})]
+
+
+def test_the_entry_lands_on_the_last_post_of_a_multi_speaker_reply(monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "Where is the ledger?")
+    _persist_reply(cid, sid, "**Winifred Ash:** Gone.\n\n**Grimoire:** The lamp gutters.\n\n"
+                   + _block('{"Winifred Ash": {"mood": "guarded"}}'))
+    # user post + two model blocks -> the tracker describes index 2
+    assert len(scenes.read_scene(cid, sid)["messages"]) == 3
+    assert turnstate.entries(cid, sid)[0][0] == 2
+
+
+def test_stripping_happens_even_with_the_feature_off(monkeypatch, tmp_path):
+    # The instruction is gone but a model still complying from the visible scene
+    # must not start writing blocks into transcripts.
+    cid, sid, _ = _scene(monkeypatch, tmp_path)
+    assert config.turnstate_depth() == 0
+    _persist_reply(cid, sid, "**Winifred Ash:** Quiet.\n\n"
+                   + _block('{"Winifred Ash": {"mood": "guarded"}}'))
+    assert "```" not in scenes.read_scene(cid, sid)["messages"][0]["content"]
+
+
+def test_an_unresolvable_name_costs_the_entry_not_the_reply(monkeypatch, tmp_path):
+    cid, sid, _ = _scene(monkeypatch, tmp_path)
+    _persist_reply(cid, sid, "**Winifred Ash:** Quiet.\n\n"
+                   + _block('{"Someone Else": {"mood": "guarded"}}'))
+    assert len(scenes.read_scene(cid, sid)["messages"]) == 1
+    assert turnstate.read(cid) == {}
+
+
+def test_a_reply_that_is_only_a_block_records_nothing(monkeypatch, tmp_path):
+    # append_reply keeps no empty post, so there is no index to file against.
+    cid, sid, _ = _scene(monkeypatch, tmp_path)
+    _persist_reply(cid, sid, _block('{"Winifred Ash": {"mood": "guarded"}}'))
+    assert scenes.read_scene(cid, sid)["messages"] == []
+    assert turnstate.read(cid) == {}
+
+
+# ---- id lifecycle ----------------------------------------------------------
+
+def test_a_renamed_scene_keeps_its_ledger(monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "hello")
+    turnstate.record(cid, sid, 0, {f"characters:{char_id}": {"mood": "guarded"}})
+    new_sid = scenes.rename_scene(cid, sid, "Saltmarch, later")
+    assert new_sid != sid
+    assert turnstate.entries(cid, new_sid) == [(0, {f"characters:{char_id}": {"mood": "guarded"}})]
+
+
+def test_a_deleted_scene_cannot_hand_its_moods_to_the_id_that_replaces_it(
+        monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    turnstate.record(cid, sid, 0, {f"characters:{char_id}": {"mood": "guarded"}})
+    scenes.delete_scene(cid, sid)
+    assert turnstate.read(cid) == {}
+    reused = scenes.create_scene(cid, "Saltmarch")
+    assert turnstate.entries(cid, reused) == []
+
+
+# ---- the prompt sections ---------------------------------------------------
+
+def _labels(cid, sid):
+    return [s["label"] for s in context.context_sections(cid, sid)]
+
+
+def test_both_sections_are_absent_while_the_feature_is_off(monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "hello")
+    turnstate.record(cid, sid, 0, {f"characters:{char_id}": {"mood": "guarded"}})
+    labels = _labels(cid, sid)
+    assert "Transient state" not in labels and "Transient state tracker" not in labels
+
+
+def test_switching_it_on_adds_the_instruction_and_the_live_values(monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    config.write_config(turnstate_depth="4")
+    scenes.append_message(cid, sid, "user", "hello")
+    turnstate.record(cid, sid, 0, {f"characters:{char_id}": {"mood": "guarded"}})
+    sections = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}
+    assert "guarded" in sections["Transient state"]
+    assert "Winifred Ash" in sections["Transient state"]
+    assert "```state" in sections["Transient state tracker"]
+
+
+def test_a_value_outside_the_window_is_not_injected(monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    config.write_config(turnstate_depth="2")
+    turnstate.record(cid, sid, 0, {f"characters:{char_id}": {"mood": "guarded"}})
+    for _ in range(5):
+        scenes.append_message(cid, sid, "user", "and then?")
+    assert "Transient state" not in _labels(cid, sid)
+
+
+def test_the_tracker_instruction_is_kept_off_the_opener(monkeypatch, tmp_path):
+    cid, sid, _ = _scene(monkeypatch, tmp_path)
+    config.write_config(turnstate_depth="4")
+    system = context.build_opener_messages(cid, sid, "Open on the hall.")[0]["content"]
+    assert "Transient state tracker" not in system and "```state" not in system
+
+
+# ---- promotion -------------------------------------------------------------
+
+def _reinforce(cid, sid, char_id, value, times=3, field="mood"):
+    for i in range(times):
+        turnstate.record(cid, sid, i, {f"characters:{char_id}": {field: value}})
+        scenes.append_message(cid, sid, "assistant", f"beat {i}", speaker="Winifred Ash")
+
+
+def _state_edits(cid, sid, parsed=None):
+    return [e for e in absorb.materialize(cid, sid, parsed or {})
+            if e["kind"] == "character_state"]
+
+
+def test_a_streak_is_offered_as_a_character_state_edit(monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    _reinforce(cid, sid, char_id, "guarded")
+    edits = _state_edits(cid, sid)
+    assert len(edits) == 1
+    assert edits[0]["id"] == f"character_state:{char_id}"
+    assert edits[0]["before"] == "" and edits[0]["after"] == "Mood: guarded"
+    assert edits[0]["authored"] is False
+
+
+def test_a_broken_streak_proposes_nothing(monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    _reinforce(cid, sid, char_id, "guarded", times=2)
+    assert _state_edits(cid, sid) == []
+
+
+def test_promotion_is_switched_off_by_a_zero_streak(monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    config.write_config(promote_streak="0")
+    _reinforce(cid, sid, char_id, "guarded")
+    assert _state_edits(cid, sid) == []
+
+
+def test_promotion_preserves_the_stored_prose_and_knowledge(monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    playstate.write_state(croot, char_id, playstate.compose_body(
+        "She is hiding a key.", "The ledger is real.", ""))
+    _reinforce(cid, sid, char_id, "guarded")
+    after = _state_edits(cid, sid)[0]["after"]
+    parsed = playstate.parse_body(after)
+    assert parsed["current_state"] == "She is hiding a key.\nMood: guarded"
+    assert parsed["knows"] == "The ledger is real."
+
+
+def test_a_second_absorb_over_the_same_ledger_proposes_nothing(monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    _reinforce(cid, sid, char_id, "guarded")
+    playstate.write_state(croot, char_id, _state_edits(cid, sid)[0]["after"])
+    assert _state_edits(cid, sid) == []
+
+
+def test_promotion_merges_into_the_models_own_edit_for_that_character(monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    _reinforce(cid, sid, char_id, "guarded")
+    edits = _state_edits(cid, sid, {"character_state_edits": [
+        {"id": f"characters/{char_id}", "current_state": "Cornered in the study."}]})
+    assert len(edits) == 1                      # one row, not two
+    assert edits[0]["after"] == "Cornered in the study.\nMood: guarded"
+
+
+def test_a_merge_that_cancels_the_models_edit_out_removes_the_row(monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    playstate.write_state(croot, char_id, "Cornered in the study.\nMood: guarded")
+    _reinforce(cid, sid, char_id, "guarded")
+    # The model proposes dropping the mood line; promotion puts it straight back,
+    # which lands on exactly what is stored -- so there is nothing to review.
+    assert _state_edits(cid, sid, {"character_state_edits": [
+        {"id": f"characters/{char_id}", "current_state": "Cornered in the study."}]}) == []
+
+
+def test_promotion_ignores_a_character_that_no_longer_exists(monkeypatch, tmp_path):
+    cid, sid, _ = _scene(monkeypatch, tmp_path)
+    for i in range(3):
+        turnstate.record(cid, sid, i, {"characters:ghost": {"mood": "guarded"}})
+        scenes.append_message(cid, sid, "assistant", f"beat {i}", speaker="Winifred Ash")
+    assert _state_edits(cid, sid) == []

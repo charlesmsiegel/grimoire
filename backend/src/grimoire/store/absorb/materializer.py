@@ -10,9 +10,12 @@ from __future__ import annotations
 
 from .. import (characters, commitments, entities, facts, groupstate, overlay,
                 pcs, playstate, plot, relationships)
+from .. import (characters, commitments, config, entities, groupstate, overlay, pcs,
+                playstate, plot, relationships, turnstate)
 from ..appearances import paths as appearances_paths, versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..paths import slugify
+from ..scenes import paths as scenes_paths, read as scenes_read
 from . import conflicts, parse, routing, weather
 
 _CARD_FIELDS = ("description", "personality", "scenario")
@@ -159,6 +162,84 @@ def _fact_label(text: str, supersedes: str, date: str) -> str:
     """
     label = "Fact retired" if not text else ("Fact superseded" if supersedes else "New fact")
     return f"{label} — {date}" if date else label
+def _character_state_edit(cid: str, char_id: str, before: str, after: str) -> dict:
+    return {"id": f"character_state:{char_id}", "kind": "character_state",
+            "target": {"kind": "characters", "id": char_id},
+            "label": f"{_char_name(cid, char_id)} — current state",
+            "field": "current_state",
+            "before": before, "after": after, "authored": False}
+
+
+def _promote(cid: str, sid: str, out: list[dict], stage) -> None:
+    """Fold #121's reinforced transient values into the staged character-state
+    edits, in place.
+
+    Promotion is a SOURCE of StagedEdits, never a writer: it rides the same
+    review checklist, the same `apply_edits` and the same `changes.json` deltas
+    the model's own proposals do, so the "extraction proposes, the user
+    approves" invariant holds without a new path to audit.
+
+    Merged onto the model's edit for the same character rather than emitted
+    beside it. Two rows with the id `character_state:<id>` would be two
+    reviewer decisions over one file, and whichever applied second would erase
+    the other's body wholesale — `apply_edits` writes a composed snapshot, not
+    a patch.
+
+    `stage` is `materialize`'s `_staged`, and every row this touches goes
+    through it with an EMPTY citation (#112). A promoted value has no quote to
+    offer: its evidence is a streak across posts, not a line somebody said, and
+    synthesizing a speaker or an excerpt is precisely the lie `routing.authority`
+    checks the transcript to catch. Uncited lands the row in the collapsed
+    section, unchecked, which is the direction `routing` says every nudge must
+    run — a reviewer ticks it deliberately or it is never written.
+
+    A row promotion MERGES into is re-stamped for the same reason, losing the
+    model's own citation: its `after` is no longer the text that citation
+    corroborated, so leaving a `high` band on it would pre-approve a promoted
+    line nothing in the transcript ever quoted.
+    """
+    need = config.promote_streak()
+    if need <= 0:
+        return
+    try:
+        tail = len(scenes_read.read_scene(cid, sid)["messages"])
+    except (scenes_paths.SceneNotFound, OSError, UnicodeDecodeError):
+        return
+    promoted = turnstate.streaks(cid, sid, tail, need)
+    if not promoted:
+        return
+    croot = campaigns_paths.campaign_root(cid)
+    staged = {e["id"]: e for e in out}
+    for token, fields in sorted(promoted.items()):
+        kind, _, char_id = token.partition(":")
+        if kind != "characters" or not char_id:
+            continue
+        try:
+            characters.read_character(overlay.char_root(cid, char_id), char_id)
+        except characters.CharacterNotFound:
+            continue
+        st = playstate.read_state(croot, char_id)
+        edit = staged.get(f"character_state:{char_id}")
+        # The model's own edit is the base when it has one: promotion adjusts
+        # what this absorb is already proposing, not what is on disk, or the
+        # merged row would silently revert the extraction's prose.
+        base = playstate.parse_body(edit["after"]) if edit else (
+            st or {"current_state": "", "knows": "", "suspects": ""})
+        after = playstate.compose_body(
+            playstate.fold_fields(base["current_state"], fields),
+            base["knows"], base["suspects"])
+        before = edit["before"] if edit else (
+            playstate.compose_body(st["current_state"], st["knows"], st["suspects"]) if st else "")
+        if not after or before == after:
+            if edit is not None and before == after:
+                out.remove(edit)          # promotion cancelled the model's own edit out
+            continue
+        if edit is not None:
+            edit["after"] = after
+            stage(edit, {}, f"characters:{char_id}")
+        else:
+            out.append(stage(_character_state_edit(cid, char_id, before, after),
+                             {}, f"characters:{char_id}"))
 
 
 def materialize(cid: str, sid: str, parsed: dict,
@@ -225,12 +306,12 @@ def materialize(cid: str, sid: str, parsed: dict,
         before = playstate.compose_body(st["current_state"], cur_knows, cur_suspects) if st else ""
         if before == after:
             continue
-        out.append(_staged({"id": f"character_state:{char_id}", "kind": "character_state",
-                            "target": {"kind": "characters", "id": char_id},
-                            "label": f"{_char_name(cid, char_id)} — current state",
-                            "field": "current_state",
-                            "before": before, "after": after, "authored": False},
+        out.append(_staged(_character_state_edit(cid, char_id, before, after),
                            e, f"characters:{char_id}"))
+
+    # After the model's own proposals, so a reinforced value merges onto the row
+    # the reviewer would already have seen rather than opening a second one.
+    _promote(cid, sid, out, _staged)
 
     for e in parsed.get("group_state_edits", []):
         raw_id = e.get("id", "")

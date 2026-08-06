@@ -1,0 +1,13 @@
+{#- Transient per-turn state, decayed to the recent window (#120): one line per
+    character, "Name — mood: value; intent: value; posture: value", carrying only
+    the fields still live. Vars: transient_states ([{name, fields: [{label,
+    value}]}]). -#}
+{%- set lines = [] -%}
+{%- for st in transient_states -%}
+{%- set parts = [] -%}
+{%- for f in st.fields -%}{%- set _ = parts.append(f.label ~ ": " ~ f.value) -%}{%- endfor -%}
+{%- if parts -%}{%- set _ = lines.append(st.name ~ " — " ~ parts | join("; ")) -%}{%- endif -%}
+{%- endfor -%}
+{%- if lines %}# Transient state
+Where each character stands right now — read from the last few posts, not settled fact. Let the scene move it.
+{{ lines | join("\n") }}{% endif -%}
