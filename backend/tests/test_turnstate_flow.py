@@ -427,3 +427,16 @@ def test_trimming_a_crashed_continuation_retires_its_state(monkeypatch, tmp_path
     scenes.trim_continuation(cid, sid, at)      # the roll compacts onto index `at`
     assert turnstate.entries(cid, sid) == []
     assert "Transient state" not in _labels(cid, sid)
+
+
+def test_a_macro_in_a_tracker_value_is_resolved_once_at_persist_time(
+        monkeypatch, tmp_path):
+    """Every rendered section is macro-expanded on each context build, so a
+    stored `{{random}}` would re-roll every prompt — and a value that never
+    holds still can never streak into a promotion either."""
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    _persist_reply(cid, sid, "**Winifred Ash:** Quiet.\n\n"
+                   + _block('{"Winifred Ash": {"mood": "{{random:calm,calm}}"}}'))
+    stored = turnstate.entries(cid, sid)[0][1][f"characters:{char_id}"]
+    assert stored == {"mood": "calm"}
+    assert "{{" not in stored["mood"]
