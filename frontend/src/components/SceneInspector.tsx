@@ -457,14 +457,15 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   async function refreshRolling() {
     setError(null);
     setRollingBusy(true);
+    // Claimed OUTSIDE the try, so both the success and the failure path can see
+    // it — the catch needs the same guard, and a token declared inside the try
+    // would not be in scope there.
+    const token = ++readToken.current;
     try {
       // `force`, always: this button exists so the player can ask for a summary
       // *now*, including when the automatic refresh is switched off. The
       // server still declines to spend a call when nothing has happened since
       // the last one, and says so in `refreshed`.
-      // Claims a token like a read does, so an ordinary read already in flight
-      // cannot land on top of the result the player explicitly asked for.
-      const token = ++readToken.current;
       const data = await api.refreshRollingSummary(cid, sid, true);
       // Retired the same way a superseded read is: the reader can move on while
       // a refold is in flight, and this one is for the record they left.
@@ -472,6 +473,12 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       setRolling({ key: `${cid}/${sid}`, data });
       setRollingUnread(false);
     } catch (err: any) {
+      // Retired on the same token as the success path, and review caught that
+      // guarding only the success path is not enough: `error` is shared by
+      // every action in this panel and the scene-change effect does not clear
+      // it, so a refresh that failed for the record the reader LEFT would sit
+      // as a banner over the one they are on until something else cleared it.
+      if (readToken.current !== token) return;
       // Reported, never destructive: the summary already on screen is still the
       // best thing anyone has, so a failed refold leaves it exactly where it is.
       setError(err.detail ?? String(err));
