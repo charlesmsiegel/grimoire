@@ -382,3 +382,55 @@ def test_a_repoint_that_cannot_be_written_drops_the_rows(monkeypatch, tmp_path):
     # neither the old id nor the new one carries them any more
     assert prompt_log.list_entries(cid, sid) == []
     assert prompt_log.list_entries(cid, "0002-renamed") == []
+
+
+def test_a_locked_index_blocks_the_delete_rather_than_freeing_the_id(monkeypatch, tmp_path):
+    """The read-side twin of the write-side raise. An index that cannot be read
+    comes back empty, so `gone` is empty and the delete would sail through and
+    free a recycled id with the rows still on disk.
+
+    The failure is injected by pointing the index at a DIRECTORY: reading one
+    raises IsADirectoryError, a real OSError, without stubbing out reads the
+    rest of the store needs."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    _record(cid, sid)
+    blocked = campaigns.campaign_root(cid) / "prompts" / "unreadable.json"
+    blocked.mkdir()
+    real_index_path = prompt_log._index_path
+    monkeypatch.setattr(prompt_log, "_index_path", lambda _cid: blocked)
+
+    with pytest.raises(OSError):
+        scenes.delete_scene(cid, sid)
+    # restore just this one -- `monkeypatch.undo()` would also revert the
+    # GRIMOIRE_HOME the fixture set, pointing the assertions at the real store
+    monkeypatch.setattr(prompt_log, "_index_path", real_index_path)
+    assert sid in [s["id"] for s in scenes.list_scenes(cid)]
+    assert [e["scene"] for e in prompt_log.list_entries(cid, sid)] == [sid]
+
+
+def test_a_corrupt_index_does_not_block_deletion_forever(monkeypatch, tmp_path):
+    """The other half of that judgement: corruption is not transient, so raising
+    on it would wedge every scene deletion in the campaign. Its rows are
+    invisible to `list_entries` anyway, so a recycled id inherits nothing a user
+    can see."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    _record(cid, sid)
+    (campaigns.campaign_root(cid) / "prompts" / "index.json").write_text("{[", encoding="utf-8")
+
+    scenes.delete_scene(cid, sid)
+    assert sid not in [s["id"] for s in scenes.list_scenes(cid)]
+
+
+def test_an_unreadable_config_does_not_make_depth_raise(monkeypatch, tmp_path):
+    """`capturing()` runs on every generating route, so this must fall back
+    rather than raise. It does not make an unreadable config.md survivable
+    overall — `context._assemble` reads it unguarded moments later — it only
+    keeps this module's own promise."""
+    _cid, _sid = _campaign(monkeypatch, tmp_path)
+
+    def boom():
+        raise OSError("locked by another process")
+
+    monkeypatch.setattr(prompt_log.config, "read_config", boom)
+    assert prompt_log.depth() == int(config.DEFAULT_PROMPT_LOG_DEPTH)
+    assert prompt_log.capturing() is True

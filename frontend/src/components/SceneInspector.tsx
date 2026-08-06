@@ -275,22 +275,35 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // routinely have a live scene under the same id, and a scene-only check would
   // wave the first campaign's prompt through into the second's inspector.
   const liveScene = useRef(`${cid}/${sid}`);
+  // The entry the reader most recently asked for; a response for anything else
+  // is superseded and dropped. See `showTurn`.
+  const wantedTurn = useRef<string | null>(null);
   // Keyed on the scene alone, deliberately NOT on refreshKey: a turn landing
   // must not yank the reader out of a past turn they are in the middle of
   // reading. Changing scene must, since the entry belongs to the old one.
-  useEffect(() => { liveScene.current = `${cid}/${sid}`; setFrozen(null); }, [cid, sid]);
+  useEffect(() => {
+    liveScene.current = `${cid}/${sid}`;
+    wantedTurn.current = null;
+    setFrozen(null);
+  }, [cid, sid]);
 
   const showTurn = useCallback(async (eid: string) => {
     setError(null);
+    // The scene guard alone is not enough WITHIN a scene: click turn A then
+    // turn B, and if A resolves second it overwrites B — the panel showing the
+    // turn the reader did not pick last. So the newest request wins, tracked by
+    // the entry it asked for.
+    wantedTurn.current = eid;
+    const current = () => liveScene.current === `${cid}/${sid}` && wantedTurn.current === eid;
     try {
       const snapshot = await api.getScenePrompt(cid, sid, eid);
       // Switching scenes mid-flight would otherwise land the old scene's prompt
       // in the new scene's panel — the exact confusion the backend refuses to
       // serve (the detail route scopes each entry to its scene), so the client
       // must not reintroduce it from the other end.
-      if (liveScene.current === `${cid}/${sid}`) setFrozen(snapshot);
+      if (current()) setFrozen(snapshot);
     } catch (err: any) {
-      if (liveScene.current !== `${cid}/${sid}`) return;
+      if (!current()) return;
       // The likeliest failure is the retention window having evicted it while
       // the list was on screen, which is a 404 and not worth a scary banner.
       setFrozen(null);

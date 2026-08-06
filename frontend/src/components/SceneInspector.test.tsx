@@ -674,3 +674,26 @@ test("a turn list arriving after a scene change is dropped, not listed", async (
   release({ entries: TURNS });
   await screen.findByText("Regenerate");   // c2's own rows, once they arrive
 });
+
+test("the last turn clicked wins even if an earlier request resolves after it", async () => {
+  // The scene guard does not cover this: both requests are for the same scene,
+  // so without a per-request check the slower first click overwrites the second.
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  const pending: Record<string, (v: any) => void> = {};
+  (api.getScenePrompt as any).mockImplementation((_c: string, _s: string, eid: string) =>
+    new Promise((r) => { pending[eid] = r; }));
+
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));        // 000001
+  fireEvent.click(await screen.findByRole("button", { name: /^Regenerate/ }));  // 000002
+
+  pending["000002"]({ ...FROZEN, id: "000002", task: "regenerate",
+                      sections: [{ label: "World info", text: "the regenerate prompt",
+                                   tokens: 90, tier: "spotlight", dropped: false, trimmed: 0 }] });
+  await screen.findByText("the regenerate prompt");
+
+  pending["000001"](FROZEN);          // the superseded click lands late
+  await new Promise((r) => setTimeout(r, 0));
+  await screen.findByText("the regenerate prompt");
+  expect(screen.queryByText("the lore as it stood then")).toBeNull();
+});
