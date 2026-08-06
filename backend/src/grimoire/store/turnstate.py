@@ -64,8 +64,14 @@ MAX_ENTRIES = 200
 # The block, as a trailing fence only. `(?:^|\n)` rather than `re.MULTILINE`'s
 # `^` so the newline that precedes the opener is eaten with it, leaving the
 # narration without a dangling blank line.
-_OPEN = re.compile(r"(?:^|\n)[ \t]*```[ \t]*state[ \t]*(?:\n|$)", re.IGNORECASE)
-_CLOSE = re.compile(r"(?:^|\n)[ \t]*```[ \t]*(?:\n|$)")
+#
+# `\r` is in the trailing class on both, because a provider that returns CRLF
+# line endings otherwise matches NEITHER boundary -- and the failure is silent
+# and total: the block is persisted into the transcript as narration and its
+# state is never recorded. The leading `\r` of a CRLF pair stays on the
+# narration side, where `split_reply` strips it like any other trailing space.
+_OPEN = re.compile(r"(?:^|\n)[ \t]*```[ \t]*state[ \t\r]*(?:\n|$)", re.IGNORECASE)
+_CLOSE = re.compile(r"(?:^|\n)[ \t]*```[ \t\r]*(?:\n|$)")
 
 
 def _norm(value: str) -> str:
@@ -277,23 +283,29 @@ class StreamRedactor:
         """Resolve everything still withheld, at the point the stream ends —
         which is the first moment either question can be answered.
 
-        A held *prefix* that never grew into an opener is just text; dropping it
-        would eat the backticks off a code fence the narration ended on.
+        Both cases go through `split_block`, the same rule the persisted reply
+        is judged by, which is the only way the two can be made to agree:
 
-        A block that opened is put through `split_block`, the same rule the
-        persisted reply is judged by. Withholding it outright would have been
-        wrong the moment a model wrote narration AFTER the block: the transcript
-        keeps that (a mid-reply block is never stripped) and the stream would
-        have silently ended the reply early, so the two would disagree about
-        what was said. Released in one burst rather than progressively, because
-        "is this block trailing?" is not decidable until there is no more text.
+        - A block that OPENED must not simply be dropped. The moment a model
+          wrote narration after it, the transcript keeps the lot (a mid-reply
+          block is never stripped) and dropping would silently end the streamed
+          reply early. Released in one burst rather than progressively, because
+          "is this block trailing?" is not decidable until there is no more text.
+        - A HELD prefix is usually just text -- dropping it would eat the
+          backticks off a code fence the narration ended on -- but not always.
+          A stream that stops exactly after ``` ```state ``` with no newline
+          leaves a *complete* opener held, and `split_block` strips that as an
+          unterminated trailing block. Emitting it here would show the player an
+          opener the transcript does not contain, and on a reroll would show it
+          in place of the reply the server just restored.
+
+        `split_block` returns anything that is not a trailing block untouched,
+        so the ordinary held prefix comes back whole.
         """
-        if self._tail is not None:
-            tail, self._tail = self._tail, None
-            narration, _ = split_block(tail)
-            return narration
-        held, self._held = self._held, ""
-        return held
+        pending = self._tail if self._tail is not None else self._held
+        self._tail, self._held = None, ""
+        narration, _ = split_block(pending)
+        return narration
 
 
 # ---- the ledger ------------------------------------------------------------

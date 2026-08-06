@@ -409,3 +409,21 @@ def test_a_refused_restore_does_not_refile_the_state(monkeypatch, tmp_path):
     _persist_reply(cid, sid, "**Winifred Ash:** Please, sit.")   # something else landed
     assert scenes.restore_trailing_assistant_run(cid, sid, token) is False
     assert turnstate.entries(cid, sid) == []
+
+
+def test_trimming_a_crashed_continuation_retires_its_state(monkeypatch, tmp_path):
+    """`trim_continuation` compacts preserved dice-roll lines DOWN to
+    `from_index`, so a roll can land on the index a crashed continuation's
+    tracker entry holds — an index the tail filter still accepts."""
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    config.write_config(turnstate_depth="4")
+    scenes.append_message(cid, sid, "user", "Where is the ledger?")
+    at = len(scenes.read_scene(cid, sid)["messages"])
+    _persist_reply(cid, sid, "**Winifred Ash:** Get out.\n\n"
+                   + _block('{"Winifred Ash": {"mood": "furious"}}'))
+    scenes.append_message(cid, sid, "assistant", "🎲 Steady Hand — 14",
+                          speaker=scenes.ROLL_SPEAKER)
+    assert turnstate.entries(cid, sid)[0][0] == at
+    scenes.trim_continuation(cid, sid, at)      # the roll compacts onto index `at`
+    assert turnstate.entries(cid, sid) == []
+    assert "Transient state" not in _labels(cid, sid)

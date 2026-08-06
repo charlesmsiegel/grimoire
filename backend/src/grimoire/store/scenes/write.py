@@ -390,6 +390,16 @@ def trim_continuation(cid: str, sid: str, from_index: int) -> None:
     meta["updated"] = now_iso()
     turns._set_turn_sizes(meta, sizes)
     atomic.write_text(p, dump_frontmatter(meta, serialize._serialize_messages(kept)))
+    # Retire the transient-state ledger from the same index (#120). The tail
+    # filter does not cover this: preserved ROLL_SPEAKER lines are compacted
+    # DOWN toward `from_index`, so a roll can land on the index a crashed
+    # continuation's tracker entry holds, leaving the entry pointing at a post
+    # that still exists and is no longer the narration it described. Never
+    # fatal, for the reason the removal's own supersede is not.
+    try:
+        turnstate.supersede(cid, sid, from_index)
+    except OSError:
+        pass
 
 
 class RollMessageImmutable(Exception):
