@@ -2436,3 +2436,59 @@ def test_the_ledger_view_is_not_capped_by_the_prompt_limit(monkeypatch, tmp_path
     for n in range(absorb.FACT_SNAPSHOT_LIMIT + 5):
         facts.record(cid, f"Standing fact {n}.", "", f"{n:04d}--s")
     assert len(facts.active(cid)) == absorb.FACT_SNAPSHOT_LIMIT + 5
+
+
+def test_re_absorbing_a_scene_does_not_resurrect_a_fact_a_later_scene_retired(
+        monkeypatch, tmp_path):
+    """`force` is exactly the operation the per-scene dedup exists for, and an
+    active-only check cannot see the retired record — so it stages the sentence
+    again and puts a truth a later scene explicitly ended back on the ledger."""
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The bridge stands.", "the third night", "s10")
+    facts.record(cid, "The bridge is rubble.", "", "s12", supersedes=old)
+
+    assert _fact_row(cid, "s10", text="The bridge stands.", date="the third night") == []
+    assert [f["text"] for f in facts.active(cid)] == ["The bridge is rubble."]
+
+
+def test_a_replacement_the_reviewer_edited_into_a_restatement_is_refused(
+        monkeypatch, tmp_path):
+    """`materialize` drops a restatement the MODEL writes, but the reviewer can
+    edit the replacement text into one afterwards and that path never returns
+    through it. Unchecked, it retires a correctly dated fact and re-records the
+    same sentence under this scene's later date — a lifecycle change
+    manufactured out of a truth that did not move."""
+    from grimoire.store import facts, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    old = facts.record(cid, "The ambassador trusts the party.", "night one", "s1")
+    (edit,) = _fact_row(cid, sid, text="The ambassador is done with the party.",
+                        supersedes=old)
+
+    applied, failures = absorb.apply_edits(
+        cid, [{**edit, "after": "  the AMBASSADOR trusts the party.  "}], sid)
+    assert applied == []
+    assert failures[0]["kind"] == "error"
+    assert "already says" in failures[0]["reason"]
+    assert facts.get(cid, old) == {
+        "text": "The ambassador trusts the party.", "date": "night one", "scene": "s1",
+        "status": "active", "superseded_by": "", "retired_scene": ""}
+    assert len(facts.read(cid)) == 1      # and nothing was recorded beside it
+
+
+def test_a_genuinely_different_replacement_the_reviewer_typed_still_lands(
+        monkeypatch, tmp_path):
+    """The recheck must not block the ordinary case it sits next to: editing the
+    replacement is what the textarea is for."""
+    from grimoire.store import facts, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    old = facts.record(cid, "The ambassador trusts the party.", "night one", "s1")
+    (edit,) = _fact_row(cid, sid, text="The ambassador is done with the party.",
+                        supersedes=old)
+
+    applied, failures = absorb.apply_edits(
+        cid, [{**edit, "after": "The ambassador wants the party gone."}], sid)
+    assert applied == [f"fact:{old}"] and failures == []
+    assert [f["text"] for f in facts.active(cid)] == ["The ambassador wants the party gone."]

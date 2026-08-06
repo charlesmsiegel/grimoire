@@ -133,14 +133,22 @@ def _new_commitment_id(owed: dict, staged: dict, slug: str, title: str) -> str:
 
 
 def _recorded_here(ledger: dict, sid: str, text: str) -> bool:
-    """Whether this scene already recorded this standing fact.
+    """Whether this scene has EVER recorded this standing fact.
+
+    Ever, not "and it is still standing" -- the same rule `facts.record`'s own
+    dedup keeps, and for the reason spelled out there: a fact this scene
+    recorded and a LATER scene retired is invisible to an active-only lookup, so
+    re-absorbing this scene would stage the sentence again and put a truth the
+    later scene ended back on the ledger. The scene id is what separates a
+    re-extraction from a genuine re-establishment, so status has no work to do
+    in this predicate.
 
     Case-insensitive, like `_new_commitment_id` compares titles: the two absorbs
     of one scene are two model replies, and a re-extraction that differs only in
     capitalisation is the same fact rather than a second one.
     """
     want = text.casefold()
-    return any(facts.is_active(rec) and _text(rec.get("scene")) == sid
+    return any(isinstance(rec, dict) and _text(rec.get("scene")) == sid
                and _text(rec.get("text")).casefold() == want
                for rec in ledger.values())
 
@@ -457,15 +465,15 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         text, date = _text(e.get("text")), _text(e.get("date"))
         sup = _text(e.get("supersedes"))
         prior = ledger.get(sup) if sup else None
-        if (text and facts.is_active(prior)
-                and _text(prior.get("text")).casefold() == text.casefold()):
-            # A RESTATEMENT, not a supersession. The prompt says not to report
-            # one and the model does anyway, which is the whole reason this is
-            # in code: honoured, it retires a correctly dated fact and records
-            # an identically worded one under this later scene's date, so the
-            # ledger claims the fact changed when nothing did and the date it
-            # really became true is off the standing list. Nothing about the
-            # world moved, so the row does not either.
+        if text and facts.is_active(prior) and facts.restates(prior, text):
+            # A RESTATEMENT, not a supersession -- see `facts.restates` for what
+            # it costs. The prompt says not to report one and the model does
+            # anyway, which is why this is in code rather than only in the
+            # prompt. Nothing about the world moved, so the row does not either.
+            #
+            # `apply` checks again rather than trusting this: the reviewer can
+            # edit the replacement text into a restatement after the row was
+            # staged, and that path never comes back through here.
             #
             # `text and` guards the BARE RETIREMENT, whose "" would otherwise
             # match a stored fact whose own text reads as "" -- which `record`

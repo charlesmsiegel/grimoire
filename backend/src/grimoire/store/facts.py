@@ -123,6 +123,29 @@ def is_active(rec) -> bool:
     return isinstance(rec, dict) and _field(rec.get("status"), ACTIVE).lower() != RETIRED
 
 
+def restates(rec, text: str) -> bool:
+    """Whether `text` says exactly what this record already says.
+
+    A supersession whose replacement restates its predecessor is not a
+    supersession: honoured, it retires a correctly dated fact and re-records the
+    same sentence under a later scene's date, so the ledger claims the world
+    changed when nothing did and the date the fact really became true drops off
+    the standing list.
+
+    Public, and one definition, because there are TWO ways in and the second was
+    missed on the first pass: `materialize` drops a row the model wrote that
+    way, and `apply` has to check again because the reviewer can edit the
+    replacement text into a restatement after the row was staged -- and `apply`
+    is the one that takes a client-supplied body.
+
+    Case-insensitively, like the rest of this module compares text: two
+    renderings of one sentence differing only in capitalisation are one
+    sentence.
+    """
+    return (isinstance(rec, dict)
+            and _field(rec.get("text")).casefold() == text.strip().casefold())
+
+
 def _next_id(data: dict) -> str:
     """The first free ``f<N>``.
 
@@ -159,6 +182,20 @@ def record(cid: str, text: str, date: str, scene: str, supersedes: str = "") -> 
     the two passes are two model replies, and identical-but-for-capitalisation
     is a re-extraction rather than a second fact.
 
+    That match deliberately ignores `status`, and matching only ACTIVE records
+    was a bug: a fact scene A recorded and scene B later retired is invisible to
+    an active-only lookup, so re-absorbing A files the same sentence as a fresh
+    standing fact and resurrects a truth B explicitly ended -- on `force`, which
+    is the operation this idempotency exists for. The SCENE is already what
+    separates a re-extraction from a genuine re-establishment: a later scene
+    that establishes the same thing again carries a different scene id and gets
+    its own record, dated to when it became true a second time.
+
+    A supersession still lands on a dedup hit that is retired, and the result is
+    a coherent chain rather than a special case: the predecessor is retired
+    pointing at the record this call returned, which is itself retired pointing
+    at whatever replaced it.
+
     A `supersedes` naming a fact that is missing or already retired is dropped
     rather than reported: it is the same situation `absorb.conflicts` refuses
     the row for at save time, so anything reaching here has either been judged
@@ -171,7 +208,7 @@ def record(cid: str, text: str, date: str, scene: str, supersedes: str = "") -> 
         data = _read_ledger(cid)
         want = text.casefold()
         fid = next((k for k, rec in data.items()
-                    if is_active(rec) and _field(rec.get("scene")) == scene
+                    if isinstance(rec, dict) and _field(rec.get("scene")) == scene
                     and _field(rec.get("text")).casefold() == want), "")
         if not fid:
             fid = _next_id(data)

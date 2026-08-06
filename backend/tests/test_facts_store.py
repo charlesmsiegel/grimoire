@@ -140,16 +140,60 @@ def test_the_same_fact_from_a_different_scene_is_a_different_fact(monkeypatch, t
     assert first != second
 
 
-def test_a_retired_fact_does_not_absorb_a_later_re_record(monkeypatch, tmp_path):
-    """Only ACTIVE facts dedupe. A scene's fact that was retired and then
-    established again is a new fact — reviving the retired record instead would
-    erase the period during which it was false."""
+def test_re_recording_a_scenes_fact_does_not_resurrect_it_after_a_later_retirement(
+        monkeypatch, tmp_path):
+    """The dedup ignores `status`, and matching only ACTIVE records was a bug.
+    Scene s1 records a fact, scene s4 ends it, and s1 is then re-absorbed with
+    `force` — an active-only lookup cannot see the retired record, so it files
+    the same sentence as a fresh standing fact and puts a truth s4 explicitly
+    ended back on the ledger. The SCENE is what separates a re-extraction from a
+    re-establishment; status has no work to do here."""
     cid = _campaign(monkeypatch, tmp_path)
     first = facts.record(cid, "The bridge stands.", "", "s1")
     facts.retire(cid, first, "s4")
     again = facts.record(cid, "The bridge stands.", "", "s1")
+    assert again == first
+    assert facts.get(cid, first)["status"] == "retired"    # s4's retirement stands
+    assert facts.active(cid) == []
+
+
+def test_a_later_scene_re_establishing_a_retired_fact_gets_its_own_record(
+        monkeypatch, tmp_path):
+    """The other half of that rule: a fact that stopped being true and then
+    became true again is genuinely new, and it is the scene id — not the status
+    — that says so. It is dated to when it became true the second time."""
+    cid = _campaign(monkeypatch, tmp_path)
+    first = facts.record(cid, "The bridge stands.", "the first night", "s1")
+    facts.retire(cid, first, "s4")
+    again = facts.record(cid, "The bridge stands.", "the ninth night", "s9")
     assert again != first
-    assert facts.get(cid, first)["status"] == "retired"
+    assert facts.active(cid) == [{"id": again, "text": "The bridge stands.",
+                                  "date": "the ninth night", "scene": "s9"}]
+
+
+def test_a_supersession_landing_on_a_retired_dedup_hit_makes_a_chain(monkeypatch, tmp_path):
+    """Not a special case: the predecessor is retired pointing at the record
+    this returned, which is itself retired pointing at what replaced it."""
+    cid = _campaign(monkeypatch, tmp_path)
+    f1 = facts.record(cid, "The bridge stands.", "", "s1")
+    f2 = facts.record(cid, "The bridge is rubble.", "", "s2", supersedes=f1)
+    facts.retire(cid, f2, "s3")
+    # s2 re-absorbed: its fact is retired, and the row still names f1
+    again = facts.record(cid, "The bridge is rubble.", "", "s2", supersedes=f1)
+    assert again == f2
+    assert facts.get(cid, f1)["superseded_by"] == f2
+    assert facts.get(cid, f2)["status"] == "retired"
+    assert facts.active(cid) == []
+
+
+def test_restates_is_case_and_whitespace_insensitive(monkeypatch, tmp_path):
+    """One definition, because there are two callers: `materialize` drops a
+    restatement the model wrote, and `apply` catches one the reviewer typed."""
+    rec = {"text": "The ambassador trusts the party."}
+    assert facts.restates(rec, "  the AMBASSADOR trusts the party.  ") is True
+    assert facts.restates(rec, "The ambassador distrusts the party.") is False
+    assert facts.restates({"text": ["not a string"]}, "") is True   # both read as ""
+    assert facts.restates(None, "anything") is False
 
 
 def test_ids_are_never_reused(monkeypatch, tmp_path):
