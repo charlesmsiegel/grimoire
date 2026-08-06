@@ -698,7 +698,7 @@ def _drop_record_dir(root: Path, kind: str, rid: str) -> None:
                     "%r will inherit what is still in it", d, exc, rid)
 
 
-def dependent_campaigns(wroot: Path) -> list[str]:
+def _dependent_campaigns(wroot: Path) -> list[str]:
     """Ids of the campaigns that inherit from `wroot`.
 
     `list_campaigns`, not `campaigns.read.world_refs`: this is the opposite of
@@ -718,8 +718,10 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
 
     Two places keep such leftovers:
 
-    - the world's own `_record_dir` — `entities.delete_entity` unlinks the
-      `.md` and nothing else, so the record's images survive it;
+    - the world's own `_record_dir` — `entities.delete_entity` and
+      `greetings.delete_greeting` unlink the `.md` and nothing else, so the
+      record's images survive it. (The actor deletes already `rmtree` the
+      directory, because for an actor the directory *is* the record.);
     - each dependent campaign's `_record_dir`, holding state the campaign filed
       against a record it only ever *inherited*. That state is campaign-local by
       definition, so no sync ever removes it, and a world-side delete leaves it
@@ -752,7 +754,7 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
     """
     _drop_record_dir(wroot, kind, rid)
     try:
-        cids = dependent_campaigns(wroot)
+        cids = _dependent_campaigns(wroot)
     except (OSError, UnicodeDecodeError) as exc:
         log.warning("could not enumerate the campaigns of %s (%s) -- state they "
                     "filed against %s/%s stays, and a record recreated under that "
