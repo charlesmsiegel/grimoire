@@ -53,25 +53,40 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None) -> Non
     stamped model rides along so a snapshot still names its provider after the
     scene is repointed at another one.
 
-    At build time rather than after the stream, deliberately. The stream
-    finalizers carry delicate turn-ownership and abort semantics that a debug
-    write has no business joining, and a turn the provider failed is one of the
-    turns whose prompt is most worth having. `prompt_log.record` swallows its
-    own storage failures, so this cannot cost the turn either way.
+    Called once the turn is committed to happening — after the stream object
+    exists, so the pre-stream claim has already succeeded — but NOT from inside
+    the stream itself. The finalizers carry delicate turn-ownership and abort
+    semantics that a debug write has no business joining, and a turn the
+    provider *failed* is one of the turns whose prompt is most worth having.
+    `prompt_log.record` swallows its own storage failures and never waits on a
+    lock, so this cannot cost the turn either way.
     """
     # None means the caller composed with `describe=False` because capture is
     # off. Nothing to record, and nothing was built to record.
     if breakdown is None:
         return
-    scene_model = ""
-    try:
-        # Frontmatter only. `read_scene` would re-parse the whole transcript for
-        # one field, on a path the turn is already about to pay for several
-        # times over.
-        scene_model = store.scenes.read_scene_meta(cid, sid).get("model", "")
-    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound, OSError):
-        pass
-    store.prompt_log.record(cid, sid, task, breakdown, model=scene_model)
+    # The scene check and the append are ONE critical section, on the same lock
+    # `record` uses. Another client can rename or delete the scene between the
+    # composition and this call, and its cleanup (`repoint_scenes` /
+    # `forget_scene`) will already have run -- so a row appended afterwards under
+    # the obsolete id is one nothing will ever repoint or remove, waiting for the
+    # id to be recycled and shown as the replacement scene's own prompt. Checking
+    # outside the lock would only narrow that window; checking inside closes it.
+    #
+    # Non-blocking, and skipping on contention, for the reason `record` is: this
+    # runs on the generating path (see `store.prompt_log.record`). The lock is
+    # reentrant, so `record`'s own acquisition inside this one is free.
+    with store.locks.campaign_lock_nowait(cid) as got:
+        if not got:
+            return
+        try:
+            # Frontmatter only. `read_scene` would re-parse the whole transcript
+            # for one field, on a path the turn is already about to pay for
+            # several times over.
+            meta = store.scenes.read_scene_meta(cid, sid)
+        except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound, OSError):
+            return   # gone or unreadable: record nothing rather than an orphan
+        store.prompt_log.record(cid, sid, task, breakdown, model=meta.get("model", ""))
 
 
 def get_llm() -> LLMClient:
