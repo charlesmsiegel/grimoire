@@ -2621,7 +2621,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                             onSceneChanged={() => selectScene(activeId)}
                             onSceneRenamed={sceneRenamed} pcless={activePcless}
                             sceneLocked={sceneLocked}
-                            onRenaming={markRenaming} />
+                            onRenaming={markRenaming}
+                            posts={messages.length} />
           )}
         </div>
       )}

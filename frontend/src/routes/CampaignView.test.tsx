@@ -49,6 +49,7 @@ vi.mock("../api/client", async () => {
       absorbScene: vi.fn(), saveChronicle: vi.fn(), getChronicle: vi.fn(), retryAudit: vi.fn(),
       // consumed by the embedded SceneInspector
       getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
+      sceneBriefing: vi.fn(),
       // Resolves to "no weather" so the widget renders nothing: these suites
       // assert on the rest of the inspector, not the sky.
       getSceneWeather: vi.fn(() => Promise.resolve({ weather: null, location: null, native: null })),
@@ -136,6 +137,10 @@ beforeEach(() => {
   (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });
   (api.getSceneContext as any).mockResolvedValue({ model: "m", total_tokens: 0,
     dropped_tokens: 0, budget_tokens: 0, sections: [] });
+  // Empty, so the inspector's Briefing section (#118) renders nothing here and
+  // these suites keep asserting on the rail they were written against.
+  (api.sceneBriefing as any).mockResolvedValue({
+    focus: [], plot: [], commitments: [], relationships: [], last_time: null });
   (api.getCalendarConfig as any).mockResolvedValue({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
     secondary: null, confirmed: true });
