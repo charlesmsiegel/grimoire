@@ -474,105 +474,86 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
     assert order == sorted(order), f"unsorted acquisition: {order}"
 
 
-# ---- only `hold_all` may hold more than one campaign lock (#267) ----
+# ---- how a campaign lock may be taken at all (#267) ----
 #
 # The two tests above are hand-written, one per holder, and that is exactly the
 # shape of guarantee that let #267 in: the ordering rule lived in prose, each
 # holder was checked on its own, and the comment over each one claimed to be
 # the *sole* multi-lock holder. Neither knew the other existed. A third holder
 # written tomorrow with a raw `ExitStack` loop -- which is what BOTH of these
-# were before `hold_all` -- passes every test in this file.
+# were before `hold_all` -- passes every test above.
 #
-# So the rule is stated against the ASTs instead, in the spirit of
-# `test_lock_domain_guard.py`: `hold_all` sorts, and `hold_all` is the only
-# thing allowed to hold more than one campaign lock at once.
+# THE RULE. Outside `hold_all` itself, in any one scope:
 #
-# The rule is one property, not a list of bad spellings, and it turns on a
-# distinction two earlier drafts of this guard got wrong: **`campaign_lock(cid)`
-# is a registry lookup, not a hold.** A lock is held by entering it -- a `with`,
-# a registration on an `ExitStack`, or an explicit `.acquire()` -- and a
-# function that merely collects lock objects holds nothing. So the question is
-# only ever "can two of those be live at once", and three shapes answer yes:
+#   1. every `campaign_lock(...)` / `hold_all(...)` call is the direct context
+#      expression of a `with`, and
+#   2. they all name the same campaign.
 #
-#   1. **a hold that repeats** -- `stack.enter_context(...)` or `.acquire()`
-#      inside a loop *or a comprehension*. A `with` releases before the next
-#      iteration; an `ExitStack` registration deliberately does not, which is
-#      how BOTH holders were written before the fix;
-#   2. **two holds that the same thing releases** -- two registrations bounded
-#      by one `with ExitStack()` block, or two bare `acquire()`s, which nothing
-#      releases at all;
-#   3. **two locks in one `with`, or any hold inside a lock-`with` body** --
-#      `with campaign_lock(a), campaign_lock(b):` is the plainest way to write
-#      a two-campaign hold.
+# Anything else fails. Two campaigns in one scope is the deadlock; a lock taken
+# anywhere but a `with` has no bounded lifetime, which is how you get two.
 #
-# The grouping in (2) is the load-bearing part, and the reason this is keyed on
-# *what releases a hold* rather than on a list of bad spellings. Earlier drafts
-# were the list, and it kept being one spelling short: locals
-# (`lock = campaign_lock(c)` then `stack.enter_context(lock)`, the shape
-# `hold_all` is written in), then `with a, b:`, then -- from the Codex review of
-# this guard -- the same two through locals, an unrolled `acquire()` pair, and a
-# comprehension. Each was the same hold in punctuation the detector had not been
-# taught.
+# WHY IT IS SHAPED LIKE THIS -- the part worth reading before changing it.
+# Earlier drafts asked the opposite question: "does this look like a multi-hold
+# I recognize?" They enumerated the bad spellings, and the enumeration was
+# always one spelling short. Across four review rounds, seven separate findings,
+# every one of them the same hold in punctuation the detector had not been
+# taught:
 #
-# Deliberately NOT flagged, because none of them holds two at once: a
-# sequential `for cid in ids: with campaign_lock(cid): ...` (and the same
-# through a local); collecting or inspecting lock objects without entering
-# them; a single registration on a stack that also holds other things; and two
-# SEQUENTIAL `with ExitStack()` blocks holding one lock each, where the first
-# is released before the second is taken. Each would be a false alarm on safe
-# code, and this guard has no escape hatch to absorb one.
+#   `lock = campaign_lock(c)` then `stack.enter_context(lock)`  (a local)
+#   `with campaign_lock(a), campaign_lock(b):`                  (one statement)
+#   `first: Lock = campaign_lock(a)` ...                        (AnnAssign)
+#   `campaign_lock(a).acquire(); campaign_lock(b).acquire()`    (unrolled)
+#   `[stack.enter_context(campaign_lock(c)) for c in cids]`     (comprehension)
+#   a registration still live across a sibling `with`           (across forms)
+#   the same stack registered under an unrelated `with`         (grouping)
+#
+# So the polarity is inverted, exactly as `test_lock_domain_guard.py` inverted
+# it after the same lesson: nothing is accepted unless it matches the whitelist
+# above, and every other spelling fails without having to be recognized. That
+# is why this is ~20 lines where the enumerating version was ~110, and why
+# `AnnAssign`, `.acquire()` and comprehensions need no special case -- none of
+# them is a `with`, so none of them passes, and neither will the next spelling
+# nobody has thought of.
+#
+# WHAT IT REJECTS THAT IS SAFE, stated rather than discovered later. Both have
+# a one-line rewrite, which is the whole reason there is no `# ...-ok:` marker:
+#
+# - `lock = campaign_lock(c)` then `with lock:` -- safe, one at a time. Inline
+#   the call into the `with`.
+# - two sequential `with ExitStack()` blocks holding one campaign lock each --
+#   safe, since the first is released before the second. Take each in a `with`.
+#   (Codex flagged the lifetime-grouping version of this guard for rejecting
+#   it. It is still rejected, but now by the stated rule rather than by an
+#   accident of how registrations were grouped.)
+#
+# Deliberately allowed: two `with campaign_lock(cid)` blocks naming the SAME
+# campaign in one scope -- `routes/streaming.py` does this in mutually
+# exclusive branches of `finalize`, and one campaign's lock cannot deadlock
+# against itself (it is an RLock, and reentrancy is by design).
 #
 # Honest about its reach, the house standard:
 #
 # - **Matched on the callee's NAME alone**, whatever receiver it is reached
-#   through. `from .locks import campaign_lock` is the same acquisition as
+#   through. `from .locks import campaign_lock` is the same call as
 #   `locks.campaign_lock`, and a guard that trusted the receiver would miss it.
-#   The cost is that an unrelated function named `campaign_lock` or `hold_all`
-#   would be matched too; there is none, and the failure is loud and local.
-# - **One function, no cross-function resolution.** A helper that returns a
-#   campaign lock -- `stack.enter_context(_lock_for(c))` -- is not seen, because
-#   nothing here resolves `_lock_for` to what it returns. Resolving that is what
-#   `test_lock_domain_guard.py` spends its length on; this guard buys the
-#   historically-real spellings cheaply and stops there rather than pretending.
-#   The same limit covers two functions that each take one lock and call each
-#   other -- the RLock-reentrancy case (`audit.apply_delta` ->
-#   `sheets.set_field`), which is the same campaign by construction.
-# - **A nested `def` or lambda is not this function's body.** A lock taken
-#   inside one is taken when that callable runs, not per iteration of the loop
-#   it was written in, so `_here` stops at those boundaries.
-# - **Branches and statement order are not tracked.** Two `ExitStack`
-#   registrations in mutually exclusive arms of an `if` count as two holds,
-#   though only one runs; two `acquire()`s count as two even with a `release()`
-#   between them. Sequencing that properly is dataflow analysis, and the shapes
-#   are odd enough that a loud failure is the right answer if they appear.
-# - **Nested stacks are grouped separately.** A registration on an inner
-#   `with ExitStack()` and one on the outer are bounded by different blocks, so
-#   they read as one hold each. Both are live at once in reality. Reachable
-#   only by nesting two stacks that each take a campaign lock, which nothing
-#   does; recorded because the grouping rule is what makes it possible.
-# - **No `# ...-ok:` marker**, unlike the other guards in this tree. Those forbid
-#   a shape with legitimate exceptions. This one forbids writing a second
-#   implementation of a function that already exists, and the answer to needing
-#   one is to call `hold_all`.
+# - **"The same campaign" is syntactic.** Two calls whose argument dumps to the
+#   same AST are one campaign; `campaign_lock(cid)` and `campaign_lock(c["id"])`
+#   are two, even if they name the same one at runtime. It errs toward failing.
+# - **One scope, no cross-function resolution.** Two functions that each take
+#   one lock and call each other still hold two. That is the RLock-reentrancy
+#   case (`audit.apply_delta` -> `sheets.set_field`), the same campaign by
+#   construction; a *different* campaign reached that way stays a review
+#   question, as it is in `test_lock_domain_guard.py`.
+# - **A nested `def` or lambda is its own scope**, since it runs when called,
+#   not where it is written -- which is what makes `routes/streaming.py`'s
+#   `finalize` a scope of its own rather than part of its enclosing route.
 
-#: How a campaign lock is NAMED. `hold_all` is here too: two of them held at
-#: once are as unordered against each other as two `campaign_lock`s, since each
-#: sorts only its own argument.
+#: How a campaign lock is NAMED. `hold_all` is here too: two of them in one
+#: scope are as unordered against each other as two `campaign_lock`s, since
+#: each sorts only its own argument.
 _LOCK_CALLS = ("campaign_lock", "hold_all")
 
-#: One of the three ways a lock is HELD -- `ExitStack`'s registration surface,
-#: the one that outlives its own statement. The other two, `with` and
-#: `.acquire()`, are structure rather than names and are recognized in
-#: `_holds`. Holding is what the guard counts: a `campaign_lock(cid)` call only
-#: looks the lock up in the registry, so collecting lock objects holds nothing.
-_ACCUMULATORS = ("enter_context", "enter_async_context", "push")
-
 _NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
-#: What makes a hold repeat. Comprehensions belong here for the same reason
-#: `for` does -- `[stack.enter_context(campaign_lock(c)) for c in cids]` is the
-#: historical multi-hold with different punctuation.
-_LOOPS = (ast.For, ast.AsyncFor, ast.While,
-          ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 _WITHS = (ast.With, ast.AsyncWith)
 
 
@@ -580,7 +561,7 @@ def _here(node: ast.AST):
     """`ast.walk`, but it does not descend into a nested function or lambda.
 
     Those run when they are called, not where they are written, so a lock taken
-    inside one is not held by the loop or the `with` that lexically contains it.
+    inside one belongs to that scope and not to this one.
     """
     todo = [node]
     while todo:
@@ -595,137 +576,50 @@ def _callee(node: ast.Call) -> str | None:
     return f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
 
 
-def _lock_calls(node: ast.AST) -> list[ast.Call]:
-    return [n for n in _here(node)
-            if isinstance(n, ast.Call) and _callee(n) in _LOCK_CALLS]
-
-
-def _lock_locals(scope: ast.AST) -> set[str]:
-    """Locals bound to a campaign lock: `lock = campaign_lock(cid)`.
-
-    Without this, `lock = campaign_lock(c)` then `stack.enter_context(lock)` --
-    the shape `hold_all` itself is written in, so the shape a copier reaches
-    for -- reads as no hold at all.
-    """
-    return {t.id for node in _here(scope)
-            if isinstance(node, ast.Assign) and _lock_calls(node.value)
-            for t in node.targets if isinstance(t, ast.Name)}
-
-
-def _is_lock(expr: ast.expr, locals_: set[str]) -> bool:
-    return bool(_lock_calls(expr)) or (isinstance(expr, ast.Name)
-                                       and expr.id in locals_)
-
-
-def _holds(scope: ast.AST, locals_: set[str]):
-    """(node, kind) for everything in `scope` that actually HOLDS a campaign
-    lock: a `with` on one, a registration of one on an `ExitStack`, or an
-    explicit `.acquire()`."""
-    for node in _here(scope):
-        if isinstance(node, _WITHS):
-            if any(_is_lock(i.context_expr, locals_) for i in node.items):
-                yield node, "with"
-        elif isinstance(node, ast.Call):
-            args = [*node.args, *(kw.value for kw in node.keywords)]
-            if _callee(node) in _ACCUMULATORS and any(_is_lock(a, locals_)
-                                                      for a in args):
-                yield node, "stack"
-            elif (_callee(node) == "acquire" and isinstance(node.func, ast.Attribute)
-                  and _is_lock(node.func.value, locals_)):
-                yield node, "acquire"
-
-
 def _scopes(tree: ast.AST):
-    """Module level and every function body, each shorn of its nested defs --
-    the unit over which "held at the same time" is decided."""
+    """Module level and every function body, each shorn of its nested defs."""
     yield tree
     yield from (n for n in ast.walk(tree) if isinstance(n, _NESTED_SCOPES))
 
 
-def _parents(scope: ast.AST) -> dict[int, ast.AST]:
-    return {id(child): node for node in _here(scope)
-            for child in ast.iter_child_nodes(node)
-            if not isinstance(child, _NESTED_SCOPES)}
-
-
-def _ancestors(node: ast.AST, parents: dict[int, ast.AST]):
-    cur = parents.get(id(node))
-    while cur is not None:
-        yield cur
-        cur = parents.get(id(cur))
-
-
-def _repeats(node: ast.AST, parents: dict[int, ast.AST]) -> bool:
-    """The hold runs more than once -- a loop or a comprehension encloses it.
-
-    Comprehensions count: `[stack.enter_context(campaign_lock(c)) for c in cids]`
-    registers every lock on one stack, and is one syntactic call.
-    """
-    return any(isinstance(a, _LOOPS) for a in _ancestors(node, parents))
-
-
-def _released_by(node: ast.AST, parents: dict[int, ast.AST]) -> int | None:
-    """Which `with` block ends this hold -- the lifetime it belongs to.
-
-    Registrations on an `ExitStack` live until the block holding the stack
-    exits, so two of them collide only when the SAME block bounds both. Two
-    sequential `with ExitStack()` blocks each holding one lock never overlap.
-    `None` is "nothing releases it before the scope ends".
-    """
-    return next((id(a) for a in _ancestors(node, parents)
-                 if isinstance(a, _WITHS)), None)
+def _campaign_of(call: ast.Call) -> str:
+    """Which campaign this call names, syntactically. A call with no argument
+    dumps to a constant, so two of those read as one campaign rather than as a
+    spurious pair."""
+    arg = call.args[0] if call.args else None
+    return ast.dump(arg) if arg is not None else "<no argument>"
 
 
 def _multi_holds(tree: ast.AST) -> list[tuple[int, str]]:
-    """(line, why) for every place that holds two campaign locks at once."""
+    """(line, why) for every campaign lock not taken the one permitted way."""
     out = []
     for scope in _scopes(tree):
-        locals_, parents = _lock_locals(scope), _parents(scope)
-        stacked: dict[int | None, list[ast.AST]] = {}
-        acquired: list[ast.AST] = []
-        for node, kind in _holds(scope, locals_):
-            if kind == "with":
-                # `_is_lock`, not `_lock_calls`: `first = campaign_lock(a)` then
-                # `with first, second:` is two locks in one statement, and the
-                # locals are exactly how it is spelled.
-                if sum(_is_lock(i.context_expr, locals_) for i in node.items) > 1:
-                    out.append((node.lineno,
-                                "two campaign locks held by one `with`"))
-                # Anything held inside the body is held alongside this one --
-                # another `with`, a stack registration, a bare acquire.
-                out += [(n.lineno, "campaign lock held inside another campaign lock")
-                        for stmt in node.body for n, _ in _holds(stmt, locals_)]
-            elif _repeats(node, parents):
-                out.append((node.lineno, f"campaign lock {kind} in a loop -- "
-                                         "each iteration adds a hold"))
-            elif kind == "stack":
-                stacked.setdefault(_released_by(node, parents), []).append(node)
-            else:
-                acquired.append(node)
-        for held in stacked.values():
-            if len(held) > 1:
-                out += [(n.lineno, "several campaign locks registered on one "
-                                   "ExitStack") for n in held]
-        if len(acquired) > 1:
-            # No `with` bounds a bare `acquire()`, so the first is still held
-            # when the second runs, however far apart they are written.
-            out += [(n.lineno, "campaign lock acquire() while another is held")
-                    for n in acquired]
+        calls = [n for n in _here(scope)
+                 if isinstance(n, ast.Call) and _callee(n) in _LOCK_CALLS]
+        entered = {id(item.context_expr) for node in _here(scope)
+                   if isinstance(node, _WITHS) for item in node.items}
+        out += [(c.lineno, "campaign lock taken outside a `with`, so nothing "
+                           "bounds how long it is held")
+                for c in calls if id(c) not in entered]
+        if len({_campaign_of(c) for c in calls}) > 1:
+            out += [(c.lineno, "two different campaigns locked in one scope -- "
+                               "only `hold_all` may hold more than one")
+                    for c in calls]
     return sorted(set(out))
 
 
 def _exempt_hold_all(tree: ast.Module) -> bool:
-    """Drop `hold_all`'s own body -- the one place allowed to do this.
+    """Drop `hold_all`'s own body -- the one place allowed to break this rule.
 
     By function rather than by file: a future multi-holder added to `locks.py`
     beside it is not exempt.
 
-    Load-bearing, not ceremonial. `hold_all` calls `lock.acquire(...)` once per
-    iteration of a loop with no `with` to release it -- which is precisely what
-    the guard forbids, because holding N campaign locks at once is precisely
-    what `hold_all` is for. Delete this exemption and the guard reports
+    Load-bearing, not ceremonial. `hold_all` calls `campaign_lock(cid)` in a
+    loop and `.acquire()`s the result, with no `with` anywhere -- which is
+    precisely what the rule forbids, because holding N campaign locks at once
+    is precisely what `hold_all` is for. Delete this and the guard reports
     `locks.py` itself; `test_the_exemption_is_what_keeps_hold_all_legal` holds
-    that fact down.
+    that down.
     """
     kept = [n for n in tree.body
             if not (isinstance(n, ast.FunctionDef) and n.name == "hold_all")]
@@ -737,13 +631,13 @@ def _exempt_hold_all(tree: ast.Module) -> bool:
 def test_the_exemption_is_what_keeps_hold_all_legal():
     """`hold_all` breaks this rule by construction -- holding N campaign locks
     is its job. Asserting that keeps two things honest at once: the exemption
-    is doing work rather than decorating, and the guard's loop rule really does
-    fire on production code and not only on the sources below."""
-    src = (pathlib.Path(grimoire.__file__).parent / "store" / "locks.py")
+    is doing work rather than decorating, and the rule really does fire on
+    production code and not only on the sources below."""
+    src = pathlib.Path(grimoire.__file__).parent / "store" / "locks.py"
     tree = ast.parse(src.read_text(encoding="utf-8"))
-    assert _multi_holds(tree), "hold_all no longer trips the rule it is exempt from"
+    assert _multi_holds(tree), "hold_all no longer breaks the rule it is exempt from"
     assert _exempt_hold_all(tree)
-    assert not _multi_holds(tree), "locks.py holds two campaign locks outside hold_all"
+    assert not _multi_holds(tree), "locks.py takes a campaign lock outside hold_all"
 
 
 def test_only_hold_all_holds_more_than_one_campaign_lock():
@@ -760,97 +654,87 @@ def test_only_hold_all_holds_more_than_one_campaign_lock():
     # understands.
     assert exempted, "locks.hold_all is gone -- this guard's exemption is stale"
     assert not offenders, (
-        "only locks.hold_all may hold more than one campaign lock at a time; "
-        "it is the only place that sorts them (#267):\n  "
-        + "\n  ".join(offenders))
+        "take a campaign lock in a `with`, one campaign per scope; only "
+        "locks.hold_all may hold more than one, and it is the only place that "
+        "sorts them (#267):\n  " + "\n  ".join(offenders))
 
 
-# The guard's own tests. Each source below is a real spelling: the first two are
+# The guard's own tests. Every source below is a real spelling: the first is
 # what `module_edit._campaign_locks` and `put_world_module` looked like when
-# they deadlocked.
+# they deadlocked, and the rest are the seven findings from four review rounds
+# -- three of mine before pushing, four from Codex on PR #297. The point of the
+# list is not that each is special-cased; it is that ONE rule rejects all of
+# them, and that the rule keeps doing so as the list grows.
 _PREFIX = "import contextlib\nfrom grimoire.store import locks\n"
-
-_MODULE_EDIT_BEFORE = _PREFIX + (
-    "def _campaign_locks():\n"
-    "    with contextlib.ExitStack() as stack:\n"
-    "        for c in campaigns.list_campaigns():\n"
-    "            stack.enter_context(locks.campaign_lock(c['id']))\n"
-    "        yield\n")
-
-_REBIND_BEFORE = _PREFIX + (
-    "def put_world_module(wid):\n"
-    "    with contextlib.ExitStack() as stack:\n"
-    "        for c in all_cids:\n"
-    "            stack.enter_context(locks.campaign_lock(c))\n")
 
 
 @pytest.mark.parametrize("src, why", [
-    (_MODULE_EDIT_BEFORE, "module_edit's pre-fix loop"),
-    (_REBIND_BEFORE, "the rebind route's pre-fix loop"),
+    (_PREFIX + "def f():\n"
+     "    with contextlib.ExitStack() as stack:\n"
+     "        for c in campaigns.list_campaigns():\n"
+     "            stack.enter_context(locks.campaign_lock(c['id']))\n"
+     "        yield\n", "module_edit's pre-fix loop"),
+    (_PREFIX + "def put_world_module(wid, all_cids):\n"
+     "    with contextlib.ExitStack() as stack:\n"
+     "        for c in all_cids:\n"
+     "            stack.enter_context(locks.campaign_lock(c))\n",
+     "the rebind route's pre-fix loop"),
     # An alias reaches the same registry, so the receiver cannot be trusted.
     (_PREFIX + "from grimoire.store.locks import campaign_lock\n"
      "def f(stack, ids):\n"
      "    for c in ids:\n"
-     "        stack.enter_context(campaign_lock(c))\n", "an aliased acquisition"),
+     "        stack.enter_context(campaign_lock(c))\n", "an aliased call"),
     (_PREFIX + "def f(cid, other):\n"
      "    with locks.campaign_lock(cid):\n"
      "        with locks.campaign_lock(other):\n"
      "            pass\n", "lexical nesting"),
-    # `hold_all` sorts its OWN argument; two of them accumulated are still two
-    # unordered holds.
     (_PREFIX + "def f(stack, groups):\n"
      "    for g in groups:\n"
      "        stack.enter_context(locks.hold_all(g))\n", "accumulated hold_alls"),
-    # The hole an earlier draft of this guard had: the same forbidden hold, one
-    # local removed from the spelling it matched on -- and the shape `hold_all`
-    # itself is written in.
+    # --- the three found reviewing this guard before it was pushed ---
     (_PREFIX + "def f(cids):\n"
      "    with contextlib.ExitStack() as stack:\n"
      "        for c in cids:\n"
      "            lock = locks.campaign_lock(c)\n"
-     "            stack.enter_context(lock)\n", "accumulation through a local"),
-    # No ExitStack at all: `acquire()` with no `with` to release it.
-    (_PREFIX + "def f(cids):\n"
-     "    for c in cids:\n"
-     "        locks.campaign_lock(c).acquire()\n", "a bare acquire() in a loop"),
-    # Unrolled, no loop: two registrations on one stack.
-    (_PREFIX + "def f(stack, a, b):\n"
-     "    stack.enter_context(locks.campaign_lock(a))\n"
-     "    stack.enter_context(locks.campaign_lock(b))\n", "two unrolled holds"),
-    # No loop and no stack -- the plainest two-campaign hold there is, and the
-    # second hole this guard had.
+     "            stack.enter_context(lock)\n", "a hold through a local"),
     (_PREFIX + "def f(a, b):\n"
      "    with locks.campaign_lock(a), locks.campaign_lock(b):\n"
      "        pass\n", "two locks in one `with`"),
     (_PREFIX + "def f(a, cids):\n"
      "    with locks.campaign_lock(a), locks.hold_all(cids):\n"
      "        pass\n", "a lock held across a hold_all"),
-    # The four below came from the Codex review of this guard on PR #297. Each
-    # was a real miss, and each is the same forbidden hold in punctuation the
-    # detector had not been taught -- which is why the fix was to key on what
-    # RELEASES a hold rather than to add four more spellings.
+    # --- the four Codex found on PR #297 ---
     (_PREFIX + "def f(a, b):\n"
-     "    first = locks.campaign_lock(a)\n"
-     "    second = locks.campaign_lock(b)\n"
+     "    first: object = locks.campaign_lock(a)\n"
+     "    second: object = locks.campaign_lock(b)\n"
      "    with first, second:\n"
-     "        pass\n", "two locks in one `with`, through locals"),
+     "        pass\n", "annotated lock locals"),
     (_PREFIX + "def f(a, b):\n"
      "    locks.campaign_lock(a).acquire()\n"
      "    locks.campaign_lock(b).acquire()\n", "an unrolled acquire() pair"),
     (_PREFIX + "def f(stack, cids):\n"
      "    [stack.enter_context(locks.campaign_lock(c)) for c in cids]\n",
      "a comprehension over enter_context"),
-    (_PREFIX + "def f(stack, cids):\n"
-     "    tuple(stack.enter_context(locks.campaign_lock(c)) for c in cids)\n",
-     "a generator expression over enter_context"),
-    # Found while fixing those: a stack registration is a hold like any other,
-    # so one inside a lock-`with` body is two at once.
     (_PREFIX + "def f(stack, a, b):\n"
-     "    with locks.campaign_lock(a):\n"
-     "        stack.enter_context(locks.campaign_lock(b))\n",
-     "a stacked lock inside a lock-`with`"),
+     "    stack.enter_context(locks.campaign_lock(a))\n"
+     "    with locks.campaign_lock(b):\n"
+     "        pass\n", "a registration live across a sibling `with`"),
+    (_PREFIX + "def f(a, b):\n"
+     "    with contextlib.ExitStack() as stack:\n"
+     "        stack.enter_context(locks.campaign_lock(a))\n"
+     "        with open('x') as fh:\n"
+     "            stack.enter_context(locks.campaign_lock(b))\n",
+     "one stack registered under an unrelated `with`"),
+    # Safe, and rejected anyway -- see "WHAT IT REJECTS THAT IS SAFE" above.
+    # Listed here so the trade is a test rather than a claim.
+    (_PREFIX + "def f(a, b):\n"
+     "    with contextlib.ExitStack() as s1:\n"
+     "        s1.enter_context(locks.campaign_lock(a))\n"
+     "    with contextlib.ExitStack() as s2:\n"
+     "        s2.enter_context(locks.campaign_lock(b))\n",
+     "two sequential ExitStack blocks (safe, still rejected)"),
 ])
-def test_guard_catches_multi_holds(src, why):
+def test_guard_catches_locks_not_taken_the_one_permitted_way(src, why):
     assert _multi_holds(ast.parse(src)), f"missed {why}"
 
 
@@ -864,51 +748,28 @@ def test_guard_catches_multi_holds(src, why):
      "            pass\n", "a sequential per-campaign loop"),
     (_PREFIX + "def f(cids):\n    with locks.hold_all(cids):\n        pass\n",
      "a single hold_all"),
+    # `routes/streaming.py` does exactly this in `finalize`. One campaign's
+    # lock cannot deadlock against itself.
+    (_PREFIX + "def f(cid):\n"
+     "    with locks.campaign_lock(cid):\n"
+     "        pass\n"
+     "    with locks.campaign_lock(cid):\n"
+     "        pass\n", "two blocks on the SAME campaign"),
     # A different lock domain accumulated on a stack -- `store/assets.py` does
     # exactly this, and it is none of this guard's business.
     (_PREFIX + "def f(stack, images):\n"
      "    for i in images:\n"
      "        stack.enter_context(_image_lock(i))\n", "another lock domain"),
-    # The safe loop wearing a local. Same two lines as the caught case above,
-    # with `with` in place of `enter_context` -- which is the whole difference.
-    (_PREFIX + "def f(ids):\n"
-     "    for c in ids:\n"
-     "        lock = locks.campaign_lock(c)\n"
-     "        with lock:\n"
-     "            pass\n", "a sequential loop through a local"),
-    # A lock taken inside a nested def runs when that def is called, not once
-    # per iteration of the loop it was written in.
+    # A nested def is its own scope: a lock inside it is that scope's, not the
+    # enclosing loop's.
     (_PREFIX + "def f(ids):\n"
      "    for c in ids:\n"
      "        def later(cid=c):\n"
      "            with locks.campaign_lock(cid):\n"
      "                pass\n"
      "        schedule(later)\n", "a lock inside a nested def"),
-    # `campaign_lock(cid)` is a registry LOOKUP, not a hold. Collecting the
-    # objects -- or reading one -- holds nothing, and flagging it would be a
-    # false alarm this guard has no marker to absorb.
-    (_PREFIX + "def f(cids):\n"
-     "    return [locks.campaign_lock(c) for c in cids]\n", "collecting objects"),
-    (_PREFIX + "def f(cids):\n"
-     "    return all(locks.campaign_lock(c)._is_owned() for c in cids)\n",
-     "reading lock state in a loop"),
-    # One registration on a stack is one campaign lock, alongside whatever else
-    # that stack holds. It is a multi-hold only when a second one joins it.
-    (_PREFIX + "def f(stack, cid, path):\n"
-     "    stack.enter_context(locks.campaign_lock(cid))\n"
-     "    stack.enter_context(open(path))\n", "a single stacked lock"),
-    # Codex's fourth finding, and the only one that was a false ALARM: two
-    # stacks that never coexist. The first lock is released before the second
-    # is taken, so this is deadlock-free code the guard used to reject -- with
-    # no marker to absorb it, which is what made it worth fixing.
-    (_PREFIX + "def f(a, b):\n"
-     "    with contextlib.ExitStack() as s1:\n"
-     "        s1.enter_context(locks.campaign_lock(a))\n"
-     "    with contextlib.ExitStack() as s2:\n"
-     "        s2.enter_context(locks.campaign_lock(b))\n",
-     "two sequential ExitStack blocks"),
 ])
-def test_guard_leaves_single_holds_alone(src, why):
+def test_guard_leaves_the_permitted_way_alone(src, why):
     assert not _multi_holds(ast.parse(src)), f"false alarm on {why}"
 
 
