@@ -545,3 +545,38 @@ test("a ledger read never joins an in-flight one", async () => {
   settle(jsonOk({ plot: [], commitments: [], facts: [], chronicle: [] }));
   await Promise.all([first, second]);
 });
+
+test("prompt-list reads never coalesce, so a post-generation refresh sees the new turn", async () => {
+  // The list is re-read on the refreshKey a completed generation bumps, and the
+  // turn that generation just captured is the entire reason for the re-read. A
+  // shared in-flight GET from before the turn answers with a list that cannot
+  // contain the new row, leaving Turn history a turn behind (#157).
+  let releaseFirst: (v: unknown) => void = () => {};
+  const fetchMock = vi
+    .fn()
+    .mockImplementationOnce(() => new Promise((r) => { releaseFirst = r; }))
+    .mockResolvedValue(jsonOk({ entries: [{ id: "000002" }] }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  const older = api.listScenePrompts("run", "s1");   // opened before the turn landed
+  const newer = api.listScenePrompts("run", "s1");   // issues its own, not shared
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+
+  expect(await newer).toEqual({ entries: [{ id: "000002" }] });
+  releaseFirst(jsonOk({ entries: [] }));
+  expect(await older).toEqual({ entries: [] });
+});
+
+test("one frozen snapshot IS shared, because it cannot go stale", async () => {
+  // The exception to the exception: a captured prompt never changes, so two
+  // readers of the same entry may share one answer.
+  let release: (v: unknown) => void = () => {};
+  const fetchMock = vi.fn().mockImplementation(() => new Promise((r) => { release = r; }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const a = api.getScenePrompt("run", "s1", "000001");
+  const b = api.getScenePrompt("run", "s1", "000001");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  release(jsonOk({ id: "000001", sections: [] }));
+  expect(await a).toEqual({ id: "000001", sections: [] });
+  expect(await b).toEqual({ id: "000001", sections: [] });
+});
