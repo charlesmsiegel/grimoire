@@ -67,7 +67,17 @@ extraction (`absorb.build_prompt` fed deterministic snapshots + `parse_output`) 
 injects a labeled, always-on, **tolerant** (omit-never-crash) section.
 
 `StagedEdit` shape (backend↔TS, fixed): `{id, kind, target:{kind,id}, label, field,
-before, after, authored, payload?}`.
+before, after, authored, payload?, review?}`.
+
+`review?` is the confidence routing added by #110/#112 (`store/absorb/routing.py`):
+`{certainty, quote, speaker, authority, score, band}`, present on the rows
+`materialize` staged from the extraction and absent on the ones the later phases
+(dossier, voice, sheet) stage, which rest on no transcript citation. It is
+**display and default-checkbox state only** — `apply_edits` never reads it, and a
+`low` row a reviewer ticks applies like any other. The review-everything
+invariant above therefore still holds: routing only ever *withholds* a default
+approval (a `low` row starts unchecked, behind a "show N low-confidence" toggle);
+it never grants one.
 
 ## Next: none — umbrella complete
 

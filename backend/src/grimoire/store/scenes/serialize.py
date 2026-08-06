@@ -54,6 +54,21 @@ _MARKER = re.compile(r"^\*\*([^*\n]{1,64}?)(?: \(([^)\n]+)\))?:\*\*[ ]?", re.MUL
 _SAFE_LABEL = re.compile(r"^[^*\r\n]{1,64}\Z")
 
 
+def speaker_base(speaker: str) -> str:
+    """A speaker label without its sub-speaker parenthetical: "Mara (aside)" is
+    Mara. Unchanged when there is no parenthetical.
+
+    Split off GREEDILY, matching `_MARKER`'s backtracking: in "A (B) (C)" the
+    LAST parenthetical is the sub, so the base is "A (B)". Shared with
+    `label_preserved` below and with `absorb.routing`, whose citation check has
+    to recognise a model that cites "Mara" for a line the transcript labelled
+    "Mara (aside)" -- a second copy of this rule would let the two disagree
+    about what a label's base is.
+    """
+    m = re.fullmatch(r"(.*) \(([^)\n]+)\)", speaker)
+    return m.group(1) if m else speaker
+
+
 def label_preserved(speaker: str | None) -> bool:
     """True when a message stored for `speaker` keeps that name as its
     transcript label, rather than falling back to the generic role label.
@@ -73,9 +88,8 @@ def label_preserved(speaker: str | None) -> bool:
     parenthetical is the sub."""
     if not speaker or not _SAFE_LABEL.match(speaker):
         return False
-    m = re.fullmatch(r"(.*) \(([^)\n]+)\)", speaker)
-    base = m.group(1) if m else speaker
-    return speaker not in RESERVED_LABELS and base not in RESERVED_LABELS
+    return (speaker not in RESERVED_LABELS
+            and speaker_base(speaker) not in RESERVED_LABELS)
 
 
 def _label(role: str, speaker: str | None) -> str:
