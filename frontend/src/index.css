@@ -501,10 +501,15 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
   max-height: 40vh; overflow-y: auto;
 }
 .ledger-panel .ledger-group { margin-bottom: 10px; }
-.ledger-panel h5 {
+/* The pre-scene briefing (#118) reuses these rows inside an inspector
+   .side-section, so the group label needs the same styling outside
+   .ledger-panel — one rule for both rather than a second set of class names
+   for identical marks. */
+.ledger-panel h5, .side-section .ledger-group h5 {
   font-family: var(--fm); font-size: 11px; letter-spacing: 0.06em;
   text-transform: uppercase; color: var(--subtle); margin: 8px 0 4px;
 }
+.side-section .ledger-group + .ledger-group { margin-top: 10px; }
 .ledger-row { padding: 4px 0; border-bottom: 1px solid var(--muted); }
 .ledger-row:last-child { border-bottom: none; }
 .ledger-row-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }

@@ -1401,6 +1401,21 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
     return result
 
 
+@router.get("/campaigns/{cid}/scenes/{sid}/briefing")
+def get_scene_briefing(cid: str, sid: str):
+    """The pre-scene briefing (#118): open threads and commitments flagged with
+    which of this scene's cast they involve, the relationships between the
+    people on stage, and the fact that came immediately before.
+
+    Thin on purpose — the join, the tolerance and the lock all live in
+    `store.briefing`, whose docstring carries the argument for each. Declared
+    ahead of `GET /scenes/{sid}/cast/{kind}/{id}` for the reason every specific
+    scene route here is: a generic path segment would otherwise swallow it.
+    """
+    _require_scene(cid, sid)
+    return store.briefing.build(cid, sid)
+
+
 @router.get("/campaigns/{cid}/scenes/{sid}/cast")
 def get_scene_cast(cid: str, sid: str):
     _require_scene(cid, sid)

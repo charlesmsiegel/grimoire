@@ -508,6 +508,24 @@ export type Ledger = {
   plot: PlotThread[]; commitments: Commitment[]; chronicle: LedgerFact[];
 };
 
+// pre-scene briefing (#118) — the ledger's per-scene sibling. The rows are the
+// ledger's, minus the `scene` label (this view is about who, not when) and plus
+// `involves`: the display names of the scene's cast this row can be traced to,
+// empty for a row it cannot. `focus` names who the flag was computed against —
+// the scene's players, or its whole cast when it is an offscreen scene with
+// none. Rows are ordered flagged-first and never filtered: an unflagged
+// commitment is still owed.
+export type BriefingRow = {
+  id: string; title: string; status: string;
+  last_scene: string; latest_beat: string; involves: string[];
+};
+export type BriefingCommitment = BriefingRow & { kind: string; due: string };
+export type BriefingFact = { id: string; one_line: string; title: string; date: string };
+export type Briefing = {
+  focus: string[]; plot: BriefingRow[]; commitments: BriefingCommitment[];
+  relationships: string[]; last_time: BriefingFact | null;
+};
+
 // lorebook import
 export type LoreEntryDraft = { name: string; keys: string[]; body: string; category: EntityKind };
 
@@ -1112,6 +1130,12 @@ export const api = {
 
   getSceneContext: (cid: string, sid: string) =>
     request<SceneContext>("GET", `/api/campaigns/${cid}/scenes/${sid}/context`),
+  // `fresh`, like `campaignLedger`: a briefing is a continuity view, and the
+  // one moment it is read is right after the previous scene's save — exactly
+  // when a cached copy would still be showing the commitment that save resolved.
+  sceneBriefing: (cid: string, sid: string) =>
+    request<Briefing>("GET", `/api/campaigns/${cid}/scenes/${sid}/briefing`,
+                      undefined, { fresh: true }),
   sceneSuggestions: (cid: string, after?: string, offscreen?: boolean) => {
     const params = new URLSearchParams();
     if (after) params.set("after", after);
