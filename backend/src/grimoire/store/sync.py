@@ -166,6 +166,11 @@ def _advance_actor(cid: str, kind: str, actor_id: str, *, copy: bool) -> bool:
 
 
 def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
+    # `incoming` filters detached refs, but accept/reject take theirs from the
+    # request body -- a stale one submitted after the slug was recreated would
+    # dematerialize the very copy detaching preserved (Codex review).
+    gone = overlay.detached(cid)
+    refs = [r for r in refs if _ref_str(r["kind"], r["id"]) not in gone]
     wroot = campaigns_read.world_root_of(cid)
     croot = campaigns_paths.campaign_root(cid)
     manifest = campaigns_paths.read_manifest(cid)
