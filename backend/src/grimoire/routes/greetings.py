@@ -82,10 +82,12 @@ def put_world_greeting_edges(wid: str, gid: str, body: Edges):
 
 @router.delete("/worlds/{wid}/greetings/{gid}")
 def delete_world_greeting(wid: str, gid: str):
+    root = _world_root_or_404(wid)
     try:
-        store.greetings.delete_greeting(_world_root_or_404(wid), gid)
+        store.greetings.delete_greeting(root, gid)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
+    store.overlay.forget_world_record(root, "greetings", gid)   # #225
     return {"ok": True}
 
 

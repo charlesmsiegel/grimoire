@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from grimoire.store import (assets, atomic, campaigns, characters, entities, failsoft, greetings,
-                            overlay, pcs, sync, taglines, worlds)
+                            groupstate, overlay, pcs, playstate, sync, taglines, worlds)
 
 
 @pytest.fixture(autouse=True)
@@ -650,3 +650,135 @@ def test_a_listing_over_a_corrupt_file_warns_once(monkeypatch, tmp_path, caplog)
         overlay.list_entities(cid, "lore")
         overlay.list_entities(cid, "lore")
     assert len(caplog.records) == 1
+
+
+# ---- #225: a world-side delete must not leave campaign state behind ----
+#
+# Ids are stable for life and are handed out by slug, so a record deleted
+# world-side and recreated under the same name gets the same id back. Anything
+# a dependent campaign filed *beside* the old record under that id is then
+# adopted by the new, unrelated one -- which is how a dead group's Secrets got
+# into a live scene's context.
+
+def _dependent(monkeypatch, tmp_path):
+    """A world plus one campaign on it, both empty."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Run", wid)
+    return worlds.world_root(wid), cid, campaigns.campaign_root(cid)
+
+
+def _delete_world_group(wroot, gid):
+    """What the world route does: drop the record, then sweep dependents."""
+    entities.delete_entity(wroot, "groups", gid)
+    overlay.forget_world_record(wroot, "groups", gid)
+
+
+def test_recreated_world_group_does_not_inherit_the_dead_ones_state(monkeypatch, tmp_path):
+    wroot, _cid, croot = _dependent(monkeypatch, tmp_path)
+    gid = entities.create_entity(wroot, "groups", "Salt Circle", "the old circle")
+    groupstate.write_state(croot, gid, "## Secrets\nThe abbot is a member.")
+
+    _delete_world_group(wroot, gid)
+    assert entities.create_entity(wroot, "groups", "Salt Circle") == gid   # id reused
+    assert groupstate.read_state(croot, gid) is None
+
+
+def test_recreated_world_character_does_not_inherit_the_dead_ones_playstate(monkeypatch, tmp_path):
+    wroot, _cid, croot = _dependent(monkeypatch, tmp_path)
+    aid, _vid = characters.create_character(wroot, "Winifred")
+    playstate.write_state(croot, aid, "## Knows\nWhere the ledger is hidden.")
+
+    characters.delete_character(wroot, aid)
+    overlay.forget_world_record(wroot, "characters", aid)
+    assert characters.create_character(wroot, "Winifred")[0] == aid        # id reused
+    assert playstate.read_state(croot, aid) is None
+
+
+def test_sweep_spares_a_campaign_that_owns_its_own_copy(monkeypatch, tmp_path):
+    """A materialized record survives the world delete, so its state is still
+    the state of a record the campaign has."""
+    wroot, cid, croot = _dependent(monkeypatch, tmp_path)
+    gid = entities.create_entity(wroot, "groups", "Salt Circle", "the old circle")
+    overlay.materialize_entity(cid, "groups", gid)
+    groupstate.write_state(croot, gid, "## Secrets\nThe abbot is a member.")
+
+    _delete_world_group(wroot, gid)
+    assert groupstate.read_state(croot, gid)["secrets"] == "The abbot is a member."
+
+
+def test_sweep_spares_a_campaign_that_materialized_the_actor(monkeypatch, tmp_path):
+    wroot, cid, croot = _dependent(monkeypatch, tmp_path)
+    aid, _vid = characters.create_character(wroot, "Winifred")
+    overlay.materialize_actor(cid, "characters", aid)
+    playstate.write_state(croot, aid, "## Knows\nWhere the ledger is hidden.")
+
+    characters.delete_character(wroot, aid)
+    overlay.forget_world_record(wroot, "characters", aid)
+    assert playstate.read_state(croot, aid)["knows"] == "Where the ledger is hidden."
+
+
+def test_sweep_leaves_campaigns_of_other_worlds_alone(monkeypatch, tmp_path):
+    """Slugs collide across worlds; only the deleted world's dependents move."""
+    wroot, _cid, croot = _dependent(monkeypatch, tmp_path)
+    other_wid = worlds.create_world("Saltmarch")
+    other = worlds.world_root(other_wid)
+    other_croot = campaigns.campaign_root(campaigns.create_campaign("Other", other_wid))
+    gid = entities.create_entity(wroot, "groups", "Salt Circle")
+    entities.create_entity(other, "groups", "Salt Circle")
+    groupstate.write_state(croot, gid, "## Secrets\nours")
+    groupstate.write_state(other_croot, gid, "## Secrets\ntheirs")
+
+    _delete_world_group(wroot, gid)
+    assert groupstate.read_state(croot, gid) is None
+    assert groupstate.read_state(other_croot, gid)["secrets"] == "theirs"
+
+
+def test_sweep_takes_every_sidecar_filed_beside_the_record(monkeypatch, tmp_path):
+    """state.md is the one #225 names, but every campaign-local file in the
+    record's directory keys on the same reusable id and re-attaches the same
+    way -- the dossier feeds scene context too."""
+    wroot, _cid, croot = _dependent(monkeypatch, tmp_path)
+    aid, _vid = characters.create_character(wroot, "Winifred")
+    d = croot / "characters" / aid
+    d.mkdir(parents=True)
+    (d / "dossier.md").write_text("standing paragraph\n", encoding="utf-8")
+    (d / "voice_drift.md").write_text("drifting\n", encoding="utf-8")
+
+    characters.delete_character(wroot, aid)
+    overlay.forget_world_record(wroot, "characters", aid)
+    assert not d.exists()
+
+
+def test_sweep_drops_the_worlds_own_leftover_record_directory(monkeypatch, tmp_path):
+    """`entities.delete_entity` unlinks `<kind>/<id>.md` and leaves
+    `<kind>/<id>/assets/` -- so the world's own images re-attached too."""
+    wroot, _cid, _croot = _dependent(monkeypatch, tmp_path)
+    gid = entities.create_entity(wroot, "groups", "Salt Circle")
+    assets.put_image(wroot, gid, "default", assets.AVATAR, PNG, "png", base="groups")
+
+    _delete_world_group(wroot, gid)
+    assert not (wroot / "groups" / gid).exists()
+
+
+def test_sweep_ignores_a_kind_that_is_never_inherited(monkeypatch, tmp_path):
+    wroot, _cid, croot = _dependent(monkeypatch, tmp_path)
+    stray = croot / "scenes" / "s1"
+    stray.mkdir(parents=True)
+    overlay.forget_world_record(wroot, "scenes", "s1")
+    assert stray.exists()
+
+
+def test_campaign_side_delete_takes_the_record_directory_too(monkeypatch, tmp_path):
+    """The campaign-side mirror: a campaign-local record deleted campaign-side
+    leaves no id taken, so its leftovers would be adopted by the next record
+    that slugs the same way."""
+    _wroot, cid, croot = _dependent(monkeypatch, tmp_path)
+    gid = overlay.create_entity(cid, "groups", "Salt Circle")
+    groupstate.write_state(croot, gid, "## Secrets\nThe abbot is a member.")
+    assets.put_image(croot, gid, "default", assets.AVATAR, PNG, "png", base="groups")
+
+    overlay.delete_entity(cid, "groups", gid)
+    assert not (croot / "groups" / gid).exists()
+    assert overlay.create_entity(cid, "groups", "Salt Circle") == gid
+    assert groupstate.read_state(croot, gid) is None

@@ -159,7 +159,12 @@ def put_world_entity(wid: str, kind: str, eid: str, body: EntityUpdate):
 
 @router.delete("/worlds/{wid}/{kind}/{eid}")
 def delete_world_entity(wid: str, kind: str, eid: str):
-    return _entity_delete(_world_root_or_404(wid), kind, eid)
+    root = _world_root_or_404(wid)
+    out = _entity_delete(root, kind, eid)
+    # After the delete, so a crash between the two leaves the pre-#225 state
+    # rather than state stripped off a record that is still there.
+    store.overlay.forget_world_record(root, kind, eid)
+    return out
 
 
 # ---- entity images (locations/lore) — assets keyed <kind>/<eid>/assets/default ----

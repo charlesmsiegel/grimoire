@@ -268,10 +268,12 @@ def put_world_pc(wid: str, pid: str, body: PCUpdate):
 
 @router.delete("/worlds/{wid}/pcs/{pid}")
 def delete_world_pc(wid: str, pid: str):
+    root = _world_root_or_404(wid)
     try:
-        store.pcs.delete_pc(_world_root_or_404(wid), pid)
+        store.pcs.delete_pc(root, pid)
     except store.pcs.PCNotFound:
         raise HTTPException(status_code=404, detail="pc not found")
+    store.overlay.forget_world_record(root, "pcs", pid)   # #225
     return {"ok": True}
 
 
