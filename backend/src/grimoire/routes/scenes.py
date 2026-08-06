@@ -1333,7 +1333,13 @@ def _rolling_view(cid: str, sid: str, scene: dict, facts: dict) -> dict:
     """
     messages = scene["messages"]
     total = len(messages)
-    stored = store.scenes.get_rolling_summary(cid, sid)
+    # Out of the snapshot this was handed, NOT a second read of the same file.
+    # Review caught that reading twice pairs one snapshot's transcript with
+    # another's metadata: a commit landing between the two yields `at: 11`
+    # against a 10-message transcript, and reports a summary that is exactly
+    # current as stale -- a contradiction the panel then holds until something
+    # else refreshes it.
+    stored = store.scenes.rolling_summary_fields(scene["meta"])
     # `at > total` short-circuits rather than slicing: `messages[:at]` past the
     # end yields the whole list and would digest-match a transcript that has
     # since been trimmed back to exactly what it covered.

@@ -140,30 +140,45 @@ def get_time_history(cid: str, sid: str) -> list[str]:
     return [x for x in meta.get("time_history", "").split(",") if x]
 
 
-def get_rolling_summary(cid: str, sid: str) -> dict:
-    """The live running summary this scene carries, and what it covers (#85).
+def rolling_summary_fields(meta: dict) -> dict:
+    """The rolling-summary fields out of a scene's frontmatter (#85).
 
     `{"summary", "at", "digest", "facts"}` — the prose, how many leading
     messages it was folded from, `rolling_summary.covered_digest` over those
     messages as they stood then, and `rolling_summary.facts_digest` over the
-    scene facts the prompt was given. A scene that has never been summarized, and one that is not
-    there at all, both report the empty state: the same posture every other
-    reader in this module takes, and the reason the caller needs no separate
-    "does this scene have one" question.
+    scene facts the prompt was given.
 
-    `at` is read defensively because frontmatter is hand-editable and this sits
+    Takes a `meta` rather than a `(cid, sid)` so a caller holding a scene it has
+    ALREADY read can ask without reading the file again, and review caught why
+    that matters: reading twice pairs one snapshot's transcript with another
+    snapshot's metadata, so a commit landing between the two produces `at: 11`
+    against a 10-message transcript and reports a perfectly current summary as
+    stale. One read, one answer.
+
+    `at` is parsed defensively because frontmatter is hand-editable and this sits
     on the play path: a non-numeric value means "we have covered nothing", which
     costs one re-fold, where raising would 500 a panel refresh.
     """
-    p = paths._scene_path(cid, sid)
-    if not safe_id(sid) or not p.exists():
-        return {"summary": "", "at": 0, "digest": "", "facts": ""}
-    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     raw = meta.get("rolling_at", "")
     return {"summary": meta.get("rolling_summary", ""),
             "at": int(raw) if raw.lstrip("-").isdigit() and int(raw) >= 0 else 0,
             "digest": meta.get("rolling_digest", ""),
             "facts": meta.get("rolling_facts", "")}
+
+
+def get_rolling_summary(cid: str, sid: str) -> dict:
+    """`rolling_summary_fields` for a scene read fresh off disk.
+
+    A scene that has never been summarized, and one that is not there at all,
+    both report the empty state: the same posture every other reader in this
+    module takes, and the reason the caller needs no separate "does this scene
+    have one" question.
+    """
+    p = paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        return {"summary": "", "at": 0, "digest": "", "facts": ""}
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    return rolling_summary_fields(meta)
 
 
 def get_suggested_date(cid: str, sid: str) -> str:

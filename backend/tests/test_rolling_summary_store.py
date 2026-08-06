@@ -125,6 +125,30 @@ def test_a_corrupt_rolling_at_reads_as_zero(monkeypatch, tmp_path):
     assert scenes.get_rolling_summary(cid, sid)["at"] == 0
 
 
+def test_the_fields_come_from_the_meta_it_is_handed(monkeypatch, tmp_path):
+    """The whole point of taking a `meta`: a caller that already read the scene
+    must be able to ask without reading again. Reading twice pairs one
+    snapshot's transcript with another's metadata — which is how a summary that
+    covers every post gets reported as covering more posts than exist."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Landing")
+    scenes.set_rolling_summary(cid, sid, "As it was when I read it.", 4, "d", "f")
+    meta = scenes.read_scene(cid, sid)["meta"]
+
+    # the file moves on behind the snapshot's back
+    scenes.set_rolling_summary(cid, sid, "Written since.", 11, "d2", "f2")
+
+    assert scenes.rolling_summary_fields(meta) == {
+        "summary": "As it was when I read it.", "at": 4, "digest": "d", "facts": "f"}
+    # ...while the file-reading sibling sees the new state, as it should
+    assert scenes.get_rolling_summary(cid, sid)["at"] == 11
+
+
+def test_a_corrupt_at_in_a_handed_meta_reads_as_zero():
+    assert scenes.rolling_summary_fields({"rolling_at": "not-a-number"})["at"] == 0
+    assert scenes.rolling_summary_fields({})["summary"] == ""
+
+
 # ---- digest ----
 def test_the_digest_changes_when_a_covered_message_is_rewritten():
     """The whole point of the digest: a reroll or an edit can leave the
