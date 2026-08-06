@@ -5,6 +5,7 @@ import {
   type CalendarConfig, type RosterEntry, type SceneDatetime,
   type CharacterSummary, type PCSummary, type Briefing, type BriefingRow,
   type PromptEntry, type PromptSnapshot,
+  type RollingSummary,
 } from "../api/client";
 import { getModels, type Model } from "../api/models";
 import { ContextBreakdown, contextPercent } from "./ContextBreakdown";
@@ -167,6 +168,13 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [locPick, setLocPick] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // `undefined` while the read is in flight or after it failed, which is NOT the
+  // same as a scene nobody has summarized (`summary: ""`). Conflating the two
+  // would report a store that could not be reached as a scene with nothing to
+  // say, on a panel that re-reads at every scene select.
+  const [rolling, setRolling] = useState<RollingSummary | undefined>();
+  const [rollingUnread, setRollingUnread] = useState(false);
+  const [rollingBusy, setRollingBusy] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadSectionCollapse);
   const toggleSection = useCallback((id: string, current: boolean) => {
     setCollapsed((prev) => {
@@ -253,6 +261,10 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     api.getSceneContext(cid, sid).then(setCtx).catch(() => setCtx(null));
 
     api.getChronicle(cid).then(setRecap).catch(() => setRecap([]));
+    setRollingUnread(false);
+    api.getRollingSummary(cid, sid)
+      .then((r) => setRolling(r))
+      .catch(() => { setRolling(undefined); setRollingUnread(true); });
     reloadWhen();
     reloadCfg();
   }, [cid, sid, refreshKey, reloadWhen, reloadCfg, reloadCast]);
@@ -412,6 +424,25 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const shownTurns = useMemo(
     () => (turns && turns.cid === cid && turns.sid === sid ? turns.rows : []),
     [turns, cid, sid]);
+  async function refreshRolling() {
+    setError(null);
+    setRollingBusy(true);
+    try {
+      // `force`, always: this button exists so the player can ask for a summary
+      // *now*, including when the automatic refresh is switched off. The
+      // server still declines to spend a call when nothing has happened since
+      // the last one, and says so in `refreshed`.
+      setRolling(await api.refreshRollingSummary(cid, sid, true));
+      setRollingUnread(false);
+    } catch (err: any) {
+      // Reported, never destructive: the summary already on screen is still the
+      // best thing anyone has, so a failed refold leaves it exactly where it is.
+      setError(err.detail ?? String(err));
+    } finally {
+      setRollingBusy(false);
+    }
+  }
+
   const nameOf = (a: Actor) => names[`${a.kind}/${a.id}`] ?? a.id;
 
   // Deliberately keyed on cid+sid and NOT on `refreshKey`, which is the same
@@ -473,6 +504,33 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           ))}
         </SideSection>
       )}
+      {/* The scene being PLAYED, where "Story so far" above is the scenes that
+          ended. Display-only — this text is never added to the prompt (#85). */}
+      <SideSection id="scenesofar" title="Scene so far" collapsed={!!collapsed.scenesofar}
+                   onToggle={toggleSection}>
+        {rollingUnread
+          ? <div className="field-hint">The summary could not be read.</div>
+          : rolling?.summary
+            ? <>
+                <div className="field-hint">{rolling.summary}</div>
+                <div className="field-hint">
+                  {rolling.stale
+                    ? "Posts it covered have changed since — it may be out of date."
+                    : `Covers ${rolling.at} of ${rolling.total} posts.`}
+                </div>
+              </>
+            : <div className="field-hint">
+                No summary yet{rolling && rolling.every > 0
+                  ? ` — one is written every ${rolling.every} posts.`
+                  : "."}
+              </div>}
+        <div className="form-actions">
+          <button className="primary" onClick={refreshRolling} disabled={rollingBusy}>
+            {rollingBusy ? "Summarizing…" : "Refresh now"}
+          </button>
+        </div>
+      </SideSection>
+
       <SideSection id="cast" title="Active characters" collapsed={!!collapsed.cast} onToggle={toggleSection}>
         {cast.length === 0 && <div className="field-hint">No one cast yet.</div>}
         {cast.map((a) => {

@@ -1262,6 +1262,124 @@ async def post_audit(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
     return {"mechanics": mechanics, "edits": edits}
 
 
+# ---- the live rolling summary (#85) ----
+# A reading aid for the scene being PLAYED, where every other summary grimoire
+# holds describes a scene that has ended. Display-only: it is deliberately not
+# injected into the scene context (see the design spec), so nothing here can
+# change what the model is told on the next turn.
+def _rolling_view(cid: str, sid: str, scene: dict) -> dict:
+    """The stored summary reconciled against the transcript as it stands now.
+
+    `base` is the answer to "how much of this transcript does the stored summary
+    actually cover" -- `at` when the covered prefix is still the prefix on disk,
+    and 0 when it is not, which is what makes an invalidated fold start over
+    from the whole scene rather than carry prose about a post that was rerolled
+    or edited away. `stale` is that same finding, reported so the panel can say
+    the summary is behind rather than presenting it as current.
+
+    An unsummarized scene is not stale: it has nothing to be stale about, and
+    saying otherwise would put a warning on every scene nobody has summarized.
+    """
+    messages = scene["messages"]
+    total = len(messages)
+    stored = store.scenes.get_rolling_summary(cid, sid)
+    # `at > total` short-circuits rather than slicing: `messages[:at]` past the
+    # end yields the whole list and would digest-match a transcript that has
+    # since been trimmed back to exactly what it covered.
+    intact = (stored["at"] <= total
+              and store.rolling_summary.covered_digest(messages[:stored["at"]])
+              == stored["digest"])
+    stale = bool(stored["summary"]) and not intact
+    base = stored["at"] if intact else 0
+    return {"summary": stored["summary"] if intact else "", "at": stored["at"],
+            "total": total, "stale": stale, "base": base}
+
+
+def _rolling_due(view: dict, every: int, force: bool) -> bool:
+    """Whether a refresh is worth an LLM call.
+
+    Server-side rather than in `CampaignView`, so the policy has one home and is
+    exercised by this suite: the client fires after every turn and this decides.
+
+    `pending > 0` guards both callers. Automatic refreshes cannot reach here
+    with nothing pending, but *force* can -- the panel's button on a
+    already-current scene -- and folding an empty list of posts onto a summary
+    would pay a provider to restate it.
+    """
+    pending = view["total"] - view["base"]
+    if pending <= 0:
+        return False
+    return force or (every > 0 and pending >= every)
+
+
+def _rolling_body(view: dict, every: int, force: bool) -> dict:
+    return {"summary": view["summary"], "at": view["at"], "total": view["total"],
+            "stale": view["stale"], "every": every,
+            "due": _rolling_due(view, every, force)}
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/rolling-summary")
+def get_rolling_summary(cid: str, sid: str):
+    """Read the summary without ever spending a call.
+
+    Needs no LLM connection on purpose: the inspector reads this on every scene
+    select, and a store with no key configured must still render the panel.
+    """
+    scene = _require_scene(cid, sid)
+    return _rolling_body(_rolling_view(cid, sid, scene),
+                         store.config.rolling_summary_every(), force=False)
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/rolling-summary")
+async def post_rolling_summary(cid: str, sid: str, force: bool = False,
+                               client: LLMClient = Depends(get_llm)):
+    """Refold the summary if enough has happened since the last one.
+
+    Fired by the client after every turn and not awaited by it, so the ordinary
+    outcome is `refreshed: false` having touched no provider. `force` is the
+    panel's own Refresh button -- also the only way to reach the feature at all
+    when `rolling_summary_every` is 0.
+
+    The connection check runs BEFORE the due check, deliberately: a 409 that
+    only appeared once a scene happened to be due would be indistinguishable, on
+    the client, from the quiet no-op that is this route's normal answer.
+    """
+    scene = _require_scene(cid, sid)
+    conn = _require_connection()
+    every = store.config.rolling_summary_every()
+    view = _rolling_view(cid, sid, scene)
+    if not _rolling_due(view, every, force):
+        return {**_rolling_body(view, every, force), "refreshed": False}
+
+    messages = scene["messages"]
+    # The snapshot is what gets recorded, not a re-read afterwards: a turn
+    # landing while the model is answering must not be counted as covered by a
+    # summary that never saw it.
+    covered, base = len(messages), view["base"]
+    digest = store.rolling_summary.covered_digest(messages)
+    prompt = store.rolling_summary.build_prompt(
+        view["summary"], store.chronicle.transcript_text(messages[base:]))
+    try:
+        text = await client.complete(prompt, conn)
+    except LLMError as exc:
+        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+    summary = store.rolling_summary.parse_output(text)
+    if not summary:
+        # A provider can return an empty completion. Storing it would blank a
+        # summary the player can still read AND record it as covering the whole
+        # scene, so the next refresh would fold new posts onto nothing and never
+        # recover what was lost.
+        return {**_rolling_body(view, every, force), "refreshed": False}
+    # Off the event loop: this takes the campaign lock, whose acquisition blocks
+    # for up to LOCK_TIMEOUT, and this handler is async -- inline it would freeze
+    # every unrelated request and open stream on the backend rather than just
+    # this refresh. Same treatment `post_absorb` and `streaming.py` give theirs.
+    await run_in_threadpool(store.scenes.set_rolling_summary, cid, sid,
+                            summary, covered, digest)
+    return {"summary": summary, "at": covered, "total": view["total"],
+            "stale": False, "every": every, "due": False, "refreshed": True}
+
+
 @router.put("/campaigns/{cid}/scenes/{sid}/chronicle")
 def put_chronicle(cid: str, sid: str, body: ChronicleSave):
     _require_scene(cid, sid)

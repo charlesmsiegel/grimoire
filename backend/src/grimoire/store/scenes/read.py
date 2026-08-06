@@ -140,6 +140,30 @@ def get_time_history(cid: str, sid: str) -> list[str]:
     return [x for x in meta.get("time_history", "").split(",") if x]
 
 
+def get_rolling_summary(cid: str, sid: str) -> dict:
+    """The live running summary this scene carries, and what it covers (#85).
+
+    `{"summary", "at", "digest"}` — the prose, how many leading messages it was
+    folded from, and `rolling_summary.covered_digest` over those messages as
+    they stood then. A scene that has never been summarized, and one that is not
+    there at all, both report the empty state: the same posture every other
+    reader in this module takes, and the reason the caller needs no separate
+    "does this scene have one" question.
+
+    `at` is read defensively because frontmatter is hand-editable and this sits
+    on the play path: a non-numeric value means "we have covered nothing", which
+    costs one re-fold, where raising would 500 a panel refresh.
+    """
+    p = paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        return {"summary": "", "at": 0, "digest": ""}
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    raw = meta.get("rolling_at", "")
+    return {"summary": meta.get("rolling_summary", ""),
+            "at": int(raw) if raw.lstrip("-").isdigit() and int(raw) >= 0 else 0,
+            "digest": meta.get("rolling_digest", "")}
+
+
 def get_suggested_date(cid: str, sid: str) -> str:
     """The creation-time date hint, if the scene still carries one. Missing ⇒ ""."""
     p = paths._scene_path(cid, sid)

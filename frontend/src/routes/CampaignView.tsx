@@ -1393,6 +1393,24 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // clearing unconditionally would unlock the scene the *new* turn is
       // streaming into. Same token idiom as `windowTokenRef`.
       if (streamTokenRef.current === streamToken) setStreamingId(null);
+      // Ask the server whether this turn was the one that makes the scene's
+      // running summary due (#85). Deliberately NOT awaited: the player's next
+      // send must never queue behind a summarization, which is the whole
+      // meaning of "non-blocking" here. Sent without `force`, so the decision —
+      // and the cost — stay on the server; an ordinary turn answers
+      // `refreshed: false` having reached no provider.
+      //
+      // Every rejection is swallowed. A missing key, a dead provider, a busy
+      // store: none of them is a reason to put a banner over a turn that landed,
+      // and the panel's own Refresh button reports the failure when the player
+      // actually asks for one.
+      //
+      // The `ctxKey` bump is guarded on the reader still being here, like every
+      // other post-await write in this function: a summary written for the scene
+      // they just left must not re-read the panel for the scene they are on.
+      api.refreshRollingSummary(cid, id)
+        .then((r) => { if (r.refreshed && activeIdRef.current === id) setCtxKey((n) => n + 1); })
+        .catch(() => {});
     }
     // Landed means the backend said so, not that the promise resolved.
     return finished && !errored;

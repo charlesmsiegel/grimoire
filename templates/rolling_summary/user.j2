@@ -1,0 +1,20 @@
+{#- The incremental fold's one user message. Vars:
+      prior — the stored summary this refresh folds forward, "" on a
+              from-scratch fold (no summary yet, or the covered prefix moved
+              under it; see rolling_summary.covered_digest)
+      transcript — str (see snippets/transcript.j2): the posts appended since
+              `prior` was written when there is a prior, the WHOLE scene when
+              there is not. The two cases are labelled differently below so the
+              model is never asked to fold new posts onto nothing. -#}
+{%- if prior -%}
+Summary so far:
+{{ prior }}
+
+Posts since that summary:
+
+{{ transcript }}
+{%- else -%}
+The scene so far:
+
+{{ transcript }}
+{%- endif -%}

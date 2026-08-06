@@ -97,6 +97,25 @@ mutable line marks "start X -> now Y" against `audit.baseline_field()`, each
 static line is marked `[static]`), `roll_lines` (`audit.roll_lines()` — the
 scene's roll-log entries), `transcript` (`snippets/transcript.j2`).
 
+### `rolling_summary/` — POST /campaigns/{cid}/scenes/{sid}/rolling-summary
+The live running summary of a scene **still being played** (#85). Mirrors
+`store/rolling_summary.py:build_prompt`. Messages: system, user.
+`user.j2` vars: `prior` (the stored summary this refresh folds forward, `""`
+when there is none to fold), `transcript` (`snippets/transcript.j2`).
+
+The two are coupled: `transcript` is the posts appended **since** `prior` when
+there is a prior, and the **whole scene** when there is not — the template
+labels the two cases differently so the model is never asked to fold new posts
+onto nothing. A prior is dropped, and the scene refolded whole, whenever the
+prefix it covered stopped matching `rolling_summary.covered_digest` (a reroll,
+an edit, a trim).
+
+Present tense, where `absorb/system.j2` is past: this describes a scene in
+progress rather than one that ended. The reply is one line of prose —
+`parse_output` collapses whitespace, because scene frontmatter is one line per
+key and a multi-line value corrupts the file. Display-only: this summary is
+deliberately absent from `scene/sections/`.
+
 ### `scene/` — the context builder (`store/context/`)
 Serves POST …/chat, …/retry, …/regenerate (via `build_messages` /
 `build_director_messages`) and …/opener (via `build_opener_messages`).

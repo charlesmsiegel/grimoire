@@ -434,6 +434,38 @@ def edit_message(cid: str, sid: str, index: int, content: str) -> None:
 
 
 @locking._serialized
+def set_rolling_summary(cid: str, sid: str, summary: str, at: int, digest: str) -> None:
+    """Record the live running summary and what it was folded from (#85).
+
+    The three keys move together and are only meaningful together: prose that
+    covers a prefix, the length of that prefix, and its digest. Writing them in
+    one file write is what keeps a reader from seeing a new summary against an
+    old digest and deciding the fold is stale when it is not.
+
+    The summary is collapsed to a single line HERE, not merely by whoever parsed
+    the model's reply. `dump_frontmatter` writes one line per key and `_quote`
+    does not escape newlines, so a value containing one is written as a second
+    physical line -- read back as a junk key if it holds a colon, dropped if it
+    does not, and, beginning `---`, as the end of the frontmatter block, taking
+    every key after it with it. That is scene-file corruption from a model reply,
+    so the guarantee belongs to the store rather than to a caller remembering.
+
+    `updated` is deliberately NOT stamped. It orders the scene rail (`list_scenes`
+    sorts on it) and gates nothing else; a summary is a derived read-aid, and
+    letting a background refresh reorder the player's scene list would make the
+    rail jump for a write they never made.
+    """
+    p = paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        raise paths.SceneNotFound(sid)
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["rolling_summary"] = " ".join(summary.split())
+    meta["rolling_at"] = str(max(0, at))
+    meta["rolling_digest"] = digest
+    atomic.write_text(p, dump_frontmatter(meta, body))
+
+
+@locking._serialized
 def mark_absorbed(cid: str, sid: str, one_line: str, summary: str) -> None:
     """Record a scene's absorbed summary into its frontmatter and flag it done."""
     p = paths._scene_path(cid, sid)

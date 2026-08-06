@@ -21,6 +21,7 @@ export default function ConfigView() {
   const [promptLogDepth, setPromptLogDepth] = useState("");
   const [turnstateDepth, setTurnstateDepth] = useState("");
   const [promoteStreak, setPromoteStreak] = useState("");
+  const [rollingEvery, setRollingEvery] = useState("");
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -37,6 +38,7 @@ export default function ConfigView() {
       setPromptLogDepth(c.prompt_log_depth);
       setTurnstateDepth(c.turnstate_depth);
       setPromoteStreak(c.promote_streak);
+      setRollingEvery(c.rolling_summary_every);
     });
     api.listConnections().then(setConnections).catch(() => setConnections([]));
   }, []);
@@ -44,7 +46,8 @@ export default function ConfigView() {
   if (!config) return <div className="page page-narrow config">Loading…</div>;
 
   async function save(fields: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; context_budget: string; archive_depth: string;
-                        prompt_log_depth: string; turnstate_depth: string; promote_streak: string }>) {
+                        prompt_log_depth: string; turnstate_depth: string; promote_streak: string;
+                        rolling_summary_every: string }>) {
     const next = await api.putConfig(fields);
     setConfig(next);
     setSaved(true);
@@ -191,6 +194,22 @@ export default function ConfigView() {
         </div>
       </div>
 
+      <div className="section-label">While playing</div>
+      <div className="field-row">
+        <div className="field">
+          <label htmlFor="cfg-rolling-every">Summarize the scene every (posts)</label>
+          <input id="cfg-rolling-every" type="text" inputMode="numeric" value={rollingEvery}
+                 placeholder="10" onChange={(e) => setRollingEvery(e.target.value)} />
+        </div>
+      </div>
+      <p className="field-hint">
+        The scene inspector keeps a running summary of the scene you are playing, refolded
+        in the background once this many posts have landed since the last one. Each refresh
+        is one extra model call, so this is what the feature costs. <code>0</code> turns the
+        automatic refresh off — the inspector's own <em>Refresh</em> button still works. The
+        summary is a reading aid only: it is never added to what the model is told.
+      </p>
+
       <div className="section-label">Theme</div>
       <ThemePicker value={config.theme} onPick={(theme) => save({ theme })} />
 
@@ -204,6 +223,7 @@ export default function ConfigView() {
             context_budget: contextBudget, archive_depth: archiveDepth,
             prompt_log_depth: promptLogDepth,
             turnstate_depth: turnstateDepth, promote_streak: promoteStreak,
+            rolling_summary_every: rollingEvery,
           })}
         >
           Save
