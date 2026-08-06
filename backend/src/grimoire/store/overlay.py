@@ -14,13 +14,17 @@ the world live. Rules:
 - sync.md holds base hashes for materialized records only. Tombstones live in
   <campaign>/deleted.json (a sorted JSON list of refs); a tombstoned id counts
   as taken for uniquify, so nothing ever resurrects under a reused id.
+- <campaign>/detached.json (same shape) holds the third state: a campaign copy
+  whose world original was DELETED, so it shares only a slug with whatever
+  claims that id next. Records, sidecars and assets all stop resolving through
+  for it -- see `detached()`.
 
 Which records inherit, and which do not, is the whole content of the rule, so
 it is declared below as data (INHERITED_KINDS / INHERITED_FILES) rather than
 only in prose: `tests/test_overlay_guard.py` reads those names to check that
 nothing outside this module resolves an inheritable record off a raw campaign
 root. Everything else under <campaign> is campaign-local by definition and is
-read directly: campaign.md, sync.md, deleted.json, appearances.json,
+read directly: campaign.md, sync.md, deleted.json, detached.json, appearances.json,
 calendar.json, changes.json, chronicle.json, timeline.md, sheet_baselines.json,
 the climate default (store/campaign_climate.py owns that filename), scenes/,
 sheets/, proposals/, and the per-actor sidecars filed inside an actor dir
@@ -97,6 +101,49 @@ def deleted(cid: str) -> set[str]:
 
 def add_deleted(cid: str, ref: str) -> None:
     atomic.write_text(_deleted_path(cid), json.dumps(sorted(deleted(cid) | {ref}), indent=2) + "\n")
+
+
+def _drop_deleted(cid: str, refs: set[str]) -> None:
+    keep = deleted(cid) - refs
+    if keep != deleted(cid):
+        atomic.write_text(_deleted_path(cid), json.dumps(sorted(keep), indent=2) + "\n")
+
+
+# ---- detached refs ----
+
+def _detached_path(cid: str) -> Path:
+    return campaigns_paths.campaign_root(cid) / "detached.json"
+
+
+def detached(cid: str) -> set[str]:
+    """Refs the campaign owns outright, sharing only a slug with the world.
+
+    The third state a record can be in here, after "campaign copy" and
+    "tombstone". A tombstone says *absent*; this says **mine, and nothing filed
+    under that id in the world applies to it** — which is what a campaign copy
+    becomes when the world record it was copied from is deleted. The id is then
+    free, and the next world record to claim it is a stranger that would
+    otherwise supply this campaign's record with its sync updates, its avatar,
+    its tagline and its voice anchor, all by coincidence of slug (#225).
+
+    Detaching is one-way and per record: the campaign copy already exists, so
+    there is nothing to fall through *to* that could be right.
+
+    Fail-soft in the same direction as `deleted`, and warned about for the same
+    reason: reading empty means "still attached", so a corrupt file quietly
+    resumes inheriting from an unrelated record. Failure *adds* content, which
+    is the one direction a user cannot spot by looking.
+    """
+    refs = failsoft.read_json(
+        _detached_path(cid), list,
+        f"campaign {cid} reads as having no detached records, so a record whose "
+        "world original was deleted will inherit from whatever now holds its id")
+    return set(refs) if refs else set()
+
+
+def add_detached(cid: str, ref: str) -> None:
+    atomic.write_text(_detached_path(cid),
+                      json.dumps(sorted(detached(cid) | {ref}), indent=2) + "\n")
 
 
 # ---- flat records (locations / lore; greetings + plotmap join in Task 2) ----
@@ -488,6 +535,8 @@ def _asset_ref(base: str, aid: str, vid: str, name: str) -> str:
 
 def list_images(cid: str, aid: str, vid: str, base: str = "characters") -> list[dict]:
     mine = assets.list_images(croot_of(cid), aid, vid, base)
+    if _flat_ref(base, aid) in detached(cid):
+        return sorted(mine, key=lambda i: i["name"])   # the world's id-mate is a stranger
     have = {i["name"] for i in mine}
     gone = deleted(cid)
     inherited = [i for i in assets.list_images(wroot_of(cid), aid, vid, base)
@@ -503,7 +552,8 @@ def image_root(cid: str, aid: str, vid: str, name: str, base: str = "characters"
     # A per-asset tombstone or a whole-record tombstone (the record was deleted
     # campaign-side; only its <base>/<aid> ref is written) both hide the image:
     # return croot so the serve route 404s instead of falling through to the world.
-    if _asset_ref(base, aid, vid, name) in gone or _flat_ref(base, aid) in gone:
+    if (_asset_ref(base, aid, vid, name) in gone or _flat_ref(base, aid) in gone
+            or _flat_ref(base, aid) in detached(cid)):
         return croot
     return wroot_of(cid)
 
@@ -513,7 +563,8 @@ def read_focus(cid: str, aid: str, vid: str, base: str = "characters") -> int | 
     focus_file = croot / base / aid / "assets" / vid / assets.FOCUS_FILE
     if (assets.image_path(croot, aid, vid, assets.AVATAR, base) is not None
             or focus_file.exists()
-            or _asset_ref(base, aid, vid, assets.AVATAR) in deleted(cid)):
+            or _asset_ref(base, aid, vid, assets.AVATAR) in deleted(cid)
+            or _flat_ref(base, aid) in detached(cid)):
         return assets.read_focus(croot, aid, vid, base)
     return assets.read_focus(wroot_of(cid), aid, vid, base)
 
@@ -527,8 +578,9 @@ def delete_image(cid: str, aid: str, vid: str, name: str, base: str = "character
 def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characters") -> None:
     """Copy-up the named image and the current avatar, then swap campaign-side."""
     croot, wroot = croot_of(cid), wroot_of(cid)
+    inherits = _flat_ref(base, aid) not in detached(cid)
     for n in (name, assets.AVATAR):
-        if (assets.image_path(croot, aid, vid, n, base) is None
+        if (inherits and assets.image_path(croot, aid, vid, n, base) is None
                 and _asset_ref(base, aid, vid, n) not in deleted(cid)):
             src = assets.image_path(wroot, aid, vid, n, base)
             if src is not None:
@@ -539,7 +591,7 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
     # no campaign file at `name`, so the inherited image there would still show
     # through the overlay next to the new avatar. Tombstone it so promotion
     # moves the image out of the gallery instead of duplicating it.
-    if (assets.image_path(croot, aid, vid, name, base) is None
+    if (inherits and assets.image_path(croot, aid, vid, name, base) is None
             and assets.image_path(wroot, aid, vid, name, base) is not None):
         add_deleted(cid, _asset_ref(base, aid, vid, name))
 
@@ -555,7 +607,10 @@ def read_character(cid: str, char_id: str) -> dict:
 
 
 def tagline(cid: str, char_id: str) -> str:
-    return taglines.read(croot_of(cid), char_id) or taglines.read(wroot_of(cid), char_id)
+    mine = taglines.read(croot_of(cid), char_id)
+    if mine or _flat_ref("characters", char_id) in detached(cid):
+        return mine
+    return taglines.read(wroot_of(cid), char_id)
 
 
 def set_voice_anchor(cid: str, char_id: str, text: str) -> None:
@@ -638,8 +693,8 @@ def voice_anchor_record(cid: str, char_id: str) -> dict:
     text campaign-side and the nonce world-side would fingerprint an anchor that
     exists nowhere."""
     mine = voice_anchors.read_record(croot_of(cid), char_id)
-    if mine["disabled"]:
-        return mine   # explicit campaign opt-out: the world's must not show through
+    if mine["disabled"] or _flat_ref("characters", char_id) in detached(cid):
+        return mine   # campaign opt-out, or a world id-mate that is a stranger
     return mine if mine["text"] else voice_anchors.read_record(wroot_of(cid), char_id)
 
 
@@ -785,28 +840,37 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
     for cid in cids:
         try:
             _forget_in_campaign(cid, kind, rid)
-        except (OSError, UnicodeDecodeError) as exc:
+        except (OSError, ValueError) as exc:
             # Per campaign, not per sweep: an unreadable sync.md used to raise
             # through the loop, so one damaged campaign cost every LATER
             # dependent its cleanup -- and the route 500'd on a delete that had
             # already happened, whose retry 404s without sweeping (Codex review).
+            # ValueError, not UnicodeDecodeError: a malformed plotmap.json
+            # reaches `json.loads` here and raises JSONDecodeError, which is a
+            # ValueError and not a decode error (Codex review). The wider catch
+            # covers both, since both mean "this campaign's file is garbage".
             log.warning("could not finish sweeping campaign %s after %s/%s was deleted "
                         "(%s) -- a record recreated under that id may inherit its state",
                         cid, kind, rid, exc)
 
 
 def _forget_in_campaign(cid: str, kind: str, rid: str) -> None:
-    croot = croot_of(cid)
-    if kind in ("characters", "pcs"):
-        mine = (croot / kind / rid / _actor_meta(kind)).exists()
-    else:
-        mine = _flat_path(croot, kind, rid).exists()
-    if mine:
-        _drop_manifest_ref(cid, _flat_ref(kind, rid))
+    croot, ref = croot_of(cid), _flat_ref(kind, rid)
+    if _record_present(croot, kind, rid):
+        # The campaign owns a copy. It keeps it -- and stops sharing an identity
+        # with whatever claims the slug next, in BOTH directions the id reaches:
+        # the sync base, and the per-file overlays `detached` governs.
+        _drop_manifest_ref(cid, ref)
+        add_detached(cid, ref)
         return
     _drop_record_dir(croot, kind, rid)
+    # Per-asset tombstones outlive the record they hid, and they hide by slot:
+    # `assets/characters/mara/default/avatar` would blank the NEXT Mara's avatar
+    # in this campaign, for a deletion aimed at a record that is gone (Codex
+    # review). The whole-record tombstone keeps its meaning and stays.
+    _drop_deleted(cid, {r for r in deleted(cid) if r.startswith(f"assets/{kind}/{rid}/")})
     if kind == "greetings":
-        _drop_plotmap_edges(croot, rid)
+        _drop_plotmap_edges(cid, croot, rid)
 
 
 def _record_present(root: Path, kind: str, rid: str) -> bool:
@@ -828,7 +892,7 @@ def _record_present(root: Path, kind: str, rid: str) -> bool:
     return _flat_path(root, kind, rid).exists()
 
 
-def _drop_plotmap_edges(croot: Path, gid: str) -> None:
+def _drop_plotmap_edges(cid: str, croot: Path, gid: str) -> None:
     """Unwire a deleted greeting from a campaign's OWN plot map.
 
     `greetings.delete_greeting` unwires it from the world's, and a campaign
@@ -841,5 +905,16 @@ def _drop_plotmap_edges(croot: Path, gid: str) -> None:
     would fork a campaign off the world's plot map as a side effect of a delete
     it had nothing to do with.
     """
-    if (croot / "plotmap.json").exists():
-        greetings.remove_from_plotmap(croot, gid)
+    if not (croot / "plotmap.json").exists():
+        return
+    greetings.remove_from_plotmap(croot, gid)
+    # A map that only ever matched the world's still matches it after both got
+    # the same edit -- but sync.md holds the pre-delete hash, so the campaign
+    # would be walked through a "conflict" whose two sides are identical (Codex
+    # review). Advance the base to what both now are.
+    wroot = wroot_of(cid)
+    manifest = campaigns_paths.read_manifest(cid)
+    world_h = greetings.plotmap_hash(wroot) if wroot.exists() else None
+    if "plotmap" in manifest and world_h is not None and greetings.plotmap_hash(croot) == world_h:
+        manifest["plotmap"] = world_h
+        campaigns_paths.write_manifest(cid, manifest)
