@@ -438,6 +438,36 @@ def campaign_lock_nowait(cid: str):
             lock.release()
 
 
+@contextmanager
+def best_effort_campaign_lock(cid: str, timeout: float = 2.0):
+    """Hold the campaign lock if it can be had quickly; otherwise proceed
+    without it. Yields whether it was actually held.
+
+    For READ paths whose only stake in the lock is seeing two files in a
+    consistent state. `campaign_lock` is the wrong tool there: it raises
+    ``StoreBusy`` after ``LOCK_TIMEOUT``, and a reader that can 409 turns a
+    nicety into a new way for a turn to fail. `context._assemble` is the case —
+    it pairs the transcript with the transient-state ledger, and `post_chat`
+    has already appended the player's post by the time it runs, with the undo
+    that would take it back off not yet wired. A timeout there would strand
+    that post with no reply and nothing able to remove it.
+
+    So the trade is stated rather than inherited: under contention this returns
+    an unlocked read, which can observe one writer's two files a moment apart.
+    That costs one prompt a stale field. Refusing would cost the turn.
+
+    `acquire` returns a bool and never raises (it keeps ``RLock``'s contract);
+    only ``__enter__`` raises, which is exactly the layer being avoided.
+    """
+    lock = campaign_lock(cid)
+    held = lock.acquire(timeout=timeout)
+    try:
+        yield held
+    finally:
+        if held:
+            lock.release()
+
+
 _config = _ProcessScopedLock("domain", "config", ConfigBusy)
 
 
