@@ -13,8 +13,12 @@ import { ApiError, api, type DataDirInfo } from "../api/client";
  *  navigate away from this block. Unmounting mid-move throws away the only
  *  place the failure would have been shown, and anything written in the gap
  *  lands in whichever store the pointer still names — so the wizard holds its
- *  Next button until this settles. */
-export function StorageLocation({ onPending }: { onPending?: (pending: boolean) => void }) {
+ *  Next button until this settles. `onMoved` fires once the pointer has
+ *  actually changed, for a caller whose own state describes the old store. */
+export function StorageLocation(
+  { onPending, onMoved }:
+  { onPending?: (pending: boolean) => void; onMoved?: (info: DataDirInfo) => void },
+) {
   const [dataDir, setDataDir] = useState<DataDirInfo | null>(null);
   const [input, setInput] = useState("");
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -37,6 +41,7 @@ export function StorageLocation({ onPending }: { onPending?: (pending: boolean) 
       setDataDir(next);
       setInput(next.data_dir);
       setMsg({ kind: "ok", text: `Storage now at ${next.data_dir}` });
+      onMoved?.(next);
     } catch (e) {
       const detail = e instanceof ApiError ? e.detail : "Could not update storage location";
       setMsg({ kind: "err", text: detail });

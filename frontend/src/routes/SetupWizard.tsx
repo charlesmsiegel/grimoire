@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { getModels, type Model } from "../api/models";
@@ -50,10 +50,31 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
   const [orModels, setOrModels] = useState<Model[]>([]);
   const [orError, setOrError] = useState(false);
   const [connected, setConnected] = useState<string | null>(null);
+  // Creating the connection and activating it are two requests, and the second
+  // can fail on its own. Holding the id from a successful create is what makes
+  // the retry activate that connection rather than create a second one —
+  // `create_connection` uniquifies the slug, so a retry loop leaves a trail of
+  // `-2`, `-3` connections behind.
+  const [createdId, setCreatedId] = useState<string | null>(null);
 
   // step 4 — the first world
   const [worldName, setWorldName] = useState("");
   const [worldId, setWorldId] = useState<string | null>(null);
+  // Step 1 can point this install at a folder that is already a full library —
+  // the synced-folder case the storage step exists to support. The store the
+  // rest of the wizard writes to is then not a first run at all, and offering
+  // to create a "first world" in it would add a stray world to someone's
+  // established collection.
+  const [existingLibrary, setExistingLibrary] = useState(false);
+
+  const recheckStore = useCallback(async () => {
+    try {
+      // putDataDir invalidated the config cache, so this reads the new store.
+      setExistingLibrary(!(await api.getConfig()).first_run);
+    } catch {
+      /* leave the verdict alone rather than guessing from a failed read */
+    }
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -83,14 +104,18 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
       : form.base_url.trim() !== "");
 
   async function saveConnection() {
-    if (!connectionUsable || busy) return;
+    if (busy || (!createdId && !connectionUsable)) return;
     setError(null);
     setBusy(true);
     try {
-      const { id } = await api.createConnection({ ...form, api_key: key });
+      let id = createdId;
+      if (!id) {
+        ({ id } = await api.createConnection({ ...form, api_key: key }));
+        setCreatedId(id);
+        setKey("");   // the key is on the server now; keeping a copy buys nothing
+      }
       await api.putConfig({ active_connection_id: id });
       setConnected(form.name.trim());
-      setKey("");
     } catch (err: any) {
       setError(err.detail ?? String(err));
     } finally {
@@ -152,7 +177,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
             Everything you make stays yours, as plain files. The default is fine —
             change it now only if you would rather it lived elsewhere.
           </p>
-          <StorageLocation onPending={setMovingStore} />
+          <StorageLocation onPending={setMovingStore} onMoved={recheckStore} />
           <div className="wizard-footer">
             <span />
             {/* Label stays "Next" — the Move button is already saying
@@ -169,15 +194,22 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
             Grimoire writes through whichever model you point it at. Add one now, or
             skip — you can play by hand and set this up later on the Connections page.
           </p>
-          {connected
-            ? <p className="config-msg save-flash">Connected to {connected} ✓</p>
-            : (
-              <ConnectionForm
-                value={form} onChange={setForm}
-                apiKey={key} onApiKey={setKey}
-                orModels={orModels} orError={orError}
-              />
-            )}
+          {connected && <p className="config-msg save-flash">Connected to {connected} ✓</p>}
+          {/* Created but not active: the form is gone because re-submitting it
+              would create a second connection, and what is left to do is the
+              activation that failed. */}
+          {!connected && createdId && (
+            <p className="field-hint">
+              {form.name.trim()} was created but could not be made active.
+            </p>
+          )}
+          {!connected && !createdId && (
+            <ConnectionForm
+              value={form} onChange={setForm}
+              apiKey={key} onApiKey={setKey}
+              orModels={orModels} orError={orError}
+            />
+          )}
           <div className="wizard-footer">
             <button className="subtle" onClick={() => setStep(1)} disabled={busy}>Back</button>
             {connected
@@ -186,8 +218,8 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
                 <span className="wizard-actions">
                   <button className="subtle" onClick={() => setStep(3)} disabled={busy}>Skip</button>
                   <button className="btn-accent" onClick={saveConnection}
-                          disabled={busy || !connectionUsable}>
-                    {busy ? "Saving…" : "Save connection"}
+                          disabled={busy || (!createdId && !connectionUsable)}>
+                    {busy ? "Saving…" : createdId ? "Retry activation" : "Save connection"}
                   </button>
                 </span>
               )}
@@ -201,7 +233,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
           <p className="wizard-intro">
             Applies as you click, and is changeable any time from Config.
           </p>
-          <ThemePicker value={theme} onPick={pickTheme} />
+          <ThemePicker value={theme} onPick={pickTheme} disabled={savingTheme} />
           <div className="wizard-footer">
             <button className="subtle" onClick={() => setStep(2)} disabled={savingTheme}>Back</button>
             <button className="btn-accent" onClick={() => setStep(4)} disabled={savingTheme}>
@@ -213,15 +245,15 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
 
       {step === 4 && (
         <div className="wizard-body">
-          <h3>Create your first world</h3>
+          <h3>{existingLibrary ? "This library is already stocked" : "Create your first world"}</h3>
           <p className="wizard-intro">
-            A world holds the places, people and lore your campaigns draw on. Every
-            campaign starts from one, so this is the last thing standing between you
-            and play.
+            {existingLibrary
+              ? "The folder you chose in step one already holds worlds, so there is nothing to create here — open one from Worlds, or start a campaign from it."
+              : "A world holds the places, people and lore your campaigns draw on. Every campaign starts from one, so this is the last thing standing between you and play."}
           </p>
           {worldId
             ? <p className="config-msg save-flash">Created {worldName.trim()} ✓</p>
-            : (
+            : existingLibrary ? null : (
               <div className="joined">
                 <input
                   placeholder="World name…" aria-label="World name"
@@ -236,7 +268,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
             )}
           <div className="wizard-footer">
             <button className="subtle" onClick={() => setStep(3)} disabled={busy}>Back</button>
-            {worldId
+            {worldId || existingLibrary
               ? (
                 <span className="wizard-actions">
                   <button className="subtle" onClick={() => finish("/")}>Finish</button>
@@ -245,7 +277,12 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
                   </button>
                 </span>
               )
-              : <button className="subtle" onClick={() => finish("/")}>Finish later</button>}
+              /* Disabled while a world is being created: leaving now unmounts
+                 the only place that would report the result, and dismisses
+                 setup for good whether or not the world landed. */
+              : <button className="subtle" onClick={() => finish("/")} disabled={busy}>
+                  Finish later
+                </button>}
           </div>
         </div>
       )}
