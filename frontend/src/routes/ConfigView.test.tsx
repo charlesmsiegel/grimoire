@@ -20,6 +20,7 @@ const cfg = {
   active_connection_id: "openrouter",
   active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true,
   llm_timeout: "120", absorb_budget: "600", context_budget: "0", archive_depth: "3",
+  prompt_log_depth: "50",
 };
 const dataDir = {
   data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
@@ -139,6 +140,16 @@ test("edits the context budget and recalled-scene cap and saves them", async () 
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
     expect.objectContaining({ context_budget: "32000", archive_depth: "5" })));
+});
+
+test("edits how many turn prompts are kept and saves it", async () => {
+  renderView();
+  const kept = await screen.findByLabelText(/kept turn prompts/i);
+  expect(kept).toHaveValue("50");
+  fireEvent.change(kept, { target: { value: "0" } });    // 0 turns capture off
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
+    expect.objectContaining({ prompt_log_depth: "0" })));
 });
 
 test("links to the Connections page to manage keys/endpoints", async () => {

@@ -91,6 +91,7 @@ export type Config = {
   /** The store this config describes, so a client can tell that a decision it
    *  made about `first_run` belongs to a library it is no longer looking at. */
   data_dir: string;
+  prompt_log_depth: string;
 };
 export type DataDirInfo = {
   data_dir: string;
@@ -397,6 +398,17 @@ export type SceneContext = {
   model: string; total_tokens: number; dropped_tokens: number;
   budget_tokens: number; sections: ContextSection[];
 };
+/** One past turn's frozen prompt, as listed. The section text is not here —
+ *  it lives in the entry itself, which is large enough that shipping every
+ *  one of them would defeat the point of a list. */
+export type PromptEntry = {
+  id: string; scene: string; ts: string; model: string;
+  task: "chat" | "director" | "retry" | "regenerate" | "continuation" | "opener";
+  total_tokens: number; dropped_tokens: number; budget_tokens: number;
+};
+/** A frozen breakdown: the same shape `getSceneContext` returns, plus which
+ *  turn it was. Rendered by the same component, pointed at stored text. */
+export type PromptSnapshot = SceneContext & Omit<PromptEntry, "scene">;
 export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
 export type TimelineEvent = { date: string; text: string };
 /** How much weight one staged proposal has earned (#110/#112), computed by
@@ -737,7 +749,9 @@ export const api = {
     }
     return configCache;
   },
-  putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; context_budget: string; archive_depth: string; setup_done: string }>) =>
+  putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; context_budget: string; archive_depth: string; setup_done: string;
+    prompt_log_depth: string }>) =>
+
     request<Config>("PUT", "/api/config", body).then((cfg) => {
       configCache = Promise.resolve(cfg); // the write's response is the fresh config
       return cfg;
@@ -1192,6 +1206,12 @@ export const api = {
   sceneBriefing: (cid: string, sid: string) =>
     request<Briefing>("GET", `/api/campaigns/${cid}/scenes/${sid}/briefing`,
                       undefined, { fresh: true }),
+  listScenePrompts: (cid: string, sid: string) =>
+    request<{ entries: PromptEntry[] }>(
+      "GET", `/api/campaigns/${cid}/scenes/${sid}/prompts`),
+  getScenePrompt: (cid: string, sid: string, eid: string) =>
+    request<PromptSnapshot>(
+      "GET", `/api/campaigns/${cid}/scenes/${sid}/prompts/${eid}`),
   sceneSuggestions: (cid: string, after?: string, offscreen?: boolean) => {
     const params = new URLSearchParams();
     if (after) params.set("after", after);

@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from .. import store
 from ..llm import LLMClient
-from .common import (_campaign_root_or_404, _require_connection, _require_scene,
-                     _world_root_or_404, get_llm)
+from .common import (_campaign_root_or_404, _record_prompt, _require_connection,
+                     _require_scene, _world_root_or_404, get_llm)
 from .models import (CopyFromGreeting, Edges, FirstPost, GreetingCreate, GreetingUpdate,
                      ImportGreetings, MarkBody, Opener, StartFromGreeting, SubjectsBody)
 from .streaming import _ephemeral_stream, _persist_reply
@@ -292,7 +292,8 @@ def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting):
 def post_opener(cid: str, sid: str, body: Opener, client: LLMClient = Depends(get_llm)):
     _require_scene(cid, sid)
     conn = _require_connection()
-    messages = store.context.build_opener_messages(cid, sid, body.prompt)
+    messages, breakdown = store.context.compose_opener(cid, sid, body.prompt)
+    _record_prompt(cid, sid, "opener", breakdown)
     return _ephemeral_stream(messages, conn, client)
 
 

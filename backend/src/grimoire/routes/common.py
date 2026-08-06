@@ -45,6 +45,31 @@ def _turn_override(body) -> dict | None:
     return {k: v for k, v in _dump(body.response).items() if v is not None}
 
 
+def _record_prompt(cid: str, sid: str, task: str, breakdown: dict) -> None:
+    """Freeze what this turn's model is about to see (#157).
+
+    Called with the breakdown from the SAME `context.compose_*` call that
+    produced the messages being sent — see `store.prompt_log`. The scene's
+    stamped model rides along so a snapshot still names its provider after the
+    scene is repointed at another one.
+
+    At build time rather than after the stream, deliberately. The stream
+    finalizers carry delicate turn-ownership and abort semantics that a debug
+    write has no business joining, and a turn the provider failed is one of the
+    turns whose prompt is most worth having. `prompt_log.record` swallows its
+    own storage failures, so this cannot cost the turn either way.
+    """
+    scene_model = ""
+    try:
+        # Frontmatter only. `read_scene` would re-parse the whole transcript for
+        # one field, on a path the turn is already about to pay for several
+        # times over.
+        scene_model = store.scenes.read_scene_meta(cid, sid).get("model", "")
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound, OSError):
+        pass
+    store.prompt_log.record(cid, sid, task, breakdown, model=scene_model)
+
+
 def get_llm() -> LLMClient:
     return _llm
 

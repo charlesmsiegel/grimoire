@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import errno
 
-from .. import alternates, atomic, calendars, commits, scene_ids, scene_refs
+from .. import alternates, atomic, calendars, commits, prompt_log, scene_ids, scene_refs
 from ..audit import baselines
 from ..campaigns import paths as campaigns_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
@@ -185,4 +185,9 @@ def delete_scene(cid: str, sid: str) -> None:
         # which does not always reach errno.
         if exc.errno != errno.ENAMETOOLONG and getattr(exc, "winerror", None) != 206:
             raise
+    # Before the unlink, for the same reason as the sidecar above: ids are
+    # recycled, so snapshots left behind would be shown as the *next* scene's
+    # prompts. `forget_scene` never raises, so unlike the sidecar it cannot
+    # refuse the delete — losing a debug snapshot is not worth failing on.
+    prompt_log.forget_scene(cid, sid)
     p.unlink()

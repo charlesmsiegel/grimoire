@@ -8,6 +8,7 @@ vi.mock("../api/client", async () => {
     api: {
       getCast: vi.fn(), getCampaign: vi.fn(), listCharacters: vi.fn(), listPCs: vi.fn(),
       listCampaignPCs: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
+      listScenePrompts: vi.fn(), getScenePrompt: vi.fn(),
       // Resolves to "no weather" so the widget renders nothing: these suites
       // assert on the rest of the inspector, not the sky.
       getSceneWeather: vi.fn(() => Promise.resolve({ weather: null, location: null, native: null })),
@@ -62,6 +63,8 @@ beforeEach(() => {
     sections: [{ label: "World info", text: "lore text", tokens: 100,
                  tier: "spotlight", dropped: false, trimmed: 0 }],
   });
+  (api.listScenePrompts as any).mockResolvedValue({ entries: [] });
+  (api.getScenePrompt as any).mockResolvedValue(null);
   (api.getCastDetail as any).mockResolvedValue({ kind: "characters", id: "seraphine", name: "Seraphine", version: "default", body: "keeper" });
   (getModels as any).mockResolvedValue([{ id: "m", name: "M", context: 1000, prompt: "0", completion: "0" }]);
   (api.getChronicle as any).mockResolvedValue([
@@ -544,4 +547,110 @@ test("a briefing never renders under a different campaign's scene of the same id
   rerender(<SceneInspector cid="b" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   await waitFor(() =>
     expect(screen.queryByText("Find the ledger")).not.toBeInTheDocument());
+});
+
+// ---- turn history: what the model saw for a PAST turn (#157) ----
+
+const TURNS = [
+  { id: "000002", scene: "s", ts: "2026-08-06T12:00:00Z", task: "regenerate",
+    model: "m", total_tokens: 90, dropped_tokens: 0, budget_tokens: 0 },
+  { id: "000001", scene: "s", ts: "2026-08-06T11:00:00Z", task: "chat",
+    model: "m", total_tokens: 80, dropped_tokens: 0, budget_tokens: 0 },
+];
+
+const FROZEN = {
+  id: "000001", ts: "2026-08-06T11:00:00Z", task: "chat", model: "m",
+  total_tokens: 80, dropped_tokens: 0, budget_tokens: 0,
+  sections: [{ label: "World info", text: "the lore as it stood then", tokens: 80,
+               tier: "spotlight", dropped: false, trimmed: 0 }],
+};
+
+test("with no captured turns the history section says so", async () => {
+  renderInspector();
+  await screen.findByText("No captured turns yet.");
+});
+
+test("captured turns are listed by what kind of turn they were", async () => {
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  renderInspector();
+  await screen.findByText("Regenerate");
+  await screen.findByText("Send");
+});
+
+test("clicking a turn shows that turn's frozen prompt instead of the live one", async () => {
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  renderInspector();
+
+  // the live composition is what shows first
+  await screen.findByText("lore text");
+
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+
+  await waitFor(() => expect(api.getScenePrompt).toHaveBeenCalledWith("c", "s", "000001"));
+  await screen.findByText("the lore as it stood then");
+  await screen.findByText(/What the model saw/);
+  // and the live text is gone — showing both would be the confusion this fixes
+  expect(screen.queryByText("lore text")).toBeNull();
+});
+
+test("going back restores the live context", async () => {
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  renderInspector();
+
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+
+  fireEvent.click(screen.getByRole("button", { name: /Back to live context/ }));
+  await screen.findByText("lore text");
+  expect(screen.queryByText(/What the model saw/)).toBeNull();
+});
+
+test("a turn that has aged out of the log says so rather than blanking", async () => {
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockRejectedValue({ status: 404, detail: "not found" });
+  renderInspector();
+
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText(/aged out of the log/);
+  await screen.findByText("lore text");        // still on the live view
+});
+
+test("a frozen turn is measured against the budget it was captured under", async () => {
+  // Not today's: the live budget has since been raised, and reporting the past
+  // turn against it would show a prompt that overran as comfortably inside.
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue({ ...FROZEN, budget_tokens: 100 });
+  (api.getSceneContext as any).mockResolvedValue({
+    model: "m", total_tokens: 100, dropped_tokens: 0, budget_tokens: 10000,
+    sections: [{ label: "World info", text: "lore text", tokens: 100,
+                 tier: "spotlight", dropped: false, trimmed: 0 }],
+  });
+  renderInspector();
+
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText(/80 \/ 100 tok/);    // the frozen budget, not 10000
+  await screen.findByText("80%");
+});
+
+test("a snapshot arriving after a scene change is dropped, not shown", async () => {
+  // The guard is worth a test because the obvious version of it — comparing the
+  // callback's own captured sid against itself — is always satisfied and looks
+  // right on the page.
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  let release: (v: any) => void = () => {};
+  (api.getScenePrompt as any).mockReturnValue(new Promise((r) => { release = r; }));
+
+  const { rerender } = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+
+  // the reader moves to another scene while the fetch is still in flight
+  rerender(<SceneInspector cid="c" sid="s2" refreshKey={0} onSceneChanged={() => {}} />);
+  release(FROZEN);
+
+  await screen.findByText("lore text");                       // still the live view
+  expect(screen.queryByText("the lore as it stood then")).toBeNull();
+  expect(screen.queryByText(/What the model saw/)).toBeNull();
 });

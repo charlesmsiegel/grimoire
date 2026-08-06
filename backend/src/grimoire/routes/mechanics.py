@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from .. import prompts, store
 from ..llm import LLMClient
-from .common import (_campaign_root_or_404, _require_connection, _require_scene, get_llm)
+from .common import (_campaign_root_or_404, _record_prompt, _require_connection,
+                     _require_scene, get_llm)
 from .models import (CheckBody, ModuleSetting, ProposalAction, RollBody, SheetAdvanceBody,
                      SheetBody, SheetCreationBody)
 from .streaming import _continuation_stream, _sse, _sse_response
@@ -67,23 +68,21 @@ def _continuation_rule_bodies(cid: str, resolution: dict) -> tuple[list[str], li
         return on_roll_docs, check_docs
 
 
-def _continuation_messages(cid: str, sid: str, resolution: dict) -> list[dict]:
-    # The roll block is rendered first and reserved: a check can drag in several
-    # on-roll rule documents, which is exactly the kind of mandatory bulk that
-    # would otherwise be packed around and then appended anyway.
+def _continuation_messages(cid: str, sid: str, resolution: dict) -> tuple[list[dict], dict]:
+    # The roll block is rendered first and named in `appended`: a check can drag
+    # in several on-roll rule documents, which is exactly the kind of mandatory
+    # bulk that would otherwise be packed around and then appended anyway.
     on_roll_docs, check_docs = _continuation_rule_bodies(cid, resolution)
     block = prompts.render("scene/roll_result.j2", resolution=resolution,
                            on_roll_docs=on_roll_docs, check_docs=check_docs)
-    messages = store.context.build_messages(cid, sid, reserve=(block,))
-    messages.append({"role": "system", "content": block})
-    return messages
+    return store.context.compose_turn(
+        cid, sid, appended=(("Roll result", "system", block),))
 
 
-def _declined_continuation_messages(cid: str, sid: str) -> list[dict]:
+def _declined_continuation_messages(cid: str, sid: str) -> tuple[list[dict], dict]:
     block = prompts.render("scene/roll_declined.j2")
-    messages = store.context.build_messages(cid, sid, reserve=(block,))
-    messages.append({"role": "system", "content": block})
-    return messages
+    return store.context.compose_turn(
+        cid, sid, appended=(("Roll declined", "system", block),))
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/roll-proposal")
@@ -170,11 +169,12 @@ def post_roll_proposal(cid: str, sid: str, body: ProposalAction,
             # brand-new fence/send). Nothing was projected — stop dead, same
             # as any other lost-race case, with a clean done frame.
             return _sse_response([_sse({"done": True})])
-        messages = _continuation_messages(cid, sid, resolution)
+        messages, breakdown = _continuation_messages(cid, sid, resolution)
     elif status == "declined":
-        messages = _declined_continuation_messages(cid, sid)
+        messages, breakdown = _declined_continuation_messages(cid, sid)
     else:  # defensive: a race moved the record out from under us
         raise HTTPException(status_code=409, detail="proposal is stale")
+    _record_prompt(cid, sid, "continuation", breakdown)
     return _continuation_stream(cid, sid, pid, messages, conn, client)
 
 
