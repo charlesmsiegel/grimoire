@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   api, type Actor, type SceneContext, type SceneLocation, type ChronicleEntry,
   type CalendarConfig, type RosterEntry, type SceneDatetime,
   type CharacterSummary, type PCSummary, type Briefing, type BriefingRow,
+  type PromptEntry, type PromptSnapshot,
 } from "../api/client";
 import { getModels, type Model } from "../api/models";
+import { ContextBreakdown, contextPercent } from "./ContextBreakdown";
 import { Portrait } from "./Portrait";
 import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
 import { CalendarDatePicker } from "./CalendarDatePicker";
@@ -20,6 +22,17 @@ const SECTIONS_KEY = "grimoire.inspector.sections";
  *  the reader toggles it, `collapsed.briefing` is set and their choice wins in
  *  both directions forever, which auto-collapsing on a timer could not do. */
 const BRIEFING_OPEN_POSTS = 6;
+
+const TASK_LABELS: Record<PromptEntry["task"], string> = {
+  chat: "Send", director: "Director", retry: "Retry",
+  regenerate: "Regenerate", continuation: "Roll result", opener: "Opener",
+};
+
+/** The captured timestamp is UTC (`…Z`, stamped by the store); show it local. */
+function whenLabel(ts: string): string {
+  const d = new Date(ts);
+  return isNaN(d.getTime()) ? ts : d.toLocaleString();
+}
 
 function loadSectionCollapse(): Record<string, boolean> {
   try {
@@ -114,6 +127,8 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [setting, setSetting] = useState<SceneLocation | null>(null);
   const [locImages, setLocImages] = useState<string[]>([]);
   const [ctx, setCtx] = useState<SceneContext | null>(null);
+  const [turns, setTurns] = useState<PromptEntry[]>([]);
+  const [frozen, setFrozen] = useState<PromptSnapshot | null>(null);
   const [recap, setRecap] = useState<ChronicleEntry[]>([]);
   // Held with the campaign AND scene it came from, the way `LedgerPanel` holds
   // its campaign: the inspector stays mounted across both switches, so a bare
@@ -222,6 +237,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
     api.getSceneLocation(cid, sid).then(setSetting).catch(() => setSetting(null));
     api.getSceneContext(cid, sid).then(setCtx).catch(() => setCtx(null));
+    api.listScenePrompts(cid, sid).then((r) => setTurns(r.entries)).catch(() => setTurns([]));
     api.getChronicle(cid).then(setRecap).catch(() => setRecap([]));
     reloadWhen();
     reloadCfg();
@@ -237,6 +253,39 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       .catch(() => { if (live) setBrief({ cid, sid, data: NO_BRIEFING }); });
     return () => { live = false; };
   }, [cid, sid, refreshKey]);
+
+  // Which scene is on screen *now*, readable from a fetch that started under a
+  // previous one — the same "a late answer is wrong, not just stale" problem
+  // the briefing effect above solves with its `live` flag. A ref rather than
+  // that pattern because `showTurn` is triggered by a click rather than by an
+  // effect, so there is no cleanup to close over; and a ref rather than the
+  // `sid` prop, because `showTurn` closes over the sid it was created with —
+  // comparing that to itself would be a guard that is always satisfied.
+  const liveScene = useRef(sid);
+  // Keyed on the scene alone, deliberately NOT on refreshKey: a turn landing
+  // must not yank the reader out of a past turn they are in the middle of
+  // reading. Changing scene must, since the entry belongs to the old one.
+  useEffect(() => { liveScene.current = sid; setFrozen(null); }, [cid, sid]);
+
+  const showTurn = useCallback(async (eid: string) => {
+    setError(null);
+    try {
+      const snapshot = await api.getScenePrompt(cid, sid, eid);
+      // Switching scenes mid-flight would otherwise land the old scene's prompt
+      // in the new scene's panel — the exact confusion the backend refuses to
+      // serve (the detail route scopes each entry to its scene), so the client
+      // must not reintroduce it from the other end.
+      if (liveScene.current === sid) setFrozen(snapshot);
+    } catch (err: any) {
+      if (liveScene.current !== sid) return;
+      // The likeliest failure is the retention window having evicted it while
+      // the list was on screen, which is a 404 and not worth a scary banner.
+      setFrozen(null);
+      setError(err?.status === 404
+        ? "That turn's prompt has aged out of the log."
+        : (err?.detail ?? String(err)));
+    }
+  }, [cid, sid]);
 
   // the location section shows the primary image when the store has one
   useEffect(() => {
@@ -294,20 +343,9 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     }
   }
 
-  const modelLen = useMemo(
-    () => models.find((m) => m.id === ctx?.model)?.context ?? 0,
-    [models, ctx]);
-  // Percentages measure against whatever actually bounds the prompt. With both
-  // a packer budget and a model window known, that is the SMALLER of the two:
-  // a 32k budget left over from a 32k model would otherwise report a full 8k
-  // window as a quarter used, hiding the overflow this panel exists to show.
-  // Either may be absent (no budget configured; an unknown model), so fall back
-  // to whichever is present.
-  const limits = [ctx?.budget_tokens ?? 0, modelLen].filter((n) => n > 0);
-  const ctxLen = limits.length ? Math.min(...limits) : 0;
-
-  const pct = (t: number) => (ctxLen > 0 ? ` · ${Math.round((t / ctxLen) * 100)}%` : "");
-  const pctNumber = (t: number) => (ctxLen > 0 ? Math.round((t / ctxLen) * 100) : 0);
+  // A selected past turn wins over the live composition — that IS the feature.
+  // Both are the same shape, so everything below reads one variable.
+  const shown = useMemo(() => frozen ?? ctx, [frozen, ctx]);
   const nameOf = (a: Actor) => names[`${a.kind}/${a.id}`] ?? a.id;
 
   // Deliberately keyed on cid+sid and NOT on `refreshKey`, which is the same
@@ -489,38 +527,38 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
         <WeatherWidget cid={cid} sid={sid} refreshKey={refreshKey} />
       </SideSection>
 
-      <SideSection id="context" title="Context" collapsed={!!collapsed.context} onToggle={toggleSection}
-                   extra={ctx && ctxLen > 0 ? <span className="ctx-pct">{pctNumber(ctx.total_tokens)}%</span> : undefined}>
-        {ctx && (
-          <>
-            <div className="ctx-bar">
-              <div className="ctx-bar-fill" style={{ width: `${Math.min(100, pctNumber(ctx.total_tokens))}%` }} />
+      <SideSection id="context" title={frozen ? "Context (past turn)" : "Context"}
+                   collapsed={!!collapsed.context} onToggle={toggleSection}
+                   extra={shown && contextPercent(shown, models) > 0
+                     ? <span className="ctx-pct">{contextPercent(shown, models)}%</span> : undefined}>
+        {frozen && (
+          <div className="ctx-frozen">
+            <div className="field-hint">
+              What the model saw · {TASK_LABELS[frozen.task] ?? frozen.task} · {whenLabel(frozen.ts)}
             </div>
-            <div className="ctx-tokens">
-              {ctx.total_tokens.toLocaleString()}{ctxLen > 0 ? ` / ${ctxLen.toLocaleString()}` : ""} tok
-            </div>
-            {ctx.dropped_tokens > 0 && (
-              <div className="ctx-tokens">
-                {ctx.dropped_tokens.toLocaleString()} tok dropped to fit the budget
-              </div>
-            )}
-            <div className="ctx-caption">Breakdown · click a row to inspect</div>
-          </>
+            <button className="ctx-frozen-back" onClick={() => setFrozen(null)}>
+              ← Back to live context
+            </button>
+          </div>
         )}
-        {ctx?.sections.map((s) => (
-          <details className={"ctx-section" + (s.dropped ? " dropped" : "")} key={s.label}>
-            <summary>
-              <span className={"ctx-dot" + (s.label.toLowerCase().includes("transcript") ? " hot" : "")} />
-              <span className="ctx-label">{s.label}</span>
-              {s.dropped && <span className="ctx-drop">dropped</span>}
-              {s.trimmed > 0 && <span className="ctx-drop">{s.trimmed} trimmed</span>}
-              <span className="ctx-meta">{s.tokens.toLocaleString()}{pct(s.tokens)}</span>
-            </summary>
-            <div className="ctx-mini">
-              <div style={{ width: `${Math.min(100, pctNumber(s.tokens))}%` }} />
-            </div>
-            <pre className="ctx-text">{s.text}</pre>
-          </details>
+        {shown && <ContextBreakdown ctx={shown} models={models} />}
+      </SideSection>
+
+      <SideSection id="turns" title="Turn history" collapsed={!!collapsed.turns} onToggle={toggleSection}>
+        {/* The live Context section above always shows the composition as it
+            stands NOW, which is not what any past turn was sent: chronicle,
+            state, cast and world-info activation have all moved since. These
+            are the frozen ones (#157). */}
+        {turns.length === 0 && (
+          <div className="field-hint">No captured turns yet.</div>
+        )}
+        {turns.map((t) => (
+          <button key={t.id}
+                  className={"inspector-row" + (frozen?.id === t.id ? " on" : "")}
+                  onClick={() => showTurn(t.id)}>
+            <span className="inspector-name">{TASK_LABELS[t.task] ?? t.task}</span>
+            <span className="ctx-meta">{whenLabel(t.ts)}</span>
+          </button>
         ))}
       </SideSection>
 

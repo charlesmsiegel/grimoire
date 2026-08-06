@@ -54,9 +54,10 @@ from .story import (  # noqa: F401
     _project_history, _recap_depth, _recap_ids, _relationship_lines, _story_entries,
 )
 from .assemble import (  # noqa: F401
-    OPENER_RECAP_DEPTH, _SECTIONS, _assemble, _compose_system, _packed,
-    _render_sections, _section_template, _system_text, Section,
+    OPENER_RECAP_DEPTH, _SECTIONS, _assemble, _breakdown, _compose_system, _packed,
+    _render_sections, _section_template, _system_text, Appended, Section,
     build_director_messages, build_messages, build_opener_messages,
+    compose_director_turn, compose_opener, compose_turn,
     context_breakdown, context_sections,
 )
 # `_encoder` is re-exported by value for compatibility with callers that read

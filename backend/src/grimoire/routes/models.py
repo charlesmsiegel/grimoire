@@ -25,6 +25,7 @@ class ConfigUpdate(BaseModel):
     context_budget: str | None = None
     archive_depth: str | None = None
     setup_done: str | None = None
+    prompt_log_depth: str | None = None
 
 
 class ConnectionCreate(BaseModel):

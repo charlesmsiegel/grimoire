@@ -30,6 +30,8 @@ def _public_config(cfg: dict[str, str]) -> dict:
             "absorb_budget": cfg.get("absorb_budget", store.config.DEFAULT_ABSORB_BUDGET),
             "context_budget": cfg.get("context_budget", store.config.DEFAULT_CONTEXT_BUDGET),
             "archive_depth": cfg.get("archive_depth", store.config.DEFAULT_ARCHIVE_DEPTH),
+            "prompt_log_depth": cfg.get("prompt_log_depth",
+                                        store.config.DEFAULT_PROMPT_LOG_DEPTH),
             "active_connection_id": active["id"] if active else "",
             "active_connection": ({"id": active["id"], "kind": active["kind"], "name": active["name"]}
                                    if active else None),

@@ -1787,7 +1787,7 @@ def test_a_reroll_that_dies_before_its_stream_puts_the_reply_back(client, monkey
 
     def boom(*a, **k):
         raise RuntimeError("context build failed")
-    monkeypatch.setattr(store.context, "build_messages", boom)
+    monkeypatch.setattr(store.context, "compose_turn", boom)
     with pytest.raises(RuntimeError):
         client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
 
@@ -2794,7 +2794,7 @@ def test_reading_alternates_for_a_scene_that_vanishes_mid_read_is_a_404(client, 
 
 
 def test_a_reroll_whose_context_cannot_be_built_keeps_the_decision(client, monkeypatch):
-    """The setup after the removal can refuse too — `build_messages` reads the
+    """The setup after the removal can refuse too — `compose_turn` reads the
     whole store and the guidance block compiles a template. Nothing reaches the
     model, the reply comes back, and the decision it was derived from has to
     come back with it."""
@@ -2805,14 +2805,14 @@ def test_a_reroll_whose_context_cannot_be_built_keeps_the_decision(client, monke
     store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
     store.proposals.new(cid, sid, {"check": "athletics", "actor": None, "problems": []})
     refuse = {"on": True}
-    real = store.context.build_messages
+    real = store.context.compose_turn
 
     def boom(*a, **k):
         if refuse["on"]:
             raise RuntimeError("context build failed")
         return real(*a, **k)
 
-    monkeypatch.setattr(store.context, "build_messages", boom)
+    monkeypatch.setattr(store.context, "compose_turn", boom)
     with pytest.raises(RuntimeError):
         client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
     refuse["on"] = False
@@ -8674,19 +8674,19 @@ def test_turn_override_still_reaches_the_cascade(client):
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     captured = {}
-    real = store.context.build_messages
+    real = store.context.compose_turn
 
-    def spy(cid_, sid_, turn=None):
+    def spy(cid_, sid_, turn=None, appended=()):
         captured["turn"] = turn
-        return real(cid_, sid_, turn=turn)
+        return real(cid_, sid_, turn=turn, appended=appended)
 
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["ok"])
-    store.context.build_messages = spy
+    store.context.compose_turn = spy
     try:
         client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
                     json={"content": "hi", "response": {"response_preset": "terse"}})
     finally:
-        store.context.build_messages = real
+        store.context.compose_turn = real
     assert captured["turn"] == {"response_preset": "terse"}
 
 
