@@ -19,24 +19,24 @@ from grimoire import routes
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 
+from .llm_fakes import FakeLLM
 
-class FakeLLM:
-    """Records every prompt it is handed and answers from a canned list."""
 
-    def __init__(self, *texts):
-        self.texts = list(texts) or ["A summary."]
-        self.prompts: list[list[dict]] = []
+def _summarizer(*texts: str) -> FakeLLM:
+    """The shared fake scripted with one turn per refresh (`llm_fakes.py` — this
+    suite writes no fake of its own). One delta per turn: `complete` joins a
+    turn's deltas, and a summary is a single string.
 
-    async def stream(self, messages, cfg):
-        yield "reply"
+    With no texts it still needs a turn, since `FakeLLM` refuses an empty
+    script: the tests that pass none are asserting the provider is never
+    reached, so what the turn says is exactly what must not appear.
+    """
+    return FakeLLM([[t] for t in texts] or [["a summary nobody should have asked for"]])
 
-    async def complete(self, messages, cfg):
-        self.prompts.append(messages)
-        return self.texts[min(len(self.prompts) - 1, len(self.texts) - 1)]
 
-    @property
-    def calls(self) -> int:
-        return len(self.prompts)
+def _user_prompt(llm: FakeLLM, n: int) -> str:
+    """The user message of the nth recorded request."""
+    return llm.requests[n]["messages"][1]["content"]
 
 
 @pytest.fixture
@@ -100,7 +100,7 @@ def test_a_turn_short_of_the_threshold_spends_nothing(client):
     """The client fires this after every turn, so the ordinary case is a no-op.
     It must not reach the model — that is what makes firing per turn free."""
     _key(client)
-    llm = _use(client, FakeLLM())
+    llm = _use(client, _summarizer())
     cid, sid = _scene(client, posts=9)
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
     assert body["refreshed"] is False and body["summary"] == ""
@@ -109,7 +109,7 @@ def test_a_turn_short_of_the_threshold_spends_nothing(client):
 
 def test_crossing_the_threshold_folds_and_stores(client):
     _key(client)
-    llm = _use(client, FakeLLM("Mara reaches the salt gate; the ledger is still missing."))
+    llm = _use(client, _summarizer("Mara reaches the salt gate; the ledger is still missing."))
     cid, sid = _scene(client, posts=10)
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
     assert llm.calls == 1
@@ -123,10 +123,10 @@ def test_crossing_the_threshold_folds_and_stores(client):
 
 def test_the_first_fold_sees_the_whole_scene_and_no_prior(client):
     _key(client)
-    llm = _use(client, FakeLLM("A summary."))
+    llm = _use(client, _summarizer("A summary."))
     cid, sid = _scene(client, posts=10)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
-    user = llm.prompts[0][1]["content"]
+    user = _user_prompt(llm, 0)
     assert "Post 0." in user and "Post 9." in user
     assert "Summary so far" not in user
 
@@ -135,14 +135,14 @@ def test_the_second_fold_carries_the_prior_and_only_the_new_posts(client):
     """The fold is incremental: a scene that runs long must not re-send its
     whole transcript on every refresh."""
     _key(client)
-    llm = _use(client, FakeLLM("First summary.", "Second summary."))
+    llm = _use(client, _summarizer("First summary.", "Second summary."))
     cid, sid = _scene(client, posts=10)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
     for n in range(10, 20):
         store.scenes.append_message(cid, sid, "user", f"Post {n}.")
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
 
-    user = llm.prompts[1][1]["content"]
+    user = _user_prompt(llm, 1)
     assert "First summary." in user
     assert "Post 15." in user
     assert "Post 0." not in user
@@ -150,7 +150,7 @@ def test_the_second_fold_carries_the_prior_and_only_the_new_posts(client):
 
 def test_force_refreshes_a_scene_that_is_not_due(client):
     _key(client)
-    llm = _use(client, FakeLLM("Forced."))
+    llm = _use(client, _summarizer("Forced."))
     cid, sid = _scene(client, posts=2)
     body = client.post(
         f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?force=true").json()
@@ -161,7 +161,7 @@ def test_force_still_spends_nothing_when_there_is_nothing_new(client):
     """Refresh-now on an already-current summary would otherwise ask the model
     to fold an empty list of posts onto a summary, and pay for the privilege."""
     _key(client)
-    llm = _use(client, FakeLLM("Once."))
+    llm = _use(client, _summarizer("Once."))
     cid, sid = _scene(client, posts=4)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?force=true")
     body = client.post(
@@ -171,7 +171,7 @@ def test_force_still_spends_nothing_when_there_is_nothing_new(client):
 
 def test_force_spends_nothing_on_an_empty_scene(client):
     _key(client)
-    llm = _use(client, FakeLLM())
+    llm = _use(client, _summarizer())
     cid, sid = _scene(client, posts=0)
     body = client.post(
         f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?force=true").json()
@@ -180,7 +180,7 @@ def test_force_spends_nothing_on_an_empty_scene(client):
 
 def test_zero_turns_the_automatic_refresh_off(client):
     _key(client)
-    llm = _use(client, FakeLLM("Never."))
+    llm = _use(client, _summarizer("Never."))
     store.write_config(rolling_summary_every="0")
     cid, sid = _scene(client, posts=40)
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
@@ -196,7 +196,7 @@ def test_an_edited_post_inside_the_covered_prefix_forces_a_full_refold(client):
     transcript exactly as long as it was, so folding forward would carry prose
     about text that is no longer there for the rest of the scene."""
     _key(client)
-    llm = _use(client, FakeLLM("First summary.", "Refolded."))
+    llm = _use(client, _summarizer("First summary.", "Refolded."))
     cid, sid = _scene(client, posts=10)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
 
@@ -206,7 +206,7 @@ def test_an_edited_post_inside_the_covered_prefix_forces_a_full_refold(client):
 
     body = client.post(
         f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?force=true").json()
-    user = llm.prompts[1][1]["content"]
+    user = _user_prompt(llm, 1)
     assert "Summary so far" not in user           # the prior was discarded
     assert "Post 0, rewritten entirely." in user  # and the whole scene re-read
     assert body["stale"] is False and body["at"] == 10
@@ -214,7 +214,7 @@ def test_an_edited_post_inside_the_covered_prefix_forces_a_full_refold(client):
 
 def test_a_shortened_transcript_is_stale_too(client):
     _key(client)
-    _use(client, FakeLLM("First summary."))
+    _use(client, _summarizer("First summary."))
     cid, sid = _scene(client, posts=10)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
     store.scenes.trim_continuation(cid, sid, 4)
@@ -226,7 +226,7 @@ def test_appending_posts_does_not_make_a_summary_stale(client):
     """The negative of the two above: ordinary play must not throw the fold
     away, or the feature costs a whole-transcript call every time."""
     _key(client)
-    _use(client, FakeLLM("First summary."))
+    _use(client, _summarizer("First summary."))
     cid, sid = _scene(client, posts=10)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
     store.scenes.append_message(cid, sid, "user", "And another thing.")
@@ -240,7 +240,7 @@ def test_a_stale_summary_is_still_returned_not_blanked(client):
     staleness warning -- which renders beside the prose -- unreachable. Stale
     means "this describes a transcript that moved on", not "this is gone"."""
     _key(client)
-    _use(client, FakeLLM("Mara reaches the salt gate."))
+    _use(client, _summarizer("Mara reaches the salt gate."))
     cid, sid = _scene(client, posts=10)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
     store.scenes.edit_message(cid, sid, 0, "Post 0, rewritten entirely.")
@@ -255,7 +255,7 @@ def test_a_forced_refresh_reports_the_automatic_schedule_not_its_own(client):
     that found nothing new must not report `due` about ITSELF -- the panel reads
     this to say when the next refresh is coming."""
     _key(client)
-    _use(client, FakeLLM("Once."))
+    _use(client, _summarizer("Once."))
     cid, sid = _scene(client, posts=4)
     body = client.post(
         f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?force=true").json()
@@ -269,18 +269,21 @@ def test_a_post_edited_during_the_call_does_not_get_the_summary_that_raced_it(cl
     trusts this response directly — presents it as current until some later GET
     happens to notice."""
     _key(client)
-    _use(client, FakeLLM("First summary."))
+    _use(client, _summarizer("First summary."))
     cid, sid = _scene(client, posts=10)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
 
     class EditsMidCall(FakeLLM):
-        async def complete(self, messages, cfg):
+        """Side effect first, then the shared implementation — chaining rather
+        than replacing keeps `calls`/`requests` true."""
+
+        async def complete(self, messages, conn):
             store.scenes.edit_message(cid, sid, 0, "Post 0, rewritten mid-call.")
-            return "A summary of the transcript as it was before that edit."
+            return await super().complete(messages, conn)
 
     for n in range(10, 25):
         store.scenes.append_message(cid, sid, "user", f"Post {n}.")
-    _use(client, EditsMidCall())
+    _use(client, EditsMidCall([["A summary of the transcript as it was before that edit."]]))
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
 
     assert body["refreshed"] is False
@@ -300,12 +303,12 @@ def test_a_recycled_scene_id_does_not_inherit_the_old_scene_s_summary(client):
     recycled: list[str] = []
 
     class DeletesMidCall(FakeLLM):
-        async def complete(self, messages, cfg):
+        async def complete(self, messages, conn):
             store.scenes.delete_scene(cid, sid)
             recycled.append(store.scenes.create_scene(cid, "Saltmarch"))
-            return "A summary of a scene that no longer exists."
+            return await super().complete(messages, conn)
 
-    _use(client, DeletesMidCall())
+    _use(client, DeletesMidCall([["A summary of a scene that no longer exists."]]))
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
 
     assert recycled == [sid]        # the id really was handed to the new scene
@@ -321,11 +324,11 @@ def test_posts_landing_during_the_call_do_not_block_the_write(client):
     cid, sid = _scene(client, posts=10)
 
     class AppendsMidCall(FakeLLM):
-        async def complete(self, messages, cfg):
+        async def complete(self, messages, conn):
             store.scenes.append_message(cid, sid, "user", "A turn that landed mid-call.")
-            return "Mara reaches the salt gate."
+            return await super().complete(messages, conn)
 
-    _use(client, AppendsMidCall())
+    _use(client, AppendsMidCall([["Mara reaches the salt gate."]]))
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
 
     assert body["refreshed"] is True and body["stale"] is False
@@ -344,16 +347,16 @@ def test_an_older_refresh_does_not_overwrite_a_newer_one(client):
     cid, sid = _scene(client, posts=10)
 
     class NewerLandsFirst(FakeLLM):
-        async def complete(self, messages, cfg):
+        async def complete(self, messages, conn):
             for n in range(10, 12):
                 store.scenes.append_message(cid, sid, "user", f"Post {n}.")
             msgs = store.scenes.read_scene(cid, sid)["messages"]
             store.scenes.set_rolling_summary(
                 cid, sid, "Newer summary, covering twelve.", len(msgs),
                 store.rolling_summary.covered_digest(msgs))
-            return "Older summary, covering ten."
+            return await super().complete(messages, conn)
 
-    _use(client, NewerLandsFirst())
+    _use(client, NewerLandsFirst([["Older summary, covering ten."]]))
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
 
     assert body["refreshed"] is False
@@ -368,20 +371,20 @@ def test_an_empty_completion_still_reports_the_staleness_it_can_see(client):
     call answered `stale: false` about a summary that had just gone stale. The
     panel renders this answer directly."""
     _key(client)
-    _use(client, FakeLLM("Good summary."))
+    _use(client, _summarizer("Good summary."))
     cid, sid = _scene(client, posts=10)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
 
     class EditsThenSaysNothing(FakeLLM):
-        async def complete(self, messages, cfg):
+        async def complete(self, messages, conn):
             store.scenes.edit_message(cid, sid, 0, "Post 0, rewritten mid-call.")
-            return "   \n  "
+            return await super().complete(messages, conn)
 
     # Posts have to be pending, or the route declines before ever calling the
     # model and this exercises the not-due branch instead of the empty-reply one.
     for n in range(10, 15):
         store.scenes.append_message(cid, sid, "user", f"Post {n}.")
-    _use(client, EditsThenSaysNothing())
+    _use(client, EditsThenSaysNothing([["   \n  "]]))
     body = client.post(
         f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?force=true").json()
 
@@ -391,7 +394,7 @@ def test_an_empty_completion_still_reports_the_staleness_it_can_see(client):
 
 # ---- POST: failure never reaches the turn loop ----
 def test_no_connection_is_a_409_not_a_500(client):
-    llm = _use(client, FakeLLM())
+    llm = _use(client, _summarizer())
     cid, sid = _scene(client, posts=10)
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
     assert r.status_code == 409
@@ -403,15 +406,11 @@ def test_no_connection_is_a_409_not_a_500(client):
 
 def test_an_upstream_failure_is_a_502_and_leaves_the_stored_summary_alone(client):
     _key(client)
-    _use(client, FakeLLM("Good summary."))
+    _use(client, _summarizer("Good summary."))
     cid, sid = _scene(client, posts=10)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
 
-    class Boom(FakeLLM):
-        async def complete(self, messages, cfg):
-            raise LLMError("upstream", "the model exploded")
-
-    _use(client, Boom())
+    _use(client, FakeLLM([["ignored"]], error=LLMError("upstream", "the model exploded")))
     for n in range(10, 25):
         store.scenes.append_message(cid, sid, "user", f"Post {n}.")
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
@@ -424,11 +423,11 @@ def test_an_empty_reply_is_not_stored_over_a_good_summary(client):
     """A provider can return an empty completion. Storing it would blank a
     summary the player could still read, and record it as covering the scene."""
     _key(client)
-    _use(client, FakeLLM("Good summary."))
+    _use(client, _summarizer("Good summary."))
     cid, sid = _scene(client, posts=10)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
 
-    _use(client, FakeLLM("   \n  "))
+    _use(client, _summarizer("   \n  "))
     for n in range(10, 25):
         store.scenes.append_message(cid, sid, "user", f"Post {n}.")
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
@@ -446,12 +445,12 @@ def test_a_scene_renamed_mid_refresh_is_not_a_500(client):
     renamed: list[str] = []
 
     class RenamesMidCall(FakeLLM):
-        async def complete(self, messages, cfg):
+        async def complete(self, messages, conn):
             renamed.append(store.scenes.rename_scene(cid, sid, "Somewhere else"))
-            return "A summary of a scene that has since moved."
+            return await super().complete(messages, conn)
 
     cid, sid = _scene(client, posts=10)
-    _use(client, RenamesMidCall())
+    _use(client, RenamesMidCall([["A summary of a scene that has since moved."]]))
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
     assert renamed and renamed[0] != sid          # the file really did move
     assert body["refreshed"] is False
@@ -469,7 +468,7 @@ def test_a_multiline_reply_does_not_corrupt_the_scene_file(client):
     per key, so a model answering in paragraphs would otherwise write a scene
     file whose frontmatter block ends early and whose transcript is unreadable."""
     _key(client)
-    _use(client, FakeLLM("Line one.\n---\ntitle: hijacked\n\nLine two."))
+    _use(client, _summarizer("Line one.\n---\ntitle: hijacked\n\nLine two."))
     cid, sid = _scene(client, posts=10)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
 
@@ -506,13 +505,18 @@ async def test_a_second_turn_does_not_start_a_second_provider_call(monkeypatch, 
     release = asyncio.Event()
 
     class SlowLLM(FakeLLM):
-        async def complete(self, messages, cfg):
-            self.prompts.append(messages)
-            started.set()
-            await release.wait()
-            return "A summary."
+        """Blocks the FIRST call only. Blocking both would deadlock the test —
+        the second request would never return to release the first. Chains
+        through the shared implementation so `calls` counts what it should."""
 
-    llm = SlowLLM()
+        async def complete(self, messages, conn):
+            text = await super().complete(messages, conn)
+            if self.calls == 1:
+                started.set()
+                await release.wait()
+            return text
+
+    llm = SlowLLM([["A summary."]])
     app.dependency_overrides[routes.get_llm] = lambda: llm
 
     transport = httpx.ASGITransport(app=app)
@@ -549,12 +553,8 @@ async def test_the_claim_is_released_so_the_next_refresh_can_run(monkeypatch, tm
     importlib.reload(store)
     app = create_app()
 
-    class Boom(FakeLLM):
-        async def complete(self, messages, cfg):
-            self.prompts.append(messages)
-            raise LLMError("upstream", "the model exploded")
-
-    app.dependency_overrides[routes.get_llm] = lambda: Boom()
+    app.dependency_overrides[routes.get_llm] = lambda: FakeLLM(
+        [["ignored"]], error=LLMError("upstream", "the model exploded"))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
         wid = (await ac.post("/api/worlds", json={"name": "Realm"})).json()["id"]
@@ -569,7 +569,7 @@ async def test_the_claim_is_released_so_the_next_refresh_can_run(monkeypatch, tm
         url = f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary"
         assert (await ac.post(url)).status_code == 502      # claim taken, then failed
 
-        ok = FakeLLM("A summary after the failure.")
+        ok = _summarizer("A summary after the failure.")
         app.dependency_overrides[routes.get_llm] = lambda: ok
         body = (await ac.post(url)).json()
 

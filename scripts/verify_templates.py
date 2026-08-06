@@ -104,12 +104,19 @@ check("voice drift user", exp[1]["content"],
 # Both folds, because the user template branches on `prior` and the two branches
 # label the transcript differently -- a from-scratch fold that said "posts since
 # that summary" would be asking the model to fold onto a summary it never got.
+# ...and both fact heads, since a scene with no location, date or cast yet must
+# render no head at all rather than an empty one.
+ROLLING_FACTS = {"location": "Night Dock", "date": "2026-07-05",
+                 "cast": ["characters/seraphine", "pcs/hero"]}
 for prior in ("", "Seraphine held the dock; the ledger was still missing."):
-    exp = rolling_summary.build_prompt(prior, transcript)
-    check(f"rolling summary system (prior={bool(prior)})", exp[0]["content"],
-          render("rolling_summary/system.j2"))
-    check(f"rolling summary user (prior={bool(prior)})", exp[1]["content"],
-          render("rolling_summary/user.j2", prior=prior, transcript=transcript))
+    for facts in (None, {"location": "", "date": "", "cast": []}, ROLLING_FACTS):
+        exp = rolling_summary.build_prompt(prior, transcript, facts)
+        check(f"rolling summary system (prior={bool(prior)})", exp[0]["content"],
+              render("rolling_summary/system.j2"))
+        check(f"rolling summary user (prior={bool(prior)}, facts={bool(facts)})",
+              exp[1]["content"],
+              render("rolling_summary/user.j2", prior=prior, transcript=transcript,
+                     facts=facts))
 
 EMPTY_SNAP = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None,
               "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],

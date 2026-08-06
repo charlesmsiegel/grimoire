@@ -162,6 +162,29 @@ def test_the_prior_summary_reaches_the_prompt_when_folding():
     assert "Mara reached the gate." in msgs[1]["content"]
 
 
+def test_the_scene_facts_reach_the_prompt():
+    """The system prompt asks where the scene is and who is present, and the
+    transcript does not always say: a scene's first location and its
+    pre-first-message cast are both seated silently. A fold cannot recover a
+    fact it was never given."""
+    msgs = rolling_summary.build_prompt(
+        "", "**You:** Where is it?",
+        {"location": "Night Dock", "date": "2026-07-05",
+         "cast": ["characters/seraphine"]})
+    user = msgs[1]["content"]
+    assert "Night Dock" in user and "2026-07-05" in user
+    assert "characters/seraphine" in user
+
+
+def test_a_scene_with_no_facts_yet_renders_no_head():
+    """An empty head, not a head full of blanks — a brand-new scene has no
+    location, date or cast, and labelled emptiness is worse than silence."""
+    msgs = rolling_summary.build_prompt(
+        "", "**You:** Hello.", {"location": "", "date": "", "cast": []})
+    assert msgs[1]["content"] == rolling_summary.build_prompt(
+        "", "**You:** Hello.")[1]["content"]
+
+
 def test_parse_output_collapses_to_a_single_line():
     text = "  Mara reaches the gate.\n\nSeraphine follows her in.  \n"
     assert rolling_summary.parse_output(text) == "Mara reaches the gate. Seraphine follows her in."

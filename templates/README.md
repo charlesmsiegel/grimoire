@@ -100,8 +100,16 @@ scene's roll-log entries), `transcript` (`snippets/transcript.j2`).
 ### `rolling_summary/` — POST /campaigns/{cid}/scenes/{sid}/rolling-summary
 The live running summary of a scene **still being played** (#85). Mirrors
 `store/rolling_summary.py:build_prompt`. Messages: system, user.
-`user.j2` vars: `prior` (the stored summary this refresh folds forward, `""`
-when there is none to fold), `transcript` (`snippets/transcript.j2`).
+`user.j2` vars: `facts` (`chronicle.scene_facts()`), `prior` (the stored summary
+this refresh folds forward, `""` when there is none to fold), `transcript`
+(`snippets/transcript.j2`).
+
+`facts` renders the same Location/Date/Present head `absorb/user.j2` builds, and
+carries more weight here: a scene's first location is set **silently**
+(`scenes/moment.py`) and cast seated before the first message is seated
+**silently** (`appearances/transitions.py`), so on an ordinary scene neither
+fact is anywhere in the transcript — and a fold cannot recover a fact it was
+never given, because the text it would have come from is already behind it.
 
 The two are coupled: `transcript` is the posts appended **since** `prior` when
 there is a prior, and the **whole scene** when there is not — the template
