@@ -84,18 +84,25 @@ def _touched_scenes(records) -> dict[str, set[str]]:
     return out
 
 
-def _focus(present: list[dict]) -> list[dict]:
-    """The actors the involvement flag is about: the scene's players, or its
-    whole cast when it has none.
+def _focus(present: list[dict], pcless: bool) -> list[dict]:
+    """The actors the involvement flag is about: the scene's players, or —
+    in an offscreen scene — its whole cast.
 
-    The fallback is for offscreen scenes (``pcless``), which seat only NPCs. A
+    The widening is for offscreen (``pcless``) scenes, which seat only NPCs. A
     flag computed against ``role == "player"`` alone would be empty for every
     row in exactly the scenes where the director steers the cast directly and
-    most needs to know what each of them is carrying. It only ever widens an
-    *empty* answer, so a scene that does have a player keeps the strict reading
-    — an NPC's thread is not "yours".
+    most needs to know what each of them is carrying.
+
+    Keyed on the scene's own ``pcless`` flag rather than on "the player list came
+    back empty", which is what this asked first and which was wrong (Codex
+    review). An ordinary scene has no players *yet* while it is being set up, and
+    momentarily none again if its player is removed — so the loose test made
+    `involves` mean one thing before the PC was seated and another after, with
+    NPC threads losing their flags the instant she arrived. A reader cannot be
+    expected to explain that. ``pcless`` is a property of the scene, so the
+    meaning now holds still for as long as the scene does.
     """
-    return [a for a in present if a.get("role") == "player"] or present
+    return present if pcless else [a for a in present if a.get("role") == "player"]
 
 
 def _stage_history(cid: str, refs: set[str]) -> dict[str, set[str]]:
@@ -125,7 +132,14 @@ def _stage_history(cid: str, refs: set[str]) -> dict[str, set[str]]:
             continue
         cast = rec.get("cast")
         for ref in (cast if isinstance(cast, list) else ()):
-            if ref in seen:
+            # `isinstance(ref, str)` BEFORE the membership test, the same rule
+            # `_touched_scenes` applies to beat scenes and for the same reason:
+            # `seen` is a dict, so a list-valued cast entry is unhashable and
+            # `in` RAISES rather than missing. That raise reaches this function's
+            # tolerant caller, which replaces the whole result -- throwing away
+            # the history already collected from appearances.json and unflagging
+            # every row, for one hand-edited record (Codex review).
+            if isinstance(ref, str) and ref in seen:
                 seen[ref].add(sid)
     return seen
 
@@ -199,7 +213,11 @@ def build(cid: str, sid: str) -> dict:
 
     with locks.campaign_lock(cid):
         present = _tolerant(lambda: appearances_cast.scene_cast(cid, sid), [])
-        focus = _focus(present)
+        # Reads the frontmatter head only. Tolerant because the scene file can
+        # go between the route's `_require_scene` and here; a scene this cannot
+        # read is treated as an ordinary one, which is the narrower reading.
+        pcless = _tolerant(lambda: scenes_read.is_pcless(cid, sid), False)
+        focus = _focus(present, pcless)
         names = {f"{a['kind']}/{a['id']}": a.get("name") or a["id"] for a in focus}
         stage = _tolerant(lambda: _stage_history(cid, set(names)), {})
         # Two reads of one file, both inside the hold: `open_threads` projects
