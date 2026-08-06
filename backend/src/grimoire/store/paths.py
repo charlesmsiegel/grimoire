@@ -106,6 +106,34 @@ def data_dir_info() -> dict:
     }
 
 
+def any_child_record(base: Path, meta_name: str) -> bool:
+    """Whether `base` holds at least one entry a listing would return.
+
+    The same filter `worlds.read.list_worlds` / `campaigns.read.list_campaigns`
+    apply — a directory, its meta file present, an id the resolvers accept —
+    but it stops at the first hit and parses nothing, so "does this store hold
+    anything?" costs a directory scan rather than a full read of every record.
+    That distinction is the whole point: the caller is `first_run` detection on
+    GET /api/config, which must not turn every config read into a walk of the
+    library.
+
+    A missing `base` is emptiness, not an error — an un-created worlds dir
+    holds no worlds. Any other OSError propagates: the caller has to be able
+    to tell "nothing here" from "could not look", because those two answers
+    send a first-run check in opposite directions.
+
+    The listing is drained before it is filtered so that `except
+    FileNotFoundError` covers only opening the directory. `iterdir` is lazy, so
+    with the generator inside the `try` a failure part-way through the scan
+    would land in the same handler and be reported as an empty store.
+    """
+    try:
+        entries = list(base.iterdir())
+    except FileNotFoundError:
+        return False
+    return any(d.is_dir() and safe_id(d.name) and (d / meta_name).exists() for d in entries)
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 

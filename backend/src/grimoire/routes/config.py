@@ -21,6 +21,7 @@ router = APIRouter()
 # ---- config ----
 def _public_config(cfg: dict[str, str]) -> dict:
     active = store.llm_connections.get_active()
+    setup_done, first_run = _setup_state(cfg)
     return {"theme": cfg["theme"], "system_prompt": cfg.get("system_prompt", ""),
             "quote_color": cfg.get("quote_color", "off"),
             "user_label": cfg.get("user_label", "You"),
@@ -32,7 +33,48 @@ def _public_config(cfg: dict[str, str]) -> dict:
             "active_connection_id": active["id"] if active else "",
             "active_connection": ({"id": active["id"], "kind": active["kind"], "name": active["name"]}
                                    if active else None),
-            "ready": _connection_ready(active)}
+            "ready": _connection_ready(active),
+            "setup_done": setup_done,
+            "first_run": first_run}
+
+
+def _setup_state(cfg: dict[str, str]) -> tuple[str, bool]:
+    """`(setup_done, first_run)` for this store (#194).
+
+    The frontend redirects `/` to the setup wizard on a true `first_run`, so
+    the two ways to be wrong are not symmetric: showing the wizard to someone
+    who already has a library hijacks their app, while missing a genuinely
+    fresh install only costs them the tour. Every uncertain case therefore
+    resolves to False.
+
+    The recorded flag is authoritative once set -- finishing *or* dismissing
+    the wizard sets it, so neither deleting every world later nor clearing a
+    key brings the wizard back. It is only when nothing has been recorded that
+    the store itself is asked, and a store that already holds worlds or
+    campaigns has its answer written down: without that backfill, every
+    install predating this key would re-run the scan on every config read
+    forever, because "no flag" is indistinguishable from "never asked".
+
+    The backfill is a write from a GET, which is worth the oddness: it is
+    idempotent, happens at most once per store, and the alternative (a startup
+    migration) cannot cover a data dir switched mid-session. Both halves of the
+    answer come from here so a response can never report the flag as unset
+    while this call has just written it -- the caller was handed `cfg` before
+    the backfill, and reading `setup_done` back off it would contradict the
+    file on exactly the request that fixed it.
+    """
+    recorded = cfg.get("setup_done", store.config.DEFAULT_SETUP_DONE)
+    if recorded == "on":
+        return "on", False
+    try:
+        if store.worlds.has_worlds() or store.campaigns.has_campaigns():
+            store.write_config(setup_done="on")
+            return "on", False
+    except OSError:
+        # Could not look, so cannot claim this is a fresh install -- and
+        # nothing was recorded, so the flag is still whatever the file says.
+        return recorded, False
+    return recorded, True
 
 
 def _connection_ready(conn: dict | None) -> bool:

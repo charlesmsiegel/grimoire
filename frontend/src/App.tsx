@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api } from "./api/client";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import { DEFAULT_THEME } from "./theme/themes";
@@ -14,9 +14,16 @@ import ResponsePresetsView from "./routes/ResponsePresetsView";
 import ClimatesView from "./routes/ClimatesView";
 import ConnectionsView from "./routes/ConnectionsView";
 import ConfigView from "./routes/ConfigView";
+import SetupWizard from "./routes/SetupWizard";
 
 export default function App() {
   const [theme, setTheme] = useState<string | null>(null);
+  // Settled by the same boot fetch that supplies the theme, and the theme
+  // already gates the first render — so this needs no request of its own and
+  // no route is ever chosen against a not-yet-known answer (#194). It is state
+  // rather than a re-read because the wizard reports its own completion:
+  // refetching to notice would race the navigation away from it.
+  const [firstRun, setFirstRun] = useState(false);
   const [ready, setReady] = useState(false);
   const [activeLabel, setActiveLabel] = useState("NO CONNECTION");
 
@@ -38,7 +45,9 @@ export default function App() {
   }
 
   useEffect(() => {
-    api.getConfig().then((c) => setTheme(c.theme)).catch(() => setTheme(DEFAULT_THEME));
+    api.getConfig()
+      .then((c) => { setTheme(c.theme); setFirstRun(c.first_run); })
+      .catch(() => setTheme(DEFAULT_THEME));
   }, []);
 
   useEffect(() => {
@@ -91,7 +100,11 @@ export default function App() {
         </div>
       </header>
       <Routes>
-        <Route path="/" element={<CampaignsView />} />
+        {/* A fresh install lands on the wizard instead of an empty campaigns
+            list. Only `/` is redirected: every other route stays reachable, so
+            the topbar is an escape hatch and a deep link is never hijacked. */}
+        <Route path="/" element={firstRun ? <Navigate to="/welcome" replace /> : <CampaignsView />} />
+        <Route path="/welcome" element={<SetupWizard onDone={() => setFirstRun(false)} />} />
         <Route path="/campaigns/new" element={<CampaignWizard ready={ready} />} />
         <Route path="/campaigns/:cid" element={
           <CampaignView ready={ready} topbarCollapsed={topbarCollapsed} onToggleTopbar={toggleTopbar} />} />

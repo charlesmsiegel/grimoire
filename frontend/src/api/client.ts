@@ -82,6 +82,12 @@ export type Config = {
   absorb_budget: string;
   context_budget: string;
   archive_depth: string;
+  /** "on" once the setup wizard has been finished or dismissed (#194). */
+  setup_done: string;
+  /** Server's verdict on whether to show the setup wizard: the flag is unset
+   *  AND the store holds no worlds and no campaigns. Derived rather than left
+   *  to the client so a boot needs one request, not three. */
+  first_run: boolean;
 };
 export type DataDirInfo = {
   data_dir: string;
@@ -722,7 +728,7 @@ export const api = {
     }
     return configCache;
   },
-  putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; context_budget: string; archive_depth: string }>) =>
+  putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; context_budget: string; archive_depth: string; setup_done: string }>) =>
     request<Config>("PUT", "/api/config", body).then((cfg) => {
       configCache = Promise.resolve(cfg); // the write's response is the fresh config
       return cfg;
