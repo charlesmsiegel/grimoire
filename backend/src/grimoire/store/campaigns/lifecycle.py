@@ -294,16 +294,29 @@ def _tombstone_deleted_copied_assets(cid: str, root: Path, wroot: Path, copied: 
     union-only and this runs once. The reserved-base residues `_recorded_base`
     leaves behind hit it the same way (Codex review).
 
-    So the fork has to say so itself, and the asset directory is its signature:
-    the fork copied whole record directories, creating
-    `<kind>/<aid>/assets/<vid>/`, and no materializer ever creates one.
-    `assets.delete_image` unlinks files without removing the directory, so it
-    survives the user deleting every image in the version — which is exactly the
-    case this function exists to preserve.
+    So it asks the campaign's own asset directory first. The fork copied whole
+    record directories, creating `<kind>/<aid>/assets/<vid>/`, and no
+    materializer creates one; `assets.delete_image` unlinks files without
+    removing the directory, so the directory survives the user deleting every
+    image in the version — exactly the case this function exists to preserve.
 
-    Assets the world added to an already-copied version after the fork are still
-    misread as deletions; that is the same false premise one step further in,
-    left alone here because it is not what #270 is about."""
+    That NARROWS the inference; it does not make it sound, and the difference is
+    worth stating because the tests cannot. `put_image`, `write_focus`,
+    `promote_image` and `image_subjects.copy_to_character` all write to the
+    campaign root and all `mkdir(parents=True)`, so a user who uploads an image,
+    sets an avatar crop, or promotes one — on a campaign whose migration is
+    deferred because its world folder has not synced yet — creates the same
+    directory the fork would have. What the world added afterwards is then read
+    as something that user deleted. Assets the world adds to an
+    already-copied version have never been distinguishable either.
+
+    Nothing on disk separates "the user deleted this world image" from "this
+    image was never copied here", and the error is one-way: a false tombstone
+    hides inherited art permanently, while a missed one shows a deleted image
+    again, which the user can delete once more. Left as it is because it is
+    pre-overlay asset attribution, not #270's manifest-ref attribution, and
+    narrowing it further is a change to make deliberately rather than in
+    passing (Codex review)."""
     gone = overlay.deleted(cid)
     for kind in ("characters", "pcs", "locations", "lore", "greetings"):
         wbase = wroot / kind
