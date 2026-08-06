@@ -500,3 +500,20 @@ def test_a_repoint_whose_index_cannot_be_read_still_drops_the_rows(monkeypatch, 
 
     assert prompt_log.list_entries(cid, sid) == []
     assert prompt_log.list_entries(cid, "0002-renamed") == []
+
+
+def test_a_row_with_malformed_metadata_is_not_listed(monkeypatch, tmp_path):
+    """The id was validated but the UI-facing fields were not, so a row like
+    `"task": {}` reached `SceneInspector`, which renders it straight into the
+    DOM — and React throws on an object child, taking the panel down."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    good = _record(cid, sid)
+    path = campaigns.campaign_root(cid) / "prompts" / "index.json"
+    index = json.loads(path.read_text(encoding="utf-8"))
+    row = dict(index["entries"][0])
+
+    for bad in ({"task": {}}, {"ts": 17}, {"model": None}, {"scene": ["s"]},
+                {"total_tokens": "lots"}, {"budget_tokens": None}):
+        index["entries"] = [{**row, "id": "000009", **bad}, dict(row)]
+        path.write_text(json.dumps(index), encoding="utf-8")
+        assert [e["id"] for e in prompt_log.list_entries(cid, sid)] == [good], bad

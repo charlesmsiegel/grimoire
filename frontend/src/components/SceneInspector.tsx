@@ -135,7 +135,13 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // stale row would fetch a DIFFERENT campaign's prompt under it. Comparing
   // during render makes the window impossible rather than short.
   const [turns, setTurns] = useState<{ cid: string; sid: string; rows: PromptEntry[] } | null>(null);
-  const [frozen, setFrozen] = useState<PromptSnapshot | null>(null);
+  // Scoped like `turns` and `brief`, and for a reason the clearing effect below
+  // cannot cover on its own: effects run AFTER render, so on a scene or campaign
+  // switch the first paint still has the old snapshot while `shown` already
+  // prefers it — painting one scene's whole prompt under another's heading for a
+  // frame. Comparing during render makes that impossible rather than brief.
+  const [frozen, setFrozen] = useState<
+    { cid: string; sid: string; data: PromptSnapshot } | null>(null);
   const [recap, setRecap] = useState<ChronicleEntry[]>([]);
   // Held with the campaign AND scene it came from, the way `LedgerPanel` holds
   // its campaign: the inspector stays mounted across both switches, so a bare
@@ -317,7 +323,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       // in the new scene's panel — the exact confusion the backend refuses to
       // serve (the detail route scopes each entry to its scene), so the client
       // must not reintroduce it from the other end.
-      if (current()) setFrozen(snapshot);
+      if (current()) setFrozen({ cid, sid, data: snapshot });
     } catch (err: any) {
       if (!current()) return;
       // The likeliest failure is the retention window having evicted it while
@@ -385,9 +391,13 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     }
   }
 
+  // The snapshot only counts while it belongs to what is on screen.
+  const seen = useMemo(
+    () => (frozen && frozen.cid === cid && frozen.sid === sid ? frozen.data : null),
+    [frozen, cid, sid]);
   // A selected past turn wins over the live composition — that IS the feature.
   // Both are the same shape, so everything below reads one variable.
-  const shown = useMemo(() => frozen ?? ctx, [frozen, ctx]);
+  const shown = useMemo(() => seen ?? ctx, [seen, ctx]);
   // Empty until the rows on hand are this scene's, so a switch shows "no
   // captured turns yet" for a moment rather than the previous scene's list.
   const shownTurns = useMemo(
@@ -578,10 +588,10 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
                    collapsed={!!collapsed.context} onToggle={toggleSection}
                    extra={shown && contextPercent(shown, models) > 0
                      ? <span className="ctx-pct">{contextPercent(shown, models)}%</span> : undefined}>
-        {frozen && (
+        {seen && (
           <div className="ctx-frozen">
             <div className="field-hint">
-              What the model saw · {TASK_LABELS[frozen.task] ?? frozen.task} · {whenLabel(frozen.ts)}
+              What the model saw · {TASK_LABELS[seen.task] ?? seen.task} · {whenLabel(seen.ts)}
             </div>
             <button className="ctx-frozen-back"
                     onClick={() => { wantedTurn.current = null; setFrozen(null); }}>
@@ -602,7 +612,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
         )}
         {shownTurns.map((t) => (
           <button key={t.id}
-                  className={"inspector-row" + (frozen?.id === t.id ? " on" : "")}
+                  className={"inspector-row" + (seen?.id === t.id ? " on" : "")}
                   onClick={() => showTurn(t.id)}>
             <span className="inspector-name">{TASK_LABELS[t.task] ?? t.task}</span>
             <span className="ctx-meta">{whenLabel(t.ts)}</span>

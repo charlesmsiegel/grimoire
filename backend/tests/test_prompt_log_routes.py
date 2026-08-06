@@ -184,3 +184,31 @@ def test_a_regenerate_that_never_reaches_the_model_records_nothing(client, monke
     entries = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
     assert len(entries) == before
     assert not any(e["task"] == "regenerate" for e in entries)
+
+
+def test_a_turn_that_never_claims_records_nothing(client, monkeypatch):
+    """`_chat_stream` claims the turn under the campaign lock synchronously,
+    before it returns — so a contended campaign raises StoreBusy there and
+    nothing is ever sent. Recording ahead of that left Turn history showing a
+    request the model never saw.
+
+    The failure is injected at `_chat_stream` itself rather than at
+    `campaign_lock`, which the route also takes BEFORE composing — patching that
+    would raise above the snapshot anyway and prove nothing about the order.
+    """
+    cid, sid = _scene(client)
+    _chat(client, cid, sid)
+    before = len(client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"])
+
+    def busy(*_a, **_k):
+        raise store.locks.StoreBusy("campaign is busy")
+
+    real_stream = routes.scenes._chat_stream
+    monkeypatch.setattr(routes.scenes, "_chat_stream", busy)
+    assert _chat(client, cid, sid).status_code == 409
+    # restore just this one -- `monkeypatch.undo()` would also revert the
+    # GRIMOIRE_HOME the fixture set, pointing the assertions at the real store
+    monkeypatch.setattr(routes.scenes, "_chat_stream", real_stream)
+
+    entries = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
+    assert len(entries) == before
