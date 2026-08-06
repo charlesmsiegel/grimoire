@@ -1206,9 +1206,16 @@ export const api = {
   sceneBriefing: (cid: string, sid: string) =>
     request<Briefing>("GET", `/api/campaigns/${cid}/scenes/${sid}/briefing`,
                       undefined, { fresh: true }),
+  // `fresh`, like `campaignLedger` and `sceneBriefing`: this is re-read on the
+  // refreshKey a completed generation bumps, and the turn that generation just
+  // captured is the entire reason for the re-read. A shared in-flight GET from
+  // before the turn would answer it with a list that cannot contain the new
+  // row, leaving Turn history a turn behind until some later refresh.
   listScenePrompts: (cid: string, sid: string) =>
     request<{ entries: PromptEntry[] }>(
-      "GET", `/api/campaigns/${cid}/scenes/${sid}/prompts`),
+      "GET", `/api/campaigns/${cid}/scenes/${sid}/prompts`, undefined, { fresh: true }),
+  // Deliberately NOT `fresh`: a snapshot is frozen by construction, so two
+  // readers of one entry can share an answer that cannot go stale.
   getScenePrompt: (cid: string, sid: string, eid: string) =>
     request<PromptSnapshot>(
       "GET", `/api/campaigns/${cid}/scenes/${sid}/prompts/${eid}`),
