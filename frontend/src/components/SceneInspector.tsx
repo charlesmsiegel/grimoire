@@ -244,9 +244,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
     api.getSceneLocation(cid, sid).then(setSetting).catch(() => setSetting(null));
     api.getSceneContext(cid, sid).then(setCtx).catch(() => setCtx(null));
-    api.listScenePrompts(cid, sid)
-      .then((r) => setTurns({ cid, sid, rows: r.entries }))
-      .catch(() => setTurns({ cid, sid, rows: [] }));
+
     api.getChronicle(cid).then(setRecap).catch(() => setRecap([]));
     reloadWhen();
     reloadCfg();
@@ -263,6 +261,22 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     return () => { live = false; };
   }, [cid, sid, refreshKey]);
 
+  // Its own effect, with the same `live` cleanup and for a second reason on top
+  // of the briefing's. `fresh: true` stops the post-generation read from JOINING
+  // a pre-generation request, but it does not order two independent ones: the
+  // initial load and the refresh a completed turn triggers are both in flight,
+  // and if the newer answers first the older `.then` overwrites it with rows
+  // that predate the turn — leaving Turn history one turn behind until the next
+  // refresh happens to arrive in order. The cleanup makes the superseded
+  // response a no-op instead.
+  useEffect(() => {
+    let live = true;
+    api.listScenePrompts(cid, sid)
+      .then((r) => { if (live) setTurns({ cid, sid, rows: r.entries }); })
+      .catch(() => { if (live) setTurns({ cid, sid, rows: [] }); });
+    return () => { live = false; };
+  }, [cid, sid, refreshKey]);
+
   // Which scene is on screen *now*, readable from a fetch that started under a
   // previous one — the same "a late answer is wrong, not just stale" problem
   // the briefing effect above solves with its `live` flag. A ref rather than
@@ -276,7 +290,9 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // wave the first campaign's prompt through into the second's inspector.
   const liveScene = useRef(`${cid}/${sid}`);
   // The entry the reader most recently asked for; a response for anything else
-  // is superseded and dropped. See `showTurn`.
+  // is superseded and dropped. See `showTurn`. `null` means "live" — going back
+  // is a newer selection too, so a detail fetch still in flight when the reader
+  // returns to the live panel must not reopen the past-turn view over them.
   const wantedTurn = useRef<string | null>(null);
   // Keyed on the scene alone, deliberately NOT on refreshKey: a turn landing
   // must not yank the reader out of a past turn they are in the middle of
@@ -567,7 +583,8 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             <div className="field-hint">
               What the model saw · {TASK_LABELS[frozen.task] ?? frozen.task} · {whenLabel(frozen.ts)}
             </div>
-            <button className="ctx-frozen-back" onClick={() => setFrozen(null)}>
+            <button className="ctx-frozen-back"
+                    onClick={() => { wantedTurn.current = null; setFrozen(null); }}>
               ← Back to live context
             </button>
           </div>

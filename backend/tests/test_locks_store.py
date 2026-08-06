@@ -1013,3 +1013,64 @@ def test_the_chronicle_save_persists_under_one_hold(monkeypatch, tmp_path):
     assert [k for k, _ in depths] == ["absorb", "timeline"], depths
     assert all(d >= 1 for _, d in depths), \
         f"each write took its own lock instead of sharing the route's: {depths}"
+
+
+def test_nowait_reports_contention_instead_of_waiting(monkeypatch, tmp_path):
+    """`campaign_lock` waits up to LOCK_TIMEOUT, which is right for a mutation
+    that has to happen and wrong for one that can be skipped. The nowait form
+    exists for the second kind — see `store.prompt_log.record`."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    held, done = threading.Event(), threading.Event()
+
+    def hold():
+        with locks.campaign_lock("run"):
+            held.set()
+            done.wait(10)
+
+    keeper = threading.Thread(target=hold)
+    keeper.start()
+    try:
+        assert held.wait(5)
+        started = time.monotonic()
+        with locks.campaign_lock_nowait("run") as got:
+            assert got is False
+        assert time.monotonic() - started < 1.0        # not LOCK_TIMEOUT
+    finally:
+        done.set()
+        keeper.join(10)
+
+    with locks.campaign_lock_nowait("run") as got:     # free again
+        assert got is True
+
+
+def test_nowait_is_reentrant_for_a_thread_that_already_holds_it(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    with locks.campaign_lock("run"):
+        with locks.campaign_lock_nowait("run") as got:
+            assert got is True
+    # and the outer release still leaves it fully free
+    with locks.campaign_lock_nowait("run") as got:
+        assert got is True
+
+
+def test_nowait_releases_only_what_it_took(monkeypatch, tmp_path):
+    """A False yield must not release a lock it never acquired — that would
+    corrupt the holder's state rather than merely skip the work."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    held, done = threading.Event(), threading.Event()
+
+    def hold():
+        with locks.campaign_lock("run"):
+            held.set()
+            done.wait(10)
+
+    keeper = threading.Thread(target=hold)
+    keeper.start()
+    try:
+        assert held.wait(5)
+        with locks.campaign_lock_nowait("run") as got:
+            assert got is False          # exiting here must not raise
+    finally:
+        done.set()
+        keeper.join(10)
+    assert not keeper.is_alive()

@@ -203,10 +203,20 @@ def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "") -> s
     assemble/pack pass that produced the messages being sent, which is what
     keeps the record and the request from describing different prompts.
 
-    Never raises. A debug view that can fail a generation is a worse bug than
-    the one it exists to diagnose, so every storage failure -- a full disk, a
-    read-only store, a contended cross-process lock -- costs the snapshot and
-    nothing else.
+    Never raises, and never WAITS. A debug view that can fail a generation is a
+    worse bug than the one it exists to diagnose, so every storage failure -- a
+    full disk, a read-only store -- costs the snapshot and nothing else.
+
+    Contention is the same rule taken seriously. This runs synchronously on the
+    generating path, before the route returns its streaming response, so a
+    blocking acquisition would stall the turn for the whole `LOCK_TIMEOUT` (30s)
+    whenever another process or a long absorb holds the campaign lock -- and
+    then swallow `StoreBusy` and discard the snapshot anyway. Half a minute of
+    dead air before the model is even called is not "costs the snapshot and
+    nothing else". So the lock is taken NON-BLOCKING and a contended campaign
+    simply goes unrecorded, which is what the retention window makes survivable.
+    Reentrant acquisition still succeeds: the underlying RLock grants a
+    non-blocking request to a thread that already owns it.
     """
     keep = depth()
     if keep <= 0:
@@ -217,7 +227,9 @@ def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "") -> s
            "dropped_tokens": breakdown.get("dropped_tokens", 0),
            "budget_tokens": breakdown.get("budget_tokens", 0)}
     try:
-        with locks.campaign_lock(cid):
+        with locks.campaign_lock_nowait(cid) as got:
+            if not got:
+                return None               # contended: skip, never stall the turn
             index = _read_index(cid)
             eid = f"{index['next']:06d}"
             index["next"] += 1
@@ -243,7 +255,7 @@ def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "") -> s
             for old in evicted:
                 _unlink(cid, old["id"])
             return eid
-    except (OSError, locks.StoreBusy):
+    except OSError:
         return None
 
 
@@ -330,7 +342,13 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     """
     try:
         with locks.campaign_lock(cid):
-            index = _read_index(cid)
+            # Strict, for the same reason `forget_scene` is: a lenient read turns
+            # a locked index into an empty one, and this function would then
+            # return having neither repointed the rows nor dropped them -- exiting
+            # above the `_write_index` fallback that is supposed to catch exactly
+            # this. The raise lands in the `except` below, which still cannot
+            # propagate (see above), but it reaches `_drop_scenes` on the way.
+            index = _read_index(cid, strict=True)
             if not any(row.get("scene") in mapping for row in index["entries"]):
                 return
             for row in index["entries"]:
@@ -341,20 +359,33 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
             except OSError:
                 _drop_scenes(cid, set(mapping))
     except (OSError, locks.StoreBusy):
-        pass
+        # Either the strict read above or the drop below it. One last attempt to
+        # invalidate the old ids, because leaving them is the outcome that hands
+        # a recreated scene someone else's prompts; if this fails too the file is
+        # simply unavailable and the rename still stands.
+        try:
+            _drop_scenes(cid, set(mapping))
+        except (OSError, locks.StoreBusy):
+            pass
 
 
 def _drop_scenes(cid: str, scenes: set[str]) -> None:
     """Best-effort removal of every row for `scenes`. The fallback when a
-    repoint cannot be written -- see `repoint_scenes`."""
-    index = _read_index(cid)
-    gone = [e for e in index["entries"] if e.get("scene") in scenes]
-    if not gone:
-        return
-    index["entries"] = [e for e in index["entries"] if e.get("scene") not in scenes]
-    _write_index(cid, index)
-    for row in gone:
-        _unlink(cid, row["id"])
+    repoint cannot be written or read -- see `repoint_scenes`.
+
+    Takes the lock itself because it is reached two ways: from inside
+    `repoint_scenes`' own hold, where it is free (reentrant), and from that
+    function's outer `except`, where the hold has already been unwound and this
+    would otherwise read-modify-write the index unserialized."""
+    with locks.campaign_lock(cid):
+        index = _read_index(cid)
+        gone = [e for e in index["entries"] if e.get("scene") in scenes]
+        if not gone:
+            return
+        index["entries"] = [e for e in index["entries"] if e.get("scene") not in scenes]
+        _write_index(cid, index)
+        for row in gone:
+            _unlink(cid, row["id"])
 
 
 def forget_scene(cid: str, sid: str) -> None:

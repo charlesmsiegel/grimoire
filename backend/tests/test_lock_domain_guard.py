@@ -1086,7 +1086,18 @@ def _is_lock_context(expr: ast.expr, fn: ast.AST) -> bool:
     name = _called_name(expr.func)
     if name == "hold_all":
         return _holds_this_campaign(expr, fn)
-    return name == "campaign_lock" and _guards_the_campaign(expr)
+    # `campaign_lock_nowait` takes the same lock on the same campaign; it only
+    # declines to WAIT for it, for work that must not delay the caller when the
+    # campaign is busy (`store.prompt_log.record`, on the generating path).
+    #
+    # What this cannot check, said plainly rather than left implied: that helper
+    # yields a boolean the body is supposed to honour, and a body that writes on
+    # False has taken no lock at all. So a `with` over this name proves less than
+    # a `with` over `campaign_lock` -- still far narrower than the exemption
+    # marker, which excuses a whole function, but not nothing. The obligation
+    # lives in `store.locks.campaign_lock_nowait`'s docstring; today `record` is
+    # its only caller and it returns early on False.
+    return name in ("campaign_lock", "campaign_lock_nowait") and _guards_the_campaign(expr)
 
 
 def _enters_lock(fn: ast.AST, aliases) -> bool:
