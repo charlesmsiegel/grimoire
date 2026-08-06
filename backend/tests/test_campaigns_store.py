@@ -607,6 +607,57 @@ def test_slim_sweep_keeps_an_untracked_copy_that_differs_from_the_world(monkeypa
     assert campaigns.read_manifest(cid) == {}    # kept, and still not adopted
 
 
+def test_slim_keeps_the_images_of_a_record_materialized_before_it_ran(monkeypatch, tmp_path):
+    """A manifest ref does not mean the fork copied the record. Every overlay
+    materializer records one and none of them copies assets, so an ordinary
+    edit to an inherited record on a campaign the migration has not reached was
+    enough to tombstone every image that record had — no crash anywhere, and
+    permanent, because `deleted.json` is union-only and slim runs once (Codex
+    review)."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    eid = entities.create_entity(wroot, "locations", "Saltmarch", "Tides.")
+    assets.put_image(wroot, eid, "default", "avatar", b"\x89PNG\r\n\x1a\nx", "png",
+                     base="locations")
+    aid, vid = characters.create_character(wroot, "Mara")
+    assets.put_image(wroot, aid, vid, "avatar", b"\x89PNG\r\n\x1a\nm", "png")
+    cid = campaigns.create_campaign("C", wid)
+    _stamp_full(cid)
+    overlay.update_entity(cid, "locations", eid, body="Campaign tides.")   # ordinary edit
+    campaigns.write_manifest(cid, {**campaigns.read_manifest(cid),
+                                   f"characters/{aid}": overlay.RESERVED_BASE})   # …and a reservation
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert not [r for r in overlay.deleted(cid) if r.startswith("assets/")]
+    assert [i["name"] for i in overlay.list_images(cid, eid, "default", base="locations")] == ["avatar"]
+    assert [i["name"] for i in overlay.list_images(cid, aid, vid)] == ["avatar"]
+
+
+def test_slim_still_tombstones_an_image_the_user_deleted_from_a_forked_copy(monkeypatch, tmp_path):
+    """The other side of that gate: the fork copied whole record directories, so
+    a campaign that holds `<kind>/<aid>/assets/<vid>/` and not the image did
+    have it and lost it to the user. `assets.delete_image` leaves the directory
+    behind, which is what makes the signature survive the deletion."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Mara")
+    assets.put_image(wroot, aid, vid, "avatar", b"\x89PNG\r\n\x1a\nm", "png")
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)   # the fork
+    campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
+    assets.delete_image(croot, aid, vid, "avatar")                            # the user
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert f"assets/characters/{aid}/{vid}/avatar" in overlay.deleted(cid)
+    assert overlay.list_images(cid, aid, vid) == []
+
+
 def test_slim_does_not_tombstone_a_ref_the_fork_recorded_no_hash_for(monkeypatch, tmp_path):
     """Both historical writers stored `<world hash> or ""`, so a campaign forked
     from a world with no plot map carries `plotmap: ''` and no plotmap.json —
