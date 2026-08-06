@@ -148,6 +148,13 @@ export function CastPanel({
       setError(err.detail ?? String(err));
     } finally {
       setBusy(false);
+      // The backend records an `opener` prompt snapshot for this attempt, and
+      // nothing else here bumps the refresh — so without this the inspector's
+      // Turn history keeps saying "No captured turns yet", and a rejected
+      // preview leaves the row invisible indefinitely (#157). `selectScene` on
+      // the SAME id only refreshes: it does not switch scenes, so the preview
+      // above survives it.
+      onSeeded();
     }
   }
 

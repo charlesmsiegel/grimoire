@@ -212,3 +212,26 @@ def test_a_turn_that_never_claims_records_nothing(client, monkeypatch):
 
     entries = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
     assert len(entries) == before
+
+
+def test_a_scene_deleted_mid_turn_records_no_orphan_row(client, monkeypatch):
+    """The rename/delete cleanup has already run by the time capture lands, so a
+    row appended under the obsolete id is one nothing will ever repoint or
+    remove — it just waits for the id to be recycled."""
+    cid, sid = _scene(client)
+    _chat(client, cid, sid)
+    entries = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
+    assert len(entries) == 1
+
+    # Capture is reached with the scene already gone: `read_scene_meta` is the
+    # check, and it runs under the same lock the append takes.
+    def vanished(*_a, **_k):
+        raise store.scenes.SceneNotFound(sid)
+
+    real_meta = store.scenes.read_scene_meta
+    monkeypatch.setattr(store.scenes, "read_scene_meta", vanished)
+    _chat(client, cid, sid)
+    monkeypatch.setattr(store.scenes, "read_scene_meta", real_meta)
+
+    after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
+    assert len(after) == 1, "a second row was appended for a scene that was gone"
