@@ -138,6 +138,16 @@ test("a first run does not hijack a route other than /", async () => {
   expect(screen.queryByTestId("setup-wizard")).not.toBeInTheDocument();
 });
 
+test("the per-navigation config read bypasses the cache", async () => {
+  // The cache is only invalidated by this tab's own writes, so a library
+  // populated in another tab or by a sync client would leave the verdict — and
+  // the connection status beside it — stale for the life of the process.
+  render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
+  await screen.findByText(/GRIMOIRE/);
+  fireEvent.click(within(screen.getByRole("banner")).getByRole("link", { name: /worlds/i }));
+  await waitFor(() => expect(api.getConfig).toHaveBeenCalledWith({ fresh: true }));
+});
+
 test("a world created outside the wizard retires the redirect on the next navigation", async () => {
   // The topbar deliberately lets a fresh user escape. If they make a world in
   // WorldsView, `/` must stop bouncing them back into setup.

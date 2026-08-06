@@ -670,12 +670,18 @@ export function invalidateConfigCache() {
 }
 
 export const api = {
-  getConfig: () => {
-    if (!configCache) {
-      configCache = request<Config>("GET", "/api/config").catch((err) => {
-        configCache = null; // never cache a failure
-        throw err;
-      });
+  /** `fresh` forces a new request and re-seeds the cache with it. The cache is
+   *  keyed to nothing but this tab's own writes, so a store populated by
+   *  another tab, another device, or a sync client is invisible to it — and
+   *  `first_run` is a statement about the store, not about this session, so a
+   *  caller re-deciding whether to show setup has to actually ask (#194). */
+  getConfig: (opts?: { fresh?: boolean }) => {
+    if (!configCache || opts?.fresh) {
+      configCache = request<Config>("GET", "/api/config", undefined, { fresh: true })
+        .catch((err) => {
+          configCache = null; // never cache a failure
+          throw err;
+        });
     }
     return configCache;
   },

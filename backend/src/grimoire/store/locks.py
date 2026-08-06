@@ -235,6 +235,11 @@ class ModuleEditBusy(StoreBusy):
         super().__init__(name, "module library")
 
 
+class ConfigBusy(StoreBusy):
+    def __init__(self, name: str = "config"):
+        super().__init__(name, "configuration")
+
+
 def _remaining(deadline) -> float:
     """RLock treats -1 as "no timeout" and rejects every other negative, so a
     computed remainder must be clamped rather than passed through."""
@@ -377,6 +382,25 @@ def campaign_lock(cid: str) -> _ProcessScopedLock:
         if lock is None:
             lock = _campaign_locks[cid] = _ProcessScopedLock("campaign", cid, CampaignBusy)
         return lock
+
+
+_config = _ProcessScopedLock("domain", "config", ConfigBusy)
+
+
+def config_lock() -> _ProcessScopedLock:
+    """The global `config.md` lock.
+
+    `write_config` is a read-merge-write of one file, so two of them lose one
+    update — and the writers are not all user-initiated: `_setup_state` on
+    `GET /api/config` backfills `setup_done`, which means merely loading the
+    app in a second tab can race a setting being saved in the first (#194
+    review). Cross-process for the same reason the campaign locks are: the
+    file belongs to the store, not to one server.
+
+    It is a leaf. Nothing under this lock takes another, so it has no place in
+    the ordering rules above and cannot participate in a cycle.
+    """
+    return _config
 
 
 _module_edit = _ProcessScopedLock("domain", "module-edit", ModuleEditBusy)
