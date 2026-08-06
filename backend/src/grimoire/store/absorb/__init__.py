@@ -27,8 +27,8 @@ from .parse import (  # noqa: F401
     _confidence, _int05, _truthy, extract_object, parse_output,
 )
 from .snapshots import (  # noqa: F401
-    _snapshot_line, commitment_snapshot, fact_snapshot, group_snapshot,
-    plot_snapshot, relationships_snapshot, state_snapshot,
+    FACT_SNAPSHOT_LIMIT, _snapshot_line, commitment_snapshot, fact_snapshot,
+    group_snapshot, plot_snapshot, relationships_snapshot, state_snapshot,
 )
 from .weather import _apply_weather, _weather_edits  # noqa: F401
 from .conflicts import (  # noqa: F401

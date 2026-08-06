@@ -257,8 +257,11 @@ def test_repoint_steps_over_a_ledger_it_cannot_read(monkeypatch, tmp_path):
 
 
 def test_repoint_writes_nothing_when_no_fact_names_a_renamed_scene(monkeypatch, tmp_path):
+    """Asserted by making a write fail rather than by comparing timestamps: the
+    file would be republished with identical bytes, so neither content nor a
+    coarse mtime can tell a skipped write from a redundant one."""
     cid = _campaign(monkeypatch, tmp_path)
     facts.record(cid, "The bridge stands.", "", "001--s")
-    before = _ledger_path(cid).stat().st_mtime_ns
+    monkeypatch.setattr(facts, "_write",
+                        lambda *a, **k: pytest.fail("repointed nothing and wrote anyway"))
     facts.repoint_scenes(cid, {"009--other": "009--renamed"})
-    assert _ledger_path(cid).stat().st_mtime_ns == before

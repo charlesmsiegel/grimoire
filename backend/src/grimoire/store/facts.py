@@ -257,15 +257,27 @@ def active(cid: str) -> list[dict]:
              "scene": _field(r.get("scene"))} for fid, r in items]
 
 
-def render_active(cid: str) -> list[str]:
+def render_active(cid: str, limit: int | None = None) -> list[str]:
     """Formatted lines for the standing facts, leading with the id so the absorb
     prompt's reply can cite one to supersede. The line format lives in
     templates/snippets/fact_line.j2. Tolerant of a garbled facts.json (returns
     []) -- same policy as `plot.render_open` and `commitments.render_open`, for
     the same reason: a broken file must cost the model one context block, not
-    the whole turn."""
+    the whole turn.
+
+    `limit` keeps the most recent N and drops the rest. Unlike a plot thread,
+    which closes, or a commitment, which resolves, a standing fact leaves this
+    list only when a later scene explicitly contradicts it -- so most never do,
+    and the prompt-side caller needs a ceiling its siblings do not (see
+    `absorb.snapshots.FACT_SNAPSHOT_LIMIT`). The OLDEST go, because they are the
+    ones play has moved furthest past; the cost is that a fact past the cap can
+    no longer be superseded, which is the trade the constant's comment explains.
+    A `limit` of None or <= 0 keeps everything.
+    """
     try:
         rows = active(cid)
     except Exception:  # noqa: BLE001 — garbled facts.json: omit, don't crash callers
         return []
+    if limit is not None and limit > 0:
+        rows = rows[-limit:]
     return [prompts.render("snippets/fact_line.j2", f=f) for f in rows]
