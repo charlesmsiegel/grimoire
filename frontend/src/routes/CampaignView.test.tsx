@@ -5159,8 +5159,10 @@ test("a finished turn asks the server to refold the scene summary", async () => 
   fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Go on." } });
   fireEvent.click(screen.getByRole("button", { name: /Send/ }));
   // Without `force`: the server decides whether this turn is the Nth, so an
-  // ordinary turn spends nothing.
-  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith("run", "s1"));
+  // ordinary turn spends nothing. The fourth argument is the turn's transcript
+  // boundary, so a fast next send cannot be swallowed by this fold.
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith(
+    "run", "s1", false, expect.anything()));
 });
 
 test("a refresh that fails never surfaces an error over the turn", async () => {
@@ -5210,7 +5212,8 @@ test("a manual dice roll also asks whether the summary is due", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Roll ▸" }));
   await waitFor(() => expect(api.roll).toHaveBeenCalled());
   // Without `force`, exactly like the per-turn call: the server still decides.
-  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith("run", "s1"));
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith(
+    "run", "s1", false, expect.anything()));
 });
 
 test("a check also asks whether the summary is due", async () => {
@@ -5230,5 +5233,6 @@ test("a check also asks whether the summary is due", async () => {
   fireEvent.change(screen.getByLabelText("Check"), { target: { value: "brawl" } });
   fireEvent.click(screen.getByRole("button", { name: "Roll ▸" }));
   await waitFor(() => expect(api.rollCheck).toHaveBeenCalled());
-  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith("run", "s1"));
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith(
+    "run", "s1", false, expect.anything()));
 });

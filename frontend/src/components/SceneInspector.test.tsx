@@ -1044,3 +1044,35 @@ test("a refresh error does not follow the reader to the next scene", async () =>
   await waitFor(() =>
     expect(screen.queryByText("OpenRouter key not set")).toBeNull());
 });
+
+test("a later successful read clears a settled refresh failure", async () => {
+  // A manual refold fails; a later automatic one succeeds and bumps refreshKey.
+  // The banner must not go on reporting a failure the panel recovered from.
+  (api.refreshRollingSummary as any).mockRejectedValueOnce({ detail: "OpenRouter key not set" });
+  const view = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
+  await screen.findByText("OpenRouter key not set");
+
+  (api.getRollingSummary as any).mockResolvedValueOnce({
+    summary: "Recovered, and current.", at: 12, total: 12,
+    stale: false, every: 10, due: false });
+  view.rerender(
+    <SceneInspector cid="c" sid="s" refreshKey={1} onSceneChanged={() => {}} />);
+
+  await screen.findByText("Recovered, and current.");
+  expect(screen.queryByText("OpenRouter key not set")).toBeNull();
+});
+
+test("moving the scene asks whether the summary is due", async () => {
+  // A location move appends a transition post, which counts toward the
+  // threshold like any other — and `onSceneChanged` only re-reads (#85).
+  (api.listEntities as any).mockResolvedValue([{ id: "dock", name: "The Night Dock" }]);
+  renderInspector();
+  fireEvent.change(await screen.findByLabelText("Move to location"),
+                   { target: { value: "dock" } });
+  fireEvent.click(screen.getByRole("button", { name: "Move to" }));
+  await waitFor(() => expect(api.setSceneLocation).toHaveBeenCalled());
+  // without `force`: the server still decides whether to spend a call
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith("c", "s"));
+});

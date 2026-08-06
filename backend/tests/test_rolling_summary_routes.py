@@ -476,6 +476,54 @@ def test_a_location_assigned_mid_call_does_not_get_the_fold_that_missed_it(clien
     assert store.scenes.get_rolling_summary(cid, sid)["summary"] == ""
 
 
+def test_upto_bounds_the_fold_to_the_turn_that_asked_for_it(client):
+    """The play loop releases the scene before firing this, so a fast next send
+    can append its player post first. A fold that swallowed it would not
+    self-repair: the reply that answers it is an APPEND, which leaves the digest
+    valid, so it would stay out of the "current" summary until another whole
+    threshold went by."""
+    _key(client)
+    llm = _use(client, _summarizer("A summary of the first ten."))
+    cid, sid = _scene(client, posts=10)
+    store.scenes.append_message(cid, sid, "user", "The next turn's post, unanswered.")
+
+    body = client.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?upto=10").json()
+
+    assert body["refreshed"] is True and body["at"] == 10
+    assert "unanswered" not in _user_prompt(llm, 0)
+    # ...and the next refresh knows it still owes those posts
+    assert store.scenes.get_rolling_summary(cid, sid)["at"] == 10
+
+
+def test_without_upto_the_scene_is_taken_as_it_is(client):
+    """The panel's own button sends no boundary — it is held while a turn
+    streams, so there is none to send."""
+    _key(client)
+    cid, sid = _scene(client, posts=11)
+    _use(client, _summarizer("A summary of all eleven."))
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
+    assert body["at"] == 11
+
+
+def test_a_negative_upto_is_a_400(client):
+    _key(client)
+    cid, sid = _scene(client, posts=10)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?upto=-1")
+    assert r.status_code == 400
+
+
+def test_an_upto_past_the_end_is_harmless(client):
+    """A boundary from a client whose count is ahead of the store must not
+    invent posts; the slice simply yields what is there."""
+    _key(client)
+    cid, sid = _scene(client, posts=10)
+    _use(client, _summarizer("A summary."))
+    body = client.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?upto=9999").json()
+    assert body["refreshed"] is True and body["at"] == 10
+
+
 # ---- POST: failure never reaches the turn loop ----
 def test_no_connection_is_a_409_not_a_500(client):
     llm = _use(client, _summarizer())
