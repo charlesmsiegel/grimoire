@@ -1,4 +1,3 @@
-import asyncio
 import contextlib
 import importlib
 import io
@@ -12,15 +11,9 @@ from grimoire.store import atomic
 from grimoire import routes
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
-
-
-class FakeOpenRouter:
-    def __init__(self, deltas):
-        self.deltas = deltas
-
-    async def stream(self, messages, cfg):
-        for d in self.deltas:
-            yield d
+from tests.llm_fakes import (  # the shared gateway fakes (#204)
+    CapturingOpenRouter, FailingOpenRouter, FakeOpenRouter, FakeOpenRouterComplete,
+    QuietThenAnswers, StallingOpenRouter)
 
 
 @pytest.fixture
@@ -1459,16 +1452,6 @@ def test_cast_supplied_version_purged_campaign_side_404(client):
     assert "alt" not in versions   # not revived from the world
 
 
-class CapturingOpenRouter:
-    def __init__(self):
-        self.messages = None
-
-    async def stream(self, messages, cfg):
-        self.messages = messages
-        for d in ["ok"]:
-            yield d
-
-
 def test_chat_injects_system_message(client):
     wid = _world(client)
     sera = {"spec": "chara_card_v3", "spec_version": "3.0",
@@ -1523,40 +1506,6 @@ def test_chat_streams_and_persists(client):
 
 
 # ---- turn cancel / heartbeat / transactional post+response (#95) ----
-
-class FailingOpenRouter:
-    """Streams `deltas`, then fails upstream — a turn that dies part-way."""
-
-    def __init__(self, deltas=()):
-        self.deltas = list(deltas)
-
-    async def stream(self, messages, cfg):
-        for d in self.deltas:
-            yield d
-        raise LLMError("network", "connection reset")
-
-
-class StallingOpenRouter:
-    """Streams `deltas`, then holds the connection open — the model still
-    talking when the client walks away."""
-
-    def __init__(self, deltas=()):
-        self.deltas = list(deltas)
-
-    async def stream(self, messages, cfg):
-        for d in self.deltas:
-            yield d
-        await asyncio.sleep(30)  # bounded so a regression fails rather than hangs
-
-
-class QuietThenAnswers:
-    """Reports liveness with no text before answering — what the LLM facade
-    surfaces while it is still waiting on the provider."""
-
-    async def stream(self, messages, cfg):
-        yield ""
-        yield "At last."
-
 
 def _scene_with_a_pending_post(tmp_path, monkeypatch, content="and then?"):
     """A scene whose tail is an unanswered user post — the state `post_chat` is
@@ -3439,27 +3388,6 @@ def test_localize_endpoint_does_not_persist_when_nothing_localized(client, monke
     assert calls == []  # changed-gating skipped the write
 
 
-class FakeOpenRouterComplete:
-    """A completer whose reply can be a single string (existing single-call
-    tests) or a list consumed one-per-call, in order (multi-step flows, e.g.
-    absorb's extraction complete() followed by the audit's complete()).
-    `calls` counts total complete()/stream() invocations."""
-    def __init__(self, text):
-        self._texts = text if isinstance(text, list) else [text]
-        self.calls = 0
-
-    def _next(self) -> str:
-        i = min(self.calls, len(self._texts) - 1)
-        self.calls += 1
-        return self._texts[i]
-
-    async def stream(self, messages, cfg):
-        yield self._next()
-
-    async def complete(self, messages, cfg):
-        return self._next()
-
-
 def _world_char(client):
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters",
@@ -4331,7 +4259,7 @@ def test_a_failing_voice_check_does_not_fail_absorb(client):
             if self.calls >= 2:                  # the voice call, after extraction + dossier
                 self.calls += 1
                 raise LLMError("upstream", "the model exploded")
-            return self._next()
+            return await super().complete(messages, cfg)
 
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: Failing([_EXTRACTION, _DOSSIER])
@@ -6588,16 +6516,6 @@ def test_offscreen_greeting_rejects_a_scene_with_players(client):
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
                        json={"greeting": g}).status_code == 409
 
-
-class FakeCompleter:
-    def __init__(self, text):
-        self.text = text
-
-    async def complete(self, messages, cfg):
-        self.messages = messages
-        return self.text
-
-
 def test_offscreen_suggestions_filter_player_cast(client):
     wid, cid = _campaign(client)
     other = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Tavern"}).json()["id"]
@@ -6606,7 +6524,7 @@ def test_offscreen_suggestions_filter_player_cast(client):
     # seating vex copies him into the campaign, making his token valid for suggestions
     client.post(f"/api/campaigns/{cid}/scenes/{other}/cast", json={"kind": "characters", "id": "vex"})
     client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
-    fake = FakeCompleter(json.dumps({"suggestions": [{
+    fake = FakeOpenRouterComplete(json.dumps({"suggestions": [{
         "title": "Plot", "premise": "The cult schemes.",
         "cast": ["characters:vex", f"pcs:{pid}"], "location": ""}]}))
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
@@ -6626,7 +6544,7 @@ def test_offscreen_suggestions_rank_only_offscreen_greetings(client):
     client.post(f"/api/campaigns/{cid}/greetings", json={
         "name": "Normal", "character": "vex", "version": ver, "body": "y"})
     client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
-    fake = FakeCompleter(json.dumps({"suggestions": [], "greeting_picks": ["alpha", "beta"]}))
+    fake = FakeOpenRouterComplete(json.dumps({"suggestions": [], "greeting_picks": ["alpha", "beta"]}))
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     out = client.post(f"/api/campaigns/{cid}/scene-suggestions?offscreen=true").json()
     assert "Available greetings" in fake.messages[1]["content"]

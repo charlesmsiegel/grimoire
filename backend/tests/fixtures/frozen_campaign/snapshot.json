@@ -1,0 +1,1075 @@
+{
+  "appearances.roster[the-drowned-ledger]": [
+    {
+      "id": "mara",
+      "kind": "characters",
+      "role": "npc",
+      "scenes": [
+        "002--2026-01-02--the-long-quay"
+      ],
+      "version": "default"
+    },
+    {
+      "id": "seraphine",
+      "kind": "characters",
+      "role": "npc",
+      "scenes": [
+        "001--the-tide-comes-in"
+      ],
+      "version": "default"
+    },
+    {
+      "id": "winifred",
+      "kind": "pcs",
+      "role": "player",
+      "scenes": [
+        "001--the-tide-comes-in"
+      ],
+      "version": "default"
+    }
+  ],
+  "appearances.scene_cast[the-drowned-ledger/001--the-tide-comes-in]": [
+    {
+      "id": "seraphine",
+      "kind": "characters",
+      "name": "Seraphine",
+      "role": "npc"
+    },
+    {
+      "id": "winifred",
+      "kind": "pcs",
+      "name": "Winifred",
+      "role": "player"
+    }
+  ],
+  "appearances.scene_cast[the-drowned-ledger/002--2026-01-02--the-long-quay]": [
+    {
+      "id": "mara",
+      "kind": "characters",
+      "name": "Mara",
+      "role": "npc"
+    }
+  ],
+  "campaigns.list_campaigns": [
+    {
+      "created": "2026-01-01T09:02:00Z",
+      "id": "the-drowned-ledger",
+      "name": "The Drowned Ledger",
+      "updated": "2026-01-01T09:09:00Z",
+      "world": "saltmarch"
+    }
+  ],
+  "campaigns.read_campaign[the-drowned-ledger]": {
+    "body": "",
+    "meta": {
+      "created": "2026-01-01T09:02:00Z",
+      "id": "the-drowned-ledger",
+      "module": "d20-basic",
+      "name": "The Drowned Ledger",
+      "updated": "2026-01-01T09:09:00Z",
+      "world": "saltmarch",
+      "world_copy": "overlay"
+    }
+  },
+  "characters.list_characters[saltmarch]": [
+    {
+      "avatar_focus": null,
+      "default_version": "default",
+      "gallery_count": 0,
+      "greeting_count": 0,
+      "has_avatar": false,
+      "id": "mara",
+      "localized_count": 0,
+      "name": "Mara",
+      "tagline": "",
+      "versions": [
+        {
+          "id": "default",
+          "name": "Mara"
+        }
+      ]
+    },
+    {
+      "avatar_focus": null,
+      "default_version": "default",
+      "gallery_count": 0,
+      "greeting_count": 1,
+      "has_avatar": false,
+      "id": "seraphine",
+      "localized_count": 0,
+      "name": "Seraphine",
+      "tagline": "",
+      "versions": [
+        {
+          "id": "default",
+          "name": "Seraphine"
+        },
+        {
+          "id": "veiled",
+          "name": "Seraphine"
+        }
+      ]
+    }
+  ],
+  "characters.read_card[saltmarch/mara/default]": {
+    "data": {
+      "alternate_greetings": [],
+      "description": "A quay-side runner who owes the ledger.",
+      "extensions": {},
+      "first_mes": "",
+      "mes_example": "",
+      "name": "Mara",
+      "personality": "",
+      "scenario": "",
+      "tags": []
+    },
+    "spec": "chara_card_v3",
+    "spec_version": "3.0"
+  },
+  "characters.read_card[saltmarch/seraphine/default]": {
+    "data": {
+      "alternate_greetings": [],
+      "description": "The drowned keeper of the tide ledger.",
+      "extensions": {},
+      "first_mes": "The ledger is open. Say your name to it.",
+      "mes_example": "",
+      "name": "Seraphine",
+      "personality": "Patient, exacting, unhurried by weather or grief.",
+      "scenario": "",
+      "tags": [
+        "keeper"
+      ]
+    },
+    "spec": "chara_card_v3",
+    "spec_version": "3.0"
+  },
+  "characters.read_card[saltmarch/seraphine/veiled]": {
+    "data": {
+      "alternate_greetings": [],
+      "description": "The keeper, hooded, off the record.",
+      "extensions": {},
+      "first_mes": "",
+      "mes_example": "",
+      "name": "Seraphine",
+      "personality": "",
+      "scenario": "",
+      "tags": []
+    },
+    "spec": "chara_card_v3",
+    "spec_version": "3.0"
+  },
+  "checks.available_checks[the-drowned-ledger/001--the-tide-comes-in]": [
+    {
+      "checks": [
+        [
+          "athletics",
+          "Athletics"
+        ],
+        [
+          "stealth",
+          "Stealth"
+        ]
+      ],
+      "label": "Seraphine",
+      "ref": "characters:seraphine",
+      "sheet_type": "warrior"
+    }
+  ],
+  "checks.available_checks[the-drowned-ledger/002--2026-01-02--the-long-quay]": [],
+  "chronicle.read_chronicle[the-drowned-ledger]": {
+    "001--the-tide-comes-in": {
+      "absorbed": "2026-01-01T09:08:00Z",
+      "id": "001--the-tide-comes-in",
+      "keywords": [
+        "ledger",
+        "salt"
+      ],
+      "one_line": "Winifred touched the ledger.",
+      "summary": "Winifred came to Tidewatch Keep and put a hand on the tide ledger; Seraphine asked for salt."
+    },
+    "002--2026-01-02--the-long-quay": {
+      "absorbed": "2026-01-01T09:12:00Z",
+      "id": "002--2026-01-02--the-long-quay",
+      "keywords": [
+        "quay"
+      ],
+      "one_line": "Winifred found Mara on the quay.",
+      "summary": "A short meeting on the Long Quay."
+    }
+  },
+  "chronicle.recent[the-drowned-ledger]": [
+    {
+      "absorbed": "2026-01-01T09:08:00Z",
+      "id": "001--the-tide-comes-in",
+      "keywords": [
+        "ledger",
+        "salt"
+      ],
+      "one_line": "Winifred touched the ledger.",
+      "summary": "Winifred came to Tidewatch Keep and put a hand on the tide ledger; Seraphine asked for salt."
+    },
+    {
+      "absorbed": "2026-01-01T09:12:00Z",
+      "id": "002--2026-01-02--the-long-quay",
+      "keywords": [
+        "quay"
+      ],
+      "one_line": "Winifred found Mara on the quay.",
+      "summary": "A short meeting on the Long Quay."
+    }
+  ],
+  "chronicle.scene_facts[the-drowned-ledger/001--the-tide-comes-in]": {
+    "cast": [
+      "characters/seraphine",
+      "pcs/winifred"
+    ],
+    "date": "",
+    "location": "Tidewatch Keep"
+  },
+  "chronicle.scene_facts[the-drowned-ledger/002--2026-01-02--the-long-quay]": {
+    "cast": [
+      "characters/mara"
+    ],
+    "date": "2026-01-02",
+    "location": ""
+  },
+  "commitments.open_commitments[the-drowned-ledger]": [
+    {
+      "due": "2026-01-05",
+      "id": "salt-owed",
+      "kind": "promise",
+      "last_scene": "001--the-tide-comes-in",
+      "latest_beat": "Seraphine asked for salt.",
+      "status": "open",
+      "title": "Bring salt to the keep"
+    }
+  ],
+  "commitments.read[the-drowned-ledger]": {
+    "salt-owed": {
+      "beats": [
+        {
+          "scene": "001--the-tide-comes-in",
+          "text": "Seraphine asked for salt."
+        }
+      ],
+      "due": "2026-01-05",
+      "kind": "promise",
+      "last_scene": "001--the-tide-comes-in",
+      "status": "open",
+      "title": "Bring salt to the keep"
+    }
+  },
+  "commitments.render_open[the-drowned-ledger]": [
+    "salt-owed: Bring salt to the keep (promise, open), due 2026-01-05 \u2014 Seraphine asked for salt."
+  ],
+  "context.build_messages[the-drowned-ledger/001--the-tide-comes-in]": [
+    {
+      "content": {
+        "__text__": [
+          "# Natural prose",
+          "",
+          "Defaults that keep the writing from sounding machine-generated. Precedence:",
+          "the reply format and established facts always win \u2014 never rename, avoid, or",
+          "misattribute anyone or anything that already has a name. The prose style",
+          "guide, when one is set, overrides the rhythm guidance below. Everything else",
+          "here holds regardless.",
+          "",
+          "**Names \u2014 only when inventing someone or something new.** Names that",
+          "already exist in this scene, cast, or world are fixed; reproduce them",
+          "exactly, even if they appear below. When you do invent a name, make it fit",
+          "the setting and vary in sound and origin. Never reach for the stock AI",
+          "pool: Elara, Lyra, Kael, Aria, Seraphina, Selene, Thorne, Voss, Vance,",
+          "Blackwood, Ashford, or a tavern called The Gilded-or-Rusty Anything. Don't",
+          "solve variety by rotating the same few names either (a Chen, an Okonkwo, a",
+          "Kowalski) \u2014 vary within an origin, not just across origins.",
+          "",
+          "**Phrases \u2014 never use.** A voice barely above a whisper / barely audible;",
+          "said in a low voice as a reflex tag; the air thick with (scent, tension,",
+          "anything); a smile playing on lips; eyes never leaving; couldn't help but;",
+          "couldn't shake the feeling; heart pounding or hammering in a chest or",
+          "against ribs; casting long shadows; something else entirely; spreading",
+          "across her face; one last time; a deep breath as filler; a testament to; a",
+          "tapestry, symphony, or dance of anything; ministrations; the ghost of a",
+          "smile; shivers down the spine; knuckles whitening; the smell of ozone; an",
+          "unreadable expression; lips swollen with kisses; foreheads pressed",
+          "together as the default tender gesture; delve; nestled; moreover,",
+          "furthermore, indeed, albeit.",
+          "",
+          "**Beat words \u2014 ration.** Flickered, leaned, murmured, muttered, nodded,",
+          "gaze, grinned, gestured, glinted, hesitated, whispered, blinked, hummed,",
+          "smirked, faintly. Ordinary words, but they are your reflexes: not every",
+          "line of dialogue needs a lean, nod, or murmur. When a beat repeats, replace",
+          "it with something specific to this character and this moment, or cut it.",
+          "",
+          "**Constructions \u2014 never use.** \"Not X, but Y\" in every disguise (\"it",
+          "wasn't just X \u2014 it was Y\", \"she didn't X; she Y'd\", \"no longer X; now Y\").",
+          "A rhetorical question you immediately answer (\"The result? Chaos.\"). The",
+          "reflexive rule of three (\"he stopped, stared, listened\") \u2014 three-part lists",
+          "only when the content is genuinely three things. Redundant adjective pairs",
+          "(\"dark and brooding\") \u2014 pick the stronger word. Explaining an emotion you",
+          "just showed (\"...which surprised him, because...\"). Metaphors that decorate",
+          "rather than clarify.",
+          "",
+          "**Rhythm.** Em dashes, ellipses, italics, and one-word dramatic fragments",
+          "are seasoning, not structure \u2014 if the last paragraph used one, the next",
+          "doesn't. Vary sentence length and paragraph shape; let some moments pass",
+          "without a dramatic beat. In narration, write lists as prose, no bullet",
+          "points or headings \u2014 the required speaker markers are reply format, not",
+          "headings, and always stay.",
+          "",
+          "The drowned keeper of the tide ledger.",
+          "Patient, exacting, unhurried by weather or grief.",
+          "",
+          "# Relationships",
+          "Winifred \u2192 Seraphine: trust 1, affection 0, tension 2 (Owes her a page.)",
+          "Seraphine & Winifred: creditor",
+          "",
+          "Winifred, she/her",
+          "A debtor with a good memory.",
+          "",
+          "# Story so far",
+          "- Winifred touched the ledger.",
+          "- Winifred found Mara on the quay.",
+          "",
+          "# Plot threads",
+          "The debt in salt (open): Mara knows what the debt was for.",
+          "",
+          "# Commitments",
+          "Bring salt to the keep (promise, open), due 2026-01-05: Seraphine asked for salt.",
+          "",
+          "# Current setting",
+          "A stone keep the tide reaches twice a day.",
+          "",
+          "Debts written in salt are owed to the sea, not the lender.",
+          "",
+          "She signed the ledger in salt and has never said for what.",
+          "",
+          "# Mechanics rules",
+          "Rolls are 1d20 plus a modifier against a difficulty class (DC). Meeting or",
+          "beating the DC succeeds.",
+          "",
+          "# Sheets",
+          "characters:seraphine \u2014 Warrior (Seraphine)",
+          "  strength 8 \u00b7 dexterity 11 \u00b7 mind 16 \u00b7 athletics 0",
+          "  stealth 0 \u00b7 arcana 0 \u00b7 hp 9/12 \u00b7 gear ['tide ledger']",
+          "  str_mod -1 \u00b7 dex_mod 0 \u00b7 mind_mod 3 \u00b7 melee_bonus 1",
+          "",
+          "# Dice checks",
+          "When a present character attempts something uncertain and consequential,",
+          "request a check by emitting exactly this fenced block mid-narration, at the",
+          "moment of the attempt, then STOP writing immediately after the closing fence:",
+          "",
+          "```roll",
+          "{\"check\": \"<check id>\", \"actor\": \"<kind:id>\", \"difficulty\": <number, optional>, \"reason\": \"<short phrase>\"}",
+          "```",
+          "",
+          "Rules: use only the check ids and actor references listed below; never",
+          "invent ids; never write dice results yourself \u2014 the engine rolls and you",
+          "will be told the outcome. Do not propose more than one check per reply.",
+          "",
+          "Available checks:",
+          "characters:seraphine (Seraphine): athletics (Athletics), stealth (Stealth)",
+          "",
+          "Write your reply as a script. Each character who acts or speaks gets their own block starting with **<Name>:** on its own line, e.g. **Seraphine Vale:**. Use **Grimoire:** for narration, scene description, and any voice that isn't a named character. Never write dialogue or actions for: Winifred.",
+          "",
+          "# Response budget",
+          "This whole reply runs about 550 words across at most 5 blocks, narration (**Grimoire:**) included \u2014 roughly 110 words per block. No block exceeds 2 paragraphs.",
+          "At most 4 characters act or speak. No character takes more than 2 blocks."
+        ]
+      },
+      "role": "system"
+    },
+    {
+      "content": "I put my hand on the ledger.",
+      "role": "user"
+    },
+    {
+      "content": "**Grimoire:** Seraphine turns the page. \"Salt first,\" she says.",
+      "role": "assistant"
+    }
+  ],
+  "context.build_messages[the-drowned-ledger/002--2026-01-02--the-long-quay]": [
+    {
+      "content": {
+        "__text__": [
+          "# Natural prose",
+          "",
+          "Defaults that keep the writing from sounding machine-generated. Precedence:",
+          "the reply format and established facts always win \u2014 never rename, avoid, or",
+          "misattribute anyone or anything that already has a name. The prose style",
+          "guide, when one is set, overrides the rhythm guidance below. Everything else",
+          "here holds regardless.",
+          "",
+          "**Names \u2014 only when inventing someone or something new.** Names that",
+          "already exist in this scene, cast, or world are fixed; reproduce them",
+          "exactly, even if they appear below. When you do invent a name, make it fit",
+          "the setting and vary in sound and origin. Never reach for the stock AI",
+          "pool: Elara, Lyra, Kael, Aria, Seraphina, Selene, Thorne, Voss, Vance,",
+          "Blackwood, Ashford, or a tavern called The Gilded-or-Rusty Anything. Don't",
+          "solve variety by rotating the same few names either (a Chen, an Okonkwo, a",
+          "Kowalski) \u2014 vary within an origin, not just across origins.",
+          "",
+          "**Phrases \u2014 never use.** A voice barely above a whisper / barely audible;",
+          "said in a low voice as a reflex tag; the air thick with (scent, tension,",
+          "anything); a smile playing on lips; eyes never leaving; couldn't help but;",
+          "couldn't shake the feeling; heart pounding or hammering in a chest or",
+          "against ribs; casting long shadows; something else entirely; spreading",
+          "across her face; one last time; a deep breath as filler; a testament to; a",
+          "tapestry, symphony, or dance of anything; ministrations; the ghost of a",
+          "smile; shivers down the spine; knuckles whitening; the smell of ozone; an",
+          "unreadable expression; lips swollen with kisses; foreheads pressed",
+          "together as the default tender gesture; delve; nestled; moreover,",
+          "furthermore, indeed, albeit.",
+          "",
+          "**Beat words \u2014 ration.** Flickered, leaned, murmured, muttered, nodded,",
+          "gaze, grinned, gestured, glinted, hesitated, whispered, blinked, hummed,",
+          "smirked, faintly. Ordinary words, but they are your reflexes: not every",
+          "line of dialogue needs a lean, nod, or murmur. When a beat repeats, replace",
+          "it with something specific to this character and this moment, or cut it.",
+          "",
+          "**Constructions \u2014 never use.** \"Not X, but Y\" in every disguise (\"it",
+          "wasn't just X \u2014 it was Y\", \"she didn't X; she Y'd\", \"no longer X; now Y\").",
+          "A rhetorical question you immediately answer (\"The result? Chaos.\"). The",
+          "reflexive rule of three (\"he stopped, stared, listened\") \u2014 three-part lists",
+          "only when the content is genuinely three things. Redundant adjective pairs",
+          "(\"dark and brooding\") \u2014 pick the stronger word. Explaining an emotion you",
+          "just showed (\"...which surprised him, because...\"). Metaphors that decorate",
+          "rather than clarify.",
+          "",
+          "**Rhythm.** Em dashes, ellipses, italics, and one-word dramatic fragments",
+          "are seasoning, not structure \u2014 if the last paragraph used one, the next",
+          "doesn't. Vary sentence length and paragraph shape; let some moments pass",
+          "without a dramatic beat. In narration, write lists as prose, no bullet",
+          "points or headings \u2014 the required speaker markers are reply format, not",
+          "headings, and always stay.",
+          "",
+          "A quay-side runner who owes the ledger.",
+          "",
+          "# Story so far",
+          "- Winifred touched the ledger.",
+          "- Winifred found Mara on the quay.",
+          "",
+          "# Plot threads",
+          "The debt in salt (open): Mara knows what the debt was for.",
+          "",
+          "# Commitments",
+          "Bring salt to the keep (promise, open), due 2026-01-05: Seraphine asked for salt.",
+          "",
+          "# Today",
+          "It is 2 January 2026 (Friday).",
+          "Upcoming: Martin Luther King Jr. Day in 17 days.",
+          "",
+          "# Mechanics rules",
+          "Rolls are 1d20 plus a modifier against a difficulty class (DC). Meeting or",
+          "beating the DC succeeds.",
+          "",
+          "# Other characters in this world",
+          "",
+          "# (Not present. Introduce them only if the story calls for it.)",
+          "",
+          "## Active in this campaign, elsewhere",
+          "Seraphine: Keeps the tide ledger. Speaks in debts. Has not left the keep.",
+          "",
+          "Write your reply as a script. Each character who acts or speaks gets their own block starting with **<Name>:** on its own line, e.g. **Seraphine Vale:**. Use **Grimoire:** for narration, scene description, and any voice that isn't a named character.",
+          "",
+          "# Response budget",
+          "This whole reply runs about 550 words across at most 5 blocks, narration (**Grimoire:**) included \u2014 roughly 110 words per block. No block exceeds 2 paragraphs.",
+          "At most 4 characters act or speak. No character takes more than 2 blocks."
+        ]
+      },
+      "role": "system"
+    },
+    {
+      "content": "I walk the quay looking for Mara.",
+      "role": "user"
+    },
+    {
+      "content": "**Grimoire:** Mara is counting crates and pretending not to see you.",
+      "role": "assistant"
+    }
+  ],
+  "context.sections[the-drowned-ledger/001--the-tide-comes-in]": [
+    {
+      "dropped": false,
+      "label": "Natural prose",
+      "tier": "lock-in",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Character descriptions",
+      "tier": "lock-in",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Relationships",
+      "tier": "spotlight",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Player personas",
+      "tier": "lock-in",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Story so far",
+      "tier": "background",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Plot threads",
+      "tier": "spotlight",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Commitments",
+      "tier": "spotlight",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Current setting",
+      "tier": "spotlight",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "World info",
+      "tier": "spotlight",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Mechanics rules",
+      "tier": "spotlight",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Mechanics sheets",
+      "tier": "spotlight",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Mechanics response format",
+      "tier": "lock-in",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Response format",
+      "tier": "lock-in",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Response budget",
+      "tier": "lock-in",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Conversation history",
+      "tier": "history",
+      "trimmed": 0
+    }
+  ],
+  "context.sections[the-drowned-ledger/002--2026-01-02--the-long-quay]": [
+    {
+      "dropped": false,
+      "label": "Natural prose",
+      "tier": "lock-in",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Character descriptions",
+      "tier": "lock-in",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Story so far",
+      "tier": "background",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Plot threads",
+      "tier": "spotlight",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Commitments",
+      "tier": "spotlight",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Today",
+      "tier": "spotlight",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Mechanics rules",
+      "tier": "spotlight",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Off-scene cast",
+      "tier": "background",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Response format",
+      "tier": "lock-in",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Response budget",
+      "tier": "lock-in",
+      "trimmed": 0
+    },
+    {
+      "dropped": false,
+      "label": "Conversation history",
+      "tier": "history",
+      "trimmed": 0
+    }
+  ],
+  "dossiers.read[the-drowned-ledger/mara]": "",
+  "dossiers.read[the-drowned-ledger/seraphine]": "Keeps the tide ledger. Speaks in debts. Has not left the keep.",
+  "entities.list_entities[saltmarch/locations]": [
+    {
+      "id": "tidewatch-keep",
+      "name": "Tidewatch Keep"
+    }
+  ],
+  "entities.list_entities[saltmarch/lore]": [
+    {
+      "id": "the-salt-pact",
+      "keys": "pact, salt",
+      "name": "The Salt Pact"
+    }
+  ],
+  "entities.read_entity[saltmarch/locations/tidewatch-keep]": {
+    "body": "A stone keep the tide reaches twice a day.",
+    "meta": {
+      "id": "tidewatch-keep",
+      "name": "Tidewatch Keep"
+    }
+  },
+  "entities.read_entity[saltmarch/lore/the-salt-pact]": {
+    "body": "Debts written in salt are owed to the sea, not the lender.",
+    "meta": {
+      "id": "the-salt-pact",
+      "keys": "pact, salt",
+      "name": "The Salt Pact"
+    }
+  },
+  "greetings.list_greetings[saltmarch]": [
+    {
+      "character": "seraphine",
+      "id": "after-the-tide",
+      "name": "After the tide",
+      "pcless": false,
+      "predecessor_join": "all",
+      "present": [
+        "seraphine"
+      ],
+      "requires_tags": [
+        "coastal"
+      ],
+      "version": "default"
+    },
+    {
+      "character": "seraphine",
+      "id": "at-the-ledger",
+      "name": "At the ledger",
+      "pcless": false,
+      "predecessor_join": "all",
+      "present": [
+        "seraphine"
+      ],
+      "requires_tags": [],
+      "version": "default"
+    }
+  ],
+  "greetings.read_greeting[saltmarch/after-the-tide]": {
+    "body": "The water has gone out. The ledger is wet through.",
+    "meta": {
+      "character": "seraphine",
+      "id": "after-the-tide",
+      "name": "After the tide",
+      "pcless": false,
+      "predecessor_join": "all",
+      "present": [
+        "seraphine"
+      ],
+      "requires_tags": [
+        "coastal"
+      ],
+      "version": "default"
+    }
+  },
+  "greetings.read_greeting[saltmarch/at-the-ledger]": {
+    "body": "Seraphine does not look up. \"Name and debt,\" she says.",
+    "meta": {
+      "character": "seraphine",
+      "id": "at-the-ledger",
+      "name": "At the ledger",
+      "pcless": false,
+      "predecessor_join": "all",
+      "present": [
+        "seraphine"
+      ],
+      "requires_tags": [],
+      "version": "default"
+    }
+  },
+  "greetings.read_plotmap[saltmarch]": {
+    "at-the-ledger": {
+      "excludes": [],
+      "leads_to": [
+        "after-the-tide"
+      ]
+    }
+  },
+  "modules.resolve[the-drowned-ledger]": "d20-basic",
+  "overlay.list_characters[the-drowned-ledger]": [
+    {
+      "avatar_focus": null,
+      "default_version": "default",
+      "gallery_count": 0,
+      "greeting_count": 0,
+      "has_avatar": false,
+      "id": "mara",
+      "localized_count": 0,
+      "name": "Mara",
+      "tagline": "",
+      "versions": [
+        {
+          "id": "default",
+          "name": "Mara"
+        }
+      ]
+    },
+    {
+      "avatar_focus": null,
+      "default_version": "default",
+      "gallery_count": 0,
+      "greeting_count": 1,
+      "has_avatar": false,
+      "id": "seraphine",
+      "localized_count": 0,
+      "name": "Seraphine",
+      "tagline": "",
+      "versions": [
+        {
+          "id": "default",
+          "name": "Seraphine"
+        }
+      ]
+    }
+  ],
+  "overlay.list_entities[the-drowned-ledger/locations]": [
+    {
+      "id": "tidewatch-keep",
+      "name": "Tidewatch Keep"
+    }
+  ],
+  "overlay.list_entities[the-drowned-ledger/lore]": [
+    {
+      "id": "the-salt-pact",
+      "keys": "pact, salt",
+      "name": "The Salt Pact"
+    },
+    {
+      "id": "winifred-s-debt",
+      "name": "Winifred's debt",
+      "owners": "pcs:winifred"
+    }
+  ],
+  "overlay.list_greetings[the-drowned-ledger]": [
+    {
+      "character": "seraphine",
+      "id": "after-the-tide",
+      "name": "After the tide",
+      "pcless": false,
+      "predecessor_join": "all",
+      "present": [
+        "seraphine"
+      ],
+      "requires_tags": [
+        "coastal"
+      ],
+      "version": "default"
+    },
+    {
+      "character": "seraphine",
+      "id": "at-the-ledger",
+      "name": "At the ledger",
+      "pcless": false,
+      "predecessor_join": "all",
+      "present": [
+        "seraphine"
+      ],
+      "requires_tags": [],
+      "version": "default"
+    }
+  ],
+  "overlay.list_pcs[the-drowned-ledger]": [
+    {
+      "default_version": "default",
+      "id": "winifred",
+      "name": "Winifred",
+      "tags": [
+        "coastal"
+      ],
+      "versions": [
+        {
+          "id": "default",
+          "name": "Winifred"
+        }
+      ]
+    }
+  ],
+  "overlay.read_entity[the-drowned-ledger/locations/tidewatch-keep]": {
+    "body": "A stone keep the tide reaches twice a day.",
+    "meta": {
+      "id": "tidewatch-keep",
+      "name": "Tidewatch Keep"
+    }
+  },
+  "overlay.read_entity[the-drowned-ledger/lore/the-salt-pact]": {
+    "body": "Debts written in salt are owed to the sea, not the lender.",
+    "meta": {
+      "id": "the-salt-pact",
+      "keys": "pact, salt",
+      "name": "The Salt Pact"
+    }
+  },
+  "overlay.read_entity[the-drowned-ledger/lore/winifred-s-debt]": {
+    "body": "She signed the ledger in salt and has never said for what.",
+    "meta": {
+      "id": "winifred-s-debt",
+      "name": "Winifred's debt",
+      "owners": "pcs:winifred"
+    }
+  },
+  "plot.open_threads[the-drowned-ledger]": [
+    {
+      "id": "the-debt",
+      "last_scene": "002--2026-01-02--the-long-quay",
+      "latest_beat": "Mara knows what the debt was for.",
+      "status": "open",
+      "title": "The debt in salt"
+    }
+  ],
+  "plot.read[the-drowned-ledger]": {
+    "the-debt": {
+      "beats": [
+        {
+          "scene": "001--the-tide-comes-in",
+          "text": "Winifred's name is in the ledger and she will not say why."
+        },
+        {
+          "scene": "002--2026-01-02--the-long-quay",
+          "text": "Mara knows what the debt was for."
+        }
+      ],
+      "last_scene": "002--2026-01-02--the-long-quay",
+      "status": "open",
+      "title": "The debt in salt"
+    },
+    "the-tide-table": {
+      "beats": [
+        {
+          "scene": "001--the-tide-comes-in",
+          "text": "The table was copied out and hung by the door."
+        }
+      ],
+      "last_scene": "001--the-tide-comes-in",
+      "status": "closed",
+      "title": "The tide table"
+    }
+  },
+  "plot.render_open[the-drowned-ledger]": [
+    "the-debt: The debt in salt (open) \u2014 Mara knows what the debt was for."
+  ],
+  "relationships.read[the-drowned-ledger]": {
+    "bonds": {
+      "characters:seraphine|pcs:winifred": {
+        "since_scene": "001--the-tide-comes-in",
+        "type": "creditor"
+      }
+    },
+    "feelings": {
+      "pcs:winifred->characters:seraphine": {
+        "affection": 0,
+        "note": "Owes her a page.",
+        "tension": 2,
+        "trust": 1
+      }
+    }
+  },
+  "scenes.get_location_history[the-drowned-ledger/001--the-tide-comes-in]": [
+    "tidewatch-keep"
+  ],
+  "scenes.get_location_history[the-drowned-ledger/002--2026-01-02--the-long-quay]": [],
+  "scenes.get_time_history[the-drowned-ledger/001--the-tide-comes-in]": [],
+  "scenes.get_time_history[the-drowned-ledger/002--2026-01-02--the-long-quay]": [
+    "2026-01-02"
+  ],
+  "scenes.list_scenes[the-drowned-ledger]": [
+    {
+      "created": "2026-01-02T09:30:00Z",
+      "date": "2026-01-02",
+      "id": "002--2026-01-02--the-long-quay",
+      "model": "openai/gpt-4o-mini",
+      "pcless": false,
+      "title": "The Long Quay",
+      "updated": "2026-01-01T09:11:00Z"
+    },
+    {
+      "created": "2026-01-01T09:03:00Z",
+      "date": "",
+      "id": "001--the-tide-comes-in",
+      "model": "anthropic/claude-opus-4.1",
+      "pcless": false,
+      "title": "The Tide Comes In",
+      "updated": "2026-01-01T09:07:00Z"
+    }
+  ],
+  "scenes.read_scene[the-drowned-ledger/001--the-tide-comes-in]": {
+    "messages": [
+      {
+        "content": "I put my hand on the ledger.",
+        "role": "user"
+      },
+      {
+        "content": "Seraphine turns the page. \"Salt first,\" she says.",
+        "role": "assistant"
+      }
+    ],
+    "meta": {
+      "created": "2026-01-01T09:03:00Z",
+      "id": "001--the-tide-comes-in",
+      "location_history": "tidewatch-keep",
+      "model": "anthropic/claude-opus-4.1",
+      "title": "The Tide Comes In",
+      "updated": "2026-01-01T09:07:00Z"
+    }
+  },
+  "scenes.read_scene[the-drowned-ledger/002--2026-01-02--the-long-quay]": {
+    "messages": [
+      {
+        "content": "I walk the quay looking for Mara.",
+        "role": "user"
+      },
+      {
+        "content": "Mara is counting crates and pretending not to see you.",
+        "role": "assistant"
+      }
+    ],
+    "meta": {
+      "created": "2026-01-02T09:30:00Z",
+      "id": "002--2026-01-02--the-long-quay",
+      "model": "openai/gpt-4o-mini",
+      "time_history": "2026-01-02",
+      "title": "The Long Quay",
+      "updated": "2026-01-01T09:11:00Z"
+    }
+  },
+  "sheets.coverage[the-drowned-ledger]": {
+    "characters": {
+      "invalid": 0,
+      "sheeted": 1,
+      "total": 2
+    },
+    "items": {
+      "invalid": 0,
+      "sheeted": 0,
+      "total": 0
+    },
+    "pcs": {
+      "invalid": 0,
+      "sheeted": 0,
+      "total": 1
+    }
+  },
+  "sheets.read[the-drowned-ledger/characters/seraphine]": {
+    "derived": {
+      "dex_mod": 0,
+      "melee_bonus": 1,
+      "mind_mod": 3,
+      "str_mod": -1
+    },
+    "errors": [],
+    "fields": {
+      "dexterity": 11,
+      "gear": [
+        "tide ledger"
+      ],
+      "hp": {
+        "current": 9,
+        "max": 12
+      },
+      "mind": 16,
+      "strength": 8
+    },
+    "gen": "2741ebcdea174b19909f7a9084ac14a2",
+    "sheet_type": "warrior"
+  },
+  "tags.read_tags[saltmarch]": {
+    "coastal": "Coastal"
+  },
+  "worlds.list_worlds": [
+    {
+      "counts": {
+        "characters": 2,
+        "creatures": 0,
+        "greetings": 2,
+        "groups": 0,
+        "items": 0,
+        "locations": 1,
+        "lore": 1,
+        "pcs": 0
+      },
+      "created": "2026-01-01T09:01:00Z",
+      "id": "saltmarch",
+      "name": "Saltmarch",
+      "updated": "2026-01-01T09:01:00Z"
+    }
+  ],
+  "worlds.read_world[saltmarch]": {
+    "body": "",
+    "counts": {
+      "characters": 2,
+      "creatures": 0,
+      "greetings": 2,
+      "groups": 0,
+      "items": 0,
+      "locations": 1,
+      "lore": 1,
+      "pcs": 0
+    },
+    "meta": {
+      "created": "2026-01-01T09:01:00Z",
+      "id": "saltmarch",
+      "name": "Saltmarch",
+      "updated": "2026-01-01T09:01:00Z"
+    }
+  }
+}

@@ -138,6 +138,26 @@ first if you think one should be skipped.
     the **istanbul** provider and `all: true` are load-bearing there, and the
     comments say why — do not switch to the v8 provider, which reports a file
     no test imports as 100% covered rather than 0%.
+- **The frozen campaign** (`backend/tests/fixtures/frozen_campaign/`) is a whole
+  store tree checked in as a fixture — the only store in the repo that today's
+  code did not write, which is the only way to catch a change that breaks
+  reading what an *older* version wrote. `home/` is **never regenerated**; its
+  value is being old. `snapshot.json` (the expected output of the read-only
+  sweep) *is* regenerated deliberately, when a template or render moved on
+  purpose and the new text was reviewed — `cd backend && PYTHONPATH=src
+  .venv/bin/python -m tests.fixtures.frozen_campaign.sweep`, committed with the
+  change that moved it. See that directory's README.
+- **Faking the LLM**: use `backend/tests/llm_fakes.py`, injected at
+  `app.dependency_overrides[routes.get_llm]` — never write another inline fake.
+  Scripted turns (`FakeOpenRouter`, `FakeOpenRouterComplete`, …) answer by call
+  order; a *cassette* (`from_cassette("campaign_flow")`) answers by what the
+  request looks like, replaying hand-authored bodies from
+  `backend/tests/fixtures/llm/`. A request matching no cassette entry raises
+  rather than defaulting, and `test_llm_fakes.py` renders every real prompt
+  template to prove the matchers still match — reword a system prompt and it
+  fails there rather than silently everywhere else. These bodies are canned, not
+  recorded: they prove the code handles a reply, never that a model would send
+  one (`evals/run.py --live` is the only thing that answers that).
 - Several architecture rules are enforced by tests that parse the package's own
   ASTs: `test_atomic_guard.py` (every store write goes through `store.atomic`),
   `test_overlay_guard.py`, `test_pydantic_guard.py` (v1/v2-agnostic pydantic),

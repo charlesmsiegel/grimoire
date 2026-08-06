@@ -16,10 +16,17 @@ those ports and never let a verification backend default to `~/.grimoire`.
    `grimoire.openrouter.API_URL` to a local mock route mounted on the same
    app, (c) runs uvicorn on a free port (e.g. 8199). The mock streams
    OpenAI-style SSE: `data: {"choices":[{"delta":{"content": ...}}]}` then
-   `data: [DONE]`. Branch on the request's system prompt: if it contains
-   `"suggestions"` return a JSON suggestions object, else return script-format
-   posts (`**Name:** line`). A working copy lives in past session scratchpads
-   as `verify_launcher.py`.
+   `data: [DONE]`. A working copy lives in past session scratchpads as
+   `verify_launcher.py`.
+
+   **Take the reply bodies from the test cassette**, don't invent new ones:
+   `backend/tests/fixtures/llm/campaign_flow.json` already covers every prompt
+   the app sends (scene turn, absorb, audit, dossier, voice, suggestions,
+   tagline), keyed by a phrase from the system prompt that owns the call —
+   `backend/tests/llm_fakes.py:Cassette` is the matcher, and the launcher can
+   import it or reimplement its four lines. The suite proves those matchers are
+   still phrases the real templates contain, which a hand-rolled
+   `if "suggestions" in prompt` branch in a throwaway launcher never does.
 2. **Frontend** — from `frontend/`:
    `GRIMOIRE_API=http://127.0.0.1:8199 npx vite --port 5199 --strictPort`
    (the vite proxy reads `GRIMOIRE_API`).
