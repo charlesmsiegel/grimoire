@@ -7,6 +7,7 @@ from grimoire.store import (appearances, assets, atomic, campaigns, characters, 
                             greetings, groupstate, overlay, pcs, playstate, sync, taglines,
                             voice_anchors, worlds)
 from grimoire.store.campaigns import read as campaigns_read
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 
 @pytest.fixture(autouse=True)
@@ -451,6 +452,61 @@ def test_materialize_pc_writes_every_version_before_the_meta_file(monkeypatch, t
     monkeypatch.setattr(atomic, "write_text", spy)
     overlay.materialize_actor(cid, "pcs", pid)
     assert seen["versions"] == ["default.md", "veteran.md"]
+
+
+def _stamp_full(cid: str) -> None:
+    """Mark a campaign pre-overlay full-copy — the state `ensure_campaign_slim`
+    migrates from, and the one where sync.md means the full copy's inventory
+    rather than the set of materialized records."""
+    mp = campaigns.campaign_meta_path(cid)
+    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    meta["world_copy"] = "full"
+    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+
+def test_materialize_entity_records_the_base_after_the_copy_before_the_migration(monkeypatch, tmp_path):
+    """The ordering above inverts on a campaign slim has not reached yet
+    (#270). There a ref with no copy is not "not materialized" — it is a
+    record the user deleted, which the pending migration tombstones. So the
+    copy has to commit first, and the manifest name it only once it has."""
+    _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    _thin(cid, "lore", eid)
+    _stamp_full(cid)
+    seen = _at_commit(monkeypatch, cid, campaigns.campaign_root(cid) / "lore" / f"{eid}.md")
+    overlay.materialize_entity(cid, "lore", eid)
+    assert f"lore/{eid}" not in seen["manifest"]                       # not named yet…
+    assert campaigns.read_manifest(cid)[f"lore/{eid}"] == entities.entity_hash(wroot, "lore", eid)
+
+
+def test_materialize_actor_records_the_base_after_the_meta_before_the_migration(monkeypatch, tmp_path):
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    _stamp_full(cid)
+    d = campaigns.campaign_root(cid) / "characters" / aid
+    seen = _at_commit(monkeypatch, cid, d / "character.md")
+    overlay.materialize_actor(cid, "characters", aid)
+    assert f"characters/{aid}" not in seen["manifest"]
+    assert campaigns.read_manifest(cid)[f"characters/{aid}"] == characters.dir_hash(wroot, aid)
+
+
+def test_an_interrupted_copy_before_the_migration_is_not_read_as_a_deletion(monkeypatch, tmp_path):
+    """End to end: interrupt the materialization at its commit point on an
+    unmigrated campaign, then let the migration run. What it finds is a copy
+    sync.md does not name, which it sweeps — the record stays inherited and
+    readable instead of being tombstoned out of the campaign."""
+    _wid, _wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    _thin(cid, "lore", eid)
+    _stamp_full(cid)
+    croot = campaigns.campaign_root(cid)
+    _fail_after_writing(monkeypatch, croot / "lore" / f"{eid}.md")
+    with pytest.raises(KeyboardInterrupt):
+        overlay.materialize_entity(cid, "lore", eid)
+    assert (croot / "lore" / f"{eid}.md").exists()                # the copy landed
+    assert f"lore/{eid}" not in campaigns.read_manifest(cid)      # the ref did not
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert f"lore/{eid}" not in overlay.deleted(cid)
+    assert overlay.read_entity(cid, "lore", eid)["body"] == "world text"
 
 
 def test_materialize_entity_drops_the_base_again_when_the_copy_fails(monkeypatch, tmp_path):

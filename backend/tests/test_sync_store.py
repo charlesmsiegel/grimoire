@@ -335,3 +335,90 @@ def test_new_kind_flows_live_and_syncs_updates(monkeypatch, tmp_path):
     pend = sync.incoming(cid)
     assert [p["status"] for p in pend] == ["update"]
     assert pend[0]["world"]["body"].strip() == "v2"
+
+
+def _stamp_full(cid: str) -> None:
+    """Mark a campaign pre-overlay full-copy — see campaigns.read.slim_pending."""
+    from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+
+    mp = campaigns.campaign_meta_path(cid)
+    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    meta["world_copy"] = "full"
+    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+
+def test_accept_before_the_migration_drops_the_ref_before_the_copy(monkeypatch, tmp_path):
+    """#270. Accept reverts a record to inherited by dropping both its copy and
+    its manifest ref, and which one may be left stranded depends on how sync.md
+    will next be read. On a campaign slim has not reached, a stranded ref is a
+    record the migration reads as user-deleted and tombstones — so there the
+    ref goes first and the copy second."""
+    wid, cid = _setup(monkeypatch, tmp_path)
+    overlay.materialize_entity(cid, "locations", "seraphine")
+    entities.update_entity(worlds.world_root(wid), "locations", "seraphine", body="v2")
+    _stamp_full(cid)
+    seen: dict = {}
+    real = overlay.dematerialize
+
+    def spy(c, ref):
+        seen.setdefault(ref, campaigns.read_manifest(c))
+        real(c, ref)
+
+    monkeypatch.setattr(overlay, "dematerialize", spy)
+    sync.accept(cid, [{"kind": "locations", "id": "seraphine"}])
+    assert "locations/seraphine" not in seen["locations/seraphine"]   # ref already gone
+    assert not (campaigns.campaign_root(cid) / "locations" / "seraphine.md").exists()
+    assert overlay.read_entity(cid, "locations", "seraphine")["body"].strip() == "v2"
+
+
+def test_an_interrupted_accept_before_the_migration_is_not_read_as_a_deletion(monkeypatch, tmp_path):
+    """Interrupt accept between the two writes on an unmigrated campaign: what
+    is left is a copy sync.md no longer names. The migration reclaims it rather
+    than tombstoning it — the campaign keeps the version it had, and the
+    update the accept never finished taking is offered again."""
+    wid, cid = _setup(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    overlay.materialize_entity(cid, "locations", "seraphine")
+    entities.update_entity(worlds.world_root(wid), "locations", "seraphine", body="v2")
+    _stamp_full(cid)
+
+    class Interrupted(Exception):
+        pass
+
+    def boom(*_a, **_kw):
+        raise Interrupted
+    monkeypatch.setattr(overlay, "dematerialize", boom)
+    with pytest.raises(Interrupted):
+        sync.accept(cid, [{"kind": "locations", "id": "seraphine"}])
+    monkeypatch.undo()
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    assert (croot / "locations" / "seraphine.md").exists()
+    assert "locations/seraphine" not in campaigns.read_manifest(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert "locations/seraphine" not in overlay.deleted(cid)
+    assert overlay.read_entity(cid, "locations", "seraphine")["body"].strip() == "v1"
+    # back in front of sync, rather than a copy that silently never syncs again
+    assert [p["status"] for p in sync.incoming(cid)] == ["update"]
+    sync.accept(cid, [{"kind": "locations", "id": "seraphine"}])
+    assert overlay.read_entity(cid, "locations", "seraphine")["body"].strip() == "v2"
+
+
+def test_accept_after_the_migration_still_drops_the_copy_first(monkeypatch, tmp_path):
+    """The inversion is scoped to the pending migration: past it, #247's rule
+    stands — a stranded ref reads through to the world live and self-heals,
+    while a stranded copy would diverge silently and forever."""
+    wid, cid = _setup(monkeypatch, tmp_path)
+    overlay.materialize_entity(cid, "locations", "seraphine")
+    entities.update_entity(worlds.world_root(wid), "locations", "seraphine", body="v2")
+    seen: dict = {}
+    real = overlay.dematerialize
+
+    def spy(c, ref):
+        seen.setdefault(ref, campaigns.read_manifest(c))
+        real(c, ref)
+
+    monkeypatch.setattr(overlay, "dematerialize", spy)
+    sync.accept(cid, [{"kind": "locations", "id": "seraphine"}])
+    assert "locations/seraphine" in seen["locations/seraphine"]   # ref still there
