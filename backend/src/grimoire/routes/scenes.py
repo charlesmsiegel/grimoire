@@ -1207,11 +1207,12 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
         # produced yet, so there is nothing to degrade to.
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     parsed = store.absorb.parse_output(text)
-    # The SAME messages the prompt was rendered from, not a fresh read: the
-    # citations in `parsed` are claims about that transcript, and a reroll or an
-    # append landing while the call was in flight would otherwise judge them
-    # against text the model never saw.
-    edits = store.absorb.materialize(cid, sid, parsed, scene["messages"])
+    # Both halves come from the SAME snapshot, and for the same reason: a reroll
+    # or an append landing while the call was in flight would otherwise have the
+    # citations (#112) judged against text the model never saw, and promotion
+    # (#121) reach replies this review does not summarize.
+    edits = store.absorb.materialize(cid, sid, parsed, scene["messages"],
+                                     tail=len(scene["messages"]))
     # Phase 2: propose each present NPC's refreshed campaign dossier -- staged, not
     # written (never raises -- see _stage_dossiers' own failure boundary).
     dossier_edits, dossiers = await _stage_dossiers(cid, sid, transcript, client, conn, budget)
@@ -1694,6 +1695,17 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage):
         # overwrite the sole copy of the first and drop it from the set.
         with store.locks.campaign_lock(cid):
             store.scenes.edit_message(cid, sid, index, content)
+            # Retire the transient-state ledger from this post on (#120). An
+            # edit is the one transcript change the tail filter cannot see:
+            # rewriting a furious exchange as a calm one leaves the entry at a
+            # perfectly valid index, so the discarded mood keeps being injected
+            # and can still be promoted into canonical state. Everything AFTER
+            # the edit goes too -- editing text can add or remove blocks, which
+            # shifts every later index onto a post it does not describe.
+            try:
+                store.turnstate.supersede(cid, sid, index)
+            except OSError:
+                pass          # same judgement as the sidecar below
             try:
                 store.alternates.reconcile(cid, sid)
             except OSError:
