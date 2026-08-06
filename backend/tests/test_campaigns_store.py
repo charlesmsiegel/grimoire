@@ -417,6 +417,110 @@ def test_slim_keeps_diverged_actor_and_ref(monkeypatch, tmp_path):
     assert ref in campaigns.read_manifest(cid)
 
 
+def test_slim_interrupted_mid_prune_does_not_tombstone_what_it_pruned(monkeypatch, tmp_path):
+    """#270. Slim used to unlink redundant copies inside the loop and persist
+    the pruned manifest only afterwards, so anything short of finishing — a
+    crash, a kill, an OSError out of the manifest write — left every copy it
+    had already dropped indistinguishable from a record the user had deleted.
+    Its own next run then tombstoned them, hiding inherited records from a
+    campaign whose only misfortune was being interrupted."""
+    wroot, cid, same, diverged, removed, aid, _vid = _fat_campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+
+    class Interrupted(Exception):
+        pass
+
+    def boom(*_a, **_kw):
+        raise Interrupted
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(campaigns.paths, "write_manifest", boom)
+        with pytest.raises(Interrupted):
+            campaigns.ensure_campaign_slim(cid)
+    # the pruning never started: the manifest still names every ref it did
+    assert f"lore/{same}" in campaigns.read_manifest(cid)
+    assert (croot / "lore" / f"{same}.md").exists()
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert f"lore/{same}" not in overlay.deleted(cid)          # not read as a deletion
+    assert f"characters/{aid}" not in overlay.deleted(cid)
+    assert overlay.read_entity(cid, "lore", same)["body"] == "same"   # still inherited
+    assert f"lore/{removed}" in overlay.deleted(cid)           # the real deletion survives
+    assert (croot / "lore" / f"{diverged}.md").exists()        # divergence untouched
+    assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "overlay"
+
+
+def test_slim_prunes_a_copy_the_manifest_does_not_name(monkeypatch, tmp_path):
+    """The other half of #270's ordering: every writer drops the manifest ref
+    before the copy while the migration is pending, so an interrupted one
+    leaves a copy sync.md does not name. Left alone it would survive as a
+    materialized record with no base — readable, but never syncing again and
+    never saying so. Slim sweeps it when the world still holds it identically."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    eid = entities.create_entity(wroot, "lore", "Saltmarch", "Tides.")
+    aid, _vid = characters.create_character(wroot, "Mara")
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    (croot / "lore").mkdir()
+    (croot / "lore" / f"{eid}.md").write_text(
+        (wroot / "lore" / f"{eid}.md").read_text(encoding="utf-8"), encoding="utf-8")
+    shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)
+    campaigns.write_manifest(cid, {})   # …and the ref that named them is already gone
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert not (croot / "lore" / f"{eid}.md").exists()
+    assert not (croot / "characters" / aid / "character.md").exists()
+    assert not overlay.deleted(cid)
+    assert overlay.read_entity(cid, "lore", eid)["body"] == "Tides."   # inherited again
+    assert campaigns.read_manifest(cid) == {}
+
+
+def test_slim_sweep_keeps_a_campaign_local_record(monkeypatch, tmp_path):
+    """The sweep is keyed on identity with the world, which is what stops it
+    taking a record the campaign owns: an edit diverged it, and a record
+    created campaign-side has no world counterpart to be identical to."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    mine = entities.create_entity(croot, "lore", "Winifred", "Campaign only.")
+    campaigns.write_manifest(cid, {})
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert (croot / "lore" / f"{mine}.md").exists()
+    assert overlay.read_entity(cid, "lore", mine)["body"] == "Campaign only."
+    assert campaigns.read_manifest(cid) == {}   # nor a base: there is no world record to have one against
+
+
+def test_slim_sweep_keeps_a_locked_actors_card(monkeypatch, tmp_path):
+    """A locked actor leaves the manifest holding its card on purpose, so it
+    is untracked by the time the sweep runs — and identical to the world when
+    the lock kept the only version. The lock invariant needs those files."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Hero")
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)
+    ref = f"characters/{aid}"
+    campaigns.write_manifest(cid, {ref: characters.dir_hash(wroot, aid)})
+    appearances.appear(cid, "s1", "characters", aid, vid, "npc")
+    campaigns.write_manifest(cid, {ref: characters.dir_hash(wroot, aid)})
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert (croot / "characters" / aid / "character.md").exists()
+    assert (croot / "characters" / aid / f"{vid}.json").exists()
+
+
 def test_create_campaign_writes_the_default_climate(monkeypatch, tmp_path):
     home(monkeypatch, tmp_path)
     from grimoire.store import campaign_climate, climates

@@ -27,6 +27,34 @@ def read_campaign(cid: str) -> dict:
     return {"meta": {"id": cid, **meta}, "body": body}
 
 
+def slim_pending(cid: str) -> bool:
+    """True while `ensure_campaign_slim` still has this campaign to migrate.
+
+    Writers ask because the manifest means two different things either side of
+    that migration, and the difference decides which way an interrupted write
+    has to fail (#270). To the overlay layout `sync.md` names the records the
+    campaign has materialized, so a ref whose copy is missing is a record that
+    was never copied -- harmless, and the next materialization overwrites it.
+    To the pending migration the same file is the pre-overlay full copy's
+    inventory, where every ref *had* a copy, so a missing one can only be a
+    record the user deleted -- and it tombstones it.
+
+    Both readings are correct for their own layout, and neither can tell
+    interrupted-write residue from the state it describes. So while this is
+    True the ref must never outlive its copy: writers that produce the pair
+    drop the ref first here and the copy first everywhere else (#247).
+
+    A campaign with no campaign.md has no migration pending -- there is nothing
+    for `ensure_campaign_slim` to migrate, and it raises for that id rather
+    than reading anything.
+    """
+    mp = paths.campaign_meta_path(cid)
+    if not mp.exists():
+        return False
+    meta, _ = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    return meta.get("world_copy") != "overlay"
+
+
 def world_root_of(cid: str) -> Path:
     """The root of the campaign's world, or an unoccupiable path if it has none.
 

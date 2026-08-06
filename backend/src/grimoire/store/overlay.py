@@ -48,6 +48,7 @@ from pathlib import Path
 
 from . import (assets, atomic, cards, characters, entities, failsoft, greetings,
                pcs, taglines, voice_anchors)
+from .appearances import paths as appearances_paths
 from .campaigns import paths as campaigns_paths, read as campaigns_read
 from .paths import natural_key, safe_id
 from .worlds import paths as worlds_paths
@@ -57,7 +58,7 @@ log = logging.getLogger(__name__)
 #: Record kinds a campaign inherits from its world. A `<campaign>/<kind>/...`
 #: read for one of these is only correct through this module (or after the
 #: reader has materialized the record itself).
-INHERITED_KINDS: tuple[str, ...] = entities.SYNCED_KINDS + ("characters", "pcs")
+INHERITED_KINDS: tuple[str, ...] = entities.SYNCED_KINDS + appearances_paths.ACTOR_KINDS
 
 #: Campaign-root files that resolve through to the world the same way.
 INHERITED_FILES: tuple[str, ...] = ("plotmap.json",)
@@ -229,6 +230,13 @@ def _recorded_base(cid: str, ref: str, base: str, commit: Path):
     landing without it leave the actor inherited, exactly as if the copy had
     not begun.
 
+    All of which describes a campaign the slim migration has already reached.
+    Before it, sync.md is the pre-overlay full copy's inventory and the same
+    residue reads as a record the user deleted, which the migration tombstones
+    (#270) — so there the two writes swap and the copy commits first. See
+    `campaigns.read.slim_pending`: what an interruption leaves there is a copy
+    the manifest does not name, which the migration sweeps.
+
     An exception, unlike a crash, can unwind, so undo the base then. It restores
     what it displaced rather than dropping the ref: an earlier interrupted
     attempt may have left a base there.
@@ -240,6 +248,15 @@ def _recorded_base(cid: str, ref: str, base: str, commit: Path):
     materialization of the same ref that finished while ours failed is the same
     case (Codex review).
     """
+    if campaigns_read.slim_pending(cid):
+        # Copy first, base second. Nothing to undo on the way out: no base was
+        # written, and the copy's own last write is atomic, so a failed body
+        # leaves the record inherited exactly as it found it.
+        yield
+        manifest = campaigns_paths.read_manifest(cid)
+        manifest[ref] = base
+        campaigns_paths.write_manifest(cid, manifest)
+        return
     manifest = campaigns_paths.read_manifest(cid)
     previous = manifest.get(ref)
     manifest[ref] = base
@@ -280,6 +297,20 @@ def _materialize_flat(cid: str, kind: str, eid: str) -> bool:
     with _recorded_base(cid, _flat_ref(kind, eid), entities.content_hash(text), dst):
         atomic.write_text(dst, text)
     return True
+
+
+def dematerialize(cid: str, ref: str) -> None:
+    """Remove the campaign copy of `ref` so the record reverts to inherited —
+    the ref-level inverse of materialization, over all three shapes sync.md
+    names. The manifest is the caller's: drop the ref before calling this while
+    `campaigns.read.slim_pending` holds, and after it otherwise (#247, #270)."""
+    kind, _, eid = ref.partition("/")
+    if ref == "plotmap":
+        (croot_of(cid) / "plotmap.json").unlink(missing_ok=True)
+    elif kind in appearances_paths.ACTOR_KINDS:
+        dematerialize_actor(cid, kind, eid)
+    else:
+        _flat_path(croot_of(cid), kind, eid).unlink(missing_ok=True)
 
 
 def _drop_manifest_ref(cid: str, ref: str) -> None:
