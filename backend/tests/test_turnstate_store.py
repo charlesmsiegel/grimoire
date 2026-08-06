@@ -504,3 +504,20 @@ def test_drop_scene_tolerates_an_unparseable_ledger(monkeypatch, tmp_path):
     turnstate.record(cid, "s1", 0, {"characters:w": {"mood": "guarded"}})
     (campaigns.campaign_root(cid) / "turnstate.json").write_text("{ nope", encoding="utf-8")
     turnstate.drop_scene(cid, "s1")           # does not raise
+
+
+def test_repoint_refuses_rather_than_pretending_on_an_unreadable_ledger(
+        monkeypatch, tmp_path):
+    """`rename_scene` moves the transcript before the fan-out runs, so a silent
+    no-op here leaves the state under the old id — lost to the renamed scene
+    and waiting for whatever later reuses that id."""
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "old", 0, {"characters:w": {"mood": "guarded"}})
+    path = campaigns.campaign_root(cid) / "turnstate.json"
+
+    def _boom(*a, **k):
+        raise OSError("sharing violation")
+
+    monkeypatch.setattr(type(path), "read_text", _boom)
+    with pytest.raises(OSError):
+        turnstate.repoint_scenes(cid, {"old": "new"})
