@@ -11,7 +11,8 @@ from .paths import (  # noqa: F401
     campaign_meta_path, campaign_root, read_manifest, write_manifest,
 )
 from .read import (  # noqa: F401
-    _NO_WORLD, list_campaigns, read_campaign, touch, world_refs, world_root_of,
+    _NO_WORLD, has_campaigns, list_campaigns, read_campaign, touch, world_refs,
+    world_root_of,
 )
 from .lifecycle import (  # noqa: F401
     _prune_duplicate_files, _tombstone_deleted_copied_assets, create_campaign,

@@ -1,5 +1,5 @@
 import { render, screen, within, fireEvent, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useNavigate } from "react-router-dom";
 import App from "./App";
 
 vi.mock("./api/client", () => ({
@@ -25,10 +25,24 @@ vi.mock("./routes/CampaignWizard", () => ({
   default: () => <div data-testid="campaign-wizard" />,
 }));
 
+// Stands in for the real wizard's exit: report completion, then leave for "/",
+// which is exactly what SetupWizard.finish() does.
+vi.mock("./routes/SetupWizard", () => ({
+  default: ({ onDone }: any) => {
+    const navigate = useNavigate();
+    return (
+      <div data-testid="setup-wizard">
+        <button onClick={() => { onDone(); navigate("/", { replace: true }); }}>finish-setup</button>
+      </div>
+    );
+  },
+}));
+
 const READY_OPENROUTER = {
   theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
   active_connection_id: "openrouter",
   active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true,
+  setup_done: "on", first_run: false,
 };
 
 beforeEach(() => {
@@ -98,4 +112,38 @@ test("the topbar stays fully visible on /campaigns/new even with a stored collap
   render(<MemoryRouter initialEntries={["/campaigns/new"]}><App /></MemoryRouter>);
   await screen.findByTestId("campaign-wizard");
   expect(screen.getByRole("banner")).not.toHaveClass("collapsed");
+});
+
+// ---- first-run setup wizard (#194) ----
+const FIRST_RUN = { ...READY_OPENROUTER, ready: false, active_connection: null, setup_done: "off", first_run: true };
+
+test("a first run sends / to the setup wizard instead of the campaigns list", async () => {
+  (api.getConfig as any).mockResolvedValue(FIRST_RUN);
+  render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
+  expect(await screen.findByTestId("setup-wizard")).toBeInTheDocument();
+  expect(api.listCampaigns).not.toHaveBeenCalled();
+});
+
+test("an install past setup lands on the campaigns list", async () => {
+  render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
+  await screen.findByText(/GRIMOIRE/);
+  await waitFor(() => expect(api.listCampaigns).toHaveBeenCalled());
+  expect(screen.queryByTestId("setup-wizard")).not.toBeInTheDocument();
+});
+
+test("a first run does not hijack a route other than /", async () => {
+  (api.getConfig as any).mockResolvedValue(FIRST_RUN);
+  render(<MemoryRouter initialEntries={["/worlds"]}><App /></MemoryRouter>);
+  await screen.findByText(/GRIMOIRE/);
+  expect(screen.queryByTestId("setup-wizard")).not.toBeInTheDocument();
+});
+
+test("finishing the wizard gives / back without waiting on a config refetch", async () => {
+  (api.getConfig as any).mockResolvedValue(FIRST_RUN);   // still says first_run
+  render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
+  const wizard = await screen.findByTestId("setup-wizard");
+
+  fireEvent.click(within(wizard).getByText("finish-setup"));
+  await waitFor(() => expect(api.listCampaigns).toHaveBeenCalled());
+  expect(screen.queryByTestId("setup-wizard")).not.toBeInTheDocument();
 });

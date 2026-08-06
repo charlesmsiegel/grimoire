@@ -1,41 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  api, type LLMConnection, type LLMConnectionDetail, type LLMConnectionKind,
-} from "../api/client";
+import { api, type LLMConnection, type LLMConnectionDetail } from "../api/client";
 import { getModels, type Model } from "../api/models";
-import ModelCombobox from "../routes/ModelCombobox";
-import { Field } from "./Field";
-
-// Aliases resolve to the newest model of each tier at request time (the Agent
-// SDK passes them through to Claude Code); pinned ids freeze a version and
-// need a refresh here when new models ship.
-const CLAUDE_ALIASES = [
-  { id: "fable", label: "Fable (latest)" },
-  { id: "opus", label: "Opus (latest)" },
-  { id: "sonnet", label: "Sonnet (latest)" },
-  { id: "haiku", label: "Haiku (latest)" },
-];
-const CLAUDE_PINNED = [
-  "claude-fable-5",
-  "claude-opus-4-8",
-  "claude-opus-4-7",
-  "claude-opus-4-6",
-  "claude-sonnet-5",
-  "claude-sonnet-4-6",
-  "claude-haiku-4-5",
-];
-
-const BLANK_FORM = {
-  kind: "openrouter" as LLMConnectionKind, name: "", base_url: "",
-  model: "", post_process: "none" as "none" | "strict",
-};
+import { BLANK_CONNECTION, ConnectionForm } from "./ConnectionForm";
 
 export function ConnectionEditor() {
   const [connections, setConnections] = useState<LLMConnection[]>([]);
   const [activeId, setActiveId] = useState("");
   const [id, setId] = useState<string | null>(null);
   const [detail, setDetail] = useState<LLMConnectionDetail | null>(null);
-  const [form, setForm] = useState(BLANK_FORM);
+  const [form, setForm] = useState(BLANK_CONNECTION);
   const [mode, setMode] = useState<"view" | "edit">("edit");
   const [key, setKey] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -55,7 +28,7 @@ export function ConnectionEditor() {
   function resetForm() {
     setId(null);
     setDetail(null);
-    setForm(BLANK_FORM);
+    setForm(BLANK_CONNECTION);
     setKey("");
     setMode("edit");
     setError(null);
@@ -186,84 +159,20 @@ export function ConnectionEditor() {
         ) : (
           <div className="form">
             <h3>{id ? "Edit connection" : "New connection"}</h3>
-            <Field label="Kind">
-              <select value={form.kind} disabled={!!id}
-                      onChange={(e) => setForm({ ...form, kind: e.target.value as LLMConnectionKind })}>
-                <option value="openrouter">OpenRouter</option>
-                <option value="claude">Claude</option>
-                <option value="openai_compatible">Custom (OpenAI-compatible)</option>
-              </select>
-            </Field>
-            <Field label="Name">
-              <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-            </Field>
-
-            {form.kind === "openrouter" && (
-              <>
-                <Field label="API key">
-                  <input type="password" placeholder={detail?.key_set ? "A key is set — type to replace" : "sk-or-…"}
-                         value={key} onChange={(e) => setKey(e.target.value)} />
-                </Field>
-                <Field label="Model">
-                  <ModelCombobox value={form.model} onChange={(v) => setForm({ ...form, model: v })}
-                                 models={orModels} error={orError} />
-                </Field>
-              </>
-            )}
-
-            {form.kind === "claude" && (
-              <Field label="Claude model">
-                <select aria-label="Claude model" value={form.model}
-                        onChange={(e) => setForm({ ...form, model: e.target.value })}>
-                  <optgroup label="Latest">
-                    {CLAUDE_ALIASES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-                  </optgroup>
-                  <optgroup label="Pinned versions">
-                    {CLAUDE_PINNED.map((mid) => <option key={mid} value={mid}>{mid}</option>)}
-                  </optgroup>
-                  {form.model &&
-                    !CLAUDE_ALIASES.some((m) => m.id === form.model) &&
-                    !CLAUDE_PINNED.includes(form.model) && (
-                      <optgroup label="Custom">
-                        <option value={form.model}>{form.model}</option>
-                      </optgroup>
-                    )}
-                </select>
-              </Field>
-            )}
-
-            {form.kind === "openai_compatible" && (
-              <>
-                <Field label="Base URL">
-                  <input type="text" placeholder="https://api.example.com/v1" value={form.base_url}
-                         onChange={(e) => setForm({ ...form, base_url: e.target.value })} />
-                </Field>
-                <Field label="API key" hint="Optional — leave blank for servers that don't require auth.">
-                  <input type="password" placeholder={detail?.key_set ? "A key is set — type to replace" : "(optional)"}
-                         value={key} onChange={(e) => setKey(e.target.value)} />
-                </Field>
-                <Field label="Model">
-                  <ModelCombobox value={form.model} onChange={(v) => setForm({ ...form, model: v })}
-                                 models={customModels} />
-                </Field>
-                {id && (
-                  <p className="field-hint">
-                    {detail?.fetched_at ? `Cached models last fetched ${detail.fetched_at}. ` : "No cached models yet. "}
-                    <button className="link" onClick={refreshModels} disabled={refreshing}>
-                      {refreshing ? "Refreshing…" : "Fetch models"}
-                    </button>
-                  </p>
-                )}
-                <Field label="Prompt post-processing"
-                       hint="Strict folds system messages into user turns and forces the sequence to start with a user turn — needed by some coding-style endpoints (e.g. z.ai's GLM) that reject a system message mid-conversation.">
-                  <select value={form.post_process}
-                          onChange={(e) => setForm({ ...form, post_process: e.target.value as "none" | "strict" })}>
-                    <option value="none">None</option>
-                    <option value="strict">Strict</option>
-                  </select>
-                </Field>
-              </>
-            )}
+            <ConnectionForm
+              value={form} onChange={setForm}
+              apiKey={key} onApiKey={setKey}
+              keySet={!!detail?.key_set} lockKind={!!id}
+              orModels={orModels} orError={orError} cachedModels={customModels}
+              modelsHint={id ? (
+                <p className="field-hint">
+                  {detail?.fetched_at ? `Cached models last fetched ${detail.fetched_at}. ` : "No cached models yet. "}
+                  <button className="link" onClick={refreshModels} disabled={refreshing}>
+                    {refreshing ? "Refreshing…" : "Fetch models"}
+                  </button>
+                </p>
+              ) : undefined}
+            />
 
             <div className="form-actions">
               {id && <button className="subtle" onClick={() => remove(connections.find((c) => c.id === id)!)}>Delete</button>}
