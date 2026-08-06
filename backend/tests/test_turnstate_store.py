@@ -1,0 +1,309 @@
+"""The transient per-turn state ledger (#120): its block grammar, the stream
+redactor that keeps the block off the player's screen, and the two projections
+the prompt and promotion read."""
+
+import json
+
+import pytest
+
+from grimoire.store import campaigns, playstate, turnstate, worlds
+
+
+def _campaign(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    return campaigns.create_campaign("Run", worlds.create_world("Realm"))
+
+
+def _block(payload: str) -> str:
+    return f"```state\n{payload}\n```"
+
+
+# ---- the block grammar -----------------------------------------------------
+
+def test_a_trailing_block_is_split_off_the_narration():
+    text = "Winifred sets the lamp down.\n\n" + _block('{"Winifred": {"mood": "guarded"}}')
+    narration, states = turnstate.split_block(text)
+    assert narration.strip() == "Winifred sets the lamp down."
+    assert states == {"Winifred": {"mood": "guarded"}}
+
+
+def test_a_reply_with_no_block_is_returned_unchanged():
+    assert turnstate.split_block("Just prose.") == ("Just prose.", {})
+
+
+def test_a_block_with_narration_after_it_is_left_in_place():
+    # Deleting from the middle of a reply is the one failure that loses story.
+    text = _block('{"Winifred": {"mood": "guarded"}}') + "\n\nShe turns back."
+    narration, states = turnstate.split_block(text)
+    assert narration == text
+    assert states == {}
+
+
+def test_an_unterminated_trailing_opener_is_stripped_with_no_data():
+    text = 'She waits.\n\n```state\n{"Winifred": {"mood": "gu'
+    narration, states = turnstate.split_block(text)
+    assert narration.strip() == "She waits."
+    assert states == {}
+
+
+def test_malformed_json_costs_the_data_not_the_reply():
+    narration, states = turnstate.split_block("She waits.\n\n" + _block("{not json"))
+    assert narration.strip() == "She waits."
+    assert states == {}
+
+
+def test_the_state_envelope_form_is_accepted_too():
+    _, states = turnstate.split_block(_block('{"state": {"Winifred": {"mood": "tense"}}}'))
+    assert states == {"Winifred": {"mood": "tense"}}
+
+
+def test_unknown_fields_and_non_string_values_are_dropped():
+    _, states = turnstate.split_block(
+        _block('{"Winifred": {"mood": "wry", "hp": 4, "intent": null, "posture": "  leaning  in  "}}'))
+    assert states == {"Winifred": {"mood": "wry", "posture": "leaning in"}}
+
+
+def test_an_over_long_value_is_dropped_rather_than_truncated():
+    long = "x" * (turnstate.MAX_VALUE + 1)
+    _, states = turnstate.split_block(_block(json.dumps({"W": {"mood": long, "intent": "wait"}})))
+    assert states == {"W": {"intent": "wait"}}
+
+
+def test_a_character_with_nothing_usable_is_dropped_entirely():
+    _, states = turnstate.split_block(_block('{"Winifred": {"hp": 3}, "Mara": {"mood": "calm"}}'))
+    assert states == {"Mara": {"mood": "calm"}}
+
+
+def test_the_last_of_several_blocks_is_the_one_that_counts():
+    text = (_block('{"Mara": {"mood": "early"}}') + "\n\nShe moves.\n\n"
+            + _block('{"Mara": {"mood": "late"}}'))
+    narration, states = turnstate.split_block(text)
+    assert states == {"Mara": {"mood": "late"}}
+    assert "early" in narration and "late" not in narration
+
+
+# ---- name resolution -------------------------------------------------------
+
+CAST = [{"kind": "characters", "id": "winifred", "role": "npc", "name": "Winifred Ash"},
+        {"kind": "pcs", "id": "mara", "role": "player", "name": "Mara"}]
+
+
+def test_names_resolve_case_insensitively_to_actor_tokens():
+    assert turnstate.resolve({"winifred ash": {"mood": "wry"}}, CAST) == {
+        "characters:winifred": {"mood": "wry"}}
+
+
+def test_an_unknown_name_is_dropped():
+    assert turnstate.resolve({"Nobody": {"mood": "wry"}}, CAST) == {}
+
+
+def test_players_are_not_tracked():
+    assert turnstate.resolve({"Mara": {"mood": "wry"}}, CAST) == {}
+
+
+# ---- the stream redactor ---------------------------------------------------
+
+def _stream(chunks):
+    r = turnstate.StreamRedactor()
+    return "".join(r.feed(c) for c in chunks) + r.finish()
+
+
+def test_the_redactor_passes_ordinary_prose_through():
+    assert _stream(["She ", "sets the ", "lamp down."]) == "She sets the lamp down."
+
+
+def test_the_redactor_swallows_the_block_even_split_across_deltas():
+    assert _stream(["She waits.\n\n", "``", "`sta", "te\n{\"W\": ", "{}}\n```"]) == "She waits.\n\n"
+
+
+def test_backticks_that_are_not_an_opener_are_released():
+    assert _stream(["a ``", "code`` span"]) == "a ``code`` span"
+    assert _stream(["```py", "thon\nx = 1\n```"]) == "```python\nx = 1\n```"
+
+
+def test_a_trailing_backtick_run_survives_end_of_stream():
+    assert _stream(["done ``", "`"]) == "done ```"
+
+
+def test_statement_is_not_an_opener():
+    assert _stream(["```statement of intent"]) == "```statement of intent"
+
+
+def test_nothing_escapes_after_an_opener():
+    r = turnstate.StreamRedactor()
+    assert r.feed("hi ```state\n") == "hi "
+    assert r.feed('{"W": {}}') == ""
+    assert r.feed("```") == ""
+    assert r.finish() == ""
+
+
+# ---- the ledger ------------------------------------------------------------
+
+def test_record_and_read_back(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 4, {"characters:w": {"mood": "guarded"}})
+    assert turnstate.entries(cid, "s1") == [(4, {"characters:w": {"mood": "guarded"}})]
+
+
+def test_recording_nothing_writes_nothing(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 4, {})
+    assert turnstate.read(cid) == {}
+
+
+def test_entries_past_the_transcript_tail_are_dropped(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 9, {"characters:w": {"mood": "stale"}})
+    assert turnstate.entries(cid, "s1", tail=5) == []
+
+
+def test_a_relanded_reply_overwrites_the_entry_at_its_index(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 4, {"characters:w": {"mood": "first"}})
+    turnstate.record(cid, "s1", 4, {"characters:w": {"mood": "second"}})
+    assert turnstate.entries(cid, "s1") == [(4, {"characters:w": {"mood": "second"}})]
+
+
+def test_a_garbled_file_reads_as_empty_rather_than_raising(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 1, {"characters:w": {"mood": "x"}})
+    (campaigns.campaign_root(cid) / "turnstate.json").write_text("{ nope", encoding="utf-8")
+    assert turnstate.read(cid) == {}
+    assert turnstate.entries(cid, "s1") == []
+    assert turnstate.current(cid, "s1", 10, 4) == {}
+
+
+@pytest.mark.parametrize("payload", [
+    '{"s1": "not a dict"}',
+    '{"s1": {"two": {"characters:w": {"mood": "x"}}}}',      # non-numeric index
+    '{"s1": {"1": ["not", "a", "dict"]}}',
+    '{"s1": {"1": {"characters:w": "not a dict"}}}',
+    '{"s1": {"-2": {"characters:w": {"mood": "x"}}}}',
+])
+def test_malformed_levels_are_skipped_not_fatal(monkeypatch, tmp_path, payload):
+    cid = _campaign(monkeypatch, tmp_path)
+    (campaigns.campaign_root(cid) / "turnstate.json").write_text(payload, encoding="utf-8")
+    assert turnstate.entries(cid, "s1") == []
+
+
+# ---- decay -----------------------------------------------------------------
+
+def test_only_the_window_is_live_and_the_newest_value_wins(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 1, {"characters:w": {"mood": "old", "intent": "wait"}})
+    turnstate.record(cid, "s1", 8, {"characters:w": {"mood": "new"}})
+    live = turnstate.current(cid, "s1", tail=10, depth=4)
+    assert live == {"characters:w": {"mood": "new"}}   # "wait" decayed out with post 1
+
+
+def test_a_field_the_newest_entry_omits_survives_inside_the_window(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 7, {"characters:w": {"intent": "reach the door"}})
+    turnstate.record(cid, "s1", 8, {"characters:w": {"mood": "new"}})
+    assert turnstate.current(cid, "s1", tail=10, depth=4) == {
+        "characters:w": {"intent": "reach the door", "mood": "new"}}
+
+
+def test_depth_zero_disables_the_projection(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 8, {"characters:w": {"mood": "new"}})
+    assert turnstate.current(cid, "s1", tail=10, depth=0) == {}
+
+
+# ---- streaks ---------------------------------------------------------------
+
+def _run(cid, values, sid="s1"):
+    for i, v in enumerate(values):
+        if v is not None:
+            turnstate.record(cid, sid, i, {"characters:w": {"mood": v}})
+
+
+def test_a_run_of_three_promotes(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    _run(cid, ["guarded", "guarded", "guarded"])
+    assert turnstate.streaks(cid, "s1", tail=9, need=3) == {"characters:w": {"mood": "guarded"}}
+
+
+def test_a_shorter_run_does_not(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    _run(cid, ["guarded", "guarded"])
+    assert turnstate.streaks(cid, "s1", tail=9, need=3) == {}
+
+
+def test_the_run_measured_is_the_final_one(monkeypatch, tmp_path):
+    # Four posts guarded, then it changes: the character is not guarded now, and
+    # promoting the scene's abandoned middle into standing state would be wrong.
+    cid = _campaign(monkeypatch, tmp_path)
+    _run(cid, ["guarded", "guarded", "guarded", "guarded", "open"])
+    assert turnstate.streaks(cid, "s1", tail=9, need=3) == {}
+
+
+def test_casing_and_trailing_punctuation_do_not_break_a_run(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    _run(cid, ["Guarded.", "guarded", "GUARDED"])
+    # The value KEPT is the last one as the model spelled it.
+    assert turnstate.streaks(cid, "s1", tail=9, need=3) == {"characters:w": {"mood": "GUARDED"}}
+
+
+def test_a_post_that_does_not_mention_the_actor_is_skipped_not_breaking(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 0, {"characters:w": {"mood": "guarded"}})
+    turnstate.record(cid, "s1", 1, {"characters:other": {"mood": "bored"}})
+    turnstate.record(cid, "s1", 2, {"characters:w": {"mood": "guarded"}})
+    turnstate.record(cid, "s1", 3, {"characters:w": {"mood": "guarded"}})
+    assert turnstate.streaks(cid, "s1", tail=9, need=3)["characters:w"] == {"mood": "guarded"}
+
+
+def test_streaks_ignore_entries_past_the_tail(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    _run(cid, ["guarded", "guarded", "guarded"])
+    assert turnstate.streaks(cid, "s1", tail=2, need=3) == {}
+
+
+# ---- id lifecycle ----------------------------------------------------------
+
+def test_repoint_follows_a_renamed_scene(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "old", 1, {"characters:w": {"mood": "x"}})
+    turnstate.repoint_scenes(cid, {"old": "new"})
+    assert turnstate.entries(cid, "old") == []
+    assert turnstate.entries(cid, "new") == [(1, {"characters:w": {"mood": "x"}})]
+
+
+def test_repoint_with_no_match_leaves_the_file_alone(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 1, {"characters:w": {"mood": "x"}})
+    before = (campaigns.campaign_root(cid) / "turnstate.json").read_text(encoding="utf-8")
+    turnstate.repoint_scenes(cid, {"other": "another"})
+    assert (campaigns.campaign_root(cid) / "turnstate.json").read_text(encoding="utf-8") == before
+
+
+def test_drop_scene_forgets_one_scene_only(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 1, {"characters:w": {"mood": "x"}})
+    turnstate.record(cid, "s2", 1, {"characters:w": {"mood": "y"}})
+    turnstate.drop_scene(cid, "s1")
+    assert turnstate.entries(cid, "s1") == []
+    assert turnstate.entries(cid, "s2") == [(1, {"characters:w": {"mood": "y"}})]
+
+
+# ---- the playstate fold ----------------------------------------------------
+
+def test_fold_appends_a_new_label_and_capitalizes_it():
+    assert playstate.fold_fields("She is tired.", {"mood": "guarded"}) == (
+        "She is tired.\nMood: guarded")
+
+
+def test_fold_replaces_an_existing_label_in_place():
+    body = "Mood: open\nShe is tired."
+    assert playstate.fold_fields(body, {"mood": "guarded"}) == "Mood: guarded\nShe is tired."
+
+
+def test_fold_is_idempotent():
+    once = playstate.fold_fields("She is tired.", {"mood": "guarded"})
+    assert playstate.fold_fields(once, {"mood": "guarded"}) == once
+
+
+def test_fold_onto_an_empty_body():
+    assert playstate.fold_fields("", {"mood": "guarded", "intent": "leave"}) == (
+        "Mood: guarded\nIntent: leave")

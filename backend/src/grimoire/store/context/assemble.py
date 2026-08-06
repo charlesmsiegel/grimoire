@@ -20,7 +20,7 @@ from typing import NamedTuple
 
 from ... import prompts
 from .. import (characters, commitments, config, entities, length_drift, lengths,
-                overlay, pcs, plot, response_presets, styles)
+                overlay, pcs, plot, response_presets, styles, turnstate)
 from ..appearances import (cast as appearances_cast, paths as appearances_paths,
                            versions as appearances_versions)
 from ..campaigns import paths as campaigns_paths, read as campaigns_read
@@ -169,6 +169,11 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # the cast record: `npc_names`/`player_names` here are one name each and
         # the wrong one for it (see `world_state._actor_aliases`).
         "states": world_state._character_states(aroot, cid, cast, pcless),
+        # `history` is the whole transcript, so its length is the post index the
+        # ledger's decay window measures back from.
+        "transient_states": world_state._transient_states(cid, sid, cast, len(history)),
+        "transient_tracker": config.turnstate_depth() > 0,
+        "transient_fields": list(turnstate.FIELDS),
         "relationship_lines": story._relationship_lines(cid, cast),
         "players": players, "ref_names": ref_names, "refs": refs,
         "story_entries": story._story_entries(cid, depth=full_recap or None, full=bool(full_recap)),
@@ -219,13 +224,19 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
 
 class Section(NamedTuple):
     """One system-message section: its inspector label, its template, the tier
-    the packer drops it at, and the two selectors that decide whether it renders
-    at all."""
+    the packer drops it at, and the three selectors that decide whether it
+    renders at all."""
     label: str
     template: str
     tier: str
     pcless_only: bool = False
     opener_only: bool = False
+    #: Rendered on every turn EXCEPT the opener. Only the tracker instruction
+    #: (#120) wants this: the opener is streamed unpersisted into a box the user
+    #: reads and adopts by hand, so a machine-readable block there is something
+    #: they have to delete themselves — and there is no reply after it to strip
+    #: it from.
+    except_opener: bool = False
 
 
 #: The system message, in order. `_render_sections` renders it and system.j2
@@ -238,6 +249,9 @@ _SECTIONS = [
     Section("System prompt", "scene/sections/card_system_prompts.j2", pack.LOCK_IN),
     Section("Character descriptions", "scene/sections/character_descriptions.j2", pack.LOCK_IN),
     Section("Character state", "scene/sections/character_state.j2", pack.SPOTLIGHT),
+    # Beside the standing state and at the same tier: the same kind of claim
+    # about the same characters, with a shorter half-life.
+    Section("Transient state", "scene/sections/transient_state.j2", pack.SPOTLIGHT),
     Section("Relationships", "scene/sections/relationships.j2", pack.SPOTLIGHT),
     Section("Player personas", "scene/sections/player_personas.j2", pack.LOCK_IN),
     Section("Offscreen scene", "scene/sections/offscreen_scene.j2", pack.LOCK_IN, pcless_only=True),
@@ -257,6 +271,8 @@ _SECTIONS = [
     Section("Off-scene cast", "scene/sections/off_scene_cast.j2", pack.BACKGROUND),
     Section("Mechanics response format", "scene/sections/mechanics_response_format.j2", pack.LOCK_IN),
     Section("Response format", "scene/sections/response_format.j2", pack.LOCK_IN),
+    Section("Transient state tracker", "scene/sections/transient_tracker.j2", pack.LOCK_IN,
+            except_opener=True),
     Section("Response budget", "scene/sections/response_budget.j2", pack.LOCK_IN),
 ]
 
@@ -287,6 +303,8 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False) -> list[
         if section.pcless_only and not data["pcless"]:
             continue
         if section.opener_only and not opener:
+            continue
+        if section.except_opener and opener:
             continue
         text = macros.expand_macros(prompts.render(_section_template(section, data), **data),
                                     a["subs"], cid, sid).strip()

@@ -1,0 +1,14 @@
+{#- The inline tracker instruction (#120). Asks for a fenced `state` block after
+    the narration; routes.streaming strips it before the reply becomes posts, so
+    it never enters the transcript and never reaches the player. Rendered only
+    when the ledger is switched on (turnstate_depth > 0); the section list keeps
+    it off the opener.
+    Vars: transient_tracker (bool), transient_fields ([str]). -#}
+{%- if transient_tracker %}# Transient state tracker
+After the last line of narration, and only there, add one fenced block:
+
+```state
+{"<character name>": { {% for f in transient_fields %}"{{ f }}": "…"{% if not loop.last %}, {% endif %}{% endfor %} }}
+```
+
+One entry per character you voiced this turn, keyed by the exact name you label their dialogue with. Each value is a short phrase — a few words, never a sentence. Omit a field the scene does not support, omit a character you did not move, and omit the block entirely if you have nothing to record. Write nothing after it.{% endif -%}

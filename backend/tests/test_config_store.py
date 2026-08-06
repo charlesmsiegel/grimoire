@@ -107,3 +107,39 @@ def test_non_positive_duration_means_no_bound(monkeypatch, tmp_path):
     s.write_config(llm_timeout="0", absorb_budget="-1")
     assert s.config.llm_timeout() == 0.0
     assert s.config.absorb_budget() == 0.0
+
+
+# ---- transient state settings (#120 / #121) ----
+
+def test_transient_state_ships_disabled(monkeypatch, tmp_path):
+    """The tracker adds an instruction to every reply, so it is opt-in — an
+    existing install must not start being told to emit machine-readable blocks
+    because it upgraded."""
+    s = reload_with_home(monkeypatch, tmp_path)
+    cfg = s.read_config()
+    assert cfg["turnstate_depth"] == "0"
+    assert cfg["promote_streak"] == "3"
+    assert s.config.turnstate_depth() == 0
+
+
+def test_transient_counts_round_trip(monkeypatch, tmp_path):
+    s = reload_with_home(monkeypatch, tmp_path)
+    s.write_config(turnstate_depth="6", promote_streak="2")
+    assert s.config.turnstate_depth() == 6
+    assert s.config.promote_streak() == 2
+
+
+def test_transient_counts_fall_back_when_unparseable(monkeypatch, tmp_path):
+    s = reload_with_home(monkeypatch, tmp_path)
+    s.write_config(turnstate_depth="lots", promote_streak="")
+    assert s.config.turnstate_depth() == 0
+    assert s.config.promote_streak() == 3
+
+
+def test_a_negative_count_reads_as_disabled(monkeypatch, tmp_path):
+    """Not as an index — history[-N:] with a negative N slices from the wrong
+    end, and a negative streak would promote on the first value seen."""
+    s = reload_with_home(monkeypatch, tmp_path)
+    s.write_config(turnstate_depth="-4", promote_streak="-1")
+    assert s.config.turnstate_depth() == 0
+    assert s.config.promote_streak() == 0

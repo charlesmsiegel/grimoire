@@ -167,6 +167,18 @@ substituted by code:
   the model cannot tell from a fact. A `pcless` scene is the director's own
   view and gets the stored value unfiltered — `context/world_state.py:
   _visible_suspects`
+- `transient_states` — `[{name, fields: [{label, value}]}]`, the per-turn
+  mood/intent/posture ledger (#120) decayed to the last `turnstate_depth`
+  posts, newest value per field, labelled with the CAST name (what the model
+  keys its tracker block by). `[]` when `turnstate_depth` is `0`, which is the
+  shipped default — `store/turnstate.py`
+- `transient_tracker`, `transient_fields` — `bool` (is the ledger switched on)
+  and `["mood", "intent", "posture"]`, for `sections/transient_tracker.j2`: the
+  instruction asking the model to end each reply with a fenced `state` block.
+  `routes.streaming._persist_reply` strips that block before the reply is split
+  into posts, so it is never part of a transcript. The section carries
+  `except_opener=True` — the opener is streamed unpersisted into a box the user
+  adopts by hand, and there is no reply after it to strip the block from
 - `relationship_lines` — `relationships.render_present()` lines
 - `players` — seated players: `{kind: "pcs", name, pronouns, summary,
   description}` (persona) or `{kind: "characters", name, description,

@@ -38,6 +38,17 @@ DEFAULT_SETUP_DONE = "off"
 # "0" disables capture. Counted per campaign rather than per scene because the
 # payloads hold whole prompts -- see that module for the tradeoff.
 DEFAULT_PROMPT_LOG_DEPTH = "50"
+# How many posts back the transient per-turn state ledger is injected over
+# (store/turnstate.py). This is the decay window AND the feature's switch: at
+# "0" no tracker instruction is added to the prompt and nothing is injected,
+# which is the default because the instruction asks the model to end every
+# reply with a machine-readable block — a real change to what it is being told
+# to write, and not one to turn on behind an existing install's back.
+DEFAULT_TURNSTATE_DEPTH = "0"
+# How many consecutive recorded values promote a transient field to canonical
+# character state at absorb (#121). Only reachable once the ledger has content,
+# so it is safe to default to something useful.
+DEFAULT_PROMOTE_STREAK = "3"
 # The global scope of the response-preset cascade. These MUST be listed here:
 # read_config() narrows its return to _CONFIG_KEYS, so a key omitted from this
 # tuple is silently dropped and the global scope resolves as if unset — no
@@ -50,7 +61,8 @@ _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "user_label", "assistant_label",
                 "default_style_id", "active_connection_id",
                 "llm_timeout", "absorb_budget", "setup_done",
-                "prompt_log_depth") + _LENGTH_KEYS
+                "prompt_log_depth",
+                "turnstate_depth", "promote_streak") + _LENGTH_KEYS
 
 
 def _config_path():
@@ -70,6 +82,8 @@ def read_config() -> dict[str, str]:
                 "llm_timeout": DEFAULT_LLM_TIMEOUT, "absorb_budget": DEFAULT_ABSORB_BUDGET,
                 "setup_done": DEFAULT_SETUP_DONE,
                 "prompt_log_depth": DEFAULT_PROMPT_LOG_DEPTH,
+                "turnstate_depth": DEFAULT_TURNSTATE_DEPTH,
+                "promote_streak": DEFAULT_PROMOTE_STREAK,
                 **{k: "" for k in _LENGTH_KEYS}}
     if not path.exists():
         # Materializing the defaults is a write, and two first-ever readers
@@ -124,6 +138,28 @@ def mark_setup_done() -> None:
     """
     if read_config().get("setup_done") != "on":
         write_config(setup_done="on")
+def _count(key: str, default: str) -> int:
+    """A whole-number setting, clamped at 0. Same tolerance `_seconds` has and
+    for the same reason: a hand-edited config.md or a field cleared in the UI
+    must not take a scene's generation down, so anything unparseable falls back
+    to the default. A negative value means the same thing as 0 -- disabled --
+    rather than an index that would slice from the wrong end."""
+    try:
+        return max(int(str(read_config().get(key, default)).strip()), 0)
+    except (TypeError, ValueError):
+        return max(int(default), 0)
+
+
+def turnstate_depth() -> int:
+    """Posts of transcript tail the transient-state ledger is read over. 0 turns
+    the whole feature off — no tracker instruction, no injected section."""
+    return _count("turnstate_depth", DEFAULT_TURNSTATE_DEPTH)
+
+
+def promote_streak() -> int:
+    """Consecutive recorded values that promote a transient field to canonical
+    character state. 0 disables promotion."""
+    return _count("promote_streak", DEFAULT_PROMOTE_STREAK)
 
 
 def write_config(**fields: str) -> dict[str, str]:

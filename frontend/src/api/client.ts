@@ -92,6 +92,10 @@ export type Config = {
    *  made about `first_run` belongs to a library it is no longer looking at. */
   data_dir: string;
   prompt_log_depth: string;
+  /** Posts of transcript tail the transient-state ledger is read over; "0" disables it. */
+  turnstate_depth: string;
+  /** Consecutive recorded values that promote a transient field to character state. */
+  promote_streak: string;
 };
 export type DataDirInfo = {
   data_dir: string;
@@ -750,7 +754,7 @@ export const api = {
     return configCache;
   },
   putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; context_budget: string; archive_depth: string; setup_done: string;
-    prompt_log_depth: string }>) =>
+    prompt_log_depth: string; turnstate_depth: string; promote_streak: string }>) =>
 
     request<Config>("PUT", "/api/config", body).then((cfg) => {
       configCache = Promise.resolve(cfg); // the write's response is the fresh config

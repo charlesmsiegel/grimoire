@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import errno
 
-from .. import alternates, atomic, calendars, commits, prompt_log, scene_ids, scene_refs
+from .. import (alternates, atomic, calendars, commits, prompt_log, scene_ids,
+                scene_refs, turnstate)
 from ..audit import baselines
 from ..campaigns import paths as campaigns_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
@@ -171,6 +172,13 @@ def delete_scene(cid: str, sid: str) -> None:
     # unlink fails -- costs an open review of a surviving scene a 409 it clears
     # by re-absorbing.
     commits.retire_scene(cid, sid)
+    # The per-turn state ledger goes for the same reason and in the same place:
+    # it is keyed by scene id, so a recycled id would hand the replacement scene
+    # a dead one's moods -- and at the low post indices a young scene's decay
+    # window covers, which is the worst case rather than a harmless one. Before
+    # the unlink, so a failure here leaves the scene intact rather than deleted
+    # with its ledger still claiming it.
+    turnstate.drop_scene(cid, sid)
     # The reroll-alternates sidecar goes FIRST. Deleting the transcript is what
     # frees the id for reuse, so a crash between the two unlinks must not be
     # able to leave a sidecar without one: that orphan would be adopted by the
