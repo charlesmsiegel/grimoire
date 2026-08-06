@@ -311,6 +311,47 @@ test("finishing locks the wizard until the write settles", async () => {
   expect(api.putConfig).toHaveBeenCalledTimes(1);   // not re-entered
 });
 
+test("a connection this store already has is adopted, not asked for again", async () => {
+  // Reloading /welcome after saving a connection but before making a world:
+  // re-entering the form would create a uniquely-suffixed duplicate of the
+  // connection that is already active.
+  (api.getConfig as any).mockResolvedValue({
+    first_run: true, ready: true,
+    active_connection: { id: "my-openrouter", kind: "openrouter", name: "My OpenRouter" },
+  });
+  await goToStep(2);
+  expect(await screen.findByText(/connected to my openrouter/i)).toBeInTheDocument();
+  expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+});
+
+test("a fresh store's unusable default connection is not mistaken for a real one", async () => {
+  // A brand-new store ships with an OpenRouter connection selected and no key.
+  (api.getConfig as any).mockResolvedValue({
+    first_run: true, ready: false,
+    active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" },
+  });
+  await goToStep(2);
+  expect(await screen.findByLabelText("Name")).toBeInTheDocument();
+  expect(screen.queryByText(/connected to/i)).not.toBeInTheDocument();
+});
+
+test("a theme that could not be saved does not stay applied", async () => {
+  // Left applied, an unsaved theme looks chosen for the session and then
+  // vanishes on reload, which reads as the app losing the setting.
+  (api.putConfig as any).mockRejectedValue({ detail: "disk full" });
+  await goToStep(3);
+  fireEvent.click(await screen.findByText("ASTRAL"));
+  await waitFor(() => expect(screen.getByText(/disk full/i)).toBeInTheDocument());
+  expect(setTheme).toHaveBeenLastCalledWith("codex");   // reverted to the stored one
+});
+
+test("finishing reports which store the answer belongs to", async () => {
+  (api.putConfig as any).mockResolvedValue({ data_dir: "/sync/grimoire" });
+  renderWizard();
+  fireEvent.click(await screen.findByRole("button", { name: /skip setup/i }));
+  await waitFor(() => expect(onDone).toHaveBeenCalledWith("/sync/grimoire"));
+});
+
 test("the connection step is skippable — playing by hand is allowed", async () => {
   await goToStep(2);
   fireEvent.click(await screen.findByRole("button", { name: /^skip$/i }));

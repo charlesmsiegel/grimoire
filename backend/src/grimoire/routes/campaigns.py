@@ -130,9 +130,11 @@ def get_calendar_months(cid: str, year: int):
 @router.post("/campaigns")
 def post_campaign(body: NewCampaign):
     try:
-        return {"id": store.campaigns.create_campaign(body.name, body.world,
-                                                      body.region, body.calendar,
-                                                      body.module, body.climate)}
+        cid = store.campaigns.create_campaign(body.name, body.world,
+                                              body.region, body.calendar,
+                                              body.module, body.climate)
+        store.config.mark_setup_done()   # see routes/worlds.post_world (#194)
+        return {"id": cid}
     except store.worlds.WorldNotFound:
         raise HTTPException(status_code=400, detail="world not found")
     except store.calendars.CalendarError as e:

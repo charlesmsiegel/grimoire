@@ -35,7 +35,11 @@ def _public_config(cfg: dict[str, str]) -> dict:
                                    if active else None),
             "ready": _connection_ready(active),
             "setup_done": setup_done,
-            "first_run": first_run}
+            "first_run": first_run,
+            # Which store this config describes. `first_run` is a statement
+            # about one library, so a client caching any decision derived from
+            # it needs to know when the library underneath changed (#194).
+            "data_dir": str(store.home())}
 
 
 def _setup_state(cfg: dict[str, str]) -> tuple[str, bool]:

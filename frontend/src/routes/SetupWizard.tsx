@@ -32,7 +32,9 @@ const STEPS = ["Storage", "Connection", "Theme", "World"];
  *  verdict does not change, because the `setup_done` write below is
  *  best-effort and a store that cannot record it would otherwise answer
  *  first-run forever. */
-export default function SetupWizard({ onDone }: { onDone: () => void }) {
+export default function SetupWizard(
+  { onDone }: { onDone: (store?: string) => void },
+) {
   const navigate = useNavigate();
   const { name: theme, setTheme } = useTheme();
   const [step, setStep] = useState(1);
@@ -111,6 +113,23 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
     return () => { alive = false; };
   }, []);
 
+  // Adopt a connection this store already has. A reload part-way through the
+  // wizard — or leaving via the topbar and coming back — otherwise shows an
+  // empty form for a step that is done, and re-entering it creates a
+  // uniquely-suffixed duplicate of the connection that is already active.
+  // Gated on `ready`, not merely on there being an active connection: a fresh
+  // store ships with an OpenRouter connection selected and no key, which is
+  // exactly the case this step exists to fix.
+  useEffect(() => {
+    let alive = true;
+    api.getConfig().then((c) => {
+      if (!alive || !c.ready || !c.active_connection) return;
+      setConnected(c.active_connection.name);
+      setCreatedId(c.active_connection.id);
+    }).catch(() => { /* the form is the safe default */ });
+    return () => { alive = false; };
+  }, []);
+
   /** Record that setup has been answered, then hand control back. Marking done
    *  is deliberately best-effort: failing to write a preference must not strand
    *  someone on the wizard, and the worst case is being offered it once more.
@@ -122,12 +141,16 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
   async function finish(to: string) {
     if (finishing) return;
     setFinishing(true);
+    let store: string | undefined;
     try {
-      await api.putConfig({ setup_done: "on" });
+      // The response names the store this answer belongs to, which is how the
+      // caller's latch stays scoped to it — step 1 may have repointed at a
+      // different library since the caller last looked.
+      store = (await api.putConfig({ setup_done: "on" })).data_dir;
     } catch {
       /* the flag is a convenience, not a gate */
     }
-    onDone();
+    onDone(store);
     navigate(to, { replace: true });
   }
 
@@ -160,12 +183,17 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
   }
 
   async function pickTheme(next: string) {
+    const previous = theme;
     setTheme(next);            // apply immediately; the wizard is the preview
     setError(null);
     setSavingTheme(true);
     try {
       await api.putConfig({ theme: next });
     } catch (err: any) {
+      // Put the preview back. Left applied, an unsaved theme looks chosen for
+      // the rest of the session and then vanishes on the next reload, which
+      // reads as the app losing the setting rather than never taking it.
+      setTheme(previous);
       setError(err.detail ?? String(err));
     } finally {
       setSavingTheme(false);

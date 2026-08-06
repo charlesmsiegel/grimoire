@@ -25,7 +25,13 @@ def get_worlds():
 
 @router.post("/worlds")
 def post_world(body: NameBody):
-    return {"id": store.worlds.create_world(body.name)}
+    wid = store.worlds.create_world(body.name)
+    # A store with a world in it has been set up, whatever happens to that world
+    # afterwards -- recording it here rather than waiting for a config read is
+    # what makes "deleting your content does not reopen the wizard" true even
+    # when nothing read the config in between (#194).
+    store.config.mark_setup_done()
+    return {"id": wid}
 
 
 @router.get("/worlds/{wid}")
