@@ -383,3 +383,33 @@ def test_the_cap_leaves_other_scenes_alone(monkeypatch, tmp_path):
     for i in range(turnstate.MAX_ENTRIES + 5):
         turnstate.record(cid, "s1", i, {"characters:w": {"mood": "x"}})
     assert turnstate.entries(cid, "s2") == [(0, {"characters:w": {"mood": "kept"}})]
+
+
+# ---- CRLF and end-of-stream edges ------------------------------------------
+
+def test_a_crlf_block_is_recognized():
+    """A provider returning CRLF otherwise matched neither boundary — and the
+    failure was total and silent: the block persisted into the transcript as
+    narration and its state was never recorded."""
+    text = 'She waits.\r\n\r\n```state\r\n{"W": {"mood": "wry"}}\r\n```\r\n'
+    narration, states = turnstate.split_block(text)
+    assert narration.strip() == "She waits."
+    assert states == {"W": {"mood": "wry"}}
+
+
+def test_a_crlf_block_is_swallowed_by_the_redactor_too():
+    text = 'She waits.\r\n\r\n```state\r\n{"W": {"mood": "wry"}}\r\n```\r\n'
+    assert _stream([text]).strip() == "She waits."
+
+
+def test_a_complete_opener_held_at_end_of_stream_is_not_leaked():
+    """`split_block` strips an EOF-terminated opener as an unterminated block,
+    so emitting it would show the player text the transcript does not have —
+    and on a reroll, show it instead of the reply the server just restored."""
+    assert _stream(["She waits.\n\n```state"]).strip() == "She waits."
+    assert turnstate.split_block("She waits.\n\n```state")[0].strip() == "She waits."
+
+
+def test_a_partial_opener_held_at_end_of_stream_still_comes_back():
+    for held in ("`", "``", "```", "```s", "```stat"):
+        assert _stream([f"done {held}"]) == f"done {held}"
