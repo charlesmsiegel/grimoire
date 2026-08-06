@@ -6,10 +6,12 @@ repointing, and the refusals that must never cost a turn.
 """
 
 import json
+import threading
+import time
 
 import pytest
 
-from grimoire.store import (campaigns, config, context, entities, prompt_log,
+from grimoire.store import (campaigns, config, context, entities, locks, prompt_log,
                             scene_refs, scenes, worlds)
 
 
@@ -434,3 +436,67 @@ def test_an_unreadable_config_does_not_make_depth_raise(monkeypatch, tmp_path):
     monkeypatch.setattr(prompt_log.config, "read_config", boom)
     assert prompt_log.depth() == int(config.DEFAULT_PROMPT_LOG_DEPTH)
     assert prompt_log.capturing() is True
+
+
+def test_capture_skips_a_contended_campaign_rather_than_waiting(monkeypatch, tmp_path):
+    """`record` runs synchronously before the route returns its stream, so a
+    blocking acquisition would stall the turn for the whole LOCK_TIMEOUT and
+    then discard the snapshot anyway. Contended means skipped, not delayed."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    _messages, breakdown = context.compose_turn(cid, sid)
+
+    held = threading.Event()
+    done = threading.Event()
+
+    def hold():
+        with locks.campaign_lock(cid):
+            held.set()
+            done.wait(10)
+
+    keeper = threading.Thread(target=hold)
+    keeper.start()
+    try:
+        assert held.wait(5)
+        started = time.monotonic()
+        assert prompt_log.record(cid, sid, "chat", breakdown) is None
+        assert time.monotonic() - started < 1.0     # not LOCK_TIMEOUT (30s)
+    finally:
+        done.set()
+        keeper.join(10)
+
+    assert prompt_log.list_entries(cid, sid) == []
+    # and the very next capture, uncontended, records normally
+    assert prompt_log.record(cid, sid, "chat", breakdown) is not None
+
+
+def test_capture_still_works_when_the_caller_already_holds_the_lock(monkeypatch, tmp_path):
+    """Non-blocking must not mean non-reentrant: the underlying RLock grants a
+    non-blocking request to a thread that already owns it."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    _messages, breakdown = context.compose_turn(cid, sid)
+    with locks.campaign_lock(cid):
+        assert prompt_log.record(cid, sid, "chat", breakdown) is not None
+
+
+def test_a_repoint_whose_index_cannot_be_read_still_drops_the_rows(monkeypatch, tmp_path):
+    """A lenient read turned a locked index into an empty one, so the function
+    returned having neither repointed nor dropped — exiting above the fallback
+    meant to catch exactly this."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    _record(cid, sid)
+    real_index_path = prompt_log._index_path
+    blocked = campaigns.campaign_root(cid) / "prompts" / "unreadable.json"
+    blocked.mkdir()
+
+    calls = {"n": 0}
+
+    def flaky(c):
+        calls["n"] += 1
+        return blocked if calls["n"] == 1 else real_index_path(c)
+
+    monkeypatch.setattr(prompt_log, "_index_path", flaky)
+    prompt_log.repoint_scenes(cid, {sid: "0002-renamed"})
+    monkeypatch.setattr(prompt_log, "_index_path", real_index_path)
+
+    assert prompt_log.list_entries(cid, sid) == []
+    assert prompt_log.list_entries(cid, "0002-renamed") == []

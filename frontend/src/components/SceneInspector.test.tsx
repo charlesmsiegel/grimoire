@@ -698,3 +698,50 @@ test("the last turn clicked wins even if an earlier request resolves after it", 
   expect(screen.queryByText("the lore as it stood then")).toBeNull();
 });
 
+
+test("a superseded turn-list response does not overwrite a newer one", async () => {
+  // `fresh: true` stops the refresh JOINING a pre-turn request; it does not
+  // order two independent ones. If the newer answers first, the older `.then`
+  // would put the pre-turn rows back.
+  const pending: ((v: any) => void)[] = [];
+  (api.listScenePrompts as any).mockImplementation(
+    () => new Promise((r) => { pending.push(r); }));
+
+  const { rerender } = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  rerender(<SceneInspector cid="c" sid="s" refreshKey={1} onSceneChanged={() => {}} />);
+  await waitFor(() => expect(pending.length).toBe(2));
+
+  pending[1]({ entries: TURNS });                    // the post-generation read
+  await screen.findByText("Regenerate");
+  pending[0]({ entries: [] });                       // the stale one, late
+  await new Promise((r) => setTimeout(r, 0));
+
+  await screen.findByText("Regenerate");             // still there
+  expect(screen.queryByText("No captured turns yet.")).toBeNull();
+});
+
+test("going back to live discards a detail fetch still in flight", async () => {
+  // Click B, change your mind, go back — B must not reopen the panel over an
+  // explicit choice to leave it.
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValueOnce(FROZEN);
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+
+  let release: (v: any) => void = () => {};
+  (api.getScenePrompt as any).mockReturnValue(new Promise((r) => { release = r; }));
+  fireEvent.click(screen.getByRole("button", { name: /^Regenerate/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Back to live context/ }));
+  await screen.findByText("lore text");
+
+  release({ ...FROZEN, id: "000002",
+            sections: [{ label: "World info", text: "the regenerate prompt", tokens: 90,
+                         tier: "spotlight", dropped: false, trimmed: 0 }] });
+  await new Promise((r) => setTimeout(r, 0));
+
+  await screen.findByText("lore text");              // still live
+  expect(screen.queryByText("the regenerate prompt")).toBeNull();
+  expect(screen.queryByText(/What the model saw/)).toBeNull();
+});

@@ -404,6 +404,34 @@ def campaign_lock(cid: str) -> _ProcessScopedLock:
         return lock
 
 
+@contextmanager
+def campaign_lock_nowait(cid: str):
+    """``campaign_lock`` that never waits: yields whether it got the lock.
+
+    For work that belongs in the domain but must not delay the caller when the
+    campaign is busy. ``campaign_lock`` waits up to ``LOCK_TIMEOUT`` (30s), which
+    is right for a mutation that has to happen and wrong for one that can simply
+    be skipped -- ``store.prompt_log.record`` runs on the generating path, before
+    the route returns its streaming response, so waiting there would stall a turn
+    for half a minute and then discard the debug snapshot anyway.
+
+    **The caller must honour the boolean.** A body that writes regardless has
+    taken no lock at all; this yields False rather than raising precisely so the
+    decision is the caller's, and `test_lock_domain_guard.py` counts a `with`
+    over this as serialization without being able to check that.
+
+    Reentrant like the underlying RLock: a thread that already holds this
+    campaign's lock always gets True.
+    """
+    lock = campaign_lock(cid)
+    got = lock.acquire(blocking=False)
+    try:
+        yield got
+    finally:
+        if got:
+            lock.release()
+
+
 _config = _ProcessScopedLock("domain", "config", ConfigBusy)
 
 
