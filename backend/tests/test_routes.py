@@ -9312,3 +9312,28 @@ def test_clearing_a_campaign_override_opts_out_even_with_no_world_anchor(client)
 
     store.voice_anchors.write(store.worlds.world_root(wid), "mara", "Added later.")
     assert store.overlay.voice_anchor(cid, "mara") == ""    # still opted out
+
+def test_absorb_primes_the_extraction_with_the_campaigns_standing_facts(client):
+    """The route is the seam: `build_prompt` renders the block and `facts.json`
+    holds the rows, and both can be right while the call that joins them sends
+    nothing. Without the ids in the prompt no scene can ever supersede a fact,
+    so the ledger only grows (#114)."""
+    seen: list = []
+
+    class _Recording(FakeOpenRouterComplete):
+        async def complete(self, messages, cfg):
+            seen.append(messages)
+            return await super().complete(messages, cfg)
+
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We entered the crypt.")
+    store.facts.record(cid, "The crypt door has no lock.", "the third night", "earlier")
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: _Recording('{"one_line": "x"}')
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").status_code == 200
+
+    user = seen[0][1]["content"]
+    assert "Standing facts:" in user
+    assert "f1: The crypt door has no lock. (the third night)" in user
