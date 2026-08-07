@@ -28,6 +28,7 @@ body::before {
 /* ---- page scaffold ---- */
 .page { width: 100%; max-width: 940px; margin: 0 auto; padding: 44px 56px; }
 .page-narrow { max-width: 680px; }
+}
 .page-head {
   display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;
   border-bottom: var(--rw3) solid var(--rule); padding-bottom: 14px;
@@ -37,7 +38,25 @@ body::before {
   margin: 0; text-transform: uppercase; letter-spacing: 0.01em;
   text-shadow: var(--glow);
 }
+
 .page-narrow .page-h1 { font-size: 52px; }
+
+/* Phone widths, which the Android WebView renders at full screen: 56px of
+   horizontal padding a side is a third of the column once the sidebar has
+   taken its rail, so the desktop figure has to come down rather than the
+   content be squeezed into what is left. Matches App.tsx's NARROW_PX, which
+   is where the sidebar makes the same decision. */
+@media (max-width: 640px) {
+  .page { padding: 24px 16px; }
+  /* The head is a title beside its action, and at this width the two do not
+     fit on one line — unwrapped they push the button past the column edge and
+     the whole page scrolls sideways. */
+  .page-head { flex-wrap: wrap; }
+  /* 64px is wider than the entire column for a single word: "CONFIGURATION"
+     measures 305px against ~270px of content box, so the heading alone
+     overflowed before any control did. */
+  .page-h1, .page-narrow .page-h1 { font-size: 40px; }
+}
 .count-label {
   font-family: var(--fm); font-size: 11px; color: var(--muted);
   letter-spacing: 0.1em; text-transform: uppercase; margin: 10px 0 0;
@@ -153,7 +172,119 @@ body::before {
 .topbar-right .divider { width: 1px; align-self: stretch; margin: 10px 0; background: var(--chrome-rule); }
 .topbar-right .config-link { color: var(--chrome-muted); text-decoration: none; }
 .topbar-right .config-link.active { color: var(--chrome-text); text-decoration: underline; }
-.topbar.collapsed nav, .topbar.collapsed .topbar-right { display: none; }
+/* CampaignView's ▴ Nav toggle hides the whole strip, not just parts of it —
+   with the links now in the sidebar there is nothing left in here worth a
+   row of its own once the reader has asked for the width. */
+.topbar.collapsed { display: none; }
+
+/* ---- app shell: sidebar + scrolling main column + status bar ---- */
+/* The chrome the sticky rails inside .shell-main have to budget around
+   (topbar + status bar). Declared here rather than on :root so it can't
+   collide with the theme tokens ThemeProvider writes there. */
+.shell { display: flex; flex: 1; min-height: 0; --chrome-h: 82px; }
+/* The scroll port is this column, not the document: a status bar pinned to the
+   bottom of the window is only honest if the page cannot scroll out from
+   under it. CampaignView's .workspace still gets a definite height to fill,
+   which is what its flex:1/min-height:0 chain needs. */
+.shell-main { display: flex; flex-direction: column; flex: 1; min-width: 0; overflow-y: auto; }
+
+.nav-sidebar {
+  flex: none; width: 208px; display: flex; flex-direction: column;
+  background: var(--chrome); color: var(--chrome-text);
+  border-right: var(--rw) solid var(--chrome-text);
+  padding: 4px 0 16px; overflow-y: auto; overflow-x: hidden;
+}
+.nav-sidebar.rail { width: 58px; }
+.nav-rail-toggle {
+  align-self: flex-end; background: none; border: none; cursor: pointer;
+  color: var(--chrome-muted); font-family: var(--fm); font-size: 13px;
+  line-height: 1; padding: 8px 14px;
+}
+.nav-sidebar.rail .nav-rail-toggle { align-self: center; padding: 8px 0; }
+.nav-rail-toggle:hover { color: var(--accent); }
+
+.nav-sidebar .nav-link {
+  display: flex; align-items: center; gap: 11px; padding: 9px 16px;
+  color: var(--chrome-text); text-decoration: none;
+  font-family: var(--fm); font-weight: 700; font-size: 12px;
+  letter-spacing: 0.1em; text-transform: uppercase;
+}
+.nav-sidebar .nav-link:hover { color: var(--accent); }
+.nav-sidebar .nav-link.active { background: var(--accent); color: var(--on-accent); }
+.nav-sidebar .nav-glyph { width: 16px; flex: none; text-align: center; }
+/* Truncate rather than wrap: a long campaign name must not make the rail
+   two rows tall, and `title` on every row carries the full text. */
+.nav-sidebar .nav-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-sidebar.rail .nav-link { justify-content: center; padding: 9px 0; gap: 0; }
+
+.nav-sub { display: flex; flex-direction: column; }
+.nav-sidebar .nav-link-sub, .nav-sidebar .nav-link-recent {
+  font-weight: 500; font-size: 11px; letter-spacing: 0.06em;
+  color: var(--chrome-muted); padding-top: 7px; padding-bottom: 7px;
+}
+.nav-sidebar .nav-link-sub { padding-left: 43px; }
+.nav-sidebar .nav-link-recent { padding-left: 22px; text-transform: none; }
+.nav-sidebar.rail .nav-link-sub, .nav-sidebar.rail .nav-link-recent { padding-left: 0; }
+.nav-sidebar .nav-link-sub:hover, .nav-sidebar .nav-link-recent:hover { color: var(--accent); }
+.nav-sidebar .nav-link-sub.active, .nav-sidebar .nav-link-recent.active { color: var(--on-accent); }
+
+.nav-heading {
+  font-family: var(--fm); font-weight: 700; font-size: 10px;
+  letter-spacing: 0.16em; text-transform: uppercase; color: var(--chrome-muted);
+  margin: 22px 0 4px; padding: 0 16px;
+}
+.nav-empty {
+  font-family: var(--fm); font-size: 10px; font-style: italic;
+  color: var(--chrome-muted); margin: 0; padding: 0 16px;
+}
+/* Railed there is no room for prose — the glyph rows still say what is there. */
+.nav-sidebar.rail .nav-heading, .nav-sidebar.rail .nav-empty { display: none; }
+
+.statusbar {
+  flex: none; display: flex; align-items: center; min-height: 26px;
+  background: var(--chrome); color: var(--chrome-muted);
+  border-top: var(--rw) solid var(--chrome-rule);
+  font-family: var(--fm); font-size: 10px; letter-spacing: 0.1em;
+  text-transform: uppercase; overflow-x: auto;
+}
+.statusbar .status-cell {
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 13px; white-space: nowrap;
+}
+.statusbar .status-cell:not(:first-child) { border-left: 1px solid var(--chrome-rule); }
+.statusbar .dot { color: var(--accent); }
+.statusbar .status-conn, .statusbar .status-value { color: var(--chrome-text); }
+.statusbar .status-label { color: var(--chrome-muted); }
+/* A reserved slot reads as absent, not as a value that happens to be short. */
+.statusbar .status-cell.empty .status-value { color: var(--disabled); }
+.statusbar .status-where .status-value {
+  max-width: 42ch; overflow: hidden; text-overflow: ellipsis;
+}
+.statusbar .status-spacer { margin-left: auto; }
+
+/* ---- library hub ---- */
+.library-grid {
+  display: grid; gap: 14px; margin-top: 20px;
+  /* min() so a track can fall below its preferred 268px rather than overflow:
+     on a 360px phone the rail leaves ~302px and .page's padding takes more,
+     which is narrower than the minimum this would otherwise insist on. */
+  grid-template-columns: repeat(auto-fill, minmax(min(268px, 100%), 1fr));
+}
+.library-card {
+  display: flex; flex-direction: column; gap: 6px; padding: 18px 20px;
+  background: var(--panel); border: var(--rw) solid var(--rule);
+  box-shadow: var(--sh4); text-decoration: none; color: inherit;
+}
+.library-card:hover { border-color: var(--accent); }
+.library-card h3 {
+  font-family: var(--fd); font-weight: 800; font-size: 26px; line-height: 1;
+  margin: 0; text-transform: uppercase; letter-spacing: 0.01em;
+}
+.library-blurb { margin: 0; flex: 1; color: var(--muted); font-size: 14px; }
+.library-card footer {
+  font-family: var(--fm); font-size: 10px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent);
+}
 
 /* ---- scene workspace ---- */
 .workspace { display: flex; flex-direction: column; flex: 1; min-height: 0; }
@@ -391,7 +522,11 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 
 .field { margin: 12px 0; }
 .field label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px; }
-.field input[type="text"], .field textarea, .field select {
+/* `password` and `number` are here because the API-key field is one: matching
+   only [type="text"] left it at the browser's intrinsic ~185px, which is wider
+   than the whole column on a phone and scrolled /connections sideways. */
+.field input[type="text"], .field input[type="password"], .field input[type="number"],
+.field textarea, .field select {
   width: 100%; background: var(--surface); color: var(--ink);
   border: var(--rw) solid var(--rule);
   padding: 8px; font-family: var(--fb); font-size: 17px;
@@ -416,11 +551,22 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 
 .editor { display: flex; gap: 16px; align-items: flex-start; }
 /* the rail scrolls on its own so a long greeting list doesn't drag the page */
+/* --chrome-h (set on .shell) is the topbar + status bar the rail must clear:
+   its scroll port is .shell-main now, not the window, so a bare 100vh would
+   run it off the bottom behind the status bar. */
 .editor-list { width: 220px; flex: none; position: sticky; top: 12px;
-  max-height: calc(100vh - 24px); overflow-y: auto; }
+  max-height: calc(100vh - 24px - var(--chrome-h, 0px)); overflow-y: auto; }
 .editor-list button.new { width: 100%; margin-bottom: 8px; position: sticky; top: 0; z-index: 1; }
 .editor-body { flex: 1; min-width: 0; }
 .editor-empty { color: var(--muted); padding: 24px 0; }
+/* Phone widths: the two panes cannot sit side by side. A 220px rail against a
+   ~270px column leaves the body 34px, so the form inside it overflows and the
+   page scrolls sideways. Stack them, and let the rail scroll within a slice of
+   the viewport rather than sticking beside content that is now below it. */
+@media (max-width: 640px) {
+  .editor { flex-direction: column; align-items: stretch; }
+  .editor-list { width: auto; position: static; max-height: 44vh; }
+}
 
 /* shared read-only detail view: rendered body + metadata sidebar (list/detail pattern) */
 .detail-view { display: flex; gap: 20px; align-items: flex-start; }

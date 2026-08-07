@@ -15,7 +15,7 @@ from fastapi.responses import Response
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from .common import (_campaign_root_or_404, _content_fields, _dump, _require_connection,
+from .common import (computes_only, _campaign_root_or_404, _content_fields, _dump, _require_connection,
                      _response_body, get_llm,
                      _serve_image, _write_response)
 from .models import (AvatarFocus, CalendarConfig, CampaignClimate, CopyFromGreeting,
@@ -91,8 +91,24 @@ def get_campaigns():
     out = []
     for c in store.campaigns.list_campaigns():
         scene_list = store.scenes.list_scenes(c["id"])
+        # `updated` is campaign.md's, which only metadata writes advance --
+        # playing a scene touches the scene file and nothing else, so ordering
+        # by it ranks a campaign renamed months ago above one played into last
+        # night. `activity` is the whole campaign's high-water mark, for
+        # anything answering "what was I last working on".
+        #
+        # Through `best_stamp` rather than a bare `max`, and over EVERY scene
+        # rather than `scene_list[0]`. The fold is lexical, so one unparseable
+        # or far-future value anywhere in it outranks every genuine timestamp
+        # and then blocks its own replacement -- and `list_scenes` sorts by the
+        # very field that may be the bad one, so element zero is only the
+        # newest if the sort key can be trusted. The list is already in memory
+        # for the count; validating it costs a strptime per scene.
         out.append({**c, "scenes": len(scene_list),
-                    "last_scene": scene_list[0]["title"] if scene_list else ""})
+                    "last_scene": scene_list[0]["title"] if scene_list else "",
+                    "activity": store.campaigns.best_stamp(
+                        c["updated"], store.campaigns.read_activity(c["id"]),
+                        *(s["updated"] for s in scene_list))})
     return out
 
 
@@ -606,6 +622,7 @@ def put_campaign_voice_anchor(cid: str, char: str, body: VoiceAnchorSave):
 
 
 @router.post("/campaigns/{cid}/characters/{char}/voice-anchor/generate")
+@computes_only
 async def post_campaign_voice_anchor_generate(cid: str, char: str,
                                               client: LLMClient = Depends(get_llm)):
     """Draft an anchor from the character's card, resolved through the overlay so

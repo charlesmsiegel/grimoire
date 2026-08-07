@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from .. import store
+from .. import llm, store
 from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
 from .common import (_dump, _response_body, _write_response,
@@ -37,7 +37,16 @@ def _public_config(cfg: dict[str, str]) -> dict:
             "rolling_summary_every": cfg.get("rolling_summary_every",
                                              store.config.DEFAULT_ROLLING_SUMMARY_EVERY),
             "active_connection_id": active["id"] if active else "",
-            "active_connection": ({"id": active["id"], "kind": active["kind"], "name": active["name"]}
+            # `model` rides along because the global status bar names the model
+            # every scene will use, and that is only ever this connection's --
+            # there is no per-campaign override. Reading it here keeps the bar
+            # off /llm-connections/{id}, whose payload carries key_set and the
+            # base URL it has no business fetching to print one string. It is
+            # the *effective* model: a Claude connection with none configured
+            # still generates, on the dispatcher's fallback, so reporting the
+            # bare "" would show a dash for a connection that is about to run.
+            "active_connection": ({"id": active["id"], "kind": active["kind"], "name": active["name"],
+                                   "model": llm.effective_model(active)}
                                    if active else None),
             "ready": _connection_ready(active),
             "setup_done": setup_done,

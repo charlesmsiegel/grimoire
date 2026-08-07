@@ -381,8 +381,13 @@ def create_entity(cid: str, kind: str, name: str, body: str = "", keys: str = ""
         return (_flat_path(wroot, kind, eid).exists() or _record_dir(wroot, kind, eid).is_dir()
                 or _flat_ref(kind, eid) in gone)
 
-    return entities.create_entity(croot_of(cid), kind, name, body, keys, owners,
-                                  sd_prompt=sd_prompt, taken=taken, fields=fields)
+    eid = entities.create_entity(croot_of(cid), kind, name, body, keys, owners,
+                                 sd_prompt=sd_prompt, taken=taken, fields=fields)
+    # Campaign-scoped entity work is work on the campaign, but it writes only
+    # overlay records -- neither campaign.md nor any scene -- so the derived
+    # activity high-water mark would not see an evening of lore or cast
+    # editing at all. Stamped after the write, and never fatal to it.
+    return eid
 
 
 def update_entity(cid: str, kind: str, eid: str, *, name: str | None = None,
@@ -445,9 +450,10 @@ def create_greeting(cid: str, name: str, character: str, version: str, body: str
     # campaign's character commonly still lives only in the world, and
     # char_root (not croot_of) is the resolver that finds it there.
     body = cards.bake_char_token(body, greetings.char_name(char_root(cid, character), character, version))
-    return greetings.create_greeting(croot_of(cid), name, character, version, body,
-                                     requires_tags, predecessor_join, present=present,
-                                     pcless=pcless, taken=taken)
+    gid = greetings.create_greeting(croot_of(cid), name, character, version, body,
+                                    requires_tags, predecessor_join, present=present,
+                                    pcless=pcless, taken=taken)
+    return gid
 
 
 def update_greeting(cid: str, gid: str, **kwargs) -> None:
@@ -586,7 +592,23 @@ def materialize_actor(cid: str, kind: str, aid: str) -> None:
 
 
 def ensure_actor_writable(cid: str, kind: str, aid: str) -> Path:
-    """Materialize an inherited actor and return the campaign root writes target."""
+    """Materialize an inherited actor and return the campaign root writes target.
+
+    Stamps campaign activity, because this is the chokepoint every
+    campaign-scoped actor write already passes through to obtain a writable
+    root -- character default-version, version create/update/delete, and the
+    PC routes. Putting it here rather than in each of those eight routes is
+    deliberate: an enumerated list of mutators is what left `activity` claiming
+    more than it delivered three times over, and the same lesson is already
+    written down for the campaign lock domain in locks.py.
+
+    The trade is that this runs *before* the caller's write, so an edit that
+    then 404s still records activity. That is the acceptable direction: asking
+    to make an actor writable is itself campaign work -- on the first call it
+    materializes files that were not there -- and an over-eager ordering hint
+    costs a row's position in a list, where a missed one loses work the user
+    can see they did.
+    """
     croot = croot_of(cid)
     if not (croot / kind / aid / _actor_meta(kind)).exists():
         materialize_actor(cid, kind, aid)
@@ -677,7 +699,8 @@ def create_pc(cid: str, name: str, tags: list[str], version_name: str = "default
     def taken(pid: str) -> bool:
         return (wroot / "pcs" / pid).is_dir() or _flat_ref("pcs", pid) in gone
 
-    return pcs.create_pc(croot_of(cid), name, tags, version_name, persona, taken=taken)
+    made = pcs.create_pc(croot_of(cid), name, tags, version_name, persona, taken=taken)
+    return made
 
 
 # ---- assets: per-file union, campaign wins ----

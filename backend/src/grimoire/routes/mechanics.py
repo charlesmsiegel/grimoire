@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from .. import prompts, store
 from ..llm import LLMClient
-from .common import (_campaign_root_or_404, _record_prompt, _require_connection,
-                     _require_scene, get_llm)
+from .common import (computes_only, _campaign_root_or_404, _record_prompt,
+                     _require_connection, _require_scene, get_llm)
 from .models import (CheckBody, ModuleSetting, ProposalAction, RollBody, SheetAdvanceBody,
                      SheetBody, SheetCreationBody)
 from .streaming import _continuation_stream, _sse, _sse_response
@@ -218,6 +218,7 @@ def get_rolls(cid: str):
 
 
 @router.post("/campaigns/{cid}/rolls/{rid}/replay")
+@computes_only
 def post_roll_replay(cid: str, rid: str):
     try:
         return {"ok": True, **store.rolls.replay(cid, rid)}
