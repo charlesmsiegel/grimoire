@@ -217,6 +217,22 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // this — it ordered the two by issue time, so a routine reread starting while
   // a refold was out discarded the refold's authoritative answer.
   const writeSeq = useRef(0);
+  // Ordering AMONG writes, which `writeSeq` does not give: it counts how many
+  // have landed, so it can retire a stale read but cannot tell two refolds
+  // apart. Review found the gap that leaves. Two transitions in quick
+  // succession each ask; the first fold finishes on the server and releases its
+  // claim, so the second is not coalesced and really does refold — and if the
+  // first one's RESPONSE is the slower of the two, it lands second and passes
+  // the scene-key check, overwriting the newer summary and coverage with its
+  // own older ones, with no read scheduled behind it to put things right.
+  //
+  // A ticket taken when a write is ISSUED, and installed only while it is still
+  // the highest issued: last asked wins. Deliberately not "highest coverage
+  // wins", which would look equivalent and is not — a refold after a trim
+  // legitimately covers fewer posts, and the manual button must be able to
+  // replace a summary with a shorter one.
+  const writeTicket = useRef(0);
+  const writeInstalled = useRef(0);
   // The record on screen, readable from a callback created for an earlier one.
   const currentKey = useRef(`${cid}/${sid}`);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadSectionCollapse);
@@ -531,12 +547,26 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // the scene it means sits under a new name with a summary nobody refolded.
   function askRolling(id: string = sid) {
     const key = `${cid}/${id}`;
+    const ticket = ++writeTicket.current;
     api.getRollingSummary(cid, id)
       .then((seen) => api.refreshRollingSummary(cid, id, false, seen.total))
       .then((data) => {
         if (currentKey.current !== key || !data.refreshed) return;
+        if (ticket < writeInstalled.current) return;   // a newer refold already landed
+        writeInstalled.current = ticket;
         writeSeq.current += 1;
         setRolling({ key, data });
+        // This answer is the server's reconciled view of a fold that just
+        // succeeded, so the two ways the panel says "what you are reading may be
+        // behind" are both now false and must go with it. Review caught that
+        // leaving them meant a provider failure from an earlier manual refresh,
+        // or a failed read from the transition before this one, kept its warning
+        // up beside prose the POST had just made current -- with nothing later
+        // scheduled to retire either message. Scoped to this record, like every
+        // other write here: a failure on the scene the reader LEFT is not this
+        // one's to clear.
+        setRollingUnread(false);
+        setRollingError((e) => (e && e.key === key ? null : e));
       })
       .catch(() => {});
   }
@@ -546,6 +576,10 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     // Captured OUTSIDE the try, so success, failure and the `finally` all judge
     // themselves against the record this refold was started for.
     const key = `${cid}/${sid}`;
+    // Ticketed with the automatic refolds, in the same sequence, so the two
+    // orders cannot disagree: an automatic answer issued before this button was
+    // pressed may not overwrite what the button installs, however late it lands.
+    const ticket = ++writeTicket.current;
     setRollingBusy(key);
     try {
       // `force`, always: this button exists so the player can ask for a summary
@@ -558,6 +592,11 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       // it returned, so it outranks any read issued before now however recently.
       // `writeSeq` is what tells those reads so.
       if (currentKey.current !== key) return;
+      // Authoritative, but not exempt from the ordering: an automatic refold
+      // issued AFTER this button was pressed describes a later transcript, and
+      // "the server wrote this" is true of both answers. Same rule either way.
+      if (ticket < writeInstalled.current) return;
+      writeInstalled.current = ticket;
       writeSeq.current += 1;
       setRolling({ key, data });
       setRollingUnread(false);

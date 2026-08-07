@@ -1105,3 +1105,63 @@ test("the first date set asks for a refold under the scene's NEW id", async () =
   await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith(
     "c", "001--2026-07-04--s", false, expect.any(Number)));
 });
+
+test("an automatic refold that answers late cannot undo a newer one", async () => {
+  // Two transitions in quick succession each ask. The first fold finishes on the
+  // server and releases its claim, so the second is not coalesced and really
+  // does refold — and if the FIRST one's response is the slower of the two it
+  // lands second, passes the scene-key check, and overwrites the newer summary
+  // and coverage with its own older ones. Nothing is scheduled behind it to put
+  // that right (#85).
+  // Two places that are not where the scene already is: the picker offers
+  // somewhere to GO, so the current location is not among its options.
+  (api.listEntities as any).mockResolvedValue([
+    { id: "dock", name: "The Night Dock" }, { id: "gate", name: "The Salt Gate" }]);
+  let landFirst: ((v: any) => void) | undefined;
+  (api.refreshRollingSummary as any)
+    .mockImplementationOnce(() => new Promise((resolve) => { landFirst = resolve; }))
+    .mockResolvedValueOnce({ summary: "The newer fold.", at: 12, total: 12,
+                             stale: false, every: 10, due: false, refreshed: true });
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+
+  const picker = await screen.findByLabelText("Move to location");
+  fireEvent.change(picker, { target: { value: "dock" } });
+  fireEvent.click(screen.getByRole("button", { name: "Move to" }));
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledTimes(1));
+  fireEvent.change(picker, { target: { value: "gate" } });
+  fireEvent.click(screen.getByRole("button", { name: "Move to" }));
+
+  await screen.findByText("The newer fold.");
+  // ...and only now does the FIRST ask answer, describing less of the scene.
+  await act(async () => {
+    landFirst!({ summary: "The older fold.", at: 10, total: 10, stale: false,
+                 every: 10, due: false, refreshed: true });
+  });
+
+  expect(screen.getByText("The newer fold.")).toBeInTheDocument();
+  expect(screen.queryByText("The older fold.")).toBeNull();
+});
+
+test("a successful automatic refold retires the warnings it just disproved", async () => {
+  // The panel has two ways of saying "what you are reading may be behind", and a
+  // fold the server reconciled makes both false. Leaving them up left an earlier
+  // provider failure sitting beside prose the POST had just made current, with
+  // nothing later scheduled to retire it (#85).
+  (api.listEntities as any).mockResolvedValue([{ id: "dock", name: "The Night Dock" }]);
+  (api.refreshRollingSummary as any).mockRejectedValueOnce(
+    { detail: "OpenRouter key not set" });
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
+  await screen.findByText("OpenRouter key not set");
+
+  (api.refreshRollingSummary as any).mockResolvedValueOnce({
+    summary: "Mara reaches the salt gate.", at: 12, total: 12, stale: false,
+    every: 10, due: false, refreshed: true });
+  fireEvent.change(await screen.findByLabelText("Move to location"),
+                   { target: { value: "dock" } });
+  fireEvent.click(screen.getByRole("button", { name: "Move to" }));
+
+  await screen.findByText("Mara reaches the salt gate.");
+  expect(screen.queryByText("OpenRouter key not set")).toBeNull();
+  expect(screen.queryByText(/latest read failed/i)).toBeNull();
+});
