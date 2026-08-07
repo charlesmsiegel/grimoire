@@ -822,7 +822,22 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     setChooserOpen(false);
     if (initialPrompt) setSeedPrompt({ sid: id, prompt: initialPrompt });
     setScenes(await api.listScenes(cid));
-    selectScene(id);
+    // A scene can be BORN past the threshold: starting from a greeting appends
+    // that greeting's posts, and a multi-speaker one appends several. None of
+    // this component's other triggers fire here — they all hang off a write the
+    // reader made in an open scene — so an opener-sized scene would sit with no
+    // summary until a later turn or a manual Refresh (#85). A manual (empty)
+    // scene answers `refreshed: false` having reached no provider.
+    refreshAndAsk(id);
+  }
+
+  // Re-read a scene after a write made OUTSIDE this component, then ask whether
+  // its summary is now due, bounded by the length that re-read verified. The
+  // catch is what makes the pair safe to fire without awaiting: a failed read is
+  // no boundary, and `askForRollingSummary` declines a negative one rather than
+  // falling back to an unbounded fold.
+  async function refreshAndAsk(id: string) {
+    askForRollingSummary(id, await selectScene(id).catch(() => -1));
   }
 
   // A scene's id is its filename, so a rename mints a new one. `scene_refs.repoint`
@@ -2503,7 +2518,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             cid={cid}
             sid={activeId}
             ready={ready}
-            onSeeded={() => selectScene(activeId)}
+            onSeeded={() => refreshAndAsk(activeId)}
             onSceneRenamed={sceneRenamed}
             initialPrompt={seedPrompt?.sid === activeId ? seedPrompt.prompt : undefined}
             pcless={activePcless}

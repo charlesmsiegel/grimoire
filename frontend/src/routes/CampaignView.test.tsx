@@ -7,10 +7,11 @@ import type { ChatEvent } from "../api/stream";
 // CastPanel, NewSceneChooser, and CalendarConfig have their own tests + make their own
 // API calls; stub them here.
 vi.mock("../components/CastPanel", () => ({
-  CastPanel: ({ initialPrompt, onSceneRenamed }: any) => (
+  CastPanel: ({ initialPrompt, onSceneRenamed, onSeeded }: any) => (
     <div data-testid="cast-panel">
       {initialPrompt ?? ""}
       <button onClick={() => onSceneRenamed?.("s10")}>stub-datestamp</button>
+      <button onClick={() => onSeeded?.()}>stub-seeded</button>
     </div>
   ),
 }));
@@ -5290,6 +5291,38 @@ test("swapping to another take asks whether the summary is due", async () => {
   fireEvent.click(screen.getByRole("button", { name: /previous alternate/i }));
 
   await waitFor(() => expect(api.pickAlternate).toHaveBeenCalled());
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith(
+    "run", "s1", false, expect.any(Number)));
+});
+
+test("a scene born from a greeting asks whether it is already due", async () => {
+  // Starting a scene from a greeting appends that greeting's posts, and a
+  // multi-speaker one appends several — so a scene can be past the threshold
+  // before anyone plays a turn in it. None of this component's other triggers
+  // fire here: they all hang off a write the reader made in an open scene (#85).
+  (api.listScenes as any)
+    .mockResolvedValueOnce([])                       // initial load
+    .mockResolvedValue([{ id: "s9", title: "New", model: "", created: "", updated: "" }]);
+  renderCampaign();
+  await screen.findByText(/Run One/);
+  fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
+  (api.refreshRollingSummary as any).mockClear();
+  fireEvent.click(await screen.findByText("stub-pick"));
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith(
+    "run", "s9", false, expect.any(Number)));
+});
+
+test("adopting a generated opener asks whether the summary is due", async () => {
+  // `firstPost` persists the opener as the scene's first post — a transcript
+  // write like any other, and the only one the cast panel makes (#85).
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [] });
+  renderCampaign();
+  await screen.findByTestId("cast-panel");
+  (api.refreshRollingSummary as any).mockClear();
+
+  fireEvent.click(screen.getByText("stub-seeded"));
+
   await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith(
     "run", "s1", false, expect.any(Number)));
 });
