@@ -48,6 +48,7 @@ vi.mock("../api/client", async () => {
       getConfig: vi.fn(),
       editMessage: vi.fn(),
       absorbScene: vi.fn(), saveChronicle: vi.fn(), getChronicle: vi.fn(), retryAudit: vi.fn(),
+      retryDossiers: vi.fn(),
       // consumed by the embedded SceneInspector
       getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
       sceneBriefing: vi.fn(),
@@ -3433,7 +3434,9 @@ test("failed mechanics shows a notice with Retry validation; retry replaces shee
   fireEvent.click(screen.getByRole("button", { name: /Retry validation/ }));
   await waitFor(() => expect(screen.queryByText(/Mechanics validation failed/)).toBeNull());
   expect(await screen.findByText("Mara — HP")).toBeInTheDocument();
-  expect(api.retryAudit).toHaveBeenCalledWith("run", "s1");
+  // the signal is how releasing the review reaches the server, so it is part
+  // of the call, not incidental
+  expect(api.retryAudit).toHaveBeenCalledWith("run", "s1", expect.any(AbortSignal));
 });
 
 test("a rejected retryAudit surfaces an error and leaves the mechanics notice/rows untouched", async () => {
@@ -3553,6 +3556,645 @@ test("dossiers the absorb budget skipped are named, not silently missing", async
   expect(screen.getByText(/skipped: winifred/)).toBeInTheDocument();
 });
 
+// ---- the dossier phase's own scoped retry (#286) ----
+
+const DOSSIER_EDIT = { id: "dossier:winifred", kind: "dossier",
+  target: { kind: "characters", id: "winifred" }, label: "Winifred — campaign dossier",
+  field: "dossier", before: "Quiet.", after: "Quiet, and newly armed.", authored: false };
+
+/** A dossier phase the clock cut short, in the two shapes the panel reads it
+ *  from: the block itself and the phase row projected from it. */
+const CUT_DOSSIERS = { status: "failed",
+  reason: "the absorb time budget ran out before any dossier could be prepared",
+  proposed: [], failed: [], skipped: ["winifred"],
+  attempted: false, budget_exhausted: true };
+const absorbCutShortOnDossiers = () =>
+  absorbWithPhases(phasesFor({ dossiers: CUT_DOSSIERS }), { dossiers: CUT_DOSSIERS });
+
+test("a cut-short dossier phase offers Retry dossiers; it stages the rows and clears the notice",
+     async () => {
+  absorbCutShortOnDossiers();
+  (api.retryDossiers as any).mockResolvedValue({
+    dossiers: { status: "ok", reason: null, proposed: ["winifred"], failed: [], skipped: [],
+                attempted: true, budget_exhausted: false },
+    edits: [DOSSIER_EDIT] });
+  await openAbsorb();
+
+  await screen.findByText(/No NPC dossier was prepared/);
+  fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
+
+  await waitFor(() => expect(screen.queryByText(/No NPC dossier was prepared/)).toBeNull());
+  expect(await screen.findByText("Winifred — campaign dossier")).toBeInTheDocument();
+  expect(api.retryDossiers).toHaveBeenCalledWith("run", "s1", expect.any(AbortSignal));
+});
+
+test("a successful dossier retry clears the budget notice it was offered for", async () => {
+  // The phase row is a projection of the block, so it has to move with it —
+  // otherwise the panel keeps warning about a step this retry has since run.
+  absorbCutShortOnDossiers();
+  (api.retryDossiers as any).mockResolvedValue({
+    dossiers: { status: "ok", reason: null, proposed: ["winifred"], failed: [], skipped: [],
+                attempted: true, budget_exhausted: false },
+    edits: [] });
+  await openAbsorb();
+
+  await screen.findByText(/only partly absorbed/);
+  fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
+  await waitFor(() => expect(screen.queryByText(/only partly absorbed/)).toBeNull());
+});
+
+test("a rejected retryDossiers surfaces an error and leaves the notice and rows untouched",
+     async () => {
+  absorbCutShortOnDossiers();
+  (api.retryDossiers as any).mockRejectedValue({ detail: "dossier retry blew up" });
+  await openAbsorb();
+
+  await screen.findByText(/No NPC dossier was prepared/);
+  fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
+
+  await screen.findByText("dossier retry blew up");
+  expect(screen.getByText(/No NPC dossier was prepared/)).toBeInTheDocument();
+  expect(screen.queryByText("Winifred — campaign dossier")).toBeNull();
+});
+
+test("releasing a review aborts the retry request, not just its answer", async () => {
+  // The generation guard stops a stale ANSWER from landing; it does nothing
+  // about the WORK. The endpoint runs one LLM call per present NPC on a fresh
+  // absorb budget, and `absorb_budget = 0` makes that unbounded — so a retry
+  // nobody is waiting for goes on spending time and credits. Cancel is offered
+  // as the way out of exactly that, so it has to reach the server.
+  absorbCutShortOnDossiers();
+  let signal: AbortSignal | undefined;
+  (api.retryDossiers as any).mockImplementation((_c: string, _s: string, sig: AbortSignal) => {
+    signal = sig;
+    return new Promise(() => {});   // never resolves; only Cancel ends it
+  });
+  await openAbsorb();
+  fireEvent.click(await screen.findByRole("button", { name: /Retry dossiers/ }));
+  await waitFor(() => expect(signal).toBeDefined());
+  expect(signal!.aborted).toBe(false);
+
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+  await waitFor(() => expect(signal!.aborted).toBe(true));
+});
+
+/** Opens a review, fails its dossier retry, and leaves the banner on screen. */
+const failedDossierRetry = async () => {
+  absorbCutShortOnDossiers();
+  (api.retryDossiers as any).mockRejectedValue({ detail: "dossier retry blew up" });
+  await openAbsorb();
+  fireEvent.click(await screen.findByRole("button", { name: /Retry dossiers/ }));
+  await screen.findByText("dossier retry blew up");
+};
+
+test("cancelling a review takes the scoped retry failure with it", async () => {
+  // The banner reports on a review; once that review is gone it is reporting on
+  // nothing, and its text ("the dossier retry failed") describes an operation
+  // the reader can no longer see or repeat.
+  await failedDossierRetry();
+
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+  await waitFor(() => expect(screen.queryByText("dossier retry blew up")).toBeNull());
+});
+
+test("saving a review takes the scoped retry failure with it", async () => {
+  // Same fact from the other exit: a save that lands closes the review, so the
+  // failure of one of its steps must not outlive it either.
+  await failedDossierRetry();
+
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+
+  await waitFor(() => expect(screen.queryByText("dossier retry blew up")).toBeNull());
+});
+
+test("an absorb that lands after a campaign switch is not installed", async () => {
+  // The `[cid]` effect clears the review state it can see, but an absorb ALREADY
+  // in flight is not state — and it is the slowest request in the app, several
+  // LLM calls, so there is ample room to leave. Installing it would put A's
+  // summary, timeline and staged edits in front of B, and Save would post them
+  // to B: scene ids repeat across campaigns and a fresh commit token matches, so
+  // nothing further down refuses them.
+  let land: (v: any) => void = () => {};
+  (api.absorbScene as any).mockImplementation(() => new Promise((r) => { land = r; }));
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  render(
+    <MemoryRouter initialEntries={["/campaigns/run"]}>
+      <Link to="/campaigns/other">switch campaign</Link>
+      <Routes>
+        <Route path="/campaigns/:cid" element={<CampaignView ready={true} />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "End scene" }));
+  await waitFor(() => expect(api.absorbScene).toHaveBeenCalled());
+
+  // Wait for B to be the campaign on screen BEFORE A's absorb lands. Resolving
+  // it while the switch is still in React's queue lets B's own `[cid]` effect
+  // clear the install a moment later, so the test passes with or without the
+  // guard — an earlier draft did exactly that and proved nothing.
+  fireEvent.click(screen.getByText("switch campaign"));
+  await waitFor(() => expect(api.getCampaign).toHaveBeenCalledWith("other"));
+
+  // `act` so the continuation actually RUNS before the assertions. Resolving
+  // bare leaves it queued as a microtask, and asserting "the panel is absent"
+  // against a continuation that has not run yet is a test that passes for the
+  // wrong reason — the second way an earlier draft of this test proved nothing.
+  await act(async () => {
+    land({
+      one_line: "A's one-liner", summary: "A's summary", keywords: [],
+      timeline_events: [], edits: [], commit_token: "t-a",
+    });
+  });
+
+  // B must not be showing a review it never asked for. Asserted on the panel
+  // itself rather than on the summary text: the summary lands in a textarea's
+  // *value*, which `queryByText` cannot see — an earlier draft of this test
+  // passed with the guard removed for exactly that reason.
+  expect(screen.queryByText("Review scene summary")).toBeNull();
+  expect(screen.queryByRole("button", { name: /Save summary/ })).toBeNull();
+});
+
+test("End scene stops a pending retry before starting the absorb that replaces it", async () => {
+  // End scene stays enabled during a retry on purpose — a wedged retry on an
+  // unbounded budget is exactly when it is needed. So it has to stop that retry
+  // itself: the review it belongs to is about to be discarded, and leaving it up
+  // runs two expensive pipelines over the same scene at once.
+  absorbCutShortOnDossiers();
+  let signal: AbortSignal | undefined;
+  (api.retryDossiers as any).mockImplementation((_c: string, _s: string, sig: AbortSignal) => {
+    signal = sig;
+    return new Promise(() => {});
+  });
+  await openAbsorb();
+  fireEvent.click(await screen.findByRole("button", { name: /Retry dossiers/ }));
+  await waitFor(() => expect(signal).toBeDefined());
+  (api.absorbScene as any).mockClear();
+
+  fireEvent.click(screen.getByRole("button", { name: "End scene" }));
+
+  // Aborted, and aborted BEFORE the replacement absorb went out — the ordering
+  // is the point, not just that it happens eventually.
+  expect(signal!.aborted).toBe(true);
+  expect(api.absorbScene).toHaveBeenCalled();
+});
+
+test("leaving the campaign section aborts a retry that is still running", async () => {
+  // Unmount, not a `cid` change: the `[cid]` effect does not re-run, so its
+  // `releaseRetries` never fires. SPA navigation does not cancel a fetch either,
+  // so without a cleanup the request outlives the screen — and with it the
+  // server-side work, which only stops when it sees the disconnect.
+  absorbCutShortOnDossiers();
+  let signal: AbortSignal | undefined;
+  (api.retryDossiers as any).mockImplementation((_c: string, _s: string, sig: AbortSignal) => {
+    signal = sig;
+    return new Promise(() => {});
+  });
+  const view = await openAbsorb();
+  fireEvent.click(await screen.findByRole("button", { name: /Retry dossiers/ }));
+  await waitFor(() => expect(signal).toBeDefined());
+  expect(signal!.aborted).toBe(false);
+
+  view.unmount();
+
+  expect(signal!.aborted).toBe(true);
+});
+
+test("a scoped retry failure does not follow the reader into another campaign", async () => {
+  // The route has no `key`, so React Router reuses this component for A -> B.
+  // The banner is not campaign-scoped state on its own, so the cid effect's
+  // `releaseRetries` is the only thing that keeps A's failure out of B.
+  absorbCutShortOnDossiers();
+  (api.retryDossiers as any).mockRejectedValue({ detail: "dossier retry blew up" });
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  render(
+    <MemoryRouter initialEntries={["/campaigns/run"]}>
+      <Link to="/campaigns/other">switch campaign</Link>
+      <Routes>
+        <Route path="/campaigns/:cid" element={<CampaignView ready={true} />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Review scene summary");
+  fireEvent.click(await screen.findByRole("button", { name: /Retry dossiers/ }));
+  await screen.findByText("dossier retry blew up");
+
+  fireEvent.click(screen.getByText("switch campaign"));
+
+  await waitFor(() => expect(screen.queryByText("dossier retry blew up")).toBeNull());
+});
+
+test("cancelling a review leaves an unrelated banner standing", async () => {
+  // The other half of the scoping: the banner is shared, and a failure with no
+  // `from` belongs to whatever raised it -- here a rename whose relist failed,
+  // raised while the review happened to be open. Closing the review must not
+  // take that report down with it, nor the Retry the reader still needs.
+  await openAbsorb();
+  (api.listScenes as any).mockRejectedValue(new Error("relist failed"));
+  (api.renameScene as any).mockResolvedValue({ id: "s1-renamed", title: "New" });
+  fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+  const input = screen.getByDisplayValue("Old");
+  fireEvent.change(input, { target: { value: "New" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await screen.findByText(/could not be refreshed/);
+
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+  await waitFor(() => expect(screen.queryByText("Review scene summary")).toBeNull());
+  expect(screen.getByText(/could not be refreshed/)).toBeInTheDocument();
+});
+
+test("non-dossier rows survive Retry dossiers with their approval intact", async () => {
+  // The whole point of a scoped retry: what the reviewer has already decided
+  // about the rest of the batch is not collateral damage.
+  const LORE_EDIT = { id: "lore:old-dock", kind: "lore",
+    target: { kind: "lore", id: "old-dock" }, label: "Old Dock — lore",
+    field: "body", before: "quiet.", after: "quiet, but watched.", authored: false };
+  absorbWithPhases(phasesFor({ dossiers: CUT_DOSSIERS }),
+                   { dossiers: CUT_DOSSIERS, edits: [LORE_EDIT] });
+  (api.retryDossiers as any).mockResolvedValue({
+    dossiers: { status: "ok", reason: null, proposed: ["winifred"], failed: [], skipped: [],
+                attempted: true, budget_exhausted: false },
+    edits: [DOSSIER_EDIT] });
+  await openAbsorb();
+
+  await screen.findByText(/No NPC dossier was prepared/);
+  const checkbox = screen.getByLabelText(`Approve ${LORE_EDIT.label}`) as HTMLInputElement;
+  fireEvent.click(checkbox);                       // the reviewer rejects it
+  expect(checkbox.checked).toBe(false);
+
+  fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
+  expect(await screen.findByText("Winifred — campaign dossier")).toBeInTheDocument();
+  const lore = screen.getAllByLabelText(`Approve ${LORE_EDIT.label}`);
+  expect(lore).toHaveLength(1);                    // not duplicated by the rebuild
+  expect((lore[0] as HTMLInputElement).checked).toBe(false);
+});
+
+test("a retry that fails for an NPC keeps that NPC's proposal from the first pass", async () => {
+  // Codex P2. The backend reports per-NPC failures inside a 200, so an
+  // unconditional rebuild turns "retry the one we missed" into a net loss:
+  // mara's good proposal is deleted and nothing replaces it.
+  const MARA_DOSSIER = { id: "dossier:mara", kind: "dossier",
+    target: { kind: "characters", id: "mara" }, label: "Mara — campaign dossier",
+    field: "dossier", before: "Steady.", after: "Steady, and owed a favour.", authored: false };
+  const partial = { status: "degraded",
+    reason: "the absorb time budget ran out before the rest could be prepared",
+    proposed: ["mara"], failed: [], skipped: ["winifred"],
+    attempted: true, budget_exhausted: true };
+  absorbWithPhases(phasesFor({ dossiers: partial }),
+                   { dossiers: partial, edits: [MARA_DOSSIER] });
+  // winifred now succeeds; mara, re-run alongside her, fails this time
+  (api.retryDossiers as any).mockResolvedValue({
+    dossiers: { status: "degraded", reason: "some dossiers could not be prepared",
+                proposed: ["winifred"], failed: [{ id: "mara", reason: "rate limited" }],
+                skipped: [], attempted: true, budget_exhausted: false },
+    edits: [DOSSIER_EDIT] });
+  await openAbsorb();
+
+  await screen.findByText("Mara — campaign dossier");
+  fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
+
+  expect(await screen.findByText("Winifred — campaign dossier")).toBeInTheDocument();
+  // mara was not re-proposed, so her first-pass row stands rather than vanishing
+  expect(screen.getByText("Mara — campaign dossier")).toBeInTheDocument();
+});
+
+test("an NPC the retry did repropose is replaced, not duplicated", async () => {
+  // The other half of the rule: `proposed` names who this run answered for, and
+  // for them the fresh proposal wins outright.
+  const STALE = { id: "dossier:winifred", kind: "dossier",
+    target: { kind: "characters", id: "winifred" }, label: "Winifred — campaign dossier",
+    field: "dossier", before: "Quiet.", after: "A first, worse draft.", authored: false };
+  const failed = { status: "failed", reason: "no dossier could be prepared",
+    proposed: [], failed: [{ id: "winifred", reason: "rate limited" }], skipped: [],
+    attempted: true, budget_exhausted: false };
+  absorbWithPhases(phasesFor({ dossiers: failed }), { dossiers: failed, edits: [STALE] });
+  (api.retryDossiers as any).mockResolvedValue({
+    dossiers: { status: "ok", reason: null, proposed: ["winifred"], failed: [], skipped: [],
+                attempted: true, budget_exhausted: false },
+    edits: [DOSSIER_EDIT] });
+  await openAbsorb();
+
+  await screen.findByText("A first, worse draft.");
+  fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
+
+  expect(await screen.findByText("Quiet, and newly armed.")).toBeInTheDocument();
+  expect(screen.queryByText("A first, worse draft.")).toBeNull();
+  expect(screen.getAllByLabelText("Approve Winifred — campaign dossier")).toHaveLength(1);
+});
+
+test("a dossier retry that lands after its review is gone leaves the new review alone",
+     async () => {
+  // Codex P1. A scoped retry gets its own budget, so it can still be in flight
+  // when the reviewer discards and absorbs another scene. Applying it then
+  // stages scene A's dossiers into scene B's review — and B's save commits them.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "One", model: "", created: "", updated: "", date: "" },
+    { id: "s2", title: "Two", model: "", created: "", updated: "", date: "" }]);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  absorbCutShortOnDossiers();
+  let land: (v: unknown) => void = () => {};
+  (api.retryDossiers as any).mockReturnValue(new Promise((resolve) => { land = resolve; }));
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText(/No NPC dossier was prepared/);
+  fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
+
+  // …the reviewer gives up on this one (Cancel clears the review) and absorbs
+  // the next scene instead
+  fireEvent.click(screen.getByRole("button", { name: /^Cancel$/ }));
+  await waitFor(() => expect(screen.queryByText("Review scene summary")).toBeNull());
+  fireEvent.click(screen.getByText(/Two/));
+  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s2", { limit: 60 }));
+  (api.absorbScene as any).mockResolvedValue({
+    one_line: "second", summary: "s", keywords: [], timeline_events: [], cast: [],
+    location: "", date: "",
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [],
+                 attempted: true, budget_exhausted: false },
+    dossiers: { status: "ok", reason: null, proposed: [], failed: [], skipped: [],
+                attempted: true, budget_exhausted: false },
+    voice: { status: "skipped", reason: null, checked: [], flagged: [], unjudged: [],
+             failed: [], skipped: [], attempted: false, budget_exhausted: false },
+    commit_token: "tok-second", phases: PHASES_NONE_CUT, edits: [] });
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByDisplayValue("second");
+
+  land({ dossiers: { status: "ok", reason: null, proposed: ["winifred"], failed: [],
+                     skipped: [], attempted: true, budget_exhausted: false },
+         edits: [DOSSIER_EDIT] });
+
+  // scene A's dossier never reaches scene B's review, and B's clean phase report
+  // is not overwritten by A's
+  await waitFor(() => expect(screen.getByDisplayValue("second")).toBeInTheDocument());
+  expect(screen.queryByText("Winifred — campaign dossier")).toBeNull();
+  expect(screen.queryByText(/No NPC dossier was prepared/)).toBeNull();
+});
+
+test("a second click cannot start an overlapping dossier retry", async () => {
+  // Codex P2 (round two): two retries of the SAME review carry the same
+  // `commit_token`, so the stale-review guard passes for both and a first
+  // request answering second overwrites the fresher generation on screen. The
+  // latch is what stops the pair ever existing — and it doubles as the feedback
+  // a call that can run for the whole absorb budget otherwise never gives.
+  absorbCutShortOnDossiers();
+  let land: (v: unknown) => void = () => {};
+  (api.retryDossiers as any).mockReturnValue(new Promise((resolve) => { land = resolve; }));
+  await openAbsorb();
+
+  await screen.findByText(/No NPC dossier was prepared/);
+  fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
+
+  const pending = await screen.findByRole("button", { name: /Retrying…/ });
+  expect(pending).toBeDisabled();
+  fireEvent.click(pending);                       // the impatient second click
+  expect(api.retryDossiers).toHaveBeenCalledTimes(1);
+
+  land({ dossiers: { status: "ok", reason: null, proposed: ["winifred"], failed: [],
+                     skipped: [], attempted: true, budget_exhausted: false },
+         edits: [DOSSIER_EDIT] });
+  // the latch releases, so a genuinely later retry is still possible
+  await waitFor(() => expect(screen.queryByText("Retrying…")).toBeNull());
+});
+
+test("Retry validation latches the same way", async () => {
+  // Same exposure, same fix — the two retries are kept symmetric so neither
+  // grows a guard the other lacks.
+  const over = {
+    mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [],
+                 attempted: true, budget_exhausted: false },
+  };
+  absorbWithPhases(phasesFor(over), over);
+  (api.retryAudit as any).mockReturnValue(new Promise(() => {}));  // never lands
+  await openAbsorb();
+
+  await screen.findByText(/Mechanics validation failed/);
+  fireEvent.click(screen.getByRole("button", { name: /Retry validation/ }));
+
+  const pending = await screen.findByRole("button", { name: /Retrying…/ });
+  expect(pending).toBeDisabled();
+  fireEvent.click(pending);
+  expect(api.retryAudit).toHaveBeenCalledTimes(1);
+});
+
+test("a dossier retry that succeeds clears the previous attempt's error", async () => {
+  // Codex, round five. The failure banner is global and nothing else clears it
+  // here, so a recovery would read as a second failure: the notice goes away
+  // while the page still reports the retry that went wrong.
+  absorbCutShortOnDossiers();
+  (api.retryDossiers as any).mockRejectedValueOnce({ detail: "dossier retry blew up" });
+  await openAbsorb();
+
+  await screen.findByText(/No NPC dossier was prepared/);
+  fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
+  await screen.findByText("dossier retry blew up");
+
+  (api.retryDossiers as any).mockResolvedValue({
+    dossiers: { status: "ok", reason: null, proposed: ["winifred"], failed: [], skipped: [],
+                attempted: true, budget_exhausted: false },
+    edits: [DOSSIER_EDIT] });
+  fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
+
+  expect(await screen.findByText("Winifred — campaign dossier")).toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByText("dossier retry blew up")).toBeNull());
+});
+
+test("an abandoned dossier retry that rejects does not drop a banner on what replaced it",
+     async () => {
+  // Codex, round six. Cancel stays enabled during a retry by design, so the
+  // request outlives its review — and the catch published the failure anyway.
+  absorbCutShortOnDossiers();
+  let reject: (e: unknown) => void = () => {};
+  (api.retryDossiers as any).mockReturnValue(new Promise((_r, rj) => { reject = rj; }));
+  await openAbsorb();
+
+  await screen.findByText(/No NPC dossier was prepared/);
+  fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Cancel$/ }));
+  await waitFor(() => expect(screen.queryByText("Review scene summary")).toBeNull());
+
+  // flushed inside act, so the rejection is fully handled before the assertion
+  // — asserting on a promise that has not settled yet would pass either way
+  await act(async () => { reject({ detail: "dossier retry blew up" }); });
+
+  expect(screen.queryByText("dossier retry blew up")).toBeNull();
+});
+
+test("starting a dossier retry leaves an unrelated error banner alone", async () => {
+  // The banner is global, the reviews are not: a review survives a scene
+  // switch, so a chat failure raised elsewhere can be on screen while this
+  // review's controls still are. Clearing it here would also remove its
+  // generate-a-reply Retry, which IS the right recovery for that one.
+  absorbCutShortOnDossiers();
+  (api.chat as any).mockRejectedValueOnce({ detail: "the model fell over" });
+  (api.retryDossiers as any).mockReturnValue(new Promise(() => {}));
+  await openAbsorb();
+
+  await screen.findByText(/No NPC dossier was prepared/);
+  // the composer, explicitly: with the review panel open, the first textbox on
+  // the page is its summary field
+  fireEvent.change(screen.getByPlaceholderText(/Speak your intent/), 
+                   { target: { value: "Go on." } });
+  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  await screen.findByText("the model fell over");
+
+  fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
+
+  // still there, and still offering the recovery that belongs to it
+  await waitFor(() => expect(screen.getByText("the model fell over")).toBeInTheDocument());
+  expect(screen.getByRole("button", { name: /^Retry$/ })).toBeInTheDocument();
+});
+
+test("switching campaigns discards the open review rather than repointing it", async () => {
+  // Codex P1. The route carries no `key`, so React Router reuses this component
+  // for campaign A -> B (browser Back between two campaigns does it); without
+  // this the review, its scene id and every request they drive — the retries
+  // and the SAVE — would follow `cid` to B, and scene ids repeat across
+  // campaigns so those requests succeed rather than 404.
+  //
+  // Navigated from inside the router on purpose: re-rendering a fresh
+  // MemoryRouter would REMOUNT CampaignView, which clears the review for a
+  // reason that has nothing to do with the fix and would pass either way.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  absorbCutShortOnDossiers();
+  render(
+    <MemoryRouter initialEntries={["/campaigns/run"]}>
+      <Link to="/campaigns/other">to the other campaign</Link>
+      <Routes>
+        <Route path="/campaigns/:cid" element={<CampaignView ready={true} />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Review scene summary");
+
+  fireEvent.click(screen.getByRole("link", { name: /to the other campaign/ }));
+
+  await waitFor(() => expect(screen.queryByText("Review scene summary")).toBeNull());
+});
+
+test("a failed End scene does not offer the banner's generate-a-reply Retry", async () => {
+  // The same defect as the scoped retries', on the operation that opens the
+  // review rather than one inside it: answering "the absorb failed" with a
+  // button that writes one more reply into the scene the user was finishing.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockRejectedValue({ detail: "absorb blew up" });
+  renderCampaign();
+  await screen.findByText("hi");
+
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+
+  await screen.findByText("absorb blew up");
+  expect(screen.queryByRole("button", { name: /^Retry$/ })).toBeNull();
+  // End scene is the recovery, and it is usable again
+  expect(screen.getByRole("button", { name: /End scene/ })).toBeEnabled();
+});
+
+test("cancelling a review frees the next review's Retry dossiers button", async () => {
+  // Codex, round three. The latch is component-wide, so an abandoned retry that
+  // never answers — `absorb_budget = 0` makes it unbounded — would keep the NEXT
+  // review's button disabled for as long as it hung.
+  absorbCutShortOnDossiers();
+  (api.retryDossiers as any).mockReturnValue(new Promise(() => {}));  // never lands
+  await openAbsorb();
+
+  await screen.findByText(/No NPC dossier was prepared/);
+  fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
+  await screen.findByRole("button", { name: /Retrying…/ });
+
+  fireEvent.click(screen.getByRole("button", { name: /^Cancel$/ }));
+  await waitFor(() => expect(screen.queryByText("Review scene summary")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+
+  // the new review's button is live immediately, not waiting on the dead request
+  const button = await screen.findByRole("button", { name: /Retry dossiers/ });
+  expect(button).toBeEnabled();
+});
+
+test("a save latches the scoped retries, and a retry latches the save", async () => {
+  // `saveAbsorb` resolves the server's conflict indices against `editRows` as
+  // the array the batch was built from, which only holds while nothing else
+  // rewrites the rows mid-flight. A clean save is just as bad: it would commit
+  // the pre-retry batch and then clear the rows the retry had just staged.
+  absorbCutShortOnDossiers();
+  let landSave: (v: unknown) => void = () => {};
+  (api.saveChronicle as any).mockReturnValue(new Promise((resolve) => { landSave = resolve; }));
+  await openAbsorb();
+
+  await screen.findByText(/No NPC dossier was prepared/);
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /Retry dossiers/ })).toBeDisabled());
+
+  landSave({ failures: [] });
+  await waitFor(() => expect(screen.queryByText("Review scene summary")).toBeNull());
+});
+
+test("a pending dossier retry latches Save summary", async () => {
+  absorbCutShortOnDossiers();
+  (api.retryDossiers as any).mockReturnValue(new Promise(() => {}));
+  await openAbsorb();
+
+  await screen.findByText(/No NPC dossier was prepared/);
+  fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
+
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /Save summary/ })).toBeDisabled());
+  // …but Cancel stays live: the retry runs on the absorb budget, which is
+  // unbounded at 0, so this is the only way out of a request that never answers
+  expect(screen.getByRole("button", { name: /^Cancel$/ })).toBeEnabled();
+});
+
+test("a failed dossier retry does not offer the banner's generate-a-reply Retry", async () => {
+  // That button runs the CHAT retry: it would extend the very scene whose
+  // end-of-scene review is open, and not re-run the dossiers at all.
+  absorbCutShortOnDossiers();
+  (api.retryDossiers as any).mockRejectedValue({ detail: "dossier retry blew up" });
+  await openAbsorb();
+
+  await screen.findByText(/No NPC dossier was prepared/);
+  fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
+
+  await screen.findByText("dossier retry blew up");
+  expect(screen.queryByRole("button", { name: /^Retry$/ })).toBeNull();
+  // the scoped button is the recovery, and it is usable again
+  expect(screen.getByRole("button", { name: /Retry dossiers/ })).toBeEnabled();
+});
+
+test("Retry dossiers targets the review's scene, not whichever is on screen", async () => {
+  // A review outlives a scene switch, so reading the rail would build dossiers
+  // from the scene the user has since opened — the bug #282 fixed for the audit
+  // retry, which this one must not reintroduce.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "One", model: "", created: "", updated: "", date: "" },
+    { id: "s2", title: "Two", model: "", created: "", updated: "", date: "" }]);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  absorbCutShortOnDossiers();
+  (api.retryDossiers as any).mockResolvedValue({
+    dossiers: { status: "ok", reason: null, proposed: [], failed: [], skipped: [],
+                attempted: true, budget_exhausted: false },
+    edits: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText(/No NPC dossier was prepared/);
+
+  fireEvent.click(screen.getByText(/Two/));                        // switch scenes
+  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s2", { limit: 60 }));
+  fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
+
+  await waitFor(() => expect(api.retryDossiers).toHaveBeenCalled());
+  expect((api.retryDossiers as any).mock.calls[0][1]).toBe("s1");
+});
+
 test("a partly-prepared dossier phase does not call itself failed", async () => {
   // mara's dossier was prepared; only winifred's was dropped. Calling that
   // "refresh failed" contradicts the edit sitting in the list beside it.
@@ -3629,10 +4271,11 @@ const absorbWithPhases = (phases: unknown, over: Record<string, unknown> = {}) =
 const openAbsorb = async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  renderCampaign();
+  const view = renderCampaign();   // returned for the unmount tests; others ignore it
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
   await screen.findByText("Review scene summary");
+  return view;
 };
 
 test("an absorb the budget cut short names the steps that never ran", async () => {
@@ -3917,7 +4560,9 @@ test("the budget notice never sends the reviewer back through End scene", async 
   await openAbsorb();
 
   await screen.findByText(/only partly absorbed/);
-  expect(screen.getByText(/Raise the absorb budget/)).toBeInTheDocument();
+  // Still the advice for a step with no scoped Retry of its own (the voice
+  // check) — now mid-sentence, since #286 gave the dossier phase one.
+  expect(screen.getByText(/raise the absorb budget/i)).toBeInTheDocument();
   expect(screen.queryByText(/end the scene again/i)).toBeNull();
 });
 

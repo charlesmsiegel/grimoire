@@ -11,7 +11,8 @@ from fastapi.responses import Response, StreamingResponse
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from .common import _require_connection, _serve_image, _world_root_or_404, get_llm
+from .common import (_bounded_call, _require_connection, _serve_image, _world_root_or_404,
+                     get_llm)
 from .models import (AvatarFocus, CharacterBirthdate, CharacterCreate, ChubImportBody,
                      ChubSourceBody, DefaultVersion, TaglineSave, VersionCreate, VersionUpdate,
                      VoiceAnchorSave)
@@ -201,7 +202,7 @@ async def post_character_tagline_generate(wid: str, cid: str,
     card = store.characters.read_card(root, cid, ch["meta"]["default_version"])
     messages = store.taglines.build_prompt(card["data"])
     try:
-        text = await client.complete(messages, conn)
+        text = await _bounded_call(client.complete(messages, conn))
     except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     # Preview only — the caller persists via PUT on Save, so Generate-then-cancel
@@ -254,7 +255,7 @@ async def post_character_voice_anchor_generate(wid: str, cid: str,
     data = card.get("data")
     messages = store.voice_anchors.build_prompt(data if isinstance(data, dict) else {})
     try:
-        text = await client.complete(messages, conn)
+        text = await _bounded_call(client.complete(messages, conn))
     except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     # Preview only, like tagline/generate — the caller persists via PUT on Save,

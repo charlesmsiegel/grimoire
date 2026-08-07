@@ -54,6 +54,14 @@ DEFAULT_PROMOTE_STREAK = "3"
 # what the feature costs; "0" turns it off, leaving only the panel's explicit
 # Refresh button.
 DEFAULT_ROLLING_SUMMARY_EVERY = "10"
+
+# Wall-clock ceiling on one one-shot generation route (#272). The idle bound
+# above cannot stop an upstream that dribbles a frame just inside it forever,
+# and a tagline / voice anchor / scene suggestion has no partial output worth
+# protecting, so those routes get a stopwatch too. Streamed prose deliberately
+# does not, and neither does absorb, which carries its own sequence budget --
+# see `routes.common.bounded_call` for both exclusions.
+DEFAULT_LLM_CALL_BUDGET = "300"
 # The global scope of the response-preset cascade. These MUST be listed here:
 # read_config() narrows its return to _CONFIG_KEYS, so a key omitted from this
 # tuple is silently dropped and the global scope resolves as if unset — no
@@ -68,7 +76,7 @@ _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "llm_timeout", "absorb_budget", "setup_done",
                 "prompt_log_depth",
                 "turnstate_depth", "promote_streak",
-                "rolling_summary_every") + _LENGTH_KEYS
+                "rolling_summary_every", "llm_call_budget") + _LENGTH_KEYS
 
 
 def _config_path():
@@ -91,6 +99,8 @@ def read_config() -> dict[str, str]:
                 "turnstate_depth": DEFAULT_TURNSTATE_DEPTH,
                 "promote_streak": DEFAULT_PROMOTE_STREAK,
                 "rolling_summary_every": DEFAULT_ROLLING_SUMMARY_EVERY,
+
+                "llm_call_budget": DEFAULT_LLM_CALL_BUDGET,
                 **{k: "" for k in _LENGTH_KEYS}}
     if not path.exists():
         # Materializing the defaults is a write, and two first-ever readers
@@ -194,6 +204,10 @@ def rolling_summary_every() -> int:
     if not math.isfinite(value):
         return int(DEFAULT_ROLLING_SUMMARY_EVERY)
     return int(value) if value > 0 else 0
+
+def llm_call_budget() -> float:
+    """Wall-clock seconds one non-streaming LLM call may take in total."""
+    return _seconds("llm_call_budget", DEFAULT_LLM_CALL_BUDGET)
 
 
 def write_config(**fields: str) -> dict[str, str]:

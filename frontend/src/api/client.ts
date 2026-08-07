@@ -32,11 +32,13 @@ export class ApiError extends Error {
   }
 }
 
-async function requestRaw<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function requestRaw<T>(method: string, path: string, body?: unknown,
+                             signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, {
     method,
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
+    signal,
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -80,11 +82,14 @@ function retireAllInflight(): void {
   inflightGets.clear();
 }
 
+// `signal` aborts the request. Only non-GETs take one today, and deliberately
+// so: an aborted GET would settle the shared promise below for every caller
+// waiting on it, not just the one that asked to stop.
 function request<T>(method: string, path: string, body?: unknown,
-                    opts?: { fresh?: boolean }): Promise<T> {
+                    opts?: { fresh?: boolean; signal?: AbortSignal }): Promise<T> {
   if (method !== "GET" || opts?.fresh) {
     if (opts?.fresh) retireInflight(path);
-    return requestRaw<T>(method, path, body);
+    return requestRaw<T>(method, path, body, opts?.signal);
   }
   const pending = inflightGets.get(path);
   if (pending) return pending as Promise<T>;
@@ -132,6 +137,8 @@ export type Config = {
   llm_timeout: string;
   /** Seconds one absorb's whole LLM sequence may take; "0" disables. */
   absorb_budget: string;
+  /** Seconds one non-streaming LLM call may take in total; "0" disables. */
+  llm_call_budget: string;
   context_budget: string;
   archive_depth: string;
   /** "on" once the setup wizard has been finished or dismissed (#194). */
@@ -831,7 +838,7 @@ export const api = {
     }
     return configCache;
   },
-  putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; context_budget: string; archive_depth: string; setup_done: string;
+  putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; llm_call_budget: string; context_budget: string; archive_depth: string; setup_done: string;
     prompt_log_depth: string; turnstate_depth: string; promote_streak: string;
     rolling_summary_every: string }>) =>
     request<Config>("PUT", "/api/config", body).then((cfg) => {
@@ -1383,9 +1390,20 @@ export const api = {
       "PUT", `/api/campaigns/${cid}/scenes/${sid}/chronicle`, body),
   getChronicle: (cid: string) =>
     request<ChronicleEntry[]>("GET", `/api/campaigns/${cid}/chronicle`),
-  retryAudit: (cid: string, sid: string) =>
+  // Both scoped retries take a `signal`. Releasing the review they belong to
+  // has to reach the *server*: these run one LLM call per present NPC on a
+  // budget of their own, and `absorb_budget = 0` means that budget is
+  // unbounded — so a retry the reviewer walked away from would otherwise keep
+  // spending time and credits on a review that no longer exists. Aborting
+  // closes the connection, which is what the endpoint watches for.
+  retryAudit: (cid: string, sid: string, signal?: AbortSignal) =>
     request<{ mechanics: Mechanics; edits: StagedEdit[] }>(
-      "POST", `/api/campaigns/${cid}/scenes/${sid}/audit`),
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/audit`, undefined, { signal }),
+  // The dossier phase's sibling to retryAudit (#286): re-runs that phase alone,
+  // on a fresh budget, without disturbing the rest of the open review.
+  retryDossiers: (cid: string, sid: string, signal?: AbortSignal) =>
+    request<{ dossiers: Dossiers; edits: StagedEdit[] }>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/dossiers`, undefined, { signal }),
   opener: (cid: string, sid: string, prompt: string, onEvent: (e: ChatEvent) => void) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/opener`, { prompt }, onEvent),
   firstPost: (cid: string, sid: string, text: string) =>
