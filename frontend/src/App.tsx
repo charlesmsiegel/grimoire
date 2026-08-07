@@ -70,8 +70,11 @@ export default function App() {
   // "new" satisfies [^/]+ exactly like a real campaign id would, so the
   // regex alone can't distinguish /campaigns/new (the wizard, not a
   // campaign detail page) from /campaigns/<cid> — exclude it explicitly.
+  // The scene segment is part of the same page (#87), so it collapses the
+  // topbar too; without it the play view grew a topbar back the moment it
+  // redirected itself to a scene URL.
   const isCampaignRoute = location.pathname !== "/campaigns/new" &&
-    /^\/campaigns\/[^/]+$/.test(location.pathname);
+    /^\/campaigns\/[^/]+(\/scenes\/[^/]+)?$/.test(location.pathname);
 
   // Two independent controls, because they answer different questions. The
   // rail is "how wide should the nav be", and a campaign page is the one place
@@ -188,11 +191,26 @@ export default function App() {
                   transcript or activeId. Until those land -- or forever, if
                   they fail -- it would show campaign A's scene while its
                   handlers carry B's cid, and scene ids repeat across
-                  campaigns. The pathname IS the cid here, the route matches
-                  nothing deeper. */}
+                  campaigns. The key is the campaign segment alone and NOT the
+                  whole pathname: this route matches deeper now (#87, below),
+                  and keying on the full path would remount on every scene
+                  jump -- exactly what the nested child exists to prevent. */}
+              {/* The play view answers to two paths — with and without a scene
+                  (#87) — and they have to resolve to the SAME element
+                  instance. Sibling routes would remount CampaignView on
+                  /campaigns/A/scenes/s1 → /campaigns/B but not on
+                  A/scenes/s1 → B/scenes/s2, so the stale-response guards the
+                  view is built around (cidRef, the window token) would hold in
+                  one direction and be bypassed in the other. Nesting keeps one
+                  instance for every combination. The child renders nothing —
+                  CampaignView has no <Outlet /> — and exists only to put
+                  `:sid` in the matched path, where useMatch can read it. */}
               <Route path="/campaigns/:cid" element={
-                <CampaignView key={location.pathname} ready={ready}
-                              topbarCollapsed={topbarCollapsed} onToggleTopbar={toggleTopbar} />} />
+                <CampaignView key={location.pathname.split("/").slice(0, 3).join("/")}
+                              ready={ready}
+                              topbarCollapsed={topbarCollapsed} onToggleTopbar={toggleTopbar} />}>
+                <Route path="scenes/:sid" element={null} />
+              </Route>
               <Route path="/campaigns/:cid/world" element={<WorldView campaign />} />
               <Route path="/library" element={<LibraryView />} />
               <Route path="/worlds" element={<WorldsView />} />

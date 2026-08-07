@@ -447,3 +447,22 @@ test("leaving the wizard sticks even when the server still answers first_run", a
   await waitFor(() => expect(api.listCampaigns).toHaveBeenCalled());
   expect(screen.queryByTestId("setup-wizard")).not.toBeInTheDocument();
 });
+
+test("a scene URL is still the campaign route: the topbar collapses there too", async () => {
+  // The play view redirects itself to /campaigns/:cid/scenes/:sid (#87), so a
+  // pattern that only matched the bare campaign path would hand the topbar
+  // back the moment the reader landed on a scene.
+  localStorage.setItem("grimoire.topbar.collapsed", "1");
+  render(<MemoryRouter initialEntries={["/campaigns/run/scenes/003--the-gate"]}><App /></MemoryRouter>);
+  await screen.findByTestId("campaign-view");
+  expect(screen.getByRole("banner")).toHaveClass("collapsed");
+});
+
+test("a scene URL renders one CampaignView, not a second nested one", async () => {
+  // The scene segment is a CHILD route so the router keeps a single instance
+  // across /campaigns/A/scenes/s1 → /campaigns/B; a sibling route would mount
+  // a second view here.
+  render(<MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}><App /></MemoryRouter>);
+  await screen.findByTestId("campaign-view");
+  expect(screen.getAllByTestId("campaign-view")).toHaveLength(1);
+});
