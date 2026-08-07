@@ -1292,9 +1292,20 @@ _rolling_inflight_guard = threading.Lock()
 # shared with whatever thread a sync route runs on, and a poll keeps it that way
 # instead of introducing a per-scene asyncio primitive bound to one loop.
 _ROLLING_WAIT_POLL = 0.05
-# Only reached when `llm_timeout` is 0, which means "no bound" for a CALL. A
-# request held open has to have one anyway.
-_ROLLING_WAIT_CEILING = 300.0
+# How long a forced refresh may be held open waiting, in wall-clock seconds.
+#
+# Its OWN number, deliberately not `llm_timeout`. Review caught the first
+# version borrowing that one on the reasoning that a wait could then only run
+# out after the call it waited for was itself entitled to give up -- which is
+# false: `llm._guard` is an *idle* bound that resets after every provider frame,
+# and says so ("deliberately an *idle* bound, not a total one. Callers that need
+# a ceiling on total duration impose it themselves"). A reasoning-heavy
+# completion can stream frames for many minutes while perfectly healthy, so
+# borrowing that value would 503 a forced refresh whose fold was progressing
+# fine. This is the ceiling `_guard`'s docstring is talking about, and what it
+# actually measures is how long a browser request may hang -- `absorb_budget` is
+# the same shape of decision for the same reason.
+_ROLLING_WAIT_CEILING = 120.0
 
 
 @contextlib.contextmanager
@@ -1557,14 +1568,14 @@ async def post_rolling_summary(cid: str, sid: str, force: bool = False,
 async def _rolling_wait(cid: str, sid: str) -> bool:
     """Wait for another request's fold on this scene to leave the provider.
 
-    True if it freed, False if the wait ran out -- and it is bounded rather than
-    open-ended because this holds a request open. The bound is the same
-    `llm_timeout` the fold itself is subject to, so a wait can only run out
-    after the call it is waiting for was itself entitled to give up; with the
-    timeout disabled (`0`, the escape hatch for a slow local endpoint) it falls
-    back to a fixed ceiling rather than inheriting "no bound at all".
+    True if it freed, False if the wait ran out -- bounded rather than
+    open-ended because this holds a request open, by a ceiling that is about
+    exactly that and nothing else (see `_ROLLING_WAIT_CEILING`).
+
+    Running out is not a claim that the fold failed, and the 503 does not say
+    it did: it says one is already running, which stays true either way.
     """
-    limit = store.config.llm_timeout() or _ROLLING_WAIT_CEILING
+    limit = _ROLLING_WAIT_CEILING
     waited = 0.0
     while waited < limit:
         with _rolling_inflight_guard:
