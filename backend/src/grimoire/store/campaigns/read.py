@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .. import atomic
@@ -163,3 +165,194 @@ def touch(cid: str) -> None:
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
     meta["updated"] = now_iso()
     atomic.write_text(mp, dump_frontmatter(meta, body))
+
+
+#: The format now_iso() writes. Parsed rather than pattern-matched: a regex
+#: accepts "9999-99-99T99:99:99Z", which is not merely odd but self-sealing --
+#: it outranks every real timestamp lexically, and `touch_quietly` then refuses
+#: to replace it because each genuine stamp compares older, pinning that
+#: campaign to the top of Recent until someone repairs the file by hand.
+_STAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def _valid_stamp(text: str) -> bool:
+    """True only for a stamp `now_iso()` could itself have written.
+
+    Round-tripped, not merely parsed: `strptime` accepts variable-width
+    components, so `2026-8-07T01:02:03Z` parses fine -- and a value that parses
+    but is not zero-padded is worse here than one that doesn't, because the
+    caller compares these *lexically*. `2026-8-07...` sorts above every stamp
+    from October onwards, so a hand edit or a sync artifact in that shape pins
+    its campaign to the top of Recent for months. Reformatting the parsed value
+    and demanding it match is what rejects it; a stamp this file wrote is
+    unchanged by the round trip.
+    """
+    try:
+        parsed = datetime.strptime(text, _STAMP_FORMAT)
+    except ValueError:
+        return False
+    if parsed.strftime(_STAMP_FORMAT) != text:
+        return False
+    return not _implausibly_future(parsed)
+
+
+#: How far ahead of this machine's clock a stamp may sit and still be believed.
+#:
+#: There has to be a ceiling, because a canonical, perfectly parseable stamp is
+#: the *last* remaining shape of the same self-sealing trap: "9999-12-31T23:59:59Z"
+#: survives every check above, outranks every real timestamp lexically, and then
+#: `_publish_stamp` declines to replace it because each genuine stamp compares
+#: older. A store synced from a device whose clock was wrong, or written while
+#: this machine's own clock was ahead and later corrected, gets there without
+#: anyone editing a file.
+#:
+#: A day, not a minute. The stamps in this file come from whichever device wrote
+#: them, and a synced library legitimately carries stamps from a phone whose
+#: clock is off by a timezone -- refusing those would discard real activity to
+#: catch a hypothetical one. A day of slack costs at most one campaign sitting
+#: high in Recent for a day, which the next write repairs; the unbounded case
+#: never repairs itself at all.
+_FUTURE_TOLERANCE = timedelta(days=1)
+
+
+def _implausibly_future(parsed: datetime) -> bool:
+    """Whether `parsed` sits further ahead than any clock skew explains.
+
+    Reads the clock through `now_iso` rather than `datetime.now` so the whole
+    module has one source of time -- the same one `_publish_stamp` writes from,
+    which is what keeps "accepted" and "publishable" from drifting apart. A
+    clock this function cannot parse its own format from is not a reason to
+    reject a stored stamp, so that case believes the file.
+    """
+    try:
+        now = datetime.strptime(now_iso(), _STAMP_FORMAT)
+    except ValueError:  # pragma: no cover -- now_iso writes _STAMP_FORMAT
+        return False
+    return parsed > now + _FUTURE_TOLERANCE
+
+
+def best_stamp(*candidates: str) -> str:
+    """The latest candidate this module would believe, or "" if none of them.
+
+    The campaign's activity is a lexical max over stamps from three different
+    files, and validating only the one this module writes was arbitrary: a
+    scene's `updated` is the same kind of value, read out of the same kind of
+    hand-editable, synced file, and folded into the same comparison. A `zzzz`
+    or a year-9999 in any one of them outranks every genuine timestamp and then
+    blocks its own replacement, pinning the campaign in Recent until that
+    particular file is repaired. Every input gets the same bar; a bad one is
+    dropped rather than allowed to win.
+
+    Callers pass *every* scene stamp, not the newest -- `list_scenes` sorts by
+    the very field that may be bogus, so element zero is only the latest if the
+    sort key was trustworthy, which is the thing in question.
+    """
+    return max((c for c in candidates if _valid_stamp(c)), default="")
+
+
+def read_activity(cid: str) -> str:
+    """The campaign's activity stamp, or "" if there isn't a readable one.
+
+    `Exception`, not `OSError`: a store is plain files the user owns and syncs,
+    so this one can come back with non-UTF-8 bytes from a bad restore or a
+    half-written sync, and `UnicodeDecodeError` is not an `OSError`. Every
+    campaign in `GET /campaigns` goes through here, so letting one damaged
+    ranking hint escape would 500 the whole listing -- blanking the campaigns
+    page and the sidebar over a file whose entire job is to order five rows.
+    Unreadable and absent mean the same thing here: fall back to the stamps in
+    campaign.md and the scenes.
+    """
+    try:
+        stamp = paths.campaign_activity_path(cid).read_text(encoding="utf-8").strip()
+    except Exception:  # noqa: BLE001 -- see docstring: an ordering hint may not 500 the list
+        return ""
+    # Shape-checked, not just decodable. The caller folds this into a lexical
+    # max against real timestamps, so arbitrary text does not merely rank
+    # oddly -- anything sorting above "9" (a stray "zzzz" from a bad sync or a
+    # hand edit) outranks every genuine stamp, and keeps outranking them until
+    # that campaign is written again. Same treatment as unreadable: absent.
+    return stamp if _valid_stamp(stamp) else ""
+
+
+#: One lock per campaign, serializing the read-compare-write below. Process-local
+#: on purpose: this closes the window between two requests in the same backend,
+#: which is the reachable one, without putting a cross-process acquire in the
+#: path of every campaign write for a hint that orders five rows. Two *processes*
+#: can still interleave; that is the residual, and it costs at most a stamp.
+#:
+#: Per campaign rather than one global lock, because the middleware holds the
+#: response's status line until this returns. Two campaigns' stamps are separate
+#: files that cannot race each other, so a shared lock would make a slow stamp on
+#: a synced or removable store -- an atomic replace plus fsync, plus Windows
+#: sharing-violation retries -- delay every *other* campaign's mutation for the
+#: length of a write it has nothing to do with.
+_STAMP_LOCKS: dict[str, threading.Lock] = {}
+#: Guards the dict, not the files: held only long enough to hand out a lock, so
+#: it is never held across an fsync. `setdefault` on a plain dict is atomic under
+#: the GIL today, but that is an implementation detail to inherit rather than
+#: depend on, and this costs a few microseconds per campaign write.
+_STAMP_LOCKS_GUARD = threading.Lock()
+
+
+def _stamp_lock(cid: str) -> threading.Lock:
+    """This campaign's stamp lock, created on first use.
+
+    Never evicted. The dict is bounded by the number of campaigns a process has
+    written to -- a few dozen entries at most, each a bare mutex -- and evicting
+    one would mean deciding it is unheld at a moment when checking that is
+    exactly the race being prevented.
+    """
+    with _STAMP_LOCKS_GUARD:
+        return _STAMP_LOCKS.setdefault(cid, threading.Lock())
+
+
+def touch_quietly(cid: str) -> None:
+    """Record that something happened in this campaign, and never fail for it.
+
+    Writes the standalone activity stamp, NOT campaign.md. That distinction is
+    load-bearing: this fires from every campaign-scoped write in the app, and
+    `touch` republishes the whole meta file from a copy it read a moment
+    earlier, so routing these through it would race `rename_campaign` and
+    `set_campaign_response` and silently restore the name or response settings
+    the user had just changed. locks.py records that hazard for `touch` and
+    notes it was only reachable from `appearances`; this would have made it
+    reachable from everywhere. See `campaign_activity_path`.
+
+    Never raises. Every caller reaches this *after* the mutation it records has
+    committed, so raising would turn work the user already has into a reported
+    failure -- a rename that 500s while the file has moved leaves the caller
+    holding a sid that now 404s. A lost stamp costs a campaign its place in a
+    list until the next write, which is by far the cheaper loss.
+
+    Deliberately broad, because every failure here has that shape: a read-only
+    or full disk, a campaign directory that has gone missing. Narrowing it
+    would only be choosing which of them is allowed to destroy the caller's
+    work.
+    """
+    try:
+        with _stamp_lock(cid):
+            _publish_stamp(cid)
+    except Exception:  # noqa: BLE001 -- see docstring: nothing here may propagate
+        pass
+
+
+def _publish_stamp(cid: str) -> None:
+    """The stamp itself. Split out so the lock above wraps the whole
+    read-compare-write rather than only the write."""
+    stamp = now_iso()
+    # Never publish a stamp older than the one already there. Two writes can
+    # overlap -- each reads the clock before its own fsync, so a slower
+    # older one can land last and drag the high-water mark backwards,
+    # misordering Recent until the next mutation. Skipping instead also
+    # drops the write entirely when several mutations share a second, which
+    # is the common case.
+    #
+    # The compare and the write are one critical section (this campaign's
+    # `_stamp_lock`, which is all it needs -- the value being compared is this
+    # campaign's file and no other writer touches it), so two
+    # requests in this process cannot both read the older value and both
+    # publish. Two *processes* still can -- that residual is deliberate, and
+    # the alternative is a cross-process acquire on every campaign write.
+    if stamp <= read_activity(cid):
+        return
+    atomic.write_text(paths.campaign_activity_path(cid), stamp + "\n")

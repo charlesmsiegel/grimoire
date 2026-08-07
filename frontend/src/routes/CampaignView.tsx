@@ -21,6 +21,7 @@ import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
 import { Portrait } from "../components/Portrait";
 import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
 import { SceneInspector } from "../components/SceneInspector";
+import { usePublishShellContext } from "../components/ShellStatus";
 import { RollProposal, type ResolveBody } from "../components/RollProposal";
 import { quotePlugin } from "../markdown/quotePlugin";
 
@@ -2227,6 +2228,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     return ver ? api.campaignImageUrl(cid, run.actor.id, ver, "avatar") : null;
   }
 
+  const sceneTitle = scenes.find((s) => s.id === activeId)?.title ?? "";
+  // The global status bar can't work this out for itself: the router hands it
+  // a cid, not a name, and which scene is open is state that lives only here.
+  usePublishShellContext(name ? { campaign: name, scene: sceneTitle } : null);
+
   return (
     <div className="workspace">
       <div className="chrome-bar">
@@ -2528,7 +2534,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         )}
         {activeId && (
           <h2 className="scene-title">
-            {scenes.find((s) => s.id === activeId)?.title ?? ""}
+            {sceneTitle}
             {activePcless && <span className="chip on offscreen-badge">Offscreen</span>}
           </h2>
         )}

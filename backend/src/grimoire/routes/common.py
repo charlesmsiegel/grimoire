@@ -201,3 +201,21 @@ def _require_scene(cid: str, sid: str) -> dict:
         # a scene path is built from campaign_root, so an unusable campaign id
         # surfaces here as CampaignNotFound -- still a 404, not a 500
         raise HTTPException(status_code=404, detail="scene not found")
+
+
+def computes_only(fn):
+    """Mark a campaign-scoped POST that persists nothing.
+
+    POST is not a synonym for write. These routes compute and return -- a
+    generated voice anchor for the user to accept or discard, scene
+    suggestions, a roll replayed against its stored inputs -- so treating them
+    as campaign activity moves a campaign up the recents rail for merely being
+    *looked* at.
+
+    Declared at the route rather than as a path list in the middleware,
+    deliberately: a path list sits far from the thing it describes and goes
+    stale silently, which is how the activity sweep leaked for six rounds. The
+    next preview route's author sees this on its neighbours.
+    """
+    fn.grimoire_computes_only = True
+    return fn

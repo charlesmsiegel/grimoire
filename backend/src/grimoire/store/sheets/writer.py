@@ -109,6 +109,7 @@ def write(cid: str, kind: str, eid: str, sheet_type: str,
         path = paths._campaign_path(cid, kind, eid)
         _check_expected(path, expected)
         _checked_write(path, mid, kind, eid, sheet_type, fields)
+    # Sheets live outside campaign.md and outside every scene, so the campaign's
 
 
 def delete(cid: str, kind: str, eid: str, *, expected_gen: str | None) -> bool:
@@ -125,7 +126,7 @@ def delete(cid: str, kind: str, eid: str, *, expected_gen: str | None) -> bool:
         if stored["gen"] != expected_gen:
             raise SheetConflict("the sheet changed since it was loaded")
         p.unlink()
-        return True
+    return True
 
 
 def write_world(wid: str, mid: str, kind: str, eid: str, sheet_type: str,

@@ -361,6 +361,11 @@ def set_campaign_response(cid: str, fields: dict) -> None:
     for key in scenes_write.RESPONSE_FIELDS:
         if key in fields:
             meta[key] = str(fields[key] or "")
+    # This *is* a campaign-metadata write -- it rewrites campaign.md -- so it
+    # advances the field that says when the metadata last changed, the way
+    # rename_campaign does. Leaving it out made `updated` untrue about its own
+    # file, not merely incomplete about the campaign.
+    meta["updated"] = now_iso()
     atomic.write_text(mp, dump_frontmatter(meta, body))
 
 

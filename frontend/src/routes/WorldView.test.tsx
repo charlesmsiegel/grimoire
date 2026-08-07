@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import WorldView from "./WorldView";
+import { ShellStatusProvider, useShellStatus } from "../components/ShellStatus";
 
 vi.mock("../api/client", () => ({
   ENTITY_FIELDS: {
@@ -182,4 +183,45 @@ test("campaign path resolves module context and threads it into the character ed
   await waitFor(() => expect(api.readModule).toHaveBeenCalledWith("pool-basic"));
   fireEvent.click(await screen.findByText("Mira"));
   await screen.findByText("Sheet");
+});
+
+test("editing a campaign's world keeps the campaign in the status bar", async () => {
+  // CampaignView unmounts on the way here and clears the shell context, so
+  // without WorldView publishing, the bar drops the campaign for the whole
+  // world-editing workflow.
+  const seen: unknown[] = [];
+  function Probe() {
+    seen.push(useShellStatus().context);
+    return null;
+  }
+  render(
+    <ShellStatusProvider>
+      <MemoryRouter initialEntries={["/campaigns/c1/world"]}>
+        <Routes>
+          <Route path="/campaigns/:cid/world" element={<WorldView campaign />} />
+        </Routes>
+      </MemoryRouter>
+      <Probe />
+    </ShellStatusProvider>,
+  );
+  await waitFor(() =>
+    expect(seen[seen.length - 1]).toEqual({ campaign: "Ashes of the Verdigris Crown", scene: "" }));
+});
+
+test("the standalone world route publishes no campaign — there isn't one", async () => {
+  const seen: unknown[] = [];
+  function Probe() {
+    seen.push(useShellStatus().context);
+    return null;
+  }
+  render(
+    <ShellStatusProvider>
+      <MemoryRouter initialEntries={["/worlds/w"]}>
+        <Routes><Route path="/worlds/:wid" element={<WorldView />} /></Routes>
+      </MemoryRouter>
+      <Probe />
+    </ShellStatusProvider>,
+  );
+  await waitFor(() => expect(api.getWorld).toHaveBeenCalled());
+  expect(seen.every((c) => c === null)).toBe(true);
 });

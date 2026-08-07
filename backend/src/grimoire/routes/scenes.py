@@ -15,8 +15,9 @@ from starlette.concurrency import run_in_threadpool
 from .. import prompts, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from .common import (_campaign_root_or_404, _dump, _record_prompt, _require_connection,
-                     _require_scene, _response_body, _turn_override, _write_response, get_llm)
+from .common import (computes_only, _campaign_root_or_404, _dump, _record_prompt,
+                     _require_connection, _require_scene, _response_body, _turn_override,
+                     _write_response, get_llm)
 from .models import (Appear, AppearBatch, ChatTurn, ChronicleSave, Dismiss, EditMessage,
                      NewScene, RegenerateBody, RenameScene, ResponseSettings, RetryBody,
                      SceneDatetime, SceneLocation)
@@ -60,6 +61,7 @@ def _resolve_cast(cid: str, tokens: list[str]) -> list[dict]:
 
 
 @router.post("/campaigns/{cid}/scene-suggestions")
+@computes_only
 async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: bool = False,
                                  client: LLMClient = Depends(get_llm)):
     try:
@@ -1162,6 +1164,7 @@ def _absorb_snapshot(cid: str, sid: str) -> tuple[int, dict, list]:
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/absorb")
+@computes_only  # every edit here is staged; PUT /chronicle is what persists them
 async def post_absorb(cid: str, sid: str, force: bool = False,
                       client: LLMClient = Depends(get_llm)):
     # Read before ANY of the scene state this review is built from (#271),
@@ -1250,6 +1253,7 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/audit")
+@computes_only  # a retry of absorb's audit step alone: same staged edits, same nothing written
 async def post_audit(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
     """Standalone audit retry: re-runs ONLY the audit step (never the prose
     absorb), returning fresh `expect` values on any resulting sheet edits."""

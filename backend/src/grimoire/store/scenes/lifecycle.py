@@ -141,6 +141,9 @@ def rename_scene(cid: str, sid: str, title: str) -> str:
         p.rename(paths._scene_path(cid, new_sid))
         # a scene's id is its filename: carry every store's references across
         scene_refs.repoint(cid, {sid: new_sid})
+    # A rename deliberately leaves the scene's own `updated` alone: the
+    # transcript did not change. Campaign activity is recorded at the request
+    # boundary (main._CampaignActivityStamp), not here.
     return new_sid
 
 
@@ -204,3 +207,8 @@ def delete_scene(cid: str, sid: str) -> None:
         if exc.errno != errno.ENAMETOOLONG and getattr(exc, "winerror", None) != 206:
             raise
     p.unlink()
+    # AFTER the unlink, so a delete that raised records nothing. Deleting the
+    # newest scene would otherwise drag the campaign's derived activity
+    # *backwards* onto an older survivor -- a campaign you just edited sinking
+    # down the recents list, or off it. Deleting is working on it too. Non-fatal
+    # for the same reason as the rename: the scene is already gone.
