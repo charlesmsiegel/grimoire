@@ -8,6 +8,7 @@ gathers the data one section renders from.
 from __future__ import annotations
 
 import re
+from typing import Callable
 
 from .. import (calendars, characters, groupstate, overlay, pcs, playstate,
                 turnstate, weather)
@@ -15,7 +16,7 @@ from ..appearances import versions as appearances_versions
 from ..scenes import read as scenes_read
 # Aliased to match `assemble.py` and `macros.py`, and because `_character_states`
 # below takes a parameter named `cast`.
-from . import cast as cast_data
+from . import cast as cast_data, semantic
 
 
 def keyword_hit(keys, text: str) -> bool:
@@ -29,29 +30,46 @@ def keyword_hit(keys, text: str) -> bool:
     return any(re.search(rf"\b{re.escape(k)}\b", text, re.IGNORECASE) for k in keys)
 
 
-def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
+def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset(),
+             recall: Callable[[list[dict], str], list[dict]] | None = None) -> list[dict]:
     """Select world-info entries. Owned entries (owners non-empty) are silent unless one
     owner ref is in `present`; then keyless = always-on, keyed = any key whole-word (ci) in
-    recent_text. Unowned entries behave as before."""
+    recent_text. Unowned entries behave as before.
+
+    `recall` is the second-stage retrieval strategy — `semantic.recall` in
+    production, wired in by `_world_info`; anything with its signature in a
+    test. It is handed the entries the keyword rule *rejected*, and only after
+    the owner gate has already admitted them: an entry whose owner is absent
+    never reaches it, so no similarity score can leak owned lore. Its hits are
+    appended, so this function's result is a superset of what the keyword rule
+    alone returns, in the same order. Defaulting it to None keeps the plain
+    three-argument call exactly as pure and as offline as it has always been.
+    """
     out: list[dict] = []
+    missed: list[dict] = []
     for e in entries:
         owners = e.get("owners") or []
         if owners and not any(o in present for o in owners):
             continue  # owned but no owner in scene -> never leak
         keys = e.get("keys") or []
-        if not keys:
+        if not keys or keyword_hit(keys, recent_text):
             out.append(e)
-            continue
-        if keyword_hit(keys, recent_text):
-            out.append(e)
+        else:
+            missed.append(e)
+    if recall is not None and missed:
+        out.extend(recall(missed, recent_text))
     return out
 
 
 def _world_info(cid: str, recent_text: str, exclude: frozenset = frozenset(),
-                present: frozenset = frozenset()) -> list[dict]:
+                present: frozenset = frozenset()) -> tuple[list[dict], list[dict]]:
     """Activated lore/location/item/group/creature entries as
     {"body", "kind", "id"} dicts — _assemble renders the bodies and uses the
-    refs (e.g. activated groups pull their campaign state into context)."""
+    refs (e.g. activated groups pull their campaign state into context).
+
+    Returns ``(keyword, recalled)``: what the keyword rule selected, and what
+    semantic recall added on top. They render as separate sections in separate
+    packer tiers — see the comment at the return statement."""
     entries = []
     for kind in ("lore", "locations", "items", "groups", "creatures"):
         for meta in overlay.list_entities(cid, kind):
@@ -65,7 +83,27 @@ def _world_info(cid: str, recent_text: str, exclude: frozenset = frozenset(),
             entries.append({"body": e["body"].strip(), "keys": keys, "owners": owners,
                             "kind": kind, "id": meta["id"],
                             "name": e["meta"].get("name", meta["id"])})
-    return activate(entries, recent_text, present)
+    # The only production caller that supplies a second stage, so the strategy
+    # is chosen in one visible place and `activate` stays a pure function of
+    # its arguments. The attribute is resolved off the module on every call,
+    # which is what keeps `semantic.recall` patchable from a test.
+    #
+    # The split is reported rather than merged because the two halves are
+    # packed differently: keyword hits are `spotlight`, recalled ones are
+    # `archive` (see assemble._SECTIONS). Merging them let a recall grow the
+    # World info section until the packer dropped the whole thing, keyword
+    # hits included -- so enabling recall could REMOVE lore, which is exactly
+    # what this layer promises never to do.
+    recalled: list[dict] = []
+
+    def recall(candidates: list[dict], text: str) -> list[dict]:
+        hits = semantic.recall(candidates, text)
+        recalled.extend(hits)
+        return hits
+
+    activated = activate(entries, recent_text, present, recall=recall)
+    by_recall = {id(e) for e in recalled}
+    return [e for e in activated if id(e) not in by_recall], recalled
 
 
 def _today_data(cid: str, sid: str, croot) -> dict | None:

@@ -158,7 +158,27 @@ export type Config = {
   /** Posts between live rolling-summary refreshes; "0" turns the automatic
    *  refresh off, leaving only the inspector's own Refresh button. */
   rolling_summary_every: string;
+  /** Semantic recall: the openai_compatible connection serving /embeddings, "" = off. */
+  embeddings_connection_id: string;
+  embeddings_model: string;
+  /** Entries a similarity pass may add on top of the keyword ones; "0" = off. */
+  semantic_recall_depth: string;
+  /** Cosine floor a recalled entry must clear. */
+  semantic_recall_threshold: string;
 };
+/**
+ * The subset of Config the Configuration page writes — the mirror of the
+ * backend's `ConfigUpdate`. Named rather than inlined at each call site: it
+ * was spelled out three times, and the copies drifted the moment a field was
+ * added.
+ */
+export type ConfigUpdate = Partial<Pick<Config,
+  "theme" | "system_prompt" | "quote_color" | "user_label" | "assistant_label" |
+  "active_connection_id" | "llm_timeout" | "absorb_budget" | "llm_call_budget" |
+  "context_budget" | "archive_depth" | "setup_done" | "prompt_log_depth" |
+  "turnstate_depth" | "promote_streak" | "rolling_summary_every" |
+  "embeddings_connection_id" | "embeddings_model" |
+  "semantic_recall_depth" | "semantic_recall_threshold">>;
 export type DataDirInfo = {
   data_dir: string;
   default: string;
@@ -838,9 +858,7 @@ export const api = {
     }
     return configCache;
   },
-  putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; llm_call_budget: string; context_budget: string; archive_depth: string; setup_done: string;
-    prompt_log_depth: string; turnstate_depth: string; promote_streak: string;
-    rolling_summary_every: string }>) =>
+  putConfig: (body: ConfigUpdate) =>
     request<Config>("PUT", "/api/config", body).then((cfg) => {
       configCache = Promise.resolve(cfg); // the write's response is the fresh config
       return notifyConfig(cfg);

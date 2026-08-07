@@ -19,6 +19,23 @@ DEFAULT_ARCHIVE_DEPTH = "3"
 # "0" = unbounded, which is what every install gets until the user sets one:
 # the backend cannot see the model's window size, only the frontend can.
 DEFAULT_CONTEXT_BUDGET = "0"
+# --- semantic recall (context/semantic.py) ---
+# The llm_connection whose OpenAI-compatible endpoint serves /embeddings, and
+# the embedding model to ask it for. Credentials deliberately do NOT live here:
+# this file lost its API keys when llm_connections/ took over (see that
+# module), and re-introducing one for embeddings would undo that.
+DEFAULT_EMBEDDINGS_CONNECTION_ID = ""
+DEFAULT_EMBEDDINGS_MODEL = ""
+# How many world-info entries a similarity pass may add on top of the keyword
+# ones. "0" disables semantic recall entirely — the default, so every
+# pre-existing install keeps a byte-identical prompt and makes no network call
+# it did not make before.
+DEFAULT_SEMANTIC_RECALL_DEPTH = "0"
+# Cosine floor a candidate must clear to be recalled. Model-dependent by
+# nature: what counts as "related" differs between embedding models, so this
+# is a starting point to tune against the scene inspector, not a constant with
+# a defensible universal value.
+DEFAULT_SEMANTIC_RECALL_THRESHOLD = "0.4"
 DEFAULT_USER_LABEL = "You"
 DEFAULT_ASSISTANT_LABEL = "Grimoire"
 DEFAULT_CLAUDE_MODEL = "opus"
@@ -76,7 +93,9 @@ _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "llm_timeout", "absorb_budget", "setup_done",
                 "prompt_log_depth",
                 "turnstate_depth", "promote_streak",
-                "rolling_summary_every", "llm_call_budget") + _LENGTH_KEYS
+                "rolling_summary_every", "llm_call_budget",
+                "embeddings_connection_id", "embeddings_model",
+                "semantic_recall_depth", "semantic_recall_threshold") + _LENGTH_KEYS
 
 
 def _config_path():
@@ -99,8 +118,11 @@ def read_config() -> dict[str, str]:
                 "turnstate_depth": DEFAULT_TURNSTATE_DEPTH,
                 "promote_streak": DEFAULT_PROMOTE_STREAK,
                 "rolling_summary_every": DEFAULT_ROLLING_SUMMARY_EVERY,
-
                 "llm_call_budget": DEFAULT_LLM_CALL_BUDGET,
+                "embeddings_connection_id": DEFAULT_EMBEDDINGS_CONNECTION_ID,
+                "embeddings_model": DEFAULT_EMBEDDINGS_MODEL,
+                "semantic_recall_depth": DEFAULT_SEMANTIC_RECALL_DEPTH,
+                "semantic_recall_threshold": DEFAULT_SEMANTIC_RECALL_THRESHOLD,
                 **{k: "" for k in _LENGTH_KEYS}}
     if not path.exists():
         # Materializing the defaults is a write, and two first-ever readers
