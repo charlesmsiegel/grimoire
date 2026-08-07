@@ -743,3 +743,157 @@ async def test_the_claim_is_released_so_the_next_refresh_can_run(monkeypatch, tm
         body = (await ac.post(url)).json()
 
     assert body["refreshed"] is True and ok.calls == 1
+
+
+# ---- a stored count with no stored prose ----
+def test_a_blanked_summary_leaves_no_coverage_behind(client):
+    """`rolling_at` means "how much of the transcript this summary describes",
+    so with the summary gone it describes nothing however well its digests still
+    check out. The store is a hand-editable markdown tree, so a scene whose
+    `rolling_summary:` line was cleared while `rolling_at`/`rolling_digest`
+    survive is a file someone can actually produce -- and review caught what the
+    fold then did with it.
+    """
+    cid, sid = _scene(client, posts=12)
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    facts = store.chronicle.scene_facts(cid, sid)
+    # Coverage and digests that are entirely valid, beside no summary at all.
+    store.scenes.set_rolling_summary(
+        cid, sid, "", 12, store.rolling_summary.covered_digest(messages[:12]),
+        store.rolling_summary.facts_digest(facts))
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
+    # Not "covers 12 of 12 posts" beside "no summary yet".
+    assert body["at"] == 0 and body["summary"] == ""
+    assert body["stale"] is False   # nothing to be stale about
+
+
+def test_a_blanked_summary_refolds_the_whole_transcript(client):
+    """The defect this pins: `prior` was correctly "" while `base` stayed at 12,
+    so the fold took the prompt's from-scratch branch and was handed only
+    `messages[12:]` -- a summary of the tail, written as if it were the whole
+    scene, and then stored as covering all of it."""
+    _key(client)
+    llm = _use(client, _summarizer("A summary of the whole scene."))
+    cid, sid = _scene(client, posts=12)
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    store.scenes.set_rolling_summary(
+        cid, sid, "", 12, store.rolling_summary.covered_digest(messages[:12]),
+        store.rolling_summary.facts_digest(store.chronicle.scene_facts(cid, sid)))
+
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?force=true")
+
+    assert r.status_code == 200 and r.json()["refreshed"] is True
+    sent = _user_prompt(llm, 0)
+    assert "Post 0." in sent, "the fold was handed only the tail of the transcript"
+    assert "Post 11." in sent
+
+
+# ---- a forced refresh is not content to be coalesced ----
+async def test_a_forced_refresh_waits_out_the_fold_already_in_flight(monkeypatch, tmp_path):
+    """The panel's button says "now". Review caught that answering
+    `refreshed: false` while another fold was at the provider let the panel
+    clear its busy state and report success having changed nothing -- and if
+    that fold belongs to another tab, this one is never told when it lands.
+
+    So the forced call waits for it and starts over from a fresh read. Here the
+    fold it waited for covered everything, so there is nothing left to do and it
+    returns that summary rather than the empty one it would have seen.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    app = create_app()
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class SlowLLM(FakeLLM):
+        """Blocks the FIRST call only — the forced request must be able to
+        return in order to release it."""
+
+        async def complete(self, messages, conn):
+            text = await super().complete(messages, conn)
+            if self.calls == 1:
+                started.set()
+                await release.wait()
+            return text
+
+    llm = SlowLLM([["The automatic fold's summary."]])
+    app.dependency_overrides[routes.get_llm] = lambda: llm
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
+        wid = (await ac.post("/api/worlds", json={"name": "Realm"})).json()["id"]
+        cid = (await ac.post("/api/campaigns",
+                             json={"name": "Run", "world": wid})).json()["id"]
+        sid = (await ac.post(f"/api/campaigns/{cid}/scenes",
+                             json={"title": "Saltmarch"})).json()["id"]
+        await ac.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
+        for n in range(10):
+            store.scenes.append_message(cid, sid, "user", f"Post {n}.")
+
+        url = f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary"
+        automatic = asyncio.create_task(ac.post(url))
+        await asyncio.wait_for(started.wait(), timeout=5)
+
+        forced = asyncio.create_task(ac.post(url + "?force=true"))
+        # It is still waiting: nothing has released the fold it is queued behind.
+        await asyncio.sleep(0.2)
+        assert not forced.done(), "the forced refresh answered without waiting"
+
+        release.set()
+        forced_body = (await asyncio.wait_for(forced, timeout=15)).json()
+        await asyncio.wait_for(automatic, timeout=15)
+
+    assert llm.calls == 1, "the forced refresh paid for a second call it did not need"
+    # The point of the whole exercise: the panel is handed the summary that
+    # landed, not the empty state that was current when the button was pressed.
+    assert forced_body["summary"] == "The automatic fold's summary."
+    assert forced_body["at"] == 10
+
+
+async def test_a_forced_refresh_that_waits_too_long_says_so(monkeypatch, tmp_path):
+    """Rather than reporting success. The panel renders `detail` in its own
+    error line, so this is what turns a silent no-op into something the player
+    can see and retry."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    app = create_app()
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class SlowLLM(FakeLLM):
+        async def complete(self, messages, conn):
+            text = await super().complete(messages, conn)
+            if self.calls == 1:
+                started.set()
+                await release.wait()
+            return text
+
+    llm = SlowLLM([["Never lands in time."]])
+    app.dependency_overrides[routes.get_llm] = lambda: llm
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
+        wid = (await ac.post("/api/worlds", json={"name": "Realm"})).json()["id"]
+        cid = (await ac.post("/api/campaigns",
+                             json={"name": "Run", "world": wid})).json()["id"]
+        sid = (await ac.post(f"/api/campaigns/{cid}/scenes",
+                             json={"title": "Saltmarch"})).json()["id"]
+        await ac.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
+        # The wait is bounded by the same timeout the call itself is subject to.
+        store.config.write_config(llm_timeout="0.1")
+        for n in range(10):
+            store.scenes.append_message(cid, sid, "user", f"Post {n}.")
+
+        url = f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary"
+        automatic = asyncio.create_task(ac.post(url))
+        await asyncio.wait_for(started.wait(), timeout=5)
+
+        forced = await asyncio.wait_for(ac.post(url + "?force=true"), timeout=15)
+        release.set()
+        await asyncio.wait_for(automatic, timeout=15)
+
+    assert forced.status_code == 503
+    assert "already running" in forced.json()["detail"]
