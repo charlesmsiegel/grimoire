@@ -295,6 +295,22 @@ def test_config_model_is_empty_for_a_non_claude_connection_without_one(client):
     assert client.get("/api/config").json()["active_connection"]["model"] == ""
 
 
+def test_config_semantic_recall_defaults_to_off_and_roundtrips(client):
+    body = client.get("/api/config").json()
+    assert body["semantic_recall_depth"] == "0"          # off for every install
+    assert body["embeddings_connection_id"] == ""
+    assert body["semantic_recall_threshold"] == "0.4"
+    r = client.put("/api/config", json={"embeddings_connection_id": "vectors",
+                                        "embeddings_model": "text-embedding-3-small",
+                                        "semantic_recall_depth": "4",
+                                        "semantic_recall_threshold": "0.55"})
+    assert r.status_code == 200
+    body = client.get("/api/config").json()
+    assert body["embeddings_connection_id"] == "vectors"
+    assert body["embeddings_model"] == "text-embedding-3-small"
+    assert (body["semantic_recall_depth"], body["semantic_recall_threshold"]) == ("4", "0.55")
+
+
 def test_data_dir_reports_env_override(client, tmp_path):
     body = client.get("/api/config/data-dir").json()
     assert body["data_dir"] == str(tmp_path)

@@ -172,7 +172,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # that exists but can't be read, which must not break generation either.
         resolved_style = None
     offscene_active, offscene_known = cast_data._cast_directory_data(croot, cid, sid)
-    activated_wi = world_state._world_info(cid, recent_text, exclude, frozenset(present))
+    activated_wi, recalled_wi = world_state._world_info(cid, recent_text, exclude,
+                                                       frozenset(present))
     mech = mechanics._mechanics(cid, sid, cast, recent_text)
     data = {
         "opener": False, "pcless": pcless, "story_full": bool(full_recap),
@@ -203,6 +204,16 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "weather": world_state._weather_data(cid, sid),
         "current_setting": current_setting,
         "world_info_bodies": [e["body"] for e in activated_wi],
+        "recalled_lore_bodies": [e["body"] for e in recalled_wi],
+        # Keyword activations only. A recalled group deliberately does NOT pull
+        # its campaign state: that state renders into the `Group state` section,
+        # which is `spotlight`, so feeding it from recall would grow a section
+        # the packer drops whole and largest-first -- and dropping it would take
+        # the states of KEYWORD-activated groups with it. That is the same way
+        # sharing the World info section broke "can only add", one section over.
+        # Giving recalled state its own droppable section would work too; not
+        # having it at all is smaller, and costs a recalled group its state
+        # block rather than costing a keyword-activated one.
         "group_states": world_state._group_states(cid, croot, activated_wi),
         "offscene_active": offscene_active, "offscene_known": offscene_known,
         "player_names": player_names,
@@ -279,6 +290,12 @@ _SECTIONS = [
     Section("Weather", "scene/sections/weather.j2", pack.SPOTLIGHT),
     Section("Current setting", "scene/sections/current_setting.j2", pack.SPOTLIGHT),
     Section("World info", "scene/sections/world_info.j2", pack.SPOTLIGHT),
+    # ARCHIVE, not SPOTLIGHT, and not folded into World info above: recalled
+    # lore is retrieved *because* the conversation touched on it, exactly like
+    # "Earlier scenes", and it is the first thing that should go when the
+    # prompt does not fit. Sharing a section with the keyword hits would let a
+    # recall drop them too.
+    Section("Recalled lore", "scene/sections/recalled_lore.j2", pack.RECALLED),
     Section("Group state", "scene/sections/group_state.j2", pack.SPOTLIGHT),
     Section("Mechanics rules", "scene/sections/mechanics_rules.j2", pack.SPOTLIGHT),
     Section("Mechanics sheets", "scene/sections/mechanics_sheets.j2", pack.SPOTLIGHT),

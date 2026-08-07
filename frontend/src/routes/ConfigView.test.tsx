@@ -23,6 +23,8 @@ const cfg = {
   context_budget: "0", archive_depth: "3",
   prompt_log_depth: "50",
   turnstate_depth: "0", promote_streak: "3",
+  embeddings_connection_id: "", embeddings_model: "", semantic_recall_depth: "0",
+  semantic_recall_threshold: "0.4",
 };
 const dataDir = {
   data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
@@ -31,6 +33,7 @@ const dataDir = {
 const connections = [
   { id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "", model: "m", post_process: "none", key_set: true, rev: "r1" },
   { id: "claude", kind: "claude", name: "Claude", base_url: "", model: "opus", post_process: "none", key_set: false, rev: "r2" },
+  { id: "local", kind: "openai_compatible", name: "Local vectors", base_url: "http://localhost:1234/v1", model: "", post_process: "none", key_set: false, rev: "r3" },
 ];
 beforeEach(() => {
   vi.clearAllMocks();
@@ -105,7 +108,7 @@ test("shows every connection in the LLM connection dropdown", async () => {
   renderView();
   const select = await screen.findByLabelText("LLM connection");
   const values = Array.from(select.querySelectorAll("option")).map((o) => (o as HTMLOptionElement).value);
-  expect(values).toEqual(["openrouter", "claude"]);
+  expect(values).toEqual(["openrouter", "claude", "local"]);
   expect((select as HTMLSelectElement).value).toBe("openrouter");
 });
 
@@ -155,6 +158,31 @@ test("edits how many turn prompts are kept and saves it", async () => {
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
     expect.objectContaining({ prompt_log_depth: "0" })));
+});
+
+test("semantic recall is off by default and offers only openai-compatible connections", async () => {
+  renderView();
+  const picker = await screen.findByLabelText(/embeddings connection/i);
+  expect(picker).toHaveValue("");                        // off until pointed somewhere
+  expect(screen.getByLabelText(/recalled entries/i)).toHaveValue("0");
+  expect(screen.getByLabelText(/similarity threshold/i)).toHaveValue("0.4");
+  // OpenRouter and Claude serve no /embeddings route, so they are not offered.
+  expect([...picker.querySelectorAll("option")].map((o) => o.textContent))
+    .toEqual(["Off", "Local vectors"]);
+});
+
+test("turns semantic recall on and saves every knob together", async () => {
+  renderView();
+  fireEvent.change(await screen.findByLabelText(/embeddings connection/i), { target: { value: "local" } });
+  fireEvent.change(screen.getByLabelText(/embedding model/i), { target: { value: "text-embedding-3-small" } });
+  fireEvent.change(screen.getByLabelText(/recalled entries/i), { target: { value: "4" } });
+  fireEvent.change(screen.getByLabelText(/similarity threshold/i), { target: { value: "0.55" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
+    expect.objectContaining({
+      embeddings_connection_id: "local", embeddings_model: "text-embedding-3-small",
+      semantic_recall_depth: "4", semantic_recall_threshold: "0.55",
+    })));
 });
 
 test("links to the Connections page to manage keys/endpoints", async () => {

@@ -19,8 +19,14 @@ Four tiers, most protected first:
     The standing frame: the recap, the message examples, the off-scene cast.
 ``archive``
     Older scenes recalled by keyword (`archive.py`). Retrieved *because* the
-    conversation touched on them, so worth having — and the first thing to go
-    when it does not fit.
+    conversation touched on them, so worth having — and among the first things
+    to go when it does not fit.
+``recalled``
+    Lore recalled by embedding similarity (`semantic.py`), and the first thing
+    of all to go. A tier of its own rather than a share of ``archive`` because
+    that layer promises to be purely additive: within a tier the largest
+    section goes first, so sharing one let a recall evict the archive section
+    — swapping context the prompt already had for context it never did.
 
 Under pressure sections are dropped whole, lowest tier first, and the trailing
 history window is trimmed between ``archive`` and ``background``. Placing the
@@ -54,6 +60,14 @@ LOCK_IN = "lock-in"
 SPOTLIGHT = "spotlight"
 BACKGROUND = "background"
 ARCHIVE = "archive"
+#: Below `archive`, and the whole reason it exists: semantic recall
+#: (`context/semantic.py`) promises it can only ADD, and sharing a tier with
+#: `archive` broke that promise. Within a tier the packer drops the largest
+#: section first, so a recalled-lore section could evict the Earlier scenes
+#: section instead -- replacing context the prompt was already carrying with
+#: context it had never had. Anything retrieved by a mechanism that did not
+#: exist before belongs here, ahead of everything that did.
+RECALLED = "recalled"
 #: Not a droppable tier — the label the conversation history reports itself
 #: under, so the inspector can tell it apart from the sections around it.
 HISTORY = "history"
@@ -61,7 +75,7 @@ HISTORY = "history"
 #: The order sections give way in. `LOCK_IN` is absent by construction: this
 #: tuple is what the packer iterates, so lock-in is unreachable rather than
 #: merely last.
-DROP_ORDER = (ARCHIVE, BACKGROUND, SPOTLIGHT)
+DROP_ORDER = (RECALLED, ARCHIVE, BACKGROUND, SPOTLIGHT)
 
 #: Projected history messages the trim never goes below. Two keeps the latest
 #: exchange — below that the model is answering a turn it cannot see.
