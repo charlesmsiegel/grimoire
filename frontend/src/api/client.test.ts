@@ -194,6 +194,33 @@ test("scene reads never coalesce, so a refresh after a mutation sees the mutatio
   expect((await older).messages[0].content).toBe("old");
 });
 
+test("scene list reads never coalesce, so issue order is request order", async () => {
+  // The scene list decides which sid the URL may name (#87), and `CampaignView`
+  // orders its reads by when they were ISSUED so a superseded read cannot
+  // install over a newer one. A shared read breaks that ordering rather than
+  // merely being stale: it is as old as the request it joined, so a read issued
+  // AFTER a rename can be handed a promise from before it and still carry the
+  // newest sequence number — retiring the genuinely post-rename relist and
+  // installing a list that still holds the old id.
+  //
+  // Here rather than in CampaignView, whose suite mocks `api.*` wholesale and
+  // so never executes the coalescing layer at all.
+  let releaseFirst: (v: unknown) => void = () => {};
+  const fetchMock = vi
+    .fn()
+    .mockImplementationOnce(() => new Promise((r) => { releaseFirst = r; }))
+    .mockResolvedValue(jsonOk([{ id: "s1-renamed" }]));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  const older = api.listScenes("run");    // in flight, pre-rename
+  const newer = api.listScenes("run");    // issues its own, not shared
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+
+  expect(await newer).toEqual([{ id: "s1-renamed" }]);
+  releaseFirst(jsonOk([{ id: "s1" }]));
+  expect(await older).toEqual([{ id: "s1" }]);
+});
+
 test("proposal reads never coalesce, so claim order is request order", async () => {
   // CampaignView orders proposal writes by the order their reads were *issued*.
   // A shared read breaks that: it is as old as the request it joined, not as
@@ -521,12 +548,15 @@ test("getScene passes the window as limit/before query params", async () => {
 
 test("overlapping identical GETs share one request", async () => {
   // The behaviour the ledger opts out of below, pinned first so the opt-out
-  // reads as a deliberate exception rather than as the rule.
+  // reads as a deliberate exception rather than as the rule. `getCast` is the
+  // exemplar because opening a scene fires it from several components at once,
+  // which is what the sharing is for — `listScenes` used to stand here and no
+  // longer coalesces at all (#87).
   let settle: (v: unknown) => void = () => {};
   const fetchMock = vi.fn().mockReturnValue(new Promise((res) => { settle = res; }));
   globalThis.fetch = fetchMock as unknown as typeof fetch;
-  const a = api.listScenes("run");
-  const b = api.listScenes("run");
+  const a = api.getCast("run", "s1");
+  const b = api.getCast("run", "s1");
   expect(fetchMock).toHaveBeenCalledTimes(1);
   settle(jsonOk([]));
   await Promise.all([a, b]);
