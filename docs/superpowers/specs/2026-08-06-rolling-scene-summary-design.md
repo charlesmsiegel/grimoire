@@ -207,3 +207,25 @@ which is why it is present tense where `absorb/system.j2` is past.
 - #84 (scene-break detection) can reuse this "every N posts" gate; #94's
   paginated transcript is what makes the panel worth having. Neither is in
   scope here.
+
+## 9. Two rules the review process added late
+
+- **Coverage without prose is not coverage.** `rolling_at` means "how much of
+  the transcript this summary describes", so a scene whose `rolling_summary:`
+  line was blanked by hand while `rolling_at`/`rolling_digest` survived has zero
+  valid coverage, whatever its digests say. Left un-handled, `prior` was
+  correctly `""` while `base` was not, so the fold took the prompt's
+  from-scratch branch and was handed only `messages[base:]` — a summary of the
+  tail, written as if it were the whole scene, then stored as covering all of
+  it. The store is a hand-editable markdown tree; this is a file a user can
+  produce.
+- **A forced refresh is never quietly coalesced.** The in-flight claim (§4)
+  makes a second automatic refresh free, which is right — the fold at the
+  provider covers its posts too. It is wrong for the panel's *Refresh now*: the
+  player pressed a button that says "now", and answering `refreshed: false`
+  let the panel clear its busy state and report success having changed nothing.
+  A forced call instead waits for the fold in flight (bounded by `llm_timeout`,
+  with a fixed ceiling when that is disabled) and then re-evaluates from a fresh
+  read, so it returns the summary that landed — usually with no second provider
+  call, because the fold it waited for left nothing pending. A wait that runs
+  out is a 503 the panel renders, not a success it invents.

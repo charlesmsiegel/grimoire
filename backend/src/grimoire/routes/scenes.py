@@ -1287,6 +1287,14 @@ async def post_audit(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
 # are individually atomic, `key not in s` followed by `s.add(key)` is not.
 _rolling_inflight: set[tuple[str, str]] = set()
 _rolling_inflight_guard = threading.Lock()
+# How a forced refresh waits out a fold already at the provider (`_rolling_wait`).
+# Polled rather than signalled: the claim is a plain set behind a threading lock,
+# shared with whatever thread a sync route runs on, and a poll keeps it that way
+# instead of introducing a per-scene asyncio primitive bound to one loop.
+_ROLLING_WAIT_POLL = 0.05
+# Only reached when `llm_timeout` is 0, which means "no bound" for a CALL. A
+# request held open has to have one anyway.
+_ROLLING_WAIT_CEILING = 300.0
 
 
 @contextlib.contextmanager
@@ -1349,12 +1357,30 @@ def _rolling_view(cid: str, sid: str, scene: dict, facts: dict) -> dict:
     # in the prompt at all: a scene's first location and first date are set
     # SILENTLY, so they can change with no message appended, and a summary built
     # from the wrong location is as stale as one built from a deleted post.
-    intact = (stored["at"] <= total
+    #
+    # Coverage without prose is not coverage, which is why the emptiness test
+    # comes first rather than being left to `prior` alone. `rolling_at` means
+    # "how much of the transcript this summary describes", so with no summary it
+    # describes nothing however well its digests still check out -- and every
+    # store here is a hand-editable markdown tree, so a scene whose
+    # `rolling_summary:` line was blanked while `rolling_at`/`rolling_digest`
+    # survive is a file someone can actually produce. Review caught what that
+    # cost: `prior` was correctly "" and `base` was NOT, so the fold took the
+    # from-scratch branch of the prompt and was handed only `messages[base:]` --
+    # a summary of the tail, written as if it were the whole scene, then stored
+    # as covering all of it. The `upto` overtaken check below already tested
+    # `ahead["summary"]` for this reason; this puts the rule in one place.
+    has_summary = bool(stored["summary"])
+    intact = (has_summary
+              and stored["at"] <= total
               and store.rolling_summary.covered_digest(messages[:stored["at"]])
               == stored["digest"]
               and store.rolling_summary.facts_digest(facts) == stored["facts"])
-    return {"summary": stored["summary"], "at": stored["at"], "total": total,
-            "stale": bool(stored["summary"]) and not intact,
+    return {"summary": stored["summary"],
+            # Reported as 0 for the same reason, so the panel cannot say
+            # "covers 12 of 14 posts" beside "no summary yet".
+            "at": stored["at"] if has_summary else 0, "total": total,
+            "stale": has_summary and not intact,
             "prior": stored["summary"] if intact else "",
             "base": stored["at"] if intact else 0}
 
@@ -1505,6 +1531,59 @@ async def post_rolling_summary(cid: str, sid: str, force: bool = False,
     so. Omitted (the panel's own button, which is held while a turn streams) the
     scene is taken as it is.
     """
+    # Two passes at most. The second only happens for a FORCED call that found
+    # another fold already at the provider: it waits for that one, then starts
+    # over from a fresh read, because everything below -- the scene, the facts,
+    # the view, whether anything is still due -- may have moved while it waited.
+    for attempt in (0, 1):
+        answer = await _rolling_once(cid, sid, force, upto, client)
+        if answer is not None:
+            return answer
+        # None means a FORCED call was coalesced (an automatic one answers for
+        # itself inside). The player pressed a button that says "now", and
+        # review caught that answering `refreshed: false` there let the panel
+        # clear its busy state and report success while nothing had happened:
+        # if that fold belongs to another tab, or fails and has its error
+        # swallowed by the automatic caller that made it, the summary this tab
+        # was promised never arrives and nothing says so.
+        if attempt or not await _rolling_wait(cid, sid):
+            raise HTTPException(
+                status_code=503,
+                detail="a refresh for this scene is already running")
+    raise HTTPException(status_code=503,  # unreachable; the loop returns or raises
+                        detail="a refresh for this scene is already running")
+
+
+async def _rolling_wait(cid: str, sid: str) -> bool:
+    """Wait for another request's fold on this scene to leave the provider.
+
+    True if it freed, False if the wait ran out -- and it is bounded rather than
+    open-ended because this holds a request open. The bound is the same
+    `llm_timeout` the fold itself is subject to, so a wait can only run out
+    after the call it is waiting for was itself entitled to give up; with the
+    timeout disabled (`0`, the escape hatch for a slow local endpoint) it falls
+    back to a fixed ceiling rather than inheriting "no bound at all".
+    """
+    limit = store.config.llm_timeout() or _ROLLING_WAIT_CEILING
+    waited = 0.0
+    while waited < limit:
+        with _rolling_inflight_guard:
+            if (cid, sid) not in _rolling_inflight:
+                return True
+        await asyncio.sleep(_ROLLING_WAIT_POLL)
+        waited += _ROLLING_WAIT_POLL
+    return False
+
+
+async def _rolling_once(cid: str, sid: str, force: bool, upto: int | None,
+                        client: LLMClient) -> dict | None:
+    """One evaluation of the whole route, from a fresh read of the scene.
+
+    Returns the response, or None to mean "another fold for this scene is
+    already at the provider" -- the one outcome the caller may retry, and the
+    reason this is a function rather than a block: a retry has to redo the read
+    and every decision that hangs off it, not just the claim.
+    """
     scene = _require_scene(cid, sid)
     if upto is not None:
         if upto < 0:
@@ -1537,7 +1616,13 @@ async def post_rolling_summary(cid: str, sid: str, force: bool = False,
             # A refresh for this scene is already at the provider and will cover
             # these posts too. Claimed AFTER the due check on purpose: a POST
             # that was never going to spend anything has nothing to coalesce.
-            return {**_rolling_body(view, every), "refreshed": False}
+            # An automatic refresh is content to be coalesced -- the fold in
+            # flight covers its posts too, and the client fires again after the
+            # next transcript write. A forced one is not, and says so by
+            # returning None for the caller to wait on and retry.
+            if not force:
+                return {**_rolling_body(view, every), "refreshed": False}
+            return None
         return await _rolling_refresh(cid, sid, scene, view, every, conn, client,
                                       facts)
 
