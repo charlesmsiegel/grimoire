@@ -76,17 +76,25 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None) -> Non
     # Non-blocking, and skipping on contention, for the reason `record` is: this
     # runs on the generating path (see `store.prompt_log.record`). The lock is
     # reentrant, so `record`'s own acquisition inside this one is free.
-    with store.locks.campaign_lock_nowait(cid) as got:
-        if not got:
-            return
-        try:
+    #
+    # The `with` is INSIDE the try, not around it: acquiring takes a file lock,
+    # so entering the context manager can raise OSError on its own (the
+    # machine-local lock directory gone or unwritable) -- outside any guard,
+    # that aborted the route over a debug side effect. Most visible on the
+    # opener, where no stream is constructed to fail into.
+    try:
+        with store.locks.campaign_lock_nowait(cid) as got:
+            if not got:
+                return
             # Frontmatter only. `read_scene` would re-parse the whole transcript
             # for one field, on a path the turn is already about to pay for
             # several times over.
             meta = store.scenes.read_scene_meta(cid, sid)
-        except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound, OSError):
-            return   # gone or unreadable: record nothing rather than an orphan
-        store.prompt_log.record(cid, sid, task, breakdown, model=meta.get("model", ""))
+            store.prompt_log.record(cid, sid, task, breakdown,
+                                    model=meta.get("model", ""))
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound,
+            store.locks.StoreBusy, OSError):
+        return   # gone, contended, or unreadable: capture nothing, cost nothing
 
 
 def get_llm() -> LLMClient:
