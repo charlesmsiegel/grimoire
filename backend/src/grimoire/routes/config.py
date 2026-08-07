@@ -38,6 +38,13 @@ def _public_config(cfg: dict[str, str]) -> dict:
             "promote_streak": cfg.get("promote_streak", store.config.DEFAULT_PROMOTE_STREAK),
             "rolling_summary_every": cfg.get("rolling_summary_every",
                                              store.config.DEFAULT_ROLLING_SUMMARY_EVERY),
+            "embeddings_connection_id": cfg.get("embeddings_connection_id",
+                                                store.config.DEFAULT_EMBEDDINGS_CONNECTION_ID),
+            "embeddings_model": cfg.get("embeddings_model", store.config.DEFAULT_EMBEDDINGS_MODEL),
+            "semantic_recall_depth": cfg.get("semantic_recall_depth",
+                                             store.config.DEFAULT_SEMANTIC_RECALL_DEPTH),
+            "semantic_recall_threshold": cfg.get("semantic_recall_threshold",
+                                                 store.config.DEFAULT_SEMANTIC_RECALL_THRESHOLD),
             "active_connection_id": active["id"] if active else "",
             # `model` rides along because the global status bar names the model
             # every scene will use, and that is only ever this connection's --

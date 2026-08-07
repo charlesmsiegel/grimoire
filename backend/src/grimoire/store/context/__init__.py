@@ -1,8 +1,9 @@
 """The context builder: assemble a scene's cast + world-info into the OpenRouter
 messages list, SillyTavern-faithful. World-info selection goes through activate(),
-the single swap point for smarter retrieval later; `archive.py` sits beside it,
-recalling absorbed scenes that have fallen out of the recap window by the same
-keyword rule.
+the single swap point for smarter retrieval; `semantic.py` is the strategy that
+took that swap, scoring what the keywords missed by embedding similarity, and
+`archive.py` sits beside both, recalling absorbed scenes that have fallen out of
+the recap window by the same keyword rule.
 
 This package gathers DATA; the prompt text lives in templates/scene/ (see
 templates/README.md for the variable contract). The section ORDER lives here,
@@ -23,7 +24,7 @@ from __future__ import annotations
 #
 # `tokens.py` stands alone: `count_tokens` is what the breakdown route calls on
 # the strings `context_sections` hands back, and it imports nothing from here.
-from . import (cast, macros, world_state, mechanics, story, archive, pack,  # noqa: F401
+from . import (cast, macros, semantic, world_state, mechanics, story, archive, pack,  # noqa: F401
                tokens, assemble)
 from .cast import (  # noqa: F401
     _campaign_player_refs, _cast_directory_data, _char_name, _drift_roster,
@@ -44,7 +45,7 @@ from .archive import _archive_entries, archive_depth  # noqa: F401
 # under that name, and a same-named function would silently replace it, leaving
 # `context.pack.LOCK_IN` an AttributeError.
 from .pack import (  # noqa: F401
-    ARCHIVE, BACKGROUND, DROP_ORDER, HISTORY, HISTORY_FLOOR, LOCK_IN,
+    ARCHIVE, BACKGROUND, DROP_ORDER, HISTORY, HISTORY_FLOOR, LOCK_IN, RECALLED,
     MESSAGE_OVERHEAD, SEPARATOR, SPOTLIGHT, budget_tokens, message_cost,
 )
 from .mechanics import (  # noqa: F401

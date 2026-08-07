@@ -445,6 +445,7 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
     present = set(tokens) | ({f"locations:{current_loc}"} if current_loc else set())
     activated = context.activate(entries, recent_text, frozenset(present))
     world_info_bodies = [e["body"] for e in activated]
+    recalled_lore_bodies = []   # recall is off in this harness, as by default
     group_states = []
     for e in activated:
         if e["kind"] != "groups":
@@ -578,6 +579,7 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             "commitment_lines": commitments.render_open(cid, with_id=False), "today": today,
             "weather": weather_now,
             "current_setting": current_setting, "world_info_bodies": world_info_bodies,
+            "recalled_lore_bodies": recalled_lore_bodies,
             "group_states": group_states,
             "offscene_active": offscene_active, "offscene_known": offscene_known,
             "player_names": player_names, "pcless": pcless,
@@ -619,6 +621,7 @@ def rendered_system(data: dict, opener: bool = False) -> str:
               "scene/sections/weather.j2",
               "scene/sections/current_setting.j2",
               "scene/sections/world_info.j2",
+              "scene/sections/recalled_lore.j2",
               "scene/sections/group_state.j2",
               "scene/sections/mechanics_rules.j2",
               "scene/sections/mechanics_sheets.j2",

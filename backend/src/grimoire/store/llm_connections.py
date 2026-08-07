@@ -138,18 +138,27 @@ def delete_connection(id: str) -> None:
     p = _path(id)
     if not p.exists():
         raise ConnectionNotFound(id)
-    if config.read_config().get("active_connection_id") == id:
-        # Clear this BEFORE unlinking the file, not after — otherwise a
+    # Every config key that names a connection, not just the active one:
+    # `embeddings_connection_id` (semantic recall) points here too, and a
+    # dangling one leaves the layer silently off while the Configuration page
+    # still shows it configured. A list rather than two branches, so the next
+    # key that references a connection is one entry rather than a third copy
+    # of this reasoning.
+    cfg = config.read_config()
+    dangling = {key: "" for key in ("active_connection_id", "embeddings_connection_id")
+                if cfg.get(key) == id}
+    if dangling:
+        # Clear these BEFORE unlinking the file, not after — otherwise a
         # failure between the two steps (disk error, process death) leaves
         # the file gone (its slug now reusable) while config.md still
         # references it, reproducing the exact dangling-reference bug this
         # exists to close, just via a partial-failure window instead of
         # never having the fix at all. With this ordering, every failure
         # window is retry-safe: fail here and nothing changed yet (clean
-        # retry); fail during the unlink below and active_connection_id is
+        # retry); fail during the unlink below and the references are
         # already correctly cleared even though the file still exists (a
         # retriable "delete didn't finish" state, not a dangling reference).
-        config.write_config(active_connection_id="")
+        config.write_config(**dangling)
     p.unlink()
     _sidecar_path(id).unlink(missing_ok=True)
 

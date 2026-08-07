@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, type Config, type LLMConnection } from "../api/client";
+import { api, type Config, type ConfigUpdate, type LLMConnection } from "../api/client";
 import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
 import { StorageLocation } from "../components/StorageLocation";
 import { ThemePicker } from "../components/ThemePicker";
@@ -23,6 +23,10 @@ export default function ConfigView() {
   const [turnstateDepth, setTurnstateDepth] = useState("");
   const [promoteStreak, setPromoteStreak] = useState("");
   const [rollingEvery, setRollingEvery] = useState("");
+  const [embeddingsConnectionId, setEmbeddingsConnectionId] = useState("");
+  const [embeddingsModel, setEmbeddingsModel] = useState("");
+  const [semanticDepth, setSemanticDepth] = useState("");
+  const [semanticThreshold, setSemanticThreshold] = useState("");
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -41,15 +45,17 @@ export default function ConfigView() {
       setTurnstateDepth(c.turnstate_depth);
       setPromoteStreak(c.promote_streak);
       setRollingEvery(c.rolling_summary_every);
+      setEmbeddingsConnectionId(c.embeddings_connection_id);
+      setEmbeddingsModel(c.embeddings_model);
+      setSemanticDepth(c.semantic_recall_depth);
+      setSemanticThreshold(c.semantic_recall_threshold);
     });
     api.listConnections().then(setConnections).catch(() => setConnections([]));
   }, []);
 
   if (!config) return <div className="page page-narrow config">Loading…</div>;
 
-  async function save(fields: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; llm_call_budget: string; context_budget: string; archive_depth: string;
-                        prompt_log_depth: string; turnstate_depth: string; promote_streak: string;
-                        rolling_summary_every: string }>) {
+  async function save(fields: ConfigUpdate) {
     const next = await api.putConfig(fields);
     setConfig(next);
     setSaved(true);
@@ -170,6 +176,60 @@ export default function ConfigView() {
         character's standing state, alongside the other proposed edits.
       </p>
 
+      <div className="section-label">Semantic recall</div>
+      <p className="field-hint" style={{ marginTop: 0 }}>
+        World info activates on keywords. Semantic recall adds a second pass over the
+        entries the keywords missed, picking the ones closest in meaning to what has just
+        been said — so the lore about a character's inherited sword can surface when the
+        scene talks about the blade her mother left her. It only ever adds, never removes,
+        and lore owned by an absent character stays hidden either way. Leave the connection
+        blank, or set entries to <code>0</code>, to turn it off.
+      </p>
+      <div className="field">
+        <label htmlFor="cfg-embeddings-connection">Embeddings connection</label>
+        <select
+          id="cfg-embeddings-connection"
+          value={embeddingsConnectionId}
+          onChange={(e) => setEmbeddingsConnectionId(e.target.value)}
+        >
+          <option value="">Off</option>
+          {connections.filter((c) => c.kind === "openai_compatible").map((c) => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
+        </select>
+      </div>
+      <div className="field-row" style={{ marginTop: 12 }}>
+        <div className="field">
+          <label htmlFor="cfg-embeddings-model">Embedding model</label>
+          <input id="cfg-embeddings-model" type="text" value={embeddingsModel}
+                 placeholder="text-embedding-3-small"
+                 onChange={(e) => setEmbeddingsModel(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="cfg-semantic-depth">Recalled entries</label>
+          <input id="cfg-semantic-depth" type="text" inputMode="numeric" value={semanticDepth}
+                 placeholder="0" onChange={(e) => setSemanticDepth(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="cfg-semantic-threshold">Similarity threshold</label>
+          <input id="cfg-semantic-threshold" type="text" inputMode="decimal"
+                 value={semanticThreshold} placeholder="0.4"
+                 onChange={(e) => setSemanticThreshold(e.target.value)} />
+        </div>
+      </div>
+      <p className="field-hint">
+        Only custom OpenAI-compatible connections can be used — OpenRouter and Claude serve
+        no embeddings endpoint. What counts as "close enough" differs between embedding
+        models, so tune the threshold (0 to 1) against the scene inspector, which shows what
+        actually activated.
+      </p>
+      <p className="field-hint">
+        <strong>This sends text to the endpoint above.</strong> Turning it on means recent
+        scene text, and the world info being searched, go to that embeddings provider as
+        well as to your LLM connection — a second place your campaign is read. Point it at
+        a local endpoint to keep it on your machine.
+      </p>
+
       <div className="section-label">System prompt</div>
       <label className="sr-only" htmlFor="cfg-system-prompt">
         System prompt (sent with every scene)
@@ -239,6 +299,10 @@ export default function ConfigView() {
             prompt_log_depth: promptLogDepth,
             turnstate_depth: turnstateDepth, promote_streak: promoteStreak,
             rolling_summary_every: rollingEvery,
+            embeddings_connection_id: embeddingsConnectionId,
+            embeddings_model: embeddingsModel,
+            semantic_recall_depth: semanticDepth,
+            semantic_recall_threshold: semanticThreshold,
           })}
         >
           Save
