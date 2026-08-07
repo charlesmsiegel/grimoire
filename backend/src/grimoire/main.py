@@ -13,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import Headers
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .routes import router
 from .store import campaigns, locks, migrations, module_edit
@@ -29,6 +31,42 @@ def dist_dir() -> Path:
     """
     env = os.environ.get("GRIMOIRE_DIST")
     return Path(env) if env else DEFAULT_DIST
+
+
+class SPAStaticFiles(StaticFiles):
+    """The built frontend, with a client-route fallback to ``index.html``.
+
+    The frontend is a ``BrowserRouter`` SPA: ``/worlds``, ``/campaigns/<cid>``
+    and now ``/campaigns/<cid>/scenes/<sid>`` (#87) are paths the *browser*
+    resolves. But a reload, a bookmark or a shared link asks the SERVER for
+    that path first, and plain ``StaticFiles`` has no file to answer with.
+    ``html=True`` does not cover it -- it serves directory indexes and looks
+    for a ``404.html``, it does not route unknown paths to the root document --
+    so every client route answered 404 in the packaged desktop and Android
+    builds. Only the Vite dev server had a fallback, which is why development
+    never saw it. Surviving a reload is the whole of #87, so the feature needed
+    this to be true anywhere but ``vite dev``.
+
+    Two things deliberately keep their 404:
+
+    - **Anything under ``/api``.** An unknown endpoint must stay a 404 for the
+      caller that asked for it, not become an HTML page with a 200 on it.
+    - **Requests that did not ask for a page.** A missing ``.js`` or image
+      answered with ``index.html`` turns "file not found" into a document the
+      browser tries to parse as a script -- a clear error replaced by a
+      confusing one. Navigations send ``text/html`` in ``Accept``; subresource
+      requests do not.
+    """
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404 or path == "api" or path.startswith("api/"):
+                raise
+            if "text/html" not in Headers(scope=scope).get("accept", ""):
+                raise
+            return await super().get_response("index.html", scope)
 
 
 @asynccontextmanager
@@ -166,7 +204,7 @@ def create_app() -> FastAPI:
 
     dist = dist_dir()
     if dist.exists():
-        app.mount("/", StaticFiles(directory=str(dist), html=True), name="static")
+        app.mount("/", SPAStaticFiles(directory=str(dist), html=True), name="static")
 
     return app
 

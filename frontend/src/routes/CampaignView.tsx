@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useMatch, useNavigate, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -36,6 +36,14 @@ const ROLL_SPEAKER = "⁣Roll";
 // separator and reroll steps over it, but it is NEVER displayed — a transition
 // renders as the unlabelled narration it was before the tag existed.
 const TRANSITION_SPEAKER = "⁣Scene";
+// The window token of a transcript that has been edited optimistically. Real
+// tokens come from `++windowTokenRef` and so start at 1; this identifies posts
+// that no fetch produced, so every readiness gate comparing against a fetch's
+// token stays correctly closed while the ownership beside it stays readable.
+// Not -1, which `NO_ALTERNATES.window` already uses — matching there would be a
+// coincidence rather than a meaning.
+const OPTIMISTIC_TOKEN = -2;
+
 // A scene with no reroll alternates — the initial state and what every failed
 // fetch falls back to. `cid`/`sid` are the campaign and scene the set was
 // fetched FOR: switching scenes does not cancel an in-flight fetch, so scene
@@ -144,6 +152,14 @@ function settleOn<T>(signal: AbortSignal, value: T): Promise<T> {
   });
 }
 
+// Where the scene on screen lives (#87). The scene is IN the URL rather than in
+// component state, so a reload, a bookmark or a shared link comes back to the
+// scene the reader was in — rather than to whichever scene was edited last,
+// which is all `list_scenes`' updated-descending order can offer.
+function sceneUrl(cid: string, sid: string): string {
+  return `/campaigns/${encodeURIComponent(cid)}/scenes/${encodeURIComponent(sid)}`;
+}
+
 // The scene rail lists scenes most-recently-edited first, but the displayed
 // number must reflect story order — the id's own leading number (its
 // filename stem is "<NNN>--<date>--<slug>"), never the list position, which
@@ -212,6 +228,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   ready: boolean; topbarCollapsed?: boolean; onToggleTopbar?: () => void;
 }) {
   const { cid = "" } = useParams();
+  // The scene segment is a CHILD route (App.tsx), so `useParams` here — which
+  // only sees params matched down to this element's own route — never carries
+  // it. `useMatch` reads it off the full location instead, and does it without
+  // a second CampaignView instance for the router to swap between.
+  const sid = useMatch("/campaigns/:cid/scenes/:sid")?.params.sid;
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [worldName, setWorldName] = useState("");
@@ -220,6 +241,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [showMechanics, setShowMechanics] = useState(false);
   const [showStyle, setShowStyle] = useState(false);
   const [scenes, setScenes] = useState<SceneMeta[]>([]);
+  // Which campaign `scenes` describes. The router reuses this component across
+  // /campaigns/A → /campaigns/B, so between the switch and B's list landing
+  // `scenes` still holds A's rows — and the resolver below would read B's sid
+  // as missing from them and redirect the reader to one of A's scenes under
+  // B's id. Every wholesale replacement goes through `installScenes` so the
+  // two cannot drift; the one plain `setScenes` left is a rename re-keying the
+  // list it already has, which cannot change whose list it is.
+  const [sceneListCid, setSceneListCid] = useState<string | null>(null);
   const [sceneSort, setSceneSort] = useState<SceneSort>("updated");
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -232,19 +261,69 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // and a sid-only key never notices the transcript is still A's.
   const [loaded, setLoaded] = useState<{ cid: string; sid: string; token: number } | null>(null);
 
-  // Every LOCAL edit to the transcript goes through here, and each one drops
-  // `loaded`. Matching tokens only prove a set and a *fetch* describe the same
-  // scene — an optimistic edit changes the posts under both without touching
-  // either, so a stale-but-consistent pair still passes. Reroll is the case
-  // that bites: it removes the displayed reply, and the set keyed to that reply
-  // stays valid, so the picker drops onto the user post above it.
+  // "The transcript on screen is the active scene's own."
+  //
+  // They diverge for exactly one read: `runStream`'s finally refreshes the
+  // TURN's scene, which is allowed to install over the scene the reader has
+  // since opened (the pull-back is load-bearing — a failed turn's recovered
+  // prompt has to appear against the scene it was written for). The resolver
+  // then corrects `activeId` back to the URL's scene, and until that read lands
+  // the previous scene's messages are still rendered.
+  //
+  // EVERY control that derives an index, an affordance or an optimistic removal
+  // from the RENDERED messages and then writes to `activeId` has to read this,
+  // or it shows the reader one scene's transcript and mutates another's. Named
+  // once because doing it per control is how the second one got missed: the
+  // edit form was gated and reroll was not, so Regenerate replaced a reply of
+  // the active scene that the reader had never been shown (codex review, P1).
+  //
+  // Null `loaded` is UNKNOWN ownership, not safe ownership. This used to read
+  // `!loaded ||`, on the reasoning that the only thing that nulls it is an
+  // optimistic edit, which extends the active scene's own transcript. True at
+  // the moment of the edit and false immediately after: nothing re-establishes
+  // it when the reader navigates, so a send or reroll followed by opening
+  // another scene left the previous scene's posts rendered, `activeId` moved,
+  // and this predicate answering "active" — which is exactly the state it
+  // exists to forbid (codex review, P1). `showOptimistically` now keeps the
+  // ownership and drops only the fetch identity, so the honest answer is
+  // available and the carve-out is gone.
+  //
+  // The other two nulls — a rename that outdated the set, a swap whose re-read
+  // failed — mean "nobody knows what this transcript is" and are correctly
+  // false here too.
+  const transcriptIsActive =
+    !!loaded && loaded.cid === cid && loaded.sid === activeId;
+
+  // Every LOCAL edit to the transcript goes through here, and each one retires
+  // `loaded`'s FETCH IDENTITY while keeping its ownership. Matching tokens only
+  // prove a set and a *fetch* describe the same scene — an optimistic edit
+  // changes the posts under both without touching either, so a
+  // stale-but-consistent pair still passes. Reroll is the case that bites: it
+  // removes the displayed reply, and the set keyed to that reply stays valid,
+  // so the picker drops onto the user post above it.
+  //
+  // It used to null the whole record, which threw away the answer to a
+  // different question — WHICH scene these posts are — and `transcriptIsActive`
+  // had no choice but to guess.
+  //
+  // The owner is CARRIED, never re-derived. Stamping the active scene's id
+  // looks equivalent and is not: Send stays enabled while a freshly selected
+  // scene is still loading (see `runStream`'s baseline read), so the reader can
+  // select B and send while B's GET is in flight — `activeIdRef` already says B
+  // while the messages being extended are still A's. Deriving the owner there
+  // labels A's posts as B's, which is worse than not knowing, because the guard
+  // then believes them and offers edits whose indices address A against a file
+  // that is B (codex review, P1).
+  //
+  // Null stays null for the same reason: an unowned transcript is one nothing
+  // may act on, and inventing an owner is exactly the mistake above.
   //
   // Loading and paging deliberately do NOT come through here: they are what
   // `loaded` describes, and a prepend extends that transcript rather than
   // replacing it.
   function showOptimistically(edit: (m: Message[]) => Message[]) {
     setMessages(edit);
-    setLoaded(null);
+    setLoaded((cur) => (cur ? { ...cur, token: OPTIMISTIC_TOKEN } : null));
   }
   // `messages` is a WINDOW onto the transcript's tail, not the whole of it.
   // `firstIndex` is the absolute index of `messages[0]`, so every index this
@@ -365,8 +444,17 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // fact, and the rename/delete/first-send paths set it without going anywhere
   // near `selectScene`.
   const activeIdRef = useRef<string | null>(null);
+  // Which campaign the active scene belongs to. Scene ids repeat freely between
+  // campaigns, so "the sid in the URL is already the active one" is only true
+  // if the active scene is also THIS campaign's — A/scenes/s1 → B/scenes/s1
+  // otherwise reads as "already there" and B's transcript never loads.
+  // Taken from the render that selected it, not `cidRef`: a handler awaited
+  // across a campaign switch belongs to the campaign it started in, which is
+  // the campaign whose scene it is selecting.
+  const activeCidRef = useRef<string | null>(null);
   function setActive(id: string | null) {
     activeIdRef.current = id;
+    activeCidRef.current = id === null ? null : cid;
     setActiveId(id);
   }
   // Same idea for the campaign: router reuses this component across
@@ -441,7 +529,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // it invites the user to generate another reply with the review still open.
   const [saveError, setSaveError] = useState<string | null>(null);
   const [chooserOpen, setChooserOpen] = useState(false);
-  const [seedPrompt, setSeedPrompt] = useState<{ sid: string; prompt: string } | null>(null);
+  // Campaign-scoped, like `loaded`, `rollingFor` and the alternate set, and for
+  // the reason all three carry a cid: scene ids repeat between campaigns. The
+  // premise is recorded before the relist that follows it, so a reader who
+  // switches campaigns during that await leaves it behind — and a sid-only
+  // match then hands campaign A's generated premise to an empty scene of B's
+  // that happens to wear the same id (codex review).
+  const [seedPrompt, setSeedPrompt] =
+    useState<{ cid: string; sid: string; prompt: string } | null>(null);
   // Response-length chip beside Send: the scene's own preset (its saved
   // setting, from the loaded scene's frontmatter) versus a one-shot pending
   // override the player just picked for the next reply only. `pendingResponse`
@@ -489,10 +584,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       setName(c.meta.name);
       setWorldName(c.meta.world_name ?? ""); // embedded: no second fetch
     });
-    api.listScenes(cid).then((list) => {
-      setScenes(list);
-      if (list.length) selectScene(list[0].id);
-    });
+    // Which scene to open is NOT decided here: the URL says, and the resolver
+    // below is the one place that reads it.
+    loadScenes().catch(() => {});
     api.getConfig().then((c) => {
       setColorQuotes(c.quote_color === "on");
       setLabels({ user: c.user_label || "You", assistant: c.assistant_label || "Grimoire" });
@@ -500,6 +594,194 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     api.listResponsePresets().then(setResponsePresets).catch(() => setResponsePresets([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid]);
+
+  // The campaign check lives HERE rather than at each call site, because every
+  // caller reaches this after an await and the mistake is invisible from the
+  // outside: `cid` is the render's, so a relist for the campaign the reader has
+  // left installs its rows and labels them with the campaign that asked. If the
+  // new campaign's own list already landed, `sceneListCid` then names a
+  // campaign the resolver will never see again — and it returns early forever,
+  // leaving the new campaign wearing the old one's rail with every rail click
+  // and URL change dead until a reload (codex review).
+  //
+  // The mount read carried this guard alone and five mutation relists did not,
+  // which is the shape of bug this file has now been bitten by repeatedly: a
+  // rule spelled out at call sites is a rule the next call site forgets.
+  function installScenes(list: SceneMeta[]) {
+    if (cidRef.current !== cid) return;
+    setScenes(list);
+    setSceneListCid(cid);
+  }
+
+  // Every read of the scene list goes through here, and only the newest one
+  // ISSUED may install — response order is not request order.
+  //
+  // Two mutations overlap easily: a rename's relist is still open when the
+  // reader deletes another row, and nothing in the UI serializes them
+  // (`renamesInFlight` blocks turns, not deletions). If the rename's older
+  // answer lands last it puts the deleted row back. That used to be a stale
+  // rail and nothing more; now the list decides which sid the URL may name, so
+  // the restored row is a ghost the reader can click straight into a read that
+  // 404s (codex review).
+  //
+  // Sequenced PER CAMPAIGN. A single global counter looked equivalent — the
+  // reasoning being that a read for the campaign the reader left is always
+  // older than the new campaign's own — and that reasoning is false: a
+  // mutation in A can finish, and issue its relist, AFTER B's mount read was
+  // already in flight. The global counter then hands A's later request the
+  // newer number, B's answer is retired by it, and A's own answer is refused by
+  // `installScenes` for being the wrong campaign. Nothing installs,
+  // `sceneListCid` never becomes B, and the resolver is disabled until reload —
+  // the exact stranding the guard exists to prevent, reintroduced by the fix
+  // for it (codex review).
+  //
+  // Keyed by campaign, each campaign's reads order only among themselves, and
+  // neither can retire the other's. One entry per campaign opened this session.
+  const sceneListSeq = useRef(new Map<string, number>());
+  // The newest read in flight per campaign, so a retired one can wait for it.
+  const sceneListPending = useRef(new Map<string, Promise<void>>());
+
+  // Resolves when a list at least as new as this call's has been INSTALLED —
+  // not merely when this call's own response arrived.
+  //
+  // The difference is what a caller does next. `sceneCreated` and the first
+  // send navigate to a row they have just created, and the resolver bounces a
+  // sid the installed list does not have. The rail stays interactive while a
+  // creation's relist is open, so a rename or delete can issue a newer read
+  // that retires it — and if that newer read has not landed yet, the installed
+  // list is still the one from before the scene existed. Returning here would
+  // send the caller to navigate against it, and the brand-new id would be read
+  // as stale and redirected away (codex review).
+  //
+  // Awaiting the newer read is not a self-deadlock: this branch is only
+  // reached when a newer read exists, so the map holds that one, never this.
+  function loadScenes(): Promise<void> {
+    const seq = (sceneListSeq.current.get(cid) ?? 0) + 1;
+    sceneListSeq.current.set(cid, seq);
+    // A later read FOR THIS CAMPAIGN was issued: it, not this one, is the
+    // answer, so the caller gets its completion rather than a false one.
+    const retired = () => sceneListSeq.current.get(cid) !== seq;
+    const followNewer = () => sceneListPending.current.get(cid);
+    const p = (async () => {
+      let list: SceneMeta[];
+      try {
+        // `listScenes` never coalesces, which is what makes the sequence number
+        // above honest: a read cannot be handed a promise older than the moment
+        // it was issued, so "newest number" and "newest request" agree.
+        list = await api.listScenes(cid);
+      } catch (err) {
+        // Retirement applies to a FAILED read exactly as it does to a
+        // successful one, and covering only the success half left the mirror
+        // image of the bug it fixed: a superseded read that rejects would
+        // reject its caller, so `sceneCreated` never navigated to the scene it
+        // had created even though the newer read installed a list containing
+        // it — and, being called from a dropped event-handler promise, it did
+        // so as an unhandled rejection (codex review).
+        //
+        // A retired read's failure describes a request nobody is waiting on.
+        // Only the campaign's newest read may speak for the list, in either
+        // direction.
+        if (retired()) return void await followNewer();
+        throw err;
+      }
+      if (retired()) return void await followNewer();
+      installScenes(list);
+    })();
+    sceneListPending.current.set(cid, p);
+    return p;
+  }
+
+  // The two places that open a scene without an awaiting caller — the resolver
+  // and a rail click on the row already open. `selectScene`'s rejection used to
+  // go nowhere from here (an unhandled rejection, no banner), which left a
+  // transcript that could not be read looking like a scene with no posts. Not
+  // retryable: the banner's Retry generates, and there is nothing to generate.
+  //
+  // Scoped to the read that failed. A rejection carries no window token of its
+  // own, so an unscoped handler raises its banner over whatever is on screen
+  // when it finally lands — and the scene switch that retired the read has
+  // already cleared the errors belonging to it, so the banner sticks, blaming
+  // the current scene for a failure in one the reader has left (codex review).
+  function readScene(id: string) {
+    const p = selectScene(id);
+    // Minted synchronously by the call above, before its first await.
+    const token = windowTokenRef.current;
+    p.catch((err: any) => {
+      if (windowTokenRef.current !== token) return;   // a later select retired it
+      setError({ text: `The scene could not be read: ` + (err?.detail ?? String(err)),
+                 retryable: false });
+    });
+  }
+
+  // Nothing is on screen: the campaign has no scenes, or the last one was just
+  // deleted. Mirrors what `selectScene` installs, in reverse.
+  function clearScene() {
+    windowTokenRef.current += 1;   // drop any page still in flight for it
+    setActive(null);
+    setMessages([]);
+    setLoaded(null);
+    setFirstIndex(0);
+    setHasUserPost(null);
+  }
+
+  // THE RESOLVER (#87). The URL names the scene; the rail's list says whether
+  // it still exists; `activeIdRef` says what is already loaded. Reconciling
+  // those three is this effect's whole job, and it is the ONLY place that
+  // decides what to read or where to send the reader instead — so a rail
+  // click, Back/Forward, a deep link, a delete and a rename all converge here
+  // rather than each re-deciding for itself.
+  //
+  // Two rules make it terminate and keep it honest:
+  //
+  //   - It reads `activeIdRef`, not `activeId`. The paths that adopt an id
+  //     WITHOUT navigating — a rename mints a new id for the scene already on
+  //     screen, and the first send into an empty campaign creates one — set
+  //     the ref and point the URL at it in the same batch. This then sees them
+  //     agreeing and does nothing, which is what preserves the rename's
+  //     `renamed` refresh (turn state kept) over a switch (turn state cleared).
+  //   - Every redirect it issues is a `replace`. A scene the reader never
+  //     chose — a fallback from a dead id, the scene a delete left behind — is
+  //     not a place they went, and Back must not return them to a URL that
+  //     resolves to nothing.
+  //
+  // `activeId` is in the deps because a divergence is exactly what has to be
+  // repaired: a background refresh (runStream's finally, the flush poll) calls
+  // `selectScene` with the scene the TURN belongs to, which is not always the
+  // scene the reader is now looking at. The URL is authoritative, so the fix
+  // is to read the URL's scene back — not to leave the two disagreeing.
+  useEffect(() => {
+    if (sceneListCid !== cid) return;      // the list is still the last campaign's
+    if (sid && scenes.some((s) => s.id === sid)) {
+      const loadedHere = sid === activeIdRef.current && activeCidRef.current === cid;
+      if (!loadedHere) readScene(sid);
+      return;
+    }
+    // No scene in the URL, or one that names nothing: scene ids are filenames
+    // and a rename, a first date stamp or a repad all mint a new one, so a
+    // bookmarked id goes stale on its own. Never fetch it — a dead id is a 404
+    // and an error banner where a fallback belongs.
+    if (scenes.length) {
+      navigate(sceneUrl(cid, scenes[0].id), { replace: true });
+    } else {
+      if (sid) navigate(`/campaigns/${encodeURIComponent(cid)}`, { replace: true });
+      if (activeIdRef.current) clearScene();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cid, sid, scenes, sceneListCid, activeId]);
+
+  // A scene the reader chose: a real history entry, so Back returns to the one
+  // they were reading. Everything else moves the URL with `replace`.
+  function goToScene(id: string) {
+    // Clicking the row already open is a re-read, which is what that click did
+    // before the scene lived in the URL. Routed through the resolver it would
+    // do nothing at all instead: the pathname does not change, so the effect
+    // never re-runs.
+    if (id === activeIdRef.current && activeCidRef.current === cid) {
+      readScene(id);
+      return;
+    }
+    navigate(sceneUrl(cid, id));
+  }
 
   // Following the tail is the default and stays the default — but only while
   // the reader is AT the tail. Two things now move the stream and they must
@@ -713,6 +995,23 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // preset picked for the next reply, and an open roll form. Same scene, same
   // reader; only the filename moved.
   async function selectScene(id: string, stillWanted?: () => boolean, renamed = false) {
+    // This closure belongs to the campaign it was created in. A background
+    // refresh outlives the view it started in — `runStream`'s finally and the
+    // flush poll both call this for the scene the TURN owns, long after the
+    // reader may have moved to another campaign — and every existing guard on
+    // those paths compares scene ids, which repeat freely between campaigns.
+    //
+    // So A's refresh for "s1" passes `activeIdRef.current === "s1"` while the
+    // reader is on B's "s1", installs A's transcript under B's URL, and leaves
+    // edits addressing B's file with A's message indices. The resolver could
+    // not repair it either: `setActiveId` is handed the value it already has,
+    // React bails out of the render, and the effect never re-runs (codex
+    // review, P1).
+    //
+    // Checked here rather than at the two call sites for the reason the rest of
+    // this file keeps re-learning: this is the one funnel every refresh passes
+    // through, so a future background path cannot forget it.
+    if (cidRef.current !== cid) return -1;
     if (stillWanted && !stillWanted()) return -1;
     // selectScene also runs to *refresh* the current scene (runStream's
     // finally, doRoll/doCheck, saveEdit, …) — only an actual scene switch
@@ -821,8 +1120,37 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
 
   async function sceneCreated(id: string, initialPrompt?: string) {
     setChooserOpen(false);
-    if (initialPrompt) setSeedPrompt({ sid: id, prompt: initialPrompt });
-    setScenes(await api.listScenes(cid));
+    if (initialPrompt) setSeedPrompt({ cid, sid: id, prompt: initialPrompt });
+    try {
+      await loadScenes();
+    } catch (err: any) {
+      // Reports rather than throws, for the reason `renameScene` does: the
+      // chooser calls this from an event handler and drops the promise, so
+      // anything escaping is an unhandled rejection the player never sees —
+      // and the scene WAS created, so a silent failure leaves a real scene
+      // that the rail does not list and nothing navigates to. Not retryable:
+      // the banner's Retry generates, and there is nothing to generate.
+      // Scoped, like the success path right below it. The switch to another
+      // campaign already cleared that campaign's errors, so an unscoped late
+      // rejection raises a banner over it claiming ITS scene list failed
+      // (codex review).
+      if (cidRef.current === cid) {
+        setError({ text: `The scene was created, but the scene list could not be `
+                         + `refreshed: ` + (err?.detail ?? String(err)), retryable: false });
+      }
+      return;
+    }
+    // Asked AFTER the relist, not before it. The rows are guarded (a list for
+    // the campaign the reader left is dropped) and the navigation was not, so
+    // a switch during that await left the new scene's URL pointing back at the
+    // campaign they came from — dragging them into another campaign entirely
+    // (codex review). Guarding the data and not the navigation is the same
+    // half-fix twice over, so both halves are asked here.
+    if (cidRef.current !== cid) return;
+    // The list first, then the URL: the resolver only opens a scene the list
+    // knows about, so navigating to a row that has not landed yet would be
+    // read as a stale id and bounced straight back to the previous scene.
+    goToScene(id);
     // A scene can be BORN past the threshold: starting from a greeting appends
     // that greeting's posts, and a multi-speaker one appends several. None of
     // this component's other triggers fire here — they all hang off a write the
@@ -943,15 +1271,53 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // `activeIdRef`, not the render-captured `activeId`: this runs from handlers
     // that awaited a request, and the reader can have moved on since. Adopting
     // the new id for a scene they are no longer looking at moves them to it.
-    if (activeIdRef.current === oldId) setActive(newId);
+    //
+    // And the CAMPAIGN as well as the id, because the id alone does not say
+    // which scene it is. A rename in campaign A finishing after the reader
+    // moved to B, whose active scene carries the same id — routine, since each
+    // campaign numbers its scenes from 001 — would otherwise adopt A's new id
+    // and replace B's history entry with A's scene URL, moving the reader to
+    // another campaign entirely (codex review).
+    // `cidRef` as well as `activeCidRef`, and the difference is not academic:
+    // `activeCidRef` says which campaign the loaded scene came from, which is
+    // still the OLD one during the window after the reader has navigated to
+    // another campaign but before its first scene has loaded. A rename landing
+    // in that window passed an `activeCidRef`-only test and navigated them
+    // straight back. Only `cidRef` answers "is the view still here".
+    if (cidRef.current === cid
+        && activeIdRef.current === oldId && activeCidRef.current === cid) {
+      setActive(newId);
+      // …and the URL with it, in the same batch as `setActive`, so the resolver
+      // sees one consistent pair and leaves this rename alone. `replace`: the
+      // reader did not go anywhere, and the entry being replaced names a file
+      // that no longer exists. React 18 batches both updates into one render,
+      // so there is no intermediate state where the URL still says `oldId`
+      // while the ref says `newId` — which the resolver would read as the
+      // reader having navigated, and chase back to a scene that is now gone.
+      navigate(sceneUrl(cid, newId), { replace: true });
+    }
     // The rail's own metadata, not just the things pointing at it. `pcless` and
     // the title are read off the row whose id matches `activeId`, so adopting
     // the id without re-keying the row loses both — an offscreen scene silently
     // offering the PC composer for sends the backend still handles as director
     // notes. A relist would fix it, and a relist that FAILS is exactly the
     // state this has to survive.
-    setScenes((list) => list.map((s) => (s.id === oldId ? { ...s, id: newId } : s)));
-    setSeedPrompt((p) => (p && p.sid === oldId ? { ...p, sid: newId } : p));
+    //
+    // Campaign-scoped, like the adoption above, and for a sharper reason than
+    // tidiness: the rail is what the resolver reads to decide whether the sid
+    // in the URL still exists. Re-keying a row in the campaign the reader moved
+    // to — B's `s1` matches `oldId` whenever both campaigns number from 001 —
+    // makes B's own URL look stale, and the resolver dutifully moves the reader
+    // off it. Scoping only the navigation above left this door open, which is
+    // how the test for that fix still failed.
+    if (cidRef.current === cid) {
+      setScenes((list) => list.map((s) => (s.id === oldId ? { ...s, id: newId } : s)));
+    }
+    // Compared against this handler's OWN campaign, not the one on screen: the
+    // scene that was renamed is this campaign's, so its premise follows the new
+    // id wherever the reader happens to be standing.
+    setSeedPrompt((p) =>
+      (p && p.cid === cid && p.sid === oldId ? { ...p, sid: newId } : p));
     reviewSceneRenamed(oldId, newId);
     const parked = parkedPrompts.current.get(oldId);
     if (parked !== undefined) {
@@ -973,7 +1339,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       const { id: newId } = await api.renameScene(cid, id, title);
       adoptSceneId(id, newId);
       try {
-        setScenes(await api.listScenes(cid));
+        await loadScenes();
       } catch (err: any) {
         // The rename LANDED; only the rail is stale. Not retryable — the
         // banner's Retry generates, and there is nothing here to generate.
@@ -1018,7 +1384,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     const initiator = activeId;   // the scene whose inspector asked for the stamp
     if (initiator) adoptSceneId(initiator, id);
     try {
-      setScenes(await api.listScenes(cid));
+      await loadScenes();
     } catch (err: any) {
       setError({ text: `Renamed, but the scene list could not be refreshed: `
                        + (err?.detail ?? String(err)), retryable: false });
@@ -1056,25 +1422,19 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   async function deleteScene(s: SceneMeta) {
     if (!window.confirm(`Delete '${s.title}'?`)) return;
     await api.deleteScene(cid, s.id);
-    const list = await api.listScenes(cid);
-    setScenes(list);
+    await loadScenes();
     // Same reason as `renameScene`: the ledger resolves every thread,
     // commitment and fact against the scene list, so a deletion changes what
-    // it returns. Deleting an INACTIVE scene selects nothing, and deleting the
-    // last one takes the `else` branch below, so neither reaches the
-    // `selectScene` that would otherwise bump this.
+    // it returns. Bumped here rather than left to the refresh, because the two
+    // deletions that need it least are the ones that reach no refresh at all:
+    // deleting a scene the reader is not on moves nothing, and deleting the
+    // last one leaves nothing to read.
     setCtxKey((k) => k + 1);
-    if (activeId === s.id) {
-      if (list.length) selectScene(list[0].id);
-      else {
-        windowTokenRef.current += 1; // drop any page still in flight for it
-        setActive(null);
-        setMessages([]);
-        setLoaded(null);
-        setFirstIndex(0);
-        setHasUserPost(null);
-      }
-    }
+    // Nothing else to do. The deleted row is gone from the list, so if it was
+    // the one in the URL the resolver now reads that sid as stale and moves
+    // the reader on — or, with nothing left, clears the view and drops the
+    // scene from the URL. Deleting a row the reader is NOT on leaves the sid
+    // valid, and the resolver leaves them where they are.
   }
 
   // How long to keep looking for a cancelled turn's partial. Aborting rejects
@@ -1340,11 +1700,20 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // Review caught this one on the immediate refresh after it had already
       // been fixed on the polling ones — the mechanism was sitting right here.
       //
-      // Only `abortRef`, unlike the poll's predicate. A scene switch is already
-      // covered for this call: switching runs `selectScene`, which bumps
-      // `windowTokenRef` and so retires the page this one has in flight. The
-      // poll needs the scene check too because it *issues* fresh selects, which
-      // bump that token themselves and cannot be retired by it.
+      // Only `abortRef`, unlike the poll's predicate — and deliberately so,
+      // even though it means this refresh can install the turn's scene over
+      // one the reader has since opened. That pull-back is load-bearing: a
+      // turn that failed parks the player's words under ITS scene, and the
+      // composer is one shared box, so the view has to return to that scene
+      // or the recovered prompt is either invisible or shown against the
+      // wrong transcript ("a recovered prompt is never shown against the
+      // scene the player moved to").
+      //
+      // Adding a scene check here was tried and reverted: it silently broke
+      // prompt recovery, which is the one thing in this file that guards text
+      // existing nowhere else. The divergence it would have prevented is
+      // instead made harmless where it does damage — `saveEdit` refuses to
+      // write while the transcript on screen belongs to another scene.
       //
       // Its failure is caught rather than thrown, because it is the *same*
       // failure the turn just had: a POST that never reached the server usually
@@ -1489,8 +1858,31 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     if (!id) {
       if (!content) return;
       id = (await api.createScene(cid)).id;
-      setScenes(await api.listScenes(cid));
+      await loadScenes();
+      // The reader left while the scene was being created. Everything below
+      // this point writes to the VIEW — it clears the composer, appends the
+      // prompt optimistically, and streams deltas into it — and none of it is
+      // campaign-scoped, so carrying on would render this turn into the
+      // campaign they moved to and leave the polluted transcript there (the
+      // refresh that would replace it is refused for being the wrong campaign).
+      //
+      // An earlier version of this guard covered only the adopt-and-navigate
+      // just below, on the reasoning that the turn "posts to `cid`, so the
+      // write lands where the player typed it". True of the write, and beside
+      // the point for the eight lines after it (codex review).
+      //
+      // So the turn does not start. The scene stays — created, empty, in the
+      // campaign it belongs to — and the composer is not cleared, so the words
+      // are still there to send. Abandoning an empty scene is a smaller cost
+      // than either losing what was typed or showing it in the wrong campaign.
+      if (cidRef.current !== cid) return;
       setActive(id);
+      // Same pairing as the rename: an id adopted without the reader going
+      // anywhere, so the URL follows it in the same batch with `replace`
+      // (there was no scene here to go Back to). Without this the resolver
+      // sees `activeId` moved while the URL still names no scene, and bounces
+      // the turn onto whatever the list happens to sort first.
+      navigate(sceneUrl(cid, id), { replace: true });
     }
     setInput("");
     // the player just spoke: put them back at the tail even if they had
@@ -1539,6 +1931,17 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // write loses the race silently discards the other, and the two refreshes
     // can land out of order on top of that.
     if (!editing || !activeId || rolling) return;
+    // The transcript ON SCREEN must be the active scene's own. `editing.index`
+    // is an index into what is rendered and `activeId` is where it would be
+    // written, and the two describe different scenes for exactly one read
+    // whenever a background refresh installs the turn's scene over the one the
+    // reader opened: the resolver then corrects `activeId` back to the URL's
+    // scene, and until that read lands the old messages are still on screen.
+    // Saving in that window overwrites an unrelated message of the scene now
+    // active (codex review, P1).
+    //
+    // `transcriptIsActive` is the named form of exactly this fact.
+    if (!transcriptIsActive) return;
     await api.editMessage(cid, activeId, editing.index, editing.text);
     setEditing(null);
     const seen = await selectScene(activeId);
@@ -1584,6 +1987,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
 
   async function reroll(repeatGuidance?: string) {
     if (!activeId || busy || rolling || renamesInFlight) return;
+    // The affordance and the optimistic removal below both read the RENDERED
+    // messages while `api.regenerate` targets `activeId`, so during the
+    // divergence window this replaces a reply of the active scene that the
+    // reader was never shown. Guarded here as well as on `canReroll`, because
+    // `retry` reaches this function without going past the button.
+    if (!transcriptIsActive) return;
     const guidance = repeatGuidance ?? (rerollPrompt ?? "").trim();
     setRerollPrompt(null);
     rerollToRetryRef.current = { sid: activeId, guidance };
@@ -2141,7 +2550,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     while (i >= 0 && messages[i].speaker === TRANSITION_SPEAKER) i--;
     return i;
   })();
-  const canReroll = rerollIndex >= 0 &&
+  const canReroll = transcriptIsActive &&
+    rerollIndex >= 0 &&
     messages[rerollIndex].role === "assistant" &&
     messages[rerollIndex].speaker !== ROLL_SPEAKER &&
     // "not the opener" — the regenerate route refuses an all-assistant
@@ -2321,7 +2731,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               // written to — and lock an unrelated one.
               locked={s.id === streamingId}
               lockedReason={LOCKED_WHILE_GENERATING}
-              onSelect={() => selectScene(s.id)}
+              onSelect={() => goToScene(s.id)}
               onRename={(title) => renameScene(s.id, title)}
               onDelete={() => deleteScene(s)}
             />
@@ -2526,7 +2936,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             ready={ready}
             onSeeded={() => refreshAndAsk(activeId)}
             onSceneRenamed={sceneRenamed}
-            initialPrompt={seedPrompt?.sid === activeId ? seedPrompt.prompt : undefined}
+            initialPrompt={seedPrompt?.cid === cid && seedPrompt.sid === activeId
+                             ? seedPrompt.prompt : undefined}
             pcless={activePcless}
             sceneLocked={sceneLocked}
             onRenaming={markRenaming}
@@ -2594,7 +3005,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                                     onClick={() => pickAlternate(stepAlternate(1))}>›</button>
                           </span>
                         )}
-                        {m.speaker !== ROLL_SPEAKER && (
+                        {m.speaker !== ROLL_SPEAKER && transcriptIsActive && (
                           <button className="msg-edit" title="Edit message" aria-label={`Edit message ${index + 1}`}
                                   disabled={rolling}
                                   onClick={() => setEditing({ index, text: m.content })}>✎</button>

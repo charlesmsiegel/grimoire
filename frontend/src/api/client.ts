@@ -901,7 +901,23 @@ export const api = {
     request<Ledger>("GET", `/api/campaigns/${cid}/ledger`, undefined, { fresh: true }),
 
   // scenes
-  listScenes: (cid: string) => request<SceneMeta[]>("GET", `/api/campaigns/${cid}/scenes`),
+  // Never coalesced, like the scene, alternates and proposal reads above — and
+  // opted out for every caller rather than at each mutation's call site, which
+  // is the same lesson those three record.
+  //
+  // The scene list decides which sid the URL may name (#87), and `CampaignView`
+  // orders its reads by when they were ISSUED so a superseded one cannot
+  // install over a newer. A shared read breaks that ordering rather than merely
+  // being stale: it is as old as the request it joined, so a read issued after
+  // a rename can be handed a promise from before it and still carry the newest
+  // sequence number — retiring the genuinely post-rename relist and installing
+  // a list with the old id in it. `fresh` at the caller's choice was tried, and
+  // left exactly that hole for the one caller that did not pass it.
+  //
+  // Nothing is lost by it: this component is the only caller, so the sharing
+  // had no second asker to share with.
+  listScenes: (cid: string) =>
+    request<SceneMeta[]>("GET", `/api/campaigns/${cid}/scenes`, undefined, { fresh: true }),
   createScene: (cid: string, title?: string, suggestedDate?: string, pcless?: boolean) =>
     request<{ id: string }>("POST", `/api/campaigns/${cid}/scenes`,
       { title, suggested_date: suggestedDate, pcless }),
