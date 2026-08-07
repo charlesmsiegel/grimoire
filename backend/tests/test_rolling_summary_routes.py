@@ -18,6 +18,7 @@ import grimoire.store as store
 from grimoire import routes
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
+from grimoire.routes import scenes as scenes_routes
 
 from .llm_fakes import FakeLLM
 
@@ -873,6 +874,10 @@ async def test_a_forced_refresh_that_waits_too_long_says_so(monkeypatch, tmp_pat
 
     llm = SlowLLM([["Never lands in time."]])
     app.dependency_overrides[routes.get_llm] = lambda: llm
+    # The ceiling is wall-clock and its own number -- NOT `llm_timeout`, which is
+    # an idle bound that resets on every provider frame -- so this is what a test
+    # has to move to reach the branch.
+    monkeypatch.setattr(scenes_routes, "_ROLLING_WAIT_CEILING", 0.1)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
@@ -882,8 +887,6 @@ async def test_a_forced_refresh_that_waits_too_long_says_so(monkeypatch, tmp_pat
         sid = (await ac.post(f"/api/campaigns/{cid}/scenes",
                              json={"title": "Saltmarch"})).json()["id"]
         await ac.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
-        # The wait is bounded by the same timeout the call itself is subject to.
-        store.config.write_config(llm_timeout="0.1")
         for n in range(10):
             store.scenes.append_message(cid, sid, "user", f"Post {n}.")
 
