@@ -522,3 +522,32 @@ def test_a_row_with_malformed_metadata_is_not_listed(monkeypatch, tmp_path):
         index["entries"] = [{**row, "id": "000009", **bad}, dict(row)]
         path.write_text(json.dumps(index), encoding="utf-8")
         assert [e["id"] for e in prompt_log.list_entries(cid, sid)] == [good], bad
+
+
+def test_a_non_finite_counter_does_not_reach_the_caller(monkeypatch, tmp_path):
+    """`"next": 1e999` decodes to inf and `int(inf)` raises OverflowError —
+    neither TypeError nor ValueError, so the fourth distinct type to escape the
+    per-name catches. `_normalized` is now guarded as a whole."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    _record(cid, sid)
+    (campaigns.campaign_root(cid) / "prompts" / "index.json").write_text(
+        '{"next": 1e999, "entries": []}', encoding="utf-8")
+
+    assert prompt_log.list_entries(cid, sid) == []
+    assert _record(cid, sid) is not None
+
+
+def test_a_payload_filed_under_the_wrong_id_is_refused(monkeypatch, tmp_path):
+    """The index authorises entry A; serving B's text under A's heading is the
+    one thing this panel exists not to do."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    first = _record(cid, sid)
+    second = _record(cid, sid)
+    root = campaigns.campaign_root(cid) / "prompts"
+
+    # second's payload, structurally valid, filed under first's name
+    (root / f"{first}.json").write_text(
+        (root / f"{second}.json").read_text(encoding="utf-8"), encoding="utf-8")
+
+    assert prompt_log.read_entry(cid, first) is None
+    assert prompt_log.read_entry(cid, second) is not None

@@ -252,3 +252,22 @@ test("generating an opener refreshes, so its captured prompt becomes visible", a
   // scene, which refreshes rather than switching, so this state survives
   await screen.findByText("Mist rolls in.");
 });
+
+test("an opener finishing after a scene switch does not drag the reader back", async () => {
+  // `onSeeded` NAVIGATES (`selectScene(activeId)`), closed over the id the
+  // render was given — so calling it unconditionally would reselect the scene
+  // the reader deliberately left, failure included.
+  let release: (v: any) => void = () => {};
+  (api.opener as any).mockImplementation(() => new Promise((r) => { release = r; }));
+  const onSeeded = vi.fn();
+  const { rerender } = render(
+    <CastPanel cid="c" sid="s" ready onSeeded={onSeeded} />);
+  fireEvent.change(screen.getByLabelText("Opener prompt"), { target: { value: "A foggy harbor" } });
+  fireEvent.click(screen.getByRole("button", { name: /generate/i }));
+
+  rerender(<CastPanel cid="c" sid="s2" ready onSeeded={onSeeded} />);
+  release(undefined);
+  await new Promise((r) => setTimeout(r, 0));
+
+  expect(onSeeded).not.toHaveBeenCalled();
+});

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api, type Actor, type CharacterSummary, type EntitySummary,
   type PCSummary, type RosterEntry, type SceneLocation, type SceneDatetime,
@@ -129,6 +129,11 @@ export function CastPanel({
     }
   }
 
+  // Which campaign/scene this panel is showing NOW, readable from a callback
+  // created under a previous one. See `generate`'s `finally`.
+  const live = useRef(`${cid}/${sid}`);
+  useEffect(() => { live.current = `${cid}/${sid}`; }, [cid, sid]);
+
   async function generate() {
     if (!prompt.trim() || busy) return;
     setError(null);
@@ -151,10 +156,16 @@ export function CastPanel({
       // The backend records an `opener` prompt snapshot for this attempt, and
       // nothing else here bumps the refresh — so without this the inspector's
       // Turn history keeps saying "No captured turns yet", and a rejected
-      // preview leaves the row invisible indefinitely (#157). `selectScene` on
-      // the SAME id only refreshes: it does not switch scenes, so the preview
-      // above survives it.
-      onSeeded();
+      // preview leaves the row invisible indefinitely (#157).
+      //
+      // Guarded, because `onSeeded` NAVIGATES: the parent's version is
+      // `() => selectScene(activeId)`, closed over the id this render was given.
+      // On the same scene that is a refresh and the preview above survives it —
+      // but a reader who started an opener in scene A and moved to B would be
+      // yanked back to A when the request finished, failure included. A ref,
+      // because this callback closes over the props it was created with, so
+      // comparing those to themselves would always agree.
+      if (live.current === `${cid}/${sid}`) onSeeded();
     }
   }
 

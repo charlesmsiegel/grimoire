@@ -87,9 +87,12 @@ def depth() -> int:
         return int(default)
 
 
-#: Longest id `_read_index` will admit. Ids are `f"{n:06d}"` off a counter that
-#: advances once per captured turn, so 18 digits is unreachable by orders of
-#: magnitude -- it exists only to keep a corrupt file's id out of `int()`.
+#: Longest id `_well_formed_row` will admit. Ids are `f"{n:06d}"` off a counter
+#: that advances once per captured turn, so 18 digits is unreachable by orders
+#: of magnitude -- it exists only to keep a corrupt file's id out of `int()`,
+#: which CPython refuses past `sys.int_info.str_digits_check_threshold` (4300).
+#: `safe_id` caps nothing and `"1" * 5000` is `isdigit()`, so neither of those
+#: catches it.
 _MAX_ID_DIGITS = 18
 
 
@@ -153,25 +156,28 @@ def _read_index(cid: str, strict: bool = False) -> dict:
         # fail every generating turn over an unreadable debug file. Both are the
         # same thing to this module: a file it cannot use.
         return {"next": 1, "entries": []}
+    try:
+        return _normalized(data)
+    except Exception:  # noqa: BLE001 - see below
+        # BROAD, and the fourth attempt at this. Interpreting the index has now
+        # thrown four different types from four different values: `int("legacy")`
+        # -> ValueError, invalid UTF-8 -> UnicodeDecodeError, a 5000-digit id ->
+        # ValueError, `"next": 1e999` -> inf -> OverflowError. Each was caught by
+        # name, and the next hand-edited value found the next gap. The question
+        # this file actually asks is "can I interpret this?", and every negative
+        # answer means the same thing -- an unusable debug file -- so it is
+        # answered once, here, instead of by enumerating the ways JSON can hold
+        # a surprise. The READ above stays narrow, because there OSError and
+        # "corrupt" are genuinely different (see `strict`).
+        return {"next": 1, "entries": []}
+
+
+def _normalized(data: object) -> dict:
+    """The index as this module uses it, or a raise. See `_read_index`."""
     if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
         return {"next": 1, "entries": []}
-    # Ids must be path-safe, numeric, AND short. Numeric because `next` is
-    # derived from them below, and `int("legacy")` raising there would escape
-    # `record`'s OSError-only guard and 500 a chat turn -- turning a hand-edited
-    # debug file into a failed generation, which is the one thing this module
-    # promises not to do.
-    #
-    # Short for the same reason and not for tidiness: `safe_id` caps nothing,
-    # `"1" * 5000` is `isdigit()`, and CPython refuses `int()` on a string over
-    # `sys.int_info.str_digits_check_threshold` (4300 by default) -- with a
-    # ValueError, through the same hole. `_MAX_ID_DIGITS` is far past any id
-    # this module could ever have written, so anything longer is corruption by
-    # definition. A row failing any of the three is dropped, like any other.
     entries = [e for e in data["entries"] if _well_formed_row(e)]
-    try:
-        nxt = int(data.get("next", 1))
-    except (TypeError, ValueError):
-        nxt = 1
+    nxt = int(data.get("next", 1))
     # Never below what the surviving rows already use, or a rebuilt index
     # reissues a live id and two turns share one payload file.
     return {"next": max(nxt, *(int(e["id"]) + 1 for e in entries)) if entries else max(nxt, 1),
@@ -344,7 +350,14 @@ def read_entry(cid: str, eid: str, scene: str | None = None) -> dict | None:
         data = json.loads(p.read_text(encoding="utf-8"))
     except (ValueError, OSError):   # ValueError covers UnicodeDecodeError -- see _read_index
         return None
-    return data if _well_formed(data) else None
+    # The payload must be the one that was asked for. A structurally valid
+    # snapshot sitting under the wrong filename -- a hand edit, a sync conflict
+    # resolved by renaming -- would otherwise be authorised by the index as
+    # entry A and served with entry B's prompt text under A's heading, which is
+    # the single thing this panel exists not to do.
+    if not _well_formed(data) or data["id"] != eid:
+        return None
+    return data
 
 
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
@@ -406,9 +419,23 @@ def _drop_scenes(cid: str, scenes: set[str]) -> None:
     Takes the lock itself because it is reached two ways: from inside
     `repoint_scenes`' own hold, where it is free (reentrant), and from that
     function's outer `except`, where the hold has already been unwound and this
-    would otherwise read-modify-write the index unserialized."""
+    would otherwise read-modify-write the index unserialized.
+
+    Reads STRICTLY. A lenient read turns an unreadable index into an empty one,
+    so `gone` comes back empty and this returns as though it had cleaned up --
+    while the rows are still on disk under an id the transcript has left. The
+    caller swallows the raise either way, so the observable behaviour is the
+    same; what changes is that this stops reporting success it did not achieve.
+
+    The limit, stated rather than papered over: when the index cannot be read at
+    ALL -- both the repoint and this fallback -- nothing here can invalidate the
+    rows, and they survive. Closing that would need a second durable mechanism
+    (a tombstone consulted by `list_entries`), which is more machinery than a
+    rolling debug window warrants. It requires a filesystem failing in both
+    directions, and even then the module's actual promise holds: play data is
+    untouched, and only a debug view is wrong."""
     with locks.campaign_lock(cid):
-        index = _read_index(cid)
+        index = _read_index(cid, strict=True)
         gone = [e for e in index["entries"] if e.get("scene") in scenes]
         if not gone:
             return
