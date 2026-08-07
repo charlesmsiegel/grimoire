@@ -15,8 +15,8 @@ from fastapi.responses import Response
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from .common import (computes_only, _campaign_root_or_404, _content_fields, _dump, _require_connection,
-                     _response_body, get_llm,
+from .common import (computes_only, _bounded_call, _campaign_root_or_404, _content_fields,
+                     _dump, _require_connection, _response_body, get_llm,
                      _serve_image, _write_response)
 from .models import (AvatarFocus, CalendarConfig, CampaignClimate, CopyFromGreeting,
                      DefaultVersion, GroupStateSave, NameBody, NewCampaign, PCCreate,
@@ -640,8 +640,8 @@ async def post_campaign_voice_anchor_generate(cid: str, char: str,
         # See the world-side route: `{}` and `{"data": ["speech"]}` are both
         # supported card state, and the template renders "(none)" per field.
         data = card.get("data")
-        text = await client.complete(
-            store.voice_anchors.build_prompt(data if isinstance(data, dict) else {}), conn)
+        text = await _bounded_call(client.complete(
+            store.voice_anchors.build_prompt(data if isinstance(data, dict) else {}), conn))
     except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     return {"voice_anchor": store.voice_anchors.parse_output(text)}

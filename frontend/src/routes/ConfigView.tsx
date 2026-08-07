@@ -16,6 +16,7 @@ export default function ConfigView() {
   const [assistantLabel, setAssistantLabel] = useState("");
   const [llmTimeout, setLlmTimeout] = useState("");
   const [absorbBudget, setAbsorbBudget] = useState("");
+  const [llmCallBudget, setLlmCallBudget] = useState("");
   const [contextBudget, setContextBudget] = useState("");
   const [archiveDepth, setArchiveDepth] = useState("");
   const [promptLogDepth, setPromptLogDepth] = useState("");
@@ -33,6 +34,7 @@ export default function ConfigView() {
       setAssistantLabel(c.assistant_label);
       setLlmTimeout(c.llm_timeout);
       setAbsorbBudget(c.absorb_budget);
+      setLlmCallBudget(c.llm_call_budget);
       setContextBudget(c.context_budget);
       setArchiveDepth(c.archive_depth);
       setPromptLogDepth(c.prompt_log_depth);
@@ -45,7 +47,7 @@ export default function ConfigView() {
 
   if (!config) return <div className="page page-narrow config">Loading…</div>;
 
-  async function save(fields: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; context_budget: string; archive_depth: string;
+  async function save(fields: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; llm_call_budget: string; context_budget: string; archive_depth: string;
                         prompt_log_depth: string; turnstate_depth: string; promote_streak: string;
                         rolling_summary_every: string }>) {
     const next = await api.putConfig(fields);
@@ -92,6 +94,11 @@ export default function ConfigView() {
           <input id="cfg-absorb-budget" type="text" inputMode="numeric" value={absorbBudget}
                  placeholder="600" onChange={(e) => setAbsorbBudget(e.target.value)} />
         </div>
+        <div className="field">
+          <label htmlFor="cfg-llm-call-budget">One-shot call ceiling (seconds)</label>
+          <input id="cfg-llm-call-budget" type="text" inputMode="numeric" value={llmCallBudget}
+                 placeholder="300" onChange={(e) => setLlmCallBudget(e.target.value)} />
+        </div>
       </div>
       <p className="field-hint">
         How long a generation may go without sending anything before it is abandoned, and
@@ -99,6 +106,13 @@ export default function ConfigView() {
         in total — past the budget, the remaining dossier refreshes are skipped and the
         audit reports as failed, leaving the absorb itself intact. Set either to
         <code> 0</code> to remove the limit, e.g. for a slow local endpoint.
+      </p>
+      <p className="field-hint">
+        The call ceiling bounds one whole one-shot generation — a tagline, a voice
+        anchor, scene suggestions — because a reply that keeps trickling in never trips
+        the no-reply timeout above. Scene prose is deliberately exempt (a long reply you
+        are already reading must not be cut off mid-sentence), and so is absorb, which
+        the budget beside it already covers. <code>0</code> removes it.
       </p>
 
       <div className="section-label">Context</div>
@@ -220,6 +234,7 @@ export default function ConfigView() {
             system_prompt: systemPrompt,
             user_label: userLabel, assistant_label: assistantLabel,
             llm_timeout: llmTimeout, absorb_budget: absorbBudget,
+            llm_call_budget: llmCallBudget,
             context_budget: contextBudget, archive_depth: archiveDepth,
             prompt_log_depth: promptLogDepth,
             turnstate_depth: turnstateDepth, promote_streak: promoteStreak,

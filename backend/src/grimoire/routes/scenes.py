@@ -9,13 +9,13 @@ import contextlib
 import threading
 import time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
 from .. import prompts, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from .common import (computes_only, _campaign_root_or_404, _dump, _record_prompt,
+from .common import (computes_only, _bounded_call, _campaign_root_or_404, _dump, _record_prompt,
                      _require_connection, _require_scene, _response_body, _turn_override,
                      _write_response, get_llm)
 from .models import (Appear, AppearBatch, ChatTurn, ChronicleSave, Dismiss, EditMessage,
@@ -74,7 +74,7 @@ async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: 
     messages = store.suggest.build_prompt(store.suggest.build_snapshot(cid, offscreen=offscreen),
                                           candidates, offscreen=offscreen)
     try:
-        text = await client.complete(messages, conn)
+        text = await _bounded_call(client.complete(messages, conn))
     except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     loc_names = {e["id"]: e.get("name", e["id"]) for e in store.overlay.list_entities(cid, "locations")}
@@ -646,6 +646,79 @@ _clock = time.monotonic
 BUDGET_EXHAUSTED = "absorb time budget exhausted"
 
 
+class Abandoned(Exception):
+    """Nobody is waiting for this work any more, so it stopped.
+
+    Not an LLMError: no call failed and no clock ran out. The phases that catch
+    it turn it into their own "the review was closed" status, and both scoped
+    retries hand that back to a client that has already gone -- the value is in
+    stopping, not in what is returned.
+    """
+
+
+ABANDON_POLL = 0.5
+
+# What a scoped retry answers once nobody is waiting for it. Vestigial by
+# construction -- the connection these would travel down is closed -- but the
+# route still has to return something, and a body that claims the phase ran
+# would be the one thing worse than none. `attempted` is deliberately true: a
+# call did go out, it just has no reader.
+_ABANDONED_REASON = "the review this was for was closed before it finished"
+_ABANDONED_DOSSIERS = {
+    "dossiers": {"status": "failed", "reason": _ABANDONED_REASON,
+                 "proposed": [], "failed": [], "skipped": [],
+                 "attempted": True, "budget_exhausted": False},
+    "edits": []}
+_ABANDONED_AUDIT = {
+    "mechanics": {"status": "failed", "reason": _ABANDONED_REASON,
+                  "warnings": [], "dropped": [],
+                  "attempted": True, "budget_exhausted": False},
+    "edits": []}
+
+
+async def _watched(coro, abandoned, poll: float = ABANDON_POLL):
+    """Await `coro`, giving up on it if the caller goes away while it runs.
+
+    A client disconnect does NOT cancel a plain endpoint -- uvicorn runs it to
+    completion -- so without this nothing notices. Checking only *between* calls
+    is not enough either, which is the gap this closes: a single wedged call
+    (the audit is one call; the first NPC of a dossier run is another) holds the
+    request for as long as the provider keeps dribbling inside the idle bound,
+    and `absorb_budget = 0` means no deadline ever ends it. Cancel is exactly
+    what the panel offers as the way out of that, so the call is raced against
+    the check rather than merely bracketed by it.
+
+    The abandoned call is cancelled and detached, not awaited: `llm._settle`'s
+    reason -- waiting for the cancellation you asked for hands the unwinding the
+    very control you were taking back.
+    """
+    if abandoned is None:
+        return await coro
+    task = asyncio.ensure_future(coro)
+
+    def detach():
+        task.cancel()
+        task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
+
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=poll)
+            if done:
+                return task.result()
+            if await abandoned():
+                detach()
+                raise Abandoned
+    except asyncio.CancelledError:
+        # The REQUEST was cancelled -- a graceful-shutdown deadline, or a server
+        # that does cancel handlers on disconnect. `asyncio.wait` re-raises that
+        # straight through here, and the child is a separately scheduled task
+        # that nothing else holds: without this it keeps generating, outliving
+        # the request whose cost this helper exists to bound. Same condition
+        # `_bounded_call` covers, same treatment.
+        detach()
+        raise
+
+
 class BudgetRefused(LLMError):
     """The budget was already gone, so the call was never issued.
 
@@ -759,14 +832,19 @@ def _phase_report(dossiers: dict, voice: dict, mechanics: dict) -> list[dict]:
 
 
 async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
-                     budget: _Budget) -> tuple[list[dict], dict]:
-    """(edits, mechanics) for the scene audit. Never raises; every failure is
-    an explicit mechanics status (spec: audit visibility) so absorb stays
-    intact even when the audit pipeline blows up.
+                     budget: _Budget, abandoned=None) -> tuple[list[dict], dict]:
+    """(edits, mechanics) for the scene audit. Never raises for absorb; every
+    failure is an explicit mechanics status (spec: audit visibility) so absorb
+    stays intact even when the audit pipeline blows up.
 
     `attempted` says whether a request actually reached the model and
     `budget_exhausted` says whether this absorb's clock is why it did not --
-    the two facts a bare `status: failed` cannot carry."""
+    the two facts a bare `status: failed` cannot carry.
+
+    `abandoned` is _stage_dossiers' predicate, and matters more here: the audit
+    is ONE call, so there is no "between calls" for a check to sit in. Watching
+    the call itself is the only thing that can end it. Absorb passes nothing, so
+    the never-raises rule above is untouched on that path."""
     mech = {"status": "skipped", "reason": None, "warnings": [], "dropped": [],
             "attempted": False, "budget_exhausted": False}
     excluded: list = []
@@ -792,10 +870,17 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
         # `mech` is the accumulator every failure return below spreads, so the
         # callback reaches all of them -- and it fires only if the request goes
         # out, which is a fact only `run` holds.
-        text = await budget.run(client.complete(messages, conn),
-                                lambda: mech.__setitem__("attempted", True))
+        text = await _watched(
+            budget.run(client.complete(messages, conn),
+                       lambda: mech.__setitem__("attempted", True)), abandoned)
         parsed = store.audit.parse_output(text)
         edits, dropped = store.audit.materialize(cid, sid, parsed)
+    except Abandoned:
+        # Ahead of the boundary below on purpose. That boundary exists so a
+        # broken audit cannot fail an absorb; this is not a broken audit, it is
+        # nobody waiting for one, and turning it into a `failed` mechanics
+        # status would report a phase that ran and did not work.
+        raise
     except BudgetRefused:
         # Never asked, so there is no finding to doubt -- only work still owed.
         # Still `failed` (not `skipped`) and still paired with the POST /audit
@@ -822,7 +907,8 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
 
 
 async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient,
-                          conn: dict, budget: _Budget) -> tuple[list[dict], dict]:
+                          conn: dict, budget: _Budget,
+                          abandoned=None) -> tuple[list[dict], dict]:
     """Propose a refreshed campaign dossier for every present NPC, reporting the
     outcome.
 
@@ -833,10 +919,17 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
     generated, not written; an NPC whose paragraph came back unchanged is proposed
     with no edit to show for it.
 
-    Never raises -- a dossier failure must not fail absorb -- but it is not silent
-    either: failures (#236) and budget skips (#243) come back as a status the
-    inspector renders, mirroring _run_audit's shape -- including `attempted` and
-    `budget_exhausted`, the two flags a phase row is built from."""
+    Never raises for absorb -- a dossier failure must not fail absorb -- but it
+    is not silent either: failures (#236) and budget skips (#243) come back as a
+    status the inspector renders, mirroring _run_audit's shape -- including
+    `attempted` and `budget_exhausted`, the two flags a phase row is built from.
+
+    `abandoned` is an optional async predicate: "is anyone still waiting for
+    this?". It is asked between NPCs and, via `_watched`, alongside the call in
+    flight; when it says no, `Abandoned` comes out and the caller that supplied
+    the predicate turns it into a response. Absorb passes nothing -- its caller
+    is holding a review open and has not gone anywhere -- so the never-raises
+    rule above is untouched on that path: no predicate, no Abandoned."""
     out: dict = {"status": "skipped", "reason": None,
                  "proposed": [], "failed": [], "skipped": [],
                  "attempted": False, "budget_exhausted": False}
@@ -862,6 +955,18 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
         if budget.spent():
             drop_tail(i)
             break
+        # The reviewer walked away -- closed the review, saved it, switched
+        # campaigns -- and the client aborted. Nothing will ever read this
+        # reply, so every remaining NPC is an LLM call spent on nobody's behalf,
+        # and `absorb_budget = 0` means the check above will never stop them.
+        #
+        # This one keeps the NEXT call from being issued at all; `_watched`
+        # below stops the one already in flight. Both, because they cover
+        # different moments: a disconnect during the gap between NPCs is caught
+        # here at once, rather than costing a doomed call that `_watched` then
+        # has to cancel a poll interval later.
+        if abandoned is not None and await abandoned():
+            raise Abandoned
         try:
             name = store.characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
             # Read ONCE, before the await. Re-reading after it to build the
@@ -873,8 +978,9 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
             # The loop's own check is stale by now -- the two reads and the
             # prompt build above are not free -- so the attempt is recorded by
             # `run`, which alone can decide it atomically with the deadline.
-            d_text = await budget.run(client.complete(msgs, conn),
-                                      lambda: out.__setitem__("attempted", True))
+            d_text = await _watched(
+                budget.run(client.complete(msgs, conn),
+                           lambda: out.__setitem__("attempted", True)), abandoned)
             parsed_dossier = store.dossiers.parse_output(d_text)
             # stage_edit returns None for an unchanged paragraph AND for a blank
             # reply; only the first is a success. Left conflated, a model that
@@ -884,6 +990,11 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
                 out["failed"].append({"id": a["id"], "reason": "empty dossier reply"})
                 continue
             edit = store.dossiers.stage_edit(a["id"], name, prior, parsed_dossier)
+        except Abandoned:
+            # Ahead of the generic handler below on purpose: this is not this
+            # NPC's failure to record and move past, it is the whole run being
+            # over. The loop's caller turns it into a status rather than a 500.
+            raise
         except BudgetRefused:
             # Refused, not failed: nothing was sent, so this NPC is one more the
             # clock never reached — and so is everyone after them.
@@ -1254,17 +1365,27 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
 
 @router.post("/campaigns/{cid}/scenes/{sid}/audit")
 @computes_only  # a retry of absorb's audit step alone: same staged edits, same nothing written
-async def post_audit(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
+async def post_audit(cid: str, sid: str, request: Request,
+                     client: LLMClient = Depends(get_llm)):
     """Standalone audit retry: re-runs ONLY the audit step (never the prose
-    absorb), returning fresh `expect` values on any resulting sheet edits."""
+    absorb), returning fresh `expect` values on any resulting sheet edits.
+
+    Takes the request for its disconnect check, the dossier retry's reason: a
+    hangup does not cancel a plain endpoint, so releasing the review would
+    otherwise leave this call running against a provider that dribbles inside
+    the idle bound -- forever, when `absorb_budget = 0`."""
     _require_scene(cid, sid)
     conn = _require_connection()
     if store.modules.resolve(cid) is None:
         raise HTTPException(status_code=400, detail="no module resolved")
     # A retry gets its own budget — it never inherits the deadline of whatever
     # absorb ran out of time earlier.
-    edits, mechanics = await _run_audit(cid, sid, client, conn,
-                                        _Budget(store.config.absorb_budget()))
+    try:
+        edits, mechanics = await _run_audit(cid, sid, client, conn,
+                                            _Budget(store.config.absorb_budget()),
+                                            abandoned=request.is_disconnected)
+    except Abandoned:
+        return _ABANDONED_AUDIT
     return {"mechanics": mechanics, "edits": edits}
 
 
@@ -1696,6 +1817,54 @@ async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: i
     # rather than the `stale: false` a just-written summary would otherwise
     # always claim. The panel's Refresh button renders this answer directly.
     return {**_rolling_body(result["view"], every), "refreshed": result["landed"]}
+@router.post("/campaigns/{cid}/scenes/{sid}/dossiers")
+async def post_dossiers(cid: str, sid: str, request: Request,
+                        client: LLMClient = Depends(get_llm)):
+    """Standalone dossier retry: re-runs ONLY the dossier phase (never the prose
+    absorb), returning the same `dossiers` block and staged edits an absorb
+    carries (#286).
+
+    The audit has had this since #235 and the dossier phase has not, so a budget
+    that ran out mid-flight left "End scene again" as the only way to get those
+    dossiers -- and that re-runs every phase and replaces the review wholesale,
+    discarding whatever the reviewer had already approved or typed.
+
+    Every present NPC is re-run, not just the ones `skipped`/`failed` last time.
+    That is deliberate: a per-NPC retry list would have to merge two dossier
+    blocks in the client, and neither the status nor the reason is a merge of
+    its parts. The re-run is also not the wasted work it looks like -- what
+    starved the phase was sharing one budget with the extraction, voice and
+    audit steps, and this hands the whole budget to dossiers alone, so the run
+    that was cut short at NPC 6 of 8 typically now reaches all 8. A phase that
+    cannot finish even on its own full budget genuinely needs a bigger one.
+
+    Staged, never written (#235), for the same reason absorb stages: these land
+    with the rest of the batch in PUT /chronicle, so a reviewer who hits Cancel
+    leaves nothing behind.
+
+    Cancel also stops the work, not just the waiting. A disconnect does NOT
+    cancel a plain endpoint -- uvicorn runs it to completion -- so leaving this
+    to the client's abort alone would keep one LLM call per remaining NPC going
+    for a review that no longer exists, unbounded when `absorb_budget = 0`. The
+    loop is given the request's own disconnect check instead."""
+    scene = _require_scene(cid, sid)
+    conn = _require_connection()
+    if not scene["messages"]:
+        # A dossier is a paragraph the model rewrites FROM the transcript, so an
+        # empty one can only produce invention. The audit needs no equivalent
+        # guard: with nothing to audit it simply finds nothing, where this would
+        # stage a proposal to overwrite a real dossier with fiction.
+        raise HTTPException(status_code=400, detail="nothing to build dossiers from")
+    transcript = store.chronicle.transcript_text(scene["messages"])
+    # A retry gets its own budget — it never inherits the deadline of whatever
+    # absorb ran out of time earlier (post_audit's reason, verbatim).
+    try:
+        edits, dossiers = await _stage_dossiers(cid, sid, transcript, client, conn,
+                                                _Budget(store.config.absorb_budget()),
+                                                abandoned=request.is_disconnected)
+    except Abandoned:
+        return _ABANDONED_DOSSIERS
+    return {"dossiers": dossiers, "edits": edits}
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}/chronicle")

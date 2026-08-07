@@ -344,9 +344,15 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // slot and hides the very set the user was trying to cycle. So the failure
   // carries whether a generation is what it wants, rather than the banner
   // assuming so.
-  const [error, setError] = useState<{ text: string; retryable: boolean } | null>(null);
-  const fail = (e: any, retryable = true) =>
-    setError({ text: e?.detail ?? String(e), retryable });
+  // `from` names the operation that raised it. The banner is global but the
+  // reviews are not: an absorb review survives a scene switch, so a chat error
+  // raised in scene B can be on screen while scene A's review is still open.
+  // Without the tag, A's retry clearing "the previous attempt's error" would
+  // take B's unrelated failure -- and its generate-a-reply Retry -- with it.
+  const [error, setError] =
+    useState<{ text: string; retryable: boolean; from?: string } | null>(null);
+  const fail = (e: any, retryable = true, from?: string) =>
+    setError({ text: e?.detail ?? String(e), retryable, from });
   const [ctxKey, setCtxKey] = useState(0);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   const [rerollPrompt, setRerollPrompt] = useState<string | null>(null); // null = popover closed
@@ -419,6 +425,44 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // open, so saving against the currently selected scene would commit scene A's
   // review onto scene B (#235).
   const [absorbSid, setAbsorbSid] = useState<string | null>(null);
+  // Which review is open, readable AFTER an await. A scoped retry (audit or
+  // dossiers) gets a budget of its own, so it can still be in flight minutes
+  // later -- long enough for the reviewer to Discard, absorb another scene, and
+  // be sitting in a *different* review when the answer lands. Applying it then
+  // writes one scene's phase report and staged edits into another scene's
+  // review, and that review's save commits them.
+  //
+  // `commit_token` rather than the `absorb` object: it is minted per absorb
+  // (`<epoch>-<uuid4>`, so unique even across two absorbs of the same scene)
+  // and survives the object being replaced, which typing in the one-line or
+  // summary field does on every keystroke. Object identity would drop a
+  // perfectly good answer the moment the reviewer edited the summary while
+  // waiting.
+  const openReviewRef = useRef<string | null>(null);
+  useEffect(() => { openReviewRef.current = absorb?.commit_token ?? null; }, [absorb]);
+  // …and which retry, within one review. `openReviewRef` cannot separate two
+  // retries of the SAME review: both capture the same token, so both pass that
+  // check whatever order they answer in, and a first request that returns
+  // second overwrites the fresher generation the reviewer is already looking
+  // at. `disabled` below is the visible half of the fix and this is the
+  // load-bearing half — it does not rest on React having re-rendered the
+  // button between two fast clicks.
+  const auditRetryRef = useRef(0);
+  const dossierRetryRef = useRef(0);
+  // The in-flight request behind each latch. The generation above stops a stale
+  // ANSWER from landing; this stops the WORK. They are not the same thing: the
+  // endpoint runs one LLM call per present NPC on a fresh `absorb_budget`, and
+  // `0` means that budget is unbounded, so a retry nobody is waiting for any
+  // more goes on spending time and credits until it finishes on its own.
+  const auditAbortRef = useRef<AbortController | null>(null);
+  const dossierAbortRef = useRef<AbortController | null>(null);
+  // The campaign as of the latest render, for continuations to check themselves
+  // against. `cid` closed over inside an async function is the campaign that
+  // STARTED it, which is exactly what makes it a usable comparison.
+  const campaignRef = useRef(cid);
+  campaignRef.current = cid;
+  const [retryingAudit, setRetryingAudit] = useState(false);
+  const [retryingDossiers, setRetryingDossiers] = useState(false);
   const [absorbing, setAbsorbing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editRows, setEditRows] = useState<(StagedEdit & { approved: boolean })[]>([]);
@@ -427,6 +471,54 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // server sends back are bound to positions in the submitted batch, so the
   // routing is a rendering decision and never a reordering one.
   const [showLow, setShowLow] = useState(false);
+
+  // Every in-flight operation that rewrites the open review. `saveAbsorb`'s
+  // conflict bookkeeping is built on "`saving` latches the panel for the whole
+  // round-trip" -- it resolves the server's batch indices against `editRows`
+  // as the array the batch was built from. A scoped retry outside that latch
+  // makes the comment false: rebuild the rows mid-PUT and a clean save commits
+  // the pre-retry batch (dropping what was just retried), while a refused one
+  // binds its indices to rows that have since moved. So the three share one
+  // latch rather than each holding its own.
+  const reviewBusy = saving || retryingAudit || retryingDossiers;
+
+  // Closing or replacing a review abandons any retry still running for the old
+  // one. Bumping the generations makes those answers land on a `!== gen` check
+  // and be dropped -- which is also what stops their `finally` from clearing a
+  // latch the NEW review now owns -- and clearing the latches here rather than
+  // waiting for that `finally` is what keeps the new review's buttons live.
+  // Waiting would disable them for as long as the abandoned request takes:
+  // the whole absorb budget, or forever, since `absorb_budget = 0` means the
+  // retry it gets is unbounded too.
+  //
+  // A scoped failure belongs to the review just as much as the latch does, so
+  // it is dropped here too. Left standing, the banner outlives the review it
+  // reports on -- Cancel, a successful save or a campaign switch all leave
+  // "the dossier retry failed" on screen for a review that no longer exists,
+  // and the cid effect below carries it into the NEXT campaign. Only the two
+  // tags this panel raises are cleared: the banner is shared, and an untagged
+  // chat error (with its generate-a-reply Retry) is not this review's to take.
+  // Just the requests, no state. Split out because unmount needs exactly this
+  // half: leaving the campaign section entirely (to Configuration, say) does not
+  // re-run the `[cid]` effect, it destroys the component -- and SPA navigation
+  // does not cancel a fetch, so without an unmount cleanup the retry keeps
+  // running with nobody left to receive it and no disconnect for the server to
+  // notice. Setting state from a cleanup on an unmounted component is the one
+  // thing that must NOT happen here, hence the split.
+  function abortRetries() {
+    auditAbortRef.current?.abort();
+    dossierAbortRef.current?.abort();
+    auditAbortRef.current = dossierAbortRef.current = null;
+  }
+
+  function releaseRetries() {
+    auditRetryRef.current++;
+    dossierRetryRef.current++;
+    abortRetries();
+    setRetryingAudit(false);
+    setRetryingDossiers(false);
+    setError((e) => (e?.from === "audit" || e?.from === "dossiers" ? null : e));
+  }
   const [editFailures, setEditFailures] = useState<
     { id: string; reason: string; kind: "conflict" | "error"; label: string }[]>([]);
   // Rows the server refused because their target moved since the scene was
@@ -485,6 +577,18 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   }
 
   useEffect(() => {
+    // A review is campaign-scoped state. The route has no `key`, so React Router
+    // reuses this component for campaign A -> B (browser Back between two
+    // campaigns does it), leaving `absorb`/`absorbSid` pointing at A while `cid`
+    // is B -- and every request they drive, the scoped retries and the SAVE
+    // alike, would then be posted to B. Scene ids repeat across campaigns, so
+    // those requests succeed rather than 404.
+    releaseRetries();
+    setAbsorb(null);
+    setAbsorbSid(null);
+    setEditRows([]);
+    setConflicts([]);
+    setSaveError(null);
     api.getCampaign(cid).then((c) => {
       setName(c.meta.name);
       setWorldName(c.meta.world_name ?? ""); // embedded: no second fetch
@@ -498,6 +602,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       setLabels({ user: c.user_label || "You", assistant: c.assistant_label || "Grimoire" });
     }).catch(() => {});
     api.listResponsePresets().then(setResponsePresets).catch(() => setResponsePresets([]));
+    // Leaving the campaign section entirely unmounts instead of re-running this,
+    // so the release above never happens on that path — abort here or the retry
+    // outlives the screen that could use it.
+    return abortRetries;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid]);
 
@@ -1829,6 +1937,17 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // transcript absorbed, with staged edits derived from narration it never
     // read. The same reasoning as the rule above, for the other latch.
     if (!activeId || absorbing || rolling) return;
+    // Release the outgoing review's retries BEFORE issuing the absorb that will
+    // replace it, not after. A retry still running here is answering a review
+    // this call is about to discard, so leaving it up meant two expensive
+    // pipelines against the same scene at once -- duplicate dossier calls, and
+    // with `absorb_budget = 0` neither one bounded.
+    //
+    // Released rather than blocked: adding `reviewBusy` to this button's
+    // disabled condition would close the escape hatch. A wedged retry on an
+    // unbounded budget is exactly when the reader needs End scene, which is the
+    // same reason Cancel stays live during a retry.
+    releaseRetries();
     setAbsorbing(true);
     setError(null);
     setEditFailures([]);
@@ -1845,12 +1964,27 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           "Absorb it again?")) return;
         a = await api.absorbScene(cid, activeId, true);
       }
+      // The review belongs to the campaign that asked for it. An absorb is the
+      // slowest request in the app -- several LLM calls -- so there is ample
+      // room to switch campaigns while it runs, and the `[cid]` effect that
+      // clears review state cannot touch a request already in flight. Installing
+      // this would put A's summary, timeline and staged edits in front of B,
+      // where Save posts them to B: scene ids repeat across campaigns and a
+      // fresh commit token matches, so nothing downstream would refuse them.
+      if (campaignRef.current !== cid) return;
       setAbsorb(a);
       setAbsorbSid(activeId);
       setEditRows(a.edits.map((e) => ({ ...e, approved: approvedByDefault(e) })));
       setShowLow(false);
     } catch (err: any) {
-      fail(err);
+      // Same guard on the failure path: A's banner over B is the same category
+      // of wrong answer, just a cheaper one.
+      if (campaignRef.current !== cid) return;
+      // `false`, for the scoped retries' reason: the banner's Retry runs the
+      // CHAT retry, so it would answer a failed absorb by generating one more
+      // reply into the scene the user was trying to finish. End scene is its
+      // own recovery, and it is still right there.
+      fail(err, false);
     } finally {
       setAbsorbing(false);
     }
@@ -1877,6 +2011,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         // when the first PUT landed and only its response was lost (#235).
         commit_token: absorb.commit_token });
       setEditFailures(res.failures.map((f) => ({ ...f, label: labels.get(f.id) ?? f.id })));
+      releaseRetries();
       setAbsorb(null);
       setAbsorbSid(null);
       setEditRows([]);
@@ -1968,8 +2103,25 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // that scene's verdict, sheet edits and phase row into this review.
     const sid = absorbSid ?? activeId;
     if (!sid) return;
+    const review = absorb?.commit_token ?? null;
+    const gen = ++auditRetryRef.current;
+    // Clear THIS retry's own previous failure on the way in -- otherwise it
+    // outlives the attempt that fixed it, and a recovery reads as a second
+    // failure. Scoped by `from`, because the banner is shared with
+    // operations that have nothing to do with this review.
+    setError((e) => (e?.from === "audit" ? null : e));
+    const ctl = new AbortController();
+    auditAbortRef.current = ctl;
+    setRetryingAudit(true);
     try {
-      const res = await api.retryAudit(cid, sid);
+      const res = await api.retryAudit(cid, sid, ctl.signal);
+      // Superseded by a later click on the same review — see `auditRetryRef`.
+      if (auditRetryRef.current !== gen) return;
+      // The review this answer was asked for is gone (discarded, or saved and
+      // replaced by another absorb) -- see `openReviewRef`. Dropping it is the
+      // whole fix: `setAbsorb`'s own null-check passes once a NEW review is
+      // open, so "is anything open" is not the question.
+      if (openReviewRef.current !== review) return;
       // The audit phase row is a projection of `mechanics` (backend:
       // _phase_report), so it has to move with it — otherwise the panel keeps
       // reporting a budget that ran out for a step this retry has since run.
@@ -1989,7 +2141,93 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // over; the next save re-reports whatever is still drifted.
       setConflicts([]);
     } catch (err: any) {
-      fail(err);
+      // The same two guards the success path takes, for the same reason: an
+      // answer -- failure included -- that belongs to a superseded retry or a
+      // review that is gone must not reach the screen. Cancel stays enabled
+      // during a retry by design, so a request abandoned that way and rejecting
+      // later would otherwise drop its banner over a replacement review.
+      if (auditRetryRef.current !== gen || openReviewRef.current !== review) return;
+      // `false`: the banner's Retry runs the CHAT retry, which generates
+      // another scene reply. Offering it for a failed audit would extend the
+      // very scene whose end-of-scene review is open, and still not re-run the
+      // audit. The scoped Retry button in the notice is the recovery.
+      fail(err, false, "audit");
+    } finally {
+      // Only the newest retry owns the latch: an older one clearing it would
+      // re-enable the button while its successor is still in flight.
+      if (auditRetryRef.current === gen) setRetryingAudit(false);
+    }
+  }
+
+  // The dossier phase's sibling to retryAudit (#286). Replaces `absorb.dossiers`
+  // with a fresh run of that phase and swaps in its staged dossiers, leaving
+  // every other staged edit (prose/relationship/sheet/…) exactly as the reviewer
+  // had it.
+  //
+  // The backend re-runs every present NPC, but only the ones it actually
+  // re-proposed are swapped here: a retry answers for those and says nothing
+  // about the rest. It reports per-NPC failures inside a 200, so an
+  // unconditional rebuild would let a retry that failed for Mara delete Mara's
+  // perfectly good proposal from the first pass and put nothing in its place —
+  // turning "retry the one we missed" into a net loss. An NPC the retry did
+  // prepare is replaced, including over a row the reviewer had retyped: that is
+  // the fresh proposal they asked for.
+  async function retryDossiers() {
+    // `absorbSid`, not `activeId` — retryAudit's reason, verbatim: a review
+    // survives a scene switch, so reading the rail would build dossiers from
+    // whatever the user has since opened and stage them into this review.
+    const sid = absorbSid ?? activeId;
+    if (!sid) return;
+    const review = absorb?.commit_token ?? null;
+    const gen = ++dossierRetryRef.current;
+    // Clear THIS retry's own previous failure on the way in -- otherwise it
+    // outlives the attempt that fixed it, and a recovery reads as a second
+    // failure. Scoped by `from`, because the banner is shared with
+    // operations that have nothing to do with this review.
+    setError((e) => (e?.from === "dossiers" ? null : e));
+    const ctl = new AbortController();
+    dossierAbortRef.current = ctl;
+    setRetryingDossiers(true);
+    try {
+      const res = await api.retryDossiers(cid, sid, ctl.signal);
+      // Both guards, in the order they can fail: superseded by a later retry of
+      // THIS review, then belonging to a review that is no longer open. The
+      // token cannot do the first job -- two retries of one review carry the
+      // same token -- so a first request answering second would otherwise
+      // overwrite the fresher generation on screen. retryAudit's reasons.
+      if (dossierRetryRef.current !== gen) return;
+      if (openReviewRef.current !== review) return;
+      // The dossiers phase row is a projection of `dossiers` (backend:
+      // _phase_report), so it has to move with it — otherwise the panel keeps
+      // reporting a budget that ran out for a step this retry has since run.
+      setAbsorb((a) => (a ? { ...a, dossiers: res.dossiers,
+        phases: a.phases.map((p) => (p.name === "dossiers"
+          ? { ...p, status: res.dossiers.status, reason: res.dossiers.reason,
+              attempted: res.dossiers.attempted,
+              budget_exhausted: res.dossiers.budget_exhausted }
+          : p)) } : a));
+      setEditRows((rows) => {
+        // `proposed` is the phase's own list of NPCs it prepared a dossier for
+        // — the same list its status is computed from, so this cannot drift
+        // from what the notice above says. It includes an NPC whose paragraph
+        // came back unchanged, which carries no edit: dropping that row is
+        // right, because "unchanged" is this run's answer for them.
+        const reproposed = new Set(res.dossiers.proposed);
+        return [
+          ...rows.filter((r) => r.kind !== "dossier" || !reproposed.has(r.target.id)),
+          ...res.edits.map((e) => ({ ...e, approved: true })),
+        ];
+      });
+      // Rebuilding the array invalidates row-bound conflicts — retryAudit's
+      // reason. Answered ones already live on the row (`resolve`/`resolve_from`)
+      // and are untouched; the unanswered badges dropped here come back on the
+      // next save, which re-checks every edit against what is stored.
+      setConflicts([]);
+    } catch (err: any) {
+      if (dossierRetryRef.current !== gen || openReviewRef.current !== review) return;
+      fail(err, false, "dossiers");   // retryAudit's reasons, both of them
+    } finally {
+      if (dossierRetryRef.current === gen) setRetryingDossiers(false);
     }
   }
 
@@ -2118,6 +2356,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       </div>
     );
   }
+
 
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -2400,12 +2639,15 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                 {/* Deliberately does NOT point at End scene: that button posts the
                     *active* scene and replaces this review wholesale, discarding
                     every edit the reviewer has already approved or typed. The audit
-                    has its own scoped Retry below; the dossier phase has none, so
-                    the honest advice is the setting, not a destructive re-run. */}
+                    and the dossier phase each have their own scoped Retry below
+                    (#286); the voice check does not, so the setting is still the
+                    only honest remedy for that one. */}
                 <p className="field-hint">
                   Cut short: {budgetCutPhases.map((p) => PHASE_LABELS[p.name]).join(", ")}. The
-                  summary and its edits above are complete and safe to save. Raise the absorb
-                  budget on the Configuration page so the next scene gets the rest.
+                  summary and its edits above are complete and safe to save. Where a step
+                  below offers a Retry, that re-runs it alone on a fresh budget; otherwise
+                  raise the absorb budget on the Configuration page so the next scene gets
+                  the rest.
                 </p>
               </div>)}
             {absorb.mechanics.status === "ok" && absorb.mechanics.warnings.length === 0 && (
@@ -2427,7 +2669,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                       : `Mechanics validation failed: ${absorb.mechanics.reason}`}</p>
                 {absorb.mechanics.dropped.map((d, i) => (
                   <p className="field-hint" key={i}>{d.id} {d.field ?? ""}: {d.reason}</p>))}
-                <button onClick={retryAudit}>Retry validation</button>
+                <button onClick={retryAudit} disabled={reviewBusy}>
+                  {retryingAudit ? "Retrying…" : "Retry validation"}</button>
               </div>)}
             {(absorb.dossiers.status === "failed" || absorb.dossiers.status === "degraded") && (
               <div className="mechanics-notice">
@@ -2438,6 +2681,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                   <p className="field-hint">
                     Never attempted, skipped: {absorb.dossiers.skipped.join(", ")}
                   </p>)}
+                {/* Offered for a budget skip and an outright failure alike, for
+                    the audit's reason: a fresh budget is what the retry gets, and
+                    a phase that broke on its own merits is still worth one more
+                    ask before the reviewer gives up on it. */}
+                <button onClick={retryDossiers} disabled={reviewBusy}>
+                  {retryingDossiers ? "Retrying…" : "Retry dossiers"}</button>
               </div>)}
             {(absorb.voice.status === "failed" || absorb.voice.status === "degraded") && (
               <div className="mechanics-notice">
@@ -2490,16 +2739,21 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             {saveError && (
               <div className="mechanics-notice">
                 <p>Could not save this review: {saveError}</p>
-                <button className="subtle" onClick={saveAbsorb} disabled={saving}>
+                <button className="subtle" onClick={saveAbsorb} disabled={reviewBusy}>
                   Try saving again</button>
               </div>
             )}
             <div className="form-actions">
+              {/* Deliberately NOT disabled by `reviewBusy`: a retry runs on the
+                  absorb budget, which is unbounded at 0, so Cancel is the only
+                  way out of a request that may never answer. Safe because
+                  `releaseRetries` invalidates that request on the way out. */}
               <button className="subtle" disabled={saving}
-                      onClick={() => { setAbsorb(null); setAbsorbSid(null); setEditRows([]);
+                      onClick={() => { releaseRetries();
+                                       setAbsorb(null); setAbsorbSid(null); setEditRows([]);
                                        setEditFailures([]); setSaveError(null);
                                        setConflicts([]); }}>Cancel</button>
-              <button className="primary" onClick={saveAbsorb} disabled={saving}>
+              <button className="primary" onClick={saveAbsorb} disabled={reviewBusy}>
                 {saving ? "Saving…" : "Save summary"}</button>
             </div>
           </div>
