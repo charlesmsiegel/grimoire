@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   api, type Actor, type CharacterSummary, type EntitySummary,
   type PCSummary, type RosterEntry, type SceneLocation, type SceneDatetime,
@@ -131,8 +131,16 @@ export function CastPanel({
 
   // Which campaign/scene this panel is showing NOW, readable from a callback
   // created under a previous one. See `generate`'s `finally`.
+  //
+  // A LAYOUT effect, not a passive one. Passive effects are scheduled in their
+  // own task, so between committing scene B and running them there is a gap in
+  // which microtasks run — and an opener from scene A settling in that gap
+  // reads a ref that still says A, matches the props it closed over, and
+  // navigates the reader back. Layout effects run synchronously inside the
+  // commit, where no promise callback can interleave, so the ref is never
+  // observable as stale.
   const live = useRef(`${cid}/${sid}`);
-  useEffect(() => { live.current = `${cid}/${sid}`; }, [cid, sid]);
+  useLayoutEffect(() => { live.current = `${cid}/${sid}`; }, [cid, sid]);
 
   async function generate() {
     if (!prompt.trim() || busy) return;
