@@ -8,12 +8,15 @@ always safe to import from one.
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 from .. import store
 from ..llm import LLMClient
+from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
 
 
@@ -95,6 +98,76 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None) -> Non
     except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound,
             store.locks.StoreBusy, OSError):
         return   # gone, contended, or unreadable: capture nothing, cost nothing
+
+
+def _abandon(task: asyncio.Task) -> None:
+    """Ask an overrun call to stop, then stop waiting on it.
+
+    Retrieving the exception in a callback is what keeps asyncio from logging
+    the abandoned task as never-retrieved (`llm._swallow`'s job, kept local:
+    routes does not reach into that module's privates). Cancellation is not
+    awaited here on purpose -- awaiting it is the very thing that lets the
+    ceiling be overrun.
+    """
+    task.cancel()
+    task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
+
+
+async def _bounded_call(coro):
+    """Await one non-streaming generation under a total-duration ceiling (#272).
+
+    The facade's own bound is an *idle* one -- the gap between deltas -- which is
+    the right shape for streamed prose (cutting a healthy long generation off
+    mid-sentence is worse than letting it finish) but leaves an upstream that
+    emits a frame every `llm_timeout - 1` seconds holding its request forever.
+    The one-shot generation routes have no partial output to protect: nothing is
+    visible until the call returns, and a truncated one costs only a retry. So
+    they get a stopwatch, and `stream` deliberately does not.
+
+    Absorb is not routed through here. It carries `_Budget`, which bounds a whole
+    *sequence* and knows which of its steps are droppable -- and whose `0` means
+    "no ceiling at all, however long the calls take". Folding this ceiling into
+    the facade would silently narrow that escape hatch for every absorb step, so
+    the ceiling stays where the policy is: the routes that opt into it.
+
+    An overrun is raised as the same `LLMError("timeout", ...)` an upstream stall
+    already raises, so every caller's existing 502 handler covers it with no new
+    branch. `llm_call_budget <= 0` disables the ceiling.
+
+    `asyncio.wait_for` is deliberately NOT used, for the reason `llm._settle`
+    spells out: it cancels the call and then waits for that cancellation to
+    finish, so the ceiling is only as hard as the unwinding underneath it. Here
+    that unwinding is `_guard`'s `finally`, which grants the pull `_CLOSE_TIMEOUT`
+    to settle and the provider another to close -- so a stalled upstream can
+    hold the request ~10s past a ceiling that promised to give up at `seconds`,
+    and a client that swallows cancellation holds it for good. Waiting is
+    therefore capped here and the cancelled call is left to unwind on its own.
+    A detached task is a leak we can live with; a wedged request is not.
+    """
+    seconds = store.config.llm_call_budget()
+    if seconds <= 0:
+        return await coro
+    task = asyncio.ensure_future(coro)
+    try:
+        done, _ = await asyncio.wait({task}, timeout=seconds)
+    except asyncio.CancelledError:
+        # The caller went away (SSE disconnect, shutdown). `wait_for` propagated
+        # that inward for free; `asyncio.wait` does not, and an uncancelled task
+        # here would outlive the request that wanted it.
+        _abandon(task)
+        raise
+    if not done:
+        _abandon(task)
+        raise LLMError(
+            "timeout", f"the reply did not finish within {seconds:g}s — giving up")
+    try:
+        return task.result()
+    except asyncio.TimeoutError as exc:
+        # asyncio.TimeoutError IS the builtin TimeoutError from 3.11 on, so an
+        # upstream that gives up on its own lands in the same 502 handler as an
+        # expired ceiling. It keeps its own message: blaming a setting that had
+        # nothing to do with it would send the user to tune the wrong knob.
+        raise LLMError("timeout", str(exc) or "the call timed out") from exc
 
 
 def get_llm() -> LLMClient:

@@ -5,13 +5,16 @@ import importlib
 import io
 import json
 import re
+import time
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire.store import atomic
 from grimoire import llm, routes
+from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from tests.llm_fakes import (  # the shared gateway fakes (#204)
@@ -243,6 +246,15 @@ def test_config_system_prompt_and_quote_color_roundtrip(client):
     body = client.get("/api/config").json()
     assert body["system_prompt"] == "Never speak for the PC."
     assert body["quote_color"] == "on"
+
+
+def test_config_llm_call_budget_roundtrip(client):
+    """The #272 ceiling is a user-visible setting like the other two durations,
+    so it has to survive the same GET/PUT round trip -- a key missing from
+    _CONFIG_KEYS is dropped silently, with no error to notice."""
+    assert client.get("/api/config").json()["llm_call_budget"] == "300"
+    assert client.put("/api/config", json={"llm_call_budget": "45"}).status_code == 200
+    assert client.get("/api/config").json()["llm_call_budget"] == "45"
 
 
 def test_config_active_connection_id_roundtrip(client):
@@ -5248,6 +5260,226 @@ def test_audit_retry_endpoint_400_without_module(client, plain_scene):
     assert r.status_code == 400
 
 
+# ---- one-shot generations: a total-duration ceiling (#272) ----
+
+class DribblingProvider:
+    """Emits a frame every `gap` seconds. Healthy by the idle bound's reckoning
+    -- every frame resets it -- and, for the 2s it keeps this up, unfinished:
+    the upstream #272 is about, which in the wild does it forever.
+
+    Bounded rather than endless on purpose, for the reason
+    test_absorb_extraction_overrunning_the_budget_is_502 keeps its sleep short:
+    a regression that drops the ceiling must FAIL the suite in seconds, not hang
+    it. The ceilings below are 0.05s, so the bound is never reached while the
+    feature works."""
+
+    def __init__(self, gap=0.005, frames=400):
+        self.gap, self.frames = gap, frames
+        self.closed = False
+
+    async def stream(self, messages, *args, **kwargs):
+        try:
+            for _ in range(self.frames):
+                await asyncio.sleep(self.gap)
+                yield "."
+        finally:
+            self.closed = True
+
+
+def _dribbling(client, provider):
+    """The real facade over a dribbling provider, with the idle bound left
+    generous -- so anything that stops the call is the new ceiling, not #243's."""
+    client.app.dependency_overrides[routes.get_llm] = lambda: LLMClient(
+        openrouter=provider, claude=provider, openai_compatible=provider, timeout=120)
+
+
+def test_a_dribbling_one_shot_generation_is_cut_off(client):
+    """Without the ceiling this request never returns: the idle bound only ever
+    measures the gap between frames, and this upstream keeps producing them."""
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    client.put("/api/config", json={"llm_call_budget": "0.05"})
+    provider = DribblingProvider()
+    _dribbling(client, provider)
+
+    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+
+    assert r.status_code == 502 and r.json()["kind"] == "timeout"
+    # and the provider's stream is closed rather than left holding a connection
+    assert provider.closed
+
+
+def test_every_one_shot_generation_route_carries_the_ceiling(client):
+    """One test per route the issue names, because the ceiling is applied per
+    call site: a route that forgets it is unbounded again, and nothing else
+    would say so."""
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara", "version_name": "main"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    client.put("/api/config", json={"llm_call_budget": "0.05"})
+    for path in (f"/api/campaigns/{cid}/scene-suggestions",
+                 f"/api/worlds/{wid}/characters/mara/tagline/generate",
+                 f"/api/worlds/{wid}/characters/mara/voice-anchor/generate",
+                 f"/api/campaigns/{cid}/characters/mara/voice-anchor/generate"):
+        _dribbling(client, DribblingProvider())
+        r = client.post(path)
+        assert r.status_code == 502 and r.json()["kind"] == "timeout", path
+
+
+class WedgedCleanupProvider(DribblingProvider):
+    """Dribbles, and then takes its time letting go — the shape `llm._settle`
+    was written for. Cancelling the pull raises into the sleep below, and the
+    `finally` then awaits again, which a cancelled task is free to do."""
+
+    UNWIND = 3.0
+
+    async def stream(self, messages, *args, **kwargs):
+        try:
+            for _ in range(self.frames):
+                await asyncio.sleep(self.gap)
+                yield "."
+        finally:
+            await asyncio.sleep(self.UNWIND)
+            self.closed = True
+
+
+def test_the_ceiling_does_not_wait_for_the_cancellation_it_requests(client):
+    """The ceiling has to be a ceiling on the REQUEST, not on the part of it
+    that precedes cleanup.
+
+    `asyncio.wait_for` cancels and then awaits that cancellation, so the wait
+    inherits whatever the unwinding costs: `_guard`'s `finally` grants the pull
+    `_CLOSE_TIMEOUT` to settle and the provider another to close, putting ~10s
+    on the far side of a ceiling that said it would give up at `seconds` — and
+    unbounded time if a provider swallows cancellation outright, which is the
+    held-forever request #272 exists to end.
+    """
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    client.put("/api/config", json={"llm_call_budget": "0.05"})
+    provider = WedgedCleanupProvider()
+    _dribbling(client, provider)
+
+    started = time.monotonic()
+    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    elapsed = time.monotonic() - started
+
+    assert r.status_code == 502 and r.json()["kind"] == "timeout"
+    assert elapsed < provider.UNWIND / 2, f"the request waited out the cleanup ({elapsed:.2f}s)"
+    # `provider.closed` is deliberately NOT asserted here, and its absence is
+    # the point rather than an oversight: the abandoned call goes on unwinding
+    # on the loop, but TestClient ends its portal with the request, so nothing
+    # after the response is observable from this harness. The sibling test
+    # above covers the close, with a provider whose cleanup returns promptly.
+
+
+def test_a_cancelled_request_takes_its_one_shot_call_with_it(client):
+    """`wait_for` propagated the caller's own cancellation inward for free;
+    `asyncio.wait` does not. Without the re-raise branch, a client that
+    disconnects (or a shutdown) leaves the generation running to completion
+    with nobody left to want it — the same held connection from the other end.
+
+    Driven directly rather than through a route: TestClient has no way to hang
+    up mid-request, and the branch is one `await` deep.
+    """
+    async def scenario():
+        begun, stopped = asyncio.Event(), asyncio.Event()
+
+        async def call():
+            begun.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                stopped.set()
+                raise
+
+        outer = asyncio.ensure_future(routes.common._bounded_call(call()))
+        await begun.wait()
+        outer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await outer
+        # Bounded and awaited HERE, inside the loop: asserting after
+        # `asyncio.run` returns proves nothing, because its own shutdown
+        # cancels whatever is left — an earlier draft of this test passed
+        # with the branch removed for exactly that reason.
+        await asyncio.wait_for(stopped.wait(), 1)
+
+    asyncio.run(scenario())
+
+
+def test_a_zero_call_budget_disables_the_ceiling(client):
+    """The same escape hatch every other duration setting has."""
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    client.put("/api/config", json={"llm_call_budget": "0"})
+
+    class Slow:
+        async def stream(self, m, cfg):
+            yield "{}"
+
+        async def complete(self, m, cfg):
+            await asyncio.sleep(0.08)  # far past any ceiling a test would set
+            return "no suggestions"
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: Slow()
+    assert client.post(f"/api/campaigns/{cid}/scene-suggestions").status_code == 200
+
+
+def test_a_timeout_from_inside_the_call_is_not_blamed_on_the_ceiling(client):
+    """asyncio.TimeoutError IS the builtin TimeoutError from 3.11 on, so one
+    raised by the provider lands in the same handler as an expired ceiling.
+    Reporting it as "the reply did not finish within 300s" a millisecond in
+    would send the user to tune a setting that had nothing to do with it."""
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    client.put("/api/config", json={"llm_call_budget": "300"})
+
+    class Upstream:
+        async def stream(self, m, cfg):
+            yield "{}"
+
+        async def complete(self, m, cfg):
+            raise TimeoutError("the upstream gave up")
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: Upstream()
+
+    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+
+    assert r.status_code == 502 and r.json()["kind"] == "timeout"
+    assert r.json()["detail"] == "the upstream gave up"
+
+
+def test_the_one_shot_ceiling_does_not_bound_absorb(client, npc_module_scene):
+    """`absorb_budget = 0` means "no ceiling at all, however long the calls
+    take" -- the documented escape hatch for a slow local endpoint. Absorb
+    therefore does NOT go through `_bounded_call`: folding the one-shot ceiling
+    into the shared facade would have narrowed that hatch silently, with every
+    absorb-budget test still green because they inject a fake client."""
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "0", "llm_call_budget": "0.02"})
+
+    class Slow:
+        def __init__(self):
+            self.replies = [ABSORB_JSON, "Aese is steady.", VOICE_OK, AUDIT_OK]
+            self.calls = 0
+
+        async def stream(self, m, cfg):
+            yield "{}"
+
+        async def complete(self, m, cfg):
+            await asyncio.sleep(0.05)  # every call overruns the one-shot ceiling
+            reply = self.replies[min(self.calls, len(self.replies) - 1)]
+            self.calls += 1
+            return reply
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: Slow()
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert body["dossiers"]["status"] == "ok" and body["mechanics"]["status"] == "ok"
+    assert all(not p["budget_exhausted"] for p in body["phases"])
+
+
 # ---- absorb: overall time budget (#243) ----
 
 @pytest.fixture
@@ -5410,6 +5642,340 @@ def test_audit_retry_gets_a_fresh_budget(client, npc_module_scene, monkeypatch):
         lambda: ClockEatingFake(clock, 1.0, [AUDIT_OK])
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit").json()
     assert body["mechanics"]["status"] == "ok"
+
+
+# ---- the dossier phase's own scoped retry (#286) ----
+
+def test_dossier_retry_gets_a_fresh_budget(client, npc_module_scene, monkeypatch):
+    """The asymmetry #286 closes: an absorb whose clock ran out before the
+    dossier phase left the reviewer with nothing but End scene, which replaces
+    the whole review. This re-runs that phase alone, on a budget of its own."""
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "60"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: ClockEatingFake(clock, 90.0, [ABSORB_JSON])
+    absorbed = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert absorbed["dossiers"]["skipped"] == ["aese"]
+
+    # The clock is now well past the absorb's deadline; a retry that inherited
+    # it would refuse every call before sending one.
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: ClockEatingFake(clock, 1.0, ["Aese is steady."])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers").json()
+
+    assert body["dossiers"]["status"] == "ok"
+    assert body["dossiers"]["proposed"] == ["aese"] and body["dossiers"]["skipped"] == []
+    assert [e["after"] for e in body["edits"]] == ["Aese is steady."]
+
+
+def test_a_dossier_retry_stops_when_the_reviewer_walks_away(client, monkeypatch):
+    """Cancel has to stop the WORK, not just the waiting.
+
+    The client aborts on release, but a disconnect does not cancel a plain
+    endpoint -- uvicorn runs it to completion -- so without this check the retry
+    keeps making one LLM call per remaining NPC for a review that no longer
+    exists. `absorb_budget = 0` is the case that makes it more than waste: the
+    budget will never stop it either, and Cancel is precisely what the panel
+    offers as the way out of an unbounded retry.
+
+    Two present NPCs, and the disconnect is reported only once the first call
+    has gone out -- so this pins that the loop stops PARTWAY, which is where all
+    the remaining cost is. TestClient cannot really hang up, so the disconnect
+    itself is faked at `Request.is_disconnected`; that uvicorn sets it on a real
+    hangup is a separate fact, checked by hand against a live server.
+    """
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    for name in ("Aese", "Mara"):
+        client.post(f"/api/worlds/{wid}/characters", json={"name": name, "version_name": "main"})
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                    json={"kind": "characters", "id": name.lower(),
+                          "version": "main", "role": "npc"})
+    store.scenes.append_message(cid, sid, "user", "Aese took a hit.")
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    client.put("/api/config", json={"absorb_budget": "0"})  # the unbounded case
+
+    calls = []
+
+    class Counting:
+        async def stream(self, m, cfg):
+            calls.append(m)
+            yield "Steady."
+
+        async def complete(self, m, cfg):
+            return "".join([d async for d in self.stream(m, cfg)])
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: Counting()
+
+    async def gone(self):
+        return len(calls) >= 1   # still connected for the first NPC, not the second
+
+    monkeypatch.setattr(Request, "is_disconnected", gone)
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers").json()
+
+    assert len(calls) == 1, f"the second NPC's call went out anyway ({len(calls)} calls)"
+    assert body["dossiers"]["status"] == "failed"
+    assert "closed before it finished" in body["dossiers"]["reason"]
+
+
+class WedgedProvider:
+    """Dribbles inside the idle bound — healthy by every clock the facade keeps,
+    and finished by none of them. The `absorb_budget = 0` case, where nothing
+    but the reviewer walking away can end the call.
+
+    Bounded at ~2s rather than endless, for DribblingProvider's reason: a
+    regression that drops the abandonment check must FAIL the suite in seconds,
+    not hang it.
+
+    `finished` is the flag the endpoint tests assert on, NOT a "was it
+    cancelled" flag. `_watched` cancels and detaches deliberately -- the
+    unwinding is explicitly not on the caller's clock -- so whether the
+    generator has processed its CancelledError by the time the response comes
+    back is a race. It won that race locally and lost it on CI. That the call is
+    genuinely cancelled is worth pinning, so it is pinned where the loop can be
+    awaited: `test_watched_cancels_the_call_it_gives_up_on`.
+    """
+
+    def __init__(self, gap=0.01, frames=200):
+        self.gap, self.frames = gap, frames
+        self.pulls = 0
+        self.finished = False
+
+    async def stream(self, messages, *args, **kwargs):
+        for _ in range(self.frames):
+            await asyncio.sleep(self.gap)
+            self.pulls += 1
+            yield ""
+        self.finished = True
+
+
+def _wedged(client, monkeypatch, provider, after=0):
+    """A real facade over a wedged provider — real, so the idle bound and the
+    unwinding are the code's own — plus a disconnect that starts being reported
+    on the `after`-th ask.
+
+    `after=1` is what makes the dossier test honest: the loop's between-NPC
+    check is asked first, and reporting the disconnect there would end the run
+    before any call went out, proving nothing about the call in flight.
+    """
+    monkeypatch.setattr(routes.scenes, "ABANDON_POLL", 0.02)
+    client.app.dependency_overrides[routes.get_llm] = lambda: LLMClient(
+        openrouter=provider, claude=provider, openai_compatible=provider, timeout=120)
+    asks = []
+
+    async def gone(self):
+        asks.append(True)
+        return len(asks) > after
+
+    monkeypatch.setattr(Request, "is_disconnected", gone)
+
+
+def test_watched_cancels_the_call_it_gives_up_on():
+    """Abandoning is not just "stop waiting" — the call is cancelled.
+
+    Asserted here rather than through the endpoint because `_watched` detaches
+    on purpose: the unwinding is not on the caller's clock, so a request-level
+    assertion on it is a race (which is exactly how the first draft of the two
+    tests below passed locally and failed on CI). Here the loop is ours and the
+    cancellation can simply be awaited.
+    """
+    seen = {}
+
+    async def wedged():
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            seen["cancelled"] = True
+            raise
+
+    async def gone():
+        return True
+
+    async def main():
+        with pytest.raises(routes.scenes.Abandoned):
+            await routes.scenes._watched(wedged(), gone, poll=0.01)
+        # One turn for the cancellation `_watched` requested to actually land.
+        # Detaching is the point; the guarantee is that it was asked for and
+        # that the loop delivers it, not that it happened before we returned.
+        await asyncio.sleep(0.05)
+        # Asserted INSIDE the loop: `asyncio.run` cancels whatever is still
+        # pending on its way out, so an assertion after it reads teardown's
+        # cancellation as the code's and passes with `task.cancel()` removed.
+        assert seen.get("cancelled")
+
+    asyncio.run(main())
+
+
+def test_watched_takes_its_child_down_when_the_handler_itself_is_cancelled():
+    """The other direction: the REQUEST is cancelled (graceful shutdown, or a
+    server that does cancel handlers on disconnect). `asyncio.wait` then raises
+    CancelledError straight through `_watched`, and without a handler the LLM
+    task it scheduled would keep running -- outliving the request whose cost it
+    exists to bound, which is the helper's whole purpose inverted.
+
+    `_bounded_call` already covers this condition; this is the same treatment.
+    """
+    seen = {}
+
+    async def wedged():
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            seen["cancelled"] = True
+            raise
+
+    async def never():
+        return False           # never abandons on its own -- only the outer cancel ends it
+
+    async def main():
+        watcher = asyncio.ensure_future(routes.scenes._watched(wedged(), never, poll=0.01))
+        await asyncio.sleep(0.05)      # let it get as far as waiting on the child
+        watcher.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await watcher
+        await asyncio.sleep(0.05)
+        # Inside the loop, for the reason the test above gives.
+        assert seen.get("cancelled"), "the child outlived the handler that was cancelled"
+
+    asyncio.run(main())
+
+
+def test_a_wedged_dossier_call_is_cut_off_when_the_reviewer_walks_away(
+        client, npc_module_scene, monkeypatch):
+    """Checking only BETWEEN NPCs leaves the first one able to hold the request
+    for good: the provider keeps emitting inside the idle bound, so #243's
+    clock never fires, and `absorb_budget = 0` means no deadline does either.
+    The in-flight call has to be raced against the check, not merely bracketed
+    by it."""
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "0"})
+    provider = WedgedProvider()
+    _wedged(client, monkeypatch, provider, after=1)   # connected for the loop's own check
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers").json()
+
+    assert body["dossiers"]["status"] == "failed"
+    assert "closed before it finished" in body["dossiers"]["reason"]
+    # Left unfinished -- the generator was abandoned partway, not allowed to run
+    # its 200 frames out and answer normally.
+    assert not provider.finished and provider.pulls < provider.frames
+
+
+def test_a_wedged_audit_call_is_cut_off_when_the_reviewer_walks_away(
+        client, npc_module_scene, monkeypatch):
+    """The audit is ONE call, so a between-calls check has nowhere to sit — it
+    was the half of this that the client's AbortSignal alone did nothing for."""
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "0"})
+    provider = WedgedProvider()
+    _wedged(client, monkeypatch, provider)
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit").json()
+
+    assert body["mechanics"]["status"] == "failed"
+    assert "closed before it finished" in body["mechanics"]["reason"]
+    assert not provider.finished and provider.pulls < provider.frames
+
+
+def test_absorb_does_not_ask_whether_it_was_abandoned(client, npc_module_scene, monkeypatch):
+    """Only the scoped retry passes a disconnect check. Absorb's caller is
+    holding a review open and has not gone anywhere, and wiring the same check
+    into it would let a flaky read of the connection silently truncate the
+    dossier phase of an ordinary End scene."""
+    cid, sid = npc_module_scene
+    asked = []
+
+    async def gone(self):
+        asked.append(True)
+        return True
+
+    monkeypatch.setattr(Request, "is_disconnected", gone)
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete([ABSORB_JSON, "Aese is steady.", VOICE_OK, AUDIT_OK])
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert not asked
+    assert body["dossiers"]["proposed"] == ["aese"]
+
+
+def test_dossier_retry_reports_the_block_absorb_carries(client, npc_module_scene, monkeypatch):
+    """Same keys, so the panel can swap one for the other without a second
+    shape to understand -- `attempted`/`budget_exhausted` included, which is
+    what the dossiers phase row is projected from."""
+    cid, sid = npc_module_scene
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: ClockEatingFake(clock, 1.0, ["Aese is steady."])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers").json()
+    assert body["dossiers"] == {
+        "status": "ok", "reason": None, "proposed": ["aese"], "failed": [], "skipped": [],
+        "attempted": True, "budget_exhausted": False}
+
+
+def test_dossier_retry_stages_but_never_writes(client, npc_module_scene, monkeypatch):
+    """#235's staged-not-written rule still holds on the retry path: the
+    paragraph rides back in `edits` and lands only when the review is saved."""
+    cid, sid = npc_module_scene
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: ClockEatingFake(clock, 1.0, ["Aese is steady."])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers").json()
+    # Staged -- so there IS something that could have been written, which is
+    # what makes the read below a real assertion rather than a no-op.
+    assert [e["target"]["id"] for e in body["edits"]] == ["aese"]
+    assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == ""
+
+
+def test_dossier_retry_reports_a_failure_rather_than_500ing(client, npc_module_scene):
+    """_stage_dossiers' failure boundary is the whole reason absorb survives a
+    broken dossier call; the retry inherits it rather than raising."""
+    cid, sid = npc_module_scene
+
+    class Boom:
+        async def stream(self, m, cfg):
+            yield "{}"
+
+        async def complete(self, m, cfg):
+            raise RuntimeError("dossier boom")
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: Boom()
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers")
+    assert r.status_code == 200
+    assert r.json()["dossiers"]["status"] == "failed"
+    assert [f["id"] for f in r.json()["dossiers"]["failed"]] == ["aese"]
+    assert r.json()["edits"] == []
+
+
+def test_dossier_retry_refuses_a_scene_with_no_transcript(client, npc_module_scene):
+    """A dossier is rewritten FROM the transcript, so an empty one could only
+    stage invention over a real paragraph."""
+    cid, _ = npc_module_scene
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Empty"}).json()["id"]
+    client.app.dependency_overrides[routes.get_llm] = lambda: _DossierFake()
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers").status_code == 400
+
+
+def test_dossier_retry_404s_for_an_unknown_scene(client, npc_module_scene):
+    cid, _ = npc_module_scene
+    client.app.dependency_overrides[routes.get_llm] = lambda: _DossierFake()
+    assert client.post(f"/api/campaigns/{cid}/scenes/nope/dossiers").status_code == 404
+
+
+def test_dossier_retry_missing_key_returns_409(client):
+    """Same refusal every other generation route gives: with no usable
+    connection there is nothing to retry against."""
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We entered.")
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers")
+    assert resp.status_code == 409 and resp.json()["kind"] == "missing_key"
 
 
 # ---- absorb: per-phase reporting ----

@@ -19,7 +19,8 @@ const cfg = {
   theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
   active_connection_id: "openrouter",
   active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true,
-  llm_timeout: "120", absorb_budget: "600", context_budget: "0", archive_depth: "3",
+  llm_timeout: "120", absorb_budget: "600", llm_call_budget: "300",
+  context_budget: "0", archive_depth: "3",
   prompt_log_depth: "50",
   turnstate_depth: "0", promote_streak: "3",
 };
@@ -119,6 +120,7 @@ test("shows the configured timeout and absorb budget", async () => {
   renderView();
   expect(await screen.findByLabelText(/no-reply timeout/i)).toHaveValue("120");
   expect(screen.getByLabelText(/absorb budget/i)).toHaveValue("600");
+  expect(screen.getByLabelText(/one-shot call ceiling/i)).toHaveValue("300");
 });
 
 test("edits the timeouts and saves them", async () => {
@@ -126,9 +128,11 @@ test("edits the timeouts and saves them", async () => {
   const timeout = await screen.findByLabelText(/no-reply timeout/i);
   fireEvent.change(timeout, { target: { value: "45" } });
   fireEvent.change(screen.getByLabelText(/absorb budget/i), { target: { value: "300" } });
+  fireEvent.change(screen.getByLabelText(/one-shot call ceiling/i), { target: { value: "90" } });
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
-    expect.objectContaining({ llm_timeout: "45", absorb_budget: "300" })));
+    expect.objectContaining({ llm_timeout: "45", absorb_budget: "300",
+                             llm_call_budget: "90" })));
 });
 
 test("edits the context budget and recalled-scene cap and saves them", async () => {
