@@ -42,6 +42,23 @@ def campaign_meta_path(cid: str) -> Path:
     return campaign_root(cid) / "campaign.md"
 
 
+def campaign_activity_path(cid: str) -> Path:
+    """The "something happened in this campaign" stamp.
+
+    Its own file, deliberately, rather than a field in campaign.md. The stamp
+    fires from every campaign-scoped write there is, and `touch` publishes the
+    whole meta file from a copy it read a moment earlier -- so putting it in
+    campaign.md would race `rename_campaign` and `set_campaign_response` and
+    silently restore the name or the response settings they had just changed
+    (see OUTSIDE_DOMAIN in locks.py, which records that hazard for `touch`).
+
+    A single-value file has no such failure: nothing else writes it, so there
+    is nothing for a stale copy to clobber. Last writer wins, which is the
+    correct semantics for a high-water mark anyway.
+    """
+    return campaign_root(cid) / "activity.txt"
+
+
 def campaign_exists(cid: str) -> bool:
     """Existence check that survives an id `campaign_root` refuses to resolve.
 

@@ -10,6 +10,7 @@ import { OwnedLorePanel } from "./OwnedLorePanel";
 import SheetPanel from "./SheetPanel";
 import { TaglinePrompt } from "./TaglinePrompt";
 import { UrlImportPrompt } from "./UrlImportPrompt";
+import { scrollShellToTop } from "../shellScroll";
 
 const TEXT_FIELDS: { key: string; label: string; area?: boolean }[] = [
   { key: "description", label: "Description", area: true },
@@ -476,7 +477,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   }
 
   async function openDetail(cid: string) {
-    window.scrollTo(0, 0);
+    scrollShellToTop();
     const d = await select(cid);
     if (!d) return null;   // scope changed under the read; do not open anything
     setMode("detail");
@@ -484,7 +485,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   }
 
   async function focusCharacter(cid: string, vid: string) {
-    window.scrollTo(0, 0);
+    scrollShellToTop();
     setError(null);
     const d = await api.readCharacter(scope, cid);
     if (!adopt(d, scope)) return;
@@ -497,13 +498,13 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   }
 
   async function openEdit(cid: string) {
-    window.scrollTo(0, 0);
+    scrollShellToTop();
     if (!(await select(cid))) return;   // scope changed under the read
     setMode("edit");
   }
 
   function backToGrid() {
-    window.scrollTo(0, 0);
+    scrollShellToTop();
     setDetail(null);
     setCard(null);
     setMode("grid");

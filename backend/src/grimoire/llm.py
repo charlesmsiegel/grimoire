@@ -30,6 +30,25 @@ HEARTBEAT_INTERVAL = 15.0
 # connection being closed is by definition a sick one, so cleanup gets its own
 # bound.
 _CLOSE_TIMEOUT = 5.0
+# What the Claude path runs when its connection names no model. The SDK takes
+# an alias, so an unconfigured Claude connection generates perfectly happily --
+# unlike the other two kinds, whose empty model reaches the provider as an
+# empty model.
+CLAUDE_DEFAULT_MODEL = "opus"
+
+
+def effective_model(conn: dict) -> str:
+    """The model a generation on `conn` will actually run on.
+
+    Only the Claude path substitutes anything, so this differs from
+    ``conn["model"]`` for exactly one kind -- but it is the difference between
+    telling the reader "no model" and naming the one about to answer them.
+    Both the dispatcher and the config route read the answer from here so the
+    status bar cannot drift from what generation does.
+    """
+    if conn.get("kind") == "claude":
+        return conn.get("model") or CLAUDE_DEFAULT_MODEL
+    return conn.get("model", "")
 
 
 def _swallow(task: asyncio.Task) -> None:
@@ -203,7 +222,7 @@ class LLMClient:
     def _dispatch(self, messages: list[dict], conn: dict):
         kind = conn.get("kind", "openrouter")
         if kind == "claude":
-            return self._claude.stream(messages, conn.get("model") or "opus")
+            return self._claude.stream(messages, effective_model(conn))
         if kind == "openai_compatible":
             return self._openai_compatible.stream(
                 messages, conn.get("model", ""), conn.get("api_key", ""),

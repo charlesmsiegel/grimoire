@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import anyio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .routes import router
-from .store import locks, migrations, module_edit
+from .store import campaigns, locks, migrations, module_edit
 
 DEFAULT_DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"  # paths-ok: DEFAULT_DIST only; GRIMOIRE_DIST overrides it on Android
 
@@ -55,6 +56,85 @@ async def _lifespan(app: FastAPI):
     yield
 
 
+class _CampaignActivityStamp:
+    """Record campaign activity for any successful campaign-scoped write.
+
+    Enumerating the mutators does not converge. Six review rounds each found
+    another one -- scenes, overlay entities, greetings, plot edges, actors,
+    calendar, group state, sheets, module binding, images, climate, weather,
+    play state -- because the store deliberately takes *roots* rather than cids
+    at its leaves, so there is no one function they all pass through. They do
+    all pass through here: a mutating method on a route that bound a `cid` is
+    exactly the set, by definition, and a route added later is covered without
+    anyone having to remember.
+
+    Written as raw ASGI rather than `@app.middleware("http")` on purpose.
+    That decorator wraps `BaseHTTPMiddleware`, which reshapes how exceptions
+    leave the app -- a route raising a non-HTTPException surfaces as
+    "No response returned" instead of propagating. The scene-commit
+    crash-recovery test caught exactly that, and transcripts are the one
+    artifact in this app that cannot be regenerated, so this stays out of the
+    exception path entirely: it awaits the app, and anything raised passes
+    through untouched because there is nothing here to catch it.
+
+    Conditions are deliberately narrow: only mutating methods, so a GET never
+    stamps; only 2xx, so a rejected write records nothing; only when routing
+    bound a `cid`, so world and config routes are untouched.
+    """
+
+    _MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+    #: `cid` is not reserved: `/api/worlds/{wid}/characters/{cid}` binds a
+    #: *character* id under that name, so matching on the parameter alone would
+    #: stamp whichever campaign happened to share the character's slug. The
+    #: path prefix is what actually says "this is campaign-scoped".
+    _PREFIX = "/api/campaigns/"
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if (scope["type"] != "http" or scope.get("method") not in self._MUTATING
+                or not scope.get("path", "").startswith(self._PREFIX)):
+            return await self.app(scope, receive, send)
+        async def _send(message):
+            if message["type"] == "http.response.start":
+                headers = {k.lower(): v for k, v in message.get("headers") or []}
+                # A stream's HTTP status is sent before its outcome is known:
+                # the chat route answers 200 and can still fail mid-stream,
+                # rolling back the message it had posted. Skipping those costs
+                # nothing -- a turn that *does* land advances the scene's own
+                # `updated`, which the campaign's activity already folds in.
+                streaming = b"text/event-stream" in headers.get(b"content-type", b"")
+                # `path_params` is populated by the router during handling, so
+                # by now it holds what actually matched.
+                cid = (scope.get("path_params") or {}).get("cid")
+                # POST is not a synonym for write. Routes that compute and
+                # return without persisting -- a generated voice anchor, scene
+                # suggestions, a replayed roll -- declare themselves with
+                # @computes_only, so merely *looking* at a campaign does not
+                # move it up the recents rail.
+                preview = getattr(getattr(scope.get("route"), "endpoint", None),
+                                  "grimoire_computes_only", False)
+                if message["status"] < 300 and not streaming and cid and not preview:
+                    # BEFORE forwarding the status, so the stamp has landed by
+                    # the time the client can observe success. Otherwise a
+                    # caller can navigate on the response and have the sidebar's
+                    # refetch read the pre-stamp value, which is exactly the
+                    # stale ordering the stamp exists to prevent.
+                    #
+                    # Off the event loop even so: this is an atomic replace plus
+                    # fsync, and `atomic` sleeps through Windows sharing-violation
+                    # retries, so on a synced or removable store it can block long
+                    # enough to stall every other request and live stream on this
+                    # worker. Sync route bodies get a thread from Starlette;
+                    # middleware does not. `touch_quietly` never raises, so this
+                    # cannot turn a completed write into a failure.
+                    await anyio.to_thread.run_sync(campaigns.touch_quietly, cid)
+            await send(message)
+
+        await self.app(scope, receive, _send)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="grimoire", lifespan=_lifespan)
     # character detail responses run to hundreds of KB of JSON; payloads under
@@ -67,6 +147,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    app.add_middleware(_CampaignActivityStamp)
 
     @app.exception_handler(HTTPException)
     async def http_exc_handler(request: Request, exc: HTTPException):

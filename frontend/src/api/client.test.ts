@@ -1,4 +1,5 @@
 import { api, invalidateConfigCache } from "./client";
+import { onCampaignsChanged, onConfigChanged } from "../appEvents";
 import type { LocalizeEvent } from "./stream";
 
 function sseResponse(chunks: string[]) {
@@ -544,6 +545,118 @@ test("a ledger read never joins an in-flight one", async () => {
   expect(fetchMock).toHaveBeenCalledTimes(2);
   settle(jsonOk({ plot: [], commitments: [], facts: [], chronicle: [] }));
   await Promise.all([first, second]);
+});
+
+test("moving the store announces on both channels — everything changed", async () => {
+  // A new root has its own campaigns and its own connections, so the sidebar's
+  // links can point at campaigns that do not exist here and the status bar
+  // names a connection from the old store. /config never changes the pathname,
+  // so nothing else would tell them.
+  const seen: string[] = [];
+  const offC = onCampaignsChanged(() => seen.push("campaigns"));
+  const offK = onConfigChanged(() => seen.push("config"));
+  globalThis.fetch = vi.fn().mockResolvedValue(
+    jsonOk({ data_dir: "/sync/grimoire", is_default: false, source: "custom" })) as any;
+
+  await api.putDataDir("/sync/grimoire");
+  expect(seen.sort()).toEqual(["campaigns", "config"]);
+  offC(); offK();
+});
+
+test("a rejected store move announces nothing", async () => {
+  // The old root is still the live one; telling the shell to refetch would
+  // have it re-read the store it is already showing, and a failed move must
+  // not look like a successful one.
+  const seen: string[] = [];
+  const off = onConfigChanged(() => seen.push("config"));
+  globalThis.fetch = vi.fn().mockResolvedValue(
+    { ok: false, status: 400, json: async () => ({ detail: "not a directory" }) }) as any;
+
+  await expect(api.putDataDir("/nope")).rejects.toThrow();
+  expect(seen).toEqual([]);
+  off();
+});
+
+test("a fresh read retires the pending one, so the next caller cannot adopt it", async () => {
+  // The fresh read bypasses the share, but leaving the pre-mutation GET in the
+  // map means the *next* caller joins it and stores the very answer the fresh
+  // read replaced — the refresh undone by whoever asks next.
+  let settleOld: (v: unknown) => void = () => {};
+  const fetchMock = vi.fn()
+    .mockReturnValueOnce(new Promise((res) => { settleOld = res; }))
+    .mockResolvedValue(jsonOk([{ id: "new" }]));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  const stale = api.listCampaigns();            // in flight, pre-mutation
+  await api.listCampaigns(true);                 // fresh: must retire the above
+  const next = api.listCampaigns();              // a later navigation read
+
+  expect(fetchMock).toHaveBeenCalledTimes(3);    // it did NOT rejoin the stale one
+  settleOld(jsonOk([{ id: "old" }]));
+  expect(await next).toEqual([{ id: "new" }]);
+  await stale;
+});
+
+test("invalidating the config cache retires the in-flight config GET too", async () => {
+  // The resolved cache is only half of what is stale: with the cache cleared,
+  // the next getConfig() would otherwise join a read issued before the change.
+  let settleOld: (v: unknown) => void = () => {};
+  const fetchMock = vi.fn()
+    .mockReturnValueOnce(new Promise((res) => { settleOld = res; }))
+    .mockResolvedValue(jsonOk({ theme: "codex", active_connection_id: "new" }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  const stale = api.getConfig();
+  invalidateConfigCache();
+  const next = api.getConfig();
+
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  settleOld(jsonOk({ theme: "codex", active_connection_id: "old" }));
+  expect((await next).active_connection_id).toBe("new");
+  await stale;
+});
+
+test("moving the store retires every pending read, not just config and campaigns", async () => {
+  // The Library hub fires five section counts. Any still in flight when the
+  // root changes would resolve with the previous store's totals, and the hub
+  // would adopt them.
+  let settleWorlds: (v: unknown) => void = () => {};
+  const fetchMock = vi.fn()
+    .mockReturnValueOnce(new Promise((res) => { settleWorlds = res; }))
+    .mockResolvedValue(jsonOk([{ id: "new-store-world" }]));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  const stale = api.listWorlds();                       // in flight against the old root
+  globalThis.fetch = vi.fn().mockResolvedValue(
+    jsonOk({ data_dir: "/sync/grimoire", is_default: false, source: "custom" })) as any;
+  await api.putDataDir("/sync/grimoire");
+
+  globalThis.fetch = vi.fn().mockResolvedValue(jsonOk([{ id: "new-store-world" }])) as any;
+  const after = api.listWorlds();                        // must not rejoin the pre-move read
+  settleWorlds(jsonOk([{ id: "old-store-world" }]));
+  expect((await after)[0].id).toBe("new-store-world");
+  await stale;
+});
+
+test("a retired read settling does not evict the replacement that took its place", async () => {
+  // A retired GET still settles. If its cleanup deletes unconditionally it
+  // removes whatever entry is live by then, and every later caller issues its
+  // own request — on /api/campaigns that is a full scan per caller.
+  let settleOld: (v: unknown) => void = () => {};
+  const fetchMock = vi.fn()
+    .mockReturnValueOnce(new Promise((res) => { settleOld = res; }))   // 1: pre-mutation
+    .mockReturnValueOnce(new Promise(() => {}))                        // 2: fresh, never settles
+    .mockReturnValueOnce(new Promise(() => {}));                       // 3: the replacement
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  const stale = api.listCampaigns();       // installed in the map
+  api.listCampaigns(true);                  // fresh: retires the entry above
+  api.listCampaigns();                      // installs a replacement entry
+  settleOld(jsonOk([]));                    // the retired read finally answers
+  await stale;
+
+  api.listCampaigns();                      // must JOIN the replacement, not refetch
+  expect(fetchMock).toHaveBeenCalledTimes(3);
 });
 
 test("prompt-list reads never coalesce, so a post-generation refresh sees the new turn", async () => {

@@ -1,5 +1,25 @@
 import { parseSSEChunk, type ChatEvent, type LocalizeEvent, type ChubGalleryEvent, type RollProposalPayload } from "./stream";
 import type { Model } from "./models";
+import { campaignsChanged, configChanged } from "../appEvents";
+
+/** Announce a campaign mutation once it has actually landed, passing the
+ *  response through untouched. Sits on the three campaign mutators rather than
+ *  in their callers so no view can forget: the persistent sidebar has no other
+ *  way to learn that a rename on `/` changed a row it is showing. A rejected
+ *  request never reaches here, so a failed delete cannot blank the rail. */
+function notifyCampaigns<T>(result: T): T {
+  campaignsChanged();
+  return result;
+}
+
+/** Same shape for the config channel. Hung off the calls that already
+ *  invalidate the config cache: invalidating only guarantees the *next* read
+ *  is fresh, and the status bar has no reason to read again until something
+ *  tells it to -- which is exactly the stale window this closes. */
+function notifyConfig<T>(result: T): T {
+  configChanged();
+  return result;
+}
 
 export class ApiError extends Error {
   /** `body` is the whole decoded error payload. Most callers only need
@@ -36,15 +56,47 @@ const inflightGets = new Map<string, Promise<unknown>>();
 // but that reasoning assumes the caller does not care when the read happened.
 // A read verifying that a write has landed does care: handed a promise started
 // before that write, it gets a pre-write answer and concludes the write never
-// happened (#95, `CampaignView.settleProposal`). It deliberately neither reads
-// nor writes the map, so it cannot be served the shared promise and cannot
-// retire it out from under the callers already waiting on it.
+// happened (#95, `CampaignView.settleProposal`).
+//
+// It is never *served* the shared promise, and it also retires the entry: a
+// caller asking for a fresh read is telling us the thing behind this path just
+// changed, so any read still in flight predates that change and must not be
+// handed to whoever asks next. Dropping the map entry cannot disturb the
+// callers already awaiting that promise — they hold it directly, and it still
+// resolves for them — it only stops new ones joining. Without this the stale
+// read outlives the refresh that was supposed to replace it, and the next
+// caller along adopts it.
+function retireInflight(path: string): void {
+  inflightGets.delete(path);
+}
+
+/** Retire *every* pending GET. Only a store move needs this: it repoints the
+ *  root, so each in-flight read is describing a library that is no longer the
+ *  one being shown -- the Library hub's five section counts as much as the
+ *  campaign list. Retiring by path would mean listing every store-scoped
+ *  endpoint here and keeping that list current, which is the enumeration this
+ *  file has already been bitten by. */
+function retireAllInflight(): void {
+  inflightGets.clear();
+}
+
 function request<T>(method: string, path: string, body?: unknown,
                     opts?: { fresh?: boolean }): Promise<T> {
-  if (method !== "GET" || opts?.fresh) return requestRaw<T>(method, path, body);
+  if (method !== "GET" || opts?.fresh) {
+    if (opts?.fresh) retireInflight(path);
+    return requestRaw<T>(method, path, body);
+  }
   const pending = inflightGets.get(path);
   if (pending) return pending as Promise<T>;
-  const p = requestRaw<T>(method, path, body).finally(() => inflightGets.delete(path));
+  // Only retire the entry if it is still *this* promise. A retired read still
+  // settles, and by then a later caller may have installed a replacement for
+  // the same path -- an unconditional delete evicts that live entry, so the
+  // callers after it each issue their own request instead of joining it. On
+  // /api/campaigns that is a full scan of every campaign's scenes per caller.
+  let p: Promise<T>;
+  p = requestRaw<T>(method, path, body).finally(() => {
+    if (inflightGets.get(path) === p) inflightGets.delete(path);
+  });
   inflightGets.set(path, p);
   return p;
 }
@@ -74,7 +126,7 @@ export type Config = {
   theme: string; system_prompt: string;
   quote_color: string; user_label: string; assistant_label: string;
   active_connection_id: string;
-  active_connection: { id: string; kind: LLMConnectionKind; name: string } | null;
+  active_connection: { id: string; kind: LLMConnectionKind; name: string; model: string } | null;
   ready: boolean;
   /** Seconds of silence before an LLM call is abandoned; "0" disables. */
   llm_timeout: string;
@@ -124,6 +176,11 @@ export type CampaignMeta = {
   updated: string;
   scenes: number;
   last_scene: string;
+  /** Whole-campaign high-water mark: the later of campaign.md's `updated` and
+   *  its newest scene's. `updated` alone misses play entirely, so anything
+   *  ranking by "recently worked on" wants this. Only the list endpoint
+   *  computes it -- GET /campaigns/{cid} returns the bare meta. */
+  activity?: string;
   module?: string;
 };
 export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string; date: string; pcless?: boolean };
@@ -751,6 +808,11 @@ let configCache: Promise<Config> | null = null;
 
 export function invalidateConfigCache() {
   configCache = null;
+  // The resolved cache is only half of what is stale. An in-flight GET of the
+  // same path is a read issued before whatever prompted this call, and the
+  // next getConfig() -- now that the cache is empty -- would join it and store
+  // the pre-change connection. Both holders of an old answer go together.
+  retireInflight("/api/config");
 }
 
 export const api = {
@@ -774,14 +836,23 @@ export const api = {
     rolling_summary_every: string }>) =>
     request<Config>("PUT", "/api/config", body).then((cfg) => {
       configCache = Promise.resolve(cfg); // the write's response is the fresh config
-      return cfg;
+      return notifyConfig(cfg);
     }),
   getDataDir: () => request<DataDirInfo>("GET", "/api/config/data-dir"),
   putDataDir: (data_dir: string | null) =>
     request<DataDirInfo>("PUT", "/api/config/data-dir", { data_dir })
       .then((info) => {
         invalidateConfigCache(); // a store move can change everything
-        return info;
+        // ...including every read still in flight against the old root. The
+        // Library hub's counts are the clearest case: five GETs that would
+        // otherwise resolve with the previous store's totals and be adopted.
+        retireAllInflight();
+        // ...and both things the shell's chrome is showing. A new root has its
+        // own campaigns and its own connections, so the sidebar's links point
+        // at campaigns that need not exist here and the status bar names a
+        // connection from the old store.
+        campaignsChanged();
+        return notifyConfig(info);
       }),
 
   // worlds
@@ -799,20 +870,27 @@ export const api = {
   deleteWorld: (wid: string) => request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}`),
 
   // campaigns
-  listCampaigns: () => request<CampaignMeta[]>("GET", "/api/campaigns"),
+  // `fresh` for the caller refetching *because* a campaign just changed: the
+  // in-flight share would hand it a read issued before that mutation, which is
+  // precisely the answer it is trying to replace. Navigation refetches leave
+  // it off, since sharing is free when the caller does not care when the read
+  // started (see `request`, and `campaignLedger` for the same trade).
+  listCampaigns: (fresh = false) =>
+    request<CampaignMeta[]>("GET", "/api/campaigns", undefined, { fresh }),
   createCampaign: (name: string, world: string, region?: string, calendar?: string, module?: string,
                    climate?: string) =>
     request<{ id: string }>("POST", "/api/campaigns",
       { name, world, ...(region ? { region } : {}), ...(calendar ? { calendar } : {}), ...(module ? { module } : {}),
         ...(climate ? { climate } : {}) }).then((r) => {
       invalidateConfigCache();   // same as createWorld: this changes `first_run`
-      return r;
+      return notifyCampaigns(r);  // and the sidebar's Recent rail gains a row
     }),
   getCampaign: (cid: string) =>
     request<{ meta: CampaignMeta; body: string }>("GET", `/api/campaigns/${cid}`),
   renameCampaign: (cid: string, name: string) =>
-    request<{ id: string; name: string }>("PUT", `/api/campaigns/${cid}`, { name }),
-  deleteCampaign: (cid: string) => request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}`),
+    request<{ id: string; name: string }>("PUT", `/api/campaigns/${cid}`, { name }).then(notifyCampaigns),
+  deleteCampaign: (cid: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}`).then(notifyCampaigns),
   campaignChanges: (cid: string) =>
     request<RecordChange[]>("GET", `/api/campaigns/${cid}/changes`),
   // Never shared with an in-flight read of the same path: the ledger is re-read
@@ -1168,18 +1246,18 @@ export const api = {
       // silently reactivate) — this invalidation is defense in depth, not
       // load-bearing, in case that ever changes.
       invalidateConfigCache();
-      return r;
+      return notifyConfig(r);
     }),
   readConnection: (id: string) => request<LLMConnectionDetail>("GET", `/api/llm-connections/${id}`),
   updateConnection: (id: string, patch: Partial<LLMConnectionDraft>) =>
     request<LLMConnectionDetail>("PUT", `/api/llm-connections/${id}`, patch).then((r) => {
       invalidateConfigCache();
-      return r;
+      return notifyConfig(r);
     }),
   deleteConnection: (id: string) =>
     request<{ ok: boolean }>("DELETE", `/api/llm-connections/${id}`).then((r) => {
       invalidateConfigCache();
-      return r;
+      return notifyConfig(r);
     }),
   refreshConnectionModels: (id: string) =>
     request<ModelsRefreshResult>("POST", `/api/llm-connections/${id}/models/refresh`),

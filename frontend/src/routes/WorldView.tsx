@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type EntityScope, type ModuleDetail } from "../api/client";
+import { usePublishShellContext } from "../components/ShellStatus";
 import { CharacterEditor } from "../components/CharacterEditor";
 import { PCEditor } from "../components/PCEditor";
 import { TagEditor } from "../components/TagEditor";
@@ -38,6 +39,13 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const [loreNav, setLoreNav] = useState<{ focusEntry?: string; newOwner?: string } | null>(null);
   const [moduleCtx, setModuleCtx] = useState<ModuleDetail | null>(null);
   const [worldMid, setWorldMid] = useState("");
+
+  // Editing a campaign's world is still being in that campaign, but it is a
+  // different route: CampaignView unmounts and clears the context, so without
+  // this the bar drops the campaign for the whole workflow. No scene -- the
+  // one open in CampaignView is not open here, and naming it would be a claim
+  // about a page the reader has left.
+  usePublishShellContext(campaign && campaignName ? { campaign: campaignName, scene: "" } : null);
 
   useEffect(() => {
     if (campaign) {

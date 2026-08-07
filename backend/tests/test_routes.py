@@ -1,14 +1,17 @@
+import asyncio
 import contextlib
+from datetime import datetime, timedelta, timezone
 import importlib
 import io
 import json
+import re
 
 import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire.store import atomic
-from grimoire import routes
+from grimoire import llm, routes
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from tests.llm_fakes import (  # the shared gateway fakes (#204)
@@ -27,6 +30,30 @@ def client(monkeypatch, tmp_path):
 
 def _world(client, name="W"):
     return client.post("/api/worlds", json={"name": name}).json()["id"]
+
+
+def _soon(seconds: int) -> str:
+    """A canonical stamp `seconds` ahead of now.
+
+    Inside the activity ceiling's clock-skew tolerance, so it is believed,
+    while still ordering after anything the real clock writes during the test.
+    A literal far-future date would be simpler and is exactly what
+    `_valid_stamp` now disbelieves -- these tests want "later than now", not
+    "implausible".
+    """
+    return (datetime.now(timezone.utc)
+            + timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _set_scene_updated(cid, sid, value):
+    """Overwrite a scene's `updated` frontmatter value, the way a bad sync or a
+    hand edit would. Rewrites the whole line — appending to it instead leaves a
+    value that is invalid for the wrong reason."""
+    path = store.scenes.paths._scene_path(cid, sid)
+    text = path.read_text(encoding="utf-8")
+    new, n = re.subn(r"(?m)^updated:.*$", f"updated: {value}", text, count=1)
+    assert n == 1, "no updated: line in the scene frontmatter"
+    path.write_text(new, encoding="utf-8")
 
 
 def _campaign(client, name="Run"):
@@ -223,6 +250,37 @@ def test_config_active_connection_id_roundtrip(client):
     assert r.status_code == 200
     assert r.json()["active_connection_id"] == "claude"
     assert client.get("/api/config").json()["active_connection"]["kind"] == "claude"
+
+
+def test_config_exposes_the_active_connection_model(client):
+    """The global status bar names the model every scene will use, and the
+    only model that exists is the active connection's -- there is no
+    per-campaign override. Without this field the bar would have to fetch
+    the whole connection (key_set and all) just to print one string."""
+    r = client.post("/api/llm-connections", json={
+        "kind": "openrouter", "name": "OR-status", "model": "vendor/model-x"})
+    client.put("/api/config", json={"active_connection_id": r.json()["id"]})
+    assert client.get("/api/config").json()["active_connection"]["model"] == "vendor/model-x"
+
+
+def test_config_reports_the_claude_fallback_model_not_an_empty_string(client):
+    """A Claude connection with no model still generates -- llm._dispatch runs
+    it on CLAUDE_DEFAULT_MODEL -- so reporting "" would put a dash in the status
+    bar for a connection that is about to answer. The bar must name what will
+    actually run."""
+    r = client.post("/api/llm-connections", json={"kind": "claude", "name": "C-status"})
+    client.put("/api/config", json={"active_connection_id": r.json()["id"]})
+    body = client.get("/api/config").json()
+    assert body["active_connection"]["model"] == llm.CLAUDE_DEFAULT_MODEL
+
+
+def test_config_model_is_empty_for_a_non_claude_connection_without_one(client):
+    """Only the Claude path substitutes a model. An openai_compatible
+    connection with none configured reaches its provider with an empty model,
+    so a dash is the honest reading -- the fallback must not leak across kinds."""
+    r = client.post("/api/llm-connections", json={"kind": "openai_compatible", "name": "OC-status"})
+    client.put("/api/config", json={"active_connection_id": r.json()["id"]})
+    assert client.get("/api/config").json()["active_connection"]["model"] == ""
 
 
 def test_data_dir_reports_env_override(client, tmp_path):
@@ -5855,6 +5913,348 @@ def test_list_campaigns_scene_counts(client):
     assert listing[0]["last_scene"] in ("First Light", "The Salt Road")
 
 
+def test_list_campaigns_activity_tracks_scene_writes_that_updated_misses(client, monkeypatch):
+    """`updated` is campaign.md's own mtime-ish field and only metadata writes
+    advance it, so a campaign played into all night still reports the timestamp
+    of the day it was renamed. `activity` is what a "recently worked on" list
+    has to sort by."""
+    _, cid = _campaign(client)
+    before = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]
+
+    # A scene created strictly later than the campaign's own metadata write.
+    # lifecycle binds now_iso by value (`from ..paths import now_iso`), so the
+    # patch has to land on that name, not on paths'.
+    later = _soon(60)
+    monkeypatch.setattr("grimoire.store.scenes.lifecycle.now_iso", lambda: later)
+    client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Low Water"})
+
+    after = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]
+    assert after["updated"] == before["updated"], "playing must not rewrite campaign metadata"
+    assert after["activity"] == later
+    assert after["activity"] > after["updated"]
+
+
+def test_activity_survives_deleting_the_newest_scene(client, monkeypatch):
+    """Derived from surviving scenes alone, deleting the newest would drag
+    activity *backwards* onto an older one -- a campaign you just edited
+    sinking down the recents list, or off it. Deleting is working on it too."""
+    _, cid = _campaign(client)
+    older, newer, deleted_at = _soon(60), _soon(120), _soon(180)
+    monkeypatch.setattr("grimoire.store.scenes.lifecycle.now_iso", lambda: older)
+    client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Old Water"})
+    monkeypatch.setattr("grimoire.store.scenes.lifecycle.now_iso", lambda: newer)
+    newest = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Low Water"}).json()["id"]
+
+    peak = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
+    assert peak == newer
+
+    # The delete happens later than either scene was written. (Real stamps are
+    # always <= now, so the campaign's touch outranks every surviving scene on
+    # its own; the scenes above are dated slightly ahead to control ordering,
+    # which would make a real clock look stale.)
+    monkeypatch.setattr("grimoire.store.campaigns.read.now_iso", lambda: deleted_at)
+    client.delete(f"/api/campaigns/{cid}/scenes/{newest}")
+
+    after = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]
+    assert after["scenes"] == 1
+    assert after["activity"] == deleted_at
+    assert after["activity"] > peak, "deleting a scene must not rewind the campaign's activity"
+
+
+def test_activity_advances_when_a_scene_is_only_renamed(client, monkeypatch):
+    """A rename leaves the scene's own `updated` alone -- the transcript did
+    not change -- so nothing derived from scene stamps would notice it."""
+    _, cid = _campaign(client)
+    monkeypatch.setattr("grimoire.store.scenes.lifecycle.now_iso",
+                        lambda: "2030-01-01T00:00:00Z")
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Old Water"}).json()["id"]
+    before = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
+
+    monkeypatch.setattr("grimoire.store.campaigns.read.now_iso",
+                        lambda: "2099-01-01T00:00:00Z")
+    client.put(f"/api/campaigns/{cid}/scenes/{sid}", json={"title": "New Water"})
+
+    after = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
+    assert after == "2099-01-01T00:00:00Z" and after > before
+
+
+def test_a_failing_activity_stamp_cannot_undo_a_committed_rename(client, monkeypatch):
+    """The stamp is written after the rename has committed. Letting it raise
+    would 500 a rename that already happened -- the caller keeps the old sid,
+    which now 404s because the file moved, and the new one is unknown to it."""
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Old Water"}).json()["id"]
+
+    def boom(_cid):
+        raise OSError("read-only file system")
+    monkeypatch.setattr("grimoire.store.campaigns.read.touch", boom)
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}", json={"title": "New Water"})
+    assert r.status_code == 200
+    new_sid = r.json()["id"]
+    assert client.get(f"/api/campaigns/{cid}/scenes/{new_sid}").status_code == 200
+
+
+def test_a_failing_activity_stamp_cannot_undo_a_committed_delete(client, monkeypatch):
+    """Same trade on delete: the scene is already gone by then, so raising
+    would report a failure for work that cannot be un-done."""
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Low Water"}).json()["id"]
+
+    def boom(_cid):
+        raise OSError("read-only file system")
+    monkeypatch.setattr("grimoire.store.campaigns.read.touch", boom)
+
+    assert client.delete(f"/api/campaigns/{cid}/scenes/{sid}").status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").status_code == 404
+
+
+def test_activity_counts_campaign_scoped_entity_work(client, monkeypatch):
+    """Editing a campaign's own lore/cast writes overlay records only --
+    neither campaign.md nor any scene -- so a derived high-water mark would
+    treat an evening of world-building as no activity at all."""
+    _, cid = _campaign(client)
+    before = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
+
+    monkeypatch.setattr("grimoire.store.campaigns.read.now_iso",
+                        lambda: "2099-01-01T00:00:00Z")
+    r = client.post(f"/api/campaigns/{cid}/locations", json={"name": "Tidewalk Steps"})
+    assert r.status_code in (200, 201)
+
+    after = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
+    assert after == "2099-01-01T00:00:00Z" and after > before
+
+
+def test_activity_covers_every_overlay_content_mutator(client, monkeypatch):
+    """The whole campaign-scoped content surface, not a subset of it -- an
+    inconsistent sweep is how `activity` came to claim more than it did. Each
+    mutation is checked against the stamp the one before it left, so a hook
+    missing from any single one fails here rather than averaging out."""
+    _, cid = _campaign(client)
+
+    # Headroom, not a counted sequence: `read_activity` reads the clock too (it
+    # has to, to tell a believable stamp from one implausibly far ahead), so a
+    # list sized to the mutations would run out partway through and the test
+    # would fail for arithmetic rather than for a missing stamp.
+    ticks = iter(range(1, 60))
+    monkeypatch.setattr("grimoire.store.campaigns.read.now_iso",
+                        lambda: f"2090-01-01T00:00:{next(ticks):02d}Z")
+
+    def activity():
+        return [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
+
+    eid = client.post(f"/api/campaigns/{cid}/locations", json={"name": "Tidewalk Steps"}).json()["id"]
+    after_create = activity()
+    client.put(f"/api/campaigns/{cid}/locations/{eid}", json={"body": "Salt-worn."})
+    after_update = activity()
+    client.delete(f"/api/campaigns/{cid}/locations/{eid}")
+    after_delete = activity()
+
+    assert after_create < after_update < after_delete, (
+        "entity create/update/delete must each advance the campaign's activity")
+
+
+def test_activity_covers_greeting_deletion_and_edge_edits(client, monkeypatch):
+    """Wiring the plot graph and deleting a greeting are both campaign work.
+
+    Monotonic rather than a pinned sequence: activity is stamped for every
+    successful campaign-scoped write, so counting exact stamps would make this
+    a ledger of how many requests the test happens to issue.
+    """
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Winifred"}).json()["character"]
+    first = client.post(f"/api/campaigns/{cid}/greetings",
+                        json={"name": "Opener", "character": chid, "version": "default"}).json()["id"]
+    second = client.post(f"/api/campaigns/{cid}/greetings",
+                         json={"name": "Second", "character": chid, "version": "default"}).json()["id"]
+
+    ticks = iter(range(1, 60))
+    monkeypatch.setattr("grimoire.store.campaigns.read.now_iso",
+                        lambda: f"2096-01-01T00:00:{next(ticks):02d}Z")
+
+    def activity():
+        return [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
+
+    before = activity()
+    r = client.put(f"/api/campaigns/{cid}/greetings/{first}/edges", json={"leads_to": [second]})
+    assert r.status_code == 200, r.text
+    after_edges = activity()
+    assert after_edges > before, "wiring the plot graph is work on the campaign"
+
+    r = client.delete(f"/api/campaigns/{cid}/greetings/{second}")
+    assert r.status_code == 200, r.text
+    assert activity() > after_edges, "deleting a greeting is work on the campaign"
+
+
+def test_any_successful_campaign_scoped_write_stamps_activity(client, monkeypatch):
+    """The routes named across six review rounds were never the point -- the
+    enumeration was. Climate, weather overrides and play state are stamped by
+    the middleware without it knowing anything about them, because a mutating
+    method on a route with a `cid` is the definition of the set."""
+    _, cid = _campaign(client)
+    # now_iso has second resolution and the request lands inside one, so the
+    # clock is pinned rather than raced.
+    ticks = iter(range(1, 60))
+    monkeypatch.setattr("grimoire.store.campaigns.read.now_iso",
+                        lambda: f"2094-01-01T00:00:{next(ticks):02d}Z")
+
+    def activity():
+        return [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
+
+    before = activity()
+    r = client.put(f"/api/campaigns/{cid}/climate", json={"default_climate": "boreal"})
+    assert r.status_code == 200, r.text
+    assert activity() > before, "a climate change is campaign work"
+
+
+def test_a_failed_campaign_write_records_no_activity(client):
+    """Only 2xx stamps. A rejected write changed nothing, and moving the
+    campaign up the recents list for it would be reporting work that did not
+    happen."""
+    _, cid = _campaign(client)
+    before = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
+
+    assert client.put(f"/api/campaigns/{cid}/climate",
+                      json={"default_climate": "no-such-climate"}).status_code >= 400
+
+    after = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
+    assert after == before, "a rejected write must not record activity"
+
+
+def test_reading_a_campaign_records_no_activity(client):
+    """GET never stamps -- opening the campaigns page must not reorder it."""
+    _, cid = _campaign(client)
+    before = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
+    client.get(f"/api/campaigns/{cid}")
+    client.get(f"/api/campaigns/{cid}/scenes")
+    after = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
+    assert after == before
+
+
+def test_a_world_character_edit_never_stamps_a_same_named_campaign(client, monkeypatch):
+    """`cid` is not reserved for campaigns: /worlds/{wid}/characters/{cid}
+    binds a *character* id under that name. Matching the parameter alone would
+    move an unrelated campaign up Recent whenever a world character happened to
+    share its slug."""
+    wid, cid = _campaign(client)
+    # a world character whose id collides with the campaign's
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": cid}).json()["character"]
+    assert chid == cid, "the collision this guards against has to actually exist"
+
+    before = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
+    # Pinned far forward so a stamp would be unmistakable: now_iso has second
+    # resolution, and an unpinned stamp inside the same second as the campaign's
+    # creation would leave `activity` unchanged and the test green either way.
+    monkeypatch.setattr("grimoire.store.campaigns.read.now_iso",
+                        lambda: "2099-01-01T00:00:00Z")
+    r = client.put(f"/api/worlds/{wid}/characters/{chid}", json={"default_version": "default"})
+    assert r.status_code == 200, r.text
+
+    after = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
+    assert after == before, "editing a world character is not work on a campaign"
+
+
+def test_an_older_activity_stamp_never_replaces_a_newer_one(client, monkeypatch):
+    """Two mutations can overlap: each reads the clock before its own fsync, so
+    a slower older one can land last and drag the high-water mark backwards,
+    misordering Recent until the next write."""
+    _, cid = _campaign(client)
+    monkeypatch.setattr("grimoire.store.campaigns.read.now_iso",
+                        lambda: "2090-01-01T00:00:05Z")
+    store.campaigns.touch_quietly(cid)
+    newest = store.campaigns.read_activity(cid)
+    assert newest == "2090-01-01T00:00:05Z"
+
+    # Seconds behind, not decades: two writers overlapping on one machine is
+    # what this guards, and their clock readings differ by the length of an
+    # fsync. A stamp decades adrift is a different fault -- a wrong clock --
+    # and `_valid_stamp` handles that one by disbelieving it, which would make
+    # this pass for the wrong reason.
+    monkeypatch.setattr("grimoire.store.campaigns.read.now_iso",
+                        lambda: "2090-01-01T00:00:04Z")
+    store.campaigns.touch_quietly(cid)   # an older writer landing late
+
+    assert store.campaigns.read_activity(cid) == newest, (
+        "an older stamp must not replace a newer one")
+
+
+def test_a_malformed_activity_stamp_cannot_outrank_real_timestamps(client):
+    """Decodable is not the same as usable. The stamp is folded into a lexical
+    max against real timestamps, so text sorting above "9" -- a stray "zzzz"
+    from a bad sync or a hand edit -- outranks every genuine one and keeps
+    doing so until that campaign is written again."""
+    _, cid = _campaign(client)
+    store.campaigns.campaign_activity_path(cid).write_text("zzzz\n", encoding="utf-8")
+
+    row = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]
+    assert row["activity"] == row["updated"], "a malformed stamp reads as absent"
+
+
+def test_the_activity_stamp_lands_before_the_status_line(client, monkeypatch):
+    """The client can navigate the moment a mutation resolves, and the
+    sidebar's refetch would then read the pre-stamp value -- the exact stale
+    ordering the stamp exists to prevent.
+
+    Driven as raw ASGI rather than through TestClient: TestClient runs the
+    whole request to completion before returning, so it cannot distinguish
+    "stamped before the status line" from "stamped after the response was on
+    the wire" -- both look identical from the caller. Watching `send` is the
+    only place the order is observable.
+    """
+    _, cid = _campaign(client)
+    order: list[str] = []
+    real = store.campaigns.touch_quietly
+    monkeypatch.setattr("grimoire.store.campaigns.touch_quietly",
+                        lambda c: (order.append("stamp"), real(c))[1])
+
+    body = json.dumps({"default_climate": "boreal"}).encode()
+    scope = {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1", "method": "PUT", "scheme": "http",
+        "path": f"/api/campaigns/{cid}/climate", "raw_path": None, "query_string": b"",
+        "root_path": "", "headers": [(b"host", b"testserver"),
+                                     (b"content-type", b"application/json"),
+                                     (b"content-length", str(len(body)).encode())],
+        "client": ("testclient", 50000), "server": ("testserver", 80),
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def send(message):
+        if message["type"] == "http.response.start":
+            assert message["status"] == 200, message
+            order.append("status")
+
+    asyncio.run(client.app(scope, receive, send))
+
+    assert order == ["stamp", "status"], (
+        "the stamp must land before the status line the client acts on")
+
+
+def test_a_corrupt_activity_stamp_does_not_break_the_campaign_list(client):
+    """A store is plain files the user syncs, so this file can come back with
+    non-UTF-8 bytes. `GET /campaigns` reads it for every campaign, so letting
+    one damaged ranking hint raise would blank the campaigns page and the
+    sidebar over a file whose whole job is to order five rows."""
+    _, cid = _campaign(client)
+    store.campaigns.campaign_activity_path(cid).write_bytes(b"\xff\xfe not utf-8 \x00")
+
+    r = client.get("/api/campaigns")
+    assert r.status_code == 200
+    row = [c for c in r.json() if c["id"] == cid][0]
+    assert row["activity"] == row["updated"], "an unreadable stamp reads as absent"
+
+
+def test_list_campaigns_activity_falls_back_to_updated_with_no_scenes(client):
+    """A campaign nobody has played yet still needs an orderable activity
+    stamp, or it would sort below every played campaign forever."""
+    _, cid = _campaign(client)
+    row = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]
+    assert row["scenes"] == 0
+    assert row["activity"] == row["updated"] != ""
+
+
 # ---- script scenes: PC speakers & per-speaker posts (#744) ----
 def _empty_scene(client, cid):
     return client.post(f"/api/campaigns/{cid}/scenes", json={}).json()["id"]
@@ -9339,6 +9739,160 @@ def test_clearing_a_campaign_override_opts_out_even_with_no_world_anchor(client)
 
     store.voice_anchors.write(store.worlds.world_root(wid), "mara", "Added later.")
     assert store.overlay.voice_anchor(cid, "mara") == ""    # still opted out
+
+def test_an_impossible_activity_stamp_is_not_accepted(client):
+    """A shape check is not a validity check. "9999-99-99T99:99:99Z" matches
+    the pattern, outranks every real timestamp lexically, and then the
+    monotonicity guard refuses to replace it because each genuine stamp
+    compares older -- pinning that campaign atop Recent until someone repairs
+    the file by hand. The two fixes are individually sound and jointly a trap."""
+    _, cid = _campaign(client)
+    store.campaigns.campaign_activity_path(cid).write_text(
+        "9999-99-99T99:99:99Z\n", encoding="utf-8")
+
+    row = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]
+    assert row["activity"] == row["updated"], "an impossible stamp reads as absent"
+
+    # and the campaign is not wedged: a real write still takes effect
+    store.campaigns.touch_quietly(cid)
+    assert store.campaigns.read_activity(cid) != ""
+
+
+def test_an_unpadded_activity_stamp_is_not_accepted(client):
+    """`strptime` accepts variable-width components, so "2026-8-07T01:02:03Z"
+    parses cleanly -- and parsing is not the bar, because the caller compares
+    these lexically. A one-digit month sorts above every stamp from October
+    onwards, so a hand edit or a sync artifact in that shape outranks real
+    activity for months. Only a stamp `now_iso()` could have written counts."""
+    _, cid = _campaign(client)
+    store.campaigns.campaign_activity_path(cid).write_text(
+        "2026-8-07T01:02:03Z\n", encoding="utf-8")
+
+    row = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]
+    assert row["activity"] == row["updated"], "an unpadded stamp reads as absent"
+
+    # and it does not wedge the campaign either: the monotonicity guard compares
+    # against "" rather than against a value that outranks everything real
+    store.campaigns.touch_quietly(cid)
+    assert store.campaigns.read_activity(cid) != ""
+
+
+def test_an_activity_stamp_from_the_future_is_not_believed(client):
+    """The last shape of the self-sealing trap, and the one that survives every
+    other check: "9999-12-31T23:59:59Z" is canonical, parses, and round-trips.
+    It also outranks every real timestamp lexically, and `_publish_stamp` then
+    declines to replace it because each genuine stamp compares older -- so a
+    store synced from a device with a wrong clock pins that campaign atop
+    Recent permanently."""
+    _, cid = _campaign(client)
+    store.campaigns.campaign_activity_path(cid).write_text(
+        "9999-12-31T23:59:59Z\n", encoding="utf-8")
+
+    row = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]
+    assert row["activity"] == row["updated"], "a far-future stamp reads as absent"
+
+    # and the campaign repairs itself on the next write rather than staying wedged
+    store.campaigns.touch_quietly(cid)
+    assert store.campaigns.read_activity(cid) not in ("", "9999-12-31T23:59:59Z")
+
+
+def test_ordinary_clock_skew_does_not_discard_a_real_stamp(client, monkeypatch):
+    """The other side of the ceiling. A synced library carries stamps written by
+    whichever device made them, and one an hour ahead is a real record of real
+    work -- refusing those to catch a hypothetical would throw away the thing
+    the file is for."""
+    _, cid = _campaign(client)
+    monkeypatch.setattr("grimoire.store.campaigns.read.now_iso",
+                        lambda: "2090-01-01T12:00:00Z")
+    store.campaigns.campaign_activity_path(cid).write_text(
+        "2090-01-01T13:00:00Z\n", encoding="utf-8")   # an hour ahead of this machine
+
+    assert store.campaigns.read_activity(cid) == "2090-01-01T13:00:00Z"
+
+
+def test_a_corrupt_scene_stamp_cannot_pin_a_campaign_atop_recent(client, monkeypatch):
+    """The activity fold reads three different files, and validating only the
+    one this app writes was arbitrary: a scene's `updated` is the same kind of
+    value in the same kind of hand-editable, synced file. A `zzzz` there
+    outranks every genuine timestamp in the same lexical `max`, and then no
+    later write can move the campaign, because nothing real beats it."""
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Saltmarch"}).json()["id"]
+
+    _set_scene_updated(cid, sid, "zzzz")
+
+    row = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]
+    assert row["activity"] != "zzzz", "a corrupt scene stamp must not rank the campaign"
+    assert row["activity"] == row["updated"] != ""
+
+    # and a later write still moves it, rather than being outranked forever
+    monkeypatch.setattr("grimoire.store.campaigns.read.now_iso", lambda: _soon(60))
+    client.put(f"/api/campaigns/{cid}/climate", json={"default_climate": "boreal"})
+    moved = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]
+    assert moved["activity"] > row["activity"]
+
+
+def test_the_newest_valid_scene_stamp_wins_even_when_a_bad_one_sorts_first(client):
+    """`list_scenes` sorts by the very field that may be the bad one, so
+    element zero is only the newest if the sort key can be trusted. Dropping
+    the bad value is not enough on its own -- the fold has to look past it."""
+    _, cid = _campaign(client)
+    good = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Real"}).json()["id"]
+    bad = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Corrupt"}).json()["id"]
+
+    real = _soon(60)
+    _set_scene_updated(cid, good, real)
+    _set_scene_updated(cid, bad, "zzzz")
+
+    row = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]
+    assert row["activity"] == real, (
+        "the bad stamp sorts first, so taking scene_list[0] alone would miss this")
+
+
+def test_two_campaigns_do_not_serialize_on_each_other_s_activity_stamp(client):
+    """The middleware holds the response's status line until the stamp lands,
+    so a shared lock would make one campaign's slow write -- an atomic replace
+    plus fsync on a synced or removable store -- delay every other campaign's
+    mutation for work it has nothing to do with. Separate files cannot race."""
+    _, a = _campaign(client, name="First")
+    _, b = _campaign(client, name="Second")
+
+    assert store.campaigns.read._stamp_lock(a) is not store.campaigns.read._stamp_lock(b)
+    assert store.campaigns.read._stamp_lock(a) is store.campaigns.read._stamp_lock(a), (
+        "the same campaign must get the same lock, or it serializes nothing")
+
+    # holding one campaign's lock must not block the other's stamp
+    with store.campaigns.read._stamp_lock(a):
+        store.campaigns.touch_quietly(b)
+    assert store.campaigns.read_activity(b) != ""
+
+
+def test_absorb_and_audit_do_not_count_as_campaign_activity(client):
+    """Both return staged edits and write nothing -- `PUT /chronicle` is what
+    persists them. Reviewing an absorb and discarding it, or retrying the audit
+    step, must not move the campaign up Recent for work that never landed."""
+    from grimoire.routes import scenes as scene_routes
+    for fn in (scene_routes.post_absorb, scene_routes.post_audit):
+        assert getattr(fn, "grimoire_computes_only", False), (
+            f"{fn.__name__} stages its edits; it must declare itself, "
+            "or the middleware stamps a campaign for a review nobody saved")
+
+
+def test_a_preview_post_does_not_count_as_campaign_activity(client):
+    """POST is not a synonym for write. Generating a voice anchor returns a
+    suggestion for the user to accept or discard; nothing is persisted, so
+    merely looking must not move the campaign up Recent."""
+    wid, cid = _campaign(client)
+    before = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
+
+    from grimoire.routes import campaigns as campaign_routes
+    assert getattr(campaign_routes.post_campaign_voice_anchor_generate,
+                   "grimoire_computes_only", False), (
+        "the preview route must declare itself, or the middleware cannot tell")
+
+    after = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
+    assert after == before
+
 
 def test_world_pc_and_greeting_deletes_sweep_their_leftovers_too(client):
     """#225's other two world-route deletes of inheritable records."""
