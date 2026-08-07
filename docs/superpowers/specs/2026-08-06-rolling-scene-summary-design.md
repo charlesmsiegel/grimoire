@@ -182,6 +182,12 @@ which is why it is present tense where `absorb/system.j2` is past.
   from-scratch refold due — without the ask, the panel could only flag the
   summary stale and wait for the next generated turn. The first date set is the
   odd one: it renames the scene, so its ask goes to the id the rename returned.
+- The rule covers a scene's **birth**, not only its play: `sceneCreated` (a
+  scene started from a greeting appends that greeting's posts, several of them
+  for a multi-speaker one) and the cast panel's adopted opener (`firstPost`) go
+  through the same helper. Both are transcript writes that no *turn* follows, so
+  at `rolling_summary_every: 1`, or with a greeting long enough on its own, a
+  scene could otherwise be born past the threshold and stay unsummarized.
 - Every ask carries the transcript length the caller **verified by re-reading**
   as its `upto` bound, so a fold cannot cover a player post whose reply has not
   been written yet (that reply is an append, and would stay out of the summary
