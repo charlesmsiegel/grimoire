@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
+         type ReactNode } from "react";
 import {
   api, type Actor, type SceneContext, type SceneLocation, type ChronicleEntry,
   type CalendarConfig, type RosterEntry, type SceneDatetime,
@@ -303,7 +304,15 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // Keyed on the scene alone, deliberately NOT on refreshKey: a turn landing
   // must not yank the reader out of a past turn they are in the middle of
   // reading. Changing scene must, since the entry belongs to the old one.
-  useEffect(() => {
+  //
+  // A LAYOUT effect for the same reason as `CastPanel`'s `live`: passive
+  // effects are scheduled in a separate task, leaving a gap after the commit
+  // in which a detail response for the scene just left can still read a ref
+  // that agrees with it. Here the render-time scoping of `frozen` makes such a
+  // write inert rather than harmful, so this is closing the window rather than
+  // fixing a live defect — but two refs guarding the same race should not
+  // disagree about when they update.
+  useLayoutEffect(() => {
     liveScene.current = `${cid}/${sid}`;
     wantedTurn.current = null;
     setFrozen(null);
