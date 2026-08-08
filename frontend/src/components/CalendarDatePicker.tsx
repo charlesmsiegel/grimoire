@@ -7,8 +7,9 @@ function parseParts(dateOnly: string): [string, string, string] {
   return m ? [m[1], m[2], String(parseInt(m[3], 10))] : ["", "", ""];
 }
 
-export function CalendarDatePicker({ scope, value, onChange, ariaLabel }: {
+export function CalendarDatePicker({ scope, value, onChange, ariaLabel, disabled }: {
   scope: CalendarScope; value: string; onChange: (native: string) => void; ariaLabel: string;
+  disabled?: boolean;
 }) {
   const [initYear, initMonth, initDay] = parseParts(splitNativeDate(value).date);
   const [year, setYear] = useState(initYear);
@@ -72,14 +73,14 @@ export function CalendarDatePicker({ scope, value, onChange, ariaLabel }: {
   const dayCount = entry?.days ?? 0;
   return (
     <span className="date-picker">
-      <input type="number" aria-label={`${ariaLabel} year`} value={year}
+      <input type="number" aria-label={`${ariaLabel} year`} value={year} disabled={disabled}
              onChange={(e) => { setYear(e.target.value); emit(e.target.value, month, day); }} />
-      <select aria-label={`${ariaLabel} month`} value={month} disabled={!months.length}
+      <select aria-label={`${ariaLabel} month`} value={month} disabled={disabled || !months.length}
               onChange={(e) => { setMonth(e.target.value); setDay(""); emitChange(""); }}>
         <option value="">— month —</option>
         {months.map((m) => <option key={m.key} value={m.key}>{m.name}</option>)}
       </select>
-      <select aria-label={`${ariaLabel} day`} value={day} disabled={!entry}
+      <select aria-label={`${ariaLabel} day`} value={day} disabled={disabled || !entry}
               onChange={(e) => { setDay(e.target.value); emit(year, month, e.target.value); }}>
         <option value="">—</option>
         {Array.from({ length: dayCount }, (_, i) => String(i + 1)).map((d) =>
