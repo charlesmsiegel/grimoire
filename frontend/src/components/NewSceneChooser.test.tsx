@@ -1,263 +1,102 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { NewSceneChooser } from "./NewSceneChooser";
 
 vi.mock("../api/client", () => ({
   api: {
-    availableGreetings: vi.fn(), sceneSuggestions: vi.fn(), createScene: vi.fn(),
-    startFromGreeting: vi.fn(), addToCast: vi.fn(), addCastBatch: vi.fn(), setSceneLocation: vi.fn(),
-    deleteScene: vi.fn(),
+    availableGreetings: vi.fn(), sceneSuggestions: vi.fn(), sceneIntent: vi.fn(),
+    createScene: vi.fn(), startFromGreeting: vi.fn(), addCastBatch: vi.fn(),
+    setSceneLocation: vi.fn(), setSceneDatetime: vi.fn(), renameScene: vi.fn(),
+    deleteScene: vi.fn(), listEntities: vi.fn(), listCharacters: vi.fn(),
+    listCampaignPCs: vi.fn(), listAppearances: vi.fn(),
   },
+}));
+vi.mock("./CalendarDatePicker", () => ({
+  CalendarDatePicker: ({ value, onChange, ariaLabel }: any) =>
+    <input aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)} />,
 }));
 import { api } from "../api/client";
 
-const GREETINGS = [
-  { id: "reck", name: "Reckoning", available: true, reasons: [], unlocked: true },
-  { id: "open", name: "Open", available: true, reasons: [], unlocked: false },
-  { id: "gala", name: "Gala", available: false, reasons: ["missing required tags"], unlocked: false },
-  { id: "dawn", name: "Dawn", available: true, reasons: [], unlocked: false },
-];
-const SUGGESTION = {
-  title: "The creditor", premise: "A debt-collector arrives.",
-  cast: [{ kind: "characters", id: "doran", name: "Doran" }],
-  location: { id: "keep", name: "The Keep" },
-};
-
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.availableGreetings as any).mockResolvedValue(GREETINGS);
-  (api.sceneSuggestions as any).mockResolvedValue({ suggestions: [SUGGESTION,
-    { title: "Storm watch", premise: "Thunder over the marsh.", cast: [], location: null }] });
+  (api.listAppearances as any).mockResolvedValue([]);
+  (api.availableGreetings as any).mockResolvedValue(
+    [{ id: "reck", name: "Reckoning", available: true, reasons: [], unlocked: true }]);
+  (api.sceneSuggestions as any).mockResolvedValue(
+    { suggestions: [], greeting_picks: [], next_date: "2026-01-01" });
   (api.createScene as any).mockResolvedValue({ id: "s9" });
   (api.startFromGreeting as any).mockResolvedValue({ ok: true, id: "s9" });
-  (api.addToCast as any).mockResolvedValue({ ok: true });
-  (api.addCastBatch as any).mockResolvedValue({ ok: true, added: 1, skipped: [] });
-  (api.setSceneLocation as any).mockResolvedValue({ ok: true, moved: false, name: "" });
+  (api.renameScene as any).mockResolvedValue({ id: "s9", title: "Reckoning" });
+  (api.setSceneDatetime as any).mockResolvedValue({ ok: true, id: "s9" });
   (api.deleteScene as any).mockResolvedValue({ ok: true });
+  (api.listEntities as any).mockResolvedValue([]);
+  (api.listCharacters as any).mockResolvedValue([]);
+  (api.listCampaignPCs as any).mockResolvedValue([]);
 });
 
-async function renderChooser(props: Partial<{ afterSid: string | null; ready: boolean;
-                                              onClose: () => void; onCreated: (sid: string, p?: string) => void }> = {}) {
-  render(<NewSceneChooser cid="c" afterSid={props.afterSid !== undefined ? props.afterSid : "s1"}
-                          ready={props.ready ?? true}
-                          onClose={props.onClose ?? (() => {})}
-                          onCreated={props.onCreated ?? (() => {})} />);
-  fireEvent.click(await screen.findByText("With your PC"));
-}
+test("mode is chosen first and nothing is fetched before it", () => {
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  expect(screen.getByText("With your PC")).toBeInTheDocument();
+  expect(api.availableGreetings).not.toHaveBeenCalled();
+});
 
-test("renders 2 greeting cards (unlocked first) and generated cards once loaded", async () => {
-  await renderChooser();
+test("picking a card opens the confirm form and creates nothing yet", async () => {
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByText("Reckoning"));
+  await screen.findByRole("button", { name: /create scene/i });
+  expect(api.createScene).not.toHaveBeenCalled();
+});
+
+test("Back returns to the picker without writing", async () => {
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByText("Reckoning"));
+  fireEvent.click(await screen.findByRole("button", { name: /back/i }));
   await screen.findByText("Reckoning");
-  expect(screen.getByText("unlocked")).toBeInTheDocument();
-  expect(screen.getByText("Open")).toBeInTheDocument();
-  expect(screen.queryByText("Dawn")).toBeNull();        // capped at 2 when generation is on
-  expect(screen.queryByText("Gala")).toBeNull();        // unavailable greetings never show
-  await screen.findByText("The creditor");              // async generated card
-  expect(screen.getByText("Storm watch")).toBeInTheDocument();
-  expect(api.availableGreetings).toHaveBeenCalledWith("c", "s1");
+  expect(api.createScene).not.toHaveBeenCalled();
 });
 
-test("picking a greeting creates a scene, starts it, and reports the sid", async () => {
-  const onCreated = vi.fn();
-  await renderChooser({ onCreated });
-  fireEvent.click(await screen.findByText("Reckoning"));
-  await waitFor(() => expect(api.startFromGreeting).toHaveBeenCalledWith("c", "s9", "reck"));
-  expect(api.createScene).toHaveBeenCalledWith("c", undefined, undefined, false);
-  expect(onCreated).toHaveBeenCalledWith("s9");
+test("offscreen mode asks for pcless greetings and pcless scenes", async () => {
+  (api.availableGreetings as any).mockResolvedValue(
+    [{ id: "cabal", name: "Cabal", available: true, reasons: [], unlocked: false, pcless: true }]);
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("Offscreen (NPCs only)"));
+  fireEvent.click(await screen.findByText("Cabal"));
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", "Cabal", expect.anything(), true));
 });
 
-test("picking a generated card seeds cast + location and passes the premise", async () => {
-  const onCreated = vi.fn();
-  await renderChooser({ onCreated });
-  fireEvent.click(await screen.findByText("The creditor"));
-  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9", "A debt-collector arrives."));
-  expect(api.addCastBatch).toHaveBeenCalledWith("c", "s9", [{ kind: "characters", id: "doran" }]);
-  expect(api.setSceneLocation).toHaveBeenCalledWith("c", "s9", "keep");
-});
-
-test("a greeting pick adopts the renamed scene id", async () => {
-  (api.startFromGreeting as any).mockResolvedValue({ ok: true, id: "s9-reckoning" });
-  const onCreated = vi.fn();
-  await renderChooser({ onCreated });
-  fireEvent.click(await screen.findByText("Reckoning"));
-  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9-reckoning"));
-});
-
-test("picking a generated card passes its title to createScene", async () => {
-  const onCreated = vi.fn();
-  await renderChooser({ onCreated });
-  fireEvent.click(await screen.findByText("The creditor"));
-  await waitFor(() => expect(onCreated).toHaveBeenCalled());
-  expect(api.createScene).toHaveBeenCalledWith("c", "The creditor", undefined, false);
-});
-
-test("Create manually only creates the scene", async () => {
-  const onCreated = vi.fn();
-  await renderChooser({ onCreated });
-  fireEvent.click(await screen.findByRole("button", { name: /create manually/i }));
-  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9"));
-  expect(api.startFromGreeting).not.toHaveBeenCalled();
-  expect(api.addCastBatch).not.toHaveBeenCalled();
-});
-
-test("Cancel closes without creating anything", async () => {
+test("Cancel from the picker writes nothing", async () => {
   const onClose = vi.fn();
-  await renderChooser({ onClose });
-  fireEvent.click(await screen.findByRole("button", { name: /cancel/i }));
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByRole("button", { name: /^cancel$/i }));
   expect(onClose).toHaveBeenCalled();
   expect(api.createScene).not.toHaveBeenCalled();
 });
 
-test("without a key: no suggestions fetch, hint shown, up to 4 greetings", async () => {
-  await renderChooser({ ready: false });
-  await screen.findByText("Reckoning");
-  expect(api.sceneSuggestions).not.toHaveBeenCalled();
-  expect(screen.getByText(/set up an llm connection/i)).toBeInTheDocument();
-  expect(screen.getByText("Dawn")).toBeInTheDocument(); // slot cap grows to 4
-});
-
-test("a failed seed deletes the orphan scene and keeps the chooser open", async () => {
-  (api.startFromGreeting as any).mockRejectedValue({ detail: "boom" });
-  const onCreated = vi.fn();
-  await renderChooser({ onCreated });
+test("Escape and the backdrop are ignored while the create sequence is writing", async () => {
+  let release: (v: any) => void = () => {};
+  (api.createScene as any).mockReturnValue(new Promise((r) => { release = r; }));
+  const onClose = vi.fn();
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
   fireEvent.click(await screen.findByText("Reckoning"));
-  await waitFor(() => expect(api.deleteScene).toHaveBeenCalledWith("c", "s9"));
-  expect(onCreated).not.toHaveBeenCalled();
-  expect(await screen.findByText("boom")).toBeInTheDocument();
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  fireEvent.keyDown(window, { key: "Escape" });
+  fireEvent.click(screen.getByRole("dialog"));
+  expect(onClose).not.toHaveBeenCalled();     // unmounting would strand the writes in flight
+  await act(async () => { release({ id: "s9" }); });
 });
 
-test("already-cast members (skipped server-side) don't block the pick", async () => {
-  (api.addCastBatch as any).mockResolvedValue({ ok: true, added: 0, skipped: ["characters/doran"] });
+test("creating reports the scene and Escape closes while idle", async () => {
   const onCreated = vi.fn();
-  await renderChooser({ onCreated });
-  fireEvent.click(await screen.findByText("The creditor"));
-  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9", "A debt-collector arrives."));
-  expect(api.deleteScene).not.toHaveBeenCalled();
-});
-
-test("a cast seeding failure aborts the pick and cleans up the scene", async () => {
-  (api.addCastBatch as any).mockRejectedValue({ status: 500, detail: "boom" });
-  const onCreated = vi.fn();
-  await renderChooser({ onCreated });
-  fireEvent.click(await screen.findByText("The creditor"));
-  await waitFor(() => expect(api.deleteScene).toHaveBeenCalledWith("c", "s9"));
-  expect(onCreated).not.toHaveBeenCalled();
-  expect(await screen.findByText("boom")).toBeInTheDocument();
-});
-
-test("a failed greetings fetch surfaces in the banner", async () => {
-  (api.availableGreetings as any).mockRejectedValue({ status: 500, detail: "greetings down" });
-  await renderChooser();
-  expect(await screen.findByText("greetings down")).toBeInTheDocument();
-  expect(screen.getByText("No available greetings.")).toBeInTheDocument();
-});
-
-test("no afterSid fetches availability without the param", async () => {
-  await renderChooser({ afterSid: null });
-  await screen.findByText("Reckoning");
-  expect(api.availableGreetings).toHaveBeenCalledWith("c", undefined);
-});
-
-test("renders exactly the server-filtered greeting list (skipped absent, marks tolerated)", async () => {
-  (api.availableGreetings as any).mockResolvedValue([
-    { id: "g1", name: "Gala", available: true, reasons: [], unlocked: false, mark: "completed" },
-  ]);
-  await renderChooser();
-  await screen.findByText("Gala");                     // a marked-complete greeting still renders
-  expect(screen.queryByText("Reckoning")).toBeNull();  // nothing beyond the server's list
-});
-
-test("with >2 greetings the section shows Choosing… until the LLM call lands", async () => {
-  let release: (v: unknown) => void = () => {};
-  (api.sceneSuggestions as any).mockReturnValue(new Promise((r) => { release = r; }));
-  await renderChooser();
-  await screen.findByText(/choosing…/i);
-  expect(screen.queryByText("Reckoning")).toBeNull();
-  release({ suggestions: [SUGGESTION], greeting_picks: [] });
-  await screen.findByText("Reckoning"); // empty picks: falls back to today's order
-  expect(screen.queryByText(/choosing…/i)).toBeNull();
-});
-
-test("greeting picks choose and order the greeting cards", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue({
-    suggestions: [SUGGESTION], greeting_picks: ["dawn", "reck"] });
-  await renderChooser();
-  await screen.findByText("Dawn");
-  expect(screen.getByText("Reckoning")).toBeInTheDocument();
-  expect(screen.queryByText("Open")).toBeNull(); // present but not picked
-  expect(api.sceneSuggestions).toHaveBeenCalledWith("c", "s1", false);
-});
-
-test("without a key greetings render immediately, no Choosing…", async () => {
-  await renderChooser({ ready: false });
-  await screen.findByText("Reckoning");
-  expect(screen.queryByText(/choosing…/i)).toBeNull();
-});
-
-test("picking a generated card passes its suggested date to createScene", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue({
-    suggestions: [{ ...SUGGESTION, date: "2026-07-10" }], next_date: "2026-07-08" });
-  await renderChooser();
-  fireEvent.click(await screen.findByText("The creditor"));
-  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", "The creditor", "2026-07-10", false));
-});
-
-test("manual creation passes the general next_date once suggestions land", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue({
-    suggestions: [SUGGESTION], next_date: "2026-07-08", greeting_picks: [] });
-  await renderChooser();
-  await screen.findByText("The creditor"); // suggestions resolved → nextDate is set
-  fireEvent.click(screen.getByRole("button", { name: /create manually/i }));
-  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", undefined, "2026-07-08", false));
-});
-
-test("a greeting pick passes the general next_date when available", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue({
-    suggestions: [SUGGESTION], next_date: "2026-07-08", greeting_picks: [] });
-  await renderChooser();
-  await screen.findByText("The creditor");
-  fireEvent.click(screen.getByText("Reckoning"));
-  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", undefined, "2026-07-08", false));
-});
-
-test("a card without a date falls back to next_date", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue({
-    suggestions: [SUGGESTION], next_date: "2026-07-08", greeting_picks: [] });
-  await renderChooser();
-  fireEvent.click(await screen.findByText("The creditor"));
-  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", "The creditor", "2026-07-08", false));
-});
-
-test("mode step gates all fetches and offscreen filters to pcless greetings", async () => {
-  (api.availableGreetings as any).mockResolvedValue([
-    { id: "reck", name: "Reckoning", available: true, reasons: [], unlocked: false },
-    { id: "cabal", name: "The Cabal", available: true, reasons: [], unlocked: false, pcless: true },
-  ]);
-  render(<NewSceneChooser cid="c" afterSid="s1" ready={true}
-                          onClose={() => {}} onCreated={() => {}} />);
-  expect(api.availableGreetings).not.toHaveBeenCalled();
-  expect(api.sceneSuggestions).not.toHaveBeenCalled();
-  fireEvent.click(await screen.findByText(/offscreen \(npcs only\)/i));
-  await screen.findByText("The Cabal");
-  expect(screen.queryByText("Reckoning")).toBeNull();
-  expect(api.sceneSuggestions).toHaveBeenCalledWith("c", "s1", true);
-});
-
-test("offscreen manual create flags the scene pcless", async () => {
-  const onCreated = vi.fn();
-  render(<NewSceneChooser cid="c" afterSid="s1" ready={true}
-                          onClose={() => {}} onCreated={onCreated} />);
-  fireEvent.click(await screen.findByText(/offscreen \(npcs only\)/i));
-  fireEvent.click(await screen.findByRole("button", { name: /create manually/i }));
-  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9"));
-  expect(api.createScene).toHaveBeenCalledWith("c", undefined, undefined, true);
-});
-
-test("pc mode hides pcless greetings", async () => {
-  (api.availableGreetings as any).mockResolvedValue([
-    { id: "reck", name: "Reckoning", available: true, reasons: [], unlocked: false },
-    { id: "cabal", name: "The Cabal", available: true, reasons: [], unlocked: false, pcless: true },
-  ]);
-  await renderChooser();
-  await screen.findByText("Reckoning");
-  expect(screen.queryByText("The Cabal")).toBeNull();
+  const onClose = vi.fn();
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={onClose} onCreated={onCreated} />);
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(onClose).toHaveBeenCalled();
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByText("Reckoning"));
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9", undefined));
 });

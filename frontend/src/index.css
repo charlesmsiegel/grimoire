@@ -1087,6 +1087,10 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .chooser-card:disabled { opacity: 0.6; cursor: default; }
 .chooser-card-title { font-weight: 600; }
 .chooser-card-premise { opacity: 0.85; }
+.chooser .picker input.grow { flex: 1; }
+.chooser textarea { width: 100%; background: transparent; border: 1px solid var(--muted); color: inherit; padding: 8px; font: inherit; }
+.chooser select { width: 100%; }
+.chooser label.role { display: block; }
 
 .avatar-crop-btn { padding: 0; border: none; background: transparent; cursor: pointer; flex: none; display: block; }
 .focus-modal { width: min(420px, 92vw); }
