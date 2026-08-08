@@ -3683,9 +3683,7 @@ test("an absorb that lands after a campaign switch is not installed", async () =
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
       <Link to="/campaigns/other">switch campaign</Link>
-      <Routes>
-        <Route path="/campaigns/:cid" element={<CampaignView ready={true} />} />
-      </Routes>
+      {playRoutes()}
     </MemoryRouter>,
   );
   fireEvent.click(await screen.findByRole("button", { name: "End scene" }));
@@ -3773,9 +3771,7 @@ test("a scoped retry failure does not follow the reader into another campaign", 
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
       <Link to="/campaigns/other">switch campaign</Link>
-      <Routes>
-        <Route path="/campaigns/:cid" element={<CampaignView ready={true} />} />
-      </Routes>
+      {playRoutes()}
     </MemoryRouter>,
   );
   await screen.findByText("hi");
@@ -4066,9 +4062,7 @@ test("switching campaigns discards the open review rather than repointing it", a
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
       <Link to="/campaigns/other">to the other campaign</Link>
-      <Routes>
-        <Route path="/campaigns/:cid" element={<CampaignView ready={true} />} />
-      </Routes>
+      {playRoutes()}
     </MemoryRouter>,
   );
   await screen.findByText("hi");
