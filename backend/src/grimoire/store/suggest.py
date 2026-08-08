@@ -120,6 +120,8 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
     cast, seen = [], set()
     for c in overlay.list_characters(cid):
         tok = f"characters:{c['id']}"
+        if offscreen and tok in player_tokens:
+            continue   # don't offer the model a token the parser will discard
         seen.add(tok)
         cast.append({"token": tok, "name": c.get("name", c["id"]),
                      "tagline": overlay.tagline(cid, c["id"]),
@@ -221,6 +223,22 @@ def _extract_json(text: str):
     return None
 
 
+def _token_ok(tok: str, char_ids: set[str], player_tokens: set[str], offscreen: bool) -> bool:
+    """A cast token this campaign actually has.
+
+    The offscreen clause is FIRST and guarded, both deliberately. A PC seated as
+    a `characters` actor (CastPanel's role selector allows exactly that) would
+    otherwise pass on the `char_ids` check below, and an offscreen scene is
+    defined by the player's absence. Guarded, because dropping the `offscreen`
+    condition would reject players from ordinary PC scenes."""
+    kind, _, aid = tok.partition(":")
+    if offscreen and tok in player_tokens:
+        return False
+    if kind == "characters" and aid in char_ids:
+        return True
+    return not offscreen and tok in player_tokens
+
+
 def parse_output(text: str, cid: str, offscreen: bool = False) -> list[dict]:
     parsed = _extract_json(text)
     if isinstance(parsed, dict):
@@ -234,12 +252,6 @@ def parse_output(text: str, cid: str, offscreen: bool = False) -> list[dict]:
     char_ids, player_tokens, loc_ids = _valid_ids(cid)
     norm = _date_normalizer(cid)
 
-    def _valid_token(tok: str) -> bool:
-        kind, _, aid = tok.partition(":")
-        if kind == "characters" and aid in char_ids:
-            return True
-        return not offscreen and tok in player_tokens
-
     out: list[dict] = []
     for e in suggestions:
         if not isinstance(e, dict):
@@ -248,7 +260,8 @@ def parse_output(text: str, cid: str, offscreen: bool = False) -> list[dict]:
         if not title or not premise:
             continue
         raw_cast = e.get("cast", [])
-        cast = ([t for t in (str(x).strip() for x in raw_cast) if _valid_token(t)]
+        cast = ([t for t in (str(x).strip() for x in raw_cast)
+                 if _token_ok(t, char_ids, player_tokens, offscreen)]
                 if isinstance(raw_cast, list) else [])
         loc = str(e.get("location", "")).strip()
         out.append({"title": title, "premise": premise, "cast": cast,
