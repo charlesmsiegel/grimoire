@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type CharacterSummary, type EntitySummary, type PCSummary,
          type RosterEntry } from "../api/client";
 import { CalendarDatePicker } from "./CalendarDatePicker";
@@ -108,6 +108,33 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
     }
   }
 
+  // `create()` below is several awaited writes long, all against the `cid`
+  // this closure captured -- and NewSceneChooser discards a stale draft the
+  // instant its `cid` prop changes, which unmounts this component. Unlike
+  // CastPanel's `live` ref (compared against fresh props on a component that
+  // stays mounted across the switch), this component never gets a chance to
+  // observe the new `cid`: it is simply gone, mid-sequence, before another
+  // render could show it one. So the only signal available is its own
+  // unmount, and `create()` checks it before every write after the first.
+  //
+  // A LAYOUT effect's cleanup, not a passive one, for the same race
+  // CastPanel's comment documents: a passive cleanup is scheduled in its own
+  // task, so a write's `.then` can land as a microtask in the gap between the
+  // unmounting commit and that task, reading a ref that has not flipped yet.
+  // A layout cleanup runs synchronously inside the commit that unmounts this
+  // component, so no later step can ever observe it as stale.
+  //
+  // This cannot make the sequence atomic -- a step already in flight when the
+  // switch happens still lands, there is no client-side way to cancel an
+  // issued HTTP request -- it only stops the STEPS AFTER IT from compounding
+  // the problem. On a detected switch the sequence also does not delete the
+  // scene it already made and does not call `onCreated`: reporting this id
+  // into a `CampaignView` now showing a different campaign would be wrong,
+  // and deleting a scene in a campaign the reader has left is worse than
+  // leaving it there, unlisted but real, for them to find on return.
+  const live = useRef(true);
+  useLayoutEffect(() => () => { live.current = false; }, []);
+
   async function create() {
     setWriting(true);
     setError(null);
@@ -118,10 +145,10 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
       //    leaves CastPanel's date box pre-filled
       ({ id: sid } = await api.createScene(cid, finalTitle, date || undefined, draft.pcless));
     } catch (err: any) {
-      setError(errMsg(err));
-      setWriting(false);
+      if (live.current) { setError(errMsg(err)); setWriting(false); }
       return;
     }
+    if (!live.current) return;    // switched campaigns while createScene was in flight -- stop here
     // 2. cast — the last step for which deleting the scene is still clean
     const soft: string[] = [];
     if (draft.source !== "greeting" && cast.length) {
@@ -146,11 +173,11 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
           soft.push(`not seated: ${names.join(", ")}`);
         }
       } catch (err: any) {
-        setError(await deleteAndReport(sid, errMsg(err)));
-        setWriting(false);
+        if (live.current) { setError(await deleteAndReport(sid, errMsg(err))); setWriting(false); }
         return;
       }
     }
+    if (!live.current) return;
     // 3-4. location and date BEFORE seeding: start_from_greeting expands the
     //      greeting body through expand_macros, which resolves {{date}} from
     //      the scene's CURRENT moment. Seeding first dates it against nothing.
@@ -158,12 +185,14 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
     if (location) {
       try { await api.setSceneLocation(cid, sid, location); }
       catch (err: any) { soft.push(errMsg(err)); }
+      if (!live.current) return;
     }
     if (date) {
       try {
         const r = await api.setSceneDatetime(cid, sid, date);
         sid = r.id;
       } catch (err: any) { soft.push(errMsg(err)); }
+      if (!live.current) return;
     }
     // 5. seed. A failure here has written nothing outside the scene, so the
     //    scene goes; anything after has, so nothing does.
@@ -172,10 +201,10 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
         const r = await api.startFromGreeting(cid, sid, draft.gid);
         sid = r.id;
       } catch (err: any) {
-        setError(await deleteAndReport(sid, errMsg(err)));
-        setWriting(false);
+        if (live.current) { setError(await deleteAndReport(sid, errMsg(err))); setWriting(false); }
         return;
       }
+      if (!live.current) return;
       // The title field is what the user was looking at when they pressed
       // Create, so it is their intent whether or not they typed in it — and
       // start_from_greeting has just overwritten it with the greeting's name.
@@ -183,6 +212,7 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
         const r = await api.renameScene(cid, sid, finalTitle);
         sid = r.id;
       } catch (err: any) { soft.push(errMsg(err)); }
+      if (!live.current) return;
     }
     setWriting(false);
     const prompt = draft.source === "greeting" ? undefined : (premise || undefined);

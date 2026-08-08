@@ -92,6 +92,35 @@ test("Back preserves the typed direction and the regenerated cards, and issues n
   expect(api.sceneSuggestions).toHaveBeenCalledTimes(2);
 });
 
+// Follow-up: a `cid` change already discards a stale, UNUSED draft (see
+// "changing cid discards the draft" above). This covers the sequence
+// already IN FLIGHT when the switch happens: create() closes over the `cid`
+// it started with, and without a liveness check its remaining writes (here:
+// setSceneDatetime, startFromGreeting, renameScene) would keep firing
+// against the campaign the reader just left, and `onCreated` would report a
+// scene id into a CampaignView now showing a different one.
+test("a cid change mid-create-sequence stops further writes and never reports the scene", async () => {
+  let releaseCreate: (v: any) => void = () => {};
+  (api.createScene as any).mockReturnValue(new Promise((r) => { releaseCreate = r; }));
+  const onCreated = vi.fn();
+  const { rerender } = render(
+    <NewSceneChooser cid="a" afterSid="s1" ready onClose={() => {}} onCreated={onCreated} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByText("Reckoning"));   // a greeting draft: source "greeting", date set
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(api.createScene).toHaveBeenCalled());
+
+  // the reader switches campaigns while createScene is still in flight
+  rerender(<NewSceneChooser cid="b" afterSid="s1" ready onClose={() => {}} onCreated={onCreated} />);
+
+  await act(async () => { releaseCreate({ id: "s9" }); });
+  // none of the sequence's later steps fired against campaign "a"
+  expect(api.setSceneDatetime).not.toHaveBeenCalled();
+  expect(api.startFromGreeting).not.toHaveBeenCalled();
+  expect(api.renameScene).not.toHaveBeenCalled();
+  expect(onCreated).not.toHaveBeenCalled();
+});
+
 test("offscreen mode asks for pcless greetings and pcless scenes", async () => {
   (api.availableGreetings as any).mockResolvedValue(
     [{ id: "cabal", name: "Cabal", available: true, reasons: [], unlocked: false, pcless: true }]);
