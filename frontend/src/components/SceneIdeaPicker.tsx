@@ -61,7 +61,12 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, onPicked, onCanc
     setInferring(true);
     try {
       const intent = await api.sceneIntent(cid, text, pcless);
-      onPicked(customDraft(text, intent, latestDate.current, pcless));
+      const draft = customDraft(text, intent, latestDate.current, pcless);
+      // fails or returns nothing -> a hint that metadata could not be inferred
+      const empty = intent !== null && !intent.title && !intent.date
+        && !intent.location && intent.cast.length === 0;
+      if (empty) onPicked(draft, "Nothing could be inferred from that — fill in the details below.");
+      else onPicked(draft);
     } catch (err: any) {
       // A miss must leave a usable form, never a dead end — and the warning
       // travels with the draft, because this pane is about to unmount.
@@ -82,14 +87,14 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, onPicked, onCanc
                placeholder="Steer the generated ideas — e.g. something at sea"
                value={direction} onChange={(e) => setDirection(e.target.value)} />
         <button className="subtle" disabled={!ready || busy}
-                onClick={() => refresh(direction)}>↻ Regenerate</button>
+                onClick={() => { setError(null); refresh(direction); }}>↻ Regenerate</button>
       </div>
 
       <div className="role">From a greeting</div>
       {rankPending && <div className="field-hint">Choosing…</div>}
       {!rankPending && greetingCards.length === 0 && <div className="field-hint">No available greetings.</div>}
       {greetingCards.map((g) => (
-        <button className="chooser-card" key={g.id}
+        <button className="chooser-card" key={g.id} disabled={inferring}
                 onClick={() => onPicked(greetingDraft(g, latestDate.current, pcless))}>
           <span className="chooser-card-title">{g.name}</span>
           {g.unlocked && <span className="chip on">unlocked</span>}
@@ -100,7 +105,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, onPicked, onCanc
       {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
       {ready && suggestions === null && <div className="field-hint">Generating…</div>}
       {generatedCards.map((s, i) => (
-        <button className="chooser-card" key={i}
+        <button className="chooser-card" key={i} disabled={inferring}
                 onClick={() => onPicked(suggestionDraft(s, latestDate.current, pcless))}>
           <span className="chooser-card-title">{s.title}</span>
           <span className="chooser-card-premise">{s.premise}</span>
