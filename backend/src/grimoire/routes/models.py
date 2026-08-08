@@ -477,6 +477,11 @@ class Opener(BaseModel):
     prompt: str
 
 
+class SceneIntent(BaseModel):
+    text: str
+    offscreen: bool = False
+
+
 class FirstPost(BaseModel):
     text: str
 

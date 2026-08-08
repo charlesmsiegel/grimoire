@@ -1,0 +1,9 @@
+{#- Extraction input: the campaign snapshot, shared verbatim with
+    scene_suggestions/user.j2 rather than restated, plus the game master's typed
+    scene-start description. Vars: s, offscreen, greeting_candidates (always
+    None here), direction (always "" here -- scene_suggestions/user.j2 reads
+    it), typed. -#}
+{%- include "scene_suggestions/user.j2" %}
+
+The game master's description of how the next scene starts:
+{{ typed }}

@@ -6319,6 +6319,55 @@ def test_scene_suggestions_missing_key_returns_409(client):
     assert r.status_code == 409 and r.json()["kind"] == "missing_key"
 
 
+# ---- scene intent (#317) ----
+def test_scene_intent_rejects_empty_text(client):
+    _wid, cid = _campaign(client)
+    assert client.post(f"/api/campaigns/{cid}/scene-intent",
+                       json={"text": "   ", "offscreen": False}).status_code == 400
+
+
+def test_scene_intent_resolves_names(client):
+    """The response mirrors scene-suggestions' shapes so the frontend reuses one
+    converter: location is {id, name} or null, cast carries names."""
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/locations", json={"name": "Saltmarch"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    reply = ('{"title": "The morning after", "date": "2026-03-04", '
+             '"location": "saltmarch", "cast": ["characters:mara"]}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(reply)
+    r = client.post(f"/api/campaigns/{cid}/scene-intent",
+                    json={"text": "the morning after, back at the marsh house",
+                          "offscreen": False})
+    assert r.status_code == 200
+    assert r.json()["location"] == {"id": "saltmarch", "name": "Saltmarch"}
+    assert r.json()["cast"][0]["name"] == "Mara"
+
+
+def test_scene_intent_reports_an_llm_failure_as_502(client):
+    _wid, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    client.app.dependency_overrides[routes.get_llm] = lambda: FailingOpenRouter()
+    assert client.post(f"/api/campaigns/{cid}/scene-intent",
+                       json={"text": "a storm", "offscreen": False}).status_code == 502
+
+
+def test_scene_intent_forwards_offscreen_to_the_parser(client):
+    """A player named in the typed text must not be cast into an offscreen
+    scene — the flag has to reach parse_intent, not just the prompt."""
+    wid, cid = _campaign(client)
+    mara = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": mara, "role": "player"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    reply = '{"title": "T", "date": "", "location": "", "cast": ["characters:mara"]}'
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(reply)
+    r = client.post(f"/api/campaigns/{cid}/scene-intent",
+                    json={"text": "while she sleeps", "offscreen": True})
+    assert r.json()["cast"] == []
+
+
 def test_put_chronicle_applies_approved_edits(client):
     _, cid = _campaign(client)
     croot = store.campaigns.campaign_root(cid)
