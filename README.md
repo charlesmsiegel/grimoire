@@ -1,4 +1,4 @@
-# ✦ Grimoire
+# <img src="frontend/public/grimoire-128.png" alt="" width="32" height="32" align="top"> Grimoire
 
 **Grimoire is a local-first app for AI-driven collaborative storytelling and
 character roleplay.** It runs entirely on your own machine, talks to whichever

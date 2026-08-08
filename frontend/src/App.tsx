@@ -157,7 +157,7 @@ export default function App() {
         <header className={"topbar" + (navHidden ? " collapsed" : "")}>
           <NavLink to="/" className="brand">
             <img src="/grimoire-128.png" alt="" width={30} height={30} />
-            <span>✦ GRIMOIRE</span>
+            <span>GRIMOIRE</span>
           </NavLink>
           <div className="topbar-right">
             <NavLink to="/config" className={({ isActive }) => "config-link" + (isActive ? " active" : "")}>
