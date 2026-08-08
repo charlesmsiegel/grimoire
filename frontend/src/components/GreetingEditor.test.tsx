@@ -363,6 +363,45 @@ test("campaign scope: played greetings show a disabled status control", async ()
   expect(screen.getByText(/started this greeting in a scene/i)).toBeInTheDocument();
 });
 
+test("campaign scope: a played greeting's Clear is enabled and clears an orphaned mark", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "g1", name: "Gala", character: "seraphine", version: "default", present: [],
+      requires_tags: [], predecessor_join: "all", mark: "played" },
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "g1", name: "Gala", character: "seraphine", version: "default", present: [],
+            requires_tags: [], predecessor_join: "all" },
+    body: "Hi.", edges: { leads_to: [], excludes: [] }, predecessors: [],
+  });
+  (api.markGreeting as any).mockResolvedValue({ ok: true });
+  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Gala"));
+  const clearBtn = await screen.findByRole("button", { name: /^clear$/i });
+  expect(clearBtn).not.toBeDisabled();          // #315: the only in-app way back from a burned greeting
+  fireEvent.click(clearBtn);
+  await waitFor(() => expect(api.markGreeting).toHaveBeenCalledWith("run", "g1", "none"));
+});
+
+test("campaign scope: clearing a played greeting that IS still stamped surfaces the backend's 409", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "g1", name: "Gala", character: "seraphine", version: "default", present: [],
+      requires_tags: [], predecessor_join: "all", mark: "played" },
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "g1", name: "Gala", character: "seraphine", version: "default", present: [],
+            requires_tags: [], predecessor_join: "all" },
+    body: "Hi.", edges: { leads_to: [], excludes: [] }, predecessors: [],
+  });
+  (api.markGreeting as any).mockRejectedValue(
+    { detail: "greeting was played in a scene; its mark cannot be changed" });
+  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Gala"));
+  fireEvent.click(await screen.findByRole("button", { name: /^clear$/i }));
+  expect(await screen.findByText(/mark cannot be changed/i)).toBeInTheDocument();
+});
+
 test("campaign scope: hides the tagging queue and never fetches untagged images", async () => {
   (api.listGreetings as any).mockResolvedValue([]);
   render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);

@@ -231,7 +231,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
                 <div className="side-section">
                   <h4>Status</h4>
                   <div className="field-hint">
-                    {mark === "played" ? "Started this greeting in a scene — the mark is fixed."
+                    {mark === "played" ? "Started this greeting in a scene. Clearing only works if no scene still records it."
                       : mark === "completed" ? "Marked complete: successors are unlocked."
                       : mark === "skipped" ? "Won't do: hidden from new scenes; the plot routes around it."
                       : "Unmarked."}
@@ -241,7 +241,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
                             onClick={() => setMark("completed")}>Mark complete</button>
                     <button className={"chip" + (mark === "skipped" ? " on" : "")} disabled={mark === "played"}
                             onClick={() => setMark("skipped")}>Won't do</button>
-                    <button className="chip" disabled={mark === "played" || !mark}
+                    <button className="chip" disabled={!mark}
                             onClick={() => setMark("none")}>Clear</button>
                   </div>
                 </div>
