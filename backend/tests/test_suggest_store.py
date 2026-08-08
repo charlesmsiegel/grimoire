@@ -283,11 +283,13 @@ def test_direction_reaches_the_prompt():
     assert "Direction" in msgs[0]["content"]      # the instruction addendum
 
 
-def test_no_direction_leaves_the_prompt_as_it_was():
+def test_no_direction_omits_the_direction_block():
     snap = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None,
             "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
             "available_locations": []}
-    assert suggest.build_prompt(snap, None) == suggest.build_prompt(snap, None, direction="")
+    msgs = suggest.build_prompt(snap, None, direction="")
+    assert "Direction" not in msgs[0]["content"]
+    assert "Direction" not in msgs[1]["content"]
 
 
 def test_direction_is_truncated_to_the_limit():
