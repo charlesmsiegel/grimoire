@@ -35,9 +35,22 @@ Who takes it:
   can carry the id of the proposal it resolved, and proposals are in this
   domain, so the two belong in one (#255);
 - ``playing.mark_greeting``'s whole read-scan-write and the recheck-and-mark
-  inside ``playing.start_from_greeting``, which closes the two races #318's
-  play-once rule exposed: two concurrent starts of the same greeting, and
-  ``mark_greeting``'s orphan-clearing scan racing a start mid-flight;
+  inside ``playing.start_from_greeting``. This closes #318's orphan-clearing
+  race outright: ``mark_greeting``'s scan for a stamping scene now shares a
+  lock with ``stamp_greeting``, so it can no longer find nothing and clear
+  the mark while a concurrent start is mid-flight. The other #318 risk --
+  two concurrent starts of the same greeting -- is narrowed, not closed:
+  both callers still cast actors, stamp their scene and append the greeting
+  body unlocked (the calendar-touching macro expansion in between cannot run
+  under this lock, see ``playing.start_from_greeting``), so a loser's scene
+  keeps that content even though only one caller now wins the mark and the
+  other gets a clean, single-witness ``PlayError``. Before this, both
+  callers could win the mark; that half is what changed. ``mark_greeting``'s
+  hold spans ``stamping_scene``'s whole sweep -- two frontmatter reads per
+  scene -- which blocks every other campaign writer, including an in-flight
+  turn's ``append_reply``, for the scan's duration; correctness needs the
+  scan inside the lock, so there is no cheaper version, but a large campaign
+  on a slow or synced volume could approach ``LOCK_TIMEOUT``;
 - ``module_edit`` publication and the world-module rebind route, the only
   actors that hold *every* campaign's lock at once, across the swap;
   ``PUT /campaigns/{cid}/module`` holds just that campaign's;
