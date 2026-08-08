@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import atomic, characters, greetings, overlay, pcs
+from . import atomic, characters, greetings, locks, overlay, pcs
 from .appearances import cast as appearances_cast, transitions as appearances_transitions, versions as appearances_versions
 from .campaigns import paths as campaigns_paths
 from .context import macros as context_macros
@@ -72,20 +72,31 @@ def mark_greeting(cid: str, gid: str, status: str) -> None:
     scene can be gone: the new-scene chooser deletes a half-seeded scene on
     failure, and versions before the cleanup rule could strand the mark behind
     it. An orphaned mark is now clearable, because a played greeting is
-    unavailable and an orphan would otherwise be unstartable forever."""
+    unavailable and an orphan would otherwise be unstartable forever.
+
+    The scan-then-clear is one locked critical section, not two steps: without
+    it, ``stamping_scene``'s sweep can find no scene stamping `gid`, and a
+    concurrent `start_from_greeting` can stamp one into existence a moment
+    later -- the mark then clears out from under a play that is genuinely
+    mid-flight, on the strength of a scan that was already stale by the time
+    it finished. `stamp_greeting` takes this same lock (`scenes._serialized`),
+    so holding it here for the whole scan excludes that write, not just the
+    final one that would have raced this call's own.
+    """
     overlay.read_greeting(cid, gid)  # raises GreetingNotFound
     if status not in ("completed", "skipped", "none"):
         raise PlayError(f"unknown mark status: {status}")
-    marks = read_marks(cid)
-    if gid in marks["played"]:
-        if status != "none" or stamping_scene(cid, gid) is not None:
-            raise PlayError("greeting was played in a scene; its mark cannot be changed")
-    marks["completed"].discard(gid)
-    marks["skipped"].discard(gid)
-    marks["played"].discard(gid)
-    if status != "none":
-        marks[status].add(gid)
-    _write_marks(cid, marks)
+    with locks.campaign_lock(cid):
+        marks = read_marks(cid)
+        if gid in marks["played"]:
+            if status != "none" or stamping_scene(cid, gid) is not None:
+                raise PlayError("greeting was played in a scene; its mark cannot be changed")
+        marks["completed"].discard(gid)
+        marks["skipped"].discard(gid)
+        marks["played"].discard(gid)
+        if status != "none":
+            marks[status].add(gid)
+        _write_marks(cid, marks)
 
 
 def player_tags(cid: str) -> set[str]:
@@ -168,6 +179,23 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
     # Marked only once the body is actually on the scene. Marking earlier meant
     # a failed expansion or append consumed the greeting anyway, and -- since a
     # played greeting is now unavailable -- consumed it permanently.
-    _mark_played(cid, gid)
+    #
+    # The availability guard above (`available_greetings`) ran unlocked, so a
+    # concurrent start of this same `gid` -- into a different scene -- can
+    # have passed it too and be racing to this same point; both would
+    # otherwise mark `gid` played and both would report success (#318).
+    # Recording the mark has to be re-verified and written in one locked
+    # step, or the second racer's read of `marks` is already stale by the
+    # time it writes. This is the only lock this function takes: the
+    # narrower availability check above and the calendar-touching macro
+    # expansion before it both stay outside, the latter deliberately --
+    # `context_macros.expand_macros` resolves and runs a user-authored
+    # calendar provider (see `scenes/lifecycle.py:_date_hint`), and nothing
+    # bounds how long that can take.
+    with locks.campaign_lock(cid):
+        marks = read_marks(cid)
+        if gid in marks["played"] or gid in marks["completed"]:
+            raise PlayError(f"greeting {gid} is not available")
+        _mark_played(cid, gid)
     # retitle last: any earlier failure leaves the caller's sid valid for cleanup
     return scenes_lifecycle.rename_scene(cid, sid, g["name"])

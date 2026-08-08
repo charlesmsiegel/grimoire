@@ -34,6 +34,10 @@ Who takes it:
   ``repoint_scenes``) plus its ``find_by_proposal`` reader — a logged roll
   can carry the id of the proposal it resolved, and proposals are in this
   domain, so the two belong in one (#255);
+- ``playing.mark_greeting``'s whole read-scan-write and the recheck-and-mark
+  inside ``playing.start_from_greeting``, which closes the two races #318's
+  play-once rule exposed: two concurrent starts of the same greeting, and
+  ``mark_greeting``'s orphan-clearing scan racing a start mid-flight;
 - ``module_edit`` publication and the world-module rebind route, the only
   actors that hold *every* campaign's lock at once, across the swap;
   ``PUT /campaigns/{cid}/module`` holds just that campaign's;
@@ -160,6 +164,19 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     "store.audit.baselines",
     "store.proposals",
     "store.rolls",
+    # `played.json` is read-modify-written by `mark_greeting` (scans every
+    # scene for one stamping `gid` before clearing an orphaned mark) and by
+    # `start_from_greeting`'s recheck-and-mark. Both were unlocked until
+    # #318 made a played greeting unavailable and made a replay raise --
+    # which is what turned "two racers can both pass the guard" from a
+    # relabeling into a duplicate play, and what turned the clearing rule's
+    # scan into a real TOCTOU against a start mid-flight. `start_from_
+    # greeting` deliberately does NOT hold this lock across `context_
+    # macros.expand_macros`, which resolves the campaign's calendar
+    # provider and runs its (user-authored) code -- same reason `scenes.
+    # lifecycle._date_hint` resolves its calendar before `_create_scene`'s
+    # lock rather than inside it.
+    "store.playing",
 })
 
 #: Modules deliberately outside the exclusion, with the reason. An entry here is
@@ -227,7 +244,6 @@ UNREVIEWED: frozenset[str] = frozenset({
     "store.dossiers",
     "store.modules.binding",           # was store.modules
     "store.overlay",
-    "store.playing",
     "store.playstate",
     "store.plot",
     "store.relationships",
