@@ -95,7 +95,8 @@ construct a state the create sequence cannot execute:
 
 ```ts
 type DraftBase = {
-  title: string;                     // trimmed; never empty (see Validation)
+  title: string;                     // editable
+  defaultTitle: string;              // immutable; what an emptied title falls back to
   date: string;                      // native notation as typed/proposed, not
                                      // yet normalized — set_datetime canonicalizes
   location: string;                  // location id, "" if none
@@ -153,12 +154,15 @@ Every field's origin is fixed here, because "an empty draft" is the kind of
 phrase two implementers read differently — and reading it as `date: ""` would
 silently drop today's behavior, where *every* path seeds `nextDate`.
 
-| | title | date | location | cast | premise |
+| | title / defaultTitle | date | location | cast | premise |
 |---|---|---|---|---|---|
 | greeting | `Availability.name` | `nextDate` | `""` | — | — |
 | generated | `suggestion.title` | `suggestion.date \|\| nextDate` | `suggestion.location?.id ?? ""` | `suggestion.cast` | `suggestion.premise` |
 | custom | `intent.title \|\| "New scene"` | `intent.date \|\| nextDate` | `intent.location?.id ?? ""` | `intent.cast` | the typed text, verbatim |
 | blank | `"New scene"` | `nextDate` | `""` | `[]` | `""` |
+
+`title` and `defaultTitle` start equal; only `title` is editable, which is what
+makes the blank-title fallback in Validation executable from the draft alone.
 
 The typed text is always the premise; the extraction's job is metadata only,
 and it never replaces what the user wrote.
@@ -223,20 +227,26 @@ behaviors combine into a trap:
   changed").
 
 So an interrupted greeting start permanently burns the greeting, with no UI to
-recover it. Two changes, both small:
+recover it. Three changes:
 
 1. **Move `_mark_played` to just before the retitle**, after `append_reply`.
-   Nothing between them reads the mark, so this is a pure reordering, and it
-   shrinks the window to the single call that the existing comment already
-   documents as the safe-to-fail one ("retitle last: any earlier failure
-   leaves the caller's sid valid for cleanup").
-2. **Let `mark_greeting(cid, gid, "none")` clear a played mark when no scene
-   stamps that greeting.** The refusal is right when a scene records the play
-   and wrong when none does — that state is exactly the orphaned mark. The
-   check needs the greeting stamp per scene, so `scenes.read.list_scenes`
-   gains `"greeting": meta.get("greeting", "")` in its projection; it already
-   does a head-only frontmatter parse, so this costs nothing. The refusal
-   message stays for the case where a scene *does* stamp it.
+   Nothing between them reads the mark, so this is a pure reordering. It does
+   *not* eliminate the window — see the cleanup rule below, which is what
+   actually closes it — but it means a failure during macro expansion or the
+   append, the likeliest failures, no longer marks anything.
+2. **Never delete a scene whose greeting has been played** — the cleanup rule
+   in Error handling. This is the real fix: the orphan existed because the
+   client deleted the scene that justified the mark.
+3. **Let `mark_greeting(cid, gid, "none")` clear a played mark when no scene
+   stamps that greeting**, as a manual escape hatch for marks orphaned by
+   older versions or by a lost response. A new
+   `playing.stamping_scene(cid, gid) -> str | None` enumerates scene
+   frontmatter heads looking for `greeting: <gid>`. That is a directory walk
+   with one head-parse per scene — the same cost as `list_scenes`, not free —
+   which is acceptable because it runs only on an explicit unmark, never in
+   the picker's path. `list_scenes`' own projection is deliberately left
+   alone so no other consumer inherits a new key. The refusal message stays
+   for the case where a scene *does* stamp it.
 
 ### #316 / #89 — `direction` and `rank`
 
@@ -314,9 +324,24 @@ offscreen guarantee is already weaker than it reads.
 
 This is pre-existing, but #316 and #317 both aim user intent at that filter —
 a direction like "what they do while she sleeps" must not cast her — so it is
-fixed here: exclude roster player tokens in `_valid_token` regardless of
-`kind`, and omit them from `build_snapshot`'s cast when `offscreen`. Tests
-cover a player whose kind is `characters`, not only a `pcs` one.
+fixed here. The predicate becomes, exactly:
+
+```python
+def _valid_token(tok: str) -> bool:
+    kind, _, aid = tok.partition(":")
+    if offscreen and tok in player_tokens:
+        return False          # a player is a player whatever kind seats them
+    if kind == "characters" and aid in char_ids:
+        return True
+    return not offscreen and tok in player_tokens
+```
+
+The new clause is guarded by `offscreen` and must stay that way: dropped, it
+would reject players from ordinary PC scenes, which is why the tests below
+assert **both** directions — a `characters`-kind player is rejected offscreen
+*and* still accepted in a PC scene. `build_snapshot`'s `list_characters` loop
+likewise skips roster player tokens when `offscreen`, so the model is not
+offered a cast member the parser will then discard.
 
 ### #23 — the date applies instead of hinting
 
@@ -332,41 +357,59 @@ Run by `SceneConfirmForm` for draft `d`. Both `startFromGreeting` and the
 first `setSceneDatetime` rename the scene, so every step adopts the id the
 previous one returned.
 
+**Metadata is applied before the scene is seeded**, which is the load-bearing
+part of this order. `start_from_greeting` runs the greeting body through
+`context.macros.expand_macros`, which resolves `{{date}}`, `{{time}}`, and
+`{{weekday}}` from `_datetime_subs(cid, sid)` — the scene's *current* moment.
+Seeding before setting the date would expand a dated greeting against no date
+at all. (There is no location macro, so location has no such constraint; it is
+set alongside the date for consistency.) Setting a first date appends no
+transition line — `set_datetime` is silent when not advancing — so the scene
+is still empty when `start_from_greeting`'s empty-scene guard runs.
+
 1. `createScene(cid, d.title, d.date, d.pcless)` → `sid`.
-2. `d.source === "greeting"` → `startFromGreeting(cid, sid, d.gid)` → `sid`
-   (renamed to the greeting's name); then **unconditionally**
-   `renameScene(cid, sid, d.title)` → `sid`. Unconditional rather than
-   compared against the seeded name: the draft does not retain that name after
-   editing, and the backend may have renamed the greeting since the picker
-   loaded, so any comparison races. Renaming to the confirmed title always
-   produces what the form showed.
-   Otherwise → `addCastBatch` when `d.cast` is non-empty.
+2. Non-greeting, `d.cast` non-empty → `addCastBatch(cid, sid, d.cast)`.
 3. `d.location` non-empty → `setSceneLocation(cid, sid, d.location)`. **All
    sources**, greeting included — the confirm pane offers the control to every
    draft, so every draft must honor it.
 4. `d.date` non-empty → `setSceneDatetime(cid, sid, d.date)` → `sid`.
-5. `onCreated(sid, d.source === "greeting" ? undefined : d.premise || undefined)`.
+5. `d.source === "greeting"` → `startFromGreeting(cid, sid, d.gid)` → `sid`
+   (renamed to the greeting's name), then `renameScene(cid, sid, d.title)` →
+   `sid`. The rename is unconditional: the title field is what the user was
+   looking at when they pressed Create, so it is their stated intent whether
+   or not they typed in it. A comparison against the seeded name would be both
+   unnecessary and — if the greeting were renamed backend-side while confirm
+   was open — wrong.
+6. `onCreated(sid, d.source === "greeting" ? undefined : d.premise || undefined)`.
 
 Ordering note: `rename_scene` preserves the date slug verbatim and
-`_stamp_start_date` only stamps when there is not one, so the two renaming
-steps are safe in either order. They are fixed in this order for one reason
-each — the rename must follow `startFromGreeting`, which overwrites the title,
-and step 4 is the one step allowed to fail.
+`_stamp_start_date` only stamps when there is not one, so steps 4 and 5 do not
+interfere; the rename in step 5 must follow `startFromGreeting`, which
+overwrites the title.
 
 ## Error handling
 
-- **Steps 1–3 fail** → delete the half-seeded scene and surface the error in
-  the confirm pane, which stays open; the picker refetches greetings on the
-  way back, so a greeting another client played in the meantime disappears
-  rather than failing twice.
-- **Step 4 fails** → the scene is kept and `onCreated(sid)` is still called
-  with the id from step 3, so the user lands in a valid, dateless scene and
-  can set the date in `CastPanel`, whose box is pre-filled from the
-  `suggested_date` written at step 1. Because `onCreated` navigates and closes
-  the chooser, the error cannot be shown in the confirm pane's banner — it is
-  reported through the parent's existing error surface in `CampaignView`. This
-  is #23's stated fallback: the scene opens with the date unset rather than
-  the creation failing.
+The cleanup rule is one line: **delete the scene only while nothing
+irreversible has happened to it.**
+
+- **Steps 1–2 fail, or `startFromGreeting` in step 5 fails** → delete the
+  scene and surface the error in the confirm pane, which stays open. Nothing
+  outside the scene has changed (a `startFromGreeting` that fails before
+  `_mark_played` has marked nothing; one that fails after it has only the
+  retitle left, and step 3 of the recovery path covers that residue). The
+  picker refetches greetings on the way back, so a greeting another client
+  played meanwhile disappears rather than failing twice.
+- **Steps 3, 4, or the rename in step 5 fail** → the scene is **kept** and the
+  sequence continues. Each is an independent piece of metadata; a scene
+  missing one is usable, and for the greeting path the scene now holds a
+  played greeting's body, so deleting it is what created the orphaned-mark
+  trap in the first place. The confirm pane shows the error and switches its
+  primary button to **Continue to scene**, which calls `onCreated` with the
+  latest known sid. The user reads what failed before navigating, so the error
+  needs no new parent contract — `onCreated`'s signature is unchanged.
+  A failed step 4 is #23's stated fallback: the scene opens dateless, with
+  `CastPanel`'s date box pre-filled from the `suggested_date` written at
+  step 1.
 - **Extraction fails or returns nothing** → confirm opens anyway with the
   blank-draft defaults and the typed text as the premise, plus a hint saying
   metadata could not be inferred.
@@ -394,25 +437,42 @@ worse in kind by this work:
 - **`store.playing` takes no campaign lock** — it sits in
   `locks.UNREVIEWED`. `start_from_greeting` checks availability and then
   read-modify-writes `played.json`, so two concurrent starts of the same
-  greeting can both pass the guard. #315 raises the *cost* of losing that race
-  (a burned greeting rather than a duplicate scene), which is precisely why
-  the recovery path above is in scope. Moving `store.playing` out of
-  `UNREVIEWED` is a welcome follow-up and is not attempted here.
-- **Scene creation is client-orchestrated across five calls**, so the scene is
-  visible to other clients between them, and cleanup deletes a scene that a
-  concurrent client could have touched. That is exactly today's shape; the
-  confirm step reduces how often the sequence runs with wrong data rather than
-  changing its transactionality. A single backend orchestration endpoint is
-  the real fix and is #90 Option C, explicitly out of scope.
+  greeting can both pass the guard, and `mark_greeting`'s new clearing rule
+  can scan for a stamping scene, find none, and clear the mark while a
+  concurrent start is mid-flight. Worst case in both directions is a greeting
+  played twice — recoverable. Moving `store.playing` out of `UNREVIEWED` is
+  the real fix, a welcome follow-up, and not attempted here.
+- **Deferring `_mark_played` widens the double-start window** by the duration
+  of `stamp_greeting`, macro expansion, and `append_reply`. Taken knowingly:
+  it trades a wider window on a race that needs two concurrent clients
+  (consequence: a duplicate scene) against orphaning on a failure that needs
+  only one dropped request (consequence, before this work: a permanently
+  unstartable greeting).
+- **Scene creation is client-orchestrated**, so the scene is visible to other
+  clients between calls, and cleanup can delete a scene a concurrent client
+  touched. This is today's shape but **the sequence is longer than today's** —
+  up to six calls where the greeting path currently makes two — so the exposure
+  grows even though its kind does not. A single backend orchestration endpoint
+  is the real fix; it is #90 Option C, considered and out of scope.
 - **Ambiguous-commit on a renaming call** (the server renames, the response is
-  lost) leaves the client holding a stale sid. `CastPanel.applyDatetime` has
-  the same exposure today and documents it under #95.
+  lost) leaves the client holding a stale sid, and a subsequent call or a
+  cleanup delete then targets an id that no longer exists.
+  `CastPanel.applyDatetime` has the same exposure today and documents it under
+  #95. The cleanup rule above bounds the damage: the two steps that can leave
+  a scene behind are the two that are not allowed to delete one.
+- **The draft is not revalidated at Create.** A location deleted, a greeting
+  played, or a character removed while confirm is open surfaces as a failure
+  from the individual call rather than as a pre-flight conflict. Acceptable
+  for a predominantly single-user desktop app; a version token on the draft is
+  the fix if multi-client editing ever becomes real.
 
 ## Validation
 
-- `d.title` is trimmed; an empty title falls back to the source default from
-  the construction table, so `renameScene` is never called with `""` and no
-  path depends on `post_scene`'s own `"New scene"` coercion.
+- `d.title` is trimmed; if it is empty, `d.defaultTitle` is used, so
+  `renameScene` is never called with `""` and no path depends on
+  `post_scene`'s own `"New scene"` coercion. Length is bounded by the same
+  slug handling every other scene title goes through (`slugify` + `fit_sid`);
+  no new limit is introduced.
 - `d.date` is whatever `CalendarDatePicker` produced or the model proposed. It
   is *not* canonical until `set_datetime` normalizes it — the spec calls it
   native-notation input, and step 4 is where validation actually happens.
@@ -427,16 +487,19 @@ Backend (`backend/tests/`, `monkeypatch.setenv("GRIMOIRE_HOME", tmp_path)`):
   completed one does too; a skipped one is still absent.
 - `start_from_greeting` on a played greeting raises `PlayError` → 409.
 - `greeting_candidates` omits played greetings.
-- `_mark_played` runs after the body is appended: a failure injected at the
-  retitle leaves the mark set, and one injected before `append_reply` does
-  not.
+- `_mark_played` runs after the body is appended: a failure injected before
+  `append_reply` leaves the greeting unmarked and still startable.
+- A greeting body containing `{{date}}` expands against the date the scene was
+  given before seeding, not against an empty one.
 - `mark_greeting(…, "none")` clears an orphaned played mark; it still refuses
-  when a scene stamps that greeting; `list_scenes` exposes the stamp.
+  when a scene stamps that greeting; `playing.stamping_scene` finds the
+  stamping scene and returns `None` when there is none.
 - `rank=false` returns `greeting_picks: []` and does not build candidates.
 - A non-empty `direction` reaches the rendered prompt; an over-long one is
   truncated to 500 characters.
-- Offscreen filtering: a player seated as `characters:<id>` is absent from an
-  offscreen snapshot and rejected by `parse_output` and `parse_intent`.
+- Offscreen filtering, both directions: a player seated as `characters:<id>`
+  is absent from an offscreen snapshot and rejected by `parse_output` and
+  `parse_intent`, **and** the same actor is still accepted in a PC scene.
 - `parse_intent` table: clean reply, unknown location id, unparseable date,
   invalid cast token, bare array, garbled JSON.
 - `/scene-intent`: 400 on empty or whitespace text, 502 on `LLMError`, names
@@ -459,11 +522,16 @@ Frontend (vitest run **from** `frontend/`, plus `npx tsc -b`):
   is discarded.
 - Empty custom text opens confirm with no LLM call.
 - Nothing is created until **Create scene**; Back and Cancel write nothing.
-- Greeting path: the confirmed title survives `startFromGreeting`, and an
-  edited location is applied.
+- Greeting path: the confirmed title survives `startFromGreeting`, an edited
+  location is applied, and location/date are sent *before* it.
+- An emptied title falls back to `defaultTitle`, not to `"New scene"`, for a
+  greeting and a suggestion alike.
 - Every enabled confirm control is asserted to reach an API call; the greeting
   pane renders no premise or cast control.
-- A `setSceneDatetime` failure still reports the scene and does not delete it.
+- Cleanup boundary: a failure at `addCastBatch` deletes the scene; failures at
+  `setSceneLocation`, `setSceneDatetime`, and the final `renameScene` do not,
+  and each surfaces an error with a **Continue to scene** button that reports
+  the latest sid.
 
 Gate: `make check`.
 
@@ -474,9 +542,9 @@ issue's wording.
 
 | Issue | Delivered | Deliberately not |
 |---|---|---|
-| #315 | Played/completed greetings are excluded at the store, so cards and the LLM ranker both stop offering them; an orphaned mark is recoverable | Concurrent double-start still races (`store.playing` holds no lock); an already-open picker keeps its loaded list until the next fetch |
+| #315 | Played/completed greetings are excluded at the store, so cards and the LLM ranker both stop offering them; the cleanup rule stops the chooser creating orphaned marks, and `mark_greeting` can clear ones that predate it | Concurrent double-start still races (`store.playing` holds no lock), and that race can also clear a mark it should not; an already-open picker keeps its loaded list until the next fetch |
 | #316 | A free-text direction steers the generated slots, with ordered requests | The direction does not re-rank greetings (decision 4) and is not persisted |
 | #317 | Typed text yields a date, location, cast, and title, validated against the campaign; the typed text is preserved as the premise | Without an LLM connection the custom path creates a blank draft and infers nothing |
 | #89 | Refresh control (`rank=false`, no card shuffle) and a free-text custom card | No ledger; unpicked suggestions are still lost on close (#88) |
 | #90 | Title, date, location editable for every source; cast and premise for generated/custom; nothing written until Create | Greeting drafts expose no cast, premise, or first-post-source choice — the greeting body is the post and the backend seats its cast (decision 2) |
-| #23 | The confirmed date is applied through `set_datetime`, populating `time_history` and the "Today" block, with a dateless-scene fallback on failure | The model still emits dates as parsed JSON fields, not tool calls |
+| #23 | The confirmed date is applied through `set_datetime`, populating `time_history` and the "Today" block before the scene is seeded, with a dateless-scene fallback on failure | The model still emits dates as parsed JSON fields, not tool calls; a lost response on the renaming call leaves the client with a stale sid, as it does everywhere else today |
