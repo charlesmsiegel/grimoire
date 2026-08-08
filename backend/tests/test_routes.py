@@ -3257,6 +3257,20 @@ def test_available_greetings_after_param(client):
                       params={"after": "nope"}).status_code == 404
 
 
+def test_replaying_a_greeting_is_a_409(client):
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"})
+    g = client.post(f"/api/worlds/{wid}/greetings",
+                    json={"name": "Alpha", "character": "seraphine",
+                          "version": "default", "body": "A."}).json()["id"]
+    s1 = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "One"}).json()["id"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{s1}/start-from-greeting",
+                       json={"greeting": g}).status_code == 200
+    s2 = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Two"}).json()["id"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{s2}/start-from-greeting",
+                       json={"greeting": g}).status_code == 409
+
+
 def test_opener_streams_without_persisting(client):
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]

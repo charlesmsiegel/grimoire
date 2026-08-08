@@ -1,7 +1,7 @@
 import pytest
 
 from grimoire.store import appearances as ap
-from grimoire.store import campaigns, characters, greetings, pcs, playing, scenes, tags, worlds
+from grimoire.store import campaigns, characters, greetings, pcs, playing, scenes, suggest, tags, worlds
 
 
 def _world(monkeypatch, tmp_path):
@@ -350,3 +350,99 @@ def test_start_from_greeting_keeps_a_single_block_greeting_at_one(monkeypatch, t
     cid, sid = _campaign_after_seed(wid)
     sid = playing.start_from_greeting(cid, sid, g)
     assert scenes.get_turn_sizes(cid, sid) == [1]
+
+
+def test_played_greeting_is_not_available(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "S", "default", characters.blank_card("S"))
+    g1 = greetings.create_greeting(wroot, "A", "s", "default", body="A.")
+    g2 = greetings.create_greeting(wroot, "B", "s", "default", body="B.")
+    cid, sid = _campaign_after_seed(wid)
+    playing.start_from_greeting(cid, sid, g1)
+    playing.mark_greeting(cid, g2, "completed")
+    got = {x["id"]: x for x in playing.available_greetings(cid)}
+    assert got[g1]["available"] is False and "already played" in got[g1]["reasons"]
+    assert got[g2]["available"] is False and "already played" in got[g2]["reasons"]
+
+
+def test_replaying_a_played_greeting_raises(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "S", "default", characters.blank_card("S"))
+    g = greetings.create_greeting(wroot, "A", "s", "default", body="A.")
+    cid, sid = _campaign_after_seed(wid)
+    playing.start_from_greeting(cid, sid, g)
+    sid2 = scenes.create_scene(cid, "Second")
+    with pytest.raises(playing.PlayError):
+        playing.start_from_greeting(cid, sid2, g)
+
+
+def test_mark_played_runs_after_the_body_is_appended(monkeypatch, tmp_path):
+    """A failure before append_reply must leave the greeting startable: that is
+    the whole reason the mark moved."""
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "S", "default", characters.blank_card("S"))
+    g = greetings.create_greeting(wroot, "A", "s", "default", body="A.")
+    cid, sid = _campaign_after_seed(wid)
+    # append_reply, not expand_macros: patching the LAST write before the mark
+    # is what makes the test reject a mark placed anywhere earlier. A mark moved
+    # only past expansion would still pass an expand_macros patch.
+    def _explode(*a, **k):
+        raise RuntimeError("append blew up")
+    monkeypatch.setattr(playing.scenes_write, "append_reply", _explode)
+    with pytest.raises(RuntimeError):
+        playing.start_from_greeting(cid, sid, g)
+    assert g not in playing.read_played(cid)
+    assert {x["id"]: x["available"] for x in playing.available_greetings(cid)}[g] is True
+
+
+def test_stamping_scene_finds_the_scene_that_played_a_greeting(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "S", "default", characters.blank_card("S"))
+    g = greetings.create_greeting(wroot, "A", "s", "default", body="A.")
+    cid, sid = _campaign_after_seed(wid)
+    assert playing.stamping_scene(cid, g) is None
+    sid = playing.start_from_greeting(cid, sid, g)
+    assert playing.stamping_scene(cid, g) == sid
+
+
+def test_orphaned_played_mark_can_be_cleared(monkeypatch, tmp_path):
+    """The scene that justified the mark is gone (an interrupted start, cleaned
+    up by the chooser), so the mark is orphaned and must be recoverable."""
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "S", "default", characters.blank_card("S"))
+    g = greetings.create_greeting(wroot, "A", "s", "default", body="A.")
+    cid, sid = _campaign_after_seed(wid)
+    sid = playing.start_from_greeting(cid, sid, g)
+    scenes.delete_scene(cid, sid)
+    playing.mark_greeting(cid, g, "none")
+    assert g not in playing.read_played(cid)
+    assert {x["id"]: x["available"] for x in playing.available_greetings(cid)}[g] is True
+
+
+def test_greeting_candidates_omits_played_greetings(monkeypatch, tmp_path):
+    """The ranker filters on `available`, so it inherits the fix — assert it
+    rather than assuming, because the ranker is the second place #315 leaked."""
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "S", "default", characters.blank_card("S"))
+    ids = [greetings.create_greeting(wroot, n, "s", "default", body=f"{n}.")
+           for n in ("A", "B", "C", "D")]
+    cid, sid = _campaign_after_seed(wid)
+    playing.start_from_greeting(cid, sid, ids[0])
+    assert ids[0] not in {c["id"] for c in suggest.greeting_candidates(cid)}
+
+
+def test_played_mark_still_refuses_while_a_scene_stamps_it(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "S", "default", characters.blank_card("S"))
+    g = greetings.create_greeting(wroot, "A", "s", "default", body="A.")
+    cid, sid = _campaign_after_seed(wid)
+    playing.start_from_greeting(cid, sid, g)
+    with pytest.raises(playing.PlayError):
+        playing.mark_greeting(cid, g, "none")
