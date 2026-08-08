@@ -328,7 +328,7 @@ Pre-existing, and fixed here because #316 and #317 aim user intent straight at t
 
 **Files:**
 - Modify: `backend/src/grimoire/store/suggest.py` (`build_snapshot` ~line 120, `parse_output` ~line 237)
-- Test: `backend/tests/test_suggest.py`
+- Test: `backend/tests/test_suggest_store.py`
 
 **Interfaces:**
 - Consumes: nothing from Task 1.
@@ -336,7 +336,7 @@ Pre-existing, and fixed here because #316 and #317 aim user intent straight at t
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `backend/tests/test_suggest.py` (create it if absent, mirroring the imports of the nearest existing store test):
+Add to `backend/tests/test_suggest_store.py` (it exists; reuse its `_world`, `_campaign`, `_char` helpers and add `suggest` to its existing `from grimoire.store import ...` line if needed):
 
 ```python
 def test_offscreen_rejects_a_player_seated_as_a_character(monkeypatch, tmp_path):
@@ -365,7 +365,7 @@ Write `_campaign_with_player_character` as a module-level helper in that test fi
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```
-cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_suggest.py -v
+cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_suggest_store.py -v
 ```
 
 Expected: `test_offscreen_rejects_...` FAILS on both assertions (cast is `["characters:mara"]`, token is present). `test_pc_scene_still_accepts...` PASSES already — it is the regression guard for step 3.
@@ -421,7 +421,7 @@ In `build_snapshot`, skip roster players in the character loop when offscreen:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```
-cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_suggest.py -v
+cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_suggest_store.py -v
 ```
 
 Expected: both PASS.
@@ -429,7 +429,7 @@ Expected: both PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/src/grimoire/store/suggest.py backend/tests/test_suggest.py
+git add backend/src/grimoire/store/suggest.py backend/tests/test_suggest_store.py
 git commit -m "fix(suggest): an offscreen scene never casts the player
 
 _valid_token accepted any characters:<id> in the campaign before consulting
@@ -452,7 +452,7 @@ one definition rather than growing a second."
 - Modify: `backend/src/grimoire/routes/scenes.py` (`post_scene_suggestions`)
 - Modify: `scripts/verify_templates.py`
 - Modify: `frontend/src/api/client.ts` (`sceneSuggestions`)
-- Test: `backend/tests/test_suggest.py`, `backend/tests/test_routes.py`
+- Test: `backend/tests/test_suggest_store.py`, `backend/tests/test_routes.py`
 
 **Interfaces:**
 - Consumes: `_token_ok` from Task 2 (unchanged here).
@@ -460,7 +460,7 @@ one definition rather than growing a second."
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `backend/tests/test_suggest.py`:
+Add to `backend/tests/test_suggest_store.py`:
 
 ```python
 def test_direction_reaches_the_prompt():
@@ -515,7 +515,7 @@ Wire the LLM through `app.dependency_overrides[routes.get_llm]` with a fake from
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```
-cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_suggest.py tests/test_routes.py -k "direction or rank_false" -v
+cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_suggest_store.py tests/test_routes.py -k "direction or rank_false" -v
 ```
 
 Expected: FAIL — `build_prompt() got an unexpected keyword argument 'direction'`, and the route ignores both query params.
@@ -650,7 +650,7 @@ In `frontend/src/api/client.ts`:
 - [ ] **Step 9: Run the tests and the template harness**
 
 ```
-cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_suggest.py tests/test_routes.py -v
+cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_suggest_store.py tests/test_routes.py -v
 cd .. && make check-templates
 ```
 
@@ -659,7 +659,9 @@ Expected: PASS, and `verify_templates.py` reports its check count with no failur
 - [ ] **Step 10: Commit**
 
 ```bash
-git add backend/src/grimoire/store/suggest.py backend/src/grimoire/routes/scenes.py \n        templates/scene_suggestions scripts/verify_templates.py \n        frontend/src/api/client.ts backend/tests/test_suggest.py backend/tests/test_routes.py
+git add backend/src/grimoire/store/suggest.py backend/src/grimoire/routes/scenes.py
+git add templates/scene_suggestions scripts/verify_templates.py
+git add frontend/src/api/client.ts backend/tests/test_suggest_store.py backend/tests/test_routes.py
 git commit -m "feat(scenes): steer scene suggestions with a direction (#316, #89)
 
 POST /scene-suggestions takes a free-text direction, truncated to 500 chars in
@@ -683,7 +685,7 @@ expensive half of the prompt."
 - Modify: `backend/src/grimoire/routes/scenes.py` (`post_scene_intent`)
 - Modify: `scripts/verify_templates.py`
 - Modify: `frontend/src/api/client.ts`
-- Test: `backend/tests/test_suggest.py`, `backend/tests/test_routes.py`
+- Test: `backend/tests/test_suggest_store.py`, `backend/tests/test_routes.py`
 
 **Interfaces:**
 - Consumes: `suggest._token_ok`, `_valid_ids`, `_date_normalizer`, `_extract_json` (Task 2); `build_snapshot`.
@@ -691,7 +693,7 @@ expensive half of the prompt."
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `backend/tests/test_suggest.py`:
+Add to `backend/tests/test_suggest_store.py`:
 
 ```python
 INTENT_REPLY = ('{"title": "The morning after", "date": "2026-03-04", '
@@ -779,7 +781,7 @@ Use `backend/tests/llm_fakes.py` for the fake in every route test — never an i
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```
-cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_suggest.py tests/test_routes.py -k intent -v
+cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_suggest_store.py tests/test_routes.py -k intent -v
 ```
 
 Expected: FAIL — `module 'suggest' has no attribute 'parse_intent'`, and 404 on the route.
@@ -946,7 +948,7 @@ export type SceneIntentResult = {
 - [ ] **Step 8: Run the tests and the harness**
 
 ```
-cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_suggest.py tests/test_routes.py -v
+cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_suggest_store.py tests/test_routes.py -v
 cd .. && make check-templates && make check-lint
 ```
 
@@ -955,7 +957,10 @@ Expected: PASS.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add backend/src/grimoire/store/suggest.py backend/src/grimoire/routes/scenes.py \n        backend/src/grimoire/routes/models.py templates/scene_intent \n        scripts/verify_templates.py frontend/src/api/client.ts \n        backend/tests/test_suggest.py backend/tests/test_routes.py
+git add backend/src/grimoire/store/suggest.py backend/src/grimoire/routes/scenes.py
+git add backend/src/grimoire/routes/models.py templates/scene_intent
+git add scripts/verify_templates.py frontend/src/api/client.ts
+git add backend/tests/test_suggest_store.py backend/tests/test_routes.py
 git commit -m "feat(scenes): extract date, location and cast from typed text (#317)
 
 POST /scene-intent reads the user's own description of how a scene starts and
@@ -2267,7 +2272,8 @@ Expected: `check-py`, `check-web`, `check-lint`, `check-templates`, and `check-p
 - [ ] **Step 7: Commit**
 
 ```bash
-git add frontend/src/components/NewSceneChooser.tsx \n        frontend/src/components/NewSceneChooser.test.tsx frontend/src/index.css
+git add frontend/src/components/NewSceneChooser.tsx
+git add frontend/src/components/NewSceneChooser.test.tsx frontend/src/index.css
 # stage frontend/src/routes/CampaignView.test.tsx ONLY if step 5 required a change there
 git commit -m "feat(scenes): the picker becomes mode -> pick -> confirm -> create (#89, #90)
 
