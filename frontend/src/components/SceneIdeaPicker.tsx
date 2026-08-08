@@ -48,6 +48,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, onPicked, onCanc
   useEffect(() => { latestDate.current = nextDate; }, [nextDate]);
 
   async function useTyped() {
+    setError(null);         // clear a stale greetings-fetch banner on every path, not just this one
     const text = typed.trim();
     if (!text) {           // the blank path: no call, today's "Create manually"
       onPicked(customDraft("", null, latestDate.current, pcless));
@@ -58,7 +59,6 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, onPicked, onCanc
       return;
     }
     setInferring(true);
-    setError(null);
     try {
       const intent = await api.sceneIntent(cid, text, pcless);
       onPicked(customDraft(text, intent, latestDate.current, pcless));
