@@ -34,7 +34,12 @@ function renderPicker(onPicked = vi.fn(), ready = true) {
 
 test("picking a greeting emits a greeting draft", async () => {
   const onPicked = renderPicker();
-  fireEvent.click(await screen.findByText("Reckoning"));
+  // wait for the suggestions fetch (not just greetings) so latestDate has
+  // landed before the click — the card title only renders once
+  // api.sceneSuggestions resolves, unlike "Reckoning" which renders as soon
+  // as the (separate) greetings fetch lands.
+  await screen.findByText("The creditor");
+  fireEvent.click(screen.getByText("Reckoning"));
   expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({
     source: "greeting", gid: "reck", title: "Reckoning", date: "2026-01-01" }));
 });
