@@ -52,16 +52,37 @@ def _mark_played(cid: str, gid: str) -> None:
     _write_marks(cid, marks)
 
 
+def stamping_scene(cid: str, gid: str) -> str | None:
+    """The scene recording that `gid` was played, or None if no scene does.
+
+    Walks every scene's frontmatter head -- `read_scene_meta` exists for exactly
+    this kind of bulk scan and never parses a transcript. Two head-parses per
+    scene, since `list_scenes` has already done one: acceptable only because
+    this runs on an explicit unmark, never in the picker's path."""
+    for meta in scenes_read.list_scenes(cid):
+        if scenes_read.read_scene_meta(cid, meta["id"]).get("greeting", "") == gid:
+            return meta["id"]
+    return None
+
+
 def mark_greeting(cid: str, gid: str, status: str) -> None:
-    """Set a greeting's off-screen mark: completed / skipped / none (clear)."""
+    """Set a greeting's off-screen mark: completed / skipped / none (clear).
+
+    A played mark is normally immutable -- a scene records the play. But the
+    scene can be gone: the new-scene chooser deletes a half-seeded scene on
+    failure, and versions before the cleanup rule could strand the mark behind
+    it. An orphaned mark is now clearable, because a played greeting is
+    unavailable and an orphan would otherwise be unstartable forever."""
     overlay.read_greeting(cid, gid)  # raises GreetingNotFound
     if status not in ("completed", "skipped", "none"):
         raise PlayError(f"unknown mark status: {status}")
     marks = read_marks(cid)
     if gid in marks["played"]:
-        raise PlayError("greeting was played in a scene; its mark cannot be changed")
+        if status != "none" or stamping_scene(cid, gid) is not None:
+            raise PlayError("greeting was played in a scene; its mark cannot be changed")
     marks["completed"].discard(gid)
     marks["skipped"].discard(gid)
+    marks["played"].discard(gid)
     if status != "none":
         marks[status].add(gid)
     _write_marks(cid, marks)
@@ -129,7 +150,6 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
         appearances_transitions.appear(cid, sid, "characters", actor, version, "npc")
     if g["pcless"] and not scene_pcless:
         scenes_write.set_pcless(cid, sid)  # before substitution: {{user}} needs the pcless fallback
-    _mark_played(cid, gid)
     scenes_write.stamp_greeting(cid, sid, gid)
     text = context_macros.expand_macros(overlay.read_greeting(cid, gid)["body"],
                                         context_macros.scene_substitutions(cid, sid), cid, sid)
@@ -145,5 +165,9 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
     # that sets the scene's length anchor.
     scenes_write.append_reply(cid, sid, scenes_write.split_reply(
         text, frozenset(appearances_cast.player_names(cid, sid))))
+    # Marked only once the body is actually on the scene. Marking earlier meant
+    # a failed expansion or append consumed the greeting anyway, and -- since a
+    # played greeting is now unavailable -- consumed it permanently.
+    _mark_played(cid, gid)
     # retitle last: any earlier failure leaves the caller's sid valid for cleanup
     return scenes_lifecycle.rename_scene(cid, sid, g["name"])

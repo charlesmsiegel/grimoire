@@ -270,6 +270,11 @@ def availability(items: list[dict], plotmap: dict, played, player_tags,
     for g in items:
         gid = g["id"]
         reasons: list[str] = []
+        if gid in played:
+            # Self-exclusion, distinct from the predecessor use of `played`
+            # below: an opening that has already opened a scene is not an
+            # opening this campaign can still use.
+            reasons.append("already played")
         p = preds[gid]
         if p:
             if g["predecessor_join"] == "any":

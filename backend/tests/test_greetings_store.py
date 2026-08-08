@@ -226,3 +226,11 @@ def test_list_greetings_sorts_names_naturally(tmp_path):
         greetings.create_greeting(tmp_path, name, "ann", "default", "body")
     assert [g["name"] for g in greetings.list_greetings(tmp_path)] == [
         "A1", "A1c", "A2", "A10", "B1", "SoL 2", "sol 10", "SoL 19"]
+
+
+def test_availability_excludes_played_greetings():
+    items = [{"id": "a", "name": "A", "predecessor_join": "all",
+              "requires_tags": [], "pcless": False}]
+    out = {x["id"]: x for x in greetings.availability(items, {}, {"a"}, set())}
+    assert out["a"]["available"] is False
+    assert "already played" in out["a"]["reasons"]
