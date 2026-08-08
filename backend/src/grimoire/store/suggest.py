@@ -173,10 +173,15 @@ def greeting_candidates(cid: str, after: str | None = None, pcless: bool = False
     return out
 
 
+DIRECTION_LIMIT = 500
+
+
 def build_prompt(snapshot: dict, greeting_candidates: list[dict] | None = None,
-                 offscreen: bool = False) -> list[dict]:
+                 offscreen: bool = False, direction: str = "") -> list[dict]:
     # the templates pick the instruction variant and addenda from the same vars
-    vars = {"s": snapshot, "offscreen": offscreen, "greeting_candidates": greeting_candidates}
+    vars = {"s": snapshot, "offscreen": offscreen,
+            "greeting_candidates": greeting_candidates,
+            "direction": direction.strip()[:DIRECTION_LIMIT]}
     return [{"role": "system", "content": prompts.render("scene_suggestions/system.j2", **vars)},
             {"role": "user", "content": prompts.render("scene_suggestions/user.j2", **vars)}]
 

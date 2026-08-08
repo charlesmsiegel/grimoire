@@ -1382,10 +1382,13 @@ export const api = {
     return request<RollingSummaryRefresh>(
       "POST", `/api/campaigns/${cid}/scenes/${sid}/rolling-summary${qs ? `?${qs}` : ""}`);
   },
-  sceneSuggestions: (cid: string, after?: string, offscreen?: boolean) => {
+  sceneSuggestions: (cid: string, after?: string, offscreen?: boolean,
+                     direction?: string, rank = true) => {
     const params = new URLSearchParams();
     if (after) params.set("after", after);
     if (offscreen) params.set("offscreen", "true");
+    if (direction) params.set("direction", direction);
+    if (!rank) params.set("rank", "false");
     const qs = params.toString();
     return request<{ suggestions: SceneSuggestion[]; greeting_picks?: string[]; next_date?: string }>(
       "POST", `/api/campaigns/${cid}/scene-suggestions${qs ? `?${qs}` : ""}`);

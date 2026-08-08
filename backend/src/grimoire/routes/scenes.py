@@ -63,16 +63,18 @@ def _resolve_cast(cid: str, tokens: list[str]) -> list[dict]:
 @router.post("/campaigns/{cid}/scene-suggestions")
 @computes_only
 async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: bool = False,
+                                 direction: str = "", rank: bool = True,
                                  client: LLMClient = Depends(get_llm)):
     try:
         store.campaigns.read_campaign(cid)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     conn = _require_connection()
-    # with >2 startable greetings the same call also ranks them for the chooser
-    candidates = store.suggest.greeting_candidates(cid, after, pcless=offscreen)
+    # A refresh passes rank=false: re-ranking would reshuffle the greeting cards
+    # under the user's cursor, and the ranking is the expensive half of the prompt.
+    candidates = store.suggest.greeting_candidates(cid, after, pcless=offscreen) if rank else []
     messages = store.suggest.build_prompt(store.suggest.build_snapshot(cid, offscreen=offscreen),
-                                          candidates, offscreen=offscreen)
+                                          candidates, offscreen=offscreen, direction=direction)
     try:
         text = await _bounded_call(client.complete(messages, conn))
     except LLMError as exc:

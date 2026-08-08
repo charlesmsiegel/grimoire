@@ -143,15 +143,20 @@ FULL_SNAP = {"now": "2026-07-05", "friendly": "July 5, 2026", "holidays_today": 
 GREETINGS = [{"id": "g1", "name": "Storm greeting", "excerpt": "Rain hammers the piers."},
              {"id": "g2", "name": "Quiet morning", "excerpt": "The dock sleeps."},
              {"id": "g3", "name": "Debt call", "excerpt": "A collector knocks."}]
-for label, snap, cands, off in (("empty", EMPTY_SNAP, None, False),
-                                ("full", FULL_SNAP, None, False),
-                                ("full+greetings", FULL_SNAP, GREETINGS, False),
-                                ("offscreen", FULL_SNAP, None, True)):
-    exp = suggest.build_prompt(snap, cands, offscreen=off)
+for label, snap, cands, off, direction in (
+        ("empty", EMPTY_SNAP, None, False, ""),
+        ("full", FULL_SNAP, None, False, ""),
+        ("full+greetings", FULL_SNAP, GREETINGS, False, ""),
+        ("offscreen", FULL_SNAP, None, True, ""),
+        ("direction", FULL_SNAP, None, False, "something at sea"),
+        ("direction+greetings", FULL_SNAP, GREETINGS, False, "something at sea")):
+    exp = suggest.build_prompt(snap, cands, offscreen=off, direction=direction)
     check(f"suggestions system ({label})", exp[0]["content"],
-          render("scene_suggestions/system.j2", s=snap, offscreen=off, greeting_candidates=cands))
+          render("scene_suggestions/system.j2", s=snap, offscreen=off,
+                 greeting_candidates=cands, direction=direction))
     check(f"suggestions user ({label})", exp[1]["content"],
-          render("scene_suggestions/user.j2", s=snap, offscreen=off, greeting_candidates=cands))
+          render("scene_suggestions/user.j2", s=snap, offscreen=off,
+                 greeting_candidates=cands, direction=direction))
 
 for label, facts, st, rel, plt, grp, cmt, fct in (
         ("bare", {}, None, None, None, None, None, None),
@@ -726,9 +731,11 @@ check_messages("offscreen opener",
 snap = suggest.build_snapshot(cid)
 exp = suggest.build_prompt(snap, None)
 check("suggestions system (store)", exp[0]["content"],
-      render("scene_suggestions/system.j2", s=snap, offscreen=False, greeting_candidates=None))
+      render("scene_suggestions/system.j2", s=snap, offscreen=False,
+             greeting_candidates=None, direction=""))
 check("suggestions user (store)", exp[1]["content"],
-      render("scene_suggestions/user.j2", s=snap, offscreen=False, greeting_candidates=None))
+      render("scene_suggestions/user.j2", s=snap, offscreen=False,
+             greeting_candidates=None, direction=""))
 
 scene_msgs = scenes.read_scene(cid, sid)["messages"]
 tr = render("snippets/transcript.j2", messages=scene_msgs)

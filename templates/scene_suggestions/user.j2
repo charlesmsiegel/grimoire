@@ -5,7 +5,8 @@
           open_threads ([{title, status, latest_beat, dormancy}]),
           cast ([{token, name, tagline, status, role}]),
           available_locations ([{id, name}])
-      greeting_candidates — [{id, name, excerpt}] | None -#}
+      greeting_candidates — [{id, name, excerpt}] | None
+      direction — str (the game master's steering instruction, "" when absent) -#}
 {%- set parts = [] -%}
 {%- if s.story_so_far -%}
 {%- set lines = [] -%}
@@ -64,5 +65,8 @@
 {%- set lines = [] -%}
 {%- for g in greeting_candidates -%}{%- set _ = lines.append("- " ~ g.id ~ " = " ~ g.name ~ ": " ~ g.excerpt) -%}{%- endfor -%}
 {%- set content = content ~ "\n\nAvailable greetings (use these ids):\n" ~ (lines | join("\n")) -%}
+{%- endif -%}
+{%- if direction -%}
+{%- set content = content ~ "\n\nDirection (the game master's instruction for this batch):\n" ~ direction -%}
 {%- endif -%}
 {{ content }}
