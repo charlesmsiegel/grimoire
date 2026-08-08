@@ -10,7 +10,10 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
   cid: string;
   afterSid: string | null;          // ranking reference: the selected (or latest) scene
   ready: boolean;
-  onClose: () => void;
+  /** `createdSid` is set only when a scene was actually created before this
+   *  dismissal (a soft-failure "salvaged" scene abandoned via Escape/backdrop
+   *  rather than "Continue to scene") -- see `salvagedSid` below. */
+  onClose: (createdSid?: string) => void;
   onCreated: (sid: string, initialPrompt?: string) => void;
 }) {
   // scene mode is picked first; nothing is fetched until then
@@ -32,6 +35,16 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
   // nobody is told about. So the form reports when it is writing and the
   // orchestrator refuses to close.
   const [writing, setWriting] = useState(false);
+
+  // Set once SceneConfirmForm salvages a soft failure into a real, created
+  // scene (see its `salvaged` state). `writing` goes false at that point, so
+  // Escape and the backdrop can dismiss the modal from here -- and unlike
+  // every other dismissal, a scene now exists that CampaignView's scene list
+  // does not know about yet. Read at dismiss time so `onClose` can report it;
+  // CampaignView reloads its list only when this is non-null, which is
+  // narrower than reloading on every dismissal (most dismissals wrote
+  // nothing).
+  const [salvagedSid, setSalvagedSid] = useState<string | null>(null);
 
   // Lifted out of SceneIdeaPicker (issue #319): that component unmounts the
   // instant a draft is picked, and again on Back (which clears `draft`
@@ -73,17 +86,27 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
     // and `cid` changing gives `run` a new identity, so the mount effect
     // re-fires and fetches fresh once a mode is chosen again.)
     setDirection("");
+    setSalvagedSid(null);
+  }
+
+  // The single path every dismissal (Cancel, Escape, the backdrop) goes
+  // through, so `salvagedSid` is reported consistently rather than only from
+  // the two sites (Escape/backdrop) that can still fire once a scene is
+  // salvaged -- the other dismissals just always carry `null`.
+  function dismiss() {
+    if (writing) return;
+    onClose(salvagedSid ?? undefined);
   }
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !writing) onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") dismiss(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, writing]);
+  }, [onClose, writing, salvagedSid]);
 
   return (
     <div className="chooser-backdrop" role="dialog" aria-label="New scene"
-         onClick={() => { if (!writing) onClose(); }}>
+         onClick={dismiss}>
       <div className="chooser" onClick={(e) => e.stopPropagation()}>
         <h3>New scene</h3>
 
@@ -101,7 +124,7 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
               </span>
             </button>
             <div className="form-actions">
-              <button className="subtle" onClick={onClose}>Cancel</button>
+              <button className="subtle" onClick={dismiss}>Cancel</button>
             </div>
           </>
         ) : draft === null ? (
@@ -113,11 +136,11 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
                              setDraft(d); setNotice(warning ?? null);
                              setDraftGen((n) => n + 1);
                            }}
-                           onCancel={onClose} />
+                           onCancel={dismiss} />
         ) : (
           <SceneConfirmForm key={draftGen} cid={cid} draft={draft} notice={notice}
-                            onBack={() => setDraft(null)} onCancel={onClose} onCreated={onCreated}
-                            onWriting={setWriting} />
+                            onBack={() => setDraft(null)} onCancel={dismiss} onCreated={onCreated}
+                            onWriting={setWriting} onSalvaged={setSalvagedSid} />
         )}
       </div>
     </div>

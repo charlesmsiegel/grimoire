@@ -5,7 +5,8 @@ import { CalendarDatePicker } from "./CalendarDatePicker";
 import { errMsg } from "./errMsg";
 import type { DraftCast, SceneDraft } from "./sceneDraft";
 
-export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreated, onWriting }: {
+export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreated, onWriting,
+                                    onSalvaged }: {
   cid: string;
   draft: SceneDraft;
   /** a warning raised while the draft was built, e.g. a failed extraction */
@@ -18,6 +19,12 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
   /** reports the create sequence in and out of flight, so the orchestrator can
    *  refuse to dismiss mid-write: unmounting cancels nothing. */
   onWriting?: (active: boolean) => void;
+  /** reports the id once a soft failure leaves a real, created scene behind
+   *  (`salvaged` below) -- Escape and the backdrop can dismiss the modal from
+   *  here (unlike the busy-write case, `writing` is already clear), and
+   *  without this the orchestrator has no way to know a scene now exists that
+   *  its own scene list does not. */
+  onSalvaged?: (sid: string) => void;
 }) {
   const [title, setTitle] = useState(draft.title);
   const [date, setDate] = useState(draft.date);
@@ -179,7 +186,7 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
     }
     setWriting(false);
     const prompt = draft.source === "greeting" ? undefined : (premise || undefined);
-    if (soft.length) { setSalvaged(sid); setError(soft.join(" · ")); return; }
+    if (soft.length) { setSalvaged(sid); onSalvaged?.(sid); setError(soft.join(" · ")); return; }
     onCreated(sid, prompt);
   }
 
