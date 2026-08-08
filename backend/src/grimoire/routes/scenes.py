@@ -20,7 +20,7 @@ from .common import (computes_only, _bounded_call, _campaign_root_or_404, _dump,
                      _write_response, get_llm)
 from .models import (Appear, AppearBatch, ChatTurn, ChronicleSave, Dismiss, EditMessage,
                      NewScene, RegenerateBody, RenameScene, ResponseSettings, RetryBody,
-                     SceneDatetime, SceneLocation)
+                     SceneDatetime, SceneIntent, SceneLocation)
 from .streaming import _chat_stream
 
 router = APIRouter()
@@ -89,6 +89,32 @@ async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: 
              if candidates else [])
     return {"suggestions": out, "greeting_picks": picks,
             "next_date": store.suggest.parse_next_date(text, cid)}
+
+
+@router.post("/campaigns/{cid}/scene-intent")
+@computes_only
+async def post_scene_intent(cid: str, body: SceneIntent,
+                            client: LLMClient = Depends(get_llm)):
+    """Metadata implied by the user's own scene-start description. Computes and
+    returns; the confirm form is what decides whether any of it is written."""
+    try:
+        store.campaigns.read_campaign(cid)
+    except store.campaigns.CampaignNotFound:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    if not body.text.strip():
+        raise HTTPException(status_code=400, detail="empty scene description")
+    conn = _require_connection()
+    messages = store.suggest.build_intent_prompt(cid, body.text, offscreen=body.offscreen)
+    try:
+        text = await _bounded_call(client.complete(messages, conn))
+    except LLMError as exc:
+        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+    got = store.suggest.parse_intent(text, cid, offscreen=body.offscreen)
+    loc_names = {e["id"]: e.get("name", e["id"]) for e in store.overlay.list_entities(cid, "locations")}
+    loc = ({"id": got["location"], "name": loc_names.get(got["location"], got["location"])}
+           if got["location"] else None)
+    return {"title": got["title"], "date": got["date"], "location": loc,
+            "cast": _resolve_cast(cid, got["cast"])}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}")

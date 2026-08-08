@@ -273,6 +273,56 @@ def test_parse_next_date_validates_and_tolerates_garbage(monkeypatch, tmp_path):
     assert suggest.parse_next_date("not json", cid) == ""
 
 
+# ---- scene intent (#317) ----
+def _campaign_with_location_and_character(monkeypatch, tmp_path):
+    # a world-level location/character, inherited into the campaign the same
+    # way `overlay.list_entities`/`overlay.list_characters` inherit anything
+    # not overridden campaign-side.
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    entities.create_entity(wroot, "locations", "Saltmarch")
+    _char(wroot, "Mara")
+    return campaigns.create_campaign("Run", wid)
+
+
+INTENT_REPLY = ('{"title": "The morning after", "date": "2026-03-04", '
+                '"location": "saltmarch", "cast": ["characters:mara"]}')
+
+
+def test_parse_intent_validates_every_field(monkeypatch, tmp_path):
+    cid = _campaign_with_location_and_character(monkeypatch, tmp_path)  # locations/saltmarch, characters/mara
+    got = suggest.parse_intent(INTENT_REPLY, cid)
+    assert got["title"] == "The morning after"
+    assert got["location"] == "saltmarch"
+    assert got["cast"] == ["characters:mara"]
+    assert got["date"]        # normalized, non-empty
+
+
+def test_parse_intent_drops_what_the_campaign_does_not_have(monkeypatch, tmp_path):
+    cid = _campaign_with_location_and_character(monkeypatch, tmp_path)
+    reply = ('{"title": "T", "date": "the fourth of Never", "location": "atlantis", '
+             '"cast": ["characters:nobody", "garbage"]}')
+    got = suggest.parse_intent(reply, cid)
+    assert got == {"title": "T", "date": "", "location": "", "cast": []}
+
+
+def test_parse_intent_takes_the_first_object_of_a_bare_array(monkeypatch, tmp_path):
+    cid = _campaign_with_location_and_character(monkeypatch, tmp_path)
+    assert suggest.parse_intent(f"[{INTENT_REPLY}]", cid)["title"] == "The morning after"
+
+
+def test_parse_intent_survives_garbage(monkeypatch, tmp_path):
+    cid = _campaign_with_location_and_character(monkeypatch, tmp_path)
+    assert suggest.parse_intent("I'm afraid I can't do that.", cid) == {
+        "title": "", "date": "", "location": "", "cast": []}
+
+
+def test_parse_intent_honors_offscreen(monkeypatch, tmp_path):
+    cid = _campaign_with_player_character(monkeypatch, tmp_path)
+    reply = '{"title": "T", "date": "", "location": "", "cast": ["characters:mara"]}'
+    assert suggest.parse_intent(reply, cid, offscreen=True)["cast"] == []
+
+
 # ---- direction (#316) ----
 def test_direction_reaches_the_prompt():
     snap = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None,

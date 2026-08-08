@@ -630,6 +630,11 @@ export type SceneSuggestion = {
   cast: { kind: string; id: string; name: string }[];
   location: { id: string; name: string } | null;
 };
+export type SceneIntentResult = {
+  title: string; date: string;
+  location: { id: string; name: string } | null;
+  cast: { kind: string; id: string; name: string }[];
+};
 export type ChronicleEntry = {
   id: string; one_line: string; summary: string; keywords: string[];
   cast: string[]; location: string; date: string; absorbed: string;
@@ -1393,6 +1398,9 @@ export const api = {
     return request<{ suggestions: SceneSuggestion[]; greeting_picks?: string[]; next_date?: string }>(
       "POST", `/api/campaigns/${cid}/scene-suggestions${qs ? `?${qs}` : ""}`);
   },
+  sceneIntent: (cid: string, text: string, offscreen: boolean) =>
+    request<SceneIntentResult>("POST", `/api/campaigns/${cid}/scene-intent`,
+      { text, offscreen }),
   getCastDetail: (cid: string, sid: string, kind: string, id: string) =>
     request<CastDetail>("GET", `/api/campaigns/${cid}/scenes/${sid}/cast/${kind}/${id}`),
   editMessage: (cid: string, sid: string, index: number, content: string) =>

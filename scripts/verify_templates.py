@@ -737,6 +737,22 @@ check("suggestions user (store)", exp[1]["content"],
       render("scene_suggestions/user.j2", s=snap, offscreen=False,
              greeting_candidates=None, direction=""))
 
+TYPED = "the morning after, back at the marsh house"
+iexp = suggest.build_intent_prompt(cid, TYPED)
+isnap = suggest.build_snapshot(cid)
+check("intent system (store)", iexp[0]["content"],
+      render("scene_intent/system.j2", s=isnap, offscreen=False,
+             greeting_candidates=None, direction="", typed=TYPED))
+check("intent user (store)", iexp[1]["content"],
+      render("scene_intent/user.j2", s=isnap, offscreen=False,
+             greeting_candidates=None, direction="", typed=TYPED))
+
+ioff_exp = suggest.build_intent_prompt(cid, TYPED, offscreen=True)
+ioff_snap = suggest.build_snapshot(cid, offscreen=True)
+check("intent user (store, offscreen)", ioff_exp[1]["content"],
+      render("scene_intent/user.j2", s=ioff_snap, offscreen=True,
+             greeting_candidates=None, direction="", typed=TYPED))
+
 scene_msgs = scenes.read_scene(cid, sid)["messages"]
 tr = render("snippets/transcript.j2", messages=scene_msgs)
 check("transcript (store)", chronicle.transcript_text(scene_msgs), tr)

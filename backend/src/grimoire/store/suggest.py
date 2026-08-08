@@ -1,8 +1,11 @@
-"""Ephemeral scene-suggestion helper: assemble deterministic campaign signals (a
-story-so-far anchor, open plot threads with dormancy, a status-annotated cast, calendar
-facts at the current moment, seedable ids), build the one-shot prompt, and parse the
-model's proposed openings. Assembly + prompt/parse only; the LLM call lives in the route
-(mirrors absorb/prompt.py) and the prompt text in templates/scene_suggestions/.
+"""Ephemeral scene-suggestion and scene-intent prompt builder/parser: assemble
+deterministic campaign signals (a story-so-far anchor, open plot threads with
+dormancy, a status-annotated cast, calendar facts at the current moment, seedable
+ids), build the one-shot prompt, and parse the model's proposed openings (or, for
+scene-intent, the metadata implied by the user's own typed description).
+Assembly + prompt/parse only; the LLM call lives in the route (mirrors
+absorb/prompt.py) and the prompt text in templates/scene_suggestions/ and
+templates/scene_intent/.
 """
 
 from __future__ import annotations
@@ -186,6 +189,26 @@ def build_prompt(snapshot: dict, greeting_candidates: list[dict] | None = None,
             {"role": "user", "content": prompts.render("scene_suggestions/user.j2", **vars)}]
 
 
+INTENT_LIMIT = 2000
+
+
+def build_intent_prompt(cid: str, typed: str, offscreen: bool = False) -> list[dict]:
+    """Prompt for extracting metadata from the user's own scene description.
+
+    Over the FULL snapshot, story-so-far included: "the morning after the
+    funeral" is exactly the kind of phrase this has to resolve, and only the
+    recent chronicle can resolve it."""
+    # `direction` is here because scene_intent/user.j2 INCLUDES
+    # scene_suggestions/user.j2, which reads it (Task 3) — and both this env and
+    # verify_templates render with StrictUndefined, so omitting it is a hard
+    # failure, not a silently-empty block.
+    vars = {"s": build_snapshot(cid, offscreen=offscreen), "offscreen": offscreen,
+            "greeting_candidates": None, "direction": "",
+            "typed": typed.strip()[:INTENT_LIMIT]}
+    return [{"role": "system", "content": prompts.render("scene_intent/system.j2", **vars)},
+            {"role": "user", "content": prompts.render("scene_intent/user.j2", **vars)}]
+
+
 def _valid_ids(cid: str):
     char_ids = {c["id"] for c in overlay.list_characters(cid)}
     player_tokens = {f"{a['kind']}:{a['id']}" for a in appearances_cast.roster(cid) if a["role"] == "player"}
@@ -273,6 +296,34 @@ def parse_output(text: str, cid: str, offscreen: bool = False) -> list[dict]:
                     "location": loc if loc in loc_ids else "",
                     "date": norm(str(e.get("date", "")).strip())})
     return out
+
+
+def parse_intent(reply: str, cid: str, offscreen: bool = False) -> dict:
+    """Metadata extracted from the user's own description, every field validated
+    against the campaign.
+
+    Malformed or semantically invalid model output never raises — extraction is
+    a convenience, and a miss must leave the user a blank form rather than an
+    error. Store and calendar failures underneath (`_valid_ids` reads entities,
+    `_date_normalizer` imports a user-authored provider) are NOT covered by that
+    and surface as the route's ordinary 500, exactly as they do for
+    `parse_output`."""
+    empty = {"title": "", "date": "", "location": "", "cast": []}
+    parsed = _extract_json(reply)
+    if isinstance(parsed, list):   # a bare array is a common LLM deviation
+        parsed = next((e for e in parsed if isinstance(e, dict)), None)
+    if not isinstance(parsed, dict):
+        return empty
+    char_ids, player_tokens, loc_ids = _valid_ids(cid)
+    raw_cast = parsed.get("cast", [])
+    cast = ([t for t in (str(x).strip() for x in raw_cast)
+             if _token_ok(t, char_ids, player_tokens, offscreen)]
+            if isinstance(raw_cast, list) else [])
+    loc = str(parsed.get("location", "")).strip()
+    return {"title": str(parsed.get("title", "")).strip(),
+            "date": _date_normalizer(cid)(str(parsed.get("date", "")).strip()),
+            "location": loc if loc in loc_ids else "",
+            "cast": cast}
 
 
 def parse_next_date(text: str, cid: str) -> str:
