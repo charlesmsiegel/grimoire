@@ -2,25 +2,38 @@ import { useEffect, useRef, useState } from "react";
 import { api, type Availability } from "../api/client";
 import { errMsg } from "./errMsg";
 import { customDraft, greetingDraft, suggestionDraft, type SceneDraft } from "./sceneDraft";
-import { useSceneSuggestions } from "./useSceneSuggestions";
+import type { SceneSuggestionsState } from "./useSceneSuggestions";
 
-export function SceneIdeaPicker({ cid, afterSid, ready, pcless, onPicked, onCancel }: {
+/** The generated half of the picker (suggestions/picks/nextDate/busy/error/
+ *  refresh) and the typed `direction` both live in `NewSceneChooser` now, not
+ *  here — this component only renders them. That is what makes **Back**
+ *  cheap: it unmounts this pane, and since the state it used to own now lives
+ *  one level up, unmounting costs nothing (issue #319). Before this, Back
+ *  cleared `draft`, which unmounted the picker and, with it, the
+ *  `useSceneSuggestions` instance; remounting re-ran the hook's mount effect
+ *  at `rank=true` — a fresh, expensive, re-shufflable LLM call for what the
+ *  user experiences as "go back", and it also discarded whatever direction
+ *  they had typed. The greeting fetch below is the one piece that stays
+ *  local: a greeting another client played meanwhile disappearing on Back is
+ *  wanted, and it is cheap enough not to matter. */
+export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDirectionChange,
+                                  suggestions, picks, nextDate, busy, error: genError, refresh,
+                                  onPicked, onCancel }: {
   cid: string;
   afterSid: string | null;
   ready: boolean;
   pcless: boolean;
+  direction: string;
+  onDirectionChange: (direction: string) => void;
   /** `warning` is shown by the confirm pane: this component unmounts the
    *  instant a draft is emitted, so its own banner cannot carry one. */
   onPicked: (draft: SceneDraft, warning?: string) => void;
   onCancel: () => void;
-}) {
+} & SceneSuggestionsState) {
   const [greetings, setGreetings] = useState<Availability[]>([]);
-  const [direction, setDirection] = useState("");
   const [typed, setTyped] = useState("");
   const [inferring, setInferring] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { suggestions, picks, nextDate, busy, error: genError, refresh } =
-    useSceneSuggestions(cid, afterSid, ready, pcless);
 
   useEffect(() => {
     api.availableGreetings(cid, afterSid ?? undefined)
@@ -85,7 +98,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, onPicked, onCanc
       <div className="picker">
         <input type="text" aria-label="Direction" className="grow"
                placeholder="Steer the generated ideas — e.g. something at sea"
-               value={direction} onChange={(e) => setDirection(e.target.value)} />
+               value={direction} onChange={(e) => onDirectionChange(e.target.value)} />
         <button className="subtle" disabled={!ready || busy}
                 onClick={() => { setError(null); refresh(direction); }}>↻ Regenerate</button>
       </div>

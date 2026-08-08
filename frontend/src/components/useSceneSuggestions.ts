@@ -57,3 +57,7 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
   const refresh = useCallback((direction: string) => run(direction, false), [run]);
   return { suggestions, picks, nextDate, busy, error, refresh };
 }
+
+/** The shape `SceneIdeaPicker` needs to render this data — shared so the
+ *  picker's props and the hook's return value cannot drift apart. */
+export type SceneSuggestionsState = ReturnType<typeof useSceneSuggestions>;
