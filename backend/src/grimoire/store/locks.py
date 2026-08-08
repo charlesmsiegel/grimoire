@@ -155,6 +155,12 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # (#115), so it starts inside the exclusion rather than joining the
     # `UNREVIEWED` backlog `plot` sits in.
     "store.commitments",
+    # The campaign's cover image (`<campaign>/assets/cover.<ext>`). A new
+    # module mutating campaign-scoped state, so it starts inside the exclusion
+    # rather than joining the frozen `UNREVIEWED` backlog: `put_cover` and
+    # `delete_cover` take the lock around the publish-then-clean sequence, and
+    # `delete_cover` verifies the removal under it.
+    "store.covers",
     # `facts.json` the same (#114), and with one reason of its own on top of
     # the whole-file rewrite: `record` retires the superseded fact and writes
     # its replacement in one read-modify-write, so an unlocked pair can also

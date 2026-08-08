@@ -149,6 +149,20 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   cannot be told from ``some_dict.foo()`` without type inference, so a
   path-valued receiver keeps the enumerated names and keeps their blind spots
   (``Path.replace`` is the documented one).
+
+  ``store.assets``' ``put_in``/``delete_in`` are recognized as publication the
+  same way ``atomic.write_text``/``write_bytes`` are — a call on a resolved
+  receiver, not a spelling match — but by ENUMERATION (``_ASSETS_WRITERS``),
+  not by inverting the whole ``assets`` namespace: most of it reads
+  (``path_in``, ``image_path``, ``list_images``, ...), so inverting it would
+  misread a caller's unlocked ``assets.path_in(...)`` as a write. Deliberately
+  narrower than that inversion, and deliberately not extended to
+  ``put_image``/``delete_image``/``promote_image``: those are real writes too,
+  but every caller of theirs today (``characters.py``, ``localize.py``,
+  ``image_subjects.py``) passes a CHARACTER id into the ``cid`` parameter this
+  guard reads as "campaign id" — recognizing them would misclassify those
+  three modules as campaign mutators on the strength of a name collision, not
+  a real one.
 - **Analysis is per-module, with one exception that reads and does not
   propagate.** Mutation propagates through a module's own helpers, never across
   an import, so a function whose only mutation happens inside a *different*
@@ -268,6 +282,28 @@ _FS_READERS = frozenset({
 # `store.atomic` exists to publish; its whole public surface is a write. Named
 # separately because its readers are its own, not the stdlib's.
 _ATOMIC_READERS = frozenset({"replace_is_atomic"})
+# `store.assets.put_in`/`delete_in` publish a file under a directory a caller
+# hands them, without ever touching `atomic`/`os`/`shutil` themselves --
+# `store.covers` is built entirely on the two of them (Task 1's directory-level
+# image primitives), so without this a campaign-scoped mutator that writes
+# purely by calling them was invisible to the survey, exactly like an
+# unenumerated `shutil` primitive would be.
+#
+# An ENUMERATION, not the `atomic`/`os`/`shutil` inversion above, and
+# deliberately narrow: unlike `atomic`, most of `assets`' surface reads
+# (`path_in`, `image_path`, `list_images`, `read_focus`, `image_version`, ...),
+# so inverting the whole namespace would misread `covers.cover_path`'s
+# unlocked `assets.path_in(...)` as a write needing a lock it doesn't need.
+#
+# And deliberately NOT `put_image`/`delete_image`/`promote_image`, though
+# those publish too: each takes a parameter named `cid` -- this guard's own
+# convention for "campaign id" (`_takes_cid`) -- but their real callers
+# (`characters.py`, `localize.py`, `image_subjects.py`) pass a CHARACTER id
+# into it. Recognizing them would newly survey those three modules and force
+# a campaign-lock classification onto mutators that were never campaign-scoped
+# to begin with -- a false positive this guard's own "campaign-scoped is
+# approximated by a `cid` parameter" limit warns about.
+_ASSETS_WRITERS = ("put_in", "delete_in")
 # `touch` is ambiguous the other way round: `Path.touch` has no fixed receiver
 # to match, so it is treated as a file creation UNLESS the receiver names a
 # module in this package that defines its own `touch`. Only one does.
@@ -425,6 +461,15 @@ def _fs_namespaces(tree: ast.AST) -> dict[str, str]:
     `import os.path as p` is deliberately NOT mapped: the alias binds the
     submodule, and `os.path` publishes nothing, so mapping it to `os` would
     read every `p.join(...)` as a write.
+
+    `assets` resolves the same way, for `_ASSETS_WRITERS` -- but it is NOT in
+    the identity seed below the way `os`/`shutil`/`atomic` are: those three are
+    trusted even where nothing in the module binds them, while `assets` is
+    resolved only from an actual import, imported-from, or assignment alias.
+    Narrower on purpose -- `assets` names a package-local module, not a
+    universally-recognized one, and `_ASSETS_WRITERS` is an enumeration of two
+    names rather than an inverted whole namespace, so trusting the bare word
+    would buy nothing an import doesn't already give it.
     """
     out = {name: name for name in (*_FS_NAMESPACES, "atomic")}
     for node in ast.walk(tree):
@@ -437,7 +482,7 @@ def _fs_namespaces(tree: ast.AST) -> dict[str, str]:
                     out[alias.asname or root] = root
         elif isinstance(node, ast.ImportFrom):
             for alias in node.names:
-                if alias.name in (*_FS_NAMESPACES, "atomic"):
+                if alias.name in (*_FS_NAMESPACES, "atomic", "assets"):
                     out[alias.asname or alias.name] = alias.name
     # `import shutil; fs = shutil` binds the MODULE OBJECT, which the import
     # scan above cannot see. Round sixteen resolved import aliases and left
@@ -839,6 +884,10 @@ def _names_a_writer(name: str | None, receiver: str | None, namespaces: dict) ->
     if namespace in _FS_NAMESPACES and name not in _FS_READERS:
         return True
     if namespace == "atomic" and name not in _ATOMIC_READERS:
+        return True
+    if namespace == "assets" and name in _ASSETS_WRITERS:
+        # An ENUMERATION, unlike the `atomic` line above -- see `_ASSETS_WRITERS`
+        # for why the whole namespace is not inverted here.
         return True
     if name in _ATOMIC_WRITERS:
         # ANY receiver, not just `atomic`. The claim that `test_atomic_guard`
@@ -2541,6 +2590,69 @@ def test_os_level_writes_are_mutations():
                 "def put(cid):\n    os.fdopen(fd, 'wb')\n"):
         _f, _s, mutators = _probe(src)
         assert mutators, f"an os-level write was invisible: {src!r}"
+
+
+def test_assets_put_in_and_delete_in_are_recognized_as_publication():
+    """`store.covers` (and any future module built the same way) mutates
+    campaign state purely by calling `assets.put_in`/`delete_in` -- neither
+    touches `atomic`/`os`/`shutil` itself, so without this the survey would
+    never see the module at all, and a `DOMAIN_MODULES` entry for it would be
+    a phantom (`test_the_declaration_has_no_phantom_modules`)."""
+    for src in ("from . import assets\n"
+                "def put_cover(cid):\n"
+                "    assets.put_in(d, 'cover', data, ext)\n",
+                "from . import assets\n"
+                "def delete_cover(cid):\n"
+                "    assets.delete_in(d, 'cover')\n"):
+        _f, _s, mutators = _probe(src)
+        assert mutators, f"a delegated assets write was invisible: {src!r}"
+
+    # An assignment alias resolves the same way `publish = atomic.write_text`
+    # already does -- `_fs_namespaces` is one mechanism for both.
+    aliased = ("from . import assets\n"
+               "art = assets\n"
+               "def put_cover(cid):\n"
+               "    art.put_in(d, 'cover', data, ext)\n")
+    _f, _s, mutators = _probe(aliased)
+    assert mutators, "an assets alias bound by assignment was invisible"
+
+
+def test_assets_reads_and_other_names_stay_invisible():
+    """The recognition is a narrow enumeration, not an inverted namespace --
+    unlike `atomic`, most of `assets` reads, and a module that only reads
+    through it (as `covers.cover_path`/`cover_version` do) must not read as an
+    unlocked mutator that needs a lock it has no business taking."""
+    for src in ("from . import assets\n"
+                "def cover_path(cid):\n"
+                "    return assets.path_in(d, 'cover')\n",
+                "from . import assets\n"
+                "def cover_version(cid):\n"
+                "    return assets.image_version(p)\n",
+                "def noop(cid):\n"
+                "    return None\n"):
+        _f, _s, mutators = _probe(src)
+        assert not mutators, f"a non-writing call read as a mutation: {src!r}"
+
+
+def test_assets_put_image_is_not_recognized_as_publication():
+    """`put_image`/`delete_image`/`promote_image` publish too, but their real
+    callers (`characters.py`, `localize.py`, `image_subjects.py`) pass a
+    CHARACTER id into the `cid` parameter this guard reads as "campaign id".
+    Recognizing them would newly survey those three modules and force a
+    campaign-lock classification onto mutators that were never campaign-scoped
+    -- so the enumeration must stop at `put_in`/`delete_in` and go no further,
+    even though the receiver resolves to `assets` exactly the same way."""
+    for src in ("from . import assets\n"
+                "def put_image(cid):\n"
+                "    assets.put_image(root, cid, vid, name, data, ext)\n",
+                "from . import assets\n"
+                "def delete_image(cid):\n"
+                "    assets.delete_image(root, cid, vid, name)\n",
+                "from . import assets\n"
+                "def promote_image(cid):\n"
+                "    assets.promote_image(root, cid, vid, name)\n"):
+        _f, _s, mutators = _probe(src)
+        assert not mutators, f"put_image/delete_image/promote_image leaked in: {src!r}"
 
 
 def test_the_filesystem_namespace_is_a_closed_whitelist_not_an_enumeration():
