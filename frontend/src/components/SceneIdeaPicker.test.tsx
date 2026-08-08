@@ -91,7 +91,15 @@ test("a failed extraction opens with the typed text AND hands the warning on", a
     expect.stringContaining("no key")));
 });
 
-test("a card picked after the date estimate lands carries that date", async () => {
+// This click is purely synchronous — nothing awaits between "the date
+// landed" and "the draft is built" — so it does NOT exercise the emit-time
+// `latestDate` ref; a plain (non-ref) read of `nextDate` would satisfy this
+// test too. It still verifies something real: that a date estimate arriving
+// after mount reaches a later-emitted greeting draft at all. The ref
+// mechanism itself is covered by "a typed pick that outlasts a slow date
+// estimate still carries the fresh date", below, which awaits `api.sceneIntent`
+// and lands the date mid-flight.
+test("a delayed date estimate reaches an emitted greeting draft", async () => {
   let release: (v: any) => void = () => {};
   (api.sceneSuggestions as any).mockReturnValue(new Promise((r) => { release = r; }));
   const onPicked = renderPicker();
@@ -101,12 +109,6 @@ test("a card picked after the date estimate lands carries that date", async () =
   expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({ date: "2026-02-02" }));
 });
 
-// The greeting-card race above exercises a purely synchronous click: nothing
-// awaits between "the date landed" and "the draft is built", so a plain
-// (non-ref) read of `nextDate` would satisfy it too. The typed path is the
-// one that actually awaits `api.sceneIntent` — this test forces the date
-// estimate to land *during* that await, which only a value read at emit time
-// (not the render this click's closure was built from) can survive.
 test("a typed pick that outlasts a slow date estimate still carries the fresh date", async () => {
   let releaseSuggestions: (v: any) => void = () => {};
   let releaseIntent: (v: any) => void = () => {};
@@ -135,4 +137,15 @@ test("without a connection the direction row is disabled but typing still works"
   await waitFor(() => expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({
     premise: "a storm", title: "New scene" })));
   expect(api.sceneIntent).not.toHaveBeenCalled();
+});
+
+test("Cancel calls onCancel and emits nothing", async () => {
+  const onPicked = vi.fn();
+  const onCancel = vi.fn();
+  render(<SceneIdeaPicker cid="c" afterSid="s1" ready={true} pcless={false}
+                          onPicked={onPicked} onCancel={onCancel} />);
+  await screen.findByText("Reckoning");
+  fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+  expect(onCancel).toHaveBeenCalledTimes(1);
+  expect(onPicked).not.toHaveBeenCalled();
 });
