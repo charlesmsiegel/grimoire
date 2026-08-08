@@ -248,28 +248,112 @@ def _mtime_ns(p: Path) -> int:
         return -1
 
 
+def _siblings(d: Path, name: str, supported_only: bool) -> list[Path]:
+    """Every file in `d` whose stem is `name`.
+
+    `supported_only` narrows that to the extensions we actually accept. The
+    cover directory is one a human browses and a sync client writes into, so a
+    `cover.txt` left beside `cover.png` must neither win resolution (it would
+    be served as octet-stream and packed into a book) nor be deleted by a
+    replace or a remove -- it is not ours. Record images keep the unfiltered
+    behaviour: `promote_image` raises `ValueError` for "an externally-placed
+    file whose extension we never accepted", which requires `image_path` to
+    still hand one back.
+    """
+    found = list(d.glob(f"{name}.*"))
+    return [p for p in found if _norm_ext(p.suffix)] if supported_only else found
+
+
+def path_in(d: Path, name: str, *, supported_only: bool = False) -> Path | None:
+    """The current file for logical image `name` in directory `d`, or None.
+
+    Newest wins, not alphabetically first -- see `image_path`. Lock-agnostic:
+    this takes a directory and no campaign identity, so a caller that mutates
+    campaign-scoped state through `put_in`/`delete_in` is the one that must
+    hold `locks.campaign_lock` (`store.covers` does).
+    """
+    if not _safe_name(name) or not d.exists():
+        return None
+    matches = _siblings(d, name, supported_only)
+    if not matches:
+        return None
+    return max(matches, key=lambda p: (_mtime_ns(p), p.name))
+
+
+def put_in(d: Path, name: str, data: bytes, ext: str, *,
+           supported_only: bool = False) -> str:
+    """Publish `data` as `<name>.<ext>` in `d`, dropping the stale siblings."""
+    if not _safe_name(name):
+        raise ValueError("unsafe image id")
+    ext = _norm_ext(ext)
+    if not ext:
+        raise ValueError("unsupported image type")
+    d.mkdir(parents=True, exist_ok=True)
+    written = d / f"{name}.{ext}"
+    with _image_lock(d, name):
+        # Write BEFORE dropping prior-extension files. The reverse order (which
+        # this used to do) loses the image outright if anything fails between
+        # the unlink and the write -- atomicity alone cannot fix an ordering
+        # bug. path_in() breaks the resulting momentary tie by mtime.
+        #
+        # Snapshot the siblings' IDENTITY before writing, and delete only those
+        # exact files: the lock keeps concurrent callers out, and the identity
+        # check keeps anything that reaches the directory another way (an
+        # external tool, a sync client) from having its file deleted by path
+        # alone.
+        stale = []
+        for p in _siblings(d, name, supported_only):
+            if p == written:
+                continue
+            try:
+                st = p.stat()
+                stale.append((p, st.st_dev, st.st_ino))
+            except OSError:
+                pass  # vanished already; nothing to clean up
+        atomic.write_bytes(written, data)
+        for p, dev, ino in stale:
+            try:
+                st = p.stat()
+                if (st.st_dev, st.st_ino) != (dev, ino):
+                    continue  # not the file we snapshotted; not ours to delete
+                p.unlink()
+            except OSError:
+                pass  # a lost cleanup self-heals: path_in prefers the newest
+    return ext
+
+
+def delete_in(d: Path, name: str, *, supported_only: bool = False) -> None:
+    """Remove every file for logical image `name` in `d`.
+
+    Failures are swallowed here, as they always were -- callers that need the
+    removal *confirmed* (`covers.delete_cover`) re-resolve afterwards.
+    """
+    if not _safe_name(name) or not d.exists():
+        return
+    # Same lock as put_in: a delete racing an upload must not remove the file
+    # the upload just published and leave the caller thinking it wrote one, nor
+    # half-remove a set the upload is mid-way through replacing.
+    with _image_lock(d, name):
+        for p in _siblings(d, name, supported_only):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
+
 def image_path(root: Path, cid: str, vid: str, name: str, base: str = "characters") -> Path | None:
     if not (safe_id(cid) and safe_id(vid) and _safe_name(name)):
         return None
     d = _dir(root, cid, vid, base)
     if not d.exists():
         return None
-    matches = sorted(d.glob(f"{name}.*"))
-    if not matches:
-        if name != AVATAR:
-            return None
+    p = path_in(d, name)
+    if p is None and name == AVATAR:
         # A promotion interrupted before #253 may have stranded the avatar under
         # `promote-tmp`; adopt it rather than serve a 404 over a file we have.
         _heal_stranded_promotion(d)
-        matches = sorted(d.glob(f"{name}.*"))
-        if not matches:
-            return None
-    # Newest wins, not alphabetically-first. put_image writes the new file
-    # before unlinking stale other-extension siblings (so a crash can't lose
-    # the image), which leaves both present for a moment -- and a plain
-    # sorted()[0] would hand back the stale one. Also self-heals if that
-    # unlink ever fails.
-    return max(matches, key=lambda p: (_mtime_ns(p), p.name))
+        p = path_in(d, name)
+    return p
 
 
 def list_images(root: Path, cid: str, vid: str, base: str = "characters") -> list[dict]:
@@ -336,43 +420,9 @@ def clear_focus(root: Path, cid: str, vid: str, base: str = "characters") -> Non
 
 def put_image(root: Path, cid: str, vid: str, name: str, data: bytes, ext: str,
               base: str = "characters") -> str:
-    if not (safe_id(cid) and safe_id(vid) and _safe_name(name)):
+    if not (safe_id(cid) and safe_id(vid)):
         raise ValueError("unsafe image id")
-    ext = _norm_ext(ext)
-    if not ext:
-        raise ValueError("unsupported image type")
-    d = _dir(root, cid, vid, base)
-    d.mkdir(parents=True, exist_ok=True)
-    written = d / f"{name}.{ext}"
-    with _image_lock(d, name):
-        # Write BEFORE dropping prior-extension files. The reverse order (which
-        # this used to do) loses the image outright if anything fails between
-        # the unlink and the write -- atomicity alone cannot fix an ordering
-        # bug. image_path() breaks the resulting momentary tie by mtime.
-        #
-        # Snapshot the siblings' IDENTITY before writing, and delete only those
-        # exact files: the lock keeps concurrent put_image calls out, and the
-        # identity check keeps anything that reaches the directory another way
-        # (an external tool, a sync client) from having its file deleted by
-        # path alone.
-        stale = []
-        for p in d.glob(f"{name}.*"):
-            if p == written:
-                continue
-            try:
-                st = p.stat()
-                stale.append((p, st.st_dev, st.st_ino))
-            except OSError:
-                pass  # vanished already; nothing to clean up
-        atomic.write_bytes(written, data)
-        for p, dev, ino in stale:
-            try:
-                st = p.stat()
-                if (st.st_dev, st.st_ino) != (dev, ino):
-                    continue  # not the file we snapshotted; not ours to delete
-                p.unlink()
-            except OSError:
-                pass  # a lost cleanup self-heals: image_path prefers the newest
+    ext = put_in(_dir(root, cid, vid, base), name, data, ext)
     if name == AVATAR:
         clear_focus(root, cid, vid, base)
     return ext
@@ -381,17 +431,7 @@ def put_image(root: Path, cid: str, vid: str, name: str, data: bytes, ext: str,
 def delete_image(root: Path, cid: str, vid: str, name: str, base: str = "characters") -> None:
     if not (safe_id(cid) and safe_id(vid) and _safe_name(name)):
         return
-    d = _dir(root, cid, vid, base)
-    if d.exists():
-        # Same lock as put_image: a delete racing an upload must not remove the
-        # file the upload just published and leave the caller thinking it wrote
-        # one, nor half-remove a set the upload is mid-way through replacing.
-        with _image_lock(d, name):
-            for p in d.glob(f"{name}.*"):
-                try:
-                    p.unlink()
-                except OSError:
-                    pass
+    delete_in(_dir(root, cid, vid, base), name)
     if name == AVATAR:
         clear_focus(root, cid, vid, base)
 

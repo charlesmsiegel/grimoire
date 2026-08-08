@@ -625,3 +625,50 @@ def test_a_delete_racing_an_upload_does_not_interleave(tmp_path):
     assert not any(t.is_alive() for t in threads), "an operation deadlocked"
     # Either outcome is legal; a half-state (two extensions) is not.
     assert len(assets.list_images(tmp_path, "sera", "default")) <= 1
+
+
+def test_path_in_returns_newest_and_puts_round_trip(tmp_path):
+    d = tmp_path / "assets"
+    assert assets.path_in(d, "cover") is None          # directory absent
+    assert assets.put_in(d, "cover", b"one", "png") == "png"
+    p = assets.path_in(d, "cover")
+    assert p is not None and p.name == "cover.png" and p.read_bytes() == b"one"
+
+
+def test_put_in_replaces_across_extensions(tmp_path):
+    d = tmp_path / "assets"
+    assets.put_in(d, "cover", b"one", "png")
+    assets.put_in(d, "cover", b"two", "jpg")
+    assert [p.name for p in sorted(d.iterdir())] == ["cover.jpg"]
+    assert assets.path_in(d, "cover").read_bytes() == b"two"
+
+
+def test_put_in_rejects_unsupported_ext_and_unsafe_name(tmp_path):
+    d = tmp_path / "assets"
+    with pytest.raises(ValueError):
+        assets.put_in(d, "cover", b"x", "svg")
+    with pytest.raises(ValueError):
+        assets.put_in(d, "../cover", b"x", "png")
+
+
+def test_supported_only_ignores_and_spares_a_foreign_sibling(tmp_path):
+    """A store directory is one a human browses and a sync client writes into:
+    a `cover.txt` must neither become the cover nor be deleted by us."""
+    d = tmp_path / "assets"
+    assets.put_in(d, "cover", b"png", "png")
+    (d / "cover.txt").write_text("sync conflict note", encoding="utf-8")
+    os.utime(d / "cover.txt", (2 ** 31, 2 ** 31))  # newest by mtime
+
+    assert assets.path_in(d, "cover", supported_only=True).name == "cover.png"
+    assert assets.path_in(d, "cover").name == "cover.txt"  # legacy behaviour kept
+
+    assets.put_in(d, "cover", b"jpg", "jpg", supported_only=True)
+    assert (d / "cover.txt").exists()
+
+    assets.delete_in(d, "cover", supported_only=True)
+    assert assets.path_in(d, "cover", supported_only=True) is None
+    assert (d / "cover.txt").exists()
+
+
+def test_delete_in_is_a_noop_without_the_directory(tmp_path):
+    assets.delete_in(tmp_path / "nope", "cover")  # no error
