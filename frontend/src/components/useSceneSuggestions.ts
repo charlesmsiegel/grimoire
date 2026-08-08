@@ -44,6 +44,16 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
 
   useEffect(() => { run("", true); }, [run]);
 
+  // `useState` above runs once, at mount. `ready` can flip false -> true on a
+  // MOUNTED hook -- App resolves its config fetch asynchronously while nothing
+  // gates the chooser on it -- and the [] that meant "no connection, nothing to
+  // offer" would otherwise persist as "nothing to offer" through the fetch that
+  // flip just triggered, showing neither hint. `refresh` never changes `ready`,
+  // so this does not fire (and cannot blank the cards) on a regenerate.
+  useEffect(() => {
+    if (ready) { setSuggestions(null); setPicks(null); }
+  }, [ready]);
+
   const refresh = useCallback((direction: string) => run(direction, false), [run]);
   return { suggestions, picks, nextDate, busy, error, refresh };
 }

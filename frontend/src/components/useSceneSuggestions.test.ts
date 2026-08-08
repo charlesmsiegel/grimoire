@@ -71,6 +71,50 @@ test("refresh is a no-op while not ready", () => {
   expect(api.sceneSuggestions).not.toHaveBeenCalled();
 });
 
+test("ready flipping true on a mounted hook restores the pending state and fetches", () => {
+  // Never resolves -- this test inspects the state right after the flip,
+  // before any reply could land.
+  (api.sceneSuggestions as any).mockReturnValue(new Promise(() => {}));
+  const { result, rerender } = renderHook(
+    ({ ready }) => useSceneSuggestions("c", "s1", ready, false),
+    { initialProps: { ready: false } },
+  );
+  expect(result.current.suggestions).toEqual([]);
+  expect(result.current.picks).toEqual([]);
+  expect(api.sceneSuggestions).not.toHaveBeenCalled();
+
+  rerender({ ready: true });
+  // Pending again, not left at "nothing to offer" -- a fetch is genuinely
+  // running now, and the picker must show "Generating...", not a blank list.
+  expect(result.current.suggestions).toBeNull();
+  expect(result.current.picks).toBeNull();
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
+});
+
+test("mounting with ready already true is unaffected by the ready-reset effect", () => {
+  (api.sceneSuggestions as any).mockReturnValue(new Promise(() => {}));
+  const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
+  expect(result.current.suggestions).toBeNull();
+  expect(result.current.picks).toBeNull();
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
+});
+
+test("a refresh does not reset existing suggestions to pending while it is in flight", async () => {
+  (api.sceneSuggestions as any).mockResolvedValueOnce(R([{ title: "A" }], ["g1"]));
+  const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
+  await waitFor(() => expect(result.current.suggestions).toEqual([{ title: "A" }]));
+
+  let releaseRefresh: (v: any) => void = () => {};
+  (api.sceneSuggestions as any).mockReturnValueOnce(new Promise((r) => { releaseRefresh = r; }));
+  act(() => result.current.refresh("x"));
+  // `ready` never changes across a refresh, so the ready-reset effect must not
+  // fire here: the existing cards should stay on screen while the new ones load.
+  expect(result.current.suggestions).toEqual([{ title: "A" }]);
+
+  await act(async () => { releaseRefresh(R([{ title: "B" }])); });
+  expect(result.current.suggestions).toEqual([{ title: "B" }]);
+});
+
 test("a failure empties the suggestions and reports the error", async () => {
   (api.sceneSuggestions as any).mockRejectedValue({ detail: "no key" });
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
