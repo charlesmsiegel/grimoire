@@ -522,7 +522,7 @@ def test_concurrent_starts_of_the_same_greeting_only_one_wins(monkeypatch, tmp_p
     failures = [o for o in outcomes if isinstance(o, playing.PlayError)]
     assert len(successes) == 1, outcomes
     assert len(failures) == 1, outcomes
-    assert "not available" in str(failures[0])
+    assert "claimed by a concurrent start" in str(failures[0])
     assert playing.read_played(cid) == {g}
 
 

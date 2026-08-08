@@ -195,7 +195,11 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
     with locks.campaign_lock(cid):
         marks = read_marks(cid)
         if gid in marks["played"] or gid in marks["completed"]:
-            raise PlayError(f"greeting {gid} is not available")
+            # Distinct from the pre-flight guard's message above: that one is
+            # a stale client (checked availability before someone else's
+            # unrelated play landed); this one is a lost race, decided only
+            # here, under the lock -- worth telling apart in a log.
+            raise PlayError(f"greeting {gid} was just claimed by a concurrent start")
         _mark_played(cid, gid)
     # retitle last: any earlier failure leaves the caller's sid valid for cleanup
     return scenes_lifecycle.rename_scene(cid, sid, g["name"])
