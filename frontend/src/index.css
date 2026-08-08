@@ -13,7 +13,14 @@ body::before {
   content: ""; position: fixed; inset: 0; z-index: 0;
   pointer-events: none; background: var(--fx, none);
 }
-#root { position: relative; z-index: 1; display: flex; flex-direction: column; }
+/* The nav's two widths live here because two siblings need them: the sidebar
+   inside .shell, and the topbar's brand cell above it, which tracks the
+   sidebar so their vertical rules line up. On #root rather than :root so they
+   cannot collide with the theme tokens ThemeProvider writes there. */
+#root {
+  position: relative; z-index: 1; display: flex; flex-direction: column;
+  --nav-w: 208px; --nav-rail-w: 58px;
+}
 
 /* visually hidden but accessible (labels whose section heading already shows the text) */
 .sr-only {
@@ -147,13 +154,27 @@ body::before {
 }
 /* ---- chrome top bar ---- */
 .topbar { display: flex; align-items: stretch; background: var(--chrome); flex: none; }
+/* The brand cell is sized by the nav below it, never by its own contents: the
+   rule under the wordmark and the rule beside the nav have to read as one
+   continuous line, and a content-sized cell cannot manage that in even one
+   theme, let alone all three — each `--fd` gives GRIMOIRE a different width.
+   The 16px inset is the nav links', so the logo sits over the glyph column. */
 .topbar .brand {
-  display: flex; align-items: center; gap: 10px;
-  font-family: var(--fd); font-weight: 900; font-size: 24px; letter-spacing: 0.03em;
-  padding: 13px 22px; color: var(--chrome-text); text-decoration: none;
+  display: flex; align-items: center; gap: 10px; width: var(--nav-w); flex: none;
+  /* 22px, not 24: the widest `--fd` (Astral's Cinzel) sets GRIMOIRE at 132px
+     here, and the cell leaves 135px once the logo, the gap and the insets are
+     paid for. A theme with a wider display face would push the wordmark past
+     the rule this whole cell exists to line up — measure before raising it. */
+  font-family: var(--fd); font-weight: 900; font-size: 22px; letter-spacing: 0.03em;
+  padding: 13px 16px; color: var(--chrome-text); text-decoration: none;
   border-right: var(--rw) solid var(--chrome-text); text-shadow: var(--glow);
   text-transform: uppercase;
 }
+/* Railed, the cell follows the nav down to its glyph width and keeps only the
+   logo, centered — the same trade the rail makes with its own labels. The
+   wordmark is hidden by swapping in `.sr-only` (App.tsx), not `display: none`,
+   so the link keeps an accessible name. */
+.topbar.railed .brand { width: var(--nav-rail-w); padding: 13px 0; justify-content: center; }
 .topbar .brand img { display: block; }
 .topbar nav { display: flex; }
 .topbar .nav-btn {
@@ -189,12 +210,12 @@ body::before {
 .shell-main { display: flex; flex-direction: column; flex: 1; min-width: 0; overflow-y: auto; }
 
 .nav-sidebar {
-  flex: none; width: 208px; display: flex; flex-direction: column;
+  flex: none; width: var(--nav-w); display: flex; flex-direction: column;
   background: var(--chrome); color: var(--chrome-text);
   border-right: var(--rw) solid var(--chrome-text);
   padding: 4px 0 16px; overflow-y: auto; overflow-x: hidden;
 }
-.nav-sidebar.rail { width: 58px; }
+.nav-sidebar.rail { width: var(--nav-rail-w); }
 .nav-rail-toggle {
   align-self: flex-end; background: none; border: none; cursor: pointer;
   color: var(--chrome-muted); font-family: var(--fm); font-size: 13px;

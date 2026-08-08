@@ -198,6 +198,23 @@ test("once the rail is toggled the choice sticks, and outlives a reload", async 
   expect(screen.getByRole("navigation", { name: /primary/i })).toHaveClass("rail");
 });
 
+// The brand cell is sized off the nav below it so their two vertical rules
+// read as one line, which only works if the top strip hears about the rail.
+// Railed there is no room for the wordmark -- it is hidden the way the rail
+// hides its own labels, so the link keeps its accessible name.
+test("the top strip follows the rail, keeping the brand link named while railed", async () => {
+  render(<MemoryRouter initialEntries={["/worlds"]}><App /></MemoryRouter>);
+  await screen.findByRole("navigation", { name: /primary/i });
+  expect(screen.getByRole("banner")).not.toHaveClass("railed");
+  expect(screen.getByText("GRIMOIRE")).not.toHaveClass("sr-only");
+
+  fireEvent.click(screen.getByRole("button", { name: /collapse navigation/i }));
+  expect(screen.getByRole("banner")).toHaveClass("railed");
+  expect(screen.getByText("GRIMOIRE")).toHaveClass("sr-only");
+  expect(within(screen.getByRole("banner")).getByRole("link", { name: /grimoire/i }))
+    .toHaveAttribute("href", "/");
+});
+
 test("expanding the rail on a campaign page overrides that page's default", async () => {
   render(<MemoryRouter initialEntries={["/campaigns/run"]}><App /></MemoryRouter>);
   fireEvent.click(await screen.findByRole("button", { name: /expand navigation/i }));

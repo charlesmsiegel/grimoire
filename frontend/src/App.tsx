@@ -154,10 +154,16 @@ export default function App() {
   return (
     <ThemeProvider initial={theme}>
       <ShellStatusProvider>
-        <header className={"topbar" + (navHidden ? " collapsed" : "")}>
+        {/* `railed` is the brand cell's width: it is the nav's cell, sitting
+            above the nav, and the two rules only read as one line if it
+            narrows when the rail does. */}
+        <header className={"topbar" + (navHidden ? " collapsed" : "") + (rail ? " railed" : "")}>
           <NavLink to="/" className="brand">
             <img src="/grimoire-128.png" alt="" width={30} height={30} />
-            <span>GRIMOIRE</span>
+            {/* Railed there is no room for the wordmark, but the link still
+                needs a name — hidden, not removed, exactly as the rail's own
+                nav labels are. */}
+            <span className={rail ? "sr-only" : undefined}>GRIMOIRE</span>
           </NavLink>
           <div className="topbar-right">
             <NavLink to="/config" className={({ isActive }) => "config-link" + (isActive ? " active" : "")}>
