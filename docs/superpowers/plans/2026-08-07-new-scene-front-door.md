@@ -103,11 +103,12 @@ def test_mark_played_runs_after_the_body_is_appended(monkeypatch, tmp_path):
     characters.create_character(wroot, "S", "default", characters.blank_card("S"))
     g = greetings.create_greeting(wroot, "A", "s", "default", body="A.")
     cid, sid = _campaign_after_seed(wid)
-    boom = RuntimeError("expansion blew up")
-
+    # append_reply, not expand_macros: patching the LAST write before the mark
+    # is what makes the test reject a mark placed anywhere earlier. A mark moved
+    # only past expansion would still pass an expand_macros patch.
     def _explode(*a, **k):
-        raise boom
-    monkeypatch.setattr(playing.context_macros, "expand_macros", _explode)
+        raise RuntimeError("append blew up")
+    monkeypatch.setattr(playing.scenes_write, "append_reply", _explode)
     with pytest.raises(RuntimeError):
         playing.start_from_greeting(cid, sid, g)
     assert g not in playing.read_played(cid)
@@ -140,6 +141,19 @@ def test_orphaned_played_mark_can_be_cleared(monkeypatch, tmp_path):
     assert {x["id"]: x["available"] for x in playing.available_greetings(cid)}[g] is True
 
 
+def test_greeting_candidates_omits_played_greetings(monkeypatch, tmp_path):
+    """The ranker filters on `available`, so it inherits the fix — assert it
+    rather than assuming, because the ranker is the second place #315 leaked."""
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "S", "default", characters.blank_card("S"))
+    ids = [greetings.create_greeting(wroot, n, "s", "default", body=f"{n}.")
+           for n in ("A", "B", "C", "D")]
+    cid, sid = _campaign_after_seed(wid)
+    playing.start_from_greeting(cid, sid, ids[0])
+    assert ids[0] not in {c["id"] for c in suggest.greeting_candidates(cid)}
+
+
 def test_played_mark_still_refuses_while_a_scene_stamps_it(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
@@ -162,13 +176,33 @@ def test_availability_excludes_played_greetings():
     assert "already played" in out["a"]["reasons"]
 ```
 
+Append to `backend/tests/test_routes.py`, so the 409 is asserted at the boundary the frontend actually meets:
+
+```python
+def test_replaying_a_greeting_is_a_409(client):
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"})
+    g = client.post(f"/api/worlds/{wid}/greetings",
+                    json={"name": "Alpha", "character": "seraphine",
+                          "version": "default", "body": "A."}).json()["id"]
+    s1 = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "One"}).json()["id"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{s1}/start-from-greeting",
+                       json={"greeting": g}).status_code == 200
+    s2 = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Two"}).json()["id"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{s2}/start-from-greeting",
+                       json={"greeting": g}).status_code == 409
+```
+
 - [ ] **Step 2: Run the tests to verify they fail**
 
 `make check-py` takes no test selector (it runs `pytest backend -q`), so run pytest directly for a single file. `PYTHONPATH=src` is load-bearing: `backend/.venv` holds an editable install whose `.pth` points at whichever checkout created it, so a bare `pytest` inside a worktree silently tests the *other* tree's sources.
 
 ```
 cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_playing_store.py tests/test_greetings_store.py -v
+cd backend && PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_routes.py -k replaying_a_greeting -v
 ```
+
+Those commands are POSIX (the Bash tool). From PowerShell set the variable first: `$env:PYTHONPATH = "src"`, then `.\.venv\Scripts\python.exe -m pytest ...`.
 
 Expected: `test_availability_excludes_played_greetings` fails (`available is True`), `test_played_greeting_is_not_available` fails, `test_replaying_a_played_greeting_raises` fails (no raise), `test_stamping_scene_*` fails (`AttributeError: module has no attribute 'stamping_scene'`), `test_orphaned_played_mark_can_be_cleared` fails (`PlayError`), `test_mark_played_runs_after_...` fails (greeting already marked).
 
@@ -214,9 +248,9 @@ def stamping_scene(cid: str, gid: str) -> str | None:
     """The scene recording that `gid` was played, or None if no scene does.
 
     Walks every scene's frontmatter head — `read_scene_meta` exists for exactly
-    this kind of bulk scan and never parses a transcript. Not free, and
-    deliberately called only from the unmark path below, never from the
-    picker's."""
+    this kind of bulk scan and never parses a transcript. Two head-parses per
+    scene, since `list_scenes` has already done one: acceptable only because
+    this runs on an explicit unmark, never in the picker's path."""
     for meta in scenes_read.list_scenes(cid):
         if scenes_read.read_scene_meta(cid, meta["id"]).get("greeting", "") == gid:
             return meta["id"]
@@ -625,7 +659,7 @@ Expected: PASS, and `verify_templates.py` reports its check count with no failur
 - [ ] **Step 10: Commit**
 
 ```bash
-git add backend/src/grimoire/store/suggest.py backend/src/grimoire/routes/scenes.py templates/scene_suggestions scripts/verify_templates.py frontend/src/api/client.ts backend/tests/
+git add backend/src/grimoire/store/suggest.py backend/src/grimoire/routes/scenes.py \n        templates/scene_suggestions scripts/verify_templates.py \n        frontend/src/api/client.ts backend/tests/test_suggest.py backend/tests/test_routes.py
 git commit -m "feat(scenes): steer scene suggestions with a direction (#316, #89)
 
 POST /scene-suggestions takes a free-text direction, truncated to 500 chars in
@@ -721,7 +755,26 @@ def test_scene_intent_resolves_names(client):
     assert r.json()["cast"][0]["name"] == "Mara"
 ```
 
-Use `backend/tests/llm_fakes.py` for the fake in both route tests.
+```python
+def test_scene_intent_reports_an_llm_failure_as_502(client):
+    _wid, cid = _campaign(client)
+    # install a fake whose complete() raises LLMError, as the scene-suggestions
+    # 502 test does
+    assert client.post(f"/api/campaigns/{cid}/scene-intent",
+                       json={"text": "a storm", "offscreen": False}).status_code == 502
+
+
+def test_scene_intent_forwards_offscreen_to_the_parser(client):
+    """A player named in the typed text must not be cast into an offscreen
+    scene — the flag has to reach parse_intent, not just the prompt."""
+    wid, cid = _campaign(client)
+    # ... seat the PC as characters:mara with role=player; fake a reply casting it ...
+    r = client.post(f"/api/campaigns/{cid}/scene-intent",
+                    json={"text": "while she sleeps", "offscreen": True})
+    assert r.json()["cast"] == []
+```
+
+Use `backend/tests/llm_fakes.py` for the fake in every route test — never an inline one.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -768,8 +821,13 @@ def build_intent_prompt(cid: str, typed: str, offscreen: bool = False) -> list[d
     Over the FULL snapshot, story-so-far included: "the morning after the
     funeral" is exactly the kind of phrase this has to resolve, and only the
     recent chronicle can resolve it."""
+    # `direction` is here because scene_intent/user.j2 INCLUDES
+    # scene_suggestions/user.j2, which reads it (Task 3) — and both this env and
+    # verify_templates render with StrictUndefined, so omitting it is a hard
+    # failure, not a silently-empty block.
     vars = {"s": build_snapshot(cid, offscreen=offscreen), "offscreen": offscreen,
-            "greeting_candidates": None, "typed": typed.strip()[:INTENT_LIMIT]}
+            "greeting_candidates": None, "direction": "",
+            "typed": typed.strip()[:INTENT_LIMIT]}
     return [{"role": "system", "content": prompts.render("scene_intent/system.j2", **vars)},
             {"role": "user", "content": prompts.render("scene_intent/user.j2", **vars)}]
 
@@ -845,22 +903,24 @@ async def post_scene_intent(cid: str, body: SceneIntent,
 
 `build_intent_prompt` calls `build_snapshot` itself, so unlike `build_prompt` it needs a real campaign — the check therefore belongs in the store-level block near line 727, which already has a `cid`, not in the pure-snapshot loop above it. Add there:
 
+Every direct `scene_intent/user.j2` render must pass `direction=""` for the same `StrictUndefined` reason:
+
 ```python
 TYPED = "the morning after, back at the marsh house"
 iexp = suggest.build_intent_prompt(cid, TYPED)
 isnap = suggest.build_snapshot(cid)
 check("intent system (store)", iexp[0]["content"],
       render("scene_intent/system.j2", s=isnap, offscreen=False,
-             greeting_candidates=None, typed=TYPED))
+             greeting_candidates=None, direction="", typed=TYPED))
 check("intent user (store)", iexp[1]["content"],
       render("scene_intent/user.j2", s=isnap, offscreen=False,
-             greeting_candidates=None, typed=TYPED))
+             greeting_candidates=None, direction="", typed=TYPED))
 
 ioff_exp = suggest.build_intent_prompt(cid, TYPED, offscreen=True)
 ioff_snap = suggest.build_snapshot(cid, offscreen=True)
 check("intent user (store, offscreen)", ioff_exp[1]["content"],
       render("scene_intent/user.j2", s=ioff_snap, offscreen=True,
-             greeting_candidates=None, typed=TYPED))
+             greeting_candidates=None, direction="", typed=TYPED))
 ```
 
 Do **not** add a check that renders a template and compares it to itself — that passes unconditionally and proves nothing. Each check compares the *builder's* output to a direct render.
@@ -895,7 +955,7 @@ Expected: PASS.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add backend/src/grimoire/store/suggest.py backend/src/grimoire/routes templates/scene_intent scripts/verify_templates.py frontend/src/api/client.ts backend/tests/
+git add backend/src/grimoire/store/suggest.py backend/src/grimoire/routes/scenes.py \n        backend/src/grimoire/routes/models.py templates/scene_intent \n        scripts/verify_templates.py frontend/src/api/client.ts \n        backend/tests/test_suggest.py backend/tests/test_routes.py
 git commit -m "feat(scenes): extract date, location and cast from typed text (#317)
 
 POST /scene-intent reads the user's own description of how a scene starts and
@@ -1003,7 +1063,9 @@ export function errMsg(err: any): string {
 ```ts
 import type { Availability, SceneIntentResult, SceneSuggestion } from "../api/client";
 
-export type DraftCast = { kind: string; id: string; name: string };
+/** `kind` is closed: an open string would let an invalid actor kind through
+ *  the seam and straight into addCastBatch. */
+export type DraftCast = { kind: "characters" | "pcs"; id: string; name: string };
 
 type DraftBase = {
   /** editable in the confirm form */
@@ -1246,7 +1308,7 @@ written, so a refresh cannot wipe the greeting ordering or a good date."
 `frontend/src/components/SceneIdeaPicker.test.tsx`:
 
 ```tsx
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { SceneIdeaPicker } from "./SceneIdeaPicker";
 
 vi.mock("../api/client", () => ({
@@ -1326,14 +1388,27 @@ test("empty text creates a blank draft with no LLM call", async () => {
     source: "custom", title: "New scene", date: "2026-01-01", premise: "" }));
 });
 
-test("a failed extraction still opens with the typed text as the premise", async () => {
+test("a failed extraction opens with the typed text AND hands the warning on", async () => {
   (api.sceneIntent as any).mockRejectedValue({ detail: "no key" });
   const onPicked = renderPicker();
   await screen.findByText("The creditor");
   fireEvent.change(screen.getByLabelText("Your own scene"), { target: { value: "a storm" } });
   fireEvent.click(screen.getByRole("button", { name: /use this/i }));
-  await waitFor(() => expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({
-    source: "custom", title: "New scene", premise: "a storm" })));
+  // the warning is the SECOND argument: this pane unmounts immediately, so a
+  // banner of its own would never be seen
+  await waitFor(() => expect(onPicked).toHaveBeenCalledWith(
+    expect.objectContaining({ source: "custom", title: "New scene", premise: "a storm" }),
+    expect.stringContaining("no key")));
+});
+
+test("a card picked after the date estimate lands carries that date", async () => {
+  let release: (v: any) => void = () => {};
+  (api.sceneSuggestions as any).mockReturnValue(new Promise((r) => { release = r; }));
+  const onPicked = renderPicker();
+  await screen.findByText("Reckoning");           // greetings render before generation
+  await act(async () => { release({ suggestions: [], greeting_picks: [], next_date: "2026-02-02" }); });
+  fireEvent.click(screen.getByText("Reckoning"));
+  expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({ date: "2026-02-02" }), undefined);
 });
 
 test("without a connection the direction row is disabled but typing still works", async () => {
@@ -1362,7 +1437,7 @@ Expected: FAIL — cannot resolve `./SceneIdeaPicker`.
 `frontend/src/components/SceneIdeaPicker.tsx`:
 
 ```tsx
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type Availability } from "../api/client";
 import { errMsg } from "./errMsg";
 import { customDraft, greetingDraft, suggestionDraft, type SceneDraft } from "./sceneDraft";
@@ -1373,7 +1448,9 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, onPicked, onCanc
   afterSid: string | null;
   ready: boolean;
   pcless: boolean;
-  onPicked: (draft: SceneDraft) => void;
+  /** `warning` is shown by the confirm pane: this component unmounts the
+   *  instant a draft is emitted, so its own banner cannot carry one. */
+  onPicked: (draft: SceneDraft, warning?: string) => void;
   onCancel: () => void;
 }) {
   const [greetings, setGreetings] = useState<Availability[]>([]);
@@ -1402,25 +1479,33 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, onPicked, onCanc
   const greetingCards = rankPending ? [] : orderedGreetings.slice(0, wantGenerated ? 2 : 4);
   const generatedCards = (suggestions ?? []).slice(0, 4 - (rankPending ? 2 : greetingCards.length));
 
+  // Read at EMIT time, not at click time: the date estimate arrives with the
+  // suggestions, and an extraction call can easily outlast it. Without the ref
+  // a draft built after the estimate landed would still carry the empty string
+  // this render closed over.
+  const latestDate = useRef(nextDate);
+  useEffect(() => { latestDate.current = nextDate; }, [nextDate]);
+
   async function useTyped() {
     const text = typed.trim();
     if (!text) {           // the blank path: no call, today's "Create manually"
-      onPicked(customDraft("", null, nextDate, pcless));
+      onPicked(customDraft("", null, latestDate.current, pcless));
       return;
     }
     if (!ready) {          // inference is an enhancement of this path, not a requirement
-      onPicked(customDraft(text, null, nextDate, pcless));
+      onPicked(customDraft(text, null, latestDate.current, pcless));
       return;
     }
     setInferring(true);
     setError(null);
     try {
       const intent = await api.sceneIntent(cid, text, pcless);
-      onPicked(customDraft(text, intent, nextDate, pcless));
+      onPicked(customDraft(text, intent, latestDate.current, pcless));
     } catch (err: any) {
-      // A miss must leave a usable form, never a dead end.
-      setError(`${errMsg(err)} — continuing without inferred details.`);
-      onPicked(customDraft(text, null, nextDate, pcless));
+      // A miss must leave a usable form, never a dead end — and the warning
+      // travels with the draft, because this pane is about to unmount.
+      onPicked(customDraft(text, null, latestDate.current, pcless),
+               `${errMsg(err)} — continuing without inferred details.`);
     } finally {
       setInferring(false);
     }
@@ -1444,7 +1529,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, onPicked, onCanc
       {!rankPending && greetingCards.length === 0 && <div className="field-hint">No available greetings.</div>}
       {greetingCards.map((g) => (
         <button className="chooser-card" key={g.id}
-                onClick={() => onPicked(greetingDraft(g, nextDate, pcless))}>
+                onClick={() => onPicked(greetingDraft(g, latestDate.current, pcless))}>
           <span className="chooser-card-title">{g.name}</span>
           {g.unlocked && <span className="chip on">unlocked</span>}
         </button>
@@ -1455,7 +1540,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, onPicked, onCanc
       {ready && suggestions === null && <div className="field-hint">Generating…</div>}
       {generatedCards.map((s, i) => (
         <button className="chooser-card" key={i}
-                onClick={() => onPicked(suggestionDraft(s, nextDate, pcless))}>
+                onClick={() => onPicked(suggestionDraft(s, latestDate.current, pcless))}>
           <span className="chooser-card-title">{s.title}</span>
           <span className="chooser-card-premise">{s.premise}</span>
           <span className="field-hint">
@@ -1517,7 +1602,7 @@ when there is neither -- typing still works without a key."
 `frontend/src/components/SceneConfirmForm.test.tsx`:
 
 ```tsx
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { SceneConfirmForm } from "./SceneConfirmForm";
 import type { SceneDraft } from "./sceneDraft";
 
@@ -1526,7 +1611,7 @@ vi.mock("../api/client", () => ({
     createScene: vi.fn(), addCastBatch: vi.fn(), setSceneLocation: vi.fn(),
     setSceneDatetime: vi.fn(), startFromGreeting: vi.fn(), renameScene: vi.fn(),
     deleteScene: vi.fn(), listEntities: vi.fn(), listCharacters: vi.fn(),
-    listCampaignPCs: vi.fn(),
+    listCampaignPCs: vi.fn(), listAppearances: vi.fn(),
   },
 }));
 vi.mock("./CalendarDatePicker", () => ({
@@ -1558,6 +1643,7 @@ beforeEach(() => {
   (api.listEntities as any).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
   (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
   (api.listCampaignPCs as any).mockResolvedValue([]);
+  (api.listAppearances as any).mockResolvedValue([]);
 });
 
 function renderForm(draft: SceneDraft, onCreated = vi.fn()) {
@@ -1649,6 +1735,54 @@ test("a startFromGreeting failure deletes the scene", async () => {
   await waitFor(() => expect(api.deleteScene).toHaveBeenCalled());
 });
 
+test("an offscreen draft never offers a player, even one seated as a character", async () => {
+  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" },
+                                                 { id: "winifred", name: "Winifred" }]);
+  (api.listAppearances as any).mockResolvedValue(
+    [{ kind: "characters", id: "mara", version: "default", role: "player", scenes: [] }]);
+  renderForm({ ...GEN, pcless: true, cast: [] } as any);
+  await screen.findByLabelText("Add to cast");
+  const options = Array.from(screen.getByLabelText("Add to cast").querySelectorAll("option"))
+    .map((o) => o.textContent);
+  expect(options).not.toContain("Mara");
+  expect(options).toContain("Winifred");
+});
+
+test("a warning raised while the draft was built is shown here", async () => {
+  render(<SceneConfirmForm cid="c" draft={GEN} notice="no key -- continuing without inferred details."
+                           onBack={() => {}} onCreated={vi.fn()} />);
+  expect(await screen.findByText(/continuing without inferred details/)).toBeInTheDocument();
+});
+
+test("a location failure keeps the scene and offers Continue", async () => {
+  (api.setSceneLocation as any).mockRejectedValue({ detail: "gone" });
+  const onCreated = renderForm(GEN);
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  await screen.findByText(/gone/);
+  expect(api.deleteScene).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: /continue to scene/i }));
+  expect(onCreated).toHaveBeenCalled();
+});
+
+test("an emptied title on a greeting draft falls back to the greeting name", async () => {
+  renderForm(GRT);
+  fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(api.renameScene).toHaveBeenCalledWith("c", "s9-greet", "Reckoning"));
+});
+
+test("the form reports writing so the modal can refuse to close", async () => {
+  let release: (v: any) => void = () => {};
+  (api.createScene as any).mockReturnValue(new Promise((r) => { release = r; }));
+  const onWriting = vi.fn();
+  render(<SceneConfirmForm cid="c" draft={GEN} onBack={() => {}} onCreated={vi.fn()}
+                           onWriting={onWriting} />);
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  expect(onWriting).toHaveBeenLastCalledWith(true);
+  await act(async () => { release({ id: "s9" }); });
+  await waitFor(() => expect(onWriting).toHaveBeenLastCalledWith(false));
+});
+
 test("a final rename failure keeps the scene", async () => {
   (api.renameScene as any).mockRejectedValue({ detail: "locked" });
   renderForm(GRT);
@@ -1673,16 +1807,22 @@ Expected: FAIL — cannot resolve `./SceneConfirmForm`.
 
 ```tsx
 import { useEffect, useState } from "react";
-import { api, type CharacterSummary, type EntitySummary, type PCSummary } from "../api/client";
+import { api, type CharacterSummary, type EntitySummary, type PCSummary,
+         type RosterEntry } from "../api/client";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import { errMsg } from "./errMsg";
 import type { DraftCast, SceneDraft } from "./sceneDraft";
 
-export function SceneConfirmForm({ cid, draft, onBack, onCreated }: {
+export function SceneConfirmForm({ cid, draft, notice, onBack, onCreated, onWriting }: {
   cid: string;
   draft: SceneDraft;
+  /** a warning raised while the draft was built, e.g. a failed extraction */
+  notice?: string | null;
   onBack: () => void;
   onCreated: (sid: string, initialPrompt?: string) => void;
+  /** reports the create sequence in and out of flight, so the orchestrator can
+   *  refuse to dismiss mid-write: unmounting cancels nothing. */
+  onWriting?: (active: boolean) => void;
 }) {
   const [title, setTitle] = useState(draft.title);
   const [date, setDate] = useState(draft.date);
@@ -1692,6 +1832,7 @@ export function SceneConfirmForm({ cid, draft, onBack, onCreated }: {
   const [locations, setLocations] = useState<EntitySummary[]>([]);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [pcs, setPCs] = useState<PCSummary[]>([]);
+  const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [addId, setAddId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1703,16 +1844,25 @@ export function SceneConfirmForm({ cid, draft, onBack, onCreated }: {
     api.listEntities({ kind: "campaign", id: cid }, "locations").then(setLocations).catch(() => setLocations([]));
     api.listCharacters({ kind: "campaign", id: cid }).then(setChars).catch(() => setChars([]));
     api.listCampaignPCs(cid).then(setPCs).catch(() => setPCs([]));
+    api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
   }, [cid]);
 
-  // pcless scenes never seat players, matching start_from_greeting's guards
+  // pcless scenes never seat players, matching start_from_greeting's guards.
+  // Filtering `pcs` alone is NOT enough: a player can be seated as a
+  // `characters` actor (CastPanel's role selector offers it), which is the same
+  // hole Task 2 closed in the suggestion parser. So the roster's roles decide.
+  const playerTokens = new Set(
+    roster.filter((r) => r.role === "player").map((r) => `${r.kind}/${r.id}`));
   const addable: DraftCast[] = [
     ...chars.map((c) => ({ kind: "characters", id: c.id, name: c.name })),
-    ...(draft.pcless ? [] : pcs.map((p) => ({ kind: "pcs", id: p.id, name: p.name }))),
-  ].filter((o) => !cast.some((c) => c.kind === o.kind && c.id === o.id));
+    ...pcs.map((p) => ({ kind: "pcs", id: p.id, name: p.name })),
+  ].filter((o) => !(draft.pcless && playerTokens.has(`${o.kind}/${o.id}`)))
+   .filter((o) => !cast.some((c) => c.kind === o.kind && c.id === o.id));
+
+  function setWriting(active: boolean) { setBusy(active); onWriting?.(active); }
 
   async function create() {
-    setBusy(true);
+    setWriting(true);
     setError(null);
     const finalTitle = title.trim() || draft.defaultTitle;
     let sid: string;
@@ -1722,7 +1872,7 @@ export function SceneConfirmForm({ cid, draft, onBack, onCreated }: {
       ({ id: sid } = await api.createScene(cid, finalTitle, date || undefined, draft.pcless));
     } catch (err: any) {
       setError(errMsg(err));
-      setBusy(false);
+      setWriting(false);
       return;
     }
     // 2. cast — the last step for which deleting the scene is still clean
@@ -1771,7 +1921,7 @@ export function SceneConfirmForm({ cid, draft, onBack, onCreated }: {
         sid = r.id;
       } catch (err: any) { soft.push(errMsg(err)); }
     }
-    setBusy(false);
+    setWriting(false);
     const prompt = draft.source === "greeting" ? undefined : (premise || undefined);
     if (soft.length) { setSalvaged(sid); setError(soft.join(" · ")); return; }
     onCreated(sid, prompt);
@@ -1779,7 +1929,7 @@ export function SceneConfirmForm({ cid, draft, onBack, onCreated }: {
 
   return (
     <>
-      {error && <div className="banner">{error}</div>}
+      {(error ?? notice) && <div className="banner">{error ?? notice}</div>}
 
       <label className="role" htmlFor="confirm-title">Title</label>
       <input id="confirm-title" aria-label="Title" type="text" value={title}
@@ -1896,7 +2046,7 @@ and offer Continue to scene instead."
 Replace `frontend/src/components/NewSceneChooser.test.tsx`'s body with flow-level tests; the card and form details are covered by Tasks 7 and 8.
 
 ```tsx
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { NewSceneChooser } from "./NewSceneChooser";
 
 vi.mock("../api/client", () => ({
@@ -1905,7 +2055,7 @@ vi.mock("../api/client", () => ({
     createScene: vi.fn(), startFromGreeting: vi.fn(), addCastBatch: vi.fn(),
     setSceneLocation: vi.fn(), setSceneDatetime: vi.fn(), renameScene: vi.fn(),
     deleteScene: vi.fn(), listEntities: vi.fn(), listCharacters: vi.fn(),
-    listCampaignPCs: vi.fn(),
+    listCampaignPCs: vi.fn(), listAppearances: vi.fn(),
   },
 }));
 vi.mock("./CalendarDatePicker", () => ({
@@ -1916,6 +2066,7 @@ import { api } from "../api/client";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  (api.listAppearances as any).mockResolvedValue([]);
   (api.availableGreetings as any).mockResolvedValue(
     [{ id: "reck", name: "Reckoning", available: true, reasons: [], unlocked: true }]);
   (api.sceneSuggestions as any).mockResolvedValue(
@@ -1963,6 +2114,29 @@ test("offscreen mode asks for pcless greetings and pcless scenes", async () => {
   await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", "Cabal", expect.anything(), true));
 });
 
+test("Cancel from the picker writes nothing", async () => {
+  const onClose = vi.fn();
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByRole("button", { name: /^cancel$/i }));
+  expect(onClose).toHaveBeenCalled();
+  expect(api.createScene).not.toHaveBeenCalled();
+});
+
+test("Escape and the backdrop are ignored while the create sequence is writing", async () => {
+  let release: (v: any) => void = () => {};
+  (api.createScene as any).mockReturnValue(new Promise((r) => { release = r; }));
+  const onClose = vi.fn();
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByText("Reckoning"));
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  fireEvent.keyDown(window, { key: "Escape" });
+  fireEvent.click(screen.getByRole("dialog"));
+  expect(onClose).not.toHaveBeenCalled();     // unmounting would strand the writes in flight
+  await act(async () => { release({ id: "s9" }); });
+});
+
 test("creating reports the scene and Escape closes while idle", async () => {
   const onCreated = vi.fn();
   const onClose = vi.fn();
@@ -2006,16 +2180,25 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
   // scene mode is picked first; nothing is fetched until then
   const [mode, setMode] = useState<"pc" | "offscreen" | null>(null);
   const [draft, setDraft] = useState<SceneDraft | null>(null);
+  // A warning from the picker (an extraction that failed) has to outlive the
+  // picker, which unmounts the moment a draft is emitted.
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // The confirm form's create sequence is several writes long, and unmounting
+  // it does not cancel them — a dismissal mid-sequence would strand a scene
+  // nobody is told about. So the form reports when it is writing and the
+  // orchestrator refuses to close.
+  const [writing, setWriting] = useState(false);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !writing) onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, writing]);
 
   return (
     <div className="chooser-backdrop" role="dialog" aria-label="New scene"
-         onClick={onClose}>
+         onClick={() => { if (!writing) onClose(); }}>
       <div className="chooser" onClick={(e) => e.stopPropagation()}>
         <h3>New scene</h3>
 
@@ -2039,10 +2222,12 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
         ) : draft === null ? (
           <SceneIdeaPicker cid={cid} afterSid={afterSid} ready={ready}
                            pcless={mode === "offscreen"}
-                           onPicked={setDraft} onCancel={onClose} />
+                           onPicked={(d, warning) => { setDraft(d); setNotice(warning ?? null); }}
+                           onCancel={onClose} />
         ) : (
-          <SceneConfirmForm cid={cid} draft={draft}
-                            onBack={() => setDraft(null)} onCreated={onCreated} />
+          <SceneConfirmForm cid={cid} draft={draft} notice={notice}
+                            onBack={() => setDraft(null)} onCreated={onCreated}
+                            onWriting={setWriting} />
         )}
       </div>
     </div>
@@ -2082,7 +2267,8 @@ Expected: `check-py`, `check-web`, `check-lint`, `check-templates`, and `check-p
 - [ ] **Step 7: Commit**
 
 ```bash
-git add frontend/src/components/NewSceneChooser.tsx frontend/src/components/NewSceneChooser.test.tsx frontend/src/index.css frontend/src/routes/
+git add frontend/src/components/NewSceneChooser.tsx \n        frontend/src/components/NewSceneChooser.test.tsx frontend/src/index.css
+# stage frontend/src/routes/CampaignView.test.tsx ONLY if step 5 required a change there
 git commit -m "feat(scenes): the picker becomes mode -> pick -> confirm -> create (#89, #90)
 
 NewSceneChooser keeps its props and drops to an orchestrator; the card grid,
