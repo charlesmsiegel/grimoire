@@ -59,7 +59,7 @@ def validate(data: bytes) -> None:
         with Image.open(io.BytesIO(data)) as im:
             width, height = im.size   # from the header; decodes no pixels
             im.verify()               # structural integrity, still no full decode
-    except Exception as exc:  # noqa: BLE001 -- PIL raises a zoo of types for bad bytes
+    except Exception as exc:  # PIL raises a zoo of types for bad bytes
         raise CoverInvalid("not a readable image") from exc
     if width * height > MAX_PIXELS:
         raise CoverInvalid("cover image has too many pixels (max 50 MP)")
@@ -72,7 +72,7 @@ def _assets_dir(cid: str) -> Path:
     rejects ids ``safe_id`` refuses. Without this, a put for an unknown id
     would create a campaign directory holding an image and no ``campaign.md``.
     """
-    if not campaigns_paths.campaign_meta_path(cid).exists():
+    if not campaigns_paths.campaign_exists(cid):
         raise campaigns_paths.CampaignNotFound(cid)
     return campaigns_paths.campaign_root(cid) / "assets"
 

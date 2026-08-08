@@ -75,7 +75,7 @@ def test_delete_raises_when_the_file_survives(cid, monkeypatch):
     covers.put_cover(cid, _png(), "png")
     monkeypatch.setattr("pathlib.Path.unlink",
                         lambda self, *a, **k: (_ for _ in ()).throw(OSError("held")))
-    with pytest.raises(OSError):
+    with pytest.raises(OSError, match="could not be removed"):
         covers.delete_cover(cid)
 
 

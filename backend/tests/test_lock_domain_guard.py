@@ -465,11 +465,20 @@ def _fs_namespaces(tree: ast.AST) -> dict[str, str]:
     `assets` resolves the same way, for `_ASSETS_WRITERS` -- but it is NOT in
     the identity seed below the way `os`/`shutil`/`atomic` are: those three are
     trusted even where nothing in the module binds them, while `assets` is
-    resolved only from an actual import, imported-from, or assignment alias.
-    Narrower on purpose -- `assets` names a package-local module, not a
-    universally-recognized one, and `_ASSETS_WRITERS` is an enumeration of two
-    names rather than an inverted whole namespace, so trusting the bare word
-    would buy nothing an import doesn't already give it.
+    resolved only from an `ImportFrom` (`from . import assets`) or an
+    assignment alias chained from one. Narrower on purpose -- `assets` names a
+    package-local module, not a universally-recognized one, and
+    `_ASSETS_WRITERS` is an enumeration of two names rather than an inverted
+    whole namespace, so trusting the bare word would buy nothing an import
+    doesn't already give it.
+
+    A named limit, not a silent one: `import grimoire.store.assets as assets`
+    (an `ast.Import`, not `ast.ImportFrom`) is NOT resolved, the same way
+    `import os.path as p` deliberately isn't above -- this package's own
+    modules only ever reach `assets` through `from . import assets`, so the
+    gap costs nothing today, and closing it would mean giving `ast.Import` the
+    same dotted-root handling `os`/`shutil` get, which no `assets` import in
+    this codebase needs.
     """
     out = {name: name for name in (*_FS_NAMESPACES, "atomic")}
     for node in ast.walk(tree):
@@ -502,13 +511,23 @@ def _fs_namespaces(tree: ast.AST) -> dict[str, str]:
 
 
 def _imported_writers(tree: ast.AST) -> set[str]:
-    """Local names bound by `from <atomic|os|shutil> import <primitive>`.
+    """Local names bound by `from <atomic|os|shutil|assets> import <primitive>`.
 
     Without this, `from .atomic import write_text` followed by a bare
     `write_text(p, x)` is invisible: the call's target is an `ast.Name`, not an
     attribute, so there is no receiver to key on. The comment here used to claim
     `test_atomic_guard` caught that form as a fallback. It does not — it matches
     `write_text`/`write_bytes` only as attributes — so nothing did.
+
+    `assets` has to be here for the same reason `_names_a_writer` needed
+    `namespace == "assets"` on top of the receiver-agnostic `_ATOMIC_WRITERS`
+    fallback: `from .assets import put_in` followed by a bare `put_in(...)`
+    reaches this function's `ast.Name` branch, not `_is_write_call`'s
+    attribute branch, and is otherwise the exact blind spot this whole
+    function exists to close for `atomic` -- reachable the moment `covers.py`
+    (or a future module built the same way) is refactored to that import
+    style, silently dropping the module's `DOMAIN_MODULES` entry back to a
+    phantom.
 
     Resolved from the import rather than matching the bare names everywhere,
     which would flag any local helper that happened to be called `remove`.
@@ -518,6 +537,13 @@ def _imported_writers(tree: ast.AST) -> set[str]:
         if not isinstance(node, ast.ImportFrom) or node.module is None:
             continue
         source = node.module.rsplit(".", 1)[-1]
+        if source == "assets":
+            # ENUMERATION, not inversion -- see `_ASSETS_WRITERS`: most of
+            # `assets` reads, so `from .assets import path_in` must not read
+            # as a writer the way `from os import truncate` does below.
+            out |= {(a.asname or a.name) for a in node.names
+                    if a.name in _ASSETS_WRITERS}
+            continue
         # Inverted the same way the attribute path is: importing a name OUT of
         # a filesystem namespace does not make it safer, so `from os import
         # truncate` binds a writer even though nothing enumerated `truncate`.
@@ -2615,6 +2641,35 @@ def test_assets_put_in_and_delete_in_are_recognized_as_publication():
                "    art.put_in(d, 'cover', data, ext)\n")
     _f, _s, mutators = _probe(aliased)
     assert mutators, "an assets alias bound by assignment was invisible"
+
+
+def test_assets_import_from_spelling_is_also_recognized():
+    """`from .assets import put_in` followed by a bare `put_in(...)` reaches
+    `ast.Name`, not `ast.Attribute` -- the exact shape `_imported_writers`
+    exists to close for `from .atomic import write_text`, and it had not been
+    taught the same thing for `assets`. Left unclosed, a refactor of
+    `covers.py` to this import style would silently drop the module out of
+    the survey and turn its `DOMAIN_MODULES` entry back into a phantom --
+    the round-one failure, re-enterable."""
+    for src in ("from .assets import put_in\n"
+                "def put_cover(cid):\n"
+                "    put_in(d, 'cover', data, ext)\n",
+                "from .assets import delete_in\n"
+                "def delete_cover(cid):\n"
+                "    delete_in(d, 'cover')\n",
+                "from .assets import put_in as p\n"
+                "def put_cover(cid):\n"
+                "    p(d, 'cover', data, ext)\n"):
+        _f, _s, mutators = _probe(src)
+        assert mutators, f"an imported-from assets writer was invisible: {src!r}"
+
+    # And the enumeration, not the whole namespace, still governs: a bare
+    # `path_in` imported the same way must not read as a writer.
+    reading = ("from .assets import path_in\n"
+               "def cover_path(cid):\n"
+               "    return path_in(d, 'cover')\n")
+    _f, _s, mutators = _probe(reading)
+    assert not mutators, "an imported-from assets READER read as a mutation"
 
 
 def test_assets_reads_and_other_names_stay_invisible():
