@@ -37,8 +37,37 @@ test("a stale response that resolves after a newer one is discarded", async () =
   expect(result.current.picks).toBeNull();     // the stale ranked reply wrote nothing
 });
 
+test("a stale response's finally does not clear busy while a newer request is still in flight", async () => {
+  let releaseFirst: (v: any) => void = () => {};
+  let releaseSecond: (v: any) => void = () => {};
+  (api.sceneSuggestions as any).mockReturnValueOnce(new Promise((r) => { releaseFirst = r; }));
+  const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
+  expect(result.current.busy).toBe(true);
+
+  (api.sceneSuggestions as any).mockReturnValueOnce(new Promise((r) => { releaseSecond = r; }));
+  act(() => result.current.refresh("x"));
+  expect(result.current.busy).toBe(true);
+
+  // The stale (first) request resolves while the newer (second) one is still
+  // pending: its `finally` must not clear `busy`, or the UI would flash
+  // "done" while a request it never saw the result of is still running.
+  await act(async () => { releaseFirst(R([{ title: "stale" }])); });
+  expect(result.current.busy).toBe(true);
+
+  await act(async () => { releaseSecond(R([{ title: "newest" }])); });
+  expect(result.current.busy).toBe(false);
+});
+
 test("without a connection nothing is fetched and the lists are empty, not pending", () => {
-  renderHook(() => useSceneSuggestions("c", "s1", false, false));
+  const { result } = renderHook(() => useSceneSuggestions("c", "s1", false, false));
+  expect(api.sceneSuggestions).not.toHaveBeenCalled();
+  expect(result.current.suggestions).toEqual([]);
+  expect(result.current.picks).toEqual([]);
+});
+
+test("refresh is a no-op while not ready", () => {
+  const { result } = renderHook(() => useSceneSuggestions("c", "s1", false, false));
+  act(() => result.current.refresh("x"));
   expect(api.sceneSuggestions).not.toHaveBeenCalled();
 });
 
