@@ -56,6 +56,42 @@ test("Back returns to the picker without writing", async () => {
   expect(api.createScene).not.toHaveBeenCalled();
 });
 
+// Issue #319: useSceneSuggestions used to live inside SceneIdeaPicker, which
+// unmounts on every Back (its draft is cleared, remounting the picker).
+// Remounting re-ran the hook's mount effect at rank=true -- a fresh,
+// expensive, re-shufflable LLM call for what the user experiences as "go
+// back" -- and threw away whatever direction they had typed, because that
+// lived in the unmounted picker's own state too. The fix lifts both up into
+// NewSceneChooser, which survives Back untouched.
+test("Back preserves the typed direction and the regenerated cards, and issues no further sceneSuggestions call", async () => {
+  (api.sceneSuggestions as any).mockResolvedValue(
+    { suggestions: [{ title: "Undirected", premise: "", cast: [], location: null }],
+      greeting_picks: [], next_date: "2026-01-01" });
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  await screen.findByText("Undirected");
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
+
+  fireEvent.change(screen.getByLabelText("Direction"), { target: { value: "something at sea" } });
+  (api.sceneSuggestions as any).mockResolvedValue(
+    { suggestions: [{ title: "At sea", premise: "", cast: [], location: null }],
+      greeting_picks: [], next_date: "2026-01-01" });
+  fireEvent.click(screen.getByRole("button", { name: /regenerate/i }));
+  await screen.findByText("At sea");
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText("Undirected")).toBeNull();
+
+  // pick a card to reach the confirm form, then come back
+  fireEvent.click(await screen.findByText("Reckoning"));
+  fireEvent.click(await screen.findByRole("button", { name: /back/i }));
+
+  // the typed direction and the regenerated (directed) card both survived --
+  // and nothing re-fetched to produce them
+  expect(await screen.findByLabelText("Direction")).toHaveValue("something at sea");
+  expect(screen.getByText("At sea")).toBeInTheDocument();
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(2);
+});
+
 test("offscreen mode asks for pcless greetings and pcless scenes", async () => {
   (api.availableGreetings as any).mockResolvedValue(
     [{ id: "cabal", name: "Cabal", available: true, reasons: [], unlocked: false, pcless: true }]);

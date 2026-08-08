@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { SceneConfirmForm } from "./SceneConfirmForm";
 import { SceneIdeaPicker } from "./SceneIdeaPicker";
 import type { SceneDraft } from "./sceneDraft";
+import { useSceneSuggestions } from "./useSceneSuggestions";
 
 /** Mode → pick → confirm → create. Props are unchanged from the
  *  commit-on-click version, so CampaignView's usage is untouched. */
@@ -32,6 +33,22 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
   // orchestrator refuses to close.
   const [writing, setWriting] = useState(false);
 
+  // Lifted out of SceneIdeaPicker (issue #319): that component unmounts the
+  // instant a draft is picked, and again on Back (which clears `draft`
+  // below). While this hook lived inside it, either unmount threw the
+  // in-flight ranking away, and Back's remount re-ran the hook's mount
+  // effect at `rank=true` -- a fresh, expensive, re-shufflable LLM call for
+  // what the user experiences as "go back", discarding the typed direction
+  // with it. Living here, the hook survives both: Back only swaps which pane
+  // is shown. `direction` moves up for the same reason -- it has to survive
+  // the picker unmounting on Back too.
+  const [direction, setDirection] = useState("");
+  // Nothing should fetch before a mode is chosen (unchanged behavior --
+  // SceneIdeaPicker only ever mounted post-mode before this move). Once
+  // `mode` is set it stays set until a `cid` change resets it below, so this
+  // only ever toggles the hook's `ready` from false to true, never back.
+  const suggestionsState = useSceneSuggestions(cid, afterSid, ready && mode !== null, mode === "offscreen");
+
   // CampaignView reuses this component across a `cid` navigation -- it stays
   // mounted, `chooserOpen` is untouched by the switch, so without an explicit
   // reset a draft picked in campaign A survives into campaign B and Create
@@ -48,6 +65,14 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
     setDraft(null);
     setNotice(null);
     setDraftGen((n) => n + 1);
+    // Direction now lives here rather than inside SceneIdeaPicker, so it no
+    // longer resets for free when the picker unmounts on a `mode` reset --
+    // a campaign switch must not leave campaign A's typed steer sitting in
+    // campaign B's box. (`suggestionsState` itself needs no explicit reset:
+    // `mode` going back to null drops the hook's `ready` argument to false,
+    // and `cid` changing gives `run` a new identity, so the mount effect
+    // re-fires and fetches fresh once a mode is chosen again.)
+    setDirection("");
   }
 
   useEffect(() => {
@@ -82,6 +107,8 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
         ) : draft === null ? (
           <SceneIdeaPicker cid={cid} afterSid={afterSid} ready={ready}
                            pcless={mode === "offscreen"}
+                           direction={direction} onDirectionChange={setDirection}
+                           {...suggestionsState}
                            onPicked={(d, warning) => {
                              setDraft(d); setNotice(warning ?? null);
                              setDraftGen((n) => n + 1);
