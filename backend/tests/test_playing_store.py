@@ -93,6 +93,23 @@ def test_start_from_greeting_expands_roll_macro(monkeypatch, tmp_path):
     assert 1 <= n <= 20
 
 
+def test_start_from_greeting_expands_date_macro_against_a_prior_datetime(monkeypatch, tmp_path):
+    """The confirm pane sets the scene's date BEFORE calling start_from_greeting
+    specifically so {{date}} in the greeting body expands against a real value
+    instead of the empty one a dateless scene would leave. Pin the payoff, not
+    just the call order: a greeting body containing {{date}} must expand
+    against the date the scene was given before seeding."""
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Seraphine", "default", characters.blank_card("Seraphine"))
+    g = greetings.create_greeting(wroot, "Open", "seraphine", "default", body="It is {{date}}.")
+    cid, sid = _campaign_after_seed(wid)
+    sid = scenes.set_datetime(cid, sid, "2026-06-29")["id"]
+    sid = playing.start_from_greeting(cid, sid, g)
+    content = scenes.read_scene(cid, sid)["messages"][0]["content"]
+    assert content == "It is 29 June 2026."
+
+
 def test_start_from_greeting_casts_all_present(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
