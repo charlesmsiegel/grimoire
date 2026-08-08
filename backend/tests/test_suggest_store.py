@@ -19,6 +19,18 @@ def _char(root, name, birthdate=""):
     return cid_
 
 
+def _campaign_with_player_character(monkeypatch, tmp_path):
+    # a `characters`-kind actor seated with role="player" -- what CastPanel's
+    # role selector allows, and the exact case the offscreen filter must catch.
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    mara = _char(wroot, "Mara")
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "One")
+    appearances.appear(cid, sid, "characters", mara, "main", "player")
+    return cid
+
+
 def test_build_snapshot_classifies_cast_and_annotates_threads(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
@@ -166,6 +178,27 @@ def test_build_snapshot_dedupes_cast(monkeypatch, tmp_path):
     tokens = [c["token"] for c in cast]
     assert tokens.count(f"characters:{hero}") == 1                    # listed once, not duplicated
     assert next(c for c in cast if c["token"] == f"characters:{hero}")["role"] == "player"
+
+
+def test_offscreen_rejects_a_player_seated_as_a_character(monkeypatch, tmp_path):
+    """CastPanel's role selector lets a `characters` actor be a player. An
+    offscreen scene is defined by the player's absence, whatever kind seats
+    them."""
+    cid = _campaign_with_player_character(monkeypatch, tmp_path)   # seats characters:mara as role=player
+    reply = '{"suggestions": [{"title": "T", "premise": "P", "cast": ["characters:mara"], "location": ""}]}'
+    assert suggest.parse_output(reply, cid, offscreen=True)[0]["cast"] == []
+    snap = suggest.build_snapshot(cid, offscreen=True)
+    assert "characters:mara" not in {c["token"] for c in snap["cast"]}
+
+
+def test_pc_scene_still_accepts_that_same_player(monkeypatch, tmp_path):
+    """The offscreen clause must stay guarded: without the guard it would
+    reject players from ordinary PC scenes too."""
+    cid = _campaign_with_player_character(monkeypatch, tmp_path)
+    reply = '{"suggestions": [{"title": "T", "premise": "P", "cast": ["characters:mara"], "location": ""}]}'
+    assert suggest.parse_output(reply, cid, offscreen=False)[0]["cast"] == ["characters:mara"]
+    snap = suggest.build_snapshot(cid, offscreen=False)
+    assert "characters:mara" in {c["token"] for c in snap["cast"]}
 
 
 # ---- greeting ranking (folded into the suggestions call) ----
