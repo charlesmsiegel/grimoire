@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from grimoire.store import appearances as ap
@@ -463,3 +465,126 @@ def test_played_mark_still_refuses_while_a_scene_stamps_it(monkeypatch, tmp_path
     playing.start_from_greeting(cid, sid, g)
     with pytest.raises(playing.PlayError):
         playing.mark_greeting(cid, g, "none")
+
+
+def test_concurrent_starts_of_the_same_greeting_only_one_wins(monkeypatch, tmp_path):
+    """#318 made a played greeting unavailable and a replay raise, which
+    raised the cost of a pre-existing gap: `start_from_greeting` checked
+    availability and later read-modify-wrote `played.json` with nothing
+    locking the two together, so two concurrent starts of the same
+    never-before-played greeting could both pass the guard and both report
+    success -- this is the race `store.playing` joining the lock domain
+    closes.
+
+    A `threading.Barrier` forces both threads past the unlocked availability
+    check and the scene stamp, releasing them into `expand_macros`
+    (deliberately unlocked -- it resolves the campaign's calendar provider,
+    user-authored code) at the same instant, so both reach the locked
+    recheck-and-mark as genuine racers on every run rather than by
+    scheduling luck. The greeting casts no character: two threads racing to
+    materialize the *same* actor into the campaign is a real gap of its own
+    (`store.appearances` is still `UNREVIEWED`), but it is not the gap this
+    test is for, so it is avoided rather than incidentally exercised.
+    """
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    g = greetings.create_greeting(wroot, "A", "", "", body="A.")
+    cid, sid_a = _campaign_after_seed(wid)
+    sid_b = scenes.create_scene(cid, "Second")
+
+    barrier = threading.Barrier(2)
+    real_expand = playing.context_macros.expand_macros
+
+    def _synced_expand(*a, **k):
+        barrier.wait(timeout=5)
+        return real_expand(*a, **k)
+
+    monkeypatch.setattr(playing.context_macros, "expand_macros", _synced_expand)
+
+    results: dict[str, object] = {}
+
+    def worker(name, sid):
+        try:
+            results[name] = playing.start_from_greeting(cid, sid, g)
+        except playing.PlayError as exc:
+            results[name] = exc
+
+    t1 = threading.Thread(target=worker, args=("a", sid_a))
+    t2 = threading.Thread(target=worker, args=("b", sid_b))
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+    assert not t1.is_alive() and not t2.is_alive(), "a worker thread never finished"
+
+    outcomes = [results["a"], results["b"]]
+    successes = [o for o in outcomes if isinstance(o, str)]
+    failures = [o for o in outcomes if isinstance(o, playing.PlayError)]
+    assert len(successes) == 1, outcomes
+    assert len(failures) == 1, outcomes
+    assert "not available" in str(failures[0])
+    assert playing.read_played(cid) == {g}
+
+
+def _lock_is_free(cid) -> bool:
+    """Whether some *other* thread could take the campaign lock right now.
+
+    Probing from this thread would prove nothing: the lock is reentrant, so a
+    holder's own `acquire` always succeeds. Mirrors the helper of the same
+    name in `test_locks_store.py` -- kept local rather than imported so this
+    file's races don't reach into that module's private test scaffolding.
+    """
+    seen = []
+
+    def probe():
+        lock = playing.locks.campaign_lock(cid)
+        got = lock.acquire(timeout=0.3)
+        seen.append(got)
+        if got:
+            lock.release()
+
+    t = threading.Thread(target=probe)
+    t.start()
+    t.join(timeout=5)
+    assert not t.is_alive(), "the probe never finished"
+    return seen[0]
+
+
+def test_mark_greeting_none_holds_the_lock_across_its_scan(monkeypatch, tmp_path):
+    """`mark_greeting("none")` scans every scene for one stamping `gid`
+    before clearing an orphaned mark -- #318's accepted risk named this scan
+    as a TOCTOU: it can find nothing and clear the mark while a concurrent
+    `start_from_greeting` is mid-flight, about to stamp a scene with the
+    same `gid`. `stamp_greeting` (what a concurrent start does at that
+    point) takes the campaign lock itself (`scenes._serialized`), so the fix
+    only holds if `mark_greeting`'s lock spans the WHOLE scan-then-write,
+    not just the final write -- a lock taken only around `_write_marks`
+    would still let a stamp land between the scan and that write.
+
+    Proven directly, the same way `test_locks_store.
+    test_calendar_plugin_code_never_runs_under_the_campaign_lock` proves the
+    opposite (that a lock is NOT held across a call): probe whether another
+    thread can take the lock at the exact moment the scan runs.
+    """
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "S", "default", characters.blank_card("S"))
+    g = greetings.create_greeting(wroot, "A", "s", "default", body="A.")
+    cid, sid = _campaign_after_seed(wid)
+    sid = playing.start_from_greeting(cid, sid, g)
+    scenes.delete_scene(cid, sid)   # orphan the mark, as in the recovery test
+
+    free = []
+    real_list_scenes = playing.scenes_read.list_scenes
+
+    def _watched(*a, **k):
+        free.append(_lock_is_free(cid))
+        return real_list_scenes(*a, **k)
+
+    monkeypatch.setattr(playing.scenes_read, "list_scenes", _watched)
+
+    playing.mark_greeting(cid, g, "none")
+
+    assert free, "the scan never ran -- the test proves nothing"
+    assert not any(free), "a concurrent writer was not excluded during the scan"
+    assert g not in playing.read_played(cid)  # the clear itself still went through
