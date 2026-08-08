@@ -17,7 +17,7 @@ from ..llm import LLMClient
 from ..llm_errors import LLMError
 from .common import (computes_only, _bounded_call, _campaign_root_or_404, _content_fields,
                      _dump, _require_connection, _response_body, get_llm,
-                     _serve_image, _write_response)
+                     _serve_image, _serve_image_file, _write_response)
 from .models import (AvatarFocus, CalendarConfig, CampaignClimate, CopyFromGreeting,
                      DefaultVersion, GroupStateSave, NameBody, NewCampaign, PCCreate,
                      PCUpdate, PersonaVersionCreate, PersonaVersionUpdate, PickBody,
@@ -105,6 +105,7 @@ def get_campaigns():
         # newest if the sort key can be trusted. The list is already in memory
         # for the count; validating it costs a strptime per scene.
         out.append({**c, "scenes": len(scene_list),
+                    "cover": store.covers.cover_version(c["id"]),
                     "last_scene": scene_list[0]["title"] if scene_list else "",
                     "activity": store.campaigns.best_stamp(
                         c["updated"], store.campaigns.read_activity(c["id"]),
@@ -171,6 +172,9 @@ def get_campaign(cid: str):
     # embedded so the frontend needn't chain a world fetch after this one
     wid = out["meta"].get("world", "")
     out["meta"]["world_name"] = store.worlds.world_name(wid) or wid
+    # Derived, like world_name above -- nothing about the cover is written into
+    # campaign.md, whose unlocked read-modify-writers would race it.
+    out["meta"]["cover"] = store.covers.cover_version(cid)
     return out
 
 
@@ -222,6 +226,50 @@ def export_campaign_json(cid: str):
         raise HTTPException(status_code=404, detail="campaign not found")
     return Response(content=blob, media_type="application/json",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+# ---- the campaign's cover image (store/covers.py) --------------------------
+# Declared here, in `campaigns`, which `routes/__init__` includes BEFORE
+# `entities` -- `/campaigns/{cid}/{kind}` would otherwise capture `cover`.
+@router.get("/campaigns/{cid}/cover")
+def get_campaign_cover(cid: str, request: Request):
+    _campaign_root_or_404(cid)
+    p = store.covers.cover_path(cid)
+    if p is None:
+        raise HTTPException(status_code=404, detail="cover not found")
+    return _serve_image_file(p, request)
+
+
+@router.put("/campaigns/{cid}/cover")
+async def put_campaign_cover(cid: str, file: UploadFile = File(...)):
+    _campaign_root_or_404(cid)
+    data = await file.read()
+    try:
+        store.covers.validate(data)
+    except store.covers.CoverTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc))
+    except store.covers.CoverInvalid as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    fn = file.filename or ""
+    ext = fn.rsplit(".", 1)[-1] if "." in fn else ""
+    try:
+        stored = store.covers.put_cover(cid, data, ext)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ext": stored, "v": store.covers.cover_version(cid)}
+
+
+@router.delete("/campaigns/{cid}/cover")
+def delete_campaign_cover(cid: str):
+    _campaign_root_or_404(cid)
+    try:
+        store.covers.delete_cover(cid)
+    except OSError:
+        # `delete_cover` confirms the removal rather than swallowing a failed
+        # unlink, so this is a cover that is genuinely still there -- a held
+        # file on Windows, a read-only store. Reporting 200 would be a lie.
+        raise HTTPException(status_code=500, detail="cover could not be removed")
+    return {"ok": True}
 
 
 @router.put("/campaigns/{cid}")

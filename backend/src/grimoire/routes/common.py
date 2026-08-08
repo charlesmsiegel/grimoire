@@ -9,6 +9,7 @@ always safe to import from one.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
@@ -211,11 +212,28 @@ def _serve_image(root, cid: str, vid: str, name: str, base: str = "characters",
     p = store.assets.image_path(root, cid, vid, name, base)
     if p is None:
         raise HTTPException(status_code=404, detail="image not found")
-    # Bare URLs are no-cache: promotions swap file contents under stable URLs,
-    # so the browser must revalidate — with an ETag that's a 304, not a re-download.
-    # A `?v=` URL (built from list responses' version tokens) names one exact
-    # content state, so it caches immutable: zero requests on later renders.
-    st = p.stat()
+    return _serve_image_file(p, request)
+
+
+def _serve_image_file(p: Path, request: Request | None = None) -> Response:
+    """Serve one image file with the app's caching contract.
+
+    Bare URLs are no-cache: promotions swap file contents under stable URLs,
+    so the browser must revalidate — with an ETag that's a 304, not a
+    re-download. A `?v=` URL (built from list responses' version tokens) names
+    one exact content state, so it caches immutable: zero requests on later
+    renders.
+
+    An `OSError` reading the file is a 404, not a 500: an image can be replaced
+    or removed between the caller resolving its path and this reading it, and
+    that is a missing image rather than a server fault. That applies to every
+    image route, not only covers — a deliberate widening, since a 500 was never
+    the right answer for a file that went away mid-request.
+    """
+    try:
+        st = p.stat()
+    except OSError:
+        raise HTTPException(status_code=404, detail="image not found")
     etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
     versioned = request is not None and "v" in request.query_params
     cache = "public, max-age=31536000, immutable" if versioned else "no-cache"
@@ -227,9 +245,18 @@ def _serve_image(root, cid: str, vid: str, name: str, base: str = "characters",
     if request is not None and (w := request.query_params.get("w", "")).isdigit():
         tp = store.thumbs.thumbnail(p, max(16, min(1024, int(w))))
         if tp is not None:
-            return Response(content=tp.read_bytes(), media_type="image/webp", headers=headers)
+            try:
+                thumb = tp.read_bytes()
+            except OSError:
+                thumb = None  # cache entry swept between generation and read
+            if thumb is not None:
+                return Response(content=thumb, media_type="image/webp", headers=headers)
     ext = p.suffix.lstrip(".").lower()
-    return Response(content=p.read_bytes(),
+    try:
+        content = p.read_bytes()
+    except OSError:
+        raise HTTPException(status_code=404, detail="image not found")
+    return Response(content=content,
                     media_type=_IMAGE_MEDIA.get(ext, "application/octet-stream"),
                     headers=headers)
 

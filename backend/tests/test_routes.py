@@ -7,6 +7,7 @@ import json
 import re
 import time
 
+from PIL import Image
 import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
@@ -10731,3 +10732,123 @@ async def test_a_bare_speaker_marker_regenerate_puts_the_old_reply_back(
     assert '"done": true' in frames
     contents = [m["content"] for m in store.scenes.read_scene(cid, sid)["messages"]]
     assert "The tide turns." in contents
+
+
+def _png_bytes(size=(4, 4)) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", size, (10, 20, 30)).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_campaign_cover_round_trip(client):
+    _wid, cid = _campaign(client)
+    url = f"/api/campaigns/{cid}/cover"
+    assert client.get(url).status_code == 404
+
+    data = _png_bytes()
+    r = client.put(url, files={"file": ("c.png", io.BytesIO(data), "image/png")})
+    assert r.status_code == 200
+    assert r.json()["ext"] == "png" and r.json()["v"]
+
+    got = client.get(url)
+    assert got.status_code == 200 and got.content == data
+    assert got.headers["content-type"].startswith("image/png")
+
+    assert client.delete(url).status_code == 200
+    assert client.delete(url).status_code == 200      # idempotent
+    assert client.get(url).status_code == 404
+
+
+def test_campaign_cover_unknown_campaign_is_404(client):
+    url = "/api/campaigns/ghost/cover"
+    assert client.get(url).status_code == 404
+    assert client.delete(url).status_code == 404
+    r = client.put(url, files={"file": ("c.png", io.BytesIO(_png_bytes()), "image/png")})
+    assert r.status_code == 404
+
+
+def test_campaign_cover_rejects_bad_uploads(client):
+    _wid, cid = _campaign(client)
+    url = f"/api/campaigns/{cid}/cover"
+
+    bad_ext = client.put(url, files={"file": ("c.svg", io.BytesIO(b"<svg/>"), "image/svg+xml")})
+    assert bad_ext.status_code == 400
+
+    not_image = client.put(url, files={"file": ("c.png", io.BytesIO(b"nope"), "image/png")})
+    assert not_image.status_code == 400 and not_image.json()["detail"]
+
+    huge = b"\x89PNG" + b"\0" * (25 * 1024 * 1024)
+    too_big = client.put(url, files={"file": ("c.png", io.BytesIO(huge), "image/png")})
+    assert too_big.status_code == 413
+
+    # A flat 8000x8000 PNG is 64 MP and only tens of KB on the wire — the exact
+    # shape the byte cap cannot catch and store.thumbs would try to decode.
+    bomb = io.BytesIO()
+    Image.new("L", (8000, 8000)).save(bomb, "PNG")
+    over = client.put(url, files={"file": ("c.png", io.BytesIO(bomb.getvalue()), "image/png")})
+    assert over.status_code == 400 and "pixels" in over.json()["detail"]
+
+    assert client.get(url).status_code == 404  # nothing was stored
+
+
+def test_record_image_serving_survives_a_vanishing_file(client, monkeypatch):
+    """_serve_image_file turns an OSError into a 404 for EVERY image route,
+    not only covers — a deliberate widening, pinned here."""
+    wid = _world(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    base = f"/api/worlds/{wid}/characters/{chid}/versions/default/images"
+    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    monkeypatch.setattr("pathlib.Path.read_bytes",
+                        lambda self, *a, **k: (_ for _ in ()).throw(OSError("gone")))
+    assert client.get(f"{base}/avatar").status_code == 404
+
+
+def test_campaign_cover_caching_and_thumbnail(client):
+    _wid, cid = _campaign(client)
+    url = f"/api/campaigns/{cid}/cover"
+    client.put(url, files={"file": ("c.png", io.BytesIO(_png_bytes((80, 80))), "image/png")})
+
+    bare = client.get(url)
+    assert bare.headers["cache-control"] == "no-cache" and bare.headers["etag"]
+    again = client.get(url, headers={"If-None-Match": bare.headers["etag"]})
+    assert again.status_code == 304
+
+    versioned = client.get(f"{url}?v=abc")
+    assert "immutable" in versioned.headers["cache-control"]
+
+    thumb = client.get(f"{url}?w=32")
+    assert thumb.status_code == 200 and thumb.headers["content-type"] == "image/webp"
+
+
+def test_campaign_cover_reported_by_campaign_reads(client):
+    _wid, cid = _campaign(client)
+    assert next(c for c in client.get("/api/campaigns").json() if c["id"] == cid)["cover"] == ""
+    assert client.get(f"/api/campaigns/{cid}").json()["meta"]["cover"] == ""
+
+    client.put(f"/api/campaigns/{cid}/cover",
+               files={"file": ("c.png", io.BytesIO(_png_bytes()), "image/png")})
+
+    row = next(c for c in client.get("/api/campaigns").json() if c["id"] == cid)
+    assert row["cover"] and row["cover"] == client.get(f"/api/campaigns/{cid}").json()["meta"]["cover"]
+
+
+def test_campaign_cover_delete_failure_is_a_500_with_a_detail(client, monkeypatch):
+    _wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/cover",
+               files={"file": ("c.png", io.BytesIO(_png_bytes()), "image/png")})
+    monkeypatch.setattr("pathlib.Path.unlink",
+                        lambda self, *a, **k: (_ for _ in ()).throw(OSError("held")))
+    r = client.delete(f"/api/campaigns/{cid}/cover")
+    assert r.status_code == 500 and r.json()["detail"] == "cover could not be removed"
+
+
+def test_campaign_cover_upload_advances_activity(client):
+    """The activity stamp comes from main.py's middleware, which keys on a `cid`
+    path parameter -- this pins that the cover routes still have one."""
+    _wid, cid = _campaign(client)
+    before = next(c for c in client.get("/api/campaigns").json() if c["id"] == cid)["activity"]
+    time.sleep(1.1)  # the stamp has one-second resolution
+    client.put(f"/api/campaigns/{cid}/cover",
+               files={"file": ("c.png", io.BytesIO(_png_bytes()), "image/png")})
+    after = next(c for c in client.get("/api/campaigns").json() if c["id"] == cid)["activity"]
+    assert after > before
