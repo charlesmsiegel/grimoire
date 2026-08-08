@@ -75,12 +75,47 @@ test("a greeting draft applies location and date BEFORE seeding", async () => {
   const onCreated = renderForm(GRT);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await waitFor(() => expect(onCreated).toHaveBeenCalled());
-  const order = (api.setSceneDatetime as any).mock.invocationCallOrder[0];
-  expect(order).toBeLessThan((api.startFromGreeting as any).mock.invocationCallOrder[0]);
+  const seedOrder = (api.startFromGreeting as any).mock.invocationCallOrder[0];
+  const locOrder = (api.setSceneLocation as any).mock.invocationCallOrder[0];
+  const dateOrder = (api.setSceneDatetime as any).mock.invocationCallOrder[0];
+  expect(locOrder).toBeLessThan(seedOrder);
+  expect(dateOrder).toBeLessThan(seedOrder);
   // seeded against the dated scene, and the confirmed title lands after the rename
   expect(api.startFromGreeting).toHaveBeenCalledWith("c", "s9-dated", "reck");
   expect(api.renameScene).toHaveBeenCalledWith("c", "s9-greet", "Reckoning");
   expect(onCreated).toHaveBeenCalledWith("s9-titled", undefined);
+});
+
+test("editing title, date, location, and premise reaches the write sequence", async () => {
+  (api.listEntities as any).mockResolvedValue([
+    { id: "saltmarch", name: "Saltmarch" },
+    { id: "harrow", name: "Harrow" },
+  ]);
+  const onCreated = renderForm(GEN);
+  fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "The reckoning" } });
+  fireEvent.change(screen.getByLabelText("Scene date"), { target: { value: "2026-05-01" } });
+  fireEvent.change(await screen.findByLabelText("Location"), { target: { value: "harrow" } });
+  fireEvent.change(screen.getByLabelText("Premise"), { target: { value: "A stranger returns." } });
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9-dated", "A stranger returns."));
+  expect(api.createScene).toHaveBeenCalledWith("c", "The reckoning", "2026-05-01", false);
+  expect(api.setSceneLocation).toHaveBeenCalledWith("c", "s9", "harrow");
+  expect(api.setSceneDatetime).toHaveBeenCalledWith("c", "s9", "2026-05-01");
+});
+
+test("adding and removing cast members through the picker reaches addCastBatch", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mara", name: "Mara" },
+    { id: "winifred", name: "Winifred" },
+  ]);
+  renderForm(GEN);
+  // GEN starts cast with Mara already seated; remove her, then add Winifred.
+  fireEvent.click(await screen.findByRole("button", { name: "Remove Mara" }));
+  fireEvent.change(screen.getByLabelText("Add to cast"), { target: { value: "characters/winifred" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(api.addCastBatch).toHaveBeenCalledWith(
+    "c", "s9", [{ kind: "characters", id: "winifred" }]));
 });
 
 test("a greeting draft never hands a premise to the panel", async () => {
@@ -126,9 +161,14 @@ test("a date failure keeps the scene and offers Continue", async () => {
 
 test("a startFromGreeting failure deletes the scene", async () => {
   (api.startFromGreeting as any).mockRejectedValue({ detail: "not available" });
-  renderForm(GRT);
+  const onCreated = renderForm(GRT);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
-  await waitFor(() => expect(api.deleteScene).toHaveBeenCalled());
+  // the scene has already been dated (id adopted from setSceneDatetime) by the
+  // time startFromGreeting runs, so the delete must target the DATED id --
+  // deleting the stale pre-date id would leave the real scene orphaned
+  await waitFor(() => expect(api.deleteScene).toHaveBeenCalledWith("c", "s9-dated"));
+  expect(onCreated).not.toHaveBeenCalled();
+  expect(screen.getByText(/not available/)).toBeInTheDocument();
 });
 
 test("an offscreen draft never offers a player, even one seated as a character", async () => {
@@ -136,11 +176,24 @@ test("an offscreen draft never offers a player, even one seated as a character",
                                                  { id: "winifred", name: "Winifred" }]);
   (api.listAppearances as any).mockResolvedValue(
     [{ kind: "characters", id: "mara", version: "default", role: "player", scenes: [] }]);
-  renderForm({ ...GEN, pcless: true, cast: [] } as any);
+  renderForm({ ...GEN, pcless: true, cast: [] });
   await screen.findByLabelText("Add to cast");
   const options = Array.from(screen.getByLabelText("Add to cast").querySelectorAll("option"))
     .map((o) => o.textContent);
   expect(options).not.toContain("Mara");
+  expect(options).toContain("Winifred");
+});
+
+test("an onscreen draft DOES offer a player seated as a character", async () => {
+  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" },
+                                                 { id: "winifred", name: "Winifred" }]);
+  (api.listAppearances as any).mockResolvedValue(
+    [{ kind: "characters", id: "mara", version: "default", role: "player", scenes: [] }]);
+  renderForm({ ...GEN, pcless: false, cast: [] });
+  await screen.findByLabelText("Add to cast");
+  const options = Array.from(screen.getByLabelText("Add to cast").querySelectorAll("option"))
+    .map((o) => o.textContent);
+  expect(options).toContain("Mara");
   expect(options).toContain("Winifred");
 });
 
@@ -197,6 +250,15 @@ test("a startFromGreeting failure still releases onWriting", async () => {
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await waitFor(() => expect(api.deleteScene).toHaveBeenCalled());
   expect(onWriting).toHaveBeenLastCalledWith(false);
+});
+
+test("a cast failure whose own cleanup also fails says so", async () => {
+  (api.addCastBatch as any).mockRejectedValue({ detail: "boom" });
+  (api.deleteScene as any).mockRejectedValue({ detail: "delete blocked" });
+  renderForm(GEN);
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  await screen.findByText(/boom/);
+  expect(screen.getByText(/half-made scene/i)).toBeInTheDocument();
 });
 
 test("a final rename failure keeps the scene", async () => {
