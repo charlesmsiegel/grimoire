@@ -53,6 +53,19 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCreated, onWrit
 
   function setWriting(active: boolean) { setBusy(active); onWriting?.(active); }
 
+  // The cleanup-on-failure paths delete the half-made scene so it doesn't
+  // strand a stray. If the delete itself fails, that stray is now invisible:
+  // the user sees only the original error, presses Create again, and gets a
+  // second scene while the first sits there unlisted-but-real. Say so.
+  async function deleteAndReport(sid: string, msg: string): Promise<string> {
+    try {
+      await api.deleteScene(cid, sid);
+      return msg;
+    } catch {
+      return `${msg} (cleanup also failed -- a half-made scene may be left behind)`;
+    }
+  }
+
   async function create() {
     setWriting(true);
     setError(null);
@@ -72,8 +85,7 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCreated, onWrit
       try {
         await api.addCastBatch(cid, sid, cast.map((c) => ({ kind: c.kind, id: c.id })));
       } catch (err: any) {
-        await api.deleteScene(cid, sid).catch(() => {});
-        setError(errMsg(err));
+        setError(await deleteAndReport(sid, errMsg(err)));
         setWriting(false);
         return;
       }
@@ -100,8 +112,7 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCreated, onWrit
         const r = await api.startFromGreeting(cid, sid, draft.gid);
         sid = r.id;
       } catch (err: any) {
-        await api.deleteScene(cid, sid).catch(() => {});
-        setError(errMsg(err));
+        setError(await deleteAndReport(sid, errMsg(err)));
         setWriting(false);
         return;
       }
