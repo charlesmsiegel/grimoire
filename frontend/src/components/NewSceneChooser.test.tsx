@@ -121,6 +121,36 @@ test("a cid change mid-create-sequence stops further writes and never reports th
   expect(onCreated).not.toHaveBeenCalled();
 });
 
+// Review (Critical): SceneConfirmForm's own `setWriting(false)` calls are all
+// either guarded by `live.current` or sit after an `if (!live.current)
+// return;` -- exactly the checks the mid-write test above relies on to stop
+// further writes. That means NONE of them run once a switch is detected, so
+// `writing` (which lives in NewSceneChooser, not the unmounted form) is never
+// reset by that path at all. Without an explicit reset in the `cid`-change
+// block, `writing` stays stuck `true` forever, and `dismiss()` refuses
+// Escape, the backdrop, and every Cancel button while `writing` is true --
+// for the NEW campaign's freshly reset chooser, not just the abandoned one.
+test("a cid change mid-write does not leave the new campaign's chooser stuck undismissable", async () => {
+  let releaseCreate: (v: any) => void = () => {};
+  (api.createScene as any).mockReturnValue(new Promise((r) => { releaseCreate = r; }));
+  const onClose = vi.fn();
+  const { rerender } = render(
+    <NewSceneChooser cid="a" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByText("Reckoning"));
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(api.createScene).toHaveBeenCalled());
+
+  // the reader switches campaigns while createScene is still in flight
+  rerender(<NewSceneChooser cid="b" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
+
+  // back at campaign b's mode-select step -- Escape must still dismiss it
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(onClose).toHaveBeenCalled();
+
+  await act(async () => { releaseCreate({ id: "s9" }); });
+});
+
 test("offscreen mode asks for pcless greetings and pcless scenes", async () => {
   (api.availableGreetings as any).mockResolvedValue(
     [{ id: "cabal", name: "Cabal", available: true, reasons: [], unlocked: false, pcless: true }]);
