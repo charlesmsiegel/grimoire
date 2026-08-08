@@ -7274,6 +7274,39 @@ def test_scene_suggestions_skip_ranking_at_two_or_fewer(client):
     assert r.json()["greeting_picks"] == []  # nothing was ranked, nothing honored
 
 
+def test_scene_suggestions_rank_false_skips_greeting_picks(client, monkeypatch):
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    # three startable greetings is what normally triggers ranking
+    cid, gids = _campaign_with_greetings(client, 3)
+    seen = {}
+    import grimoire.store.suggest as suggest_mod
+    real = suggest_mod.greeting_candidates
+
+    def _spy(*a, **k):
+        seen["called"] = True
+        return real(*a, **k)
+    monkeypatch.setattr(suggest_mod, "greeting_candidates", _spy)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        '{"suggestions": []}')
+    r = client.post(f"/api/campaigns/{cid}/scene-suggestions?rank=false")
+    assert r.status_code == 200
+    assert r.json()["greeting_picks"] == []
+    assert "called" not in seen
+
+
+def test_scene_suggestions_truncates_an_over_long_direction(client):
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    _wid, cid = _campaign(client)
+    fake = FakeOpenRouterComplete('{"suggestions": []}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = client.post(f"/api/campaigns/{cid}/scene-suggestions",
+                    params={"direction": "x" * 900})
+    assert r.status_code == 200
+    content = fake.messages[1]["content"]
+    assert ("x" * 500) in content
+    assert ("x" * 501) not in content
+
+
 def test_datetime_get_returns_creation_hint_as_suggested(client):
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes",

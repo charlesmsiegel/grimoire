@@ -271,3 +271,29 @@ def test_parse_next_date_validates_and_tolerates_garbage(monkeypatch, tmp_path):
     assert suggest.parse_next_date('{"suggestions": [], "next_date": "soonish"}', cid) == ""
     assert suggest.parse_next_date('{"suggestions": []}', cid) == ""
     assert suggest.parse_next_date("not json", cid) == ""
+
+
+# ---- direction (#316) ----
+def test_direction_reaches_the_prompt():
+    snap = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None,
+            "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
+            "available_locations": []}
+    msgs = suggest.build_prompt(snap, None, direction="something at sea")
+    assert "something at sea" in msgs[1]["content"]
+    assert "Direction" in msgs[0]["content"]      # the instruction addendum
+
+
+def test_no_direction_leaves_the_prompt_as_it_was():
+    snap = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None,
+            "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
+            "available_locations": []}
+    assert suggest.build_prompt(snap, None) == suggest.build_prompt(snap, None, direction="")
+
+
+def test_direction_is_truncated_to_the_limit():
+    snap = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None,
+            "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
+            "available_locations": []}
+    msgs = suggest.build_prompt(snap, None, direction="x" * 900)
+    assert ("x" * suggest.DIRECTION_LIMIT) in msgs[1]["content"]
+    assert ("x" * (suggest.DIRECTION_LIMIT + 1)) not in msgs[1]["content"]

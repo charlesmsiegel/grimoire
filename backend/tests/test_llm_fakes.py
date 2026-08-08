@@ -172,7 +172,7 @@ def _rendered_prompts() -> list[str]:
                                         "dossier/system.j2", "voice_anchor/system.j2",
                                         "voice_drift/system.j2", "tagline/system.j2")] + [
         prompts.render("scene_suggestions/system.j2", offscreen=False, s={"now": ""},
-                       greeting_candidates=[]),
+                       greeting_candidates=[], direction=""),
         prompts.render("scene/sections/response_format.j2", player_names=[]),
     ]
 
