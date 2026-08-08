@@ -1,3 +1,5 @@
+import json
+
 from grimoire.store import (appearances, campaigns, characters, chronicle, entities,
                             plot, scenes, suggest, taglines, worlds)
 
@@ -321,6 +323,18 @@ def test_parse_intent_honors_offscreen(monkeypatch, tmp_path):
     cid = _campaign_with_player_character(monkeypatch, tmp_path)
     reply = '{"title": "T", "date": "", "location": "", "cast": ["characters:mara"]}'
     assert suggest.parse_intent(reply, cid, offscreen=True)["cast"] == []
+
+
+def test_parse_intent_treats_a_non_string_field_as_missing(monkeypatch, tmp_path):
+    # `str(None)` == "None", `str(42)` == "42", `str({...})` == "{...}" -- each
+    # a non-empty string that would otherwise read as real model output (e.g.
+    # the title "None") instead of falling back to blank/BLANK_TITLE and
+    # keeping the empty-intent warning live.
+    cid = _campaign_with_location_and_character(monkeypatch, tmp_path)
+    for bad in (None, 42, {"nested": "object"}):
+        reply = json.dumps({"title": bad, "date": bad, "location": bad, "cast": []})
+        got = suggest.parse_intent(reply, cid)
+        assert got == {"title": "", "date": "", "location": "", "cast": []}, bad
 
 
 # ---- direction (#316) ----

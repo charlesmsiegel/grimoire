@@ -298,6 +298,17 @@ def parse_output(text: str, cid: str, offscreen: bool = False) -> list[dict]:
     return out
 
 
+def _str_field(value) -> str:
+    """A model field that is supposed to be a string. `str(x)` on a non-string
+    (JSON `null`, a number, a nested object) produces a non-empty string like
+    "None"/"42"/"{'a': 1}" that then reads as real model output -- e.g. a
+    `null` title survives as the literal title "None" instead of falling back
+    to blank. Only an actual string is trimmed; anything else counts as
+    missing, the same way `cast`'s entries are validated structurally rather
+    than coerced."""
+    return value.strip() if isinstance(value, str) else ""
+
+
 def parse_intent(reply: str, cid: str, offscreen: bool = False) -> dict:
     """Metadata extracted from the user's own description, every field validated
     against the campaign.
@@ -319,9 +330,9 @@ def parse_intent(reply: str, cid: str, offscreen: bool = False) -> dict:
     cast = ([t for t in (str(x).strip() for x in raw_cast)
              if _token_ok(t, char_ids, player_tokens, offscreen)]
             if isinstance(raw_cast, list) else [])
-    loc = str(parsed.get("location", "")).strip()
-    return {"title": str(parsed.get("title", "")).strip(),
-            "date": _date_normalizer(cid)(str(parsed.get("date", "")).strip()),
+    loc = _str_field(parsed.get("location", ""))
+    return {"title": _str_field(parsed.get("title", "")),
+            "date": _date_normalizer(cid)(_str_field(parsed.get("date", ""))),
             "location": loc if loc in loc_ids else "",
             "cast": cast}
 
