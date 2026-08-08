@@ -100,3 +100,47 @@ test("creating reports the scene and Escape closes while idle", async () => {
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9", undefined));
 });
+
+// A late `onPicked` (the picker's extraction resolves after another draft has
+// already replaced it) must remount SceneConfirmForm with fresh state rather
+// than mutate the mounted instance -- otherwise the pane mixes controls from
+// the stale draft with state seeded from the new one (Important 2). The real
+// UI now also disables the picker's own cards mid-extraction (see
+// SceneIdeaPicker.test.tsx), which closes off the only way this race reaches
+// the app today -- so this test drives the two `onPicked` calls directly
+// through a stand-in picker to prove the `key`-based remount holds regardless.
+test("a late-arriving draft remounts the confirm form instead of mutating it in place", async () => {
+  vi.resetModules();
+  let capturedOnPicked: ((d: any, w?: string) => void) | null = null;
+  vi.doMock("./SceneIdeaPicker", () => ({
+    SceneIdeaPicker: ({ onPicked }: any) => {
+      capturedOnPicked = onPicked;
+      return (
+        <button onClick={() => onPicked({
+          source: "greeting", gid: "reck", title: "Reckoning", defaultTitle: "Reckoning",
+          date: "2026-01-01", location: "", pcless: false,
+        })}>Pick greeting</button>
+      );
+    },
+  }));
+  const { NewSceneChooser: FreshChooser } = await import("./NewSceneChooser");
+  render(<FreshChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByText("Pick greeting"));
+  // now on the confirm form, seeded from the greeting draft
+  expect(await screen.findByLabelText("Title")).toHaveValue("Reckoning");
+  // simulate the extraction resolving late and calling onPicked a second time,
+  // exactly as SceneIdeaPicker's useTyped does after the picker has already
+  // handed off once
+  act(() => {
+    capturedOnPicked!({
+      source: "custom", title: "Fresh title", defaultTitle: "Fresh title",
+      date: "2026-02-02", location: "", pcless: false, premise: "fresh premise", cast: [],
+    });
+  });
+  // remounted with the SECOND draft's own state, not the first draft's state
+  // surviving underneath the second draft's (now custom) controls
+  await waitFor(() => expect(screen.getByLabelText("Title")).toHaveValue("Fresh title"));
+  expect(screen.getByLabelText("Premise")).toHaveValue("fresh premise");
+  vi.doUnmock("./SceneIdeaPicker");
+});
