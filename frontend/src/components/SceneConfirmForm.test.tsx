@@ -184,6 +184,21 @@ test("an offscreen draft never offers a player, even one seated as a character",
   expect(options).toContain("Winifred");
 });
 
+test("a pcless draft excludes a PC that has never appeared, not just ones the roster already flags", async () => {
+  // Elara has no entry in listAppearances at all -- roster() only enumerates
+  // actors that have appeared, so a roster-role filter alone would miss her.
+  (api.listCharacters as any).mockResolvedValue([{ id: "winifred", name: "Winifred" }]);
+  (api.listCampaignPCs as any).mockResolvedValue(
+    [{ id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] }]);
+  (api.listAppearances as any).mockResolvedValue([]);
+  renderForm({ ...GEN, pcless: true, cast: [] });
+  await screen.findByLabelText("Add to cast");
+  const options = Array.from(screen.getByLabelText("Add to cast").querySelectorAll("option"))
+    .map((o) => o.textContent);
+  expect(options).not.toContain("Elara");
+  expect(options).toContain("Winifred");
+});
+
 test("an onscreen draft DOES offer a player seated as a character", async () => {
   (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" },
                                                  { id: "winifred", name: "Winifred" }]);
@@ -252,6 +267,37 @@ test("a startFromGreeting failure still releases onWriting", async () => {
   expect(onWriting).toHaveBeenLastCalledWith(false);
 });
 
+test("a cast member the backend skips is reported rather than silently dropped", async () => {
+  // addCastBatch succeeds overall but reports one ref it could not seat (e.g.
+  // its default version moved since the actor's first appearance) -- that
+  // must not be discarded, or the user is told the cast is complete when it isn't.
+  (api.addCastBatch as any).mockResolvedValue({ ok: true, added: 0, skipped: ["characters/mara"] });
+  const onCreated = renderForm(GEN);
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  expect(await screen.findByText(/not seated.*Mara/i)).toBeInTheDocument();
+  expect(onCreated).not.toHaveBeenCalled();
+  expect(api.deleteScene).not.toHaveBeenCalled();   // skipped != failed: the scene is kept, like any soft failure
+  fireEvent.click(screen.getByRole("button", { name: /continue to scene/i }));
+  expect(onCreated).toHaveBeenCalledWith("s9-dated", "A debt-collector arrives.");
+});
+
+test("Cancel closes the whole chooser without writing", async () => {
+  const onCancel = vi.fn();
+  render(<SceneConfirmForm cid="c" draft={GEN} onBack={() => {}} onCancel={onCancel} onCreated={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: /^cancel$/i }));
+  expect(onCancel).toHaveBeenCalledTimes(1);
+  expect(api.createScene).not.toHaveBeenCalled();
+});
+
+test("Cancel is disabled while the create sequence is writing, like Back", async () => {
+  let release: (v: any) => void = () => {};
+  (api.createScene as any).mockReturnValue(new Promise((r) => { release = r; }));
+  render(<SceneConfirmForm cid="c" draft={GEN} onBack={() => {}} onCancel={() => {}} onCreated={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  expect(screen.getByRole("button", { name: /^cancel$/i })).toBeDisabled();
+  await act(async () => { release({ id: "s9" }); });
+});
+
 test("a cast failure whose own cleanup also fails says so", async () => {
   (api.addCastBatch as any).mockRejectedValue({ detail: "boom" });
   (api.deleteScene as any).mockRejectedValue({ detail: "delete blocked" });
@@ -263,9 +309,12 @@ test("a cast failure whose own cleanup also fails says so", async () => {
 
 test("a final rename failure keeps the scene", async () => {
   (api.renameScene as any).mockRejectedValue({ detail: "locked" });
-  renderForm(GRT);
+  const onCreated = renderForm(GRT);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await screen.findByText(/locked/);
   expect(api.deleteScene).not.toHaveBeenCalled();
-  expect(screen.getByRole("button", { name: /continue to scene/i })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /continue to scene/i }));
+  // the greeting path's own id (from startFromGreeting), not the pre-rename
+  // scene id -- the rename failure happens AFTER seeding adopted it
+  expect(onCreated).toHaveBeenCalledWith("s9-greet", undefined);
 });

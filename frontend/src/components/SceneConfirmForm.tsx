@@ -5,12 +5,15 @@ import { CalendarDatePicker } from "./CalendarDatePicker";
 import { errMsg } from "./errMsg";
 import type { DraftCast, SceneDraft } from "./sceneDraft";
 
-export function SceneConfirmForm({ cid, draft, notice, onBack, onCreated, onWriting }: {
+export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreated, onWriting }: {
   cid: string;
   draft: SceneDraft;
   /** a warning raised while the draft was built, e.g. a failed extraction */
   notice?: string | null;
   onBack: () => void;
+  /** closes the whole chooser, distinct from onBack (which only returns to the
+   *  picker). Optional so tests that don't care about it need not pass one. */
+  onCancel?: () => void;
   onCreated: (sid: string, initialPrompt?: string) => void;
   /** reports the create sequence in and out of flight, so the orchestrator can
    *  refuse to dismiss mid-write: unmounting cancels nothing. */
@@ -48,7 +51,10 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCreated, onWrit
   const addable: DraftCast[] = [
     ...chars.map((c) => ({ kind: "characters" as const, id: c.id, name: c.name })),
     ...pcs.map((p) => ({ kind: "pcs" as const, id: p.id, name: p.name })),
-  ].filter((o) => !(draft.pcless && playerTokens.has(`${o.kind}/${o.id}`)))
+  // A campaign PC that hasn't appeared yet is absent from the roster, so
+  // `playerTokens` alone would miss it: a pcless draft must exclude every PC
+  // by kind, not just the ones the roster already knows are players.
+  ].filter((o) => !(draft.pcless && (o.kind === "pcs" || playerTokens.has(`${o.kind}/${o.id}`))))
    .filter((o) => !cast.some((c) => c.kind === o.kind && c.id === o.id));
 
   function setWriting(active: boolean) { setBusy(active); onWriting?.(active); }
@@ -81,9 +87,17 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCreated, onWrit
       return;
     }
     // 2. cast — the last step for which deleting the scene is still clean
+    const soft: string[] = [];
     if (draft.source !== "greeting" && cast.length) {
       try {
-        await api.addCastBatch(cid, sid, cast.map((c) => ({ kind: c.kind, id: c.id })));
+        const r = await api.addCastBatch(cid, sid, cast.map((c) => ({ kind: c.kind, id: c.id })));
+        // A chip the user explicitly added can still be skipped server-side
+        // (e.g. its default version moved since the actor's first appearance)
+        // -- say so rather than handing off as though the cast were complete.
+        if (r.skipped.length) {
+          const names = r.skipped.map((ref) => cast.find((c) => `${c.kind}/${c.id}` === ref)?.name ?? ref);
+          soft.push(`not seated: ${names.join(", ")}`);
+        }
       } catch (err: any) {
         setError(await deleteAndReport(sid, errMsg(err)));
         setWriting(false);
@@ -94,7 +108,6 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCreated, onWrit
     //      greeting body through expand_macros, which resolves {{date}} from
     //      the scene's CURRENT moment. Seeding first dates it against nothing.
     //      Neither failure deletes: each is one independent piece of metadata.
-    const soft: string[] = [];
     if (location) {
       try { await api.setSceneLocation(cid, sid, location); }
       catch (err: any) { soft.push(errMsg(err)); }
@@ -194,6 +207,7 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCreated, onWrit
         ) : (
           <>
             <button className="subtle" disabled={busy} onClick={onBack}>← Back</button>
+            {onCancel && <button className="subtle" disabled={busy} onClick={onCancel}>Cancel</button>}
             <button className="primary" disabled={busy} onClick={create}>
               {busy ? "…" : "Create scene"}
             </button>
