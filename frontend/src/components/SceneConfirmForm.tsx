@@ -25,6 +25,11 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
   const [cast, setCast] = useState<DraftCast[]>(draft.source === "greeting" ? [] : draft.cast);
   const [premise, setPremise] = useState(draft.source === "greeting" ? "" : draft.premise);
   const [locations, setLocations] = useState<EntitySummary[]>([]);
+  // Tracks the locations read specifically (not chars/pcs/roster): the
+  // controlled <select> can only ever offer what has loaded, so a location
+  // this pane hasn't shown yet must not be able to reach setSceneLocation.
+  const [locationsLoading, setLocationsLoading] = useState(true);
+  const [locationsNotice, setLocationsNotice] = useState<string | null>(null);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [pcs, setPCs] = useState<PCSummary[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
@@ -36,7 +41,24 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
   const [salvaged, setSalvaged] = useState<string | null>(null);
 
   useEffect(() => {
-    api.listEntities({ kind: "campaign", id: cid }, "locations").then(setLocations).catch(() => setLocations([]));
+    setLocationsLoading(true);
+    setLocationsNotice(null);
+    api.listEntities({ kind: "campaign", id: cid }, "locations")
+      .then((ls) => { setLocations(ls); setLocationsLoading(false); })
+      .catch(() => {
+        // Two choices here: leave Create disabled forever (locationsLoading
+        // never settling) or drop the unresolved location and say why. The
+        // first strands the user with no way forward; the second keeps the
+        // form usable and still guarantees nothing the user never saw reaches
+        // setSceneLocation. `location` is only cleared when it was actually
+        // non-empty, so a draft with no location stays silent.
+        setLocations([]);
+        setLocationsLoading(false);
+        setLocation((prev) => {
+          if (prev) setLocationsNotice("Locations failed to load — the pre-filled location was cleared.");
+          return "";
+        });
+      });
     api.listCharacters({ kind: "campaign", id: cid }).then(setChars).catch(() => setChars([]));
     api.listCampaignPCs(cid).then(setPCs).catch(() => setPCs([]));
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
@@ -56,6 +78,13 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
   // by kind, not just the ones the roster already knows are players.
   ].filter((o) => !(draft.pcless && (o.kind === "pcs" || playerTokens.has(`${o.kind}/${o.id}`))))
    .filter((o) => !cast.some((c) => c.kind === o.kind && c.id === o.id));
+
+  // Once Create has read the fields (create() closes over that render's
+  // values) or the scene already exists with a soft failure (Continue can't
+  // save further edits -- there's nothing left for them to reach), every
+  // field goes read-only so what's displayed always matches what will be
+  // persisted or handed off.
+  const locked = busy || !!salvaged;
 
   function setWriting(active: boolean) { setBusy(active); onWriting?.(active); }
 
@@ -90,7 +119,18 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
     const soft: string[] = [];
     if (draft.source !== "greeting" && cast.length) {
       try {
-        const r = await api.addCastBatch(cid, sid, cast.map((c) => ({ kind: c.kind, id: c.id })));
+        // A `characters`-kind actor can be the player themselves (CastPanel's
+        // role selector allows it, and the roster's roles are how this pane
+        // already knows to keep such a token in an onscreen pcless filter --
+        // see `playerTokens` above). _seat_cast_member defaults an omitted
+        // role to "npc"; for a roster-known player that default fights the
+        // campaign-locked "player" role and appear() rejects the seat as
+        // though the user's explicit pick were skipped. Carry the role the
+        // roster already told us rather than let the backend guess.
+        const r = await api.addCastBatch(cid, sid, cast.map((c) => ({
+          kind: c.kind, id: c.id,
+          ...(c.kind === "characters" && playerTokens.has(`${c.kind}/${c.id}`) ? { role: "player" } : {}),
+        })));
         // A chip the user explicitly added can still be skipped server-side
         // (e.g. its default version moved since the actor's first appearance)
         // -- say so rather than handing off as though the cast were complete.
@@ -145,18 +185,19 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
 
   return (
     <>
-      {(error ?? notice) && <div className="banner">{error ?? notice}</div>}
+      {(error ?? notice ?? locationsNotice) && <div className="banner">{error ?? notice ?? locationsNotice}</div>}
 
       <label className="role" htmlFor="confirm-title">Title</label>
-      <input id="confirm-title" aria-label="Title" type="text" value={title}
+      <input id="confirm-title" aria-label="Title" type="text" value={title} disabled={locked}
              onChange={(e) => setTitle(e.target.value)} />
 
       <div className="role">When</div>
-      <CalendarDatePicker scope={{ kind: "campaign", id: cid }} value={date}
+      <CalendarDatePicker scope={{ kind: "campaign", id: cid }} value={date} disabled={locked}
                           onChange={setDate} ariaLabel="Scene date" />
 
       <div className="role">Where</div>
-      <select aria-label="Location" value={location} onChange={(e) => setLocation(e.target.value)}>
+      <select aria-label="Location" value={location} disabled={locked}
+              onChange={(e) => setLocation(e.target.value)}>
         <option value="">— no location —</option>
         {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
       </select>
@@ -172,19 +213,19 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
           {cast.map((c) => (
             <span className="chip on" key={`${c.kind}/${c.id}`}>
               {c.name}
-              <button className="subtle" aria-label={`Remove ${c.name}`}
+              <button className="subtle" aria-label={`Remove ${c.name}`} disabled={locked}
                       onClick={() => setCast(cast.filter((x) => !(x.kind === c.kind && x.id === c.id)))}>×</button>
             </span>
           ))}
           <div className="picker">
-            <select aria-label="Add to cast" value={addId}
+            <select aria-label="Add to cast" value={addId} disabled={locked}
                     onChange={(e) => setAddId(e.target.value)}>
               <option value="">— pick —</option>
               {addable.map((o) => (
                 <option key={`${o.kind}/${o.id}`} value={`${o.kind}/${o.id}`}>{o.name}</option>
               ))}
             </select>
-            <button className="primary" disabled={!addId} onClick={() => {
+            <button className="primary" disabled={!addId || locked} onClick={() => {
               const found = addable.find((o) => `${o.kind}/${o.id}` === addId);
               if (found) setCast([...cast, found]);
               setAddId("");
@@ -192,7 +233,7 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
           </div>
 
           <label className="role" htmlFor="confirm-premise">Premise</label>
-          <textarea id="confirm-premise" aria-label="Premise" rows={3} value={premise}
+          <textarea id="confirm-premise" aria-label="Premise" rows={3} value={premise} disabled={locked}
                     onChange={(e) => setPremise(e.target.value)} />
           <div className="field-hint">Seeds the opener box once the scene exists.</div>
         </>
@@ -208,7 +249,7 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
           <>
             <button className="subtle" disabled={busy} onClick={onBack}>← Back</button>
             {onCancel && <button className="subtle" disabled={busy} onClick={onCancel}>Cancel</button>}
-            <button className="primary" disabled={busy} onClick={create}>
+            <button className="primary" disabled={busy || locationsLoading} onClick={create}>
               {busy ? "…" : "Create scene"}
             </button>
           </>

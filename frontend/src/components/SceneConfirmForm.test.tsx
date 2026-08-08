@@ -11,8 +11,8 @@ vi.mock("../api/client", () => ({
   },
 }));
 vi.mock("./CalendarDatePicker", () => ({
-  CalendarDatePicker: ({ value, onChange, ariaLabel }: any) =>
-    <input aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)} />,
+  CalendarDatePicker: ({ value, onChange, ariaLabel, disabled }: any) =>
+    <input aria-label={ariaLabel} value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)} />,
 }));
 import { api } from "../api/client";
 
@@ -317,4 +317,66 @@ test("a final rename failure keeps the scene", async () => {
   // the greeting path's own id (from startFromGreeting), not the pre-rename
   // scene id -- the rename failure happens AFTER seeding adopted it
   expect(onCreated).toHaveBeenCalledWith("s9-greet", undefined);
+});
+
+// ---- Finding 2 (PR #318 review): a pending/failed locations read must not
+// let a location the user never saw reach setSceneLocation ----
+test("a pending locations read blocks Create scene", async () => {
+  (api.listEntities as any).mockReturnValue(new Promise(() => {}));   // never resolves
+  renderForm(GEN);
+  await screen.findByDisplayValue("The creditor");
+  expect(screen.getByRole("button", { name: /create scene/i })).toBeDisabled();
+});
+
+test("a failed locations read clears an unresolved location rather than sending it unseen", async () => {
+  (api.listEntities as any).mockRejectedValue({ detail: "boom" });
+  const onCreated = renderForm(GEN);   // GEN.location = "saltmarch"
+  await screen.findByDisplayValue("The creditor");
+  await waitFor(() => expect(screen.getByRole("button", { name: /create scene/i })).not.toBeDisabled());
+  expect(screen.getByText(/pre-filled location was cleared/i)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalled());
+  // "saltmarch" was never shown in the (empty) <select>, so it must never reach the API
+  expect(api.setSceneLocation).not.toHaveBeenCalled();
+});
+
+// ---- Finding 3 (PR #318 review): fields must not stay editable once
+// create() has captured the render's values, or once a soft failure means
+// Continue can no longer save anything typed afterward ----
+test("fields are disabled while the create sequence is writing", async () => {
+  let release: (v: any) => void = () => {};
+  (api.createScene as any).mockReturnValue(new Promise((r) => { release = r; }));
+  renderForm(GEN);
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  expect(screen.getByLabelText("Title")).toBeDisabled();
+  expect(screen.getByLabelText("Scene date")).toBeDisabled();
+  expect(screen.getByLabelText("Location")).toBeDisabled();
+  expect(screen.getByLabelText("Premise")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Remove Mara" })).toBeDisabled();
+  expect(screen.getByLabelText("Add to cast")).toBeDisabled();
+  await act(async () => { release({ id: "s9" }); });
+});
+
+test("fields stay disabled after a soft failure, since Continue cannot save further edits", async () => {
+  (api.setSceneLocation as any).mockRejectedValue({ detail: "gone" });
+  renderForm(GEN);
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  await screen.findByText(/gone/);
+  expect(screen.getByLabelText("Title")).toBeDisabled();
+  expect(screen.getByLabelText("Scene date")).toBeDisabled();
+  expect(screen.getByLabelText("Location")).toBeDisabled();
+  expect(screen.getByLabelText("Premise")).toBeDisabled();
+});
+
+// ---- Finding 5 (PR #318 review): a characters-kind actor who is the
+// campaign's player must be seated with role "player", not defaulted to
+// "npc" by the backend and then rejected by the campaign's locked role ----
+test("a character-kind player is seated with role player, not left to the backend's npc default", async () => {
+  (api.listAppearances as any).mockResolvedValue(
+    [{ kind: "characters", id: "mara", version: "default", role: "player", scenes: [] }]);
+  renderForm(GEN);   // GEN's cast already seats Mara as a `characters` actor
+  await screen.findByLabelText("Add to cast");   // roster (and so playerTokens) has settled
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(api.addCastBatch).toHaveBeenCalledWith(
+    "c", "s9", [{ kind: "characters", id: "mara", role: "player" }]));
 });
