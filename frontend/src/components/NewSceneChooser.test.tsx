@@ -101,6 +101,34 @@ test("creating reports the scene and Escape closes while idle", async () => {
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9", undefined));
 });
 
+// CampaignView reuses this component across a `cid` navigation instead of
+// remounting it (Finding 1, PR #318 review): without an explicit reset, a
+// draft picked in campaign A would still be showing -- and creatable --
+// once the prop moves to campaign B.
+test("changing cid discards the draft and returns to the mode step", async () => {
+  (api.availableGreetings as any).mockImplementation((cid: string) =>
+    Promise.resolve(cid === "a"
+      ? [{ id: "reck", name: "Reckoning", available: true, reasons: [], unlocked: true }]
+      : [{ id: "vow", name: "Vow of silence", available: true, reasons: [], unlocked: true }]));
+  const { rerender } = render(
+    <NewSceneChooser cid="a" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByText("Reckoning"));
+  await screen.findByRole("button", { name: /create scene/i });   // confirm form open on campaign a's draft
+
+  rerender(<NewSceneChooser cid="b" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  // back at the mode step -- campaign a's draft (and its "Create scene" form) is gone
+  expect(screen.getByText("With your PC")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /create scene/i })).toBeNull();
+
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByText("Vow of silence"));
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  // the create call carries campaign b's own draft, not a's
+  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("b", "Vow of silence", expect.anything(), false));
+  expect(api.createScene).not.toHaveBeenCalledWith("b", "Reckoning", expect.anything(), expect.anything());
+});
+
 // A late `onPicked` (the picker's extraction resolves after another draft has
 // already replaced it) must remount SceneConfirmForm with fresh state rather
 // than mutate the mounted instance -- otherwise the pane mixes controls from
