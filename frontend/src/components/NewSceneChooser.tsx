@@ -32,6 +32,24 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
   // orchestrator refuses to close.
   const [writing, setWriting] = useState(false);
 
+  // CampaignView reuses this component across a `cid` navigation -- it stays
+  // mounted, `chooserOpen` is untouched by the switch, so without an explicit
+  // reset a draft picked in campaign A survives into campaign B and Create
+  // would send A's title/location/cast/greeting id there. Adjusting state
+  // during render (the documented React pattern for "reset state when a prop
+  // changes") means the stale draft never gets a chance to paint against the
+  // new cid, unlike resetting from an effect. `draftGen` only ever moves
+  // forward here, same as `onPicked` already does -- never fed a fixed value
+  // that could later collide with a key SceneConfirmForm has already used.
+  const [seenCid, setSeenCid] = useState(cid);
+  if (cid !== seenCid) {
+    setSeenCid(cid);
+    setMode(null);
+    setDraft(null);
+    setNotice(null);
+    setDraftGen((n) => n + 1);
+  }
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !writing) onClose(); };
     window.addEventListener("keydown", onKey);
