@@ -15,6 +15,13 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
   // scene mode is picked first; nothing is fetched until then
   const [mode, setMode] = useState<"pc" | "offscreen" | null>(null);
   const [draft, setDraft] = useState<SceneDraft | null>(null);
+  // Bumped every time a new draft is set. A late `onPicked` (an extraction
+  // that resolves after the user already clicked a card) can replace `draft`
+  // while SceneConfirmForm is already mounted; without a changing `key` React
+  // reuses the existing instance and its useState initializers never re-run,
+  // so the pane ends up mixing controls from the stale draft with state from
+  // the new one. Keying on this counter forces a remount on every replacement.
+  const [draftGen, setDraftGen] = useState(0);
   // A warning from the picker (an extraction that failed) has to outlive the
   // picker, which unmounts the moment a draft is emitted.
   const [notice, setNotice] = useState<string | null>(null);
@@ -57,11 +64,14 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
         ) : draft === null ? (
           <SceneIdeaPicker cid={cid} afterSid={afterSid} ready={ready}
                            pcless={mode === "offscreen"}
-                           onPicked={(d, warning) => { setDraft(d); setNotice(warning ?? null); }}
+                           onPicked={(d, warning) => {
+                             setDraft(d); setNotice(warning ?? null);
+                             setDraftGen((n) => n + 1);
+                           }}
                            onCancel={onClose} />
         ) : (
-          <SceneConfirmForm cid={cid} draft={draft} notice={notice}
-                            onBack={() => setDraft(null)} onCreated={onCreated}
+          <SceneConfirmForm key={draftGen} cid={cid} draft={draft} notice={notice}
+                            onBack={() => setDraft(null)} onCancel={onClose} onCreated={onCreated}
                             onWriting={setWriting} />
         )}
       </div>
