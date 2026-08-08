@@ -598,8 +598,10 @@ git commit -m "Add store.covers: one cover image per campaign"
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `backend/tests/test_routes.py` (it already imports `io`; add
-`from PIL import Image` at the top of the file if it is not there):
+Append to `backend/tests/test_routes.py`. It already imports `io` and `time`,
+and `routes/campaigns.py` already imports `File`, `UploadFile` and `Request`
+(`:12`), so no import work is needed there — but add `from PIL import Image`
+to the test module, which does not have it.
 
 ```python
 def _png_bytes(size=(4, 4)) -> bytes:
@@ -649,7 +651,26 @@ def test_campaign_cover_rejects_bad_uploads(client):
     too_big = client.put(url, files={"file": ("c.png", io.BytesIO(huge), "image/png")})
     assert too_big.status_code == 413
 
+    # A flat 8000x8000 PNG is 64 MP and only tens of KB on the wire — the exact
+    # shape the byte cap cannot catch and store.thumbs would try to decode.
+    bomb = io.BytesIO()
+    Image.new("L", (8000, 8000)).save(bomb, "PNG")
+    over = client.put(url, files={"file": ("c.png", io.BytesIO(bomb.getvalue()), "image/png")})
+    assert over.status_code == 400 and "pixels" in over.json()["detail"]
+
     assert client.get(url).status_code == 404  # nothing was stored
+
+
+def test_record_image_serving_survives_a_vanishing_file(client, monkeypatch):
+    """_serve_image_file turns an OSError into a 404 for EVERY image route,
+    not only covers — a deliberate widening, pinned here."""
+    wid = _world(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    base = f"/api/worlds/{wid}/characters/{chid}/versions/default/images"
+    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    monkeypatch.setattr("pathlib.Path.read_bytes",
+                        lambda self, *a, **k: (_ for _ in ()).throw(OSError("gone")))
+    assert client.get(f"{base}/avatar").status_code == 404
 
 
 def test_campaign_cover_caching_and_thumbnail(client):
@@ -714,8 +735,9 @@ Expected: FAIL — the cover URLs 404 through the generic entity routes / the
 
 - [ ] **Step 3: Split the image-serving helper**
 
-In `backend/src/grimoire/routes/common.py`, replace `_serve_image`'s body with
-a resolver plus a new file-level function:
+In `backend/src/grimoire/routes/common.py`, add `from pathlib import Path` to
+the imports (it is not there today, and the new signature annotates one), then
+replace `_serve_image`'s body with a resolver plus a new file-level function:
 
 ```python
 def _serve_image(root, cid: str, vid: str, name: str, base: str = "characters",
@@ -726,7 +748,7 @@ def _serve_image(root, cid: str, vid: str, name: str, base: str = "characters",
     return _serve_image_file(p, request)
 
 
-def _serve_image_file(p, request: Request | None = None):
+def _serve_image_file(p: Path, request: Request | None = None) -> Response:
     """Serve one image file with the app's caching contract.
 
     Bare URLs are no-cache: promotions swap file contents under stable URLs,
@@ -737,7 +759,9 @@ def _serve_image_file(p, request: Request | None = None):
 
     An `OSError` reading the file is a 404, not a 500: an image can be replaced
     or removed between the caller resolving its path and this reading it, and
-    that is a missing image rather than a server fault.
+    that is a missing image rather than a server fault. That applies to every
+    image route, not only covers — a deliberate widening, since a 500 was never
+    the right answer for a file that went away mid-request.
     """
     try:
         st = p.stat()
@@ -754,7 +778,12 @@ def _serve_image_file(p, request: Request | None = None):
     if request is not None and (w := request.query_params.get("w", "")).isdigit():
         tp = store.thumbs.thumbnail(p, max(16, min(1024, int(w))))
         if tp is not None:
-            return Response(content=tp.read_bytes(), media_type="image/webp", headers=headers)
+            try:
+                thumb = tp.read_bytes()
+            except OSError:
+                thumb = None  # cache entry swept between generation and read
+            if thumb is not None:
+                return Response(content=thumb, media_type="image/webp", headers=headers)
     ext = p.suffix.lstrip(".").lower()
     try:
         content = p.read_bytes()
@@ -942,16 +971,20 @@ def test_cover_is_not_packed_into_the_other_exports(monkeypatch, tmp_path):
     assert data["cover"] is not None
     assert sorted(data["images"].by_path.values()) == before  # no renumbering
 
+    cover_bytes = covers.cover_path(cid).read_bytes()
     blob, _ = export.build_markdown_bundle(cid)
-    names = zipfile.ZipFile(io.BytesIO(blob)).namelist()
-    assert not [n for n in names if "cover" in n]
+    z = zipfile.ZipFile(io.BytesIO(blob))
+    assert not [n for n in z.namelist()
+                if n.startswith("images/") and z.read(n) == cover_bytes]
 
     html, _ = export.build_html(cid)
-    assert b"cover" not in html
+    # asserted on the BYTES, not the word "cover": the campaign's own prose can
+    # contain that word, which would make a substring check fail for nothing
+    assert base64.b64encode(cover_bytes) not in html
 ```
 
 (Use whatever fixture helper `test_export_store.py` already defines; add
-`from grimoire.store import covers` and, if absent, `import io, zipfile`.)
+`from grimoire.store import covers` and, if absent, `import base64, io, zipfile`.)
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1122,7 +1155,11 @@ body.cover { display: flex; align-items: center; justify-content: center; }
 cd backend && PYTHONPATH=src .venv/Scripts/python -m pytest tests/test_epub_store.py tests/test_export_store.py tests/test_frozen_campaign.py -v
 ```
 
-Expected: PASS. Then the template harnesses:
+Expected: PASS. `test_epub_store.py` is the real guard on these templates —
+`scripts/verify_templates.py` covers the *prompt* builders and never renders
+anything under `templates/epub/`, so it cannot catch a `StrictUndefined`
+failure here. Run it anyway (it is part of `make check`) to confirm the
+prompt side is untouched:
 
 ```
 cd backend && PYTHONPATH=src .venv/Scripts/python ../scripts/verify_templates.py
@@ -1320,7 +1357,9 @@ export function CampaignCover({ cid }: { cid: string }) {
       {version
         ? <img className="cover-preview" src={api.campaignCoverUrl(cid, { v: version })} alt="Campaign cover" />
         : <p className="field-hint">No cover set. It is used on the campaigns list and as the cover of the exported EPUB.</p>}
-      <label className="field-hint" htmlFor="campaign-cover-file">Cover image</label>
+      <label className="field-hint" htmlFor="campaign-cover-file">
+        {version ? "Replace cover image" : "Cover image"}
+      </label>
       <input id="campaign-cover-file" ref={input} type="file" disabled={busy}
              accept="image/png,image/jpeg,image/gif,image/webp"
              onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }} />
@@ -1332,15 +1371,29 @@ export function CampaignCover({ cid }: { cid: string }) {
 }
 ```
 
-- [ ] **Step 5: Run the panel test**
+- [ ] **Step 5: Add the panel's CSS**
+
+In `frontend/src/index.css`, after the `.list-row-*` block. The preview needs
+an explicit bound: a stored cover can be 25 MB and thousands of pixels wide,
+and an unsized `<img>` would render at its intrinsic size and blow the panel
+open.
+
+```css
+.campaign-cover { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.campaign-cover .cover-preview { max-width: 260px; max-height: 340px; object-fit: contain;
+                                 border: var(--rw2) solid var(--rule-soft); }
+```
+
+- [ ] **Step 6: Run the panel test**
 
 ```
 cd frontend && npx vitest run src/components/CampaignCover.test.tsx
 ```
 
-Expected: PASS.
+Expected: PASS. The label assertion in the tests is `/cover image/i`, which
+matches both "Cover image" and "Replace cover image".
 
-- [ ] **Step 6: Wire it into `CampaignView`**
+- [ ] **Step 7: Wire it into `CampaignView`**
 
 In `frontend/src/routes/CampaignView.tsx`:
 
@@ -1367,7 +1420,7 @@ In `frontend/src/routes/CampaignView.tsx`:
         )}
 ```
 
-- [ ] **Step 7: Run the campaign view suite and the typechecker**
+- [ ] **Step 8: Run the campaign view suite and the typechecker**
 
 ```
 cd frontend && npx vitest run src/routes/CampaignView.test.tsx src/components/CampaignCover.test.tsx && npm run typecheck
@@ -1375,10 +1428,10 @@ cd frontend && npx vitest run src/routes/CampaignView.test.tsx src/components/Ca
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add frontend/src/api/client.ts frontend/src/components/CampaignCover.tsx \
+git add frontend/src/api/client.ts frontend/src/index.css frontend/src/components/CampaignCover.tsx \
         frontend/src/components/CampaignCover.test.tsx frontend/src/routes/CampaignView.tsx
 git commit -m "Add the campaign cover panel"
 ```
@@ -1397,9 +1450,12 @@ git commit -m "Add the campaign cover panel"
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `frontend/src/routes/CampaignsView.test.tsx` (follow the file's
+Append to `frontend/src/routes/CampaignsView.test.tsx`. Follow the file's
 existing mock setup for `api.listCampaigns` / `api.listWorlds`; add
-`campaignCoverUrl` to the mocked `api` object if it is not already there):
+`campaignCoverUrl: (cid: string, o?: { w?: number; v?: string }) =>
+\`/api/campaigns/${cid}/cover?w=${o?.w}&v=${o?.v}\`` to the mocked `api`
+object, and make sure `fireEvent` and `waitFor` are in the
+`@testing-library/react` import — the second test needs both.
 
 ```tsx
 test("renders a thumbnail for a campaign with a cover and a placeholder without", async () => {
@@ -1414,6 +1470,17 @@ test("renders a thumbnail for a campaign with a cover and a placeholder without"
   expect(img.getAttribute("src")).toContain("v=v1");
   expect(screen.queryByAltText("Winifred's War cover")).toBeNull();
   expect(document.querySelectorAll(".list-row-cover").length).toBe(2);  // both boxes, aligned
+});
+
+test("a thumbnail that fails to load falls back to the placeholder box", async () => {
+  (api.listCampaigns as any).mockResolvedValue([
+    { id: "saltmarch", name: "Saltmarch Nights", world: "realm", scenes: 3, last_scene: "", cover: "v1" },
+  ]);
+  render(<MemoryRouter><CampaignsView /></MemoryRouter>);
+  const img = await screen.findByAltText("Saltmarch Nights cover");
+  fireEvent.error(img);
+  await waitFor(() => expect(screen.queryByAltText("Saltmarch Nights cover")).toBeNull());
+  expect(document.querySelectorAll(".list-row-cover").length).toBe(1);  // the box stays
 });
 ```
 
@@ -1431,16 +1498,19 @@ In `frontend/src/routes/CampaignsView.tsx`, add state for covers that fail to
 load and render the box as the first child of each `.list-row`:
 
 ```tsx
+  // Keyed by id AND version, not id alone: a cover that failed to load must
+  // not keep its replacement hidden after the next listCampaigns() refresh.
   const [broken, setBroken] = useState<Record<string, boolean>>({});
 ```
 
 ```tsx
           <div className="list-row" key={c.id}>
             <div className="list-row-cover">
-              {c.cover && !broken[c.id] && (
-                <img src={api.campaignCoverUrl(c.id, { w: 96, v: c.cover })}
+              {c.cover && !broken[`${c.id}:${c.cover}`] && (
+                <img className="list-row-cover-img"
+                     src={api.campaignCoverUrl(c.id, { w: 96, v: c.cover })}
                      alt={`${c.name} cover`}
-                     onError={() => setBroken((b) => ({ ...b, [c.id]: true }))} />
+                     onError={() => setBroken((b) => ({ ...b, [`${c.id}:${c.cover}`]: true }))} />
               )}
             </div>
 ```
@@ -1456,8 +1526,13 @@ In `frontend/src/index.css`, after the `.list-row-meta` block:
 
 ```css
 .list-row-cover { flex: 0 0 auto; width: 64px; height: 64px; margin-left: 20px; background: var(--rule-soft); }
-.list-row-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.list-row-cover-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 ```
+
+(The box carries `.list-row-cover` and the image `.list-row-cover-img`: the
+box is what has to exist on every row, cover or not, for the rows to stay
+aligned. The spec's prose puts the class on the `<img>`; the wrapper is what
+makes the alignment requirement in that same paragraph work.)
 
 - [ ] **Step 5: Run the suite and the typechecker**
 
@@ -1499,30 +1574,56 @@ assumption would surface.
 
 - [ ] **Step 3: Drive it in a browser**
 
-Use the `verify` skill to launch the app against an isolated store, then:
-set a cover from the campaign's **Cover** panel, confirm the thumbnail appears
-on the campaigns list, replace it and confirm the displayed image changes,
-export the EPUB and open it in a reader to confirm the cover shows on the
-shelf and as the first page, then Remove the cover and confirm both the list
-and a fresh export go back to no cover.
+Invoke the project's `verify` skill (`Skill(skill="verify")`), which launches
+the app against an isolated store with a mocked OpenRouter. Then, in the
+browser it opens: create a campaign, open its **Cover** panel from the rail
+foot, set a cover, confirm the thumbnail appears on the campaigns list,
+replace it with a different image and confirm the *displayed* image changes
+(this is the one thing the jsdom tests cannot prove), then Remove it and
+confirm the list falls back to the placeholder box.
+
+Download `/api/campaigns/<cid>/export.epub` with a cover set and check the
+zip directly — it is the packaging, not a reader's shelf rendering, that this
+step can actually establish:
+
+```
+cd backend && PYTHONPATH=src .venv/Scripts/python -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); print(z.namelist()[:8]); print(z.read('package.opf').decode()[:900])" C:/path/to/downloaded.epub
+```
+
+Expected: `text/cover.xhtml` and `images/cover.png` present, `cover-img`
+carrying `properties="cover-image"`, and `<meta name="cover" .../>` in the
+metadata.
 
 - [ ] **Step 4: Run the implementation review gate**
 
-Per `CLAUDE.md`, `/codex:review` against the diff. Note that the Codex sandbox
-helper is missing on this machine, so the plugin command silently reviews
-GitHub instead of the local diff — pipe the diff to `codex exec` instead:
+Per `CLAUDE.md`, `/codex:review` against the diff. The Codex sandbox helper
+(`codex-windows-sandbox-setup.exe`) is missing on this machine, so the plugin
+command's shell calls fail and it silently reviews GitHub instead of the local
+diff. Pipe the diff to `codex exec` instead — from the **Bash** tool, not
+PowerShell:
 
 ```bash
-git diff main...HEAD > /tmp/cover.patch
-cat /tmp/cover.patch | codex exec --sandbox read-only --skip-git-repo-check "Your shell is broken; review ONLY the diff on <stdin>. …"
+SCRATCH="$(mktemp -d)"
+git diff main...HEAD > "$SCRATCH/cover.patch"
+cat "$SCRATCH/cover.patch" | codex exec --sandbox read-only --skip-git-repo-check \
+  "Your shell and filesystem tools are BROKEN here: do not run git, do not read files, do not fetch from GitHub. Review ONLY the diff on <stdin>. Find correctness defects, races, and anything that breaks existing behaviour. Cite the diff lines. Rank by severity."
 ```
+
+Check the output cites this branch's code — if it describes files not in the
+diff, it fell back to GitHub and the run is worthless.
 
 - [ ] **Step 5: Run the final adversarial gate**
 
-`/codex:adversarial-review` (same `codex exec` workaround) against the diff
-**and** `docs/superpowers/specs/2026-08-08-campaign-cover-image-design.md`,
-asking specifically whether the changes implement the spec — gaps, drift and
-quietly-dropped requirements, not style.
+Same workaround, with the spec appended to the diff so the reviewer can judge
+implementation against intent:
+
+```bash
+SCRATCH="$(mktemp -d)"
+{ git diff main...HEAD; echo; echo "===== SPEC ====="; \
+  cat docs/superpowers/specs/2026-08-08-campaign-cover-image-design.md; } > "$SCRATCH/bundle.txt"
+cat "$SCRATCH/bundle.txt" | codex exec --sandbox read-only --skip-git-repo-check \
+  "Your shell and filesystem tools are BROKEN here: do not run git, do not read files, do not fetch from GitHub. Review ONLY <stdin>: a diff followed by the spec it claims to implement. Answer whether the diff implements that spec — gaps, drift, quietly-dropped requirements — not style. Quote the spec clause and the diff line for each finding. Rank by severity."
+```
 
 - [ ] **Step 6: Commit any fixes and finish the branch**
 
@@ -1543,7 +1644,16 @@ button → Task 5; the list thumbnail with its placeholder and `onError` → Tas
 "what needs no change" (activity stamping) is covered by an assertion in Task
 3 rather than by code, as intended.
 
-**Placeholders:** none — every step carries the code or the exact command.
+One deliberate widening beyond the spec, recorded here so a reviewer sees it:
+`_serve_image_file` turns a mid-request `OSError` into a 404 for **every**
+image route, not only covers. The spec only required it for the cover, but the
+helper is shared and a 500 was never the right answer for a file that went
+away; Task 3 pins the widened behaviour with a record-image test.
+
+**Placeholders:** none — every step carries the code or the exact command,
+including the two Codex gate invocations in Task 7 (whose prompts are written
+out in full, because the plugin's own commands read GitHub rather than the
+local diff on this machine).
 
 **Type consistency:** `path_in` / `put_in` / `delete_in` keep one signature
 across Tasks 1–2; `cover_version` returns `str` and is what Task 3 puts in the
