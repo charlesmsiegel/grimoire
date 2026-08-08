@@ -127,6 +127,39 @@ test("a typed pick that outlasts a slow date estimate still carries the fresh da
     expect.objectContaining({ date: "2026-05-05" })));
 });
 
+test("an extraction that returns nothing still hands on a hint that metadata could not be inferred", async () => {
+  (api.sceneIntent as any).mockResolvedValue({ title: "", date: "", location: null, cast: [] });
+  const onPicked = renderPicker();
+  await screen.findByText("The creditor");
+  fireEvent.change(screen.getByLabelText("Your own scene"), { target: { value: "a storm" } });
+  fireEvent.click(screen.getByRole("button", { name: /use this/i }));
+  await waitFor(() => expect(onPicked).toHaveBeenCalledWith(
+    expect.objectContaining({ source: "custom", title: "New scene", premise: "a storm" }),
+    expect.stringMatching(/could not be inferred|nothing could be inferred/i)));
+});
+
+test("greeting and generated cards are disabled while an extraction is in flight", async () => {
+  let releaseIntent: (v: any) => void = () => {};
+  (api.sceneIntent as any).mockReturnValue(new Promise((r) => { releaseIntent = r; }));
+  renderPicker();
+  await screen.findByText("The creditor");
+  fireEvent.change(screen.getByLabelText("Your own scene"), { target: { value: "a storm" } });
+  fireEvent.click(screen.getByRole("button", { name: /use this/i }));
+  // a card click here would otherwise emit a SECOND onPicked once the
+  // extraction resolves, racing the first draft into the confirm form (#Important2)
+  expect(screen.getByText("Reckoning").closest("button")).toBeDisabled();
+  expect(screen.getByText("The creditor").closest("button")).toBeDisabled();
+  await act(async () => { releaseIntent({ title: "x", date: "", location: null, cast: [] }); });
+});
+
+test("a stale greetings-fetch error banner is cleared when Regenerate starts", async () => {
+  (api.availableGreetings as any).mockRejectedValue({ detail: "greetings unreachable" });
+  renderPicker();
+  await screen.findByText(/greetings unreachable/i);
+  fireEvent.click(screen.getByRole("button", { name: /regenerate/i }));
+  await waitFor(() => expect(screen.queryByText(/greetings unreachable/i)).toBeNull());
+});
+
 test("without a connection the direction row is disabled but typing still works", async () => {
   const onPicked = renderPicker(vi.fn(), false);
   await screen.findByText("Reckoning");
