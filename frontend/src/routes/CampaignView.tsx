@@ -1226,6 +1226,32 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     setChooserOpen(true);
   }
 
+  // Dismissing the chooser (Escape/backdrop) after a soft failure -- once
+  // SceneConfirmForm's "Continue to scene" is the only OTHER exit -- still
+  // leaves a real, created scene behind, and `writing` is already clear by
+  // then so the dismissal goes through. NewSceneChooser reports that scene's
+  // id as `createdSid`; every other dismissal (Cancel, an idle Escape) reports
+  // none, so this stays a no-op for them -- reloading unconditionally would
+  // relist on every plain Cancel too, and most of those wrote nothing.
+  //
+  // Reuses `loadScenes` -- the same relist `sceneCreated` runs after a normal
+  // create -- rather than inventing a second refresh path. Unlike
+  // `sceneCreated`, this must NOT navigate: the user chose to leave the scene
+  // behind, not open it. The error handling mirrors `sceneCreated`'s, for the
+  // reason given in its comment below: this too is called from an event
+  // handler with the promise dropped, so a failure here would otherwise be an
+  // unhandled rejection describing a scene that really was created.
+  function closeChooser(createdSid?: string) {
+    setChooserOpen(false);
+    if (!createdSid) return;
+    loadScenes().catch((err: any) => {
+      if (cidRef.current === cid) {
+        setError({ text: `The scene was created, but the scene list could not be `
+                         + `refreshed: ` + (err?.detail ?? String(err)), retryable: false });
+      }
+    });
+  }
+
   async function sceneCreated(id: string, initialPrompt?: string) {
     setChooserOpen(false);
     if (initialPrompt) setSeedPrompt({ cid, sid: id, prompt: initialPrompt });
@@ -3493,7 +3519,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       )}
       {chooserOpen && (
         <NewSceneChooser cid={cid} afterSid={activeId} ready={ready}
-                         onClose={() => setChooserOpen(false)} onCreated={sceneCreated} />
+                         onClose={closeChooser} onCreated={sceneCreated} />
       )}
       </div>
     </div>

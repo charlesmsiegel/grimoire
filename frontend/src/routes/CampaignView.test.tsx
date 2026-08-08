@@ -20,6 +20,11 @@ vi.mock("../components/NewSceneChooser", () => ({
     <div data-testid="scene-chooser">
       <button onClick={() => onCreated("s9", "A premise")}>stub-pick</button>
       <button onClick={() => onClose()}>stub-close</button>
+      {/* Stands in for Escape/backdrop dismissing the chooser AFTER a soft
+          failure salvaged a real scene -- NewSceneChooser reports that
+          scene's id to onClose in exactly this situation (see its own
+          tests); every other dismissal above calls onClose with no id. */}
+      <button onClick={() => onClose("s9")}>stub-close-salvaged</button>
     </div>
   ),
 }));
@@ -6603,6 +6608,43 @@ test("a premise generated in one campaign is not offered to another's scene", as
 
   // "other" also has an s9, and it must not be handed run's premise
   expect(screen.getByTestId("cast-panel")).not.toHaveTextContent("A premise");
+});
+
+// Follow-up to PR #318: a soft failure inside SceneConfirmForm (a failed
+// location/date/rename step) still creates the scene -- `salvaged` -- and
+// clears `writing`, so Escape and the backdrop can dismiss the chooser from
+// there instead of only "Continue to scene". `sceneCreated` is what relists
+// after a normal create; dismissing never reached it, so the rail stayed one
+// scene short of reality until a manual reload.
+test("dismissing the chooser after a soft failure refreshes the scene list", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  await screen.findByTestId("cast-panel");
+
+  fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
+  await screen.findByTestId("scene-chooser");
+  const before = (api.listScenes as any).mock.calls.length;
+  const wasAt = here();
+  fireEvent.click(screen.getByText("stub-close-salvaged"));
+  await waitFor(() => expect((api.listScenes as any).mock.calls.length).toBeGreaterThan(before));
+  // a dismissal, not "Continue to scene" -- the URL does not move to the
+  // salvaged scene, unlike a normal `sceneCreated`
+  expect(here()).toBe(wasAt);
+});
+
+// The other half: a PLAIN dismissal (nothing was salvaged) must not pay for
+// a relist it doesn't need -- most Cancels and idle Escapes wrote nothing.
+test("a plain dismissal (nothing salvaged) does not refresh the scene list", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  await screen.findByTestId("cast-panel");
+
+  fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
+  await screen.findByTestId("scene-chooser");
+  const before = (api.listScenes as any).mock.calls.length;
+  fireEvent.click(screen.getByText("stub-close"));
+  await act(async () => { for (let i = 0; i < 4; i++) await Promise.resolve(); });
+  expect((api.listScenes as any).mock.calls.length).toBe(before);
 });
 
 test("a created scene is opened against a list that knows it exists", async () => {
