@@ -86,6 +86,31 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
     // and `cid` changing gives `run` a new identity, so the mount effect
     // re-fires and fetches fresh once a mode is chosen again.)
     setDirection("");
+    // `writing` must reset here too. SceneConfirmForm's own create() sequence
+    // stops issuing writes once its `live` ref notices this same switch (see
+    // its comment) -- but every `setWriting(false)` on that abandoned path is
+    // now guarded by that same `live` check and so never runs. Left alone,
+    // `writing` would stay stuck true forever, and `dismiss()` below refuses
+    // Escape, the backdrop, and every Cancel button while it is true -- for
+    // the NEW campaign's freshly reset (mode-select) chooser, not just the
+    // old one, since `writing` is not itself reset by anything else. That
+    // would permanently lock the modal until a whole new create cycle
+    // happened to flip it back through a live component (Critical, review).
+    setWriting(false);
+    // A soft failure may have salvaged a real scene (`salvagedSid`) that the
+    // reader never dismissed before switching campaigns. There is no safe
+    // way to report it from here the way `dismiss()` does: `onClose` (like
+    // `cid`) is already bound to the NEW campaign by the time this branch
+    // runs -- CampaignView redefines both together in the same render that
+    // changed `cid`, so there is no live closure left pointing at the
+    // campaign the reader just left. Even if there were, CampaignView's own
+    // `installScenes` refuses to install a scene list for any campaign other
+    // than the one it is currently showing, by design, so a call here could
+    // not make that campaign's rail reflect the scene anyway. The scene is
+    // not lost -- it exists on the backend and surfaces normally the next
+    // time the reader navigates back to that campaign and it does its own
+    // mount read -- it is just not pushed there proactively (Important,
+    // review).
     setSalvagedSid(null);
   }
 
