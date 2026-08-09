@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -719,30 +718,22 @@ def _git_repo(tmp_path: Path) -> None:
     subprocess.run(["git", "commit", "-q", "-m", "baseline"], cwd=tmp_path, check=True)
 
 
-def _write_manifest(tmp_path: Path, wid: str, external: bool = True, **overrides) -> Path:
-    """Write manifest JSON to a file.
+def _write_manifest(tmp_path: Path, wid: str, **overrides) -> Path:
+    """Write manifest JSON to a file outside the git repo.
 
-    Args:
-        external: If True, write outside tmp_path (outside git repo).
-                 If False, write inside tmp_path but git will ignore it.
+    The manifest is the tool's input (not stored state) and must be kept
+    outside the git repository to avoid false dirty-check failures.
     """
     base = {"world": wid, "entities": [], "reclassifications": [], "tags": [],
             "greeting_imports": [], "greeting_edges": [], "greeting_gating": []}
     base.update(overrides)
-    if external:
-        # Write manifest outside tmp_path (which is the git repo root)
-        # Use a real temp directory that gets cleaned up by the OS
-        temp_dir = tempfile.mkdtemp()
-        p = Path(temp_dir) / "manifest.json"
-        p.write_text(json.dumps(base), encoding="utf-8")
-        return p
-    else:
-        # Write manifest inside tmp_path, outside git (git initialized in subdirectory)
-        manifest_dir = tmp_path / "manifests"
-        manifest_dir.mkdir(exist_ok=True)
-        p = manifest_dir / "manifest.json"
-        p.write_text(json.dumps(base), encoding="utf-8")
-        return p
+    # Write to a sibling directory of tmp_path (not inside it, where git repo lives)
+    # pytest cleans up the parent temp directory automatically
+    temp_dir = tmp_path.parent / f"{tmp_path.name}-manifests"
+    temp_dir.mkdir(exist_ok=True)
+    p = temp_dir / "manifest.json"
+    p.write_text(json.dumps(base), encoding="utf-8")
+    return p
 
 
 def test_run_aborts_on_dirty_tree_anywhere_in_the_repo(monkeypatch, tmp_path, capsys):
@@ -764,7 +755,7 @@ def test_run_does_not_commit_when_manifest_has_errors(monkeypatch, tmp_path, cap
     wid, root = _world(monkeypatch, tmp_path)
     _git_repo(tmp_path)
     # Mix of valid entity (gets written) + invalid entity (causes error)
-    manifest_path = _write_manifest(tmp_path, wid, external=True,
+    manifest_path = _write_manifest(tmp_path, wid,
                                      entities=[
                                          {"kind": "locations", "name": "Good Place", "body": "valid"},
                                          {"kind": "not-a-real-kind", "name": "Bad", "body": "invalid"}
@@ -778,8 +769,8 @@ def test_run_does_not_commit_when_manifest_has_errors(monkeypatch, tmp_path, cap
     assert len(out["created"]) == 1  # "Good Place" was written
     # Git status shows the world's files are dirty (not committed), not the manifest
     status = subprocess.run(["git", "status", "--short"], cwd=tmp_path, capture_output=True, text=True).stdout
-    # Should show the location file as modified/untracked (depends on git state after write)
-    assert status.strip() != ""
+    # Verify the world's path appears in git status (proves world files are staged, not manifest)
+    assert any(f"worlds/{wid}" in line for line in status.splitlines()), f"World path not in status: {status}"
 
 
 def test_run_applies_verifies_and_commits_on_clean_repo(monkeypatch, tmp_path, capsys):
@@ -834,7 +825,7 @@ def test_run_handles_git_commit_failure(monkeypatch, tmp_path, capsys):
     capsys.readouterr()
 
     # Create a second manifest with a new entity
-    manifest_path2 = _write_manifest(tmp_path, wid, external=True,
+    manifest_path2 = _write_manifest(tmp_path, wid,
                                       entities=[
                                           {"kind": "locations", "name": "Blind Lion", "body": ""},
                                           {"kind": "locations", "name": "New Place", "body": ""}
@@ -853,3 +844,28 @@ def test_run_handles_git_commit_failure(monkeypatch, tmp_path, capsys):
     assert out["committed"] is False
     assert "git_error" in out
     assert len(out["git_error"]) > 0
+
+
+def test_git_changed_paths_handles_renames(tmp_path):
+    """Rename/copy files are parsed correctly in -z output (I4 regression test)."""
+    # Init git repo
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+
+    # Create and commit a file
+    (tmp_path / "oldname.txt").write_text("content")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "baseline"], cwd=tmp_path, check=True)
+
+    # Rename the file and stage the rename
+    (tmp_path / "oldname.txt").unlink()
+    (tmp_path / "newname.txt").write_text("content")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+
+    # Get changed paths - should include only the NEW path, not garbled old path
+    paths = pwc._git_changed_paths(tmp_path, ".")
+    assert paths == {"newname.txt"}
+    # Make sure we don't have garbage from truncating the old path
+    assert "name.txt" not in paths  # would be old garbage from line[3:] on oldname.txt
+    assert "oldname.txt" not in paths

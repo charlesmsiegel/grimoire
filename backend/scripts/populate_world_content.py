@@ -512,6 +512,11 @@ def _git_changed_paths(cwd: Path, scope: str) -> set[str]:
 
     Uses -z for NUL-separated output (safe for non-ASCII/renamed paths)
     and core.quotePath=false to avoid C-quoting of filenames.
+
+    Porcelain format (-z): each line is "XY PATH", status + space + path.
+    For renames/copies: status line is "R  NEW_PATH", followed by a second
+    field "OLD_PATH" (no status prefix). We extract the new path from the
+    status line and skip the old-path field (not appending to result).
     """
     result = _git(
         ["-c", "core.quotePath=false", "status", "--porcelain", "-z",
@@ -524,13 +529,31 @@ def _git_changed_paths(cwd: Path, scope: str) -> set[str]:
     paths = set()
     # Split on NUL byte for safety with non-ASCII and renamed paths
     if result.stdout:
-        for line in result.stdout.split("\0"):
+        fields = result.stdout.split("\0")
+        i = 0
+        while i < len(fields):
+            line = fields[i]
             if not line:  # skip empty strings from trailing NUL
+                i += 1
                 continue
-            # Porcelain format: XY PATH, skip the first 3 chars (2 status + space)
-            # With renames: old path is skipped, only new path kept
+
+            # Porcelain format: XY PATH (skip first 3 chars: 2 status + space)
             if len(line) > 3:
-                paths.add(line[3:])
+                status = line[0]
+                path = line[3:]
+
+                # For renames (R) and copies (C), the next field is the old path
+                # We skip it and don't add it to results (we only care about new paths)
+                if status in ("R", "C"):
+                    # Skip the old-path field by incrementing i
+                    i += 2  # Move past this line and the next (old-path)
+                    paths.add(path)
+                else:
+                    paths.add(path)
+                    i += 1
+            else:
+                i += 1
+
     return paths
 
 
