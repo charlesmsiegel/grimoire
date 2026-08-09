@@ -528,8 +528,11 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # Whole-repo dirty check, not just this world's path: `git commit` with no
     # pathspec commits everything staged, so anything dirty anywhere is a risk
-    # of getting swept into this world's checkpoint.
-    if _git_changed_paths(grimoire_root, "."):
+    # of getting swept into this world's checkpoint. Exclude the manifest file
+    # itself, which is the tool's input and not stored state.
+    dirty = _git_changed_paths(grimoire_root, ".")
+    dirty_excluding_manifest = {p for p in dirty if not p.endswith("manifest.json")}
+    if dirty_excluding_manifest:
         print(json.dumps({"status": "aborted", "reason": "repo is dirty"}))
         return 1
 

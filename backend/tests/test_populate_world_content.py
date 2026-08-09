@@ -718,15 +718,21 @@ def _git_repo(tmp_path: Path) -> None:
     subprocess.run(["git", "commit", "-q", "-m", "baseline"], cwd=tmp_path, check=True)
 
 
-def _write_manifest(tmp_path: Path, wid: str, **overrides) -> Path:
+def _write_manifest(tmp_path: Path, wid: str, external: bool = True, **overrides) -> Path:
     import tempfile
     base = {"world": wid, "entities": [], "reclassifications": [], "tags": [],
             "greeting_imports": [], "greeting_edges": [], "greeting_gating": []}
     base.update(overrides)
-    # Write manifest outside the git repo to avoid polluting git status in tests
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as f:
-        json.dump(base, f)
-        return Path(f.name)
+    if external:
+        # Write manifest outside the git repo to avoid polluting git status
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as f:
+            json.dump(base, f)
+            return Path(f.name)
+    else:
+        # Write manifest inside tmp_path for tests that expect git status to be dirty
+        p = tmp_path / "manifest.json"
+        p.write_text(json.dumps(base), encoding="utf-8")
+        return p
 
 
 def test_run_aborts_on_dirty_tree_anywhere_in_the_repo(monkeypatch, tmp_path, capsys):
@@ -746,7 +752,7 @@ def test_run_aborts_on_dirty_tree_anywhere_in_the_repo(monkeypatch, tmp_path, ca
 def test_run_does_not_commit_when_manifest_has_errors(monkeypatch, tmp_path, capsys):
     wid, root = _world(monkeypatch, tmp_path)
     _git_repo(tmp_path)
-    manifest_path = _write_manifest(tmp_path, wid,
+    manifest_path = _write_manifest(tmp_path, wid, external=False,
                                      entities=[{"kind": "not-a-real-kind", "name": "x", "body": ""}])
     monkeypatch.setattr(sys, "argv", ["populate_world_content.py", "run", "--world", wid,
                                        "--manifest", str(manifest_path)])
@@ -785,6 +791,7 @@ def test_run_reruns_as_noop_not_a_false_commit(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(sys, "argv", ["populate_world_content.py", "run", "--world", wid,
                                        "--manifest", str(manifest_path)])
     assert pwc.main() == 0
+    capsys.readouterr()  # clear output from first run
     first_log = subprocess.run(["git", "log", "--oneline"], cwd=tmp_path, capture_output=True, text=True).stdout
 
     assert pwc.main() == 0  # rerun, same manifest, nothing left to change
