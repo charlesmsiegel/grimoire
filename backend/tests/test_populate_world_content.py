@@ -454,3 +454,34 @@ def test_apply_greeting_imports_errors_on_same_count_replacement_drift(monkeypat
     assert err["character"] == char_id and err["version"] == vid
     assert "don't match" in err["reason"]
     assert len(ref_map_1) == 3
+
+
+def test_apply_greeting_edges_unions_and_rejects_cycles(monkeypatch, tmp_path):
+    wid, root = _world(monkeypatch, tmp_path)
+    g1 = greetings.create_greeting(root, "First", "adriana", "default", "a")
+    g2 = greetings.create_greeting(root, "Second", "adriana", "default", "b")
+    g3 = greetings.create_greeting(root, "Third", "adriana", "default", "c")
+    greetings.set_edges(root, g1, leads_to=[g2])  # pre-existing edge must survive
+    results = pwc.new_results()
+    ref_map = {f"id:{g1}": g1, f"id:{g2}": g2, f"id:{g3}": g3}
+
+    pwc.apply_greeting_edges(root, [
+        {"greeting_ref": f"id:{g1}", "leads_to": [f"id:{g3}"], "excludes": []},
+        {"greeting_ref": f"id:{g3}", "leads_to": [f"id:{g1}"], "excludes": []},  # would cycle g1->g3->g1
+    ], ref_map, results)
+
+    edges = greetings.edges_of(greetings.read_plotmap(root), g1)
+    assert set(edges["leads_to"]) == {g2, g3}
+    edges3 = greetings.edges_of(greetings.read_plotmap(root), g3)
+    assert edges3["leads_to"] == []
+    assert any(s["reason"] == "would create a cycle" for s in results["skipped"])
+
+
+def test_resolve_ref_handles_id_and_new_and_unknown(monkeypatch, tmp_path):
+    wid, root = _world(monkeypatch, tmp_path)
+    g1 = greetings.create_greeting(root, "First", "adriana", "default", "a")
+    ref_map = {f"id:{g1}": g1, "new:adriana:default:0": "some-new-id"}
+
+    assert pwc.resolve_ref(f"id:{g1}", ref_map, root) == g1
+    assert pwc.resolve_ref("new:adriana:default:0", ref_map, root) == "some-new-id"
+    assert pwc.resolve_ref("id:does-not-exist", ref_map, root) is None

@@ -315,6 +315,73 @@ def apply_greeting_imports(root: Path, specs: list[dict], results: dict) -> dict
     return ref_map
 
 
+def resolve_ref(ref: str, ref_map: dict[str, str], root: Path) -> str | None:
+    if ref in ref_map:
+        return ref_map[ref]
+    elif ref.startswith("id:"):
+        gid = ref[len("id:"):]
+        try:
+            greetings.read_greeting(root, gid)
+        except greetings.GreetingNotFound:
+            return None
+        return gid
+    else:
+        return None
+
+
+def _resolve_refs(refs: list[str], ref_map: dict[str, str], root: Path, results: dict, stage: str) -> list[str]:
+    out = []
+    for ref in refs:
+        gid = resolve_ref(ref, ref_map, root)
+        if gid is None:
+            results["errors"].append({"stage": stage, "reason": "unresolvable ref", "ref": ref})
+            continue
+        out.append(gid)
+    return out
+
+
+def _reaches(plotmap: dict, src: str, target: str, seen: set[str]) -> bool:
+    if src == target:
+        return True
+    if src in seen:
+        return False
+    seen.add(src)
+    return any(_reaches(plotmap, nxt, target, seen) for nxt in plotmap.get(src, {}).get("leads_to", []))
+
+
+def apply_greeting_edges(root: Path, specs: list[dict], ref_map: dict[str, str], results: dict) -> None:
+    world_rel = _world_rel(root)
+    plotmap = greetings.read_plotmap(root)
+    for spec in specs:
+        gid = resolve_ref(spec["greeting_ref"], ref_map, root)
+        if gid is None:
+            results["errors"].append({"stage": "greeting_edges", "reason": "unresolvable ref", "ref": spec["greeting_ref"]})
+            continue
+        cur = greetings.edges_of(plotmap, gid)
+        new_leads_to = _resolve_refs(spec.get("leads_to", []), ref_map, root, results, "greeting_edges.leads_to")
+        new_excludes = _resolve_refs(spec.get("excludes", []), ref_map, root, results, "greeting_edges.excludes")
+
+        accepted = list(cur["leads_to"])
+        for target in new_leads_to:
+            if target in accepted:
+                continue
+            if _reaches(plotmap, target, gid, set()):
+                results["skipped"].append({"stage": "greeting_edges", "reason": "would create a cycle",
+                                            "gid": gid, "target": target})
+                continue
+            accepted.append(target)
+
+        excludes = list(cur["excludes"])
+        for target in new_excludes:
+            if target not in excludes:
+                excludes.append(target)
+
+        if accepted != cur["leads_to"] or excludes != cur["excludes"]:
+            greetings.set_edges(root, gid, leads_to=accepted, excludes=excludes)
+            plotmap[gid] = {"leads_to": accepted, "excludes": excludes}
+            results["touched_files"].add(f"{world_rel}/plotmap.json")
+
+
 def cmd_index(args: argparse.Namespace) -> int:
     root = worlds.world_root(args.world)
     print(json.dumps(build_index(root), indent=2, sort_keys=True))
