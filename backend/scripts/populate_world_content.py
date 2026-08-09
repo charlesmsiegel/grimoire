@@ -416,6 +416,26 @@ def apply_greeting_gating(root: Path, specs: list[dict], ref_map: dict[str, str]
             results["touched_files"].add(f"{world_rel}/greetings/{gid}.md")
 
 
+def apply_manifest(root: Path, manifest: dict, wid: str) -> dict:
+    results = new_results()
+
+    apply_tags(root, manifest.get("tags", []), results)
+
+    apply_entities(root, manifest.get("entities", []), results, wid)
+    apply_reclassifications(root, manifest.get("reclassifications", []), results, wid)
+
+    import_ref_map = apply_greeting_imports(root, manifest.get("greeting_imports", []), results)
+    ref_map = dict(import_ref_map)
+    for g in greetings.list_greetings(root):
+        ref_map.setdefault(f"id:{g['id']}", g["id"])
+
+    apply_greeting_edges(root, manifest.get("greeting_edges", []), ref_map, results)
+    apply_greeting_gating(root, manifest.get("greeting_gating", []), ref_map, results)
+
+    results["touched_files"] = sorted(results["touched_files"])
+    return results
+
+
 def cmd_index(args: argparse.Namespace) -> int:
     root = worlds.world_root(args.world)
     print(json.dumps(build_index(root), indent=2, sort_keys=True))

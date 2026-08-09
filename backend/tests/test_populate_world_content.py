@@ -576,3 +576,39 @@ def test_apply_greeting_gating_flags_unknown_tag_name(monkeypatch, tmp_path):
 
     assert greetings.read_greeting(root, g1)["meta"]["requires_tags"] == []
     assert any(e["reason"] == "unknown tag display_name" for e in results["errors"])
+
+
+def test_apply_manifest_full_pipeline_and_idempotent_rerun(monkeypatch, tmp_path):
+    wid, root = _world(monkeypatch, tmp_path)
+    characters.create_character(root, "Adriana", "default", _card("Hello.", ["Bye."]))
+    manifest = {
+        "world": wid,
+        "entities": [{"kind": "locations", "name": "Blind Lion", "body": "A tavern."}],
+        "reclassifications": [],
+        "tags": [{"display_name": "Farmer"}],
+        "greeting_imports": [{"character": "adriana", "version": "default",
+                               "titles": ["Guild induction", "A farewell"]}],
+        "greeting_edges": [{"greeting_ref": "new:adriana:default:0",
+                             "leads_to": ["new:adriana:default:1"], "excludes": []}],
+        "greeting_gating": [{"greeting_ref": "new:adriana:default:1",
+                              "requires_tags": ["Farmer"], "present": []}],
+    }
+
+    r1 = pwc.apply_manifest(root, manifest, wid)
+    assert r1["errors"] == []
+    assert len(entities.list_entities(root, "locations")) == 1
+    assert len(greetings.list_greetings(root)) == 2
+    assert len(tags.read_tags(root)) == 1
+    g1_id = next(g["id"] for g in greetings.list_greetings(root) if g["name"] == "Guild induction")
+    edges = greetings.edges_of(greetings.read_plotmap(root), g1_id)
+    assert len(edges["leads_to"]) == 1
+
+    r2 = pwc.apply_manifest(root, manifest, wid)  # exact same manifest again
+
+    assert r2["errors"] == []  # <- the property the first draft's test never actually checked
+    assert r2["touched_files"] == []  # nothing changed the second time
+    assert len(entities.list_entities(root, "locations")) == 1  # not duplicated
+    assert len(greetings.list_greetings(root)) == 2  # not duplicated
+    assert len(tags.read_tags(root)) == 1  # not duplicated
+    edges_again = greetings.edges_of(greetings.read_plotmap(root), g1_id)
+    assert edges_again == edges  # edge still there, not lost, not doubled
