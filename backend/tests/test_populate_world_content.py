@@ -477,6 +477,68 @@ def test_apply_greeting_edges_unions_and_rejects_cycles(monkeypatch, tmp_path):
     assert any(s["reason"] == "would create a cycle" for s in results["skipped"])
 
 
+def test_apply_greeting_edges_unions_excludes_like_leads_to(monkeypatch, tmp_path):
+    """Critical test: excludes must be unioned with pre-existing entries,
+    not replaced. This mirrors the leads_to union test but exercises excludes."""
+    wid, root = _world(monkeypatch, tmp_path)
+    g1 = greetings.create_greeting(root, "First", "adriana", "default", "a")
+    g2 = greetings.create_greeting(root, "Second", "adriana", "default", "b")
+    g3 = greetings.create_greeting(root, "Third", "adriana", "default", "c")
+    g4 = greetings.create_greeting(root, "Fourth", "adriana", "default", "d")
+    # Set pre-existing excludes on g1
+    greetings.set_edges(root, g1, excludes=[g2])
+    results = pwc.new_results()
+    ref_map = {f"id:{g1}": g1, f"id:{g2}": g2, f"id:{g3}": g3, f"id:{g4}": g4}
+
+    # Apply edges spec that adds g3 to g1's excludes
+    pwc.apply_greeting_edges(root, [
+        {"greeting_ref": f"id:{g1}", "leads_to": [], "excludes": [f"id:{g3}"]},
+    ], ref_map, results)
+
+    # Both pre-existing (g2) and new (g3) excludes must be present
+    edges = greetings.edges_of(greetings.read_plotmap(root), g1)
+    assert set(edges["excludes"]) == {g2, g3}, f"Expected {{g2, g3}}, got {set(edges['excludes'])}"
+
+
+def test_apply_greeting_edges_errors_on_unresolvable_greeting_ref(monkeypatch, tmp_path):
+    """Test error handling when greeting_ref itself cannot be resolved."""
+    wid, root = _world(monkeypatch, tmp_path)
+    g1 = greetings.create_greeting(root, "First", "adriana", "default", "a")
+    results = pwc.new_results()
+    ref_map = {f"id:{g1}": g1}
+
+    # Spec references a greeting that doesn't exist
+    pwc.apply_greeting_edges(root, [
+        {"greeting_ref": "id:nonexistent", "leads_to": [f"id:{g1}"], "excludes": []},
+    ], ref_map, results)
+
+    # Should have an error for unresolvable greeting_ref
+    assert len(results["errors"]) == 1
+    assert results["errors"][0]["reason"] == "unresolvable ref"
+    assert results["errors"][0]["ref"] == "id:nonexistent"
+
+
+def test_apply_greeting_edges_errors_on_unresolvable_leads_to_ref(monkeypatch, tmp_path):
+    """Test error handling when a ref in leads_to cannot be resolved."""
+    wid, root = _world(monkeypatch, tmp_path)
+    g1 = greetings.create_greeting(root, "First", "adriana", "default", "a")
+    results = pwc.new_results()
+    ref_map = {f"id:{g1}": g1}
+
+    # Spec has an unresolvable ref in leads_to
+    pwc.apply_greeting_edges(root, [
+        {"greeting_ref": f"id:{g1}", "leads_to": ["id:nonexistent"], "excludes": []},
+    ], ref_map, results)
+
+    # Should have an error for the unresolvable leads_to ref
+    assert len(results["errors"]) == 1
+    assert results["errors"][0]["reason"] == "unresolvable ref"
+    assert results["errors"][0]["ref"] == "id:nonexistent"
+    # No edges should have been added
+    edges = greetings.edges_of(greetings.read_plotmap(root), g1)
+    assert edges["leads_to"] == []
+
+
 def test_resolve_ref_handles_id_and_new_and_unknown(monkeypatch, tmp_path):
     wid, root = _world(monkeypatch, tmp_path)
     g1 = greetings.create_greeting(root, "First", "adriana", "default", "a")
