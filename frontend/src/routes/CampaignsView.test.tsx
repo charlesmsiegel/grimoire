@@ -83,6 +83,7 @@ test("renders a thumbnail for a campaign with a cover and a placeholder without"
 
   const img = await screen.findByAltText("Saltmarch Nights cover");
   expect(img.getAttribute("src")).toContain("/api/campaigns/saltmarch/cover");
+  expect(img.getAttribute("src")).toContain("w=96");  // a list thumbnail must ask for a downscale, never the original
   expect(img.getAttribute("src")).toContain("v=v1");
   expect(screen.queryByAltText("Winifred's War cover")).toBeNull();
   expect(document.querySelectorAll(".list-row-cover").length).toBe(2);  // both boxes, aligned
@@ -97,4 +98,28 @@ test("a thumbnail that fails to load falls back to the placeholder box", async (
   fireEvent.error(img);
   await waitFor(() => expect(screen.queryByAltText("Saltmarch Nights cover")).toBeNull());
   expect(document.querySelectorAll(".list-row-cover").length).toBe(1);  // the box stays
+});
+
+test("a replacement cover is not hidden by the previous version's broken mark", async () => {
+  (api.listCampaigns as any)
+    .mockResolvedValueOnce([
+      { id: "saltmarch", name: "Saltmarch Nights", world: "w1", scenes: 3, last_scene: "", cover: "v1" },
+    ])
+    .mockResolvedValueOnce([
+      { id: "saltmarch", name: "Saltmarch Nights", world: "w1", scenes: 3, last_scene: "", cover: "v2" },
+    ]);
+  render(<MemoryRouter><CampaignsView /></MemoryRouter>);
+
+  const v1img = await screen.findByAltText("Saltmarch Nights cover");
+  expect(v1img.getAttribute("src")).toContain("v=v1");
+  fireEvent.error(v1img);  // v1 marked broken
+  await waitFor(() => expect(screen.queryByAltText("Saltmarch Nights cover")).toBeNull());
+
+  // a refetch (same id, new cover token) must not stay hidden under the old key
+  fireEvent.click(screen.getByRole("button", { name: "Rename Saltmarch Nights" }));
+  fireEvent.keyDown(screen.getByLabelText("Rename campaign"), { key: "Enter" });
+  await waitFor(() => expect(api.renameCampaign).toHaveBeenCalled());
+
+  const v2img = await screen.findByAltText("Saltmarch Nights cover");
+  expect(v2img.getAttribute("src")).toContain("v=v2");
 });
