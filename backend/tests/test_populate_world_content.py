@@ -257,6 +257,122 @@ def test_apply_greeting_imports_errors_when_existing_greetings_dont_match_card(m
     assert "don't match" in err["reason"]
 
 
+def test_apply_greeting_imports_stable_for_duplicate_bodies_on_rerun(monkeypatch, tmp_path):
+    """Round 5: two card positions that bake to the IDENTICAL body. Body
+    matching pins every position whose body is unique, but it cannot tell twins
+    apart -- the tiebreak decides, and the old tiebreak was whatever order
+    `list_greetings` happened to return, which is sorted by the greeting's
+    `name`. This script RENAMES greetings when it applies titles, so that order
+    changes between the run that imported and every run after: with titles
+    chosen to reverse the name-sort, the two twins silently swap which
+    `new:*:idx` ref they answer to, with no error logged. Sorting candidates by
+    the immutable id instead makes the assignment stable."""
+    wid, root = _world(monkeypatch, tmp_path)
+    # first_mes and the single alternate are the same text -> identical bodies.
+    characters.create_character(root, "Adriana", "default", _card("Hello.", ["Hello."]))
+    # Titles picked so that applying them REVERSES the name-sort order: before
+    # the rename list_greetings yields "Adriana" then "Adriana (alt 1)"; after
+    # it yields "Alpha follow-up" (the alt) then "Zulu opener" (the first_mes).
+    spec = [{"character": "adriana", "version": "default",
+             "titles": ["Zulu opener", "Alpha follow-up"]}]
+
+    r1 = pwc.new_results()
+    ref_map_1 = pwc.apply_greeting_imports(root, spec, r1)
+    assert r1["errors"] == []
+    assert len(greetings.list_greetings(root)) == 2
+    by_id_1 = {g["id"]: g["name"] for g in greetings.list_greetings(root)}
+    assert by_id_1[ref_map_1["new:adriana:default:0"]] == "Zulu opener"
+    assert by_id_1[ref_map_1["new:adriana:default:1"]] == "Alpha follow-up"
+    # the rename really did invert the name-sort the old tiebreak depended on
+    assert [g["id"] for g in greetings.list_greetings(root)] != sorted(by_id_1)
+
+    r2 = pwc.new_results()
+    ref_map_2 = pwc.apply_greeting_imports(root, spec, r2)
+
+    assert len(greetings.list_greetings(root)) == 2  # not duplicated
+    assert r2["errors"] == []
+    assert r2["skipped"][0]["reason"] == "already imported"
+    # The whole point: not merely "no error" -- the same keys resolve to the
+    # same greetings, so the twin that got titles[0] still answers to :0.
+    assert ref_map_2 == ref_map_1
+    assert ref_map_2["new:adriana:default:0"] == ref_map_1["new:adriana:default:0"]
+    assert ref_map_2["new:adriana:default:1"] == ref_map_1["new:adriana:default:1"]
+
+
+def test_apply_greeting_imports_stable_when_duplicate_twins_are_not_id_sorted(monkeypatch, tmp_path):
+    """Round 5, third drift source: sorting candidates by id makes reruns agree
+    with each other, but the IMPORTING run indexed its ref_map by
+    `import_from_character`'s creation order, and those two orders are not the
+    same. `… (alt 10)` slugifies to `…-alt-10`, which sorts before `…-alt-2`,
+    so twins at creation positions 2 and 10 come out swapped on the rerun. The
+    fix is for the importing run to index through the same resolver, so run 1
+    and run 2 agree by construction rather than by coincidence."""
+    wid, root = _world(monkeypatch, tmp_path)
+    # Alternates 1..10; the 2nd and the 10th are the same text (creation
+    # positions 2 and 10, since first_mes takes position 0).
+    alts = [f"Alt {i} text." for i in range(1, 11)]
+    alts[1] = alts[9] = "Twinned alt text."
+    characters.create_character(root, "Adriana", "default", _card("Hello.", alts))
+    spec = [{"character": "adriana", "version": "default",
+             "titles": [f"Title {i}" for i in range(11)]}]
+
+    r1 = pwc.new_results()
+    ref_map_1 = pwc.apply_greeting_imports(root, spec, r1)
+    assert r1["errors"] == []
+    assert len(greetings.list_greetings(root)) == 11
+    # the id sort really does disagree with creation order here
+    assert sorted(["adriana-alt-2", "adriana-alt-10"]) == ["adriana-alt-10", "adriana-alt-2"]
+    assert {ref_map_1["new:adriana:default:2"], ref_map_1["new:adriana:default:10"]} == \
+        {"adriana-alt-2", "adriana-alt-10"}
+
+    r2 = pwc.new_results()
+    ref_map_2 = pwc.apply_greeting_imports(root, spec, r2)
+
+    assert len(greetings.list_greetings(root)) == 11  # not duplicated
+    assert r2["errors"] == []
+    assert ref_map_2 == ref_map_1
+    assert ref_map_2["new:adriana:default:2"] == ref_map_1["new:adriana:default:2"]
+    assert ref_map_2["new:adriana:default:10"] == ref_map_1["new:adriana:default:10"]
+    # and the title really did land on the greeting :2 resolves to, both times
+    by_id = {g["id"]: g["name"] for g in greetings.list_greetings(root)}
+    assert by_id[ref_map_2["new:adriana:default:2"]] == "Title 2"
+    assert by_id[ref_map_2["new:adriana:default:10"]] == "Title 10"
+
+
+def test_apply_greeting_imports_tolerates_crlf_card_bodies_on_rerun(monkeypatch, tmp_path):
+    """Round 5: a card whose greeting text has CRLF line breaks (SillyTavern
+    and Chub exports routinely do). Cards are JSON so they round-trip "\\r\\n"
+    exactly, but a greeting body does not: `atomic.write_text` writes in text
+    mode (`newline=None`, deliberately, so a user's CRLF store isn't rewritten
+    to LF) and `read_greeting` reads with universal newlines, and that pair
+    turns a stored "\\r\\n" into "\\n\\n" on a CRLF platform and "\\n" on an LF
+    one. Comparing a freshly-baked body against the stored one therefore fails
+    on a store where NOTHING drifted, hard-erroring every rerun."""
+    wid, root = _world(monkeypatch, tmp_path)
+    characters.create_character(
+        root, "Adriana", "default",
+        _card("Hello.\r\nSecond line.", ["Alt one.\r\nAlt line two.", "Alt two."]))
+    spec = [{"character": "adriana", "version": "default",
+             "titles": ["Guild induction", "Lost in the city"]}]
+
+    r1 = pwc.new_results()
+    ref_map_1 = pwc.apply_greeting_imports(root, spec, r1)
+    assert r1["errors"] == []
+    assert len(greetings.list_greetings(root)) == 3
+
+    r2 = pwc.new_results()
+    ref_map_2 = pwc.apply_greeting_imports(root, spec, r2)  # identical spec, unchanged card
+
+    # Nothing changed on disk -- only the newline representation round-tripped,
+    # so this must NOT be reported as drift.
+    assert r2["errors"] == []
+    assert len(greetings.list_greetings(root)) == 3  # not duplicated
+    assert r2["skipped"][0]["reason"] == "already imported"
+    assert ref_map_2 == ref_map_1
+    assert set(ref_map_2) == {"new:adriana:default:0", "new:adriana:default:1",
+                              "new:adriana:default:2"}
+
+
 def test_apply_greeting_imports_errors_on_insertion_drift(monkeypatch, tmp_path):
     """Round 4: a new alternate greeting inserted into the MIDDLE of the card's
     alternates list between two runs. Total existing-greeting count (2) still

@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from grimoire.store import cards, characters, entities, greetings, tags, worlds
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.paths import home
 
 # creatures entities are only meaningful in fantasy worlds; enforced here (not
@@ -147,6 +148,42 @@ def apply_reclassifications(root: Path, specs: list[dict], results: dict,
             pass
 
 
+def _normalize_newlines(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _stored_body_forms(baked: str) -> list[str]:
+    r"""Every body string the store can legitimately hand back for `baked`.
+
+    A greeting body does not survive its own write/read round-trip
+    byte-for-byte, so comparing a freshly-baked body against a stored one
+    directly reports drift on a store that never drifted. The lossy step is
+    newline translation: `atomic.write_text` writes in text mode with
+    `newline=None` (deliberately — forcing `newline=""` would rewrite a user's
+    whole CRLF store to LF on its next save), which expands every "\n" to the
+    platform separator, while `read_greeting` reads with universal newlines,
+    which collapses "\r\n" and "\r" back to "\n". That pair is not an identity:
+    a card's "\r\n" comes back as "\n\n" on a CRLF platform and as "\n" on an
+    LF one. Cards themselves are JSON and *do* round-trip "\r\n" exactly, so
+    only the greeting side loses anything — which is why CRLF cards
+    (SillyTavern/Chub exports routinely have them) are the case this exists
+    for; without it every rerun against such a card hard-errors.
+
+    Modelled by running the real `dump_frontmatter`/`parse_frontmatter` pair
+    rather than by guessing which characters move, so the fence handling (the
+    body sits after a blank line the parser strips back off) stays correct too.
+    Both platform separators are modelled, not just this machine's: the store
+    may live in a synced folder, written by one machine and reread by another.
+    """
+    forms: list[str] = []
+    for linesep in ("\n", "\r\n"):
+        written = dump_frontmatter({"name": "x"}, baked).replace("\n", linesep)
+        _, body = parse_frontmatter(_normalize_newlines(written))
+        if body not in forms:
+            forms.append(body)
+    return forms
+
+
 def _existing_greetings_in_creation_order(root: Path, character: str, version: str) -> list[str] | None:
     """Greetings for one character/version, in the order import_from_character
     would create them from the CURRENT card — recovered via a value-based 1:1
@@ -176,27 +213,39 @@ def _existing_greetings_in_creation_order(root: Path, character: str, version: s
             raw_items.append(alt)
     expected_bodies = [cards.bake_char_token(raw, baked_name) for raw in raw_items]
 
-    candidates = [g["id"] for g in greetings.list_greetings(root)
-                  if g["character"] == character and g["version"] == version]
+    # Sorted by id, which is immutable — this script renames greetings when it
+    # applies titles, and `list_greetings` sorts by that mutable `name`, so its
+    # own order differs between the run that imported and every run after.
+    # Body matching pins every position whose body is unique regardless of
+    # order, but two positions that bake to the *same* body can only be told
+    # apart by the tiebreak below, and a name-ordered tiebreak would hand them
+    # out differently on a rerun — silently swapping which `new:*:idx` ref each
+    # twin answers to.
+    candidates = sorted(g["id"] for g in greetings.list_greetings(root)
+                        if g["character"] == character and g["version"] == version)
     if not candidates:
         return []
 
-    # Value-based 1:1 assignment: map each distinct expected body to the
-    # (possibly several, if duplicated) indices it occupies, then consume one
-    # index per matching candidate. This catches "count still matches but a
-    # candidate landed at the wrong slot" because it checks per-value
-    # membership, not sequential position.
+    # Value-based 1:1 assignment: map every form each expected body can read
+    # back as to the (possibly several, if duplicated) indices it occupies,
+    # then consume one index per matching candidate. This catches "count still
+    # matches but a candidate landed at the wrong slot" because it checks
+    # per-value membership, not sequential position.
     expected_index_map: dict[str, list[int]] = {}
     for idx, body in enumerate(expected_bodies):
-        expected_index_map.setdefault(body, []).append(idx)
+        for form in _stored_body_forms(body):
+            expected_index_map.setdefault(form, []).append(idx)
 
     ordered: list[str | None] = [None] * len(expected_bodies)
+    taken: set[int] = set()
     for gid in candidates:
-        body = greetings.read_greeting(root, gid)["body"]
-        slots = expected_index_map.get(body)
-        if not slots:
+        body = _normalize_newlines(greetings.read_greeting(root, gid)["body"])
+        # lowest unused index for this body: with `candidates` sorted by id,
+        # duplicate-body twins get a deterministic, rerun-stable assignment.
+        idx = next((i for i in expected_index_map.get(body, ()) if i not in taken), None)
+        if idx is None:
             return None  # a stored greeting matches nothing the card produces now
-        idx = slots.pop(0)
+        taken.add(idx)
         ordered[idx] = gid
 
     if any(slot is None for slot in ordered):
@@ -238,14 +287,31 @@ def apply_greeting_imports(root: Path, specs: list[dict], results: dict) -> dict
             continue
 
         imported_this_call.add((char_id, version))
+        # Index the greetings we just created through the SAME resolver a rerun
+        # will use, rather than trusting import order, so this call and every
+        # later one agree by construction. They genuinely can differ: when two
+        # positions bake to the same body, only the resolver's id tiebreak can
+        # separate them, and `import_from_character`'s creation order is not
+        # id-sorted (`… (alt 10)` slugifies to an id that sorts before
+        # `… (alt 2)`). Trusting creation order here would give one twin the
+        # title and the rerun's `new:*:idx` ref to the other.
+        ordered = _existing_greetings_in_creation_order(root, char_id, version)
+        if ordered is None or len(ordered) != len(new_ids):
+            results["errors"].append({
+                "stage": "greeting_imports",
+                "reason": ("imported greetings could not be resolved back to the card's "
+                           "expected order — left in place, unreferenced, for inspection"),
+                "character": char_id, "version": version})
+            continue
+
         titles = spec.get("titles") or []
-        for idx, gid in enumerate(new_ids):
+        for idx, gid in enumerate(ordered):
             if idx < len(titles):
                 greetings.update_greeting(root, gid, name=titles[idx])
             ref_map[f"new:{char_id}:{version}:{idx}"] = gid
             results["touched_files"].add(f"{world_rel}/greetings/{gid}.md")
         results["created"].append({"stage": "greeting_imports", "character": char_id,
-                                    "version": version, "count": len(new_ids)})
+                                    "version": version, "count": len(ordered)})
     return ref_map
 
 
