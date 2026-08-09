@@ -194,8 +194,21 @@ in one process:
   default, not a policy: 50 MP is the policy, checked before the bytes are
   stored.
 
-The stored extension stays the one from the filename (normalized by
-`_norm_ext`); the decode check is a gate, not a converter.
+~~The stored extension stays the one from the filename (normalized by
+`_norm_ext`); the decode check is a gate, not a converter.~~
+
+**Amended during implementation** (final review, 2026-08-08): the **detected**
+format decides the stored extension, and a decodable image whose format is not
+one the store allows is rejected. Taking the extension from the filename let a
+JPEG uploaded as `cover.png` be stored as `cover.png`, served as `image/png`,
+and packed into `package.opf` with `media-type="image/png"` — an epubcheck
+error, and precisely the "produce an invalid book" outcome the decode check was
+added to prevent. `im.format` was already in hand. The filename now decides
+nothing.
+
+Deliberately fixed for covers only: every packed *record* image still takes its
+manifest media type from its filename suffix, which is a pre-existing systemic
+hazard and a separate change.
 
 ### Cover presence in campaign reads
 
