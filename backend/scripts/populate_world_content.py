@@ -508,11 +508,29 @@ def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
 
 
 def _git_changed_paths(cwd: Path, scope: str) -> set[str]:
-    out = _git(["status", "--porcelain", "--untracked-files=all", "--", scope], cwd).stdout
+    """Get changed file paths from git status.
+
+    Uses -z for NUL-separated output (safe for non-ASCII/renamed paths)
+    and core.quotePath=false to avoid C-quoting of filenames.
+    """
+    result = _git(
+        ["-c", "core.quotePath=false", "status", "--porcelain", "-z",
+         "--untracked-files=all", "--", scope],
+        cwd
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git status failed: {result.stderr}")
+
     paths = set()
-    for line in out.splitlines():
-        if len(line) > 3:
-            paths.add(line[3:].strip())
+    # Split on NUL byte for safety with non-ASCII and renamed paths
+    if result.stdout:
+        for line in result.stdout.split("\0"):
+            if not line:  # skip empty strings from trailing NUL
+                continue
+            # Porcelain format: XY PATH, skip the first 3 chars (2 status + space)
+            # With renames: old path is skipped, only new path kept
+            if len(line) > 3:
+                paths.add(line[3:])
     return paths
 
 
@@ -528,11 +546,8 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # Whole-repo dirty check, not just this world's path: `git commit` with no
     # pathspec commits everything staged, so anything dirty anywhere is a risk
-    # of getting swept into this world's checkpoint. Exclude the manifest file
-    # itself, which is the tool's input and not stored state.
-    dirty = _git_changed_paths(grimoire_root, ".")
-    dirty_excluding_manifest = {p for p in dirty if not p.endswith("manifest.json")}
-    if dirty_excluding_manifest:
+    # of getting swept into this world's checkpoint.
+    if _git_changed_paths(grimoire_root, "."):
         print(json.dumps({"status": "aborted", "reason": "repo is dirty"}))
         return 1
 
@@ -548,7 +563,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     else:
         add = _git(["add", "-A", "--", world_rel], grimoire_root)
         summary = f"{len(results['created'])} created, {len(results['skipped'])} skipped, {len(results['errors'])} errors"
-        commit = _git(["commit", "-q", "-m", f"{args.world}: populate content ({summary})"], grimoire_root)
+        # Scoped commit: prevents interleaved runs from sweeping other worlds' staged changes
+        commit = _git(["commit", "-q", "-m", f"{args.world}: populate content ({summary})", "--", world_rel], grimoire_root)
         results["committed"] = add.returncode == 0 and commit.returncode == 0
         if not results["committed"]:
             results["git_error"] = (add.stderr or "") + (commit.stderr or "")

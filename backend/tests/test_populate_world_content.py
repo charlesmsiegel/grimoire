@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -719,18 +720,27 @@ def _git_repo(tmp_path: Path) -> None:
 
 
 def _write_manifest(tmp_path: Path, wid: str, external: bool = True, **overrides) -> Path:
-    import tempfile
+    """Write manifest JSON to a file.
+
+    Args:
+        external: If True, write outside tmp_path (outside git repo).
+                 If False, write inside tmp_path but git will ignore it.
+    """
     base = {"world": wid, "entities": [], "reclassifications": [], "tags": [],
             "greeting_imports": [], "greeting_edges": [], "greeting_gating": []}
     base.update(overrides)
     if external:
-        # Write manifest outside the git repo to avoid polluting git status
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as f:
-            json.dump(base, f)
-            return Path(f.name)
+        # Write manifest outside tmp_path (which is the git repo root)
+        # Use a real temp directory that gets cleaned up by the OS
+        temp_dir = tempfile.mkdtemp()
+        p = Path(temp_dir) / "manifest.json"
+        p.write_text(json.dumps(base), encoding="utf-8")
+        return p
     else:
-        # Write manifest inside tmp_path for tests that expect git status to be dirty
-        p = tmp_path / "manifest.json"
+        # Write manifest inside tmp_path, outside git (git initialized in subdirectory)
+        manifest_dir = tmp_path / "manifests"
+        manifest_dir.mkdir(exist_ok=True)
+        p = manifest_dir / "manifest.json"
         p.write_text(json.dumps(base), encoding="utf-8")
         return p
 
@@ -750,18 +760,26 @@ def test_run_aborts_on_dirty_tree_anywhere_in_the_repo(monkeypatch, tmp_path, ca
 
 
 def test_run_does_not_commit_when_manifest_has_errors(monkeypatch, tmp_path, capsys):
+    """Partial apply with errors: leaves valid writes staged+uncommitted for inspection."""
     wid, root = _world(monkeypatch, tmp_path)
     _git_repo(tmp_path)
-    manifest_path = _write_manifest(tmp_path, wid, external=False,
-                                     entities=[{"kind": "not-a-real-kind", "name": "x", "body": ""}])
+    # Mix of valid entity (gets written) + invalid entity (causes error)
+    manifest_path = _write_manifest(tmp_path, wid, external=True,
+                                     entities=[
+                                         {"kind": "locations", "name": "Good Place", "body": "valid"},
+                                         {"kind": "not-a-real-kind", "name": "Bad", "body": "invalid"}
+                                     ])
     monkeypatch.setattr(sys, "argv", ["populate_world_content.py", "run", "--world", wid,
                                        "--manifest", str(manifest_path)])
     assert pwc.main() == 1
     out = json.loads(capsys.readouterr().out)
-    assert out["committed"] is False
-    assert out["errors"]
+    assert out["committed"] is False  # error-gated: refuses commit despite partial success
+    assert out["errors"]  # has the invalid-kind error
+    assert len(out["created"]) == 1  # "Good Place" was written
+    # Git status shows the world's files are dirty (not committed), not the manifest
     status = subprocess.run(["git", "status", "--short"], cwd=tmp_path, capture_output=True, text=True).stdout
-    assert status.strip() != ""  # left dirty for the user to inspect, not silently committed
+    # Should show the location file as modified/untracked (depends on git state after write)
+    assert status.strip() != ""
 
 
 def test_run_applies_verifies_and_commits_on_clean_repo(monkeypatch, tmp_path, capsys):
@@ -799,3 +817,39 @@ def test_run_reruns_as_noop_not_a_false_commit(monkeypatch, tmp_path, capsys):
     assert out["committed"] == "noop"
     second_log = subprocess.run(["git", "log", "--oneline"], cwd=tmp_path, capture_output=True, text=True).stdout
     assert first_log == second_log  # no empty/duplicate commit was created
+
+
+def test_run_handles_git_commit_failure(monkeypatch, tmp_path, capsys):
+    """Git commit failure is detected and reported (I5: test git-failure branch)."""
+    wid, root = _world(monkeypatch, tmp_path)
+    _git_repo(tmp_path)
+
+    # Manifest with entity that will be created
+    manifest_path = _write_manifest(tmp_path, wid,
+                                     entities=[{"kind": "locations", "name": "Blind Lion", "body": ""}])
+    monkeypatch.setattr(sys, "argv", ["populate_world_content.py", "run", "--world", wid,
+                                       "--manifest", str(manifest_path)])
+    # First run should succeed and create the location
+    assert pwc.main() == 0
+    capsys.readouterr()
+
+    # Create a second manifest with a new entity
+    manifest_path2 = _write_manifest(tmp_path, wid, external=True,
+                                      entities=[
+                                          {"kind": "locations", "name": "Blind Lion", "body": ""},
+                                          {"kind": "locations", "name": "New Place", "body": ""}
+                                      ])
+    monkeypatch.setattr(sys, "argv", ["populate_world_content.py", "run", "--world", wid,
+                                       "--manifest", str(manifest_path2)])
+
+    # Lock the git index to force commit to fail on the write attempt
+    git_index_lock = tmp_path / ".git" / "index.lock"
+    git_index_lock.write_text("locked")
+
+    # Second run should fail due to git commit failing
+    assert pwc.main() == 1
+    out = json.loads(capsys.readouterr().out)
+    # Verify we detected the commit failure
+    assert out["committed"] is False
+    assert "git_error" in out
+    assert len(out["git_error"]) > 0
