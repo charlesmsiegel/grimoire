@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import populate_world_content as pwc
-from grimoire.store import entities, greetings, tags, worlds
+from grimoire.store import characters, entities, greetings, tags, worlds
 
 
 def _world(monkeypatch, tmp_path) -> tuple[str, Path]:
@@ -106,3 +106,43 @@ def test_apply_reclassifications_is_idempotent_across_reruns(monkeypatch, tmp_pa
     # Deleting an already-gone lore entry is not an error
     assert r2["errors"] == []
     assert r2["skipped"][0]["reason"] == "target already exists"
+
+
+def _card(first_mes="", alts=None):
+    return {"data": {"name": "Adriana", "first_mes": first_mes,
+                      "alternate_greetings": alts or [], "description": "", "personality": "",
+                      "scenario": "", "mes_example": "", "tags": [], "extensions": {}},
+            "spec": "chara_card_v3", "spec_version": "3.0"}
+
+
+def test_apply_greeting_imports_titles_in_order(monkeypatch, tmp_path):
+    wid, root = _world(monkeypatch, tmp_path)
+    characters.create_character(root, "Adriana", "default", _card("Hello.", ["Alt one.", "Alt two."]))
+    results = pwc.new_results()
+
+    ref_map = pwc.apply_greeting_imports(root, [
+        {"character": "adriana", "version": "default", "titles": ["Guild induction", "Lost in the city"]},
+    ], results)
+
+    by_id = {g["id"]: g["name"] for g in greetings.list_greetings(root)}
+    assert by_id[ref_map["new:adriana:default:0"]] == "Guild induction"
+    assert by_id[ref_map["new:adriana:default:1"]] == "Lost in the city"
+    assert "Adriana (alt 2)" in by_id.values()  # no title supplied for idx 2 -> kept raw import name
+
+
+def test_apply_greeting_imports_resolves_new_refs_idempotently_on_rerun(monkeypatch, tmp_path):
+    wid, root = _world(monkeypatch, tmp_path)
+    characters.create_character(root, "Adriana", "default", _card("Hello.", ["Alt one."]))
+    spec = [{"character": "adriana", "version": "default", "titles": ["Guild induction", "Lost in the city"]}]
+
+    r1 = pwc.new_results()
+    ref_map_1 = pwc.apply_greeting_imports(root, spec, r1)
+    assert len(greetings.list_greetings(root)) == 2
+
+    r2 = pwc.new_results()
+    ref_map_2 = pwc.apply_greeting_imports(root, spec, r2)  # same spec again
+
+    assert len(greetings.list_greetings(root)) == 2  # not duplicated
+    assert r2["skipped"][0]["reason"] == "already imported"
+    assert ref_map_2 == ref_map_1  # refs resolve to the SAME greetings both times
+    assert ref_map_2["new:adriana:default:0"] == ref_map_1["new:adriana:default:0"]

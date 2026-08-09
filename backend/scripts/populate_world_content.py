@@ -147,6 +147,54 @@ def apply_reclassifications(root: Path, specs: list[dict], results: dict,
             pass
 
 
+def _greeting_file(root: Path, gid: str) -> Path:
+    return root / "greetings" / f"{gid}.md"
+
+
+def _existing_greetings_in_creation_order(root: Path, character: str, version: str) -> list[str]:
+    """Greetings for one character/version, oldest-file-first — reconstructs the
+    order `import_from_character` originally created them in, even after a
+    later title-rename changed their `name` (rename doesn't move the file)."""
+    matches = [g for g in greetings.list_greetings(root) if g["character"] == character and g["version"] == version]
+    return sorted((g["id"] for g in matches), key=lambda gid: _greeting_file(root, gid).stat().st_mtime)
+
+
+def apply_greeting_imports(root: Path, specs: list[dict], results: dict) -> dict[str, str]:
+    world_rel = _world_rel(root)
+    imported_this_call: set[tuple[str, str]] = set()
+    ref_map: dict[str, str] = {}
+
+    for spec in specs:
+        char_id, version = spec["character"], spec["version"]
+        already_existing = _existing_greetings_in_creation_order(root, char_id, version)
+        already = bool(already_existing) or (char_id, version) in imported_this_call
+
+        if already:
+            results["skipped"].append({"stage": "greeting_imports", "reason": "already imported",
+                                        "character": char_id, "version": version})
+            for idx, gid in enumerate(already_existing):
+                ref_map[f"new:{char_id}:{version}:{idx}"] = gid
+            continue
+
+        try:
+            new_ids = greetings.import_from_character(root, char_id, version)
+        except Exception as exc:  # noqa: BLE001 — bad character/version in one spec must not abort the run
+            results["errors"].append({"stage": "greeting_imports", "reason": str(exc),
+                                       "character": char_id, "version": version})
+            continue
+
+        imported_this_call.add((char_id, version))
+        titles = spec.get("titles") or []
+        for idx, gid in enumerate(new_ids):
+            if idx < len(titles):
+                greetings.update_greeting(root, gid, name=titles[idx])
+            ref_map[f"new:{char_id}:{version}:{idx}"] = gid
+            results["touched_files"].add(f"{world_rel}/greetings/{gid}.md")
+        results["created"].append({"stage": "greeting_imports", "character": char_id,
+                                    "version": version, "count": len(new_ids)})
+    return ref_map
+
+
 def cmd_index(args: argparse.Namespace) -> int:
     root = worlds.world_root(args.world)
     print(json.dumps(build_index(root), indent=2, sort_keys=True))
