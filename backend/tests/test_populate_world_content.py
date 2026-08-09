@@ -615,13 +615,17 @@ def test_apply_manifest_full_pipeline_and_idempotent_rerun(monkeypatch, tmp_path
 
 
 def test_verify_manifest_catches_dangling_character_ref(monkeypatch, tmp_path):
-    """Test that greeting's own character field is checked for dangling refs."""
+    """Test that greeting's own character field is checked for dangling refs.
+
+    Explicitly set present=[] to avoid the default behavior of defaulting to
+    [character], which would cause the present check to also fire and make
+    this test non-isolated."""
     wid, root = _world(monkeypatch, tmp_path)
-    greetings.create_greeting(root, "First", "nobody-character", "default", "a")
+    greetings.create_greeting(root, "First", "nobody-character", "default", "a", present=[])
 
     result = pwc.verify_manifest(root)
     assert result["ok"] is False
-    assert any("nobody-character" in p and "character" in p for p in result["problems"])
+    assert any("character references unknown character" in p for p in result["problems"])
 
 
 def test_verify_manifest_catches_dangling_requires_tags(monkeypatch, tmp_path):
