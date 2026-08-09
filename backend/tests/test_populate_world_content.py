@@ -612,3 +612,35 @@ def test_apply_manifest_full_pipeline_and_idempotent_rerun(monkeypatch, tmp_path
     assert len(tags.read_tags(root)) == 1  # not duplicated
     edges_again = greetings.edges_of(greetings.read_plotmap(root), g1_id)
     assert edges_again == edges  # edge still there, not lost, not doubled
+
+
+def test_verify_manifest_catches_dangling_refs(monkeypatch, tmp_path):
+    wid, root = _world(monkeypatch, tmp_path)
+    greetings.create_greeting(root, "First", "nobody-character", "default", "a",
+                               requires_tags=["ghost-tag"], present=["nobody"])
+    entities.create_entity(root, "lore", "Bad owner", owners="characters:nobody")
+
+    result = pwc.verify_manifest(root)
+    assert result["ok"] is False
+    assert any("ghost-tag" in p for p in result["problems"])
+    assert any("present references unknown character" in p for p in result["problems"])
+    assert any("nobody-character" in p and "character" in p for p in result["problems"])
+    assert any("characters:nobody" in p for p in result["problems"])
+
+
+def test_verify_manifest_checks_git_cross_check_both_directions(monkeypatch, tmp_path):
+    wid, root = _world(monkeypatch, tmp_path)
+    entities.create_entity(root, "locations", "Blind Lion")
+    world_rel = pwc._world_rel(root)
+    touched = [f"{world_rel}/locations/blind-lion.md"]
+
+    ok_result = pwc.verify_manifest(root, touched_files=touched, git_changed=set(touched))
+    assert ok_result == {"ok": True, "problems": []}
+
+    extra_change = pwc.verify_manifest(root, touched_files=touched,
+                                        git_changed=set(touched) | {f"{world_rel}/lore/surprise.md"})
+    assert extra_change["ok"] is False and any("surprise.md" in p for p in extra_change["problems"])
+
+    missing_change = pwc.verify_manifest(root, touched_files=touched, git_changed=set())
+    assert missing_change["ok"] is False
+    assert any("claimed to touch" in p for p in missing_change["problems"])

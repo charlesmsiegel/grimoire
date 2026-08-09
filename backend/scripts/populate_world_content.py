@@ -436,6 +436,62 @@ def apply_manifest(root: Path, manifest: dict, wid: str) -> dict:
     return results
 
 
+def verify_manifest(root: Path, touched_files: list[str] | None = None,
+                    git_changed: set[str] | None = None) -> dict:
+    """Verify referential integrity in the store and optionally cross-check
+    against git changes.
+
+    Returns: {"ok": bool, "problems": [str, ...]}
+    """
+    problems: list[str] = []
+    world_rel = _world_rel(root)
+
+    char_ids = {c["id"] for c in characters.list_characters(root)}
+    tag_ids = set(tags.read_tags(root))
+    greeting_list = greetings.list_greetings(root)
+    greeting_ids = {g["id"] for g in greeting_list}
+
+    for g in greeting_list:
+        if g["character"] and g["character"] not in char_ids:
+            problems.append(f"greeting {g['id']}: character references unknown character {g['character']}")
+        for tid in g["requires_tags"]:
+            if tid not in tag_ids:
+                problems.append(f"greeting {g['id']}: requires_tags references unknown tag {tid}")
+        for cid in g["present"]:
+            if cid not in char_ids:
+                problems.append(f"greeting {g['id']}: present references unknown character {cid}")
+
+    plotmap = greetings.read_plotmap(root)
+    for gid, edges in plotmap.items():
+        if gid not in greeting_ids:
+            problems.append(f"plotmap: edge source {gid} is not a real greeting")
+        for target in edges.get("leads_to", []) + edges.get("excludes", []):
+            if target not in greeting_ids:
+                problems.append(f"plotmap edge from {gid}: references unknown greeting {target}")
+
+    for kind in entities.ENTITY_KINDS:
+        for e in entities.list_entities(root, kind):
+            owners = [o.strip() for o in e.get("owners", "").split(",") if o.strip()]
+            for ref in owners:
+                ref_kind, _, ref_id = ref.partition(":")
+                ok = (ref_kind == "characters" and ref_id in char_ids) or \
+                     (ref_kind in entities.ENTITY_KINDS and
+                      any(x["id"] == ref_id for x in entities.list_entities(root, ref_kind)))
+                if not ok:
+                    problems.append(f"{kind}/{e['id']}: owners references unresolvable {ref}")
+
+    if touched_files is not None and git_changed is not None:
+        scoped_git_changed = {p for p in git_changed if p.startswith(world_rel + "/")}
+        unexpected = scoped_git_changed - set(touched_files)
+        if unexpected:
+            problems.append(f"git shows changes apply did not account for: {sorted(unexpected)}")
+        missing = set(touched_files) - scoped_git_changed
+        if missing:
+            problems.append(f"apply claimed to touch files git shows no change to: {sorted(missing)}")
+
+    return {"ok": not problems, "problems": problems}
+
+
 def cmd_index(args: argparse.Namespace) -> int:
     root = worlds.world_root(args.world)
     print(json.dumps(build_index(root), indent=2, sort_keys=True))
