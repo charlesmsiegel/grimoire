@@ -217,3 +217,41 @@ def test_apply_greeting_imports_idempotent_when_char_id_diverges_from_card_name(
     assert ref_map_2["new:charlotte-claymore:default:0"] == ref_map_1["new:charlotte-claymore:default:0"]
     assert ref_map_2["new:charlotte-claymore:default:1"] == ref_map_1["new:charlotte-claymore:default:1"]
     assert ref_map_2["new:charlotte-claymore:default:2"] == ref_map_1["new:charlotte-claymore:default:2"]
+
+
+def test_apply_greeting_imports_errors_when_existing_greetings_dont_match_card(monkeypatch, tmp_path):
+    """Round 3: body-content matching itself has a gap when the card (or, as
+    simulated here, a greeting's stored body) drifts from what it was at
+    import time -- e.g. a user commits a legitimate character text edit
+    between two swarm runs. If one expected body no longer matches, a naive
+    match silently drops that index and shifts every later one into the wrong
+    slot; if every body fails to match, it silently looks like "nothing
+    imported yet" and reimports, duplicating. Neither is acceptable -- this
+    must surface as an error and touch nothing."""
+    wid, root = _world(monkeypatch, tmp_path)
+    characters.create_character(root, "Adriana", "default", _card("Hello.", ["Alt one.", "Alt two."]))
+    spec = [{"character": "adriana", "version": "default", "titles": ["Guild induction", "Lost in the city"]}]
+
+    r1 = pwc.new_results()
+    ref_map_1 = pwc.apply_greeting_imports(root, spec, r1)
+    assert len(greetings.list_greetings(root)) == 3
+
+    # Simulate drift: alt-1's stored body no longer matches what the card
+    # would currently bake for it (as if the card had been edited and this
+    # greeting's body were still the old text -- body-matching can no longer
+    # tell which existing greeting is which).
+    alt1_gid = ref_map_1["new:adriana:default:1"]
+    greetings.update_greeting(root, alt1_gid, body="Something else entirely.")
+
+    r2 = pwc.new_results()
+    ref_map_2 = pwc.apply_greeting_imports(root, spec, r2)
+
+    assert len(greetings.list_greetings(root)) == 3  # not duplicated
+    assert ref_map_2 == {}  # nothing resolved for this spec -- errored, not guessed or shifted
+    assert r2["skipped"] == []
+    assert r2["created"] == []
+    assert len(r2["errors"]) == 1
+    err = r2["errors"][0]
+    assert err["stage"] == "greeting_imports"
+    assert err["character"] == "adriana" and err["version"] == "default"
+    assert "don't match" in err["reason"]

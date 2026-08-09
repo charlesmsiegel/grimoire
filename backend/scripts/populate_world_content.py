@@ -147,14 +147,26 @@ def apply_reclassifications(root: Path, specs: list[dict], results: dict,
             pass
 
 
-def _existing_greetings_in_creation_order(root: Path, character: str, version: str) -> list[str]:
+def _existing_greetings_in_creation_order(root: Path, character: str, version: str) -> list[str] | None:
     """Greetings for one character/version, in the order import_from_character
     originally created them — recovered by recomputing the exact bodies the
     card would produce (deterministic; we bake them the same way at creation
     and never touch body afterward) and matching against existing greetings'
     actual bodies. This survives title renames (name is mutable, body isn't)
     and doesn't depend on id slugification, which can diverge from char_id
-    when a card's display name isn't already slug-shaped."""
+    when a card's display name isn't already slug-shaped.
+
+    Three distinct outcomes, since "nothing exists yet" and "something exists
+    but can't be trusted" must never be confused:
+    - `[]` — nothing exists yet for this character/version; safe to import fresh.
+    - a full ordered list — every existing greeting matched exactly one expected
+      body; safe to reuse as-is.
+    - `None` — greetings exist for this character/version but don't cleanly match
+      the card's *current* expected bodies (e.g. the card, or a greeting's body,
+      was edited between runs). This is genuinely undecidable without a human:
+      guessing an order would silently shift every later ref into the wrong
+      greeting, and treating it as "nothing exists" would silently duplicate.
+      The caller must surface this as an error, not resolve it either way."""
     try:
         card = characters.read_card(root, character, version)
     except (characters.CharacterNotFound, characters.VersionNotFound):
@@ -174,6 +186,8 @@ def _existing_greetings_in_creation_order(root: Path, character: str, version: s
 
     candidates = [g["id"] for g in greetings.list_greetings(root)
                   if g["character"] == character and g["version"] == version]
+    if not candidates:
+        return []
     body_by_id = {gid: greetings.read_greeting(root, gid)["body"] for gid in candidates}
 
     ordered: list[str] = []
@@ -184,6 +198,9 @@ def _existing_greetings_in_creation_order(root: Path, character: str, version: s
         if match is not None:
             ordered.append(match)
             used.add(match)
+
+    if len(ordered) != len(candidates):
+        return None  # some existing greeting didn't match any expected body -- ambiguous
     return ordered
 
 
@@ -195,6 +212,14 @@ def apply_greeting_imports(root: Path, specs: list[dict], results: dict) -> dict
     for spec in specs:
         char_id, version = spec["character"], spec["version"]
         already_existing = _existing_greetings_in_creation_order(root, char_id, version)
+        if already_existing is None:
+            results["errors"].append({
+                "stage": "greeting_imports",
+                "reason": ("existing greetings for this character/version don't match "
+                           "the current card content — cannot safely resolve which is which"),
+                "character": char_id, "version": version})
+            continue
+
         already = bool(already_existing) or (char_id, version) in imported_this_call
 
         if already:
