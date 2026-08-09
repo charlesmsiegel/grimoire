@@ -382,6 +382,40 @@ def apply_greeting_edges(root: Path, specs: list[dict], ref_map: dict[str, str],
             results["touched_files"].add(f"{world_rel}/plotmap.json")
 
 
+def apply_greeting_gating(root: Path, specs: list[dict], ref_map: dict[str, str], results: dict) -> None:
+    world_rel = _world_rel(root)
+    tag_by_lower = {name.lower(): tid for tid, name in tags.read_tags(root).items()}
+
+    for spec in specs:
+        gid = resolve_ref(spec["greeting_ref"], ref_map, root)
+        if gid is None:
+            results["errors"].append({"stage": "greeting_gating", "reason": "unresolvable ref", "ref": spec["greeting_ref"]})
+            continue
+        cur = greetings.read_greeting(root, gid)["meta"]
+
+        new_tag_ids = []
+        for name in spec.get("requires_tags", []):
+            tid = tag_by_lower.get(name.lower())
+            if tid is None:
+                results["errors"].append({"stage": "greeting_gating", "reason": "unknown tag display_name",
+                                           "display_name": name, "gid": gid})
+                continue
+            new_tag_ids.append(tid)
+        requires_tags = list(cur["requires_tags"])
+        for tid in new_tag_ids:
+            if tid not in requires_tags:
+                requires_tags.append(tid)
+
+        present = list(cur["present"])
+        for cid in spec.get("present", []):
+            if cid not in present:
+                present.append(cid)
+
+        if requires_tags != cur["requires_tags"] or present != cur["present"]:
+            greetings.update_greeting(root, gid, requires_tags=requires_tags, present=present)
+            results["touched_files"].add(f"{world_rel}/greetings/{gid}.md")
+
+
 def cmd_index(args: argparse.Namespace) -> int:
     root = worlds.world_root(args.world)
     print(json.dumps(build_index(root), indent=2, sort_keys=True))

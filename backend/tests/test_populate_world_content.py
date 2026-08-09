@@ -547,3 +547,32 @@ def test_resolve_ref_handles_id_and_new_and_unknown(monkeypatch, tmp_path):
     assert pwc.resolve_ref(f"id:{g1}", ref_map, root) == g1
     assert pwc.resolve_ref("new:adriana:default:0", ref_map, root) == "some-new-id"
     assert pwc.resolve_ref("id:does-not-exist", ref_map, root) is None
+
+
+def test_apply_greeting_gating_resolves_existing_and_new_tags_case_insensitively(monkeypatch, tmp_path):
+    wid, root = _world(monkeypatch, tmp_path)
+    tags.add_tag(root, "Merchant")  # pre-existing, NOT re-listed by this manifest's tags[]
+    g1 = greetings.create_greeting(root, "First", "adriana", "default", "a",
+                                    requires_tags=[], present=["adriana"])
+    results = pwc.new_results()
+
+    pwc.apply_greeting_gating(root, [
+        {"greeting_ref": f"id:{g1}", "requires_tags": ["merchant"], "present": ["breath"]},
+    ], {f"id:{g1}": g1}, results)
+
+    meta = greetings.read_greeting(root, g1)["meta"]
+    assert meta["requires_tags"] == ["merchant"]
+    assert set(meta["present"]) == {"adriana", "breath"}
+
+
+def test_apply_greeting_gating_flags_unknown_tag_name(monkeypatch, tmp_path):
+    wid, root = _world(monkeypatch, tmp_path)
+    g1 = greetings.create_greeting(root, "First", "adriana", "default", "a")
+    results = pwc.new_results()
+
+    pwc.apply_greeting_gating(root, [
+        {"greeting_ref": f"id:{g1}", "requires_tags": ["Nonexistent"], "present": []},
+    ], {f"id:{g1}": g1}, results)
+
+    assert greetings.read_greeting(root, g1)["meta"]["requires_tags"] == []
+    assert any(e["reason"] == "unknown tag display_name" for e in results["errors"])
