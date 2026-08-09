@@ -163,10 +163,22 @@ already implements — an `ETag` from `mtime_ns`/`size`, a 304 on a matching
 `public, max-age=31536000, immutable` for a `?v=` one, and a `?w=` downscale
 served as WebP through `store.thumbs`. That body is extracted as
 `_serve_image_file(p: Path, request)`; `_serve_image` keeps its signature and
-calls it after resolving the path, so no existing route changes. The extracted
-function additionally treats an `OSError` from `stat`/`read_bytes` as a 404:
-the cover can be deleted between resolution and read, and that is a missing
-image, not a server fault.
+calls it after resolving the path, so no existing route changes. ~~The
+extracted function additionally treats an `OSError` from `stat`/`read_bytes`
+as a 404: the cover can be deleted between resolution and read, and that is a
+missing image, not a server fault.~~
+
+**Amended during implementation** (final review, 2026-08-08): narrowed to
+`FileNotFoundError`, not `OSError` whole. The file-went-away race is real and
+still answers 404, but catching `OSError` whole also swallows a
+`PermissionError`, a Windows sharing violation, an exhausted file-descriptor
+table or a disk read error — cases where the image is still there. Reporting
+those as "not found" tells the user their data is missing when it isn't, makes
+the frontend mark a valid cover broken, and hides an operational fault behind
+the wrong status code. `FileNotFoundError` is exactly the race this section
+was written for; the wider catch was never needed to cover it. This applies to
+every route through `_serve_image_file`, not only covers — every image route
+shares the one helper.
 
 ### Upload validation
 

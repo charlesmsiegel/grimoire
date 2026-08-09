@@ -285,6 +285,12 @@ def test_build_epub_without_a_cover_is_structurally_unchanged(monkeypatch, tmp_p
     first = opf.findall(".//opf:itemref", OPF_NS)[0].get("idref")
     assert {i.get("id"): i.get("href") for i in opf.findall(".//opf:item", OPF_NS)}[first] \
         == "text/titlepage.xhtml"
+    # The stylesheet is the one file that DOES change relative to a pre-cover
+    # book: it carries the cover-page rules unconditionally, even for a
+    # no-cover book. Rendering it conditionally would make the stylesheet vary
+    # per campaign for no benefit, so a no-cover book still ships it.
+    css = z.read("css/stylesheet.css").decode()
+    assert "body.cover" in css and ".cover img" in css
 
 
 def test_build_epub_with_a_cover(monkeypatch, tmp_path):

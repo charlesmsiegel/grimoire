@@ -1,14 +1,15 @@
 import io
+import pathlib
 
 import pytest
 from PIL import Image
 
-from grimoire.store import assets, campaigns, covers, worlds
+from grimoire.store import campaigns, covers, worlds
 
 
-def _png(size=(4, 4)) -> bytes:
+def _png(size=(4, 4), color=(10, 20, 30)) -> bytes:
     buf = io.BytesIO()
-    Image.new("RGB", size, (10, 20, 30)).save(buf, "PNG")
+    Image.new("RGB", size, color).save(buf, "PNG")
     return buf.getvalue()
 
 
@@ -36,10 +37,15 @@ def test_put_read_delete_round_trip(cid):
 
 
 def test_replacing_across_extensions_leaves_one_file(cid):
-    covers.put_cover(cid, _png(), "png")
-    covers.put_cover(cid, _png((5, 5)), "jpg")
+    first = _png(color=(10, 20, 30))
+    second = _png((5, 5), color=(200, 100, 50))  # visibly different from `first`
+    covers.put_cover(cid, first, "png")
+    covers.put_cover(cid, second, "jpg")
     d = campaigns.campaign_root(cid) / "assets"
     assert [p.name for p in sorted(d.iterdir())] == ["cover.jpg"]
+    read_back = covers.cover_path(cid).read_bytes()
+    assert read_back == second
+    assert read_back != first
 
 
 def test_unsupported_extension_rejected(cid):
@@ -66,6 +72,10 @@ def test_foreign_sibling_is_ignored_and_kept(cid):
     os.utime(stray, (2 ** 31, 2 ** 31))  # newest, so a naive glob would pick it
 
     assert covers.cover_path(cid).name == "cover.png"
+    # A replace's stale-sibling cleanup must stay scoped to supported
+    # extensions too -- pin that at the `covers` layer, not only at `assets`.
+    covers.put_cover(cid, _png((5, 5)), "jpg")
+    assert stray.exists()
     covers.delete_cover(cid)
     assert stray.exists()
 
@@ -80,10 +90,28 @@ def test_delete_raises_when_the_file_survives(cid, monkeypatch):
 
 
 def test_cover_version_survives_a_vanishing_file(cid, monkeypatch):
-    """It runs once per row in GET /campaigns; a stat race may not 500 the list."""
+    """It runs once per row in GET /campaigns; a stat race may not 500 the list.
+
+    Patches `Path.stat` itself, not `assets.image_version` -- patching
+    `image_version` only proves `cover_version`'s `except OSError` fires, not
+    that it survives the actual race the spec describes (the file vanishing
+    between `cover_path`'s resolution and the `stat()` call inside
+    `image_version`). `_mtime_ns`, which `cover_path` -> `path_in` uses to rank
+    siblings, already swallows a stat failure on its own (that's what lets
+    resolution tolerate a concurrent unlink at all), so patching every
+    `Path.stat` call still lets resolution succeed and only trips the
+    unguarded `stat()` inside `image_version`.
+    """
     covers.put_cover(cid, _png(), "png")
-    monkeypatch.setattr(assets, "image_version",
-                        lambda p: (_ for _ in ()).throw(OSError("gone")))
+    p = covers.cover_path(cid)
+    real_stat = pathlib.Path.stat
+
+    def flaky_stat(self, *a, **k):
+        if self == p:
+            raise OSError("gone")
+        return real_stat(self, *a, **k)
+
+    monkeypatch.setattr(pathlib.Path, "stat", flaky_stat)
     assert covers.cover_version(cid) == ""
 
 
