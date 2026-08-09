@@ -19,16 +19,27 @@ into first-class records the app's other features (world-info triggers,
 lore-owner gating, greeting availability, tag-gated greetings) can use.
 
 **This spec went through a Codex adversarial pass against the design**
-(not just the prose) which found several places the design as first
-drafted would have silently corrupted or duplicated real data. Two are
-load-bearing enough to call out up front, because they reshape the
-Merge and Apply sections below:
+(not just the prose), which found real issues, plus one claim that
+turned out to be wrong when checked against this store's actual
+character cards:
 
-- `alternate_greetings` on a character card are **mutually-exclusive
-  alternate openings for that one character**, not a narrative sequence
-  — SillyTavern's convention, confirmed in `characters.py`'s card shape.
-  Auto-chaining a character's own alternates via `leads_to` would be
-  actively wrong, not just low-value.
+- Codex asserted `alternate_greetings` are always "mutually-exclusive
+  alternate openings," citing SillyTavern convention, and the first
+  draft of this spec took that as a blanket rule ("never chain a
+  character's own alternates"). Sampling real cards shows that's not
+  true here: `realm/adriana` (9 alternates) is a clear
+  life-stage progression — guild induction → lost in the city →
+  injury → married domesticity → pregnancy → a breakdown/memory-loss
+  scene. `port-haven/abigail` (21 alternates) is the opposite case —
+  mostly independent occasion-vignettes (three separate Halloween
+  scenes, a Christmas one, a laundry-mishap gag), though one alt
+  explicitly presupposes established history with `{{user}}` from
+  another. **The reality is mixed, not categorical in either
+  direction.** The fix: same-character alternates get judged by the
+  *exact same* evidence standard as cross-character pairs (see Merge,
+  below) — chain on explicit textual/chronological evidence, no
+  default assumption either way, whether the pair is one character's
+  alternates or two different characters' cards.
 - `store.greetings.set_edges` and `update_greeting`'s `present`/
   `requires_tags` **replace the field wholesale** — confirmed by reading
   `store/greetings.py:205-214,146-167` directly. Several worlds already
@@ -43,7 +54,11 @@ Merge and Apply sections below:
   already-imported character/version — re-running it duplicates
   greetings).
 
-Everything below already has these fixes folded in.
+Everything below already has these fixes folded in. Lesson for the
+propose/merge agent prompts themselves: don't assume a uniform pattern
+across a whole world's cast either — some characters' alternates will
+be a real sequence, others a grab-bag of vignettes, and the only way to
+tell is the text of each pair, not a rule of thumb.
 
 ## Goals
 
@@ -54,9 +69,11 @@ For each of the 16 worlds:
    recorded as their own entities.
 2. Import greeting-worthy content from character cards
    (`first_mes`/`alternate_greetings`) into world-level `greetings/`, and
-   link greetings that are evidently part of the same story — across
-   *different* characters, never a character's own alternates — into
-   plot-map sequences (`leads_to`, multi-character `present` casts).
+   link greetings that are evidently part of the same story — whether
+   that's two different characters' cards or one character's own
+   alternates — into plot-map sequences (`leads_to`, multi-character
+   `present` casts), based on textual evidence, not on which card they
+   came from.
 3. Build each world's tag vocabulary (`tags.md`) from recurring identity
    categories evident in the cast, and attach `requires_tags` to the
    greetings where those tags are the natural gate.
@@ -183,14 +200,18 @@ already covered. It does not re-read the raw character/lore corpus.
   cases go to `open_questions` instead.
 - **Cross-checks against the existing-store index** so nothing gets
   recreated.
-- **Chains greetings only across different characters, with an
-  explicit chronological/causal marker in the text** — not just shared
-  topic or a name mentioned in passing. A character's own
-  `alternate_greetings` are never chained to each other (they're
-  alternate openings, not a sequence — see the note at the top of this
-  doc). `present` is set only for characters who are actually in the
-  scene (speaking, acting, physically there) — being *named* in a
-  greeting's text is not enough on its own.
+- **Chains any pair of greetings only on an explicit chronological/
+  causal marker in the text** — not just shared topic or a name
+  mentioned in passing — regardless of whether the pair is one
+  character's own alternates or two different characters' cards. Real
+  cards in this store contain both patterns (see the note at the top of
+  this doc: `realm/adriana`'s alternates are a genuine
+  life-stage sequence; `port-haven/abigail`'s are mostly independent
+  occasion-vignettes with one exception that presupposes shared
+  history) — there's no shortcut that avoids reading each candidate
+  pair's actual text. `present` is set only for characters who are
+  actually in the scene (speaking, acting, physically there) — being
+  *named* in a greeting's text is not enough on its own.
 - **Respects plot-graph shape**: new `leads_to` edges must not create a
   cycle, and must be unioned with — never replace — whatever edges
   already exist for that greeting (see Apply, which is where the
