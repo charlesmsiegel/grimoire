@@ -5,10 +5,11 @@
     <dc:title>{{ title }}</dc:title>
     <dc:language>en</dc:language>
     <meta property="dcterms:modified">{{ modified }}</meta>
-  </metadata>
+{% if cover_id %}    <meta name="cover" content="{{ cover_id }}"/>
+{% endif %}  </metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
-{% for it in items %}    <item id="{{ it.id }}" href="{{ it.href }}" media-type="{{ it.media_type }}"/>
+{% for it in items %}    <item id="{{ it.id }}" href="{{ it.href }}" media-type="{{ it.media_type }}"{% if it.properties %} properties="{{ it.properties }}"{% endif %}/>
 {% endfor %}  </manifest>
   <spine>
 {% for idref in spine %}    <itemref idref="{{ idref }}"/>

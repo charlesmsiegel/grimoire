@@ -76,29 +76,60 @@ def build_epub(cid: str) -> tuple[bytes, str]:
     images = data["images"]
     chapters = [_chapter_doc(c) for c in data["chapters"]]
     appendix = [_appendix_doc(e) for e in data["appendix"]]
-
     title = data["title"]
-    docs = [("text/titlepage.xhtml",
-             _render("titlepage.xhtml", title=title, world=data["world_name"],
-                    date_range=data["date_range"]))]
+
+    # Read the cover FIRST, so "there is a cover" is one decision everything
+    # downstream follows. The manifest is composed here and the image bytes are
+    # written much later, at zip time -- reading it there instead would let a
+    # cover deleted mid-export leave a cover page and a manifest entry pointing
+    # at a file that never got written. A vanished cover simply produces the
+    # no-cover book, which is what an export owes the user over an exception.
+    cover_bytes, cover_name = None, ""
+    if data["cover"] is not None:
+        try:
+            cover_bytes = data["cover"].read_bytes()
+            cover_name = f"cover{data['cover'].suffix.lower()}"
+        except OSError:
+            cover_bytes, cover_name = None, ""
+
+    docs = []
+    if cover_bytes is not None:
+        docs.append(("text/cover.xhtml",
+                     _render("cover.xhtml", title=title, src=f"../images/{cover_name}")))
+    docs.append(("text/titlepage.xhtml",
+                 _render("titlepage.xhtml", title=title, world=data["world_name"],
+                         date_range=data["date_range"])))
     docs += [(f"text/{c['file']}", c["doc"]) for c in chapters]
     if appendix:
         docs.append(("text/appendix.xhtml", _render("divider.xhtml", title="Appendix")))
         docs += [(f"text/{e['file']}", e["doc"]) for e in appendix]
 
     fonts = sorted(FONTS_DIR.glob("*.ttf")) if FONTS_DIR.exists() else []
-    items = [{"id": f"doc-{i}", "href": href, "media_type": "application/xhtml+xml"}
+    # Every item carries `properties` (usually ""): the template environment is
+    # StrictUndefined, so an item missing the key raises rather than rendering
+    # an empty attribute.
+    items = [{"id": f"doc-{i}", "href": href, "media_type": "application/xhtml+xml",
+              "properties": ""}
              for i, (href, _) in enumerate(docs)]
     spine = [it["id"] for it in items]
-    items.append({"id": "css", "href": "css/stylesheet.css", "media_type": "text/css"})
-    items += [{"id": f"font-{i}", "href": f"fonts/{f.name}", "media_type": "font/ttf"}
+    items.append({"id": "css", "href": "css/stylesheet.css", "media_type": "text/css",
+                  "properties": ""})
+    items += [{"id": f"font-{i}", "href": f"fonts/{f.name}", "media_type": "font/ttf",
+               "properties": ""}
               for i, f in enumerate(fonts)]
     items += [{"id": f"img-{i}", "href": f"images/{name}",
-               "media_type": _EXT_MEDIA.get(name.rsplit(".", 1)[-1], "application/octet-stream")}
+               "media_type": _EXT_MEDIA.get(name.rsplit(".", 1)[-1], "application/octet-stream"),
+               "properties": ""}
               for i, name in enumerate(images.by_path.values())]
+    if cover_bytes is not None:
+        items.append({"id": "cover-img", "href": f"images/{cover_name}",
+                      "media_type": _EXT_MEDIA.get(cover_name.rsplit(".", 1)[-1],
+                                                   "application/octet-stream"),
+                      "properties": "cover-image"})
 
     opf = _render("package.opf", identifier=f"urn:grimoire:campaign:{cid}", title=title,
                   modified=data["updated"] or now_iso(),
+                  cover_id="cover-img" if cover_bytes is not None else "",
                   items=items, spine=spine)
     nav = _render("nav.xhtml", chapters=chapters, appendix=appendix)
 
@@ -115,4 +146,6 @@ def build_epub(cid: str) -> tuple[bytes, str]:
             z.writestr(f"fonts/{f.name}", f.read_bytes())
         for p, name in images.by_path.items():
             z.writestr(f"images/{name}", p.read_bytes())
+        if cover_bytes is not None:
+            z.writestr(f"images/{cover_name}", cover_bytes)
     return buf.getvalue(), f"{cid}.epub"

@@ -18,7 +18,7 @@ from pathlib import Path
 import markdown as _md_lib
 from markupsafe import escape
 
-from . import assets, calendars, chronicle, characters, entities, overlay, pcs, worlds
+from . import assets, calendars, chronicle, characters, covers, entities, overlay, pcs, worlds
 from .appearances import cast as appearances_cast, paths as appearances_paths
 from .scenes import read as scenes_read, serialize as scenes_serialize
 from .campaigns import paths as campaigns_paths, read as campaigns_read
@@ -216,6 +216,12 @@ def collect(cid: str, image_prefix: str = "images/") -> dict:
     return {
         "title": campaign["meta"].get("name", cid),
         "world_name": world_name,
+        # The cover is a PATH, deliberately NOT registered in `images`: every
+        # renderer packs everything in that registry (`build_markdown_bundle`
+        # zips it, `build_html` base64-inlines it), so registering the cover
+        # would ship it into exports that never reference it -- and would
+        # renumber every other packed image. Only `epub.build_epub` uses this.
+        "cover": covers.cover_path(cid),
         "date_range": date_range,
         "updated": campaign["meta"].get("updated", ""),
         "chapters": chapters,

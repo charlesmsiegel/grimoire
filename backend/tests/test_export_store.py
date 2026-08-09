@@ -1,10 +1,11 @@
 """Campaign export: shared collector + markdown/HTML/text/JSON renderers."""
 
+import base64
 import io
 import json
 import zipfile
 
-from grimoire.store import appearances, assets, campaigns, characters, chronicle, entities, export, pcs, scenes, worlds
+from grimoire.store import appearances, assets, campaigns, characters, chronicle, covers, entities, export, pcs, scenes, worlds
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -226,3 +227,25 @@ def test_json_export_keeps_the_transition_tag(monkeypatch, tmp_path):
                           speaker=scenes.TRANSITION_SPEAKER)
     payload = json.loads(export.build_json(cid)[0].decode())
     assert payload["scenes"][0]["messages"][0]["speaker"] == scenes.TRANSITION_SPEAKER
+
+
+def test_cover_is_not_packed_into_the_other_exports(monkeypatch, tmp_path):
+    """The cover must stay out of the shared image registry: every other
+    renderer packs everything in it."""
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    before = sorted(export.collect(cid)["images"].by_path.values())
+    covers.put_cover(cid, b"\x89PNG-cover", "png")
+    data = export.collect(cid)
+    assert data["cover"] is not None
+    assert sorted(data["images"].by_path.values()) == before  # no renumbering
+
+    cover_bytes = covers.cover_path(cid).read_bytes()
+    blob, _ = export.build_markdown_bundle(cid)
+    z = zipfile.ZipFile(io.BytesIO(blob))
+    assert not [n for n in z.namelist()
+                if n.startswith("images/") and z.read(n) == cover_bytes]
+
+    html, _ = export.build_html(cid)
+    # asserted on the BYTES, not the word "cover": the campaign's own prose can
+    # contain that word, which would make a substring check fail for nothing
+    assert base64.b64encode(cover_bytes) not in html

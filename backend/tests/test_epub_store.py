@@ -42,12 +42,21 @@ def test_message_html_speaker_label():
 
 
 import io  # noqa: E402 - deliberate late import; see the lines above
+import pathlib  # noqa: E402 - deliberate late import; see the lines above
 import xml.etree.ElementTree as ET  # noqa: E402 - deliberate late import; see the lines above
 import zipfile  # noqa: E402 - deliberate late import; see the lines above
 
-from grimoire.store import appearances, characters, entities, pcs, scenes  # noqa: E402 - deliberate late import; see the lines above
+from PIL import Image  # noqa: E402 - deliberate late import; see the lines above
+
+from grimoire.store import appearances, characters, covers, entities, pcs, scenes  # noqa: E402 - deliberate late import; see the lines above
 
 OPF_NS = {"opf": "http://www.idpf.org/2007/opf"}
+
+
+def _png(size=(4, 4)) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", size, (10, 20, 30)).save(buf, "PNG")
+    return buf.getvalue()
 
 
 def _fixture_campaign(monkeypatch, tmp_path):
@@ -262,3 +271,61 @@ def test_epub_renders_transitions_without_a_speaker_plate(monkeypatch, tmp_path)
     assert scenes.TRANSITION_SPEAKER not in ch
     assert "Scene</span>" not in ch
     assert "Time passes. It is now dusk." in ch
+
+
+def test_build_epub_without_a_cover_is_structurally_unchanged(monkeypatch, tmp_path):
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    z = _open(epub.build_epub(cid)[0])
+    assert "text/cover.xhtml" not in z.namelist()
+    assert "images/cover.png" not in z.namelist()
+    opf = ET.fromstring(z.read("package.opf"))
+    assert not [i for i in opf.findall(".//opf:item", OPF_NS)
+                if i.get("properties") == "cover-image"]
+    assert opf.find(".//opf:meta[@name='cover']", OPF_NS) is None
+    first = opf.findall(".//opf:itemref", OPF_NS)[0].get("idref")
+    assert {i.get("id"): i.get("href") for i in opf.findall(".//opf:item", OPF_NS)}[first] \
+        == "text/titlepage.xhtml"
+
+
+def test_build_epub_with_a_cover(monkeypatch, tmp_path):
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    data = _png()
+    covers.put_cover(cid, data, "png")
+
+    z = _open(epub.build_epub(cid)[0])
+    assert z.read("images/cover.png") == data
+    page = z.read("text/cover.xhtml").decode()
+    assert "../images/cover.png" in page and "Run One" in page
+
+    opf = ET.fromstring(z.read("package.opf"))
+    items = {i.get("id"): i for i in opf.findall(".//opf:item", OPF_NS)}
+    assert items["cover-img"].get("properties") == "cover-image"
+    assert items["cover-img"].get("href") == "images/cover.png"
+    assert opf.find(".//opf:meta[@name='cover']", OPF_NS).get("content") == "cover-img"
+
+    spine = [ref.get("idref") for ref in opf.findall(".//opf:itemref", OPF_NS)]
+    assert items[spine[0]].get("href") == "text/cover.xhtml"
+    assert items[spine[1]].get("href") == "text/titlepage.xhtml"
+    # not a ToC entry, by convention
+    assert "cover.xhtml" not in z.read("nav.xhtml").decode()
+
+
+def test_build_epub_drops_a_cover_that_vanishes_mid_export(monkeypatch, tmp_path):
+    """The panel that replaces a cover sits next to the Export menu, so this
+    window is reachable. An export must degrade, not 500."""
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    covers.put_cover(cid, _png(), "png")
+    real = pathlib.Path.read_bytes
+
+    def vanishing(self, *a, **k):
+        if self.name == "cover.png":
+            raise OSError("gone")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", vanishing)
+    z = _open(epub.build_epub(cid)[0])
+    assert "text/cover.xhtml" not in z.namelist()
+    assert "images/cover.png" not in z.namelist()
+    opf = ET.fromstring(z.read("package.opf"))
+    assert not [i for i in opf.findall(".//opf:item", OPF_NS)
+                if i.get("properties") == "cover-image"]
