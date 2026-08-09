@@ -14,6 +14,8 @@ vi.mock("../api/client", () => ({
     listWorlds: vi.fn(),
     renameCampaign: vi.fn(),
     deleteCampaign: vi.fn(),
+    campaignCoverUrl: (cid: string, o?: { w?: number; v?: string }) =>
+      `/api/campaigns/${cid}/cover?w=${o?.w}&v=${o?.v}`,
   },
 }));
 import { api } from "../api/client";
@@ -70,4 +72,29 @@ test("deletes a campaign after confirm", async () => {
   await screen.findByText("Doomed");
   fireEvent.click(screen.getByRole("button", { name: /delete/i }));
   await waitFor(() => expect(api.deleteCampaign).toHaveBeenCalledWith("c1"));
+});
+
+test("renders a thumbnail for a campaign with a cover and a placeholder without", async () => {
+  (api.listCampaigns as any).mockResolvedValue([
+    { id: "saltmarch", name: "Saltmarch Nights", world: "realm", scenes: 3, last_scene: "Arrival", cover: "v1" },
+    { id: "winifred", name: "Winifred's War", world: "realm", scenes: 1, last_scene: "", cover: "" },
+  ]);
+  render(<MemoryRouter><CampaignsView /></MemoryRouter>);
+
+  const img = await screen.findByAltText("Saltmarch Nights cover");
+  expect(img.getAttribute("src")).toContain("/api/campaigns/saltmarch/cover");
+  expect(img.getAttribute("src")).toContain("v=v1");
+  expect(screen.queryByAltText("Winifred's War cover")).toBeNull();
+  expect(document.querySelectorAll(".list-row-cover").length).toBe(2);  // both boxes, aligned
+});
+
+test("a thumbnail that fails to load falls back to the placeholder box", async () => {
+  (api.listCampaigns as any).mockResolvedValue([
+    { id: "saltmarch", name: "Saltmarch Nights", world: "realm", scenes: 3, last_scene: "", cover: "v1" },
+  ]);
+  render(<MemoryRouter><CampaignsView /></MemoryRouter>);
+  const img = await screen.findByAltText("Saltmarch Nights cover");
+  fireEvent.error(img);
+  await waitFor(() => expect(screen.queryByAltText("Saltmarch Nights cover")).toBeNull());
+  expect(document.querySelectorAll(".list-row-cover").length).toBe(1);  // the box stays
 });

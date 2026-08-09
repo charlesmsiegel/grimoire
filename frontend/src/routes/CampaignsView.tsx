@@ -7,6 +7,9 @@ export default function CampaignsView() {
   const [campaigns, setCampaigns] = useState<CampaignMeta[]>([]);
   const [worlds, setWorlds] = useState<WorldMeta[]>([]);
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
+  // Keyed by id AND version, not id alone: a cover that failed to load must
+  // not keep its replacement hidden after the next listCampaigns() refresh.
+  const [broken, setBroken] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     api.listCampaigns().then(setCampaigns);
@@ -47,6 +50,14 @@ export default function CampaignsView() {
       <div className="list-block">
         {campaigns.map((c) => (
           <div className="list-row" key={c.id}>
+            <div className="list-row-cover">
+              {c.cover && !broken[`${c.id}:${c.cover}`] && (
+                <img className="list-row-cover-img"
+                     src={api.campaignCoverUrl(c.id, { w: 96, v: c.cover })}
+                     alt={`${c.name} cover`}
+                     onError={() => setBroken((b) => ({ ...b, [`${c.id}:${c.cover}`]: true }))} />
+              )}
+            </div>
             {renaming?.id === c.id ? (
               <input
                 className="row-rename" aria-label="Rename campaign" autoFocus

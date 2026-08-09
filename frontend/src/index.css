@@ -112,6 +112,8 @@ body::before {
   font-family: var(--fm); font-size: 10.5px; color: var(--muted);
   letter-spacing: 0.06em; text-transform: uppercase;
 }
+.list-row-cover { flex: 0 0 auto; width: 64px; height: 64px; margin-left: 20px; background: var(--rule-soft); }
+.list-row-cover-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .list-row-arrow { font-family: var(--fd); font-weight: 900; font-size: 22px; color: var(--accent); padding: 0 20px; }
 .list-row .row-actions { opacity: 0; }
 .list-row:hover .row-actions, .list-row:focus-within .row-actions { opacity: 1; }
