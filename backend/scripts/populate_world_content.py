@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from grimoire.store import entities, greetings, tags, worlds
+from grimoire.store import cards, characters, entities, greetings, tags, worlds
 from grimoire.store.paths import home
 
 # creatures entities are only meaningful in fantasy worlds; enforced here (not
@@ -147,34 +147,44 @@ def apply_reclassifications(root: Path, specs: list[dict], results: dict,
             pass
 
 
-def _extract_import_index(character_id: str, gid: str) -> int:
-    """Extract the import index from a greeting ID by parsing the deterministic
-    naming pattern created by import_from_character: main = {character_id},
-    alts = {character_id}-alt-{index}. Returns the index (0, 1, 2, ...), which
-    is stable across reruns even after titles are renamed (rename doesn't change
-    the ID)."""
-    if gid == character_id:
-        return 0
-    suffix = "-alt-"
-    if gid.startswith(f"{character_id}{suffix}"):
-        try:
-            return int(gid[len(character_id) + len(suffix):])
-        except ValueError:
-            pass
-    # Fallback for any ID that doesn't match pattern (shouldn't happen)
-    return 0
-
-
 def _existing_greetings_in_creation_order(root: Path, character: str, version: str) -> list[str]:
-    """Greetings for one character/version, in creation order — extracts the order
-    from greeting IDs, which encode the creation sequence via a deterministic
-    pattern (main greeting = character_id, alts = character_id-alt-N). This is
-    stable across reruns even when some greetings are renamed to custom titles,
-    unlike file-timestamp-based ordering which breaks when only partial titles
-    are applied (leaves some greetings with old mtimes, completely reordering
-    the sort on rerun)."""
-    matches = [g for g in greetings.list_greetings(root) if g["character"] == character and g["version"] == version]
-    return sorted((g["id"] for g in matches), key=lambda gid: _extract_import_index(character, gid))
+    """Greetings for one character/version, in the order import_from_character
+    originally created them — recovered by recomputing the exact bodies the
+    card would produce (deterministic; we bake them the same way at creation
+    and never touch body afterward) and matching against existing greetings'
+    actual bodies. This survives title renames (name is mutable, body isn't)
+    and doesn't depend on id slugification, which can diverge from char_id
+    when a card's display name isn't already slug-shaped."""
+    try:
+        card = characters.read_card(root, character, version)
+    except (characters.CharacterNotFound, characters.VersionNotFound):
+        return []
+    data = card.get("data", {})
+    baked_name = greetings.char_name(root, character, version)
+
+    raw_items = []
+    first = data.get("first_mes", "")
+    if isinstance(first, str) and first.strip():
+        raw_items.append(first)
+    for alt in data.get("alternate_greetings", []) or []:
+        if isinstance(alt, str) and alt.strip():
+            raw_items.append(alt)
+
+    expected_bodies = [cards.bake_char_token(raw, baked_name) for raw in raw_items]
+
+    candidates = [g["id"] for g in greetings.list_greetings(root)
+                  if g["character"] == character and g["version"] == version]
+    body_by_id = {gid: greetings.read_greeting(root, gid)["body"] for gid in candidates}
+
+    ordered: list[str] = []
+    used: set[str] = set()
+    for expected in expected_bodies:
+        match = next((gid for gid in candidates
+                      if gid not in used and body_by_id[gid] == expected), None)
+        if match is not None:
+            ordered.append(match)
+            used.add(match)
+    return ordered
 
 
 def apply_greeting_imports(root: Path, specs: list[dict], results: dict) -> dict[str, str]:

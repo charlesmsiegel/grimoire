@@ -108,8 +108,8 @@ def test_apply_reclassifications_is_idempotent_across_reruns(monkeypatch, tmp_pa
     assert r2["skipped"][0]["reason"] == "target already exists"
 
 
-def _card(first_mes="", alts=None):
-    return {"data": {"name": "Adriana", "first_mes": first_mes,
+def _card(first_mes="", alts=None, name="Adriana"):
+    return {"data": {"name": name, "first_mes": first_mes,
                       "alternate_greetings": alts or [], "description": "", "personality": "",
                       "scenario": "", "mes_example": "", "tags": [], "extensions": {}},
             "spec": "chara_card_v3", "spec_version": "3.0"}
@@ -180,3 +180,40 @@ def test_apply_greeting_imports_idempotent_with_partial_titles_on_rerun(monkeypa
     assert ref_map_2["new:adriana:default:0"] == ref_map_1["new:adriana:default:0"]
     assert ref_map_2["new:adriana:default:1"] == ref_map_1["new:adriana:default:1"]
     assert ref_map_2["new:adriana:default:2"] == ref_map_1["new:adriana:default:2"]
+
+
+def test_apply_greeting_imports_idempotent_when_char_id_diverges_from_card_name(monkeypatch, tmp_path):
+    """Critical test: the character's store id ("charlotte-claymore") does NOT
+    slugify-match the card's own `data.name` field ("Charlotte"), which is what
+    import_from_character actually uses to build greeting names/ids ("charlotte",
+    "charlotte-alt-1", "charlotte-alt-2"). Combined with partial titles (only
+    2 of 3 greetings renamed), this broke both a prior mtime-based ordering
+    fix and a prior id-pattern-matching fix (the pattern was matched against
+    char_id, which never matches these ids). Ordering by recomputed body
+    content is immune to both the id/char_id mismatch and title renames."""
+    wid, root = _world(monkeypatch, tmp_path)
+    char_id, vid = characters.create_character(
+        root, "Charlotte Claymore", "default",
+        _card("Hello.", ["Alt one.", "Alt two."], name="Charlotte"))
+    assert char_id == "charlotte-claymore"  # store id diverges from the card's own name
+    spec = [{"character": char_id, "version": vid,
+             "titles": ["Guild induction", "Lost in the city"]}]
+
+    r1 = pwc.new_results()
+    ref_map_1 = pwc.apply_greeting_imports(root, spec, r1)
+    assert len(greetings.list_greetings(root)) == 3
+
+    by_id_1 = {g["id"]: g["name"] for g in greetings.list_greetings(root)}
+    assert by_id_1[ref_map_1["new:charlotte-claymore:default:0"]] == "Guild induction"
+    assert by_id_1[ref_map_1["new:charlotte-claymore:default:1"]] == "Lost in the city"
+    assert by_id_1[ref_map_1["new:charlotte-claymore:default:2"]] == "Charlotte (alt 2)"
+
+    r2 = pwc.new_results()
+    ref_map_2 = pwc.apply_greeting_imports(root, spec, r2)  # same spec again
+
+    assert len(greetings.list_greetings(root)) == 3  # not duplicated
+    assert r2["skipped"][0]["reason"] == "already imported"
+    assert ref_map_2 == ref_map_1
+    assert ref_map_2["new:charlotte-claymore:default:0"] == ref_map_1["new:charlotte-claymore:default:0"]
+    assert ref_map_2["new:charlotte-claymore:default:1"] == ref_map_1["new:charlotte-claymore:default:1"]
+    assert ref_map_2["new:charlotte-claymore:default:2"] == ref_map_1["new:charlotte-claymore:default:2"]
