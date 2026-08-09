@@ -63,6 +63,90 @@ def apply_tags(root: Path, tag_specs: list[dict], results: dict) -> dict[str, st
     return result
 
 
+def _existing_names_by_kind(root: Path) -> dict[str, set[str]]:
+    return {kind: {e["name"].lower() for e in entities.list_entities(root, kind)}
+            for kind in entities.ENTITY_KINDS}
+
+
+def apply_entities(root: Path, specs: list[dict], results: dict, wid: str) -> None:
+    world_rel = _world_rel(root)
+    existing_by_kind = _existing_names_by_kind(root)
+
+    for spec in specs:
+        kind = spec["kind"]
+        if kind not in entities.ENTITY_KINDS:
+            results["errors"].append(
+                {"stage": "entities", "reason": "unknown kind", "spec": spec})
+            continue
+        if kind == "creatures" and wid not in CREATURE_ALLOWED_WORLDS:
+            results["errors"].append({
+                "stage": "entities",
+                "reason": "creatures not allowed outside fantasy worlds",
+                "world": wid, "name": spec["name"]})
+            continue
+        name_lower = spec["name"].lower()
+        if name_lower in existing_by_kind[kind]:
+            results["skipped"].append({
+                "stage": "entities", "reason": "already exists",
+                "kind": kind, "name": spec["name"]})
+            continue
+        eid = entities.create_entity(
+            root, kind, spec["name"], body=spec.get("body", ""),
+            keys=spec.get("keys", ""), owners=spec.get("owners", ""),
+            fields=spec.get("fields") or None)
+        existing_by_kind[kind].add(name_lower)
+        results["created"].append({
+            "stage": "entities", "kind": kind, "id": eid,
+            "name": spec["name"], "source": spec.get("source", "")})
+        results["touched_files"].add(f"{world_rel}/{kind}/{eid}.md")
+
+
+def apply_reclassifications(root: Path, specs: list[dict], results: dict,
+                            wid: str) -> None:
+    world_rel = _world_rel(root)
+    existing_by_kind = _existing_names_by_kind(root)
+
+    for spec in specs:
+        kind = spec["new_kind"]
+        if kind not in entities.ENTITY_KINDS:
+            results["errors"].append({
+                "stage": "reclassifications", "reason": "unknown kind",
+                "spec": spec})
+            continue
+        if kind == "creatures" and wid not in CREATURE_ALLOWED_WORLDS:
+            results["errors"].append({
+                "stage": "reclassifications",
+                "reason": "creatures not allowed outside fantasy worlds",
+                "world": wid, "name": spec["name"]})
+            continue
+
+        name_lower = spec["name"].lower()
+        if name_lower in existing_by_kind[kind]:
+            results["skipped"].append({
+                "stage": "reclassifications",
+                "reason": "target already exists", "kind": kind,
+                "name": spec["name"]})
+        else:
+            eid = entities.create_entity(
+                root, kind, spec["name"], body=spec.get("body", ""),
+                keys=spec.get("keys", ""), owners=spec.get("owners", ""),
+                fields=spec.get("fields") or None)
+            existing_by_kind[kind].add(name_lower)
+            results["created"].append({
+                "stage": "reclassifications", "kind": kind, "id": eid,
+                "name": spec["name"], "source": spec.get("source", "")})
+            results["touched_files"].add(f"{world_rel}/{kind}/{eid}.md")
+
+        # Idempotent by construction: EntityNotFound just means prior run
+        # already deleted it.
+        try:
+            entities.delete_entity(root, "lore", spec["lore_id"])
+            results["touched_files"].add(
+                f"{world_rel}/lore/{spec['lore_id']}.md")
+        except entities.EntityNotFound:
+            pass
+
+
 def cmd_index(args: argparse.Namespace) -> int:
     root = worlds.world_root(args.world)
     print(json.dumps(build_index(root), indent=2, sort_keys=True))
