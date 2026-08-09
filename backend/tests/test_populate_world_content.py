@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -707,3 +708,87 @@ def test_verify_manifest_checks_git_cross_check_both_directions(monkeypatch, tmp
     missing_change = pwc.verify_manifest(root, touched_files=touched, git_changed=set())
     assert missing_change["ok"] is False
     assert any("claimed to touch" in p for p in missing_change["problems"])
+
+
+def _git_repo(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "baseline"], cwd=tmp_path, check=True)
+
+
+def _write_manifest(tmp_path: Path, wid: str, **overrides) -> Path:
+    import tempfile
+    base = {"world": wid, "entities": [], "reclassifications": [], "tags": [],
+            "greeting_imports": [], "greeting_edges": [], "greeting_gating": []}
+    base.update(overrides)
+    # Write manifest outside the git repo to avoid polluting git status in tests
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as f:
+        json.dump(base, f)
+        return Path(f.name)
+
+
+def test_run_aborts_on_dirty_tree_anywhere_in_the_repo(monkeypatch, tmp_path, capsys):
+    wid, root = _world(monkeypatch, tmp_path)
+    entities.create_entity(root, "locations", "Pre-existing")
+    _git_repo(tmp_path)
+    (tmp_path / "worlds" / "some-other-world.md").write_text("unrelated dirty file", encoding="utf-8")
+
+    manifest_path = _write_manifest(tmp_path, wid)
+    monkeypatch.setattr(sys, "argv", ["populate_world_content.py", "run", "--world", wid,
+                                       "--manifest", str(manifest_path)])
+    assert pwc.main() == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "aborted" and out["reason"] == "repo is dirty"
+
+
+def test_run_does_not_commit_when_manifest_has_errors(monkeypatch, tmp_path, capsys):
+    wid, root = _world(monkeypatch, tmp_path)
+    _git_repo(tmp_path)
+    manifest_path = _write_manifest(tmp_path, wid,
+                                     entities=[{"kind": "not-a-real-kind", "name": "x", "body": ""}])
+    monkeypatch.setattr(sys, "argv", ["populate_world_content.py", "run", "--world", wid,
+                                       "--manifest", str(manifest_path)])
+    assert pwc.main() == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["committed"] is False
+    assert out["errors"]
+    status = subprocess.run(["git", "status", "--short"], cwd=tmp_path, capture_output=True, text=True).stdout
+    assert status.strip() != ""  # left dirty for the user to inspect, not silently committed
+
+
+def test_run_applies_verifies_and_commits_on_clean_repo(monkeypatch, tmp_path, capsys):
+    wid, root = _world(monkeypatch, tmp_path)
+    _git_repo(tmp_path)
+
+    manifest_path = _write_manifest(tmp_path, wid,
+                                     entities=[{"kind": "locations", "name": "Blind Lion", "body": ""}])
+    monkeypatch.setattr(sys, "argv", ["populate_world_content.py", "run", "--world", wid,
+                                       "--manifest", str(manifest_path)])
+    assert pwc.main() == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["committed"] is True
+    assert out["verify"]["ok"] is True
+
+    log = subprocess.run(["git", "log", "--oneline", "-1"], cwd=tmp_path, capture_output=True, text=True).stdout
+    assert wid in log
+    status = subprocess.run(["git", "status", "--short"], cwd=tmp_path, capture_output=True, text=True).stdout
+    assert status.strip() == ""
+
+
+def test_run_reruns_as_noop_not_a_false_commit(monkeypatch, tmp_path, capsys):
+    wid, root = _world(monkeypatch, tmp_path)
+    _git_repo(tmp_path)
+    manifest_path = _write_manifest(tmp_path, wid,
+                                     entities=[{"kind": "locations", "name": "Blind Lion", "body": ""}])
+    monkeypatch.setattr(sys, "argv", ["populate_world_content.py", "run", "--world", wid,
+                                       "--manifest", str(manifest_path)])
+    assert pwc.main() == 0
+    first_log = subprocess.run(["git", "log", "--oneline"], cwd=tmp_path, capture_output=True, text=True).stdout
+
+    assert pwc.main() == 0  # rerun, same manifest, nothing left to change
+    out = json.loads(capsys.readouterr().out)
+    assert out["committed"] == "noop"
+    second_log = subprocess.run(["git", "log", "--oneline"], cwd=tmp_path, capture_output=True, text=True).stdout
+    assert first_log == second_log  # no empty/duplicate commit was created

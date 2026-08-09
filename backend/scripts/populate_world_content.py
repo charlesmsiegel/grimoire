@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -502,6 +503,57 @@ def cmd_index(args: argparse.Namespace) -> int:
     return 0
 
 
+def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+
+
+def _git_changed_paths(cwd: Path, scope: str) -> set[str]:
+    out = _git(["status", "--porcelain", "--untracked-files=all", "--", scope], cwd).stdout
+    paths = set()
+    for line in out.splitlines():
+        if len(line) > 3:
+            paths.add(line[3:].strip())
+    return paths
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    root = worlds.world_root(args.world)
+    grimoire_root = home()
+    world_rel = _world_rel(root)
+    manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+
+    if manifest.get("world") != args.world:
+        print(json.dumps({"status": "aborted", "reason": "manifest world does not match --world"}))
+        return 1
+
+    # Whole-repo dirty check, not just this world's path: `git commit` with no
+    # pathspec commits everything staged, so anything dirty anywhere is a risk
+    # of getting swept into this world's checkpoint.
+    if _git_changed_paths(grimoire_root, "."):
+        print(json.dumps({"status": "aborted", "reason": "repo is dirty"}))
+        return 1
+
+    results = apply_manifest(root, manifest, args.world)
+    git_changed = _git_changed_paths(grimoire_root, world_rel)
+    verify_result = verify_manifest(root, touched_files=results["touched_files"], git_changed=git_changed)
+    results["verify"] = verify_result
+
+    if results["errors"] or not verify_result["ok"]:
+        results["committed"] = False
+    elif not git_changed:
+        results["committed"] = "noop"
+    else:
+        add = _git(["add", "-A", "--", world_rel], grimoire_root)
+        summary = f"{len(results['created'])} created, {len(results['skipped'])} skipped, {len(results['errors'])} errors"
+        commit = _git(["commit", "-q", "-m", f"{args.world}: populate content ({summary})"], grimoire_root)
+        results["committed"] = add.returncode == 0 and commit.returncode == 0
+        if not results["committed"]:
+            results["git_error"] = (add.stderr or "") + (commit.stderr or "")
+
+    print(json.dumps(results, indent=2, sort_keys=True))
+    return 0 if results["committed"] in (True, "noop") else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Apply a world-content manifest to a real grimoire world.")
@@ -510,9 +562,15 @@ def main(argv: list[str] | None = None) -> int:
     p_index = sub.add_parser("index", help="print the existing-content index for a world")
     p_index.add_argument("--world", required=True)
 
+    p_run = sub.add_parser("run", help="apply a manifest to a world, verify, and commit")
+    p_run.add_argument("--world", required=True)
+    p_run.add_argument("--manifest", required=True)
+
     args = ap.parse_args(argv)
     if args.cmd == "index":
         return cmd_index(args)
+    if args.cmd == "run":
+        return cmd_run(args)
     return 1
 
 
