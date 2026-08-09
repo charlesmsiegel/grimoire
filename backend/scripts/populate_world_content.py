@@ -469,14 +469,18 @@ def verify_manifest(root: Path, touched_files: list[str] | None = None,
             if target not in greeting_ids:
                 problems.append(f"plotmap edge from {gid}: references unknown greeting {target}")
 
+    # Pre-compute entity id sets by kind to avoid repeated file I/O in the owners loop
+    entity_ids_by_kind: dict[str, set[str]] = {}
+    for kind in entities.ENTITY_KINDS:
+        entity_ids_by_kind[kind] = {e["id"] for e in entities.list_entities(root, kind)}
+
     for kind in entities.ENTITY_KINDS:
         for e in entities.list_entities(root, kind):
             owners = [o.strip() for o in e.get("owners", "").split(",") if o.strip()]
             for ref in owners:
                 ref_kind, _, ref_id = ref.partition(":")
                 ok = (ref_kind == "characters" and ref_id in char_ids) or \
-                     (ref_kind in entities.ENTITY_KINDS and
-                      any(x["id"] == ref_id for x in entities.list_entities(root, ref_kind)))
+                     (ref_kind in entities.ENTITY_KINDS and ref_id in entity_ids_by_kind.get(ref_kind, set()))
                 if not ok:
                     problems.append(f"{kind}/{e['id']}: owners references unresolvable {ref}")
 

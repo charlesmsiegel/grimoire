@@ -614,18 +614,77 @@ def test_apply_manifest_full_pipeline_and_idempotent_rerun(monkeypatch, tmp_path
     assert edges_again == edges  # edge still there, not lost, not doubled
 
 
-def test_verify_manifest_catches_dangling_refs(monkeypatch, tmp_path):
+def test_verify_manifest_catches_dangling_character_ref(monkeypatch, tmp_path):
+    """Test that greeting's own character field is checked for dangling refs."""
     wid, root = _world(monkeypatch, tmp_path)
-    greetings.create_greeting(root, "First", "nobody-character", "default", "a",
-                               requires_tags=["ghost-tag"], present=["nobody"])
+    greetings.create_greeting(root, "First", "nobody-character", "default", "a")
+
+    result = pwc.verify_manifest(root)
+    assert result["ok"] is False
+    assert any("nobody-character" in p and "character" in p for p in result["problems"])
+
+
+def test_verify_manifest_catches_dangling_requires_tags(monkeypatch, tmp_path):
+    """Test that greeting's requires_tags are checked for dangling refs."""
+    wid, root = _world(monkeypatch, tmp_path)
+    characters.create_character(root, "Some Char", "default", {"data": {"name": "Some Char"}})
+    greetings.create_greeting(root, "First", "some-char", "default", "a",
+                               requires_tags=["ghost-tag"])
+
+    result = pwc.verify_manifest(root)
+    assert result["ok"] is False
+    assert any("ghost-tag" in p and "requires_tags" in p for p in result["problems"])
+
+
+def test_verify_manifest_catches_dangling_present(monkeypatch, tmp_path):
+    """Test that greeting's present list is checked for dangling refs."""
+    wid, root = _world(monkeypatch, tmp_path)
+    characters.create_character(root, "Some Char", "default", {"data": {"name": "Some Char"}})
+    greetings.create_greeting(root, "First", "some-char", "default", "a",
+                               present=["nobody"])
+
+    result = pwc.verify_manifest(root)
+    assert result["ok"] is False
+    assert any("present references unknown character" in p for p in result["problems"])
+
+
+def test_verify_manifest_catches_dangling_entity_owners(monkeypatch, tmp_path):
+    """Test that entity owners are checked for dangling refs."""
+    wid, root = _world(monkeypatch, tmp_path)
     entities.create_entity(root, "lore", "Bad owner", owners="characters:nobody")
 
     result = pwc.verify_manifest(root)
     assert result["ok"] is False
-    assert any("ghost-tag" in p for p in result["problems"])
-    assert any("present references unknown character" in p for p in result["problems"])
-    assert any("nobody-character" in p and "character" in p for p in result["problems"])
-    assert any("characters:nobody" in p for p in result["problems"])
+    assert any("characters:nobody" in p and "owners" in p for p in result["problems"])
+
+
+def test_verify_manifest_catches_dangling_plotmap_target(monkeypatch, tmp_path):
+    """Test that plotmap edge targets are checked for dangling refs."""
+    wid, root = _world(monkeypatch, tmp_path)
+    characters.create_character(root, "Char", "default", {"data": {"name": "Char"}})
+    g1 = greetings.create_greeting(root, "First", "char", "default", "a")
+    # Set edges pointing to a non-existent greeting
+    greetings.set_edges(root, g1, leads_to=["nonexistent-greeting"])
+
+    result = pwc.verify_manifest(root)
+    assert result["ok"] is False
+    assert any("nonexistent-greeting" in p and "references unknown greeting" in p for p in result["problems"])
+
+
+def test_verify_manifest_catches_dangling_plotmap_source(monkeypatch, tmp_path):
+    """Test that plotmap edge sources (keys) are checked for dangling refs."""
+    import json
+    from grimoire.store import atomic
+
+    wid, root = _world(monkeypatch, tmp_path)
+    # Directly write a plotmap with a source key that doesn't correspond to a real greeting
+    plotmap = {"nonexistent-source": {"leads_to": [], "excludes": []}}
+    plotmap_path = root / "plotmap.json"
+    atomic.write_text(plotmap_path, json.dumps(plotmap, indent=2, sort_keys=True) + "\n")
+
+    result = pwc.verify_manifest(root)
+    assert result["ok"] is False
+    assert any("nonexistent-source" in p and "edge source" in p for p in result["problems"])
 
 
 def test_verify_manifest_checks_git_cross_check_both_directions(monkeypatch, tmp_path):
