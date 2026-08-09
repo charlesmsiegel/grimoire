@@ -7,7 +7,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import populate_world_content as pwc
-from grimoire.store import characters, entities, greetings, tags, worlds
+from grimoire.store import (assets, campaigns, characters, entities, greetings, overlay,
+                            tags, worlds)
 
 
 def _world(monkeypatch, tmp_path) -> tuple[str, Path]:
@@ -107,6 +108,60 @@ def test_apply_reclassifications_is_idempotent_across_reruns(monkeypatch, tmp_pa
     # Deleting an already-gone lore entry is not an error
     assert r2["errors"] == []
     assert r2["skipped"][0]["reason"] == "target already exists"
+
+
+def test_reclassification_sweeps_the_freed_lore_id_out_of_world_and_campaigns(monkeypatch, tmp_path):
+    """A reclassification DELETES a world lore record, and the id it frees is
+    handed straight back to the next record of that name. `forget_world_record`
+    is the sweep every world-side deleter in this codebase owes the overlay for
+    exactly that reason (#225): without it the world's own asset directory
+    survives the delete, and each dependent campaign keeps the state it filed
+    against a record it only ever inherited -- both of which a later record
+    under the same slug then adopts."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Ashgrove")
+    root = worlds.world_root(wid)
+    lore_id = entities.create_entity(root, "lore", "Gangs", "The Erune family.")
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    croot = campaigns.campaign_root(cid)
+    # world-side: an image filed beside the record, which delete_entity leaves
+    assets.put_image(root, lore_id, "default", "gallery_1", b"world-bytes", "png", base="lore")
+    # campaign-side: state filed against a record this campaign only inherited
+    assets.put_image(croot, lore_id, "default", "gallery_1", b"campaign-bytes", "png", base="lore")
+
+    results = pwc.new_results()
+    pwc.apply_reclassifications(root, [{
+        "lore_id": lore_id, "new_kind": "groups",
+        "name": "Erune family", "body": "Mafia family."}], results, wid)
+
+    assert results["errors"] == []
+    assert not (root / "lore" / lore_id).exists()      # world-side leftovers gone
+    assert not (croot / "lore" / lore_id).exists()     # campaign-side state gone
+    assert results["swept"] == [
+        {"stage": "reclassifications", "kind": "lore", "id": lore_id}]
+    # The world-side removals are real changes under the world's path, so they
+    # have to be accounted for or verify_manifest's git cross-check reports
+    # them as "changes apply did not account for" and blocks the commit.
+    assert f"worlds/{wid}/lore/{lore_id}/assets/default/gallery_1.png" in results["touched_files"]
+    # and the id really is reusable now, with nothing of the old record on it
+    assert entities.create_entity(root, "lore", "Gangs") == lore_id
+    assert assets.list_images(root, lore_id, "default", base="lore") == []
+
+
+def test_reclassification_rerun_does_not_sweep_again(monkeypatch, tmp_path):
+    """The sweep is tied to a delete that actually happened. A rerun's delete
+    raises EntityNotFound, so nothing is swept -- which is what keeps the rerun
+    a true no-op (and, in cmd_run, a `noop` rather than a fresh commit)."""
+    wid, root = _world(monkeypatch, tmp_path)
+    lore_id = entities.create_entity(root, "lore", "Gangs", "The Erune family.")
+    spec = {"lore_id": lore_id, "new_kind": "groups", "name": "Erune family", "body": "x"}
+
+    pwc.apply_reclassifications(root, [spec], pwc.new_results(), wid)
+    r2 = pwc.new_results()
+    pwc.apply_reclassifications(root, [spec], r2, wid)
+
+    assert r2["swept"] == []
+    assert r2["touched_files"] == set()
 
 
 def _card(first_mes="", alts=None, name="Adriana"):
@@ -374,6 +429,53 @@ def test_apply_greeting_imports_tolerates_crlf_card_bodies_on_rerun(monkeypatch,
                               "new:adriana:default:2"}
 
 
+def test_apply_greeting_imports_does_not_let_a_loose_body_steal_a_tight_slot(monkeypatch, tmp_path):
+    r"""Final review: the matching loop was greedy in `candidates`' id order, so
+    a candidate that could sit at either of two positions could take the one
+    slot a different candidate had as its ONLY option -- leaving that one with
+    nothing and reporting the whole character as unmatchable, on a store where
+    nothing had drifted at all.
+
+    The pairs below are what makes that concrete. Only greeting bodies lose
+    newline detail on their write/read round trip (`_stored_body_forms`), and
+    they lose a DIFFERENT amount per platform, so two card positions whose text
+    differs only in CRLF-vs-LF collapse to one stored body on one platform and
+    stay two on the other -- which is precisely "one candidate with a single
+    possible position, one with two, over the same pair of slots".
+
+    Two pairs, because the asymmetry runs opposite ways: positions 2/10 are the
+    tight pair where "\r\n" and "\n" round-trip differently (CRLF platforms),
+    positions 3/11 where "\r\n" and "\n\n" do (LF platforms). Both pairs are
+    also arranged so the loose candidate's id sorts FIRST (`…-alt-10` <
+    `…-alt-2`), which is what let it grab the slot under the old loop.
+    """
+    wid, root = _world(monkeypatch, tmp_path)
+    alts = [f"Alt {i} text." for i in range(1, 13)]   # 12 alternates -> 13 positions
+    alts[1] = "Anchor line.\r\nSecond line."          # position 2  (id adriana-alt-2)
+    alts[9] = "Anchor line.\nSecond line."            # position 10 (id adriana-alt-10)
+    alts[2] = "Other line.\r\nTail line."             # position 3  (id adriana-alt-3)
+    alts[10] = "Other line.\n\nTail line."            # position 11 (id adriana-alt-11)
+    characters.create_character(root, "Adriana", "default", _card("Hello.", alts))
+    spec = [{"character": "adriana", "version": "default", "titles": []}]
+
+    r1 = pwc.new_results()
+    ref_map_1 = pwc.apply_greeting_imports(root, spec, r1)
+
+    assert r1["errors"] == []          # under the old loop: "could not be resolved back"
+    assert len(greetings.list_greetings(root)) == 13
+    assert set(ref_map_1) == {f"new:adriana:default:{i}" for i in range(13)}
+    assert len(set(ref_map_1.values())) == 13     # a real 1:1 assignment, no slot reused
+    assert pwc._existing_greetings_in_creation_order(root, "adriana", "default") is not None
+
+    r2 = pwc.new_results()
+    ref_map_2 = pwc.apply_greeting_imports(root, spec, r2)   # identical card, identical spec
+
+    assert r2["errors"] == []
+    assert len(greetings.list_greetings(root)) == 13         # not duplicated
+    assert r2["skipped"][0]["reason"] == "already imported"
+    assert ref_map_2 == ref_map_1     # and the assignment is rerun-stable
+
+
 def test_apply_greeting_imports_errors_on_insertion_drift(monkeypatch, tmp_path):
     """Round 4: a new alternate greeting inserted into the MIDDLE of the card's
     alternates list between two runs. Total existing-greeting count (2) still
@@ -615,6 +717,72 @@ def test_apply_manifest_full_pipeline_and_idempotent_rerun(monkeypatch, tmp_path
     assert edges_again == edges  # edge still there, not lost, not doubled
 
 
+def test_apply_manifest_skips_malformed_items_and_still_applies_the_good_ones(monkeypatch, tmp_path):
+    """A manifest is LLM-authored JSON, so a missing key is expected input, not
+    a programmer error. It used to raise KeyError out of the middle of a stage:
+    items earlier in the same list were already on disk, the stages after it
+    never ran, and cmd_run never printed anything at all."""
+    wid, root = _world(monkeypatch, tmp_path)
+    manifest = {
+        "world": wid,
+        "entities": [
+            {"kind": "locations", "name": "Blind Lion", "body": "A tavern."},
+            {"kind": "locations", "body": "no name at all"},          # missing `name`
+            {"kind": "locations", "name": "   ", "body": "blank"},    # blank `name`
+            {"kind": "locations", "name": "Guild Hall", "body": "still applied"},
+        ],
+        "tags": [{"display_name": "Farmer"}, {"source": "only a source"}],
+    }
+
+    results = pwc.apply_manifest(root, manifest, wid)
+
+    names = {e["name"] for e in entities.list_entities(root, "locations")}
+    assert names == {"Blind Lion", "Guild Hall"}   # the good ones, both of them
+    assert list(tags.read_tags(root).values()) == ["Farmer"]
+    reasons = [e["reason"] for e in results["errors"]]
+    assert len(reasons) == 3 and all(r.startswith("malformed manifest item") for r in reasons)
+    assert any("'name'" in r for r in reasons) and any("'display_name'" in r for r in reasons)
+
+
+def test_apply_manifest_validates_every_stage_without_crashing(monkeypatch, tmp_path):
+    """One malformed item in each of the six stages: each is recorded and
+    skipped, none raises, and a stage whose whole section is the wrong JSON type
+    is reported rather than iterated."""
+    wid, root = _world(monkeypatch, tmp_path)
+    manifest = {
+        "world": wid,
+        "entities": [{"name": "No kind"}],                            # missing `kind`
+        "reclassifications": [{"new_kind": "groups", "name": "No lore id"}],
+        "tags": ["Farmer"],                                            # not an object
+        "greeting_imports": [{"character": "adriana", "titles": [1, 2]}],  # no version, bad titles
+        "greeting_edges": [{"greeting_ref": "id:x", "leads_to": "id:y"}],  # leads_to not a list
+        "greeting_gating": {"greeting_ref": "id:x"},                   # section is not a list
+    }
+
+    results = pwc.apply_manifest(root, manifest, wid)
+
+    by_stage = {e["stage"]: e["reason"] for e in results["errors"]}
+    assert set(by_stage) == {"entities", "reclassifications", "tags", "greeting_imports",
+                             "greeting_edges", "greeting_gating"}
+    assert by_stage["greeting_gating"] == "manifest section is not a list"
+    assert results["created"] == [] and results["touched_files"] == []
+
+
+def test_apply_manifest_accepts_null_optional_fields(monkeypatch, tmp_path):
+    """`null` for an optional key means "not supplied" -- every stage reaches
+    those through `.get(key, default)` / `or None` anyway, so rejecting a null
+    would refuse manifests the apply path handles perfectly well."""
+    wid, root = _world(monkeypatch, tmp_path)
+
+    results = pwc.apply_manifest(root, {
+        "world": wid,
+        "entities": [{"kind": "locations", "name": "Blind Lion", "body": "x",
+                      "fields": None, "source": None}]}, wid)
+
+    assert results["errors"] == []
+    assert [e["name"] for e in entities.list_entities(root, "locations")] == ["Blind Lion"]
+
+
 def test_verify_manifest_catches_dangling_character_ref(monkeypatch, tmp_path):
     """Test that greeting's own character field is checked for dangling refs.
 
@@ -844,6 +1012,198 @@ def test_run_handles_git_commit_failure(monkeypatch, tmp_path, capsys):
     assert out["committed"] is False
     assert "git_error" in out
     assert len(out["git_error"]) > 0
+
+
+def _log(tmp_path: Path) -> str:
+    return subprocess.run(["git", "log", "--oneline"], cwd=tmp_path,
+                          capture_output=True, text=True).stdout
+
+
+def _status(tmp_path: Path) -> str:
+    return subprocess.run(["git", "status", "--short"], cwd=tmp_path,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def _head_files(tmp_path: Path) -> list[str]:
+    return subprocess.run(["git", "ls-tree", "-r", "--name-only", "HEAD"], cwd=tmp_path,
+                          capture_output=True, text=True).stdout.splitlines()
+
+
+def test_run_aborts_when_the_world_does_not_exist(monkeypatch, tmp_path, capsys):
+    """`world_root` only checks the id is filesystem-safe. A typo'd --world used
+    to CREATE `worlds/<typo>/` from nothing, commit it and report success --
+    while `list_worlds` skipped it forever for having no world.md, so the
+    content was unreachable from the app AND missing from its real world. The
+    manifest/--world cross-check cannot catch it: both names come from the same
+    mistaken source."""
+    wid, root = _world(monkeypatch, tmp_path)
+    _git_repo(tmp_path)
+    before = _log(tmp_path)
+
+    manifest_path = _write_manifest(tmp_path, "ashgrov",   # typo: the world is "ashgrove"
+                                     entities=[{"kind": "locations", "name": "Blind Lion", "body": ""}])
+    monkeypatch.setattr(sys, "argv", ["populate_world_content.py", "run", "--world", "ashgrov",
+                                       "--manifest", str(manifest_path)])
+
+    assert pwc.main() == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"status": "aborted", "reason": "no such world", "world": "ashgrov"}
+    assert not (tmp_path / "worlds" / "ashgrov").exists()   # nothing written
+    assert _log(tmp_path) == before                          # nothing committed
+    assert _status(tmp_path) == ""
+
+
+def test_run_prints_json_and_refuses_the_commit_for_a_malformed_manifest(monkeypatch, tmp_path, capsys):
+    """The malformed item must not take the run down with it: the valid items
+    still apply, the error is reported on stdout as JSON like any other, and
+    the error gate keeps it all out of git."""
+    wid, root = _world(monkeypatch, tmp_path)
+    _git_repo(tmp_path)
+    manifest_path = _write_manifest(tmp_path, wid, entities=[
+        {"kind": "locations", "name": "Blind Lion", "body": "valid"},
+        {"kind": "locations", "body": "no name at all"},
+        {"kind": "locations", "name": "Guild Hall", "body": "valid too"}])
+    monkeypatch.setattr(sys, "argv", ["populate_world_content.py", "run", "--world", wid,
+                                       "--manifest", str(manifest_path)])
+
+    assert pwc.main() == 1
+    out = json.loads(capsys.readouterr().out)      # JSON, not a traceback
+
+    assert out["committed"] is False
+    assert len(out["created"]) == 2                 # both valid entities applied
+    assert len(out["errors"]) == 1
+    assert out["errors"][0]["stage"] == "entities"
+    assert out["errors"][0]["reason"].startswith("malformed manifest item")
+
+
+def test_run_aborts_on_an_unexplained_change_outside_the_world(monkeypatch, tmp_path, capsys):
+    """The only thing allowed to write outside the world being processed is the
+    reclassification sweep. Anything else there is unattributable -- and since
+    the repo was verified clean at the top, it was written by this run. Refuse
+    the commit rather than either sweeping it in silently or leaving it to
+    surface as the NEXT world's bare "repo is dirty"."""
+    wid, root = _world(monkeypatch, tmp_path)
+    _git_repo(tmp_path)
+    manifest_path = _write_manifest(tmp_path, wid,
+                                     entities=[{"kind": "locations", "name": "Blind Lion", "body": ""}])
+    monkeypatch.setattr(sys, "argv", ["populate_world_content.py", "run", "--world", wid,
+                                       "--manifest", str(manifest_path)])
+    real_apply = pwc.apply_manifest
+
+    def apply_and_scribble(root_, manifest, wid_):
+        out = real_apply(root_, manifest, wid_)
+        (tmp_path / "stray.md").write_text("written outside the world", encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(pwc, "apply_manifest", apply_and_scribble)
+
+    assert pwc.main() == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["committed"] is False
+    assert out["swept_files"] == ["stray.md"]
+    assert any(e["stage"] == "run" and e["paths"] == ["stray.md"] for e in out["errors"])
+
+
+def test_run_commits_the_campaign_side_sweep_in_the_same_checkpoint(monkeypatch, tmp_path, capsys):
+    """C2's scoping tension, end to end. The sweep a reclassification owes the
+    overlay can write OUTSIDE the world -- here `detached.json`/`sync.md` for a
+    campaign that had materialized its own copy of the reclassified lore record.
+    Those writes are consequences of the same reclassification, so they belong
+    in the same commit; left out of its pathspec they would sit uncommitted and
+    abort the NEXT world's run on the whole-repo dirty check."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Ashgrove")
+    root = worlds.world_root(wid)
+    lore_id = entities.create_entity(root, "lore", "Gangs", "The Erune family.")
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    croot = campaigns.campaign_root(cid)
+    overlay.materialize_entity(cid, "lore", lore_id)   # the campaign owns a copy
+    _git_repo(tmp_path)
+
+    manifest_path = _write_manifest(tmp_path, wid, reclassifications=[{
+        "lore_id": lore_id, "new_kind": "groups",
+        "name": "Erune family", "body": "Mafia family."}])
+    monkeypatch.setattr(sys, "argv", ["populate_world_content.py", "run", "--world", wid,
+                                       "--manifest", str(manifest_path)])
+
+    assert pwc.main() == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["committed"] is True
+    assert out["verify"]["ok"] is True
+    # the sweep really did write campaign-side, and those paths were committed
+    assert f"campaigns/{cid}/detached.json" in out["swept_files"]
+    assert lore_id in json.loads((croot / "detached.json").read_text(encoding="utf-8"))[0]
+    assert _status(tmp_path) == ""                     # nothing left dirty
+    assert f"campaigns/{cid}/detached.json" in _head_files(tmp_path)
+
+    # ...which is what lets the next run get past the whole-repo dirty check
+    capsys.readouterr()
+    first_log = _log(tmp_path)
+    assert pwc.main() == 0
+    assert json.loads(capsys.readouterr().out)["committed"] == "noop"
+    assert _log(tmp_path) == first_log
+
+
+def test_run_end_to_end_applies_every_stage_commits_once_and_reruns_as_noop(monkeypatch, tmp_path, capsys):
+    """One manifest exercising all six stages against a real git repo: the
+    checkpoint has to be complete (clean tree, the reclassified lore gone from
+    HEAD rather than only from the working tree) and the rerun has to be a true
+    no-op, not a second commit of nothing."""
+    wid, root = _world(monkeypatch, tmp_path)
+    lore_id = entities.create_entity(root, "lore", "Gangs", "The Erune family runs the docks.")
+    characters.create_character(root, "Adriana", "default", _card("Hello.", ["Bye."]))
+    _git_repo(tmp_path)
+    assert f"worlds/{wid}/lore/{lore_id}.md" in _head_files(tmp_path)   # it IS in the baseline
+
+    manifest_path = _write_manifest(
+        tmp_path, wid,
+        entities=[{"kind": "locations", "name": "Blind Lion", "body": "A tavern.",
+                   "source": "chapter 2"}],
+        reclassifications=[{"lore_id": lore_id, "new_kind": "groups", "name": "Erune family",
+                            "body": "Mafia family.", "source": "chapter 2"}],
+        tags=[{"display_name": "Farmer"}],
+        greeting_imports=[{"character": "adriana", "version": "default",
+                           "titles": ["Guild induction", "A farewell"]}],
+        greeting_edges=[{"greeting_ref": "new:adriana:default:0",
+                         "leads_to": ["new:adriana:default:1"], "excludes": []}],
+        greeting_gating=[{"greeting_ref": "new:adriana:default:1",
+                          "requires_tags": ["Farmer"], "present": []}])
+    monkeypatch.setattr(sys, "argv", ["populate_world_content.py", "run", "--world", wid,
+                                       "--manifest", str(manifest_path)])
+
+    assert pwc.main() == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["committed"] is True
+    assert out["verify"] == {"ok": True, "problems": []}
+    assert out["errors"] == []
+
+    # every stage really landed
+    assert [e["name"] for e in entities.list_entities(root, "locations")] == ["Blind Lion"]
+    assert [e["name"] for e in entities.list_entities(root, "groups")] == ["Erune family"]
+    assert entities.list_entities(root, "lore") == []
+    assert list(tags.read_tags(root).values()) == ["Farmer"]
+    named = {g["name"]: g["id"] for g in greetings.list_greetings(root)}
+    assert set(named) == {"Guild induction", "A farewell"}
+    assert greetings.edges_of(greetings.read_plotmap(root),
+                              named["Guild induction"])["leads_to"] == [named["A farewell"]]
+    assert greetings.read_greeting(root, named["A farewell"])["meta"]["requires_tags"] == ["farmer"]
+
+    # the checkpoint is complete: clean tree, and the lore record is gone from
+    # HEAD itself rather than only from the working tree
+    assert _status(tmp_path) == ""
+    head = _head_files(tmp_path)
+    assert f"worlds/{wid}/lore/{lore_id}.md" not in head
+    assert f"worlds/{wid}/groups/erune-family.md" in head
+    assert f"worlds/{wid}/locations/blind-lion.md" in head
+
+    capsys.readouterr()
+    first_log = _log(tmp_path)
+    assert pwc.main() == 0                                   # identical manifest again
+    rerun = json.loads(capsys.readouterr().out)
+    assert rerun["committed"] == "noop"
+    assert rerun["errors"] == []
+    assert _log(tmp_path) == first_log                       # no second commit
+    assert _status(tmp_path) == ""
 
 
 def test_git_changed_paths_handles_renames(tmp_path):

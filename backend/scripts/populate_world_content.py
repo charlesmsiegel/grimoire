@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from grimoire.store import cards, characters, entities, greetings, tags, worlds
+from grimoire.store import cards, characters, entities, greetings, overlay, tags, worlds
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.paths import home
 
@@ -40,7 +40,11 @@ def build_index(root: Path) -> dict:
 
 
 def new_results() -> dict:
-    return {"created": [], "skipped": [], "errors": [], "touched_files": set()}
+    # "swept" records every `overlay.forget_world_record` call this run made.
+    # cmd_run needs it: a sweep is the only thing here allowed to write outside
+    # the world being processed, so it is also the only explanation for a git
+    # change outside `world_rel` (see cmd_run).
+    return {"created": [], "skipped": [], "errors": [], "swept": [], "touched_files": set()}
 
 
 def _world_rel(root: Path) -> str:
@@ -143,10 +147,35 @@ def apply_reclassifications(root: Path, specs: list[dict], results: dict,
         # already deleted it.
         try:
             entities.delete_entity(root, "lore", spec["lore_id"])
-            results["touched_files"].add(
-                f"{world_rel}/lore/{spec['lore_id']}.md")
         except entities.EntityNotFound:
-            pass
+            continue
+        results["touched_files"].add(f"{world_rel}/lore/{spec['lore_id']}.md")
+
+        # The sweep every world-side deleter in this codebase owes the overlay
+        # (`overlay.forget_world_record`, and see its docstring): the id this
+        # delete just freed is handed straight back to the next record of the
+        # same name, so anything still filed under it -- the world's own asset
+        # directory, and each dependent campaign's state for a record it only
+        # ever inherited -- would be adopted by an unrelated record (#225).
+        # Reclassification is exactly that shape: the lore slug goes away and
+        # the world keeps being edited afterwards.
+        #
+        # Run AFTER the delete, like the routes do, so a crash between the two
+        # leaves state attached to a record that still exists rather than a
+        # record stripped of state it still owns.
+        rec_dir = root / "lore" / spec["lore_id"]
+        before = [p for p in rec_dir.rglob("*") if p.is_file()] if rec_dir.is_dir() else []
+        overlay.forget_world_record(root, "lore", spec["lore_id"])
+        # The world-side half of the sweep drops that record directory, so its
+        # files are real changes under `world_rel`; unaccounted for, they fail
+        # verify_manifest's git cross-check as "changes apply did not account
+        # for". (The campaign-side half writes outside `world_rel` and is
+        # handled in cmd_run, which commits those paths in the same commit.)
+        for p in before:
+            if not p.exists():
+                results["touched_files"].add(p.relative_to(home()).as_posix())
+        results["swept"].append({"stage": "reclassifications", "kind": "lore",
+                                 "id": spec["lore_id"]})
 
 
 def _normalize_newlines(text: str) -> str:
@@ -239,11 +268,30 @@ def _existing_greetings_in_creation_order(root: Path, character: str, version: s
 
     ordered: list[str | None] = [None] * len(expected_bodies)
     taken: set[int] = set()
-    for gid in candidates:
-        body = _normalize_newlines(greetings.read_greeting(root, gid)["body"])
-        # lowest unused index for this body: with `candidates` sorted by id,
-        # duplicate-body twins get a deterministic, rerun-stable assignment.
-        idx = next((i for i in expected_index_map.get(body, ()) if i not in taken), None)
+    matched = [(gid, expected_index_map.get(
+                    _normalize_newlines(greetings.read_greeting(root, gid)["body"]), ()))
+               for gid in candidates]
+    # Most-constrained-first, not plain greedy over `candidates`: a candidate
+    # that fits only ONE position must claim it before a candidate that fits
+    # several, or the loose one takes that slot and the tight one is left with
+    # nothing -- reported as "these greetings don't match the card" for a store
+    # where a perfectly good assignment existed. Not hypothetical: two card
+    # positions whose text differs only in CRLF-vs-LF read back as one shared
+    # body on one platform and two distinct ones on the other, which is exactly
+    # a one-choice candidate and a two-choice candidate over the same pair of
+    # slots (and `candidates` is id-sorted, which decides nothing about which
+    # is tighter). Ties break by the immutable id, so duplicate-body twins --
+    # genuinely interchangeable, since nothing on disk tells them apart -- get
+    # the same assignment on every rerun, which is what keeps a `new:*:idx` ref
+    # pointing at the same greeting run after run.
+    #
+    # Still a heuristic rather than a full bipartite matching: a contrived
+    # overlap pattern could make it give up where an augmenting-path search
+    # would succeed. That direction of wrongness is the safe one -- the caller
+    # records an error and touches nothing, exactly as it does for real drift.
+    matched.sort(key=lambda pair: (len(pair[1]), pair[0]))
+    for gid, choices in matched:
+        idx = next((i for i in choices if i not in taken), None)
         if idx is None:
             return None  # a stored greeting matches nothing the card produces now
         taken.add(idx)
@@ -417,21 +465,117 @@ def apply_greeting_gating(root: Path, specs: list[dict], ref_map: dict[str, str]
             results["touched_files"].add(f"{world_rel}/greetings/{gid}.md")
 
 
+# ---- manifest shape validation ----
+#
+# A manifest is LLM-authored JSON, so a missing or mistyped key is expected
+# INPUT, not a programmer error -- but every apply_* stage indexes its required
+# keys directly (`spec["kind"]`, `spec["name"]`, ...). Without a check up front
+# one bad item raised KeyError out of the middle of a stage: earlier items in
+# the same list were already on disk, later ones never ran, and cmd_run never
+# reached its `print`, so the whole run reported nothing at all on stdout.
+#
+# Validating the WHOLE manifest before any stage runs turns that into ordinary
+# per-item errors: the malformed item is recorded in results["errors"] (which
+# already gates the commit) and skipped, every well-formed item beside it still
+# applies, and cmd_run still prints its JSON with committed=false.
+
+_STR_LIST = "list[str]"
+
+#: {stage: (required, optional)}, each a {key: kind} map over "str", "dict" and
+#: `_STR_LIST`. Required strings must also be non-blank -- a record with a blank
+#: name has no usable id. Mirrors the manifest contract in
+#: docs/superpowers/plans/2026-08-08-world-content-population-swarm.md.
+_ENTITY_OPTIONAL = {"body": "str", "keys": "str", "owners": "str",
+                    "source": "str", "fields": "dict"}
+_MANIFEST_SCHEMA: dict[str, tuple[dict[str, str], dict[str, str]]] = {
+    "tags": ({"display_name": "str"}, {"source": "str"}),
+    "entities": ({"kind": "str", "name": "str"}, _ENTITY_OPTIONAL),
+    "reclassifications": ({"lore_id": "str", "new_kind": "str", "name": "str"}, _ENTITY_OPTIONAL),
+    "greeting_imports": ({"character": "str", "version": "str"},
+                         {"titles": _STR_LIST, "source": "str"}),
+    "greeting_edges": ({"greeting_ref": "str"},
+                       {"leads_to": _STR_LIST, "excludes": _STR_LIST, "source": "str"}),
+    "greeting_gating": ({"greeting_ref": "str"},
+                        {"requires_tags": _STR_LIST, "present": _STR_LIST, "source": "str"}),
+}
+
+
+def _value_problem(key: str, value, kind: str, *, required: bool) -> str | None:
+    if kind == "str":
+        if not isinstance(value, str):
+            return f"{key!r} must be a string"
+        if required and not value.strip():
+            return f"{key!r} must not be blank"
+    elif kind == "dict":
+        if not isinstance(value, dict):
+            return f"{key!r} must be an object"
+    elif kind == _STR_LIST:
+        if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
+            return f"{key!r} must be a list of strings"
+    return None
+
+
+def _item_problem(item, required: dict[str, str], optional: dict[str, str]) -> str | None:
+    if not isinstance(item, dict):
+        return "item is not an object"
+    for key, kind in required.items():
+        if key not in item:
+            return f"missing required key {key!r}"
+        problem = _value_problem(key, item[key], kind, required=True)
+        if problem:
+            return problem
+    for key, kind in optional.items():
+        # `None` reads as "not supplied": every stage reaches optional keys
+        # through `.get(key, default)` / `or None`, so a null is already the
+        # default rather than a value anything indexes.
+        if item.get(key) is not None:
+            problem = _value_problem(key, item[key], kind, required=False)
+            if problem:
+                return problem
+    return None
+
+
+def validate_manifest(manifest: dict, results: dict) -> dict:
+    """The manifest with every malformed item dropped and one error recorded
+    per drop. Same shape as the input, holding only items the apply_* stages
+    can safely index."""
+    clean: dict[str, list] = {}
+    for stage, (required, optional) in _MANIFEST_SCHEMA.items():
+        raw = manifest.get(stage) or []
+        if not isinstance(raw, list):
+            results["errors"].append({
+                "stage": stage, "reason": "manifest section is not a list"})
+            clean[stage] = []
+            continue
+        good = []
+        for item in raw:
+            problem = _item_problem(item, required, optional)
+            if problem is None:
+                good.append(item)
+            else:
+                results["errors"].append({
+                    "stage": stage, "reason": f"malformed manifest item: {problem}",
+                    "spec": item})
+        clean[stage] = good
+    return clean
+
+
 def apply_manifest(root: Path, manifest: dict, wid: str) -> dict:
     results = new_results()
+    manifest = validate_manifest(manifest, results)
 
-    apply_tags(root, manifest.get("tags", []), results)
+    apply_tags(root, manifest["tags"], results)
 
-    apply_entities(root, manifest.get("entities", []), results, wid)
-    apply_reclassifications(root, manifest.get("reclassifications", []), results, wid)
+    apply_entities(root, manifest["entities"], results, wid)
+    apply_reclassifications(root, manifest["reclassifications"], results, wid)
 
-    import_ref_map = apply_greeting_imports(root, manifest.get("greeting_imports", []), results)
+    import_ref_map = apply_greeting_imports(root, manifest["greeting_imports"], results)
     ref_map = dict(import_ref_map)
     for g in greetings.list_greetings(root):
         ref_map.setdefault(f"id:{g['id']}", g["id"])
 
-    apply_greeting_edges(root, manifest.get("greeting_edges", []), ref_map, results)
-    apply_greeting_gating(root, manifest.get("greeting_gating", []), ref_map, results)
+    apply_greeting_edges(root, manifest["greeting_edges"], ref_map, results)
+    apply_greeting_gating(root, manifest["greeting_gating"], ref_map, results)
 
     results["touched_files"] = sorted(results["touched_files"])
     return results
@@ -558,6 +702,18 @@ def _git_changed_paths(cwd: Path, scope: str) -> set[str]:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    # Before anything else, and before any write: `world_root` only checks that
+    # the id is filesystem-safe, so a typo'd --world used to CREATE
+    # `worlds/<typo>/...` from nothing, commit it, and report success -- while
+    # `list_worlds` skipped it forever (no world.md), leaving the content
+    # unreachable from the app and absent from the world it was meant for. The
+    # `manifest["world"] != --world` guard below cannot catch that: both names
+    # come from the same mistaken source.
+    if not worlds.world_exists(args.world):
+        print(json.dumps({"status": "aborted", "reason": "no such world",
+                          "world": args.world}))
+        return 1
+
     root = worlds.world_root(args.world)
     grimoire_root = home()
     world_rel = _world_rel(root)
@@ -576,18 +732,46 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     results = apply_manifest(root, manifest, args.world)
     git_changed = _git_changed_paths(grimoire_root, world_rel)
+
+    # Anything changed OUTSIDE this world. The repo was verified clean above, so
+    # every such path was written by this run -- and the only thing here that
+    # writes outside `world_rel` is `overlay.forget_world_record`, sweeping a
+    # reclassified lore id out of the dependent campaigns (detached.json,
+    # sync.md, campaign-local state filed under that id).
+    #
+    # Those writes have to land in THIS commit, not be left behind: they are
+    # consequences of the same reclassification, and the whole-repo dirty check
+    # at the top means anything left uncommitted here aborts the NEXT world's
+    # run with a bare "repo is dirty" that names nothing. So the commit's
+    # pathspec widens to exactly those paths -- still enumerated rather than a
+    # bare repo-wide `git add -A`, which would let an interleaved run's staged
+    # work be swept into this world's checkpoint.
+    outside = {p for p in _git_changed_paths(grimoire_root, ".")
+               if p != world_rel and not p.startswith(world_rel + "/")}
+    results["swept_files"] = sorted(outside)
+    if outside and not results["swept"]:
+        # No sweep ran, so nothing here explains a write outside the world.
+        # Refuse the commit and leave it in the tree for a human: a silent
+        # commit of an unexplained change is the worse outcome, and so is a
+        # scoped commit that leaves it to surface as the next run's dirty abort.
+        results["errors"].append({
+            "stage": "run",
+            "reason": "changes outside this world that no record sweep explains",
+            "paths": sorted(outside)})
+
     verify_result = verify_manifest(root, touched_files=results["touched_files"], git_changed=git_changed)
     results["verify"] = verify_result
 
     if results["errors"] or not verify_result["ok"]:
         results["committed"] = False
-    elif not git_changed:
+    elif not git_changed and not outside:
         results["committed"] = "noop"
     else:
-        add = _git(["add", "-A", "--", world_rel], grimoire_root)
+        scope = [world_rel, *sorted(outside)]
+        add = _git(["add", "-A", "--", *scope], grimoire_root)
         summary = f"{len(results['created'])} created, {len(results['skipped'])} skipped, {len(results['errors'])} errors"
         # Scoped commit: prevents interleaved runs from sweeping other worlds' staged changes
-        commit = _git(["commit", "-q", "-m", f"{args.world}: populate content ({summary})", "--", world_rel], grimoire_root)
+        commit = _git(["commit", "-q", "-m", f"{args.world}: populate content ({summary})", "--", *scope], grimoire_root)
         results["committed"] = add.returncode == 0 and commit.returncode == 0
         if not results["committed"]:
             results["git_error"] = (add.stderr or "") + (commit.stderr or "")
