@@ -146,3 +146,37 @@ def test_apply_greeting_imports_resolves_new_refs_idempotently_on_rerun(monkeypa
     assert r2["skipped"][0]["reason"] == "already imported"
     assert ref_map_2 == ref_map_1  # refs resolve to the SAME greetings both times
     assert ref_map_2["new:adriana:default:0"] == ref_map_1["new:adriana:default:0"]
+
+
+def test_apply_greeting_imports_idempotent_with_partial_titles_on_rerun(monkeypatch, tmp_path):
+    """Critical test: partial-title scenario that breaks mtime-based ordering.
+    3 greetings created (main + 2 alts), but only 2 titles supplied (indices 0-1).
+    Index 2 keeps raw name 'Adriana (alt 2)'. On first run, refs map correctly.
+    On second run with mtime-based ordering, the modified greetings (0 & 1) have
+    new mtimes while the unmodified one (2) keeps original (earlier) mtime,
+    completely reordering the sort. ID-based ordering fixes this."""
+    wid, root = _world(monkeypatch, tmp_path)
+    characters.create_character(root, "Adriana", "default", _card("Hello.", ["Alt one.", "Alt two."]))
+    spec = [{"character": "adriana", "version": "default", "titles": ["Guild induction", "Lost in the city"]}]
+
+    r1 = pwc.new_results()
+    ref_map_1 = pwc.apply_greeting_imports(root, spec, r1)
+    assert len(greetings.list_greetings(root)) == 3
+
+    by_id_1 = {g["id"]: g["name"] for g in greetings.list_greetings(root)}
+    # Verify first run mapping: titled greetings renamed, untitled keeps raw name
+    assert by_id_1[ref_map_1["new:adriana:default:0"]] == "Guild induction"
+    assert by_id_1[ref_map_1["new:adriana:default:1"]] == "Lost in the city"
+    assert by_id_1[ref_map_1["new:adriana:default:2"]] == "Adriana (alt 2)"
+
+    r2 = pwc.new_results()
+    ref_map_2 = pwc.apply_greeting_imports(root, spec, r2)  # same spec again
+
+    assert len(greetings.list_greetings(root)) == 3  # not duplicated
+    assert r2["skipped"][0]["reason"] == "already imported"
+    # The critical assertion: ref_map_2 must equal ref_map_1, which means
+    # the ordering didn't change despite partial renames having different mtimes
+    assert ref_map_2 == ref_map_1
+    assert ref_map_2["new:adriana:default:0"] == ref_map_1["new:adriana:default:0"]
+    assert ref_map_2["new:adriana:default:1"] == ref_map_1["new:adriana:default:1"]
+    assert ref_map_2["new:adriana:default:2"] == ref_map_1["new:adriana:default:2"]

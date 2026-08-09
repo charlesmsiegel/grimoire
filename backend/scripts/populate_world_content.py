@@ -147,16 +147,34 @@ def apply_reclassifications(root: Path, specs: list[dict], results: dict,
             pass
 
 
-def _greeting_file(root: Path, gid: str) -> Path:
-    return root / "greetings" / f"{gid}.md"
+def _extract_import_index(character_id: str, gid: str) -> int:
+    """Extract the import index from a greeting ID by parsing the deterministic
+    naming pattern created by import_from_character: main = {character_id},
+    alts = {character_id}-alt-{index}. Returns the index (0, 1, 2, ...), which
+    is stable across reruns even after titles are renamed (rename doesn't change
+    the ID)."""
+    if gid == character_id:
+        return 0
+    suffix = "-alt-"
+    if gid.startswith(f"{character_id}{suffix}"):
+        try:
+            return int(gid[len(character_id) + len(suffix):])
+        except ValueError:
+            pass
+    # Fallback for any ID that doesn't match pattern (shouldn't happen)
+    return 0
 
 
 def _existing_greetings_in_creation_order(root: Path, character: str, version: str) -> list[str]:
-    """Greetings for one character/version, oldest-file-first — reconstructs the
-    order `import_from_character` originally created them in, even after a
-    later title-rename changed their `name` (rename doesn't move the file)."""
+    """Greetings for one character/version, in creation order — extracts the order
+    from greeting IDs, which encode the creation sequence via a deterministic
+    pattern (main greeting = character_id, alts = character_id-alt-N). This is
+    stable across reruns even when some greetings are renamed to custom titles,
+    unlike file-timestamp-based ordering which breaks when only partial titles
+    are applied (leaves some greetings with old mtimes, completely reordering
+    the sort on rerun)."""
     matches = [g for g in greetings.list_greetings(root) if g["character"] == character and g["version"] == version]
-    return sorted((g["id"] for g in matches), key=lambda gid: _greeting_file(root, gid).stat().st_mtime)
+    return sorted((g["id"] for g in matches), key=lambda gid: _extract_import_index(character, gid))
 
 
 def apply_greeting_imports(root: Path, specs: list[dict], results: dict) -> dict[str, str]:
