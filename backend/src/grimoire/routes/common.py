@@ -224,15 +224,22 @@ def _serve_image_file(p: Path, request: Request | None = None) -> Response:
     one exact content state, so it caches immutable: zero requests on later
     renders.
 
-    An `OSError` reading the file is a 404, not a 500: an image can be replaced
-    or removed between the caller resolving its path and this reading it, and
-    that is a missing image rather than a server fault. That applies to every
-    image route, not only covers — a deliberate widening, since a 500 was never
-    the right answer for a file that went away mid-request.
+    A `FileNotFoundError` reading the file is a 404, not a 500: an image can be
+    replaced or removed between the caller resolving its path and this reading
+    it, and that is a missing image rather than a server fault. That applies to
+    every image route, not only covers — a deliberate widening, since a 500 was
+    never the right answer for a file that went away mid-request.
+
+    Only that one, though. Catching `OSError` whole would swallow a
+    `PermissionError`, a Windows sharing violation, an exhausted file-descriptor
+    table or a disk read error — cases where the image is still there — and
+    report a real operational fault to the user as missing data, with the
+    frontend dutifully marking a valid cover broken. Those surface as a 500,
+    which is what they are.
     """
     try:
         st = p.stat()
-    except OSError:
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
     etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
     versioned = request is not None and "v" in request.query_params
@@ -254,7 +261,7 @@ def _serve_image_file(p: Path, request: Request | None = None) -> Response:
     ext = p.suffix.lstrip(".").lower()
     try:
         content = p.read_bytes()
-    except OSError:
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
     return Response(content=content,
                     media_type=_IMAGE_MEDIA.get(ext, "application/octet-stream"),

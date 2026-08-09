@@ -10771,8 +10771,15 @@ def test_campaign_cover_rejects_bad_uploads(client):
     _wid, cid = _campaign(client)
     url = f"/api/campaigns/{cid}/cover"
 
-    bad_ext = client.put(url, files={"file": ("c.svg", io.BytesIO(b"<svg/>"), "image/svg+xml")})
-    assert bad_ext.status_code == 400
+    # A real BMP: decodable, so it gets past the decode gate, and rejected for
+    # the format itself. (`c.svg` used to stand here holding `b"<svg/>"`, which
+    # failed the decode check first -- it proved that gate twice and this one
+    # never.) The filename says `.png` on purpose: the extension is no longer
+    # what decides anything.
+    bmp = io.BytesIO()
+    Image.new("RGB", (4, 4), (10, 20, 30)).save(bmp, "BMP")
+    bad_fmt = client.put(url, files={"file": ("c.png", io.BytesIO(bmp.getvalue()), "image/png")})
+    assert bad_fmt.status_code == 400 and "bmp" in bad_fmt.json()["detail"]
 
     not_image = client.put(url, files={"file": ("c.png", io.BytesIO(b"nope"), "image/png")})
     assert not_image.status_code == 400 and not_image.json()["detail"]
@@ -10791,16 +10798,64 @@ def test_campaign_cover_rejects_bad_uploads(client):
     assert client.get(url).status_code == 404  # nothing was stored
 
 
+def test_campaign_cover_stored_format_beats_the_filename(client):
+    """A PNG uploaded as `cover.jpg` is stored and served as PNG.
+
+    Trusting the filename here would put `media-type="image/jpeg"` on PNG bytes
+    in the EPUB manifest, which epubcheck reports as an error -- the exact
+    "produce an invalid book" outcome the decode check exists to prevent."""
+    _wid, cid = _campaign(client)
+    url = f"/api/campaigns/{cid}/cover"
+    data = _png_bytes()
+    r = client.put(url, files={"file": ("c.jpg", io.BytesIO(data), "image/jpeg")})
+    assert r.status_code == 200 and r.json()["ext"] == "png"
+    assert (store.campaigns.campaign_root(cid) / "assets" / "cover.png").exists()
+
+    got = client.get(url)
+    assert got.content == data and got.headers["content-type"].startswith("image/png")
+
+
+def test_campaign_cover_oversized_upload_is_rejected_before_it_is_read(client, monkeypatch):
+    """The 413 must land without `read()` ever materializing the body.
+
+    That allocation is the whole reason MAX_BYTES exists (the Android/Chaquopy
+    memory profile), so a cap enforced only after reading protects nothing."""
+    _wid, cid = _campaign(client)
+
+    async def _no(self, *a, **k):
+        raise AssertionError("the body was read before the size was checked")
+    monkeypatch.setattr("starlette.datastructures.UploadFile.read", _no)
+
+    huge = b"\x89PNG" + b"\0" * (25 * 1024 * 1024)
+    r = client.put(f"/api/campaigns/{cid}/cover",
+                   files={"file": ("c.png", io.BytesIO(huge), "image/png")})
+    assert r.status_code == 413 and r.json()["detail"] == store.covers.TOO_LARGE
+
+
 def test_record_image_serving_survives_a_vanishing_file(client, monkeypatch):
-    """_serve_image_file turns an OSError into a 404 for EVERY image route,
-    not only covers — a deliberate widening, pinned here."""
+    """_serve_image_file turns a FileNotFoundError into a 404 for EVERY image
+    route, not only covers — a deliberate widening, pinned here."""
     wid = _world(client)
     chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
     base = f"/api/worlds/{wid}/characters/{chid}/versions/default/images"
     client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
     monkeypatch.setattr("pathlib.Path.read_bytes",
-                        lambda self, *a, **k: (_ for _ in ()).throw(OSError("gone")))
+                        lambda self, *a, **k: (_ for _ in ()).throw(FileNotFoundError("gone")))
     assert client.get(f"{base}/avatar").status_code == 404
+
+
+def test_image_serving_does_not_turn_a_permission_error_into_a_404(client, monkeypatch):
+    """Only "the file went away" is a 404. A PermissionError, a Windows sharing
+    violation, an exhausted fd table or a disk read error all mean the image IS
+    there — answering 404 reports a real operational fault as missing data and
+    has the frontend mark a valid cover broken."""
+    _wid, cid = _campaign(client)
+    url = f"/api/campaigns/{cid}/cover"
+    client.put(url, files={"file": ("c.png", io.BytesIO(_png_bytes()), "image/png")})
+    monkeypatch.setattr("pathlib.Path.read_bytes",
+                        lambda self, *a, **k: (_ for _ in ()).throw(PermissionError("held")))
+    with pytest.raises(PermissionError):
+        client.get(url)
 
 
 def test_campaign_cover_caching_and_thumbnail(client):
@@ -10848,7 +10903,12 @@ def test_campaign_cover_upload_advances_activity(client):
     _wid, cid = _campaign(client)
     before = next(c for c in client.get("/api/campaigns").json() if c["id"] == cid)["activity"]
     time.sleep(1.1)  # the stamp has one-second resolution
-    client.put(f"/api/campaigns/{cid}/cover",
-               files={"file": ("c.png", io.BytesIO(_png_bytes()), "image/png")})
+    r = client.put(f"/api/campaigns/{cid}/cover",
+                   files={"file": ("c.png", io.BytesIO(_png_bytes()), "image/png")})
+    # Assert the upload actually happened. Without this the test passes if the
+    # endpoint rejects every upload and the middleware stamps the attempt --
+    # i.e. it would go green while proving nothing about the feature.
+    assert r.status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/cover").status_code == 200
     after = next(c for c in client.get("/api/campaigns").json() if c["id"] == cid)["activity"]
     assert after > before

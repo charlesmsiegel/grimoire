@@ -243,18 +243,35 @@ def get_campaign_cover(cid: str, request: Request):
 @router.put("/campaigns/{cid}/cover")
 async def put_campaign_cover(cid: str, file: UploadFile = File(...)):
     _campaign_root_or_404(cid)
-    data = await file.read()
     try:
-        store.covers.validate(data)
+        # Check the size BEFORE reading. `read()` below materializes the whole
+        # upload as a single `bytes` object, and that allocation -- not the
+        # receipt -- is what `MAX_BYTES` exists to bound: the backend is packaged
+        # verbatim into the Android app (Chaquopy), where a 300 MB image would
+        # OOM the process before a 413 could be composed. Starlette spools the
+        # body to disk above 1 MB and populates `UploadFile.size`, so this costs
+        # nothing and the bytes are already on disk by the time we look.
+        #
+        # `covers.validate` still re-checks `len(data)`, and must: `size` is
+        # Optional in the ASGI contract, so a client (or a future transport)
+        # that leaves it None would otherwise buy an unbounded read.
+        if file.size is not None and file.size > store.covers.MAX_BYTES:
+            raise store.covers.CoverTooLarge(store.covers.TOO_LARGE)
+        data = await file.read()
+        # `validate` also names the extension to store under, from the format it
+        # decoded -- `file.filename` is not consulted at all, so a JPEG uploaded
+        # as `cover.png` cannot be served (or manifested in the EPUB) as PNG.
+        ext = store.covers.validate(data)
     except store.covers.CoverTooLarge as exc:
         raise HTTPException(status_code=413, detail=str(exc))
     except store.covers.CoverInvalid as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    fn = file.filename or ""
-    ext = fn.rsplit(".", 1)[-1] if "." in fn else ""
     try:
         stored = store.covers.put_cover(cid, data, ext)
     except ValueError as exc:
+        # Nothing `validate` returns is an extension `put_in` refuses today, so
+        # this is unreachable from here -- kept because what is storable is the
+        # store's decision to make, not this route's to assume.
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ext": stored, "v": store.covers.cover_version(cid)}
 

@@ -87,8 +87,24 @@ def test_cover_version_survives_a_vanishing_file(cid, monkeypatch):
     assert covers.cover_version(cid) == ""
 
 
-def test_validate_accepts_a_real_image(cid):
-    covers.validate(_png())
+def test_validate_returns_the_extension_of_the_decoded_format(cid):
+    """The bytes name the extension, so the caller never has to trust a filename."""
+    assert covers.validate(_png()) == "png"
+
+    for fmt, ext in (("JPEG", "jpg"), ("GIF", "gif"), ("WEBP", "webp")):
+        buf = io.BytesIO()
+        Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, fmt)
+        assert covers.validate(buf.getvalue()) == ext
+
+
+def test_validate_rejects_a_decodable_image_in_an_unsupported_format(cid):
+    """A BMP decodes fine, so only the format check can stop it -- and it must:
+    stored as `cover.bmp` it would be served as octet-stream and packed into
+    the EPUB manifest with a media type nothing declares."""
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "BMP")
+    with pytest.raises(covers.CoverInvalid, match="bmp"):
+        covers.validate(buf.getvalue())
 
 
 def test_validate_rejects_non_image_bytes(cid):

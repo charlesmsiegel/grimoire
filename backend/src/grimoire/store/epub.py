@@ -117,6 +117,12 @@ def build_epub(cid: str) -> tuple[bytes, str]:
     items += [{"id": f"font-{i}", "href": f"fonts/{f.name}", "media_type": "font/ttf",
                "properties": ""}
               for i, f in enumerate(fonts)]
+    # Record images take their manifest media type from the filename suffix, so
+    # a JPEG stored as `.png` is declared `image/png` and epubcheck flags the
+    # book. Covers no longer can (`covers.validate` names the extension from the
+    # decoded format); this path still can, deliberately -- it is a pre-existing,
+    # systemic hazard across every image route and every store already on disk,
+    # and closing it is its own change rather than a rider on the cover work.
     items += [{"id": f"img-{i}", "href": f"images/{name}",
                "media_type": _EXT_MEDIA.get(name.rsplit(".", 1)[-1], "application/octet-stream"),
                "properties": ""}

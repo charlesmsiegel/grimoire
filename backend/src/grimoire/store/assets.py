@@ -237,7 +237,7 @@ def _heal_stranded_promotion(d: Path) -> None:
 
 
 def _mtime_ns(p: Path) -> int:
-    """Sort key that tolerates the file vanishing mid-scan. put_image writes
+    """Sort key that tolerates the file vanishing mid-scan. put_in writes
     the new extension and then unlinks the stale sibling, so a concurrent
     reader can genuinely glob a path that is gone by the time it stats -- and
     the old `sorted(...)[0]` never stat'd at all, so raising here would be a
@@ -267,10 +267,14 @@ def _siblings(d: Path, name: str, supported_only: bool) -> list[Path]:
 def path_in(d: Path, name: str, *, supported_only: bool = False) -> Path | None:
     """The current file for logical image `name` in directory `d`, or None.
 
-    Newest wins, not alphabetically first -- see `image_path`. Lock-agnostic:
-    this takes a directory and no campaign identity, so a caller that mutates
-    campaign-scoped state through `put_in`/`delete_in` is the one that must
-    hold `locks.campaign_lock` (`store.covers` does).
+    Newest wins, not alphabetically first: `put_in` writes the new file before
+    unlinking stale other-extension siblings (so a crash can't lose the image),
+    which leaves both present for a moment -- and a plain `sorted()[0]` would
+    hand back the stale one. Also self-heals if that unlink ever fails.
+
+    Lock-agnostic: this takes a directory and no campaign identity, so a caller
+    that mutates campaign-scoped state through `put_in`/`delete_in` is the one
+    that must hold `locks.campaign_lock` (`store.covers` does).
     """
     if not _safe_name(name) or not d.exists():
         return None
