@@ -119,12 +119,28 @@ For each of the 16 worlds:
 
 ## Architecture
 
-Per-world pipeline, run independently across all 16 worlds (no barrier
-between worlds — each finishes on its own schedule):
+Worlds are processed **one at a time, sequentially, not fanned out in
+parallel.** Each world runs its full pipeline to completion — including
+its own commit (see Safety) — before the next world starts:
 
 ```
-propose (batched)  →  merge/dedupe (1 agent/world)  →  apply (deterministic script)  →  verify  →  report
+world 1: propose (batched) → merge/dedupe → apply → verify → commit
+                                                                  |
+                                                                  v
+world 2: propose (batched) → merge/dedupe → apply → verify → commit
+                                                                  |
+                                                                 ...
 ```
+
+Within a single world, the propose stage still batches across that
+world's characters/lore (see below) — the sequencing constraint is
+*between* worlds, not within one. This means a bad or ambiguous world
+never blocks or gets tangled up with another world's run, each world's
+git commit is a real checkpoint you can stop after and inspect before
+continuing, and realm (already mostly done) can simply be
+run first, as a fast, low-risk confirmation that the pipeline works
+end-to-end on its one remaining gap (`items`) before committing the
+same process to the other 15 worlds.
 
 ### 1. Propose
 
@@ -299,8 +315,11 @@ the only copy of the information.
 
 ## Safety / preconditions
 
-- `~/.grimoire` is now a local git repo with a baseline commit
-  (`e6b8303`, 16,416 files) taken before this work starts.
+- `~/.grimoire` is now a local git repo. The `pre-swarm-baseline` tag
+  marks the recovery point (`e6b8303`'s initial snapshot plus
+  `7dcc77e`, realm's already-completed greetings/plot-map/
+  tags work from a separate prior session) — `git reset --hard
+  pre-swarm-baseline` undoes everything from this point forward.
 - **Per-world commit checkpoints**: immediately before applying a given
   world, the apply script checks `git status --short` for that world's
   path is clean — if it isn't (something changed since the last
