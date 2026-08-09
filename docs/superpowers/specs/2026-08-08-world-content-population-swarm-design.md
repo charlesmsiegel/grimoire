@@ -66,7 +66,17 @@ For each of the 16 worlds:
 
 1. Extract `locations`/`items`/`groups`/`lore`/(fantasy-world `creatures`)
    entries that are evidenced in existing character/lore text but not yet
-   recorded as their own entities.
+   recorded as their own entities. This includes **reclassifying existing
+   `lore` entries that are actually a location/group/item/creature
+   description** — realm' own lore went from 102 entries to 4
+   this way (most of what was filed as `lore` was really a place, a
+   faction, or a species) — not just mining character bios for content
+   nobody has recorded anywhere yet. A reclassification creates the
+   properly-kinded entity, then deletes the original `lore` entry; it
+   goes through the same source-citation and merge-conservatism rules as
+   any other candidate (see Propose/Merge below) since deleting existing
+   content is exactly the kind of action the per-world git checkpoint
+   exists to make recoverable from.
 2. Import greeting-worthy content from character cards
    (`first_mes`/`alternate_greetings`) into world-level `greetings/`, and
    link greetings that are evidently part of the same story — whether
@@ -157,6 +167,11 @@ agent emits structured JSON:
   source}]` for `locations`/`items`/`groups`/`lore`/`creatures`, where
   `kind` includes `creatures` (restricted to fantasy worlds by the
   classification rule below, not by the schema).
+- `reclassifications`: `[{lore_id, new_kind, name, body, keys, owners?,
+  fields?, source}]` — an existing `lore` entry (`lore_id`) whose
+  content is actually a location/group/item/creature description, not
+  background lore. `source` here is the existing lore entry's own text,
+  not external corpus text — the citation requirement still applies.
 - `candidate_tags`: `[{display_name, rationale, source}]`
 - `greeting_candidates`: `[{character, version}]` — cards worth
   importing
