@@ -115,6 +115,9 @@ body::before {
 .list-row-arrow { font-family: var(--fd); font-weight: 900; font-size: 22px; color: var(--accent); padding: 0 20px; }
 .list-row .row-actions { opacity: 0; }
 .list-row:hover .row-actions, .list-row:focus-within .row-actions { opacity: 1; }
+.campaign-cover { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.campaign-cover .cover-preview { max-width: 260px; max-height: 340px; object-fit: contain;
+                                 border: var(--rw2) solid var(--rule-soft); }
 .page-note { color: var(--subtle); font-style: italic; }
 .page-note a { color: var(--accent); }
 

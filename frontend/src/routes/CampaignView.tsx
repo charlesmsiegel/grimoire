@@ -16,6 +16,7 @@ import { NewSceneChooser } from "../components/NewSceneChooser";
 import { ChangesPanel } from "../components/ChangesPanel";
 import { LedgerPanel } from "../components/LedgerPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
+import { CampaignCover } from "../components/CampaignCover";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
 import { Portrait } from "../components/Portrait";
@@ -240,6 +241,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [showCalendar, setShowCalendar] = useState(false);
   const [showMechanics, setShowMechanics] = useState(false);
   const [showStyle, setShowStyle] = useState(false);
+  const [showCover, setShowCover] = useState(false);
   const [scenes, setScenes] = useState<SceneMeta[]>([]);
   // Which campaign `scenes` describes. The router reuses this component across
   // /campaigns/A → /campaigns/B, so between the switch and B's list landing
@@ -3019,6 +3021,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                   title="Response preset and length settings">
             Response
           </button>
+          <button className="rail-date" onClick={() => setShowCover((v) => !v)}
+                  title="Cover image, used on the campaigns list and in the EPUB export">
+            Cover
+          </button>
         </div>
       </aside>
       )}
@@ -3037,6 +3043,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           <div className="panel-slot">
             <ResponsePresetPicker scope="campaign" cid={cid}
                                   onChanged={() => activeId && selectScene(activeId)} />
+          </div>
+        )}
+        {showCover && (
+          <div className="panel-slot">
+            <CampaignCover cid={cid} />
           </div>
         )}
         {/* `ctxKey` bumps on every successful absorb save (and on scene select),

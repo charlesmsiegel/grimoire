@@ -209,6 +209,10 @@ export type CampaignMeta = {
    *  computes it -- GET /campaigns/{cid} returns the bare meta. */
   activity?: string;
   module?: string;
+  /** Cache-busting token for the campaign's cover image, "" when it has none.
+   *  A token rather than a boolean: it also makes the URL change when the
+   *  bytes do, so a replaced cover cannot keep rendering from cache. */
+  cover?: string;
 };
 export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string; date: string; pcless?: boolean };
 export type Message = { role: "user" | "assistant"; content: string; speaker?: string };
@@ -1128,6 +1132,20 @@ export const api = {
     `${entityBase(scope)}/${kind}/${eid}/images/${name}`,
   listEntityImages: (scope: EntityScope, kind: EntityKind, eid: string) =>
     request<{ name: string; ext: string; v: string }[]>("GET", `${entityBase(scope)}/${kind}/${eid}/images`),
+  campaignCoverUrl: (cid: string, opts?: { w?: number; v?: string }) => {
+    const q = new URLSearchParams();
+    if (opts?.w) q.set("w", String(opts.w));
+    if (opts?.v) q.set("v", opts.v);
+    const qs = q.toString();
+    return `/api/campaigns/${cid}/cover${qs ? `?${qs}` : ""}`;
+  },
+  putCampaignCover: (cid: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return requestForm<{ ext: string; v: string }>(`/api/campaigns/${cid}/cover`, form, "PUT");
+  },
+  deleteCampaignCover: (cid: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/cover`),
   putEntityImage: (scope: EntityScope, kind: EntityKind, eid: string, name: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
