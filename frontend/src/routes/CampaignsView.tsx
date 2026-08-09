@@ -52,6 +52,9 @@ export default function CampaignsView() {
           <div className="list-row" key={c.id}>
             <div className="list-row-cover">
               {c.cover && !broken[`${c.id}:${c.cover}`] && (
+                // w=96 for a box `index.css` sizes at 64x64: 1.5x of headroom,
+                // so the thumbnail is still sharp on a 1.5x/2x display rather
+                // than upscaled. More than that only costs bytes.
                 <img className="list-row-cover-img"
                      src={api.campaignCoverUrl(c.id, { w: 96, v: c.cover })}
                      alt={`${c.name} cover`}
