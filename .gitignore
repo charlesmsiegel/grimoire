@@ -33,3 +33,6 @@ frontend/coverage/
 
 # Local Codex plugin model override (personal preference, not a repo convention)
 .codex/
+
+# Personal VS Code multi-root workspace (references an absolute local path)
+*.code-workspace
