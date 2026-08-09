@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import populate_world_content as pwc  # noqa: E402
-from grimoire.store import characters, entities, greetings, tags, worlds  # noqa: E402
+import populate_world_content as pwc
+from grimoire.store import entities, greetings, tags, worlds
 
 
 def _world(monkeypatch, tmp_path) -> tuple[str, Path]:

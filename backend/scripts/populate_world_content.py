@@ -9,14 +9,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from grimoire.store import characters, entities, greetings, tags, worlds
-from grimoire.store.paths import home
+from grimoire.store import entities, greetings, tags, worlds
 
 # creatures entities are only meaningful in fantasy worlds; enforced here (not
 # just prompted) so one merge-agent mistake can't write them anywhere else.
