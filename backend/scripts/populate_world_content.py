@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from grimoire.store import entities, greetings, tags, worlds
+from grimoire.store.paths import home
 
 # creatures entities are only meaningful in fantasy worlds; enforced here (not
 # just prompted) so one merge-agent mistake can't write them anywhere else.
@@ -34,6 +35,32 @@ def build_index(root: Path) -> dict:
         for g in greetings.list_greetings(root)
     ]
     return {"entities": entity_rows, "tags": tag_rows, "greetings": greeting_rows}
+
+
+def new_results() -> dict:
+    return {"created": [], "skipped": [], "errors": [], "touched_files": set()}
+
+
+def _world_rel(root: Path) -> str:
+    return root.relative_to(home()).as_posix()
+
+
+def apply_tags(root: Path, tag_specs: list[dict], results: dict) -> dict[str, str]:
+    world_rel = _world_rel(root)
+    existing = tags.read_tags(root)
+    by_lower = {name.lower(): tid for tid, name in existing.items()}
+    result: dict[str, str] = {}
+    for spec in tag_specs:
+        name = spec["display_name"]
+        key = name.lower()
+        if key in by_lower:
+            result[name] = by_lower[key]
+        else:
+            tid = tags.add_tag(root, name)
+            by_lower[key] = tid
+            result[name] = tid
+            results["touched_files"].add(f"{world_rel}/tags.md")
+    return result
 
 
 def cmd_index(args: argparse.Namespace) -> int:

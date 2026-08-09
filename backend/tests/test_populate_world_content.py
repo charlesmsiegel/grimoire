@@ -39,3 +39,17 @@ def test_index_cli_prints_json(monkeypatch, tmp_path, capsys):
     assert pwc.main() == 0
     out = json.loads(capsys.readouterr().out)
     assert out["entities"][0]["name"] == "Blind Lion"
+
+
+def test_apply_tags_reuses_existing_id_and_tracks_touched_file(monkeypatch, tmp_path):
+    wid, root = _world(monkeypatch, tmp_path)
+    existing_id = tags.add_tag(root, "Farmer")
+    world_rel = pwc._world_rel(root)
+    results = pwc.new_results()
+
+    result = pwc.apply_tags(root, [{"display_name": "farmer"}, {"display_name": "Merchant"}], results)
+
+    assert result["farmer"] == existing_id
+    assert len(tags.read_tags(root)) == 2  # no duplicate "farmer"/"farmer-2" entry
+    assert result["Merchant"] in tags.read_tags(root)
+    assert f"{world_rel}/tags.md" in results["touched_files"]
