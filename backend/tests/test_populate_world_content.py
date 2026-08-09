@@ -255,3 +255,86 @@ def test_apply_greeting_imports_errors_when_existing_greetings_dont_match_card(m
     assert err["stage"] == "greeting_imports"
     assert err["character"] == "adriana" and err["version"] == "default"
     assert "don't match" in err["reason"]
+
+
+def test_apply_greeting_imports_errors_on_insertion_drift(monkeypatch, tmp_path):
+    """Round 4: a new alternate greeting inserted into the MIDDLE of the card's
+    alternates list between two runs. Total existing-greeting count (2) still
+    equals... nothing in particular, but the OLD (count-based) ambiguity check
+    (`len(ordered) != len(candidates)`) would have compared 2 matched against 2
+    candidates and called it clean, silently mapping `new:*:1` to the wrong
+    greeting (the original alt, which is now actually at expected index 2, not
+    1) and leaving `new:*:1` (the new alt) unresolved. The value-based fix must
+    catch this: the new alt's expected body has no existing greeting, so its
+    slot in `ordered` stays None."""
+    wid, root = _world(monkeypatch, tmp_path)
+    char_id, vid = characters.create_character(
+        root, "Adriana", "default", _card("Hello.", ["Original alt text."]))
+    spec = [{"character": char_id, "version": vid, "titles": []}]
+
+    r1 = pwc.new_results()
+    ref_map_1 = pwc.apply_greeting_imports(root, spec, r1)
+    assert len(greetings.list_greetings(root)) == 2  # first_mes + 1 alt
+
+    # Insert a brand-new alt BEFORE the original one: first_mes unchanged,
+    # alternates go from ["Original alt text."] to
+    # ["New inserted alt text.", "Original alt text."]. Both existing
+    # greetings' bodies still appear somewhere in the new expected list, but
+    # the total expected count is now 3.
+    card = characters.read_card(root, char_id, vid)
+    card["data"]["alternate_greetings"] = ["New inserted alt text.", "Original alt text."]
+    characters.update_version(root, char_id, vid, card)
+
+    r2 = pwc.new_results()
+    ref_map_2 = pwc.apply_greeting_imports(root, spec, r2)
+
+    assert len(greetings.list_greetings(root)) == 2  # no new greeting created
+    assert ref_map_2 == {}  # nothing resolved for this spec -- errored, not shifted
+    assert r2["skipped"] == []
+    assert r2["created"] == []
+    assert len(r2["errors"]) == 1
+    err = r2["errors"][0]
+    assert err["stage"] == "greeting_imports"
+    assert err["character"] == char_id and err["version"] == vid
+    assert "don't match" in err["reason"]
+    # ref_map_1 is untouched by this assertion -- just documents what existed
+    assert len(ref_map_1) == 2
+
+
+def test_apply_greeting_imports_errors_on_same_count_replacement_drift(monkeypatch, tmp_path):
+    """Round 4: the sharpest test of value-based vs. count-based matching. One
+    alternate's text is replaced by different text, so the expected-body COUNT
+    stays identical (3 before, 3 after) but one distinct body ("Alt one.")
+    disappears from the expected set entirely while a new one ("Replaced alt
+    text.") appears. A count-only check (`len(ordered) == len(candidates)`)
+    would wrongly call this clean since 3 still equals 3; the value-based fix
+    must still catch it because the greeting whose stored body is "Alt one."
+    can no longer find a matching slot in expected_index_map."""
+    wid, root = _world(monkeypatch, tmp_path)
+    char_id, vid = characters.create_character(
+        root, "Adriana", "default", _card("Hello.", ["Alt one.", "Alt two."]))
+    spec = [{"character": char_id, "version": vid, "titles": []}]
+
+    r1 = pwc.new_results()
+    ref_map_1 = pwc.apply_greeting_imports(root, spec, r1)
+    assert len(greetings.list_greetings(root)) == 3  # first_mes + 2 alts
+
+    # Replace alt-1's text (index 1: "Alt one.") with different text, leaving
+    # the total alternates count (and thus total expected-body count) the same.
+    card = characters.read_card(root, char_id, vid)
+    card["data"]["alternate_greetings"] = ["Replaced alt text.", "Alt two."]
+    characters.update_version(root, char_id, vid, card)
+
+    r2 = pwc.new_results()
+    ref_map_2 = pwc.apply_greeting_imports(root, spec, r2)
+
+    assert len(greetings.list_greetings(root)) == 3  # no new greeting created
+    assert ref_map_2 == {}  # nothing resolved for this spec -- errored, not guessed
+    assert r2["skipped"] == []
+    assert r2["created"] == []
+    assert len(r2["errors"]) == 1
+    err = r2["errors"][0]
+    assert err["stage"] == "greeting_imports"
+    assert err["character"] == char_id and err["version"] == vid
+    assert "don't match" in err["reason"]
+    assert len(ref_map_1) == 3

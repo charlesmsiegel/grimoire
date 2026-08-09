@@ -149,24 +149,17 @@ def apply_reclassifications(root: Path, specs: list[dict], results: dict,
 
 def _existing_greetings_in_creation_order(root: Path, character: str, version: str) -> list[str] | None:
     """Greetings for one character/version, in the order import_from_character
-    originally created them — recovered by recomputing the exact bodies the
-    card would produce (deterministic; we bake them the same way at creation
-    and never touch body afterward) and matching against existing greetings'
-    actual bodies. This survives title renames (name is mutable, body isn't)
-    and doesn't depend on id slugification, which can diverge from char_id
-    when a card's display name isn't already slug-shaped.
-
-    Three distinct outcomes, since "nothing exists yet" and "something exists
-    but can't be trusted" must never be confused:
-    - `[]` — nothing exists yet for this character/version; safe to import fresh.
-    - a full ordered list — every existing greeting matched exactly one expected
-      body; safe to reuse as-is.
-    - `None` — greetings exist for this character/version but don't cleanly match
-      the card's *current* expected bodies (e.g. the card, or a greeting's body,
-      was edited between runs). This is genuinely undecidable without a human:
-      guessing an order would silently shift every later ref into the wrong
-      greeting, and treating it as "nothing exists" would silently duplicate.
-      The caller must surface this as an error, not resolve it either way."""
+    would create them from the CURRENT card — recovered via a value-based 1:1
+    match between each existing greeting's stored body and the body the card
+    would produce at each position, never by sequential/positional consumption
+    (which silently mis-assigns when the card's greeting list has been edited
+    between runs — e.g. a new alternate inserted in the middle). Returns:
+    - [] if nothing exists yet for this character/version (fresh import case)
+    - the ordered id list if every existing greeting matches exactly one
+      expected body and every expected body is matched (clean case)
+    - None if existing greetings and the current card's expected bodies don't
+      form a clean bijection (ambiguous — caller must treat this as an error,
+      never guess by shifting or re-importing)"""
     try:
         card = characters.read_card(root, character, version)
     except (characters.CharacterNotFound, characters.VersionNotFound):
@@ -181,27 +174,35 @@ def _existing_greetings_in_creation_order(root: Path, character: str, version: s
     for alt in data.get("alternate_greetings", []) or []:
         if isinstance(alt, str) and alt.strip():
             raw_items.append(alt)
-
     expected_bodies = [cards.bake_char_token(raw, baked_name) for raw in raw_items]
 
     candidates = [g["id"] for g in greetings.list_greetings(root)
                   if g["character"] == character and g["version"] == version]
     if not candidates:
         return []
-    body_by_id = {gid: greetings.read_greeting(root, gid)["body"] for gid in candidates}
 
-    ordered: list[str] = []
-    used: set[str] = set()
-    for expected in expected_bodies:
-        match = next((gid for gid in candidates
-                      if gid not in used and body_by_id[gid] == expected), None)
-        if match is not None:
-            ordered.append(match)
-            used.add(match)
+    # Value-based 1:1 assignment: map each distinct expected body to the
+    # (possibly several, if duplicated) indices it occupies, then consume one
+    # index per matching candidate. This catches "count still matches but a
+    # candidate landed at the wrong slot" because it checks per-value
+    # membership, not sequential position.
+    expected_index_map: dict[str, list[int]] = {}
+    for idx, body in enumerate(expected_bodies):
+        expected_index_map.setdefault(body, []).append(idx)
 
-    if len(ordered) != len(candidates):
-        return None  # some existing greeting didn't match any expected body -- ambiguous
-    return ordered
+    ordered: list[str | None] = [None] * len(expected_bodies)
+    for gid in candidates:
+        body = greetings.read_greeting(root, gid)["body"]
+        slots = expected_index_map.get(body)
+        if not slots:
+            return None  # a stored greeting matches nothing the card produces now
+        idx = slots.pop(0)
+        ordered[idx] = gid
+
+    if any(slot is None for slot in ordered):
+        return None  # some expected body has no matching stored greeting
+
+    return ordered  # every element is a str at this point, not None
 
 
 def apply_greeting_imports(root: Path, specs: list[dict], results: dict) -> dict[str, str]:
