@@ -36,3 +36,8 @@ frontend/coverage/
 
 # Personal VS Code multi-root workspace (references an absolute local path)
 *.code-workspace
+
+# Scratch working files (manifests, intermediate data) -- never commit real
+# store data or references to it here; ~/.grimoire (store.home()) is the
+# only place that belongs, per the privacy rule in CLAUDE.md.
+/scratchpad/
