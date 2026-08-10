@@ -92,6 +92,22 @@ never a bare name, never a guessed abbreviation.
    code too from a 1:1 rule, never ask an LLM to keep tags/gating manually consistent by hand;
    that mismatch was a real, repeated source of failed applies this session.
 
+**Processing multiple worlds in one run? Don't serialize them.** A whole world's
+propose+merge+apply has zero data dependency on any other world's — running world A's *entire*
+pass (including its apply, which is slow only because it's sequential, not because it's
+expensive) before even starting world B's propose+merge wastes real wall-clock. Split each
+world's work into a propose+merge-only function (returns partials, no apply) and a separate apply
+step; kick off every world's propose+merge concurrently (`Promise.all`), then run each world's
+apply sequentially afterward (apply still can't run concurrently *across* worlds either — they
+share one repo, and `run` needs a clean repo + commits at the end regardless of which world it's
+for). Also: before re-processing a world you've partially done, compute the actual remaining
+`(character, version)` pairs from real store state — read each existing greeting file's own
+`character`/`version` frontmatter field, never infer from the greeting filename (filenames are
+slugified from the card's *display name*, not the folder id — a character folder named
+`mara-variant` can have greetings named `mara.md`, `mara-2.md`, ...). Pass only the remaining
+pairs into the batch listing so you're not re-paying propose/merge cost for characters already
+done.
+
 5. **Apply — per CHUNK, strictly sequential, never parallel/pipelined.** Even after per-batch
    merge, recombining many small merge outputs into ONE whole-world manifest can still exceed the
    64k output-token cap **on the Write itself** (the apply agent must emit the full manifest as
