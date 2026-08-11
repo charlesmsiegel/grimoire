@@ -1,6 +1,6 @@
 ---
 name: populate-world-content
-description: Use when a grimoire World's character roster has never had its locations/items/groups/lore/greetings extracted, or when greetings need recovering/re-importing (including per character-version "era" variants). Drives backend/scripts/populate_world_content.py via a swarm of Workflow subagents.
+description: Use when a grimoire World's character roster has never had its locations/items/groups/lore/greetings extracted, or when greetings need recovering/re-importing (including per character-version "era" variants). Drives .claude/skills/populate-world-content/scripts/populate_world_content.py via a swarm of Workflow subagents.
 ---
 
 # Populating world content (entities + greetings) from character cards
@@ -13,17 +13,23 @@ next session doesn't have to relearn any of it the expensive way.
 
 ## Two-part architecture
 
-**Part A — `backend/scripts/populate_world_content.py`** (committed, stable, do not casually
+**Part A — `.claude/skills/populate-world-content/scripts/populate_world_content.py`** (committed, stable, do not casually
 change). CLI:
 ```
-python backend/scripts/populate_world_content.py index --world <wid>
-python backend/scripts/populate_world_content.py run --world <wid> --manifest <path.json>
+python .claude/skills/populate-world-content/scripts/populate_world_content.py index --world <wid>
+python .claude/skills/populate-world-content/scripts/populate_world_content.py run --world <wid> --manifest <path.json> [--allow-creatures]
 ```
 `index` prints the world's existing entities (id/kind/name only) and tag vocabulary, so
 proposal-writing agents can avoid duplicating what's already there. `run` applies a **manifest**
 (schema below), verifies referential integrity, and **commits** — but only if the whole repo was
 clean when it started and nothing failed. Never edit this file to make a one-off pass work; if it
 has a real bug, fix it and run `make check-py` before touching anything else.
+
+`--allow-creatures` permits the `creatures` entity kind for this world; omit it and any
+`creatures` entity/reclassification in the manifest errors out instead of writing. The script
+itself carries no notion of which of your worlds are fantasy/genre-appropriate for creatures —
+that judgment belongs in the Part B orchestration script (per-world, per-invocation, never
+committed), not hardcoded here as a set of world ids.
 
 **Part B — a Workflow orchestration script you write per invocation.** Not committed (it's
 world-specific, ephemeral tooling) — write it fresh each time using the templates below, or

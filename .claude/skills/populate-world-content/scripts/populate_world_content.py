@@ -13,16 +13,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "backend" / "src"))
 
 from grimoire.store import cards, characters, entities, greetings, overlay, tags, worlds
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.paths import home
-
-# creatures entities are only meaningful in fantasy worlds; enforced here (not
-# just prompted) so one merge-agent mistake can't write them anywhere else.
-CREATURE_ALLOWED_WORLDS = {"arcane-academy", "realm", "guildhall"}
-
 
 def build_index(root: Path) -> dict:
     """Compact existing-content summary for the merge stage: id/name only, no
@@ -74,7 +69,8 @@ def _existing_names_by_kind(root: Path) -> dict[str, set[str]]:
             for kind in entities.ENTITY_KINDS}
 
 
-def apply_entities(root: Path, specs: list[dict], results: dict, wid: str) -> None:
+def apply_entities(root: Path, specs: list[dict], results: dict, wid: str,
+                   allow_creatures: bool = False) -> None:
     world_rel = _world_rel(root)
     existing_by_kind = _existing_names_by_kind(root)
 
@@ -84,7 +80,7 @@ def apply_entities(root: Path, specs: list[dict], results: dict, wid: str) -> No
             results["errors"].append(
                 {"stage": "entities", "reason": "unknown kind", "spec": spec})
             continue
-        if kind == "creatures" and wid not in CREATURE_ALLOWED_WORLDS:
+        if kind == "creatures" and not allow_creatures:
             results["errors"].append({
                 "stage": "entities",
                 "reason": "creatures not allowed outside fantasy worlds",
@@ -108,7 +104,7 @@ def apply_entities(root: Path, specs: list[dict], results: dict, wid: str) -> No
 
 
 def apply_reclassifications(root: Path, specs: list[dict], results: dict,
-                            wid: str) -> None:
+                            wid: str, allow_creatures: bool = False) -> None:
     world_rel = _world_rel(root)
     existing_by_kind = _existing_names_by_kind(root)
 
@@ -119,7 +115,7 @@ def apply_reclassifications(root: Path, specs: list[dict], results: dict,
                 "stage": "reclassifications", "reason": "unknown kind",
                 "spec": spec})
             continue
-        if kind == "creatures" and wid not in CREATURE_ALLOWED_WORLDS:
+        if kind == "creatures" and not allow_creatures:
             results["errors"].append({
                 "stage": "reclassifications",
                 "reason": "creatures not allowed outside fantasy worlds",
@@ -560,14 +556,15 @@ def validate_manifest(manifest: dict, results: dict) -> dict:
     return clean
 
 
-def apply_manifest(root: Path, manifest: dict, wid: str) -> dict:
+def apply_manifest(root: Path, manifest: dict, wid: str,
+                   allow_creatures: bool = False) -> dict:
     results = new_results()
     manifest = validate_manifest(manifest, results)
 
     apply_tags(root, manifest["tags"], results)
 
-    apply_entities(root, manifest["entities"], results, wid)
-    apply_reclassifications(root, manifest["reclassifications"], results, wid)
+    apply_entities(root, manifest["entities"], results, wid, allow_creatures)
+    apply_reclassifications(root, manifest["reclassifications"], results, wid, allow_creatures)
 
     import_ref_map = apply_greeting_imports(root, manifest["greeting_imports"], results)
     ref_map = dict(import_ref_map)
@@ -730,7 +727,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(json.dumps({"status": "aborted", "reason": "repo is dirty"}))
         return 1
 
-    results = apply_manifest(root, manifest, args.world)
+    results = apply_manifest(root, manifest, args.world, allow_creatures=args.allow_creatures)
     git_changed = _git_changed_paths(grimoire_root, world_rel)
 
     # Anything changed OUTSIDE this world. The repo was verified clean above, so
@@ -791,6 +788,10 @@ def main(argv: list[str] | None = None) -> int:
     p_run = sub.add_parser("run", help="apply a manifest to a world, verify, and commit")
     p_run.add_argument("--world", required=True)
     p_run.add_argument("--manifest", required=True)
+    p_run.add_argument("--allow-creatures", action="store_true",
+                       help="permit the 'creatures' entity kind for this world "
+                            "(fantasy/genre worlds only; the caller decides per-invocation, "
+                            "never hardcoded here)")
 
     args = ap.parse_args(argv)
     if args.cmd == "index":

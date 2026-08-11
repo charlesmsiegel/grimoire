@@ -5,7 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / ".claude" / "skills" /
+                      "populate-world-content" / "scripts"))
 import populate_world_content as pwc
 from grimoire.store import (assets, campaigns, characters, entities, greetings, overlay,
                             tags, worlds)
@@ -74,14 +75,25 @@ def test_apply_entities_skips_existing_name_case_insensitively(monkeypatch, tmp_
     assert any(p.endswith("locations/guild-hall.md") for p in results["touched_files"])
 
 
-def test_apply_entities_rejects_creatures_outside_fantasy_worlds(monkeypatch, tmp_path):
-    wid, root = _world(monkeypatch, tmp_path)  # "Ashgrove" is not in CREATURE_ALLOWED_WORLDS
+def test_apply_entities_rejects_creatures_by_default(monkeypatch, tmp_path):
+    wid, root = _world(monkeypatch, tmp_path)
     results = pwc.new_results()
 
     pwc.apply_entities(root, [{"kind": "creatures", "name": "Dragon", "body": "x"}], results, wid)
 
     assert entities.list_entities(root, "creatures") == []
     assert results["errors"][0]["reason"] == "creatures not allowed outside fantasy worlds"
+
+
+def test_apply_entities_allows_creatures_when_opted_in(monkeypatch, tmp_path):
+    wid, root = _world(monkeypatch, tmp_path)
+    results = pwc.new_results()
+
+    pwc.apply_entities(root, [{"kind": "creatures", "name": "Dragon", "body": "x"}], results, wid,
+                       allow_creatures=True)
+
+    assert {e["name"] for e in entities.list_entities(root, "creatures")} == {"Dragon"}
+    assert results["errors"] == []
 
 
 def test_apply_reclassifications_is_idempotent_across_reruns(monkeypatch, tmp_path):
@@ -1090,8 +1102,8 @@ def test_run_aborts_on_an_unexplained_change_outside_the_world(monkeypatch, tmp_
                                        "--manifest", str(manifest_path)])
     real_apply = pwc.apply_manifest
 
-    def apply_and_scribble(root_, manifest, wid_):
-        out = real_apply(root_, manifest, wid_)
+    def apply_and_scribble(root_, manifest, wid_, allow_creatures=False):
+        out = real_apply(root_, manifest, wid_, allow_creatures)
         (tmp_path / "stray.md").write_text("written outside the world", encoding="utf-8")
         return out
 
