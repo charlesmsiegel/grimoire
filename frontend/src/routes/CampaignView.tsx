@@ -24,6 +24,7 @@ import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
 import { SceneInspector } from "../components/SceneInspector";
 import { usePublishShellContext } from "../components/ShellStatus";
 import { RollProposal, type ResolveBody } from "../components/RollProposal";
+import { commentPlugin } from "../markdown/commentPlugin";
 import { quotePlugin } from "../markdown/quotePlugin";
 
 // Marks a manual dice-roll transcript line's speaker (backend: scenes.ROLL_SPEAKER).
@@ -220,8 +221,12 @@ function sortScenes(scenes: SceneMeta[], sort: SceneSort): SceneMeta[] {
 // Memoized so typing in the input bar (which re-renders CampaignView on every
 // keystroke) doesn't re-parse the markdown of every unchanged message.
 const RenderedMarkdown = memo(function RenderedMarkdown({ content }: { content: string }) {
+  // commentPlugin runs first, though nothing depends on it doing so: quotePlugin
+  // scans `text` nodes only and steps over `raw`/`comment` ones without reading
+  // their values, so a quote mark inside a note could never have opened a run
+  // either way. The order is for reading, not for correctness.
   return (
-    <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[quotePlugin]}>{content}</Markdown>
+    <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[commentPlugin, quotePlugin]}>{content}</Markdown>
   );
 });
 

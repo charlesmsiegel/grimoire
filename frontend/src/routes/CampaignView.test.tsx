@@ -424,6 +424,36 @@ test("a manual dice roll's transcript line has no Edit control", async () => {
   expect(screen.getAllByTitle("Edit message")).toHaveLength(1);
 });
 
+// Author notes live in the transcript as HTML comments: kept in the stored text
+// so they survive an edit, but never shown to the reader alongside the prose.
+test("HTML comments are invisible in the rendered transcript but survive into the edit box", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "assistant",
+      content: "The tide turns.\n\n<!-- remember: she is lying here -->\n\nShe looks away." }] });
+  renderCampaign();
+  await screen.findByText("The tide turns.");
+  expect(screen.getByText("She looks away.")).toBeInTheDocument();
+  // the note itself is nowhere in what the reader sees
+  expect(screen.queryByText(/remember: she is lying/)).toBeNull();
+  expect(document.body.textContent).not.toContain("remember: she is lying");
+
+  // ...but editing the message hands back the whole stored text, comment included
+  fireEvent.click(screen.getByTitle("Edit message"));
+  expect(await screen.findByLabelText("Edit message"))
+    .toHaveValue("The tide turns.\n\n<!-- remember: she is lying here -->\n\nShe looks away.");
+});
+
+test("an inline HTML comment is invisible without breaking the sentence around it", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "assistant", content: "She smiles <!-- beat --> and turns away." }] });
+  renderCampaign();
+  await waitFor(() => expect(document.body.textContent).toContain("She smiles"));
+  expect(document.body.textContent).not.toContain("beat");
+  expect(document.body.textContent).toContain("and turns away.");
+});
+
 test("Enter sends a message in the active scene", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
