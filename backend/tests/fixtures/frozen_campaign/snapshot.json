@@ -936,6 +936,7 @@
     {
       "created": "2026-01-02T09:30:00Z",
       "date": "2026-01-02",
+      "done": false,
       "id": "002--2026-01-02--the-long-quay",
       "model": "openai/gpt-4o-mini",
       "pcless": false,
@@ -945,6 +946,7 @@
     {
       "created": "2026-01-01T09:03:00Z",
       "date": "",
+      "done": false,
       "id": "001--the-tide-comes-in",
       "model": "anthropic/claude-opus-4.1",
       "pcless": false,

@@ -1002,6 +1002,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     () => scenes.find((s) => s.id === activeId)?.pcless ?? false,
     [scenes, activeId]);
 
+  // A scene absorbed into the chronicle is finished: its summary is written and
+  // its changes are applied, so anything appended now sits outside the record
+  // that was taken of it. The composer goes entirely rather than being disabled
+  // -- a greyed-out entry box still says "you could type here".
+  const activeDone = useMemo(
+    () => scenes.find((s) => s.id === activeId)?.done ?? false,
+    [scenes, activeId]);
+
   // The response-length chip. A pending one-shot pick beats the scene's own
   // saved preset; with neither, the label comes from what the SERVER resolved
   // (api.getSceneResponse), because a preset set at campaign or global scope
@@ -3036,6 +3044,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               label={s.title}
               prefix={String(sceneNumber(s.id, scenes.length - i)).padStart(2, "0")}
               subtitle={s.pcless ? "Offscreen" : undefined}
+              done={s.done}
               active={s.id === activeId}
               // A scene's id is its filename, and renaming re-slugs it — so a
               // rename mid-turn moves the file out from under the stream, and
@@ -3442,6 +3451,15 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           <RollProposal key={proposal.id} record={proposal} busy={busy || rolling}
                         onResolve={resolve} />
         )}
+        {activeDone ? (
+          /* The whole composer, not a disabled entry box. This scene's summary
+             is written and its changes are applied, so a post added now would
+             sit outside the record taken of it -- and a greyed-out textarea
+             still says "you could type here". Editing and rerolling existing
+             posts stay available: those change what was absorbed, rather than
+             adding to a scene that is closed. */
+          <div className="scene-complete">✓ Scene complete</div>
+        ) : (
         <div className="composer">
         <div className="inputbar">
           {/* Dice are a mechanics affordance: both the popover's tabs lead to
@@ -3591,11 +3609,6 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                 matching option a native select silently displays the FIRST one,
                 so the strip would confidently name a preset that is not in
                 effect. Show the id instead (Codex review). */}
-            {/* Same fallback ResponsePresetPicker carries: a scene can name a
-                preset the list has not loaded yet, or one since deleted. With no
-                matching option a native select silently displays the FIRST one,
-                so the strip would confidently name a preset that is not in
-                effect. Show the id instead (Codex review). */}
             {responseChipPresetId
               && !responsePresets.some((p) => p.id === responseChipPresetId) && (
               <option value={responseChipPresetId}>{responseChipPresetId}</option>
@@ -3622,6 +3635,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           )}
         </div>
         </div>
+        )}
       </section>
       {inspectorCollapsed ? (
         <button className="inspector-tab" aria-label="Expand sidebar" onClick={toggleInspector}>‹</button>

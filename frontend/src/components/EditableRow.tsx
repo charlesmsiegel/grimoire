@@ -4,6 +4,7 @@ export function EditableRow({
   label,
   prefix,
   subtitle,
+  done,
   active,
   locked,
   lockedReason,
@@ -15,6 +16,8 @@ export function EditableRow({
   /** display-only ordinal shown before the name; excluded from rename */
   prefix?: string;
   subtitle?: string;
+  /** Finished record — a scene absorbed into the chronicle. Marked, not hidden. */
+  done?: boolean;
   active?: boolean;
   /** Disable rename and delete — the record is busy being written to. Selecting
    *  it stays live, since reading a row is never what makes a write unsafe. */
@@ -61,7 +64,16 @@ export function EditableRow({
       ) : (
         <>
           <span className="row-label" onClick={onSelect}>
-            <span className="row-name">{prefix ? `${prefix} · ${label}` : label}</span>
+            <span className="row-name">
+              {/* The title is its own element so the ellipsis truncates IT and
+                  leaves the mark standing; a long name would otherwise clip the
+                  mark away with the rest of the run. */}
+              <span className="row-title">{prefix ? `${prefix} · ${label}` : label}</span>
+              {/* Carries a title as well as a glyph: a bare ✓ beside a name is
+                  not self-explanatory, and it is the only thing distinguishing a
+                  finished scene from an unfinished one. */}
+              {done && <span className="row-done" title="Scene complete">✓</span>}
+            </span>
             {subtitle && <span className="row-subtitle">{subtitle}</span>}
           </span>
           <span className="row-actions">

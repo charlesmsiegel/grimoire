@@ -423,6 +423,13 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
    bar at a fixed, un-shrinkable 334px, which is what pushed Send out of the
    column on any narrow layout. */
 .composer { display: flex; flex-direction: column; flex: none; }
+/* Takes the composer's place on an absorbed scene. Sized and bordered like the
+   bar it replaces so the transcript does not jump when a scene is ended. */
+.scene-complete {
+  flex: none; padding: 14px 18px; background: var(--page); color: var(--page-muted);
+  border-top: var(--rw) solid var(--rule);
+  font-family: var(--fm); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+}
 .inputbar { display: flex; gap: 0; padding: 0; border-top: var(--rw) solid var(--rule); background: var(--page); flex: none; position: relative; }
 .composer-meta {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -519,7 +526,12 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 }
 .row.active { border-color: var(--accent); border-left: 4px solid var(--accent); }
 .row-label { flex: 1; cursor: pointer; overflow: hidden; }
-.row-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A row of [title][mark] rather than one clipped run: the ellipsis has to
+   truncate the TITLE and leave the completion mark standing, so the mark is its
+   own non-shrinking item and the text does the clipping. */
+.row-name { display: flex; align-items: baseline; gap: 6px; }
+.row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-done { flex: none; margin-left: auto; color: var(--accent); font-size: 11px; }
 .row-subtitle { display: block; font-family: var(--fm); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 .row-actions { display: flex; gap: 2px; flex: none; }
 .row-actions button { background: transparent; border: none; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: 13px; line-height: 1; }

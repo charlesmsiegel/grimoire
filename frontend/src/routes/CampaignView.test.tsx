@@ -454,6 +454,64 @@ test("an inline HTML comment is invisible without breaking the sentence around i
   expect(document.body.textContent).toContain("and turns away.");
 });
 
+// A scene absorbed into the chronicle is finished: its summary is written and
+// its changes are applied, so anything appended now sits outside the record
+// taken of it.
+const DONE_SCENE = [{ id: "s1", title: "Old", model: "", created: "", updated: "", done: true }];
+
+test("a complete scene replaces the composer with a notice", async () => {
+  (api.listScenes as any).mockResolvedValue(DONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  renderCampaign();
+  await screen.findByText("a reply");
+
+  expect(screen.getByText(/scene complete/i)).toBeInTheDocument();
+  // the whole composer, not a disabled entry box: a greyed-out one still says
+  // "you could type here"
+  expect(screen.queryByRole("textbox")).toBeNull();
+  expect(screen.queryByRole("button", { name: /continue ▶/i })).toBeNull();
+  expect(screen.queryByRole("button", { name: /send ▸/i })).toBeNull();
+  expect(screen.queryByLabelText("Response length")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Roll dice" })).toBeNull();
+});
+
+test("an unfinished scene keeps its composer", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  expect(screen.queryByText(/scene complete/i)).toBeNull();
+  expect(screen.getByRole("textbox")).toBeInTheDocument();
+});
+
+// Editing and rerolling stay available on a finished scene: those change what
+// was absorbed rather than adding to a scene that is closed.
+test("a complete scene can still have its existing posts edited", async () => {
+  (api.listScenes as any).mockResolvedValue(DONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  expect(screen.getAllByTitle("Edit message").length).toBeGreaterThan(0);
+});
+
+test("the scene rail marks a complete scene and leaves the others unmarked", async () => {
+  (api.listScenes as any).mockResolvedValue([
+    { id: "002--two", title: "Second", model: "", created: "", updated: "2026-01-02", done: true },
+    { id: "001--one", title: "First", model: "", created: "", updated: "2026-01-01" },
+  ]);
+  const { container } = renderCampaign();
+  await screen.findByText(/Second/);
+  const marks = container.querySelectorAll(".rail-scenes .row-done");
+  expect(marks).toHaveLength(1);
+  expect(marks[0]).toHaveAttribute("title", "Scene complete");
+  // and it belongs to the finished row, not merely to some row
+  const doneRow = marks[0].closest(".row") as HTMLElement;
+  expect(doneRow.textContent).toContain("Second");
+});
+
 test("Enter sends a message in the active scene", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();

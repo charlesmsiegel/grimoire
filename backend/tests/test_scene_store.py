@@ -23,6 +23,28 @@ def test_create_list_and_read_empty(monkeypatch, tmp_path):
     assert scenes.read_scene(cid, sid)["messages"] == []
 
 
+def test_list_scenes_reports_absorbed_as_done(monkeypatch, tmp_path):
+    """The rail marks a finished scene and the composer hides itself for one, so
+    `done` has to reach the list -- and it has to agree with the guard that
+    actually refuses a second absorb (`routes.scenes._already_absorbed`), which
+    reads the same key case-insensitively out of a hand-editable file."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Unfinished")
+    assert scenes.list_scenes(cid)[0]["done"] is False
+
+    scenes.mark_absorbed(cid, sid, "one line", "the summary")
+    assert scenes.list_scenes(cid)[0]["done"] is True
+
+
+def test_list_scenes_done_matches_the_absorb_guard_on_hand_edits(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Hand Edited")
+    p = tmp_path / "campaigns" / cid / "scenes" / f"{sid}.md"
+    p.write_text(p.read_text(encoding="utf-8").replace("title:", "done: TRUE\ntitle:", 1),
+                 encoding="utf-8")
+    assert scenes.list_scenes(cid)[0]["done"] is True
+
+
 def test_append_and_parse_roundtrip(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "Roundtrip")

@@ -34,6 +34,13 @@ def list_scenes(cid: str) -> list[dict]:
                 "updated": meta.get("updated", ""),
                 "date": history[0] if history else "",
                 "pcless": meta.get("pcless") == "true",
+                # Absorbed and accepted into the chronicle -- `mark_absorbed`
+                # writes it. Read with the same tolerance as
+                # `routes.scenes._already_absorbed`, which is what actually
+                # refuses a second absorb: this file is hand-editable, and a
+                # rail that called a scene unfinished while the absorb guard
+                # called it done would be worse than either answer alone.
+                "done": str(meta.get("done", "")).lower() == "true",
             })
     out.sort(key=lambda m: m["updated"], reverse=True)
     return out

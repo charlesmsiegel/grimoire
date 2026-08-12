@@ -214,7 +214,11 @@ export type CampaignMeta = {
    *  bytes do, so a replaced cover cannot keep rendering from cache. */
   cover?: string;
 };
-export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string; date: string; pcless?: boolean };
+/** `done` is the scene's absorb mark: End Scene run to completion and its
+ *  changes accepted, written into the scene's own frontmatter by
+ *  `scenes.mark_absorbed`. It is what the rail marks and what the composer
+ *  hides itself for. */
+export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string; date: string; pcless?: boolean; done?: boolean };
 export type Message = { role: "user" | "assistant"; content: string; speaker?: string };
 export type Scene = { meta: { id: string; title: string; response_preset?: string }; messages: Message[] };
 // One stored variant of the generation a reroll replaces. `posts` is how many
