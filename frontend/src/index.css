@@ -418,12 +418,37 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
 .msg:hover .gutter-icons, .msg:focus-within .gutter-icons { opacity: 1; }
 .msg-body p:first-child { margin-top: 0; }
 .msg-body p:last-child { margin-bottom: 0; }
+/* The composer is two stacked rows: the bar (dice / entry / send) and a meta
+   strip under it. The response-length control used to be a fourth cell in the
+   bar at a fixed, un-shrinkable 334px, which is what pushed Send out of the
+   column on any narrow layout. */
+.composer { display: flex; flex-direction: column; flex: none; }
 .inputbar { display: flex; gap: 0; padding: 0; border-top: var(--rw) solid var(--rule); background: var(--page); flex: none; position: relative; }
+.composer-meta {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 18px; background: var(--page);
+  border-top: var(--rw) solid var(--rule-soft);
+}
+.composer-meta-label {
+  font-family: var(--fm); font-size: 10px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--page-muted); flex: none;
+}
+/* min-width lets it shrink below its longest option rather than pinning the
+   row, which is the whole point of moving it out of the bar. */
+.composer-meta select {
+  background: var(--surface); color: var(--ink); border: var(--rw) solid var(--rule);
+  padding: 3px 6px; font-family: var(--fm); font-size: 11px;
+  min-width: 0; max-width: 100%;
+}
+.composer-meta-hint { font-family: var(--fm); font-size: 10px; color: var(--page-muted); }
 .inputbar .roll-btn { border: none; border-right: var(--rw) solid var(--rule); background: none;
   padding: 0 12px; cursor: pointer; font-size: 15px; }
 .inputbar .roll-btn:disabled { opacity: 0.4; cursor: default; }
 .inputbar textarea {
-  flex: 1; background: transparent; color: var(--page-ink); border: none;
+  /* `min-width: 0` overrides the flex default of `auto`, which is a textarea's
+     intrinsic width (its `cols`) and refuses to shrink past it. Without it the
+     bar carries that width into its own minimum and overflows the column. */
+  flex: 1; min-width: 0; background: transparent; color: var(--page-ink); border: none;
   padding: 14px 18px; font-family: var(--fb); font-size: 15.5px; resize: none; outline: none;
 }
 .inputbar .send {
@@ -436,14 +461,7 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
    different action at a glance rather than as Send having changed its label. */
 .inputbar .send.cancel-turn { background: var(--page); color: var(--accent); }
 
-/* ---- response-length chip + dropdown (anchored to the input bar) ---- */
-.response-length-chip { position: relative; flex: none; display: flex; align-items: center;
-  border-left: var(--rw) solid var(--rule); }
-.chip-toggle {
-  background: none; border: none; height: 100%; padding: 0 16px; cursor: pointer;
-  font-family: var(--fm); font-size: 11px; letter-spacing: 0.04em; color: var(--page-muted); white-space: nowrap;
-}
-.chip-toggle:hover { color: var(--accent); }
+/* ---- response-length one-shot markers (in the composer meta strip) ---- */
 /* one-shot badge: a pending per-turn pick must not read as a standing setting */
 .chip-oneshot {
   margin-left: 7px; padding: 1px 5px; border: var(--rw) solid var(--accent);
@@ -454,18 +472,6 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
   font-family: var(--fm); font-size: 13px; line-height: 1; color: var(--page-muted);
 }
 .chip-clear:hover { color: var(--accent); }
-.chip-menu {
-  position: absolute; bottom: 100%; right: 0; margin-bottom: 8px; z-index: 5;
-  list-style: none; padding: 0; min-width: 170px;
-  background: var(--surface); border: var(--rw) solid var(--rule); box-shadow: var(--sh3);
-}
-.chip-menu li {
-  padding: 7px 12px; cursor: pointer; font-family: var(--fm); font-size: 12px; color: var(--ink);
-  border-bottom: 1px solid var(--rule-soft);
-}
-.chip-menu li:last-child { border-bottom: none; }
-.chip-menu li:hover { background: var(--panel2); }
-.chip-menu li[aria-selected="true"] { color: var(--accent); font-weight: 700; }
 button.primary { background: var(--accent); color: var(--on-accent); border: var(--rw2) solid var(--rule); padding: 8px 14px; cursor: pointer; font-family: var(--fm); font-weight: 700; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
 .banner { background: var(--banner-bg); border: var(--rw) solid var(--accent); color: var(--banner-ink); padding: 10px 16px; margin: 12px 22px; font-family: var(--fm); font-size: 11px; flex: none; }
 .banner a { color: var(--banner-ink); }
@@ -1036,10 +1042,41 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .drawer-close { float: right; background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 16px; }
 .drawer-close:hover { color: var(--accent); }
 .drawer-avatar { max-width: 180px; height: auto; display: block; border: 1px solid var(--muted); margin: 8px 0; }
-@media (max-width: 1100px) {
-  .inspector, .inspector-slot, .inspector-tab { display: none; }
+/* Below this the inspector stops being a column and becomes an overlay. It used
+   to be 1100px and hid `.inspector-tab` along with the panel, so the scene
+   details simply vanished with no affordance to bring them back -- which was a
+   workaround for the input bar's old 529px minimum (1100 - 236 - 286 = 578, just
+   above it). The bar now shrinks to ~159px, so the column survives much further
+   down, and when it does give way the tab remains. */
+@media (max-width: 900px) {
   .layout, .layout.inspector-collapsed { grid-template-columns: 236px 1fr; }
   .layout.rail-collapsed, .layout.rail-collapsed.inspector-collapsed { grid-template-columns: 28px 1fr; }
+  /* Out of the grid and over the transcript: the layout has no third track at
+     this width, so an in-flow slot would have nowhere to go. CampaignView
+     forces it closed on the way down, so this only ever paints once the reader
+     has asked for it via the tab; `.inspector-collapse` inside it closes it. */
+  /* Under the record drawer (.drawer-backdrop, z-index 20) and the modal
+     chooser (30), deliberately. Both of those also hug the right edge, and an
+     inspector stacked above them covered ~286px of a 360px drawer including its
+     close button -- an overlay with no way out (Codex review). Above the
+     transcript (auto/0), which is all it needs to be. */
+  .inspector-slot {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 18;
+    width: min(286px, 90vw); background: var(--panel);
+    border-left: var(--rw) solid var(--rule); box-shadow: var(--sh4);
+    overflow-y: auto;
+  }
+  /* Out of flow too, and for a sharper reason than the panel: the tab is the
+     layout's THIRD grid child, and this width leaves only two tracks. Auto
+     placement therefore dropped it into row 2 / column 1 -- a 236px strip
+     beneath the scene rail, nowhere near the right edge, and it took a whole
+     grid row's height off the transcript to sit there (Codex review round 2).
+     Pinned to the edge it reads as the handle it is. */
+  .inspector-tab {
+    position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+    z-index: 17; width: 28px; height: 72px;
+    border: var(--rw) solid var(--rule); border-right: none;
+  }
 }
 
 /* collapsible lorebook import inside the Lore tab */

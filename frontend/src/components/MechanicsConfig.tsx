@@ -6,7 +6,20 @@ const KIND_LABELS: Record<string, string> = {
   items: "Items", groups: "Groups", creatures: "Creatures",
 };
 
-export default function MechanicsConfig({ cid }: { cid: string }) {
+export default function MechanicsConfig({ cid, onChanged }: {
+  cid: string;
+  /** Fired once a save has landed AND been re-read, so a caller that gates UI
+   *  on "does this campaign have mechanics" (the input bar's dice button) can
+   *  refresh. Optional: every existing caller predates it.
+   *
+   *  Carries no campaign id on purpose. A save CAN settle after the reader has
+   *  navigated away -- this component holds the `cid` and the callback from the
+   *  render that started it -- so the receiver must not assume the event is
+   *  about the campaign it is showing. Naming the saved campaign here would
+   *  invite exactly that assumption; the one receiver instead re-reads whatever
+   *  is currently on screen, which is right either way. */
+  onChanged?: () => void;
+}) {
   const [mods, setMods] = useState<ModuleSummary[]>([]);
   const [state, setState] = useState<CampaignModule | null>(null);
   const [value, setValue] = useState("");
@@ -36,6 +49,9 @@ export default function MechanicsConfig({ cid }: { cid: string }) {
       await api.setCampaignModule(cid, value);
       setSaved(true);
       await load();
+      // After `load`, not before: the caller reads the same endpoint, and
+      // firing on the bare PUT would race its own re-read.
+      onChanged?.();
     } catch (e) {
       setError(String(e));
     }

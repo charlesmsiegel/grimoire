@@ -645,7 +645,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // here; a campaign-scope preset is invisible to the scene's own frontmatter.
   const [sceneResponse, setSceneResponse] = useState<ResponseBundle | null>(null);
   const [pendingResponse, setPendingResponse] = useState<ResponseOverride | null>(null);
-  const [responseChipOpen, setResponseChipOpen] = useState(false);
+  // Whether this campaign resolves to a mechanics pack. `null` while unknown:
+  // the dice button renders on `true` only, so a control never appears and then
+  // vanishes a moment later once the read lands.
+  const [moduleBound, setModuleBound] = useState<boolean | null>(null);
   const streamRef = useRef<HTMLDivElement>(null);
   const [railCollapsed, setRailCollapsed] = useState(
     () => localStorage.getItem("grimoire.rail.collapsed") === "1");
@@ -664,6 +667,58 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       return !v;
     });
   }
+  // Below the narrow breakpoint the inspector is an overlay rather than a
+  // column (see index.css), so it must not start open on top of the transcript
+  // -- and `inspectorCollapsed` defaults to OPEN. Forced closed here without
+  // touching localStorage, deliberately: the stored value is the reader's
+  // wide-screen preference, and a window they happened to narrow once should
+  // not overwrite it for every later session. The cost is that widening again
+  // within one session leaves it closed until they click the tab.
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 900px)");
+    const apply = () => { if (mq.matches) setInspectorCollapsed(true); };
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+  // Read on every `cid` change and again whenever MechanicsConfig saves, so
+  // binding or clearing a pack updates the input bar without a reload.
+  //
+  // TWO guards, because they stop different things (Codex review):
+  //
+  // - `moduleReq` drops a read that STARTED earlier and landed later, exactly
+  //   as `lockReq`/`anchorReq` do.
+  // - `liveCid` drops a read that started later but belongs to a campaign the
+  //   reader has left. A token cannot catch that one: MechanicsConfig's save
+  //   holds the `onChanged` it was handed, so a PUT issued in campaign A and
+  //   settling after a move to B calls A's callback, which would start a
+  //   *newer* read of A and commit A's answer over B's.
+  //
+  // `reset` separates the two callers. A campaign change genuinely knows
+  // nothing yet, so it blanks to `null`; a refresh in place keeps the value it
+  // has, or the dice button would blink out and back on every save -- and the
+  // popover-closing effect below would read that blank as "unbound".
+  const liveCid = useRef(cid);
+  liveCid.current = cid;
+  const moduleReq = useRef(0);
+  function readModuleBound(reset = false) {
+    const forCid = liveCid.current;
+    const req = ++moduleReq.current;
+    if (reset) setModuleBound(null);
+    const settle = (v: boolean) => {
+      if (moduleReq.current === req && liveCid.current === forCid) setModuleBound(v);
+    };
+    api.getCampaignModule(forCid)
+      .then((m) => settle(m.resolved !== null))
+      // A failed READ is not evidence of anything. On a campaign change there
+      // is nothing better to fall back on, so it errs toward "no dice" -- the
+      // same side it errs on while the read is out. On a refresh in place there
+      // IS something better: the answer already on screen. Keeping it stops a
+      // transient failure from retracting the dice button and discarding a
+      // half-typed roll with it (Codex review round 2).
+      .catch(() => { if (reset) settle(false); });
+  }
+
   const [subheaderCollapsed, setSubheaderCollapsed] = useState(
     () => localStorage.getItem("grimoire.subheader.collapsed") === "1");
   function toggleSubheader() {
@@ -698,6 +753,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       setLabels({ user: c.user_label || "You", assistant: c.assistant_label || "Grimoire" });
     }).catch(() => {});
     api.listResponsePresets().then(setResponsePresets).catch(() => setResponsePresets([]));
+    readModuleBound(true);   // new campaign: nothing known about it yet
     // Leaving the campaign section entirely unmounts instead of re-running this,
     // so the release above never happens on that path — abort here or the retry
     // outlives the screen that could use it.
@@ -960,33 +1016,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
 
   function chooseResponseOverride(id: string) {
     setPendingResponse({ response_preset: id });
-    setResponseChipOpen(false);
   }
   function clearResponseOverride() {
     setPendingResponse(null);
-    setResponseChipOpen(false);
   }
-  const responseChipRef = useRef<HTMLDivElement>(null);
-  // matches the reroll popover / roll form: Escape closes it; this dropdown
-  // additionally closes on an outside click, since (unlike those) it has no
-  // focused input to anchor a keydown handler to.
-  useEffect(() => {
-    if (!responseChipOpen) return;
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setResponseChipOpen(false);
-    }
-    function onPointerDown(e: MouseEvent) {
-      if (responseChipRef.current && !responseChipRef.current.contains(e.target as Node)) {
-        setResponseChipOpen(false);
-      }
-    }
-    document.addEventListener("keydown", onKeyDown);
-    document.addEventListener("mousedown", onPointerDown);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      document.removeEventListener("mousedown", onPointerDown);
-    };
-  }, [responseChipOpen]);
+  // The custom listbox this used to be needed its own open state, an
+  // outside-click listener and an Escape handler. It is a native <select> now,
+  // which the browser opens, closes, dismisses and keyboard-drives for free --
+  // so all three are gone rather than reimplemented.
   const [directorNote, setDirectorNote] = useState<string | null>(null);
 
 
@@ -2297,6 +2334,17 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     }
   }
 
+  // Unbinding the pack removes the dice button, which is the popover's only
+  // way in and its only way out -- left open it would be a form nothing can
+  // dismiss, offering a Check whose actor list is now empty.
+  //
+  // `=== false`, not `!== true`: `null` means "not known yet", and treating
+  // that as unbound threw away a half-typed roll every time the read ran --
+  // including a save that left the SAME pack bound (Codex review).
+  useEffect(() => {
+    if (moduleBound === false) setRollForm(null);
+  }, [moduleBound]);
+
   function toggleRollPop() {
     if (rollForm) {
       setRollForm(null);
@@ -3036,7 +3084,25 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         )}
         {showMechanics && (
           <div className="panel-slot">
-            <MechanicsConfig cid={cid} />
+            {/* Guarded against a save that settles after the reader has moved
+                on: the callback this panel holds is the one it was handed, so
+                it can name a campaign that is no longer on screen. */}
+            {/* No cid check on the callback. A save settling after the reader
+                moved on does fire a stale `onChanged`, but `readModuleBound`
+                keys off `liveCid`, so it reads and commits the campaign on
+                SCREEN -- harmless, and the correct answer. Filtering by the
+                saved cid would only skip a request MechanicsConfig's own
+                `load()` has already made anyway, while masking that keying in
+                any test (Codex review round 2). */}
+            {/* `key` remounts it per campaign. Its own save is a PUT followed
+                by a re-read, both against the `cid` its render captured, and
+                every commit in that chain is unguarded -- so a save started in
+                one campaign and settling after a switch would write the old
+                campaign's module into the new campaign's editor, and the next
+                Save would then persist that selection to the wrong campaign.
+                A fresh instance has no state for the stale chain to land in
+                (Codex review round 2). */}
+            <MechanicsConfig key={cid} cid={cid} onChanged={() => readModuleBound()} />
           </div>
         )}
         {showStyle && (
@@ -3371,14 +3437,23 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           <RollProposal key={proposal.id} record={proposal} busy={busy || rolling}
                         onResolve={resolve} />
         )}
+        <div className="composer">
         <div className="inputbar">
-          <button className="roll-btn"
-                  title={sceneLocked ? LOCKED_WHILE_GENERATING : "Roll dice"}
-                  aria-label="Roll dice"
-                  disabled={!activeId || busy || sceneLocked || messages.length === 0}
-                  onClick={toggleRollPop}>
-            🎲
-          </button>
+          {/* Dice are a mechanics affordance: both the popover's tabs lead to
+              routes that only mean something with a pack bound (Check needs one
+              outright; freeform Dice is offered alongside it as part of the same
+              tool). An unbound campaign is freeform play, so the button is not
+              there at all -- and not merely while the read is still out, which
+              would flash a control and then remove it. */}
+          {moduleBound === true && (
+            <button className="roll-btn"
+                    title={sceneLocked ? LOCKED_WHILE_GENERATING : "Roll dice"}
+                    aria-label="Roll dice"
+                    disabled={!activeId || busy || sceneLocked || messages.length === 0}
+                    onClick={toggleRollPop}>
+              🎲
+            </button>
+          )}
           {rollForm && (
             <div className="roll-pop">
               <div className="roll-mode-toggle">
@@ -3471,33 +3546,6 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
           />
-          <div className="response-length-chip" ref={responseChipRef}>
-            <button type="button" className="chip-toggle" aria-haspopup="listbox"
-                    aria-expanded={responseChipOpen}
-                    onClick={() => setResponseChipOpen((v) => !v)}>
-              Response length: {responseChipLabel}
-              {/* A one-shot pick and an inherited setting read identically
-                  without this — and they mean very different things: one is
-                  spent by the next reply, the other is the scene's standing
-                  answer. */}
-              {responseChipPending && <span className="chip-oneshot">next reply only</span>}
-            </button>
-            {responseChipPending && (
-              <button type="button" className="chip-clear" title="Cancel the one-shot pick"
-                      aria-label="Cancel the one-shot response length"
-                      onClick={clearResponseOverride}>×</button>
-            )}
-            {responseChipOpen && (
-              <ul className="chip-menu" role="listbox" aria-label="Response length options">
-                {responsePresets.map((p) => (
-                  <li key={p.id} role="option" aria-selected={p.id === responseChipPresetId}
-                      onClick={() => chooseResponseOverride(p.id)}>
-                    {p.name}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
           {/* Replaces Send rather than sitting beside it: Send is already
               disabled for the whole turn, so the slot is dead space at exactly
               the moment a way out is wanted. */}
@@ -3508,6 +3556,66 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               {!input.trim() ? "Continue ▶" : "Send ▸"}
             </button>
           )}
+        </div>
+        {/* Its own row under the bar, not a cell inside it. As a cell it was
+            `flex: none` at 334px of un-shrinkable nowrap text -- 63% of the
+            bar's 529px minimum -- so a narrow middle column squeezed the
+            textarea to 36px and then pushed Send clean out of the column, over
+            the inspector. Here it is free to shrink and Send cannot be
+            displaced. */}
+        <div className="composer-meta">
+          <label className="composer-meta-label" htmlFor="response-length">Response</label>
+          <select id="response-length" aria-label="Response length"
+                  value={responseChipPresetId}
+                  aria-describedby={responseChipPending ? "response-length-oneshot" : undefined}
+                  onChange={(e) => (e.target.value
+                    ? chooseResponseOverride(e.target.value)
+                    : clearResponseOverride())}>
+            {/* Offered only while nothing is picked. With no preset named at
+                scene level the value comes from campaign or global scope, which
+                names nothing the scene knows about -- so this option reports the
+                effective budget and its source instead of claiming a preset.
+                Rendering it always would also turn it into a "revert to
+                inherited" action, which this control has never had. */}
+            {!responseChipPresetId && <option value="">{responseChipLabel}</option>}
+            {responsePresets.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+            {/* Same fallback ResponsePresetPicker carries: a scene can name a
+                preset the list has not loaded yet, or one since deleted. With no
+                matching option a native select silently displays the FIRST one,
+                so the strip would confidently name a preset that is not in
+                effect. Show the id instead (Codex review). */}
+            {/* Same fallback ResponsePresetPicker carries: a scene can name a
+                preset the list has not loaded yet, or one since deleted. With no
+                matching option a native select silently displays the FIRST one,
+                so the strip would confidently name a preset that is not in
+                effect. Show the id instead (Codex review). */}
+            {responseChipPresetId
+              && !responsePresets.some((p) => p.id === responseChipPresetId) && (
+              <option value={responseChipPresetId}>{responseChipPresetId}</option>
+            )}
+          </select>
+          {/* A one-shot pick and a standing setting read identically without
+              this — and they mean very different things: one is spent by the
+              next reply, the other is the scene's standing answer. It used to
+              sit INSIDE the control and so formed part of its accessible name;
+              as a sibling it has to be tied back on with `aria-describedby`, or
+              the distinction is visual only (Codex review). */}
+          {responseChipPending && (
+            <span className="chip-oneshot" id="response-length-oneshot">next reply only</span>
+          )}
+          {responseChipPending && (
+            <button type="button" className="chip-clear" title="Cancel the one-shot pick"
+                    aria-label="Cancel the one-shot response length"
+                    onClick={clearResponseOverride}>×</button>
+          )}
+          {!responseChipPending && responseChipPresetId && sceneResponse && (
+            <span className="composer-meta-hint">
+              {sceneResponse.effective.reply_words} words
+            </span>
+          )}
+        </div>
         </div>
       </section>
       {inspectorCollapsed ? (

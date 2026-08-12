@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { MemoryRouter, Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
 import CampaignView from "./CampaignView";
 import type { ChatEvent } from "../api/stream";
@@ -67,6 +67,10 @@ vi.mock("../api/client", async () => {
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
       listStyles: vi.fn(),
       listResponsePresets: vi.fn(), getSceneResponse: vi.fn(),
+      // the Mechanics panel's own reads/writes: CampaignView hosts
+      // MechanicsConfig, and gates the dice button on the same binding
+      getCampaignModule: vi.fn(), setCampaignModule: vi.fn(),
+      listModules: vi.fn(), getCampaignSheets: vi.fn(),
       listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
       campaignChanges: vi.fn(),
       campaignLedger: vi.fn(),
@@ -186,6 +190,13 @@ beforeEach(() => {
   (api.campaignChanges as any).mockResolvedValue([]);
   (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
   (api.listResponsePresets as any).mockResolvedValue([]);
+  // A pack is bound by default, so the dice button is present for the tests
+  // that predate it being conditional.
+  (api.getCampaignModule as any).mockResolvedValue(
+    { setting: "pool-basic", resolved: "pool-basic", source: "campaign" });
+  (api.setCampaignModule as any).mockResolvedValue({ ok: true });
+  (api.listModules as any).mockResolvedValue([{ id: "pool-basic", name: "Pool Basic" }]);
+  (api.getCampaignSheets as any).mockResolvedValue({ coverage: {} });
   (api.getRollingSummary as any).mockResolvedValue({
     summary: "", at: 0, total: 0, stale: false, every: 10, due: false });
   (api.refreshRollingSummary as any).mockResolvedValue({
@@ -435,36 +446,26 @@ test("Shift+Enter does not send", async () => {
   expect(api.chat).not.toHaveBeenCalled();
 });
 
-test("the response length chip shows the scene's preset and reverts after a successful send", async () => {
+test("the response length picker shows the scene's preset and reverts after a successful send", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({
     meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [] });
   (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   renderCampaign();
-  const chip = await screen.findByRole("button", { name: /Response length/ });
-  expect(chip).toHaveTextContent("Cinematic");
-  fireEvent.click(chip);
-  fireEvent.click(screen.getByRole("option", { name: "Terse" }));
-  expect(chip).toHaveTextContent("Terse");
+  const picker = await screen.findByLabelText("Response length");
+  expect(picker).toHaveValue("cinematic");
+  fireEvent.change(picker, { target: { value: "terse" } });
+  expect(picker).toHaveValue("terse");
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
   fireEvent.click(screen.getByRole("button", { name: /Send/ }));
-  // the chip's promise is "the next reply" — once it lands, the one-shot
-  // pick is spent and the chip falls back to the scene's own setting.
-  await waitFor(() => expect(chip).toHaveTextContent("Cinematic"));
+  // the picker's promise is "the next reply" — once it lands, the one-shot
+  // pick is spent and it falls back to the scene's own setting.
+  await waitFor(() => expect(picker).toHaveValue("cinematic"));
 });
 
-test("Escape closes the response length dropdown", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any).mockResolvedValue({
-    meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [] });
-  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
-  renderCampaign();
-  const chip = await screen.findByRole("button", { name: /Response length/ });
-  fireEvent.click(chip);
-  expect(screen.getByRole("listbox")).toBeInTheDocument();
-  fireEvent.keyDown(document, { key: "Escape" });
-  expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
-});
+// The Escape-closes-the-dropdown test that stood here is gone with the custom
+// listbox it covered. A native <select> is opened, closed, Escape-dismissed and
+// keyboard-driven by the browser; there is no longer any code of ours to test.
 
 test("sends the one-shot override in the chat request payload", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
@@ -472,9 +473,8 @@ test("sends the one-shot override in the chat request payload", async () => {
     meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [] });
   (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   renderCampaign();
-  const chip = await screen.findByRole("button", { name: /Response length/ });
-  fireEvent.click(chip);
-  fireEvent.click(screen.getByRole("option", { name: "Terse" }));
+  const picker = await screen.findByLabelText("Response length");
+  fireEvent.change(picker, { target: { value: "terse" } });
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
   fireEvent.click(screen.getByRole("button", { name: /Send/ }));
   await waitFor(() => expect(api.chat).toHaveBeenCalledWith(
@@ -488,12 +488,11 @@ test("a failed stream keeps the override, and retry carries it", async () => {
   (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   (api.chat as any).mockRejectedValueOnce(new Error("stream failed"));
   renderCampaign();
-  const chip = await screen.findByRole("button", { name: /Response length/ });
-  fireEvent.click(chip);
-  fireEvent.click(screen.getByRole("option", { name: "Terse" }));
+  const picker = await screen.findByLabelText("Response length");
+  fireEvent.change(picker, { target: { value: "terse" } });
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
   fireEvent.click(screen.getByRole("button", { name: /Send/ }));
-  await waitFor(() => expect(chip).toHaveTextContent("Terse")); // NOT cleared by the failure
+  await waitFor(() => expect(picker).toHaveValue("terse")); // NOT cleared by the failure
   fireEvent.click(screen.getByRole("button", { name: /Retry/ }));
   await waitFor(() => expect(api.retry).toHaveBeenCalledWith(
     "run", "s1", expect.any(Function), { response_preset: "terse" }, expect.any(AbortSignal)));
@@ -1415,15 +1414,14 @@ test("Stop after the done frame is a finished turn, not a cancellation", async (
       });
     });
   renderCampaign();
-  const chip = await screen.findByRole("button", { name: /Response length/ });
-  fireEvent.click(chip);
-  fireEvent.click(screen.getByRole("option", { name: "Terse" }));
+  const picker = await screen.findByLabelText("Response length");
+  fireEvent.change(picker, { target: { value: "terse" } });
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
   await screen.findByRole("button", { name: /continue ▶/i });
   // spent by the reply that did land, so it must not ride the next turn
-  await waitFor(() => expect(chip).not.toHaveTextContent("Terse"));
+  await waitFor(() => expect(picker).not.toHaveValue("terse"));
 });
 
 test("a failed send that was rolled back gives the player their words back", async () => {
@@ -1556,16 +1554,15 @@ test("a body that ends before the done frame is an interrupted turn", async () =
       onEvent({ delta: "The tide " });   // ...and then the body just ends
     });
   renderCampaign();
-  const chip = await screen.findByRole("button", { name: /Response length/ });
-  fireEvent.click(chip);
-  fireEvent.click(screen.getByRole("option", { name: "Terse" }));
+  const picker = await screen.findByLabelText("Response length");
+  fireEvent.change(picker, { target: { value: "terse" } });
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   setTimeout(() => { flushed = true; }, 100);
   await screen.findByText("The tide");          // poll caught the flush and ended
   await new Promise((r) => setTimeout(r, 600)); // let the poll exit and send() settle
   // unspent: the reply never confirmed, so the override rides the retry
-  expect(chip).toHaveTextContent("Terse");
+  expect(picker).toHaveValue("terse");
 });
 
 test("the post-cancel poll stops once a new turn owns the view", async () => {
@@ -1598,13 +1595,12 @@ test("cancelling keeps a one-shot response override for the retry", async () => 
   (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   (api.chat as any).mockImplementation(hangingChat());
   renderCampaign();
-  const chip = await screen.findByRole("button", { name: /Response length/ });
-  fireEvent.click(chip);
-  fireEvent.click(screen.getByRole("option", { name: "Terse" }));
+  const picker = await screen.findByLabelText("Response length");
+  fireEvent.change(picker, { target: { value: "terse" } });
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
-  await waitFor(() => expect(chip).toHaveTextContent("Terse")); // unspent, like a failure
+  await waitFor(() => expect(picker).toHaveValue("terse")); // unspent, like a failure
 });
 
 test("Reroll on the last assistant post replaces it with a fresh reply", async () => {
@@ -1665,9 +1661,8 @@ test("regenerate carries a pending override", async () => {
   (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   renderCampaign();
   await screen.findByText("old reply");
-  const chip = await screen.findByRole("button", { name: /Response length/ });
-  fireEvent.click(chip);
-  fireEvent.click(screen.getByRole("option", { name: "Terse" }));
+  const picker = await screen.findByLabelText("Response length");
+  fireEvent.change(picker, { target: { value: "terse" } });
   fireEvent.click(screen.getByTitle("Reroll"));
   fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i })); // empty guidance = plain reroll
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
@@ -4781,6 +4776,181 @@ test("Roll dice is disabled on a fresh scene until the opener/cast setup produce
   expect(rollBtn).toBeDisabled();
 });
 
+// Dice are a mechanics affordance: an unbound campaign is freeform play, and
+// the popover's Check tab has nothing to offer it either (available_checks
+// returns [] with no pack). Accepted consequence: freeform notation rolls go
+// with it, since this button is their only entry point.
+test("no dice button in a campaign with no mechanics pack bound", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.getCampaignModule as any).mockResolvedValue({ setting: "", resolved: null, source: null });
+  renderCampaign();
+  await screen.findByText("a reply");
+  expect(screen.queryByRole("button", { name: "Roll dice" })).toBeNull();
+  // the composer is otherwise intact
+  expect(screen.getByRole("textbox")).toBeInTheDocument();
+  expect(screen.getByLabelText("Response length")).toBeInTheDocument();
+});
+
+// A control that appears and then vanishes a beat later is worse than one that
+// arrives late, so an unresolved read renders nothing rather than guessing.
+test("the dice button waits for the module read rather than flashing", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  let release: (v: any) => void = () => {};
+  (api.getCampaignModule as any).mockReturnValue(new Promise((r) => { release = r; }));
+  renderCampaign();
+  await screen.findByText("a reply");
+  expect(screen.queryByRole("button", { name: "Roll dice" })).toBeNull();
+  await act(async () => { release({ setting: "pool-basic", resolved: "pool-basic", source: "campaign" }); });
+  expect(await screen.findByRole("button", { name: "Roll dice" })).toBeInTheDocument();
+});
+
+// The button is the popover's only way in AND its only way out. Unbinding the
+// pack while it is open would otherwise strand a form nothing can dismiss,
+// offering a Check whose actor list is now empty.
+test("unbinding the pack closes an open roll popover", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: "Roll dice" }));
+  expect(screen.getByLabelText("Dice notation")).toBeInTheDocument();
+
+  // the reader clears the pack in the Mechanics panel, which reports the change
+  fireEvent.click(screen.getByRole("button", { name: /^mechanics$/i }));
+  const modSelect = await screen.findByLabelText("Mechanics");
+  (api.getCampaignModule as any).mockResolvedValue({ setting: "none", resolved: null, source: null });
+  fireEvent.change(modSelect, { target: { value: "none" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Roll dice" })).toBeNull());
+  expect(screen.queryByLabelText("Dice notation")).toBeNull();
+  // ...and it stays gone once everything has settled, rather than this having
+  // caught a transient "not known yet" on the way through (Codex review)
+  await act(async () => { await Promise.resolve(); });
+  expect(screen.queryByRole("button", { name: "Roll dice" })).toBeNull();
+});
+
+// Codex review, finding 4. `readModuleBound` runs on every save, and blanking
+// the binding to "not known yet" while it is out used to read as unbound --
+// discarding a half-typed roll even when the same pack stayed bound.
+test("re-saving the same pack leaves an open roll form alone", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: "Roll dice" }));
+  fireEvent.change(screen.getByLabelText("Dice notation"), { target: { value: "2d6+1" } });
+
+  fireEvent.click(screen.getByRole("button", { name: /^mechanics$/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /^save$/i }));   // same pack
+
+  await waitFor(() => expect(api.setCampaignModule).toHaveBeenCalled());
+  await act(async () => { await Promise.resolve(); });
+  expect(screen.getByLabelText("Dice notation")).toHaveValue("2d6+1");   // typing survived
+  expect(screen.getByRole("button", { name: "Roll dice" })).toBeInTheDocument();
+});
+
+// Codex review, finding 1. MechanicsConfig holds the `cid` and the `onChanged`
+// it was handed, so a save issued in campaign A settles and fires that callback
+// after a move to B. If the read it triggers were keyed to the captured `cid`,
+// it would ask about A -- which HAS a pack -- and commit that answer into the
+// bar for B, which does not: dice appear in a freeform campaign.
+test("a mechanics save settling after a campaign switch answers for the campaign on screen", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  let releaseSave: (v: any) => void = () => {};
+  (api.setCampaignModule as any).mockReturnValue(new Promise((r) => { releaseSave = r; }));
+  render(
+    <MemoryRouter initialEntries={["/campaigns/run"]}>
+      <Link to="/campaigns/other">switch campaign</Link>
+      {playRoutes()}
+    </MemoryRouter>,
+  );
+  await screen.findByText("a reply");
+
+  // start a save in campaign "run" that will not settle yet
+  fireEvent.click(screen.getByRole("button", { name: /^mechanics$/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /^save$/i }));
+
+  // the reader moves to a campaign with NO pack, which resolves first
+  (api.getCampaignModule as any).mockResolvedValue({ setting: "", resolved: null, source: null });
+  fireEvent.click(screen.getByText("switch campaign"));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Roll dice" })).toBeNull());
+
+  // now "run"'s save lands and fires its stale callback. "run" answers "bound",
+  // the campaign actually on screen answers "not bound".
+  (api.getCampaignModule as any).mockImplementation(async (c: string) =>
+    (c === "run" ? { setting: "pool-basic", resolved: "pool-basic", source: "campaign" }
+                 : { setting: "", resolved: null, source: null }));
+  await act(async () => { releaseSave({ ok: true }); });
+  await act(async () => { await Promise.resolve(); });
+
+  // the bar reports the campaign on screen, not the one the save belonged to
+  expect(screen.queryByRole("button", { name: "Roll dice" })).toBeNull();
+});
+
+// Codex review round 2, finding 3. A failed refresh is not evidence that the
+// pack went away, and treating it as such retracted the dice button and threw
+// away a half-typed roll.
+test("a refresh whose read fails leaves the binding, and the roll form, alone", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: "Roll dice" }));
+  fireEvent.change(screen.getByLabelText("Dice notation"), { target: { value: "2d6+1" } });
+
+  fireEvent.click(screen.getByRole("button", { name: /^mechanics$/i }));
+  await screen.findByLabelText("Mechanics");
+  // the panel's own re-read succeeds; the refresh the callback triggers does not
+  (api.getCampaignModule as any).mockResolvedValueOnce(
+    { setting: "pool-basic", resolved: "pool-basic", source: "campaign" })
+    .mockRejectedValue(new Error("offline"));
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+  await waitFor(() => expect(api.setCampaignModule).toHaveBeenCalled());
+  await act(async () => { await Promise.resolve(); });
+  expect(screen.getByRole("button", { name: "Roll dice" })).toBeInTheDocument();
+  expect(screen.getByLabelText("Dice notation")).toHaveValue("2d6+1");
+});
+
+// Codex review, finding 2. A native select with no option matching its value
+// silently displays the FIRST option, so a scene naming a deleted preset would
+// have the strip confidently report a preset that is not in effect.
+test("a preset the list does not contain is still named, not silently swapped", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old", response_preset: "ghost" }, messages: [] });
+  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
+  renderCampaign();
+  const picker = await screen.findByLabelText("Response length");
+  await waitFor(() => expect(picker).toHaveValue("ghost"));
+  expect(within(picker as HTMLSelectElement).getByRole("option", { selected: true }))
+    .toHaveTextContent("ghost");
+});
+
+// Codex review, finding 5. The badge used to sit inside the control and so
+// formed part of its accessible name; as a sibling it has to be tied back on.
+test("the one-shot badge is announced with the response picker", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [] });
+  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
+  renderCampaign();
+  const picker = await screen.findByLabelText("Response length");
+  expect(picker).not.toHaveAttribute("aria-describedby");
+  fireEvent.change(picker, { target: { value: "terse" } });
+  expect(picker).toHaveAccessibleDescription(/next reply only/i);
+});
+
 test("renders an export menu with a download link per format", async () => {
   renderCampaign();
   const epub = await screen.findByRole("link", { name: /^epub$/i });
@@ -5099,10 +5269,15 @@ test("the chip names the preset resolved at campaign scope, not a hardcoded Stan
   });
   (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   renderCampaign();
-  const chip = await screen.findByRole("button", { name: /Response length/ });
-  await waitFor(() => expect(chip).toHaveTextContent("900 words"));
-  expect(chip).toHaveTextContent("this campaign");
-  expect(chip).not.toHaveTextContent("Standard");
+  const picker = await screen.findByLabelText("Response length");
+  // Nothing is selected: the scene names no preset, so the only honest thing to
+  // show is the effective budget and where it came from. That lives in the
+  // placeholder option, which exists only in this state.
+  await waitFor(() => expect(picker).toHaveValue(""));
+  const inherited = within(picker as HTMLSelectElement).getByRole("option", { selected: true });
+  expect(inherited).toHaveTextContent("900 words");
+  expect(inherited).toHaveTextContent("this campaign");
+  expect(inherited).not.toHaveTextContent("Standard");
 });
 
 test("a pending one-shot pick is badged and can be cancelled without sending", async () => {
@@ -5111,20 +5286,19 @@ test("a pending one-shot pick is badged and can be cancelled without sending", a
     meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [] });
   (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   renderCampaign();
-  const chip = await screen.findByRole("button", { name: /Response length/ });
+  const picker = await screen.findByLabelText("Response length");
   // an inherited/scene setting carries no badge...
-  expect(chip).toHaveTextContent("Cinematic");
-  expect(chip).not.toHaveTextContent(/next reply only/i);
+  expect(picker).toHaveValue("cinematic");
+  expect(screen.queryByText(/next reply only/i)).toBeNull();
   expect(screen.queryByLabelText(/cancel the one-shot/i)).toBeNull();
   // ...a one-shot pick does, and is distinguishable from it
-  fireEvent.click(chip);
-  fireEvent.click(screen.getByRole("option", { name: "Terse" }));
-  expect(chip).toHaveTextContent("Terse");
-  expect(chip).toHaveTextContent(/next reply only/i);
+  fireEvent.change(picker, { target: { value: "terse" } });
+  expect(picker).toHaveValue("terse");
+  expect(screen.getByText(/next reply only/i)).toBeInTheDocument();
   // cancelling reverts to the scene's own setting without sending anything
   fireEvent.click(screen.getByLabelText(/cancel the one-shot/i));
-  expect(chip).toHaveTextContent("Cinematic");
-  expect(chip).not.toHaveTextContent(/next reply only/i);
+  expect(picker).toHaveValue("cinematic");
+  expect(screen.queryByText(/next reply only/i)).toBeNull();
   expect(api.chat).not.toHaveBeenCalled();
 });
 
