@@ -132,8 +132,21 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
   // into a `CampaignView` now showing a different campaign would be wrong,
   // and deleting a scene in a campaign the reader has left is worse than
   // leaving it there, unlisted but real, for them to find on return.
+  //
+  // Set on the way IN as well as cleared on the way out, for the reason
+  // `CampaignView`'s `mountedRef` spells out (#95): main.tsx renders inside
+  // StrictMode, and in development React runs setup / cleanup / setup on mount
+  // — layout effects included. A cleanup-only flag is left `false` by that
+  // middle step for the whole life of the form, so `create()` bailed at the
+  // first check below on EVERY create: the scene was made server-side but
+  // nothing was cast, dated, located or reported, and `busy` (cleared only on
+  // paths that check this same flag) pinned the dialog on "…" forever. Dev-only
+  // — and dev is where the app is run.
   const live = useRef(true);
-  useLayoutEffect(() => () => { live.current = false; }, []);
+  useLayoutEffect(() => {
+    live.current = true;
+    return () => { live.current = false; };
+  }, []);
 
   async function create() {
     setWriting(true);

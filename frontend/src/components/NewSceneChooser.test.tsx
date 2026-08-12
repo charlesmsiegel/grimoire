@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { NewSceneChooser } from "./NewSceneChooser";
 
@@ -149,6 +150,33 @@ test("a cid change mid-write does not leave the new campaign's chooser stuck und
   expect(onClose).toHaveBeenCalled();
 
   await act(async () => { releaseCreate({ id: "s9" }); });
+});
+
+// The same #95 trap CampaignView's `mountedRef` already carries a comment
+// about, repeated in SceneConfirmForm: main.tsx renders inside StrictMode, so
+// in development React runs setup / cleanup / setup on mount -- for LAYOUT
+// effects too. A cleanup-only `live` ref is left `false` by that middle step
+// for the whole life of the form, so `create()` takes its first
+// `if (!live.current) return;` (the one right after createScene resolves) on
+// EVERY create: the scene is made on the server but nothing is cast, dated,
+// located or reported, and `busy` -- which only clears on paths that check the
+// same flag -- pins the dialog in its "…" state forever. In development, which
+// is where the app is run, the New Scene dialog therefore always freezes.
+test("StrictMode's mount cycle does not wedge the create sequence", async () => {
+  const onCreated = vi.fn();
+  render(
+    <StrictMode>
+      <NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={onCreated} />
+    </StrictMode>,
+  );
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByText("Reckoning"));
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+
+  // the sequence runs past its first liveness check and reports the scene
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9", undefined));
+  // ...and the button is back out of its busy state rather than stuck on "…"
+  expect(screen.queryByRole("button", { name: "…" })).toBeNull();
 });
 
 test("offscreen mode asks for pcless greetings and pcless scenes", async () => {
