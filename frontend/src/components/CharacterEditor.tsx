@@ -211,12 +211,12 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     setAnchorSaving(false);
   }, [reload]);
 
-  // Who has ever been cast here. Re-read on `resetSignal` as well as on a scope
-  // change, so re-clicking the Characters tab after playing a scene picks up
-  // the actors that scene introduced rather than showing a roster from before
-  // it. World scope has no appearances at all, so it clears instead of fetching
-  // -- and clearing matters, because this instance is reused across a scope
-  // change and a campaign's set left standing would filter a world's grid.
+  // Who is actually in a scene here. Re-read on `resetSignal` as well as on a
+  // scope change, so re-clicking the Characters tab after playing a scene picks
+  // up the actors that scene introduced rather than showing a roster from
+  // before it. World scope has no appearances at all, so it clears instead of
+  // fetching -- and clearing matters, because this instance is reused across a
+  // scope change and a campaign's set left standing would filter a world's grid.
   useEffect(() => {
     // Bumped before the early return too: a world scope must orphan a campaign
     // read still in flight, or that reply installs a campaign's `appeared` set
@@ -230,7 +230,20 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
         if (rosterReq.current !== req) return;   // a later read owns the answer
         // A character closed before this landed is judged by the `keepVisible`
         // resolver above, which re-runs on this very state change.
-        setAppeared(new Set(roster.filter((r) => r.kind === "characters").map((r) => r.id)));
+        //
+        // A ROSTER ENTRY IS NOT AN APPEARANCE. `appearances.transitions.leave`
+        // drops a scene from an actor's record but deliberately keeps the
+        // record itself ("the actor stays appeared campaign-wide"), because the
+        // entry is also what locks them to a version and a base. So a character
+        // seated and then removed again -- and one whose only scene was since
+        // deleted -- sits in the roster with an empty `scenes` list, having
+        // never been in one. `suggestions` treats bare presence as appeared on
+        // purpose (it is asking "who is already spoken for", and a locked
+        // version counts), but this grid is answering the reader's question
+        // "who is in this campaign", and the answer to that is the scene list.
+        setAppeared(new Set(roster
+          .filter((r) => r.kind === "characters" && (r.scenes?.length ?? 0) > 0)
+          .map((r) => r.id)));
       })
       // An unreadable roster must not hide the records it was meant to narrow:
       // the filter is withdrawn entirely and the grid shows everything. Tracked

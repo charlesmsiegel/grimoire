@@ -946,6 +946,23 @@ test("campaign scope: the grid opens on the appeared cast and All reveals the re
   await waitFor(() => expect(screen.queryByText("Winifred")).toBeNull());
 });
 
+// A roster entry is not an appearance. `transitions.leave` drops a scene from
+// an actor's record but keeps the record (it is also what locks them to a
+// version), so a character seated and then removed -- or whose only scene was
+// deleted -- sits in the roster having never been in a scene.
+test("a roster entry with no scenes has not appeared", async () => {
+  (api.listCharacters as any).mockResolvedValue(TWO_CHARS);
+  (api.listAppearances as any).mockResolvedValue([
+    ...appearedRoster("mara"),
+    { kind: "characters", id: "winifred", version: "default", role: "npc", scenes: [] },
+  ]);
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+
+  await screen.findByText("Mara");
+  expect(screen.queryByText("Winifred")).toBeNull();
+  expect(screen.getByRole("button", { name: "Appeared (1)" })).toBeInTheDocument();
+});
+
 test("world scope offers no appeared filter and reads no roster", async () => {
   (api.listCharacters as any).mockResolvedValue(TWO_CHARS);
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
