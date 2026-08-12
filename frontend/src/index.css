@@ -589,6 +589,24 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .editor-list { width: 220px; flex: none; position: sticky; top: 12px;
   max-height: calc(100vh - 24px - var(--chrome-h, 0px)); overflow-y: auto; }
 .editor-list button.new { width: 100%; margin-bottom: 8px; position: sticky; top: 0; z-index: 1; }
+/* Rail filters. `box-sizing` is load-bearing on the search box: the rail is a
+   fixed 220px and the input carries padding and a border, so content-box would
+   put it over the edge and give the whole page a sideways scroll. */
+.editor-list .rail-search {
+  width: 100%; box-sizing: border-box; margin-bottom: 8px;
+  background: var(--surface); color: var(--ink); border: var(--rw) solid var(--rule);
+  padding: 6px 8px; font-family: var(--fm); font-size: 11px;
+}
+.editor-list .rail-filters { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.editor-list .rail-filters .chip { cursor: pointer; font-size: 9.5px; padding: 2px 7px; }
+/* An unlit chip is a mark being hidden, so it has to read as off rather than
+   merely as a different colour. */
+.editor-list .rail-filters .chip:not(.on) { opacity: 0.45; }
+/* Stays in the DOM even with nothing to say (it is a live region, and one
+   mounted on demand announces nothing), so it collapses instead of hiding --
+   `display: none` would take it out of the accessibility tree. */
+.editor-list .rail-empty { padding: 8px 0; }
+.editor-list .rail-empty:empty { padding: 0; }
 .editor-body { flex: 1; min-width: 0; }
 .editor-empty { color: var(--muted); padding: 24px 0; }
 /* Phone widths: the two panes cannot sit side by side. A 220px rail against a

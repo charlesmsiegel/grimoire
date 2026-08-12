@@ -25,13 +25,35 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
   const [picking, setPicking] = useState<string | null>(null); // image name being edited
   const [untagged, setUntagged] = useState<Appearance[]>([]);
   const [queueOpen, setQueueOpen] = useState(false);
+  // Rail filters. `query` matches names; `hiddenMarks` holds the marks the
+  // reader has switched OFF, so the default (an empty set) hides nothing -- a
+  // list that silently starts short is worse than one that starts long.
+  const [query, setQuery] = useState("");
+  const [hiddenMarks, setHiddenMarks] = useState<Set<Exclude<GreetingMark, null>>>(new Set());
+
+  // Both lists, because the rail's verdict needs both: greetings are what it
+  // counts, and character names are half of what search matches -- so before
+  // they land, a query on a character reads as "no matches" while it is really
+  // "not looked yet". Only the scope effect clears this; the `reload()` calls
+  // that follow a save must not put the rail back into a loading state.
+  const [listsReady, setListsReady] = useState(false);
 
   const reload = useCallback(() => api.listGreetings(scope).then(setGreetings), [scope.kind, scope.id]);
   useEffect(() => {
-    reload();
-    api.listCharacters(scope).then(setChars);
+    setListsReady(false);
+    Promise.all([reload(), api.listCharacters(scope).then(setChars)])
+      .catch(() => {})                   // a failed list is still a settled one
+      .finally(() => setListsReady(true));
     api.listTags(wid).then(setTags);  // tag vocabulary stays a world concern
     if (worldScope) api.listUntaggedImages(wid).then(setUntagged).catch(() => setUntagged([]));
+    // The rail filters describe THIS scope's list and must not survive into the
+    // next one: this component is reused across a scope change, so a search and
+    // a hidden mark set in one campaign would silently omit rows from another
+    // -- against the "everything shown by default" rule, and invisibly, since
+    // a campaign -> world -> campaign trip hides the chips in the middle leg
+    // while the exclusion they represent is still in force (Codex review).
+    setQuery("");
+    setHiddenMarks(new Set());
   }, [wid, worldScope, reload]);  // eslint-disable-line react-hooks/exhaustive-deps -- scope is captured by reload
 
   function closeQueue() {
@@ -139,6 +161,49 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
 
   const others = greetings.filter((g) => g.id !== gid);
   const charName = (id: string) => chars.find((c) => c.id === id)?.name ?? id;
+
+  // --- rail filtering -------------------------------------------------------
+  // Marks are campaign-only (a world has no play history), so the chips are
+  // too; search works in both scopes.
+  const MARKS: Exclude<GreetingMark, null>[] = ["played", "completed", "skipped"];
+  const MARK_LABEL: Record<string, string> = { played: "played", completed: "done", skipped: "skip" };
+  const markCounts = MARKS.map((m) => [m, greetings.filter((g) => g.mark === m).length] as const);
+
+  function toggleMark(m: Exclude<GreetingMark, null>) {
+    setHiddenMarks((prev) => {
+      const next = new Set(prev);
+      if (next.has(m)) next.delete(m); else next.add(m);
+      return next;
+    });
+  }
+
+  // NFC on both sides before folding case. Names arrive from hand-written
+  // markdown and imported cards, so an accented one can be stored decomposed
+  // (e + combining acute) while the reader types it composed; the two render
+  // identically and would otherwise never match (Codex review). This normalizes
+  // form, not accents: "cafe" still does not find "café", which keeps the match
+  // rule something a reader can predict.
+  const fold = (s: string) => s.normalize("NFC").toLowerCase();
+
+  // Name, source character, and every present character -- all of which the
+  // list payload already carries, so this costs no request. Bodies are NOT
+  // searched: they only exist on the per-greeting read.
+  function matchesQuery(g: Greeting, needle: string): boolean {
+    if (!needle) return true;
+    const hay = [g.name, charName(g.character), ...(g.present ?? []).map(charName)];
+    return hay.some((s) => fold(s).includes(needle));
+  }
+
+  const needle = fold(query.trim());
+  const shownGreetings = greetings.filter((g) => {
+    // The open greeting always stays listed. Its content is on screen either
+    // way, and dropping its row would leave the body with no visible source --
+    // the reader would see a record the list denies having.
+    if (g.id === gid) return true;
+    if (!worldScope && g.mark && hiddenMarks.has(g.mark)) return false;
+    return matchesQuery(g, needle);
+  });
+  const hiddenCount = greetings.length - shownGreetings.length;
   const greetName = (id: string) => greetings.find((g) => g.id === id)?.name ?? id;
   // the version a present character is cast at: source at the greeting's version, others at their default
   const presentVid = (id: string) => (id === form.character ? form.version : (chars.find((c) => c.id === id)?.default_version ?? ""));
@@ -174,7 +239,22 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
             ▶ Tag images ({untagged.length})
           </button>
         )}
-        {greetings.map((g) => (
+        <input className="rail-search" type="search" value={query} aria-label="Search greetings"
+               placeholder="Search name or character…"
+               onChange={(e) => setQuery(e.target.value)} />
+        {!worldScope && markCounts.some(([, n]) => n > 0) && (
+          <div className="rail-filters" role="group" aria-label="Filter by mark">
+            {markCounts.filter(([, n]) => n > 0).map(([m, n]) => (
+              <button key={m} className={"chip" + (hiddenMarks.has(m) ? "" : " on")}
+                      aria-pressed={!hiddenMarks.has(m)}
+                      title={hiddenMarks.has(m) ? `Show ${MARK_LABEL[m]}` : `Hide ${MARK_LABEL[m]}`}
+                      onClick={() => toggleMark(m)}>
+                {MARK_LABEL[m]} {n}
+              </button>
+            ))}
+          </div>
+        )}
+        {shownGreetings.map((g) => (
           <button
             key={g.id}
             className={"row" + (gid === g.id ? " active" : "")}
@@ -183,11 +263,26 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
             {g.name}
             {!worldScope && g.mark && (
               <span className={`mark-badge ${g.mark}`}>
-                {g.mark === "completed" ? "done" : g.mark === "skipped" ? "skip" : "played"}
+                {MARK_LABEL[g.mark]}
               </span>
             )}
           </button>
         ))}
+        {/* One status line, always in the DOM rather than mounted on demand:
+            filtering happens while focus is still in the search box, so a
+            result count that only appears afterwards is never announced. Live
+            regions have to exist before the text changes to be read out. */}
+        {/* One status line, always in the DOM rather than mounted on demand:
+            filtering happens while focus is still in the search box, so a
+            result count that only appears afterwards is never announced. Live
+            regions have to exist before the text changes to be read out. */}
+        <div className="field-hint rail-empty" role="status" aria-live="polite">
+          {!listsReady
+            ? ""                        /* silence, not a verdict, while loading */
+            : shownGreetings.length === 0
+              ? "No greetings match."
+              : hiddenCount > 0 ? `${hiddenCount} hidden` : ""}
+        </div>
       </div>
 
       <div className="editor-body">

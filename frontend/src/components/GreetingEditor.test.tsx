@@ -1,4 +1,4 @@
-﻿import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+﻿import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { GreetingEditor } from "./GreetingEditor";
 
 vi.mock("../api/client", () => ({
@@ -28,6 +28,189 @@ beforeEach(() => {
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [],
   });
+});
+
+// --- rail search and mark filters ------------------------------------------
+
+const CAST = [
+  { id: "seraphine", name: "Seraphine", default_version: "default", versions: [{ id: "default", name: "default" }] },
+  { id: "winifred", name: "Winifred", default_version: "default", versions: [{ id: "default", name: "default" }] },
+  { id: "mara", name: "Mara", default_version: "default", versions: [{ id: "default", name: "default" }] },
+];
+/** name, source character, present characters, mark */
+function greeting(id: string, name: string, character: string, present: string[], mark?: string) {
+  return { id, name, character, version: "default", present, requires_tags: [],
+           predecessor_join: "all" as const, ...(mark ? { mark } : {}) };
+}
+const RAIL = [
+  greeting("dawn", "Saltmarch Dawn", "seraphine", []),
+  greeting("ledger", "The Ledger", "winifred", ["mara"], "played"),
+  greeting("word", "A Quiet Word", "mara", [], "skipped"),
+  greeting("vow", "Vow of Silence", "winifred", [], "completed"),
+];
+const railOf = (c: HTMLElement) => c.querySelector(".editor-list") as HTMLElement;
+
+test("mark chips hide their group, and are absent in world scope", async () => {
+  (api.listGreetings as any).mockResolvedValue(RAIL);
+  (api.listCharacters as any).mockResolvedValue(CAST);
+  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  const rail = await waitFor(() => railOf(container));
+  await within(rail).findByText("Saltmarch Dawn");
+
+  // everything is listed by default -- a rail that silently starts short is worse
+  expect(within(rail).getByText("The Ledger")).toBeInTheDocument();
+  const skipChip = within(rail).getByRole("button", { name: /^skip 1$/ });
+  expect(skipChip).toHaveAttribute("aria-pressed", "true");
+
+  fireEvent.click(skipChip);
+  await waitFor(() => expect(within(rail).queryByText("A Quiet Word")).toBeNull());
+  expect(skipChip).toHaveAttribute("aria-pressed", "false");
+  expect(within(rail).getByText("1 hidden")).toBeInTheDocument();
+  expect(within(rail).getByText("The Ledger")).toBeInTheDocument();   // other marks untouched
+
+  fireEvent.click(skipChip);                                          // and back
+  await waitFor(() => expect(within(rail).getByText("A Quiet Word")).toBeInTheDocument());
+});
+
+test("world scope has no mark chips, since a world has no play history", async () => {
+  (api.listGreetings as any).mockResolvedValue(
+    RAIL.map(({ mark, ...g }) => g));   // a world list carries no marks
+  (api.listCharacters as any).mockResolvedValue(CAST);
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const rail = await waitFor(() => railOf(container));
+  await within(rail).findByText("Saltmarch Dawn");
+  expect(within(rail).queryByRole("button", { name: /^played/ })).toBeNull();
+  expect(within(rail).queryByRole("button", { name: /^skip/ })).toBeNull();
+  // ...but search is offered in both scopes
+  expect(within(rail).getByLabelText("Search greetings")).toBeInTheDocument();
+});
+
+test("search matches the greeting name, its source character, and present characters", async () => {
+  (api.listGreetings as any).mockResolvedValue(RAIL);
+  (api.listCharacters as any).mockResolvedValue(CAST);
+  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  const rail = await waitFor(() => railOf(container));
+  await within(rail).findByText("Saltmarch Dawn");
+
+  fireEvent.change(within(rail).getByLabelText("Search greetings"), { target: { value: "mara" } });
+  await waitFor(() => expect(within(rail).queryByText("Saltmarch Dawn")).toBeNull());
+  expect(within(rail).getByText("A Quiet Word")).toBeInTheDocument();   // source character
+  expect(within(rail).getByText("The Ledger")).toBeInTheDocument();     // present character
+  expect(within(rail).queryByText("Vow of Silence")).toBeNull();
+
+  // substring, case-insensitive, on the name itself
+  fireEvent.change(within(rail).getByLabelText("Search greetings"), { target: { value: "SALT" } });
+  await waitFor(() => expect(within(rail).getByText("Saltmarch Dawn")).toBeInTheDocument());
+  expect(within(rail).queryByText("The Ledger")).toBeNull();
+
+  fireEvent.change(within(rail).getByLabelText("Search greetings"), { target: { value: "nothing here" } });
+  await waitFor(() => expect(within(rail).getByText("No greetings match.")).toBeInTheDocument());
+});
+
+// Codex review, finding 1. This component is reused across a scope change, so
+// filters describing one list would silently omit rows from the next -- and a
+// campaign -> world -> campaign trip hides the chips in the middle leg while
+// the exclusion they represent is still in force.
+test("search and mark filters reset when the scope changes", async () => {
+  (api.listGreetings as any).mockResolvedValue(RAIL);
+  (api.listCharacters as any).mockResolvedValue(CAST);
+  const { container, rerender } = render(
+    <GreetingEditor scope={{ kind: "campaign", id: "a" }} wid="w" />);
+  const rail = await waitFor(() => railOf(container));
+  await within(rail).findByText("Saltmarch Dawn");
+
+  fireEvent.click(within(rail).getByRole("button", { name: /^skip 1$/ }));
+  fireEvent.change(within(rail).getByLabelText("Search greetings"), { target: { value: "ledger" } });
+  await waitFor(() => expect(within(rail).queryByText("Saltmarch Dawn")).toBeNull());
+
+  rerender(<GreetingEditor scope={{ kind: "campaign", id: "b" }} wid="w" />);
+  // campaign b opens on its whole list, with nothing carried over
+  await waitFor(() => expect(within(rail).getByText("Saltmarch Dawn")).toBeInTheDocument());
+  expect(within(rail).getByText("A Quiet Word")).toBeInTheDocument();
+  expect(within(rail).getByLabelText("Search greetings")).toHaveValue("");
+  expect(within(rail).getByRole("button", { name: /^skip 1$/ })).toHaveAttribute("aria-pressed", "true");
+});
+
+// Names come from hand-written markdown and imported cards, so an accented one
+// can be stored decomposed while the reader types it composed. The two render
+// identically; without normalizing they never match.
+test("search matches a decomposed name typed in composed form", async () => {
+  // Built from escapes rather than pasted: a literal would be normalized
+  // somewhere in the toolchain and the fixture would quietly stop testing this.
+  const decomposed = "Café Meeting";   // e + U+0301 combining acute
+  const composed = "Café";              // the same glyph as one code point
+  expect(decomposed).not.toContain(composed);  // the premise, asserted
+  (api.listGreetings as any).mockResolvedValue([
+    greeting("cafe", decomposed, "seraphine", []),
+  ]);
+  (api.listCharacters as any).mockResolvedValue(CAST);
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const rail = await waitFor(() => railOf(container));
+  await waitFor(() => expect(rail.querySelectorAll(".row")).toHaveLength(1));
+
+  fireEvent.change(within(rail).getByLabelText("Search greetings"), { target: { value: composed } });
+  await waitFor(() => expect(rail.querySelectorAll(".row")).toHaveLength(1));   // still matched
+});
+
+// Codex review round 2. An empty list before the read lands is not "no
+// matches" -- and a query on a character's name cannot be judged at all until
+// the character list is in, since `charName` falls back to the raw id.
+test("the status line says nothing until both lists have loaded", async () => {
+  let releaseGreetings: (v: any) => void = () => {};
+  let releaseChars: (v: any) => void = () => {};
+  (api.listGreetings as any).mockReturnValue(new Promise((r) => { releaseGreetings = r; }));
+  (api.listCharacters as any).mockReturnValue(new Promise((r) => { releaseChars = r; }));
+  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  const rail = await waitFor(() => railOf(container));
+  const status = within(rail).getByRole("status");
+
+  expect(status).toHaveTextContent("");                    // nothing has been read yet
+  await act(async () => { releaseGreetings(RAIL); });
+  expect(status).toHaveTextContent("");                    // greetings in, names still out
+  await act(async () => { releaseChars(CAST); });
+  await waitFor(() => expect(within(rail).getByText("Saltmarch Dawn")).toBeInTheDocument());
+  expect(status).toHaveTextContent("");                    // everything shown: still nothing to say
+
+  fireEvent.change(within(rail).getByLabelText("Search greetings"), { target: { value: "zzz" } });
+  await waitFor(() => expect(status).toHaveTextContent("No greetings match."));
+});
+
+// Filtering happens while focus is still in the search box, so the result
+// count has to live in a region that exists before the text changes.
+test("the result count is a live region", async () => {
+  (api.listGreetings as any).mockResolvedValue(RAIL);
+  (api.listCharacters as any).mockResolvedValue(CAST);
+  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  const rail = await waitFor(() => railOf(container));
+  await within(rail).findByText("Saltmarch Dawn");
+
+  const status = within(rail).getByRole("status");
+  expect(status).toHaveAttribute("aria-live", "polite");
+  expect(status).toHaveTextContent("");                    // present before it has anything to say
+  fireEvent.click(within(rail).getByRole("button", { name: /^skip 1$/ }));
+  await waitFor(() => expect(status).toHaveTextContent("1 hidden"));
+});
+
+// The body of the open greeting is on screen either way; dropping its row would
+// leave that content with no visible source in the list that supposedly holds it.
+test("the open greeting stays listed even when the filters would hide it", async () => {
+  (api.listGreetings as any).mockResolvedValue(RAIL);
+  (api.listCharacters as any).mockResolvedValue(CAST);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: greeting("word", "A Quiet Word", "mara", []),
+    body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [],
+  });
+  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  const rail = await waitFor(() => railOf(container));
+  fireEvent.click(await within(rail).findByText("A Quiet Word"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalled());
+
+  fireEvent.click(within(rail).getByRole("button", { name: /^skip 1$/ }));   // would hide it
+  expect(within(rail).getByText("A Quiet Word")).toBeInTheDocument();
+  // and a search it cannot match still leaves it there
+  fireEvent.change(within(rail).getByLabelText("Search greetings"), { target: { value: "zzz" } });
+  await waitFor(() => expect(within(rail).queryByText("Saltmarch Dawn")).toBeNull());
+  expect(within(rail).getByText("A Quiet Word")).toBeInTheDocument();
 });
 
 test("clicking a greeting shows a read-only rendered view; Edit reveals the form", async () => {
