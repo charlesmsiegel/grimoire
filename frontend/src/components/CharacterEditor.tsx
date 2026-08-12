@@ -91,6 +91,28 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const [locked, setLocked] = useState<string | null>(null);       // campaign: locked version id
   const [worldVersions, setWorldVersions] = useState<VersionRef[]>([]);
   const [importVid, setImportVid] = useState("");
+  // campaign: the ids that have ever been cast in this campaign. `null` while
+  // the roster is still loading (or in world scope, where it has no meaning) --
+  // distinct from the empty set, which is a campaign nobody has played yet, and
+  // distinct again from `rosterFailed`, which is null for a third reason. Those
+  // three have to stay separable: the empty set filters everything out, a
+  // failure filters nothing, and loading shows no verdict at all.
+  const [appeared, setAppeared] = useState<Set<string> | null>(null);
+  const [rosterFailed, setRosterFailed] = useState(false);
+  // Same token discipline as `lockReq`/`anchorReq`: the roster is re-read on
+  // `resetSignal` as well as on a scope change, so two reads of the SAME
+  // campaign can be in flight at once and the scope they carry cannot tell them
+  // apart. Without this, a slow earlier read lands last and reinstates a roster
+  // from before the scene that was just played.
+  const rosterReq = useRef(0);
+  // A campaign inherits its whole world's roster, most of which never walks
+  // on. The grid therefore opens on the campaign's own cast and offers the
+  // inherited remainder behind a toggle.
+  const [showAll, setShowAll] = useState(false);
+  // The character a close is handing back to the grid, held until there is a
+  // roster to judge it against. See `keepVisible` below.
+  const pendingReveal = useRef<string | null>(null);
+  const [revealTick, setRevealTick] = useState(0);
 
   // LIVE mirrors of state that async continuations have to read. A handler
   // closes over the values from the render that created it, and everything
@@ -101,6 +123,40 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   liveScope.current = scope;
   const liveAnchor = useRef({ cid: "", text: "", state: "loading" as typeof anchorState });
   liveAnchor.current = { cid: detail?.meta.id ?? "", text: voiceAnchor, state: anchorState };
+  // Which character is open, for the `resetSignal` effect: it closes one
+  // WITHOUT going through `backToGrid`, and it cannot take `detail` as a
+  // dependency (it would then re-fire on every character opened, sending the
+  // reader back to the grid they just left).
+  const liveDetailId = useRef("");
+  liveDetailId.current = detail?.meta.id ?? "";
+
+  /** Hand a character back to the grid without letting the appeared filter
+   *  swallow it.
+   *
+   *  A character can be reached without going through the grid at all -- a
+   *  greeting's present-character link, an owner chip, a chub-unlinked chip --
+   *  and nothing says it has appeared in this campaign. Landing on a grid that
+   *  filters it out reads as the record having been deleted, so the filter
+   *  yields to it instead.
+   *
+   *  Recorded rather than decided here, because BOTH of the closes that call
+   *  this can run while the roster read is still in flight (the `focus` route
+   *  opens a character on mount, in parallel with that read) -- and a decision
+   *  taken against no roster is no decision, it just lets the character vanish
+   *  the moment the roster lands. The effect below applies it as soon as there
+   *  is something to apply it against, whichever order the two arrive in. */
+  function keepVisible(id: string) {
+    if (!id || liveScope.current.kind !== "campaign") return;
+    pendingReveal.current = id;
+    setRevealTick((n) => n + 1);   // re-run the resolver even if `appeared` is unchanged
+  }
+
+  useEffect(() => {
+    const pend = pendingReveal.current;
+    if (pend === null || appeared === null) return;   // nothing pending, or no roster yet
+    pendingReveal.current = null;
+    if (!appeared.has(pend)) setShowAll(true);
+  }, [appeared, revealTick]);
 
   /** Install a freshly-read character — unless the editor has since left the
    *  scope it was read from, in which case drop it.
@@ -130,6 +186,22 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     // in flight for the scope we just left, whose reply would otherwise fill
     // the textarea with the other scope's anchor.
     anchorReq.current++;
+    // ...and never carry the grid FILTER across it either. `showAll` is a
+    // statement about one campaign's inherited roster; left standing it opens
+    // the next campaign on its whole world instead of on its own cast, which is
+    // the state this filter exists to avoid. Reset here rather than beside the
+    // roster read, which also re-runs on `resetSignal` -- re-clicking the tab
+    // should not undo a toggle the reader just made.
+    setShowAll(false);
+    pendingReveal.current = null;
+    // `setDetail(null)` below does not take effect until the next render, but
+    // the `resetSignal` effect can run before that render -- in the same commit,
+    // when a caller changes both props at once -- and would then read the ref
+    // and hand the PREVIOUS scope's character to this one's filter, re-arming
+    // the reveal this line just disarmed and opening the new campaign on its
+    // whole inherited roster. Clearing the ref is immediate, so that window
+    // closes (Codex review, round 3).
+    liveDetailId.current = "";
     setDetail(null);
     setCard(null);
     setMode("grid");
@@ -139,12 +211,44 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     setAnchorSaving(false);
   }, [reload]);
 
-  // re-clicking the Characters tab (resetSignal bumps) returns to the grid
+  // Who has ever been cast here. Re-read on `resetSignal` as well as on a scope
+  // change, so re-clicking the Characters tab after playing a scene picks up
+  // the actors that scene introduced rather than showing a roster from before
+  // it. World scope has no appearances at all, so it clears instead of fetching
+  // -- and clearing matters, because this instance is reused across a scope
+  // change and a campaign's set left standing would filter a world's grid.
   useEffect(() => {
+    // Bumped before the early return too: a world scope must orphan a campaign
+    // read still in flight, or that reply installs a campaign's `appeared` set
+    // over a world's grid and filters records that have no appearances at all.
+    const req = ++rosterReq.current;
+    setAppeared(null);
+    setRosterFailed(false);
+    if (scope.kind !== "campaign") return;
+    api.listAppearances(scope.id)
+      .then((roster) => {
+        if (rosterReq.current !== req) return;   // a later read owns the answer
+        // A character closed before this landed is judged by the `keepVisible`
+        // resolver above, which re-runs on this very state change.
+        setAppeared(new Set(roster.filter((r) => r.kind === "characters").map((r) => r.id)));
+      })
+      // An unreadable roster must not hide the records it was meant to narrow:
+      // the filter is withdrawn entirely and the grid shows everything. Tracked
+      // separately from "still loading" so the grid can wait for one and not
+      // the other.
+      .catch(() => { if (rosterReq.current === req) setRosterFailed(true); });
+  }, [scope.kind, scope.id, resetSignal]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // re-clicking the Characters tab (resetSignal bumps) returns to the grid.
+  // This is a close like `backToGrid`'s, so it owes the character it closes the
+  // same protection from the appeared filter -- it just gets there without
+  // passing through that function.
+  useEffect(() => {
+    keepVisible(liveDetailId.current);
     setMode("grid");
     setDetail(null);
     setCard(null);
-  }, [resetSignal]);
+  }, [resetSignal]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // arrived via a present-character link: open that character at the given version
   useEffect(() => {
@@ -505,6 +609,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
 
   function backToGrid() {
     scrollShellToTop();
+    keepVisible(liveDetailId.current);
     setDetail(null);
     setCard(null);
     setMode("grid");
@@ -909,6 +1014,17 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   }
 
   if (mode === "grid" || !detail || !card) {
+    // The filter is offered only where "appeared" means something and the
+    // roster actually loaded; everywhere else `shown` is simply every card.
+    const filterable = !worldScope && appeared !== null;
+    const appearedChars = filterable ? chars.filter((c) => appeared.has(c.id)) : chars;
+    const shown = filterable && !showAll ? appearedChars : chars;
+    // Campaign scope has no verdict yet while the roster is in flight. Painting
+    // the grid anyway shows every inherited character for as long as that read
+    // takes and then yanks most of them away -- so the cards (and the "nobody
+    // yet" line, which would be equally wrong) wait for the answer. A FAILED
+    // read is not this state: it has its answer, which is "do not filter".
+    const rosterPending = !worldScope && appeared === null && !rosterFailed;
     return (
       <div className="character-editor">
         {taglineQueue.length > 0 && (
@@ -939,6 +1055,19 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
               Adding {bulkUrl.current}/{bulkUrl.total} — {bulkUrl.name}: {bulkUrl.step}…
             </span>
           )}
+          {filterable && (
+            <div className="chips" role="group" aria-label="Show">
+              <button className={"chip" + (showAll ? "" : " on")} aria-pressed={!showAll}
+                      onClick={() => setShowAll(false)}>
+                Appeared ({appearedChars.length})
+              </button>
+              <button className={"chip" + (showAll ? " on" : "")} aria-pressed={showAll}
+                      onClick={() => setShowAll(true)}>
+                All ({chars.length})
+              </button>
+            </div>
+          )}
+
           {!bulkLocalize && importMsg && <span className="field-hint">{importMsg}</span>}
         </div>
         {unlinkedVersions !== null && (
@@ -963,11 +1092,15 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
           </div>
         )}
         {error && <div className="banner">{error}</div>}
-        {chars.length === 0 ? (
-          <div className="editor-empty">No characters yet. Create one or import a card.</div>
+        {rosterPending ? null : shown.length === 0 ? (
+          <div className="editor-empty">
+            {chars.length === 0
+              ? "No characters yet. Create one or import a card."
+              : "No one has appeared in this campaign yet — show All to see the world's roster."}
+          </div>
         ) : (
           <div className="char-grid">
-            {chars.map((c) => (
+            {shown.map((c) => (
               <div key={c.id} className="char-card">
                 <button className="char-card-main" onClick={() => openDetail(c.id)}>
                   {c.has_avatar

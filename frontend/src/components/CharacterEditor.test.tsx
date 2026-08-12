@@ -80,7 +80,15 @@ beforeEach(() => {
   (api.copyGreetingImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
   (api.listGreetings as any).mockResolvedValue([]);
   (api.getCalendarMonths as any).mockResolvedValue({ months: GREG_MONTHS });
+  // Campaign scope reads the roster to drive the appeared/all grid filter.
+  // World scope never calls it, so this default is inert there.
+  (api.listAppearances as any).mockResolvedValue([]);
 });
+
+/** A roster the appeared filter will keep every one of `ids` in. */
+function appearedRoster(...ids: string[]) {
+  return ids.map((id) => ({ kind: "characters", id, version: "default", role: "npc", scenes: ["01"] }));
+}
 
 // reach the edit form: grid -> click a card's Edit button -> form
 async function openEditForm() {
@@ -898,6 +906,7 @@ test("campaign scope: hides world-only tooling and uses campaign image URLs", as
   (api.listCharacters as any).mockResolvedValue([
     { id: "mara", name: "Mara", default_version: "young", has_avatar: true, versions: [] },
   ]);
+  (api.listAppearances as any).mockResolvedValue(appearedRoster("mara"));
   const { container } = render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
   await screen.findByText("Mara");
   expect(screen.queryByRole("button", { name: "Import card" })).toBeNull();
@@ -905,6 +914,227 @@ test("campaign scope: hides world-only tooling and uses campaign image URLs", as
   expect(screen.queryByRole("button", { name: "+ New character" })).toBeNull();
   const img = container.querySelector("img.char-card-avatar")!;
   expect(img.getAttribute("src")).toContain("/img/run/mara/");
+});
+
+// A campaign inherits its world's whole character roster, most of which never
+// walks on. The grid opens on the campaign's own cast; the rest stays one
+// click away rather than being hidden outright.
+const TWO_CHARS = [
+  { id: "mara", name: "Mara", default_version: "young", versions: [] },
+  { id: "winifred", name: "Winifred", default_version: "default", versions: [] },
+];
+
+test("campaign scope: the grid opens on the appeared cast and All reveals the rest", async () => {
+  (api.listCharacters as any).mockResolvedValue(TWO_CHARS);
+  (api.listAppearances as any).mockResolvedValue([
+    ...appearedRoster("mara"),
+    // a PC sharing a character's id must not smuggle that character in: the
+    // filter is per kind, and PCs have their own tab
+    { kind: "pcs", id: "winifred", version: "default", role: "player", scenes: ["01"] },
+  ]);
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+
+  await screen.findByText("Mara");
+  expect(screen.queryByText("Winifred")).toBeNull();
+  expect(screen.getByRole("button", { name: "Appeared (1)" })).toHaveAttribute("aria-pressed", "true");
+
+  fireEvent.click(screen.getByRole("button", { name: "All (2)" }));
+  await screen.findByText("Winifred");
+  expect(screen.getByText("Mara")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Appeared (1)" }));
+  await waitFor(() => expect(screen.queryByText("Winifred")).toBeNull());
+});
+
+test("world scope offers no appeared filter and reads no roster", async () => {
+  (api.listCharacters as any).mockResolvedValue(TWO_CHARS);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await screen.findByText("Mara");
+  expect(screen.getByText("Winifred")).toBeInTheDocument();   // nothing is filtered
+  expect(screen.queryByRole("button", { name: /^Appeared/ })).toBeNull();
+  expect(api.listAppearances).not.toHaveBeenCalled();
+});
+
+// The filter narrows a list; it must never be the reason a character cannot be
+// found at all. An unreadable roster therefore falls back to showing everything.
+test("a failed roster read leaves the campaign grid unfiltered", async () => {
+  (api.listCharacters as any).mockResolvedValue(TWO_CHARS);
+  (api.listAppearances as any).mockRejectedValue(new Error("nope"));
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  await screen.findByText("Mara");
+  expect(screen.getByText("Winifred")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^Appeared/ })).toBeNull();
+});
+
+test("a campaign nobody has played yet says so rather than looking empty", async () => {
+  (api.listCharacters as any).mockResolvedValue(TWO_CHARS);
+  (api.listAppearances as any).mockResolvedValue([]);
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  await screen.findByText(/No one has appeared in this campaign yet/);
+  fireEvent.click(screen.getByRole("button", { name: "All (2)" }));
+  await screen.findByText("Mara");
+});
+
+// Reached from another tab (a greeting's present-character link, an owner
+// chip), a character need not have appeared. Coming back to a grid that
+// filtered it out would read as the record having been deleted.
+test("returning from a character that has not appeared drops the filter", async () => {
+  (api.listCharacters as any).mockResolvedValue(TWO_CHARS);
+  (api.listAppearances as any).mockResolvedValue(appearedRoster("mara"));
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "winifred", name: "Winifred", default_version: "default" },
+    versions: [{ id: "default", name: "default", images: [],
+                 card: { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Winifred" } } }],
+  });
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w"
+                          focus={{ cid: "winifred", vid: "default" }} />);
+  fireEvent.click(await screen.findByRole("button", { name: /‹ all characters/i }));
+  await screen.findByText("Winifred");                       // still listed, not filtered away
+  expect(screen.getByRole("button", { name: "All (2)" })).toHaveAttribute("aria-pressed", "true");
+});
+
+// The roster grows as scenes are played, and re-clicking the Characters tab is
+// how a reader refreshes this page.
+test("re-clicking the Characters tab re-reads the roster", async () => {
+  (api.listCharacters as any).mockResolvedValue(TWO_CHARS);
+  (api.listAppearances as any).mockResolvedValue(appearedRoster("mara"));
+  const { rerender } = render(
+    <CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" resetSignal={0} />);
+  await screen.findByText("Mara");
+  expect(screen.queryByText("Winifred")).toBeNull();
+
+  (api.listAppearances as any).mockResolvedValue(appearedRoster("mara", "winifred"));
+  rerender(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" resetSignal={1} />);
+  await screen.findByText("Winifred");
+});
+
+// Codex review, finding 1. Two reads of the SAME campaign can be in flight at
+// once (`resetSignal` re-reads), so a scope check cannot order them: the slow
+// first read lands last and reinstates the roster from before the scene that
+// was just played, dropping its new arrivals back out of the grid.
+test("a slow earlier roster read cannot overwrite a later one", async () => {
+  (api.listCharacters as any).mockResolvedValue(TWO_CHARS);
+  let releaseFirst: (v: any) => void = () => {};
+  (api.listAppearances as any)
+    .mockReturnValueOnce(new Promise((r) => { releaseFirst = r; }))    // read A: hangs
+    .mockResolvedValue(appearedRoster("mara", "winifred"));            // read B: the current roster
+  const { rerender } = render(
+    <CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" resetSignal={0} />);
+  rerender(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" resetSignal={1} />);
+  await screen.findByText("Winifred");
+
+  // A now lands, carrying the pre-scene roster
+  await act(async () => { releaseFirst(appearedRoster("mara")); });
+  expect(screen.getByText("Winifred")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Appeared (2)" })).toBeInTheDocument();
+});
+
+// Codex review, finding 2. This instance is reused across a scope change, and
+// `showAll` is a statement about ONE campaign's inherited roster.
+test("All does not carry across a campaign change", async () => {
+  (api.listCharacters as any).mockResolvedValue(TWO_CHARS);
+  (api.listAppearances as any).mockResolvedValue(appearedRoster("mara"));
+  const { rerender } = render(<CharacterEditor scope={{ kind: "campaign", id: "a" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: "All (2)" }));
+  await screen.findByText("Winifred");
+
+  rerender(<CharacterEditor scope={{ kind: "campaign", id: "b" }} wid="w" />);
+  await screen.findByText("Mara");
+  expect(screen.queryByText("Winifred")).toBeNull();      // campaign b opens on its own cast
+  expect(screen.getByRole("button", { name: "Appeared (1)" })).toHaveAttribute("aria-pressed", "true");
+});
+
+// Codex review, finding 3. `listCharacters` can resolve first; painting the
+// grid then shows the whole inherited roster until the appearances read lands
+// and yanks it away.
+test("the grid waits for the roster instead of flashing every inherited character", async () => {
+  (api.listCharacters as any).mockResolvedValue(TWO_CHARS);
+  let release: (v: any) => void = () => {};
+  (api.listAppearances as any).mockReturnValue(new Promise((r) => { release = r; }));
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+
+  await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
+  expect(screen.queryByText("Winifred")).toBeNull();
+  expect(screen.queryByText("Mara")).toBeNull();
+  expect(screen.queryByText(/No one has appeared/)).toBeNull();   // no wrong verdict either
+
+  await act(async () => { release(appearedRoster("mara")); });
+  await screen.findByText("Mara");
+  expect(screen.queryByText("Winifred")).toBeNull();
+});
+
+// Codex review, finding 4. Back can be pressed before the roster read lands,
+// which is exactly the case the `focus` route hits: the character opens on
+// mount, in parallel with the read.
+test("a character closed before the roster lands is still not stranded behind the filter", async () => {
+  (api.listCharacters as any).mockResolvedValue(TWO_CHARS);
+  let release: (v: any) => void = () => {};
+  // The filter's read (first call) hangs; `loadLockState` shares this endpoint
+  // and must still answer, or the detail view never opens at all.
+  (api.listAppearances as any)
+    .mockReturnValueOnce(new Promise((r) => { release = r; }))
+    .mockResolvedValue([]);
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "winifred", name: "Winifred", default_version: "default" },
+    versions: [{ id: "default", name: "default", images: [],
+                 card: { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Winifred" } } }],
+  });
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w"
+                          focus={{ cid: "winifred", vid: "default" }} />);
+  fireEvent.click(await screen.findByRole("button", { name: /‹ all characters/i }));
+
+  // only now does the roster arrive, and it does not contain her
+  await act(async () => { release(appearedRoster("mara")); });
+  await screen.findByText("Winifred");
+  expect(screen.getByRole("button", { name: "All (2)" })).toHaveAttribute("aria-pressed", "true");
+});
+
+// Codex review round 2. Back is not the only way out of a character: clicking
+// the already-active Characters tab bumps `resetSignal`, which closes the
+// detail view WITHOUT going through backToGrid. That close owes the character
+// the same protection, or the safeguard only covers one of its two doors.
+test("closing a character via the Characters tab keeps it out of the filter's way too", async () => {
+  (api.listCharacters as any).mockResolvedValue(TWO_CHARS);
+  (api.listAppearances as any).mockResolvedValue(appearedRoster("mara"));
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "winifred", name: "Winifred", default_version: "default" },
+    versions: [{ id: "default", name: "default", images: [],
+                 card: { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Winifred" } } }],
+  });
+  const { rerender } = render(
+    <CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" resetSignal={0}
+                     focus={{ cid: "winifred", vid: "default" }} />);
+  await screen.findByRole("button", { name: /‹ all characters/i });   // her detail is open
+
+  // the reader clicks the Characters tab rather than Back
+  rerender(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" resetSignal={1}
+                            focus={{ cid: "winifred", vid: "default" }} />);
+  await screen.findByText("Winifred");
+  expect(screen.getByRole("button", { name: "All (2)" })).toHaveAttribute("aria-pressed", "true");
+});
+
+// Codex review round 3. A commit that changes BOTH props runs the scope reset
+// and the `resetSignal` close together: the reset clears the pending reveal,
+// and the close must not then re-arm it with the character that belonged to the
+// campaign just left -- which would open the NEW campaign on its whole roster.
+test("a simultaneous campaign change and tab reset does not carry the reveal across", async () => {
+  (api.listCharacters as any).mockResolvedValue(TWO_CHARS);
+  (api.listAppearances as any).mockResolvedValue(appearedRoster("mara"));
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "winifred", name: "Winifred", default_version: "default" },
+    versions: [{ id: "default", name: "default", images: [],
+                 card: { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Winifred" } } }],
+  });
+  const { rerender } = render(
+    <CharacterEditor scope={{ kind: "campaign", id: "a" }} wid="w" resetSignal={0}
+                     focus={{ cid: "winifred", vid: "default" }} />);
+  await screen.findByRole("button", { name: /‹ all characters/i });
+
+  rerender(<CharacterEditor scope={{ kind: "campaign", id: "b" }} wid="w" resetSignal={1} />);
+  await screen.findByText("Mara");
+  // campaign b opens on its own cast; a's character does not drag the filter open
+  expect(screen.queryByText("Winifred")).toBeNull();
+  expect(screen.getByRole("button", { name: "Appeared (1)" })).toHaveAttribute("aria-pressed", "true");
 });
 
 test("campaign scope: picking a version calls pickVersion", async () => {
@@ -918,10 +1148,15 @@ test("campaign scope: picking a version calls pickVersion", async () => {
       { id: "veteran", name: "Veteran", card: { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Mara" } } },
     ],
   }));
+  // An empty roster is the whole point of this case: picking a version is only
+  // offered while the character is NOT yet locked to one, and locking is what
+  // a first appearance does. So Mara has not appeared, and the grid is opened
+  // on All to reach her.
   (api.listAppearances as any).mockResolvedValue([]);
   (api.pickVersion as any).mockResolvedValue({ ok: true });
   vi.spyOn(window, "confirm").mockReturnValue(true);
   render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: "All (1)" }));
   fireEvent.click(await screen.findByText("Mara"));
   fireEvent.click(await screen.findByRole("button", { name: "Pick this version" }));
   await waitFor(() => expect(api.pickVersion).toHaveBeenCalledWith("run", "characters", "mara", "young"));
@@ -937,7 +1172,7 @@ test("campaign scope: the avatar crop control mutates the campaign's own copy", 
     versions: [{ id: "young", name: "Young", images: ["avatar"], avatar_focus: null,
                  card: { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Mara" } } }],
   });
-  (api.listAppearances as any).mockResolvedValue([]);
+  (api.listAppearances as any).mockResolvedValue(appearedRoster("mara"));
   render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
   fireEvent.click(await screen.findByText("Mara"));
   fireEvent.click(await screen.findByRole("button", { name: /adjust avatar crop/i }));
@@ -957,7 +1192,7 @@ test("campaign scope: uploading an avatar calls the scope-aware endpoint", async
     versions: [{ id: "young", name: "Young", images: [],
                  card: { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Mara" } } }],
   });
-  (api.listAppearances as any).mockResolvedValue([]);
+  (api.listAppearances as any).mockResolvedValue(appearedRoster("mara"));
   render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
   await openEditForm();
   const input = screen.getByLabelText("Upload avatar");
@@ -975,7 +1210,7 @@ test("campaign scope: gallery shelf allows adding an image and promoting to avat
     versions: [{ id: "young", name: "Young", images: ["avatar", "gallery_1"],
                  card: { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Mara" } } }],
   });
-  (api.listAppearances as any).mockResolvedValue([]);
+  (api.listAppearances as any).mockResolvedValue(appearedRoster("mara"));
   render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
   fireEvent.click(await screen.findByText("Mara"));
   await screen.findByText("Images");
@@ -1388,7 +1623,7 @@ test("a campaign-local character gets the anchor controls too (#59)", async () =
   // anchor — and absorb would skip its voice check forever.
   (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "Clipped." });
   (api.setCharacterVoiceAnchor as any).mockResolvedValue({ ok: true });
-  (api.listAppearances as any).mockResolvedValue([]);
+  (api.listAppearances as any).mockResolvedValue(appearedRoster("seraphine"));
   render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
   await openEditForm();
   const box = await screen.findByLabelText("Voice anchor");

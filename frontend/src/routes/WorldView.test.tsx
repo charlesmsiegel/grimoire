@@ -53,6 +53,8 @@ beforeEach(() => {
   (api.getWorld as any).mockResolvedValue({ meta: { id: "w", name: "Drowned Realm" }, body: "", counts: {} });
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "c1", name: "Ashes of the Verdigris Crown", world: "w" } });
   (api.listCharacters as any).mockResolvedValue([]);
+  // campaign scope reads the roster to drive the Characters grid's appeared filter
+  (api.listAppearances as any).mockResolvedValue([]);
   (api.listPCs as any).mockResolvedValue([]);
   (api.listTags as any).mockResolvedValue({});
   (api.listEntities as any).mockResolvedValue([]);
@@ -173,6 +175,9 @@ test("campaign path resolves module context and threads it into the character ed
   (api.listCharacters as any).mockResolvedValue([
     { id: "mira", name: "Mira", default_version: "main", versions: [{ id: "main", name: "main" }] },
   ]);
+  // she has to have appeared, or the campaign grid's default filter hides her
+  (api.listAppearances as any).mockResolvedValue(
+    [{ kind: "characters", id: "mira", version: "main", role: "npc", scenes: ["01"] }]);
   render(
     <MemoryRouter initialEntries={["/campaigns/c1/world"]}>
       <Routes><Route path="/campaigns/:cid/world" element={<WorldView campaign />} /></Routes>
