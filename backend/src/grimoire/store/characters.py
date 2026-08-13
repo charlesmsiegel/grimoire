@@ -394,9 +394,9 @@ def find_unlinked_versions(root: Path) -> list[dict]:
     return out
 
 
-# How many bundled members one import may inflate looking for an avatar. A card
-# needs one; the cap is what stops a hostile CHARX from spending the size limit
-# once per listed candidate (Codex review).
+# How many bundled members one import may open looking for an avatar. A card
+# needs one; each lookup re-parses the archive, so the cap is what keeps a
+# hostile CHARX from buying thousands of those (Codex review).
 _MAX_BUNDLED_READS = 4
 # The V3 asset types that mean "this is the character's picture".
 _AVATAR_TYPES = ("icon", "avatar")
@@ -441,20 +441,24 @@ def _resolve_avatar(card: dict, data: bytes, fmt: str, *,
     written in the URI decides nothing, since `assets.put_image` will store the
     file under whatever type we name here.
 
-    Candidates are deduplicated and bundled reads share one byte budget,
-    because an uploaded CHARX is untrusted: a card listing over-compressed
-    members as its avatar would otherwise inflate each of them in full — a
-    small upload, a great deal of work (Codex review).
+    Candidates are deduplicated, and bundled lookups are bounded twice over,
+    because an uploaded CHARX is untrusted (Codex review): by bytes, so a card
+    naming over-compressed members as its avatar cannot inflate each of them in
+    full, and by count, because every lookup re-parses the archive — a member
+    that reads as empty or refuses to open costs nothing in bytes and would
+    otherwise buy an unlimited number of those parses.
     """
     budget = cards.MAX_ASSET_BYTES
+    lookups = _MAX_BUNDLED_READS
     for uri in dict.fromkeys(_avatar_candidates(card)):
         embedded = fetch.decode_data_uri(uri)
         if embedded:
             return embedded[0], embedded[1], uri
         path = cards.embedded_path(uri)
         if path is not None:
-            if fmt != "charx" or budget <= 0:
-                continue  # nothing to open it against, or the budget is spent
+            if fmt != "charx" or budget <= 0 or lookups <= 0:
+                continue  # nothing to open it against, or a budget is spent
+            lookups -= 1
             blob = cards.read_charx_asset(data, path, max_bytes=budget)
             if blob is None:
                 continue
@@ -483,35 +487,36 @@ def _drop_avatar_uri(card: dict, uri: str) -> None:
     the URI (one image serving as both icon and background) is somebody else's
     reference, and dropping it would lose an asset nothing replaced.
 
-    And only the FIRST match, which is the one export prepends. A card that
-    already listed that exact URI keeps its own entry, so a round trip returns
-    the character it started as rather than one asset lighter (Codex review).
+    And only the FIRST match — the one export prepends — walking the locations
+    in the order `_avatar_candidates` yields them, so the reference removed is
+    the reference resolved. (Searching in any other order removes a different
+    copy and leaves the consumed one on the card, base64 and all — Codex
+    review.) A card that already listed that exact URI therefore keeps its own
+    entry, and comes back from a round trip as the character it started as.
     """
-    data = card.get("data")
-    holders = [h for h in (card, data if isinstance(data, dict) else None,
-                           (data or {}).get("extensions") if isinstance(data, dict) else None)
-               if isinstance(h, dict)]
-    dropped = False
-    for holder in holders:
+    data = card.get("data") if isinstance(card.get("data"), dict) else {}
+    extensions = data.get("extensions") if isinstance(data.get("extensions"), dict) else {}
+    for holder in (data, extensions):
         entries = holder.get("assets")
-        if isinstance(entries, list):
-            kept = []
-            for a in entries:
-                if (not dropped and isinstance(a, dict) and a.get("uri") == uri
-                        and a.get("type") in _AVATAR_TYPES):
-                    dropped = True
-                    continue
-                kept.append(a)
-            # An emptied list is removed, not left behind: a card that arrived
-            # with nothing but its avatar in `assets` must come back out of a
-            # round-trip byte-identical, hash included.
-            if kept:
-                holder["assets"] = kept
-            else:
-                holder.pop("assets")
-        if not dropped and holder.get("avatar") == uri:
+        if not isinstance(entries, list):
+            continue
+        for i, a in enumerate(entries):
+            if isinstance(a, dict) and a.get("uri") == uri and a.get("type") in _AVATAR_TYPES:
+                kept = entries[:i] + entries[i + 1:]
+                # An emptied list goes with it: a card that arrived carrying
+                # nothing but its avatar must come back out of a round trip
+                # byte-identical, hash included. (An `assets: []` a card
+                # authored itself is normalized away the same way — the two
+                # spellings mean the same thing to every reader of the card.)
+                if kept:
+                    holder["assets"] = kept
+                else:
+                    holder.pop("assets")
+                return
+    for holder in (data, extensions, card):
+        if holder.get("avatar") == uri:
             holder.pop("avatar")
-            dropped = True
+            return
 
 
 def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,

@@ -1245,6 +1245,24 @@ def test_round_trip_keeps_a_card_that_already_embedded_its_own_avatar(tmp_path):
     assert ch.card_hash(dest, new_cid, new_vid) == ch.card_hash(tmp_path, cid, vid)
 
 
+def test_import_unhooks_the_reference_it_actually_resolved(tmp_path):
+    # `_avatar_candidates` reads data.assets before any bare `avatar` string, so
+    # removal has to walk the same order: dropping the other copy would leave
+    # the consumed one -- base64 and all -- on the stored card (Codex review).
+    import base64 as _b64
+    import json as _json
+    uri = "data:image/png;base64," + _b64.b64encode(b"\x89PNG\r\n\x1a\nSAME").decode()
+    card = ch.blank_card("Seraphine")
+    card["data"]["assets"] = [{"type": "icon", "uri": uri, "name": "main", "ext": "png"}]
+    card["data"]["avatar"] = uri
+
+    cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")
+
+    stored = ch.read_card(tmp_path, cid, vid)["data"]
+    assert "assets" not in stored           # the entry that resolved is gone
+    assert stored.get("avatar") == uri      # the other copy is not ours to touch
+
+
 def test_import_keeps_an_asset_of_another_kind_sharing_the_avatar_uri(tmp_path):
     # One image can serve as both icon and background. Consuming the icon must
     # not take the background's reference with it (Codex review).
@@ -1280,11 +1298,12 @@ def test_import_bounds_the_bytes_one_card_can_inflate(tmp_path, monkeypatch):
         for i in range(50):
             z.writestr(f"assets/decoy_{i}.png", b"\x00" * 8192)  # not an image: never resolves
 
-    inflated = 0
+    inflated, lookups = 0, 0
     real = cards.read_charx_asset
 
     def counting(data: bytes, path: str, max_bytes: int = cards.MAX_ASSET_BYTES):
-        nonlocal inflated
+        nonlocal inflated, lookups
+        lookups += 1
         blob = real(data, path, max_bytes)
         inflated += len(blob or b"")
         return blob
@@ -1294,6 +1313,40 @@ def test_import_bounds_the_bytes_one_card_can_inflate(tmp_path, monkeypatch):
     ch.import_card(tmp_path, buf.getvalue(), "charx")
 
     assert 0 < inflated <= 20_000  # two decoys' worth, not fifty
+    assert lookups <= ch._MAX_BUNDLED_READS
+
+
+def test_import_bounds_lookups_even_when_no_bytes_are_read(tmp_path):
+    # Empty members cost no budget, so a byte cap alone bounds nothing: every
+    # candidate would still re-parse the whole archive (Codex review).
+    import json as _json
+    import zipfile as _zip
+    from io import BytesIO
+    from grimoire.store import cards
+    card = ch.blank_card("Seraphine")
+    card["data"]["assets"] = [
+        {"type": "icon", "uri": f"embeded://assets/empty_{i}.png", "name": f"e{i}", "ext": "png"}
+        for i in range(200)
+    ]
+    buf = BytesIO()
+    with _zip.ZipFile(buf, "w", _zip.ZIP_DEFLATED) as z:
+        z.writestr("card.json", _json.dumps(card))
+        for i in range(200):
+            z.writestr(f"assets/empty_{i}.png", b"")
+
+    lookups = 0
+    real = cards.read_charx_asset
+
+    def counting(data: bytes, path: str, max_bytes: int = cards.MAX_ASSET_BYTES):
+        nonlocal lookups
+        lookups += 1
+        return real(data, path, max_bytes)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cards, "read_charx_asset", counting)
+        ch.import_card(tmp_path, buf.getvalue(), "charx")
+
+    assert lookups <= ch._MAX_BUNDLED_READS
 
 
 def test_export_filename_is_derived_from_the_card_name_and_version(tmp_path):
