@@ -35,6 +35,7 @@ discarded whole. A rejected import leaves no partial world in the library.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import uuid
 import zipfile
@@ -82,12 +83,20 @@ def bundle_filename(wid: str) -> str:
 # ---- export ----
 
 def _is_write_temp(path: Path) -> bool:
-    """An ``store.atomic`` temp caught mid-write (``.<name>.xxxx.tmp``).
+    """An ``store.atomic`` temp caught mid-write.
 
     Not part of the world, and the writer that owns it will rename or unlink it
     out from under the walk -- so packing one is both wrong and racy.
+
+    Matched against what ``atomic._mkstemp_beside`` actually produces --
+    ``.<target-name>.<mkstemp's 8 random chars>.tmp`` -- rather than the
+    dot-prefix-and-.tmp-suffix approximation this started as, which also
+    swallowed a legitimate ``.notes.tmp`` sitting in the world (Codex review).
     """
-    return path.name.startswith(".") and path.name.endswith(".tmp")
+    return bool(_ATOMIC_TEMP.fullmatch(path.name))
+
+
+_ATOMIC_TEMP = re.compile(r"\..+\.[a-z0-9_]{8}\.tmp")
 
 
 def write_bundle(wid: str, dest: Path) -> None:
@@ -199,12 +208,20 @@ def _repoint_urls(staging: Path, old_wid: str, new_wid: str) -> int:
     asset would corrupt it. The prefix carries its trailing slash so a world id
     that is a prefix of another (``realm`` beside ``realm-2``) cannot be
     rewritten by half.
+
+    Asset subtrees are excluded by *path*, not just by suffix. Suffix alone let
+    an ``.svg`` portrait through, which broke the byte-identical promise for a
+    real asset (Codex review) -- and nothing there needs rewriting anyway:
+    ``store/localize.py`` writes serving URLs into card and greeting text, and
+    the only sidecars under ``assets/`` (``subjects.json``, ``focus.json``)
+    hold ids and offsets, never URLs.
     """
     old = f"/api/worlds/{old_wid}/".encode()
     new = f"/api/worlds/{new_wid}/".encode()
     touched = 0
     for p in staging.rglob("*"):
-        if not p.is_file() or not _is_text(p):
+        rel = p.relative_to(staging).parts
+        if "assets" in rel or not _is_text(p) or not p.is_file():
             continue
         data = p.read_bytes()
         if old in data:
@@ -222,7 +239,13 @@ def _publish(staging: Path, wid: str) -> str:
         # POSIX when the directory happens to be empty -- so refuse rather than
         # publish a world that is half somebody else's.
         raise BundleError(f"world id {wid} was taken while the import ran")
-    staging.rename(dest)
+    try:
+        staging.rename(dest)
+    except OSError as e:
+        # The same race, lost in the window between the check above and here.
+        # A refused import is the right answer; a bare OSError reaching the
+        # route as a 500 is not (Codex review).
+        raise BundleError(f"could not publish the imported world as {wid}: {e}")
     return wid
 
 

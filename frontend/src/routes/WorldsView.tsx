@@ -60,15 +60,24 @@ export default function WorldsView() {
     if (!file) return;
     setError(null);
     setImporting(true);
+    let imported: string;
     try {
-      const { id } = await api.importWorld(file);
-      setWorlds(await api.listWorlds());
-      navigate(`/worlds/${id}`);
+      ({ id: imported } = await api.importWorld(file));
     } catch (err: any) {
       setError(err?.detail ?? err?.message ?? "Could not import that bundle.");
-    } finally {
       setImporting(false);
+      return;
     }
+    // Receiving the id IS the commit point: the world exists from here on.
+    // A failing refresh below must not be reported as a failed import, or the
+    // user retries and imports a second copy (Codex review).
+    setImporting(false);
+    try {
+      setWorlds(await api.listWorlds());
+    } catch {
+      /* the grid is stale; navigating to the new world is what matters */
+    }
+    navigate(`/worlds/${imported}`);
   }
 
   return (

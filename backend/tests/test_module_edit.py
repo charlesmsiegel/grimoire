@@ -877,33 +877,56 @@ def test_import_wraps_extraction_oserror(monkeypatch, tmp_path):
 
 
 def test_import_wraps_zip_read_errors(monkeypatch, tmp_path):
-    """P2-4: z.read(i) can raise RuntimeError (encrypted member),
-    NotImplementedError (unsupported compression), or zipfile.BadZipFile (bad
-    CRC/corrupt data) -- none of those may escape import_module as a bare
-    exception; they must surface as modules.ModuleError, same as the OSError
-    case above."""
+    """P2-4: pulling a member out of the archive can raise RuntimeError
+    (encrypted member), NotImplementedError (unsupported compression), or
+    zipfile.BadZipFile (bad CRC/corrupt data) -- none of those may escape
+    import_module as a bare exception; they must surface as modules.ModuleError,
+    same as the OSError case above.
+
+    Patches ``ZipFile.open``, not ``ZipFile.read``: extraction streams each
+    member through a bounded buffer now (store.ziputil.extract), so a patch on
+    ``read`` intercepts nothing and this test would go green while proving
+    nothing -- the by-value-import failure mode CLAUDE.md describes, in test
+    form. Both the raise-at-open and the raise-mid-stream shapes are covered,
+    because a bad CRC only surfaces once bytes are actually pulled.
+    """
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     entries = {
         "pack/module.md": "---\nname: X\n---\n",
         "pack/sheets.json": '{\n  "groups": {},\n  "sheet_types": {}\n}\n',
     }
-    real_read = zipfile.ZipFile.read
+    real_open = zipfile.ZipFile.open
+
+    class _BoomStream(io.RawIOBase):
+        def __init__(self, exc):
+            self._exc = exc
+
+        def readable(self):
+            return True
+
+        def readinto(self, _b):
+            raise self._exc
+
     for exc in (RuntimeError("Bad password for file"),
                 NotImplementedError("compression type 99"),
                 zipfile.BadZipFile("Bad CRC-32")):
-        zpath = tmp_path / "bad.zip"
-        zpath.write_bytes(_zip_bytes(entries))
+        for mid_stream in (False, True):
+            zpath = tmp_path / "bad.zip"
+            zpath.write_bytes(_zip_bytes(entries))
 
-        def boom(self, name, *a, _exc=exc, **k):
-            if isinstance(name, zipfile.ZipInfo) and name.filename.endswith("module.md"):
-                raise _exc
-            return real_read(self, name, *a, **k)
-        monkeypatch.setattr(zipfile.ZipFile, "read", boom)
-        with pytest.raises(modules.ModuleError):
-            module_edit.import_module(zpath)
-        monkeypatch.setattr(zipfile.ZipFile, "read", real_read)
-        staging = module_edit._staging_root()
-        assert not staging.is_dir() or not any(staging.iterdir())
+            def boom(self, name, *a, _exc=exc, _mid=mid_stream, **k):
+                target = name.filename if isinstance(name, zipfile.ZipInfo) else str(name)
+                if target.endswith("module.md"):
+                    if _mid:
+                        return _BoomStream(_exc)
+                    raise _exc
+                return real_open(self, name, *a, **k)
+            monkeypatch.setattr(zipfile.ZipFile, "open", boom)
+            with pytest.raises(modules.ModuleError):
+                module_edit.import_module(zpath)
+            monkeypatch.setattr(zipfile.ZipFile, "open", real_open)
+            staging = module_edit._staging_root()
+            assert not staging.is_dir() or not any(staging.iterdir())
 
 
 def test_delete_module_rejects_builtin_before_campaign_locks(monkeypatch, tmp_path):

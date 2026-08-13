@@ -329,6 +329,90 @@ def test_a_rejected_import_leaves_no_trace(monkeypatch, tmp_path):
     assert not staging.is_dir() or not any(staging.iterdir())
 
 
+def test_import_rejects_names_that_alias_another_member(monkeypatch, tmp_path):
+    """Silent-corruption names, not escapes, and the reason each is refused
+    rather than sanitized (Codex review):
+
+    - a trailing dot or space is trimmed by Win32, so `item.md.` and `item.md`
+      are one file and the second member quietly overwrites the first;
+    - a reserved device name swallows its member whole -- opening `NUL` for
+      writing succeeds and discards every byte, so the file just is not there.
+
+    Both are rejected on every platform, for the reason `safe_id` gives for the
+    same rule: a store is synced between them and a name must mean one thing.
+    """
+    _home(monkeypatch, tmp_path)
+    cases: dict[str, dict[str, str | bytes]] = {
+        "trailing-dot": {world_bundle.MANIFEST_NAME: _manifest(), **GOOD_WORLD,
+                         "world/lore/tide.md": "a", "world/lore/tide.md.": "b"},
+        "trailing-space": {world_bundle.MANIFEST_NAME: _manifest(), **GOOD_WORLD,
+                           "world/lore/tide.md ": "b"},
+        "device-name": {world_bundle.MANIFEST_NAME: _manifest(), **GOOD_WORLD,
+                        "world/NUL": "x"},
+        "device-name-with-suffix": {world_bundle.MANIFEST_NAME: _manifest(), **GOOD_WORLD,
+                                    "world/lore/con.md": "x"},
+        "dir-case-collision": {world_bundle.MANIFEST_NAME: _manifest(), **GOOD_WORLD,
+                               "world/Lore/a.md": "a", "world/lore/b.md": "b"},
+    }
+    for label, entries in cases.items():
+        _reject(tmp_path, label, entries)
+    assert worlds.list_worlds() == []
+
+
+def test_import_counts_directory_entries_against_the_member_cap(monkeypatch, tmp_path):
+    """A cap applied after directories are filtered out would wave through the
+    archive it exists to stop: a million empty directories holds two files."""
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setattr(world_bundle, "MAX_MEMBERS", 4)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr(world_bundle.MANIFEST_NAME, _manifest())
+        z.writestr("world/world.md", "---\nname: X\n---\n")
+        for n in range(8):
+            z.writestr(f"world/pad{n}/", b"")      # directory entries only
+    zpath = tmp_path / "dirbomb.zip"
+    zpath.write_bytes(buf.getvalue())
+    with pytest.raises(world_bundle.BundleError):
+        world_bundle.import_bundle(zpath)
+    assert worlds.list_worlds() == []
+
+
+def test_import_leaves_text_assets_byte_identical(monkeypatch, tmp_path):
+    """`.svg` is a text suffix and an image format at once. Rewriting by suffix
+    alone edited real asset bytes; asset subtrees are excluded by path."""
+    _home(monkeypatch, tmp_path)
+    old = _seed_world()
+    root = worlds.world_root(old)
+    cid = characters.list_characters(root)[0]["id"]
+    svg = (f'<svg><desc>/api/worlds/{old}/characters/{cid}/versions/default/'
+           f'images/embed-abc123</desc></svg>').encode()
+    (root / "characters" / cid / "assets" / "default" / "sigil.svg").write_bytes(svg)
+
+    new = world_bundle.import_bundle(_export(old, tmp_path))
+    assert new != old
+    copied = worlds.world_root(new) / "characters" / cid / "assets" / "default" / "sigil.svg"
+    assert copied.read_bytes() == svg          # untouched, old id and all
+    # ...while the card beside it, which is a record rather than an asset, did
+    # get repointed -- so this is not just "the rewrite never ran".
+    assert f"/api/worlds/{new}/".encode() in (
+        worlds.world_root(new) / "characters" / cid / "default.json").read_bytes()
+
+
+def test_export_keeps_a_file_that_merely_looks_like_a_write_temp(monkeypatch, tmp_path):
+    """`.notes.tmp` is a world file; `.world.md.a1b2c3d4.tmp` is store.atomic
+    mid-write. Only the second may be dropped from the bundle."""
+    _home(monkeypatch, tmp_path)
+    wid = _seed_world()
+    root = worlds.world_root(wid)
+    (root / ".notes.tmp").write_bytes(b"mine")
+    (root / ".world.md.a1b2c3d4.tmp").write_bytes(b"half-written")
+
+    with zipfile.ZipFile(_export(wid, tmp_path)) as z:
+        names = z.namelist()
+    assert f"{world_bundle.WORLD_PREFIX}/.notes.tmp" in names
+    assert f"{world_bundle.WORLD_PREFIX}/.world.md.a1b2c3d4.tmp" not in names
+
+
 def test_import_accepts_a_hand_built_minimal_bundle(monkeypatch, tmp_path):
     """The store layout is the format: a bundle assembled by hand (or by an
     older grimoire) imports as long as the manifest and world.md are there."""
