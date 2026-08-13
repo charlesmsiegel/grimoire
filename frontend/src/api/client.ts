@@ -907,6 +907,21 @@ export const api = {
     request<{ id: string; name: string }>("PUT", `/api/worlds/${wid}`, { name }),
   deleteWorld: (wid: string) => request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}`),
 
+  // world bundles (#54). Export is a plain href so the browser streams the zip
+  // straight to disk -- a world runs to a gigabyte, which is not something to
+  // pull through fetch and hold in a Blob.
+  exportWorldUrl: (wid: string) => `/api/worlds/${wid}/export.zip`,
+  importWorld: (file: Blob) =>
+    fetch("/api/worlds/import", { method: "POST", body: file,
+      headers: { "content-type": "application/zip" } }).then(async (r) => {
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          throw new ApiError(r.status, data.detail ?? r.statusText, data.kind);
+        }
+        invalidateConfigCache();   // same as createWorld: this changes `first_run`
+        return r.json() as Promise<{ id: string }>;
+      }),
+
   // campaigns
   // `fresh` for the caller refetching *because* a campaign just changed: the
   // in-flight share would hand it a read issued before that mutation, which is

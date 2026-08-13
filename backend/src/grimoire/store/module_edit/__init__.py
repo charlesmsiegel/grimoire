@@ -48,7 +48,7 @@ from .migrate import (  # noqa: F401
     _sidecar_stats_at, _would_migrate, recover,
 )
 from .packs import (  # noqa: F401
-    MAX_MEMBERS, MAX_UNCOMPRESSED, _DRIVE_OR_UNC, _check_archive,
+    MAX_MEMBERS, MAX_UNCOMPRESSED, _check_archive,
     _member_parts, create_module, delete_module, duplicate_module,
     export_module, import_module,
 )

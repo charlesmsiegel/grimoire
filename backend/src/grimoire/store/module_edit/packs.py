@@ -12,13 +12,12 @@ calling the original with the assertion never reached.
 from __future__ import annotations
 
 import io
-import re
 import shutil
 import uuid
 import zipfile
 from pathlib import Path
 
-from .. import atomic
+from .. import atomic, ziputil
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..modules import admin as modules_admin, pack as modules_pack
 from . import migrate
@@ -95,49 +94,27 @@ def export_module(mid: str) -> bytes:
         return buf.getvalue()
 
 
-_DRIVE_OR_UNC = re.compile(r"^[A-Za-z]:|^[/\\]{2}")
-
-
 def _member_parts(raw_name: str) -> list[str]:
-    """Normalized path components for a zip member, or raise. Rejects
-    absolute paths, drive-qualified and UNC names, and EMPTY / '.' / '..'
-    components (codex plan review: 'pack//module.md' passes a naive split —
-    the stripped remainder '/module.md' then resolves to the drive root).
-    Also rejects any component containing ':' — the whole-name
-    `_DRIVE_OR_UNC` check only anchors at the start, so a mid-path drive
-    segment like 'pack/C:evil.txt' would otherwise pass here and then get
-    collapsed onto the drive root by Path.joinpath, escaping staging before
-    the containment recheck ever runs (review finding: all checks must
-    happen before any extraction, not be caught mid-extraction)."""
-    name = raw_name.replace("\\", "/")
-    if _DRIVE_OR_UNC.match(name) or name.startswith("/"):
-        raise modules_pack.ModuleError(f"unsafe zip entry: {raw_name}")
-    parts = name.split("/")
-    if len(parts) < 2 or any(p in ("", ".", "..") or ":" in p for p in parts):
-        raise modules_pack.ModuleError(f"unsafe zip entry: {raw_name}")
-    return parts
+    """A pack member's path components: ``<root>/<file>``, so at least two.
+
+    The checks themselves live in ``store.ziputil`` -- world bundles (#54) need
+    the identical defense, and keeping a second copy here is how one of the two
+    ends up missing a hardening the other got.
+    """
+    return ziputil.member_parts(raw_name, min_parts=2, err=modules_pack.ModuleError)
 
 
-def _check_archive(z: zipfile.ZipFile) -> str:
-    infos = [i for i in z.infolist() if not i.is_dir()]
-    if len(infos) > MAX_MEMBERS:
-        raise modules_pack.ModuleError(f"zip has too many entries (> {MAX_MEMBERS})")
-    if sum(i.file_size for i in infos) > MAX_UNCOMPRESSED:
-        raise modules_pack.ModuleError("zip expands past the size cap")
-    roots: set[str] = set()
-    seen_ci: set[str] = set()
-    for i in infos:
-        if (i.external_attr >> 16) & 0o170000 == 0o120000:
-            raise modules_pack.ModuleError(f"zip contains a symlink: {i.filename}")
-        parts = _member_parts(i.filename)
-        roots.add(parts[0])
-        ci = "/".join(parts).casefold()   # normalized + case-folded collisions
-        if ci in seen_ci:
-            raise modules_pack.ModuleError(f"case-colliding zip entries: {i.filename}")
-        seen_ci.add(ci)
+def _check_archive(z: zipfile.ZipFile) -> tuple[str, list[zipfile.ZipInfo]]:
+    """Validate the whole archive; return its single top-level directory and
+    the file members to extract. The members come back rather than being
+    re-derived so extraction cannot walk a different set than the one that was
+    checked -- every check happens before any file is written."""
+    infos = ziputil.scan(z, max_members=MAX_MEMBERS, max_uncompressed=MAX_UNCOMPRESSED,
+                         min_parts=2, err=modules_pack.ModuleError)
+    roots = ziputil.top_level_names(infos)
     if len(roots) != 1:
         raise modules_pack.ModuleError("zip must contain exactly one top-level module directory")
-    return next(iter(roots))
+    return next(iter(roots)), infos
 
 
 def import_module(path: Path) -> str:
@@ -148,39 +125,15 @@ def import_module(path: Path) -> str:
         except (zipfile.BadZipFile, OSError) as e:
             raise modules_pack.ModuleError(f"not a zip archive: {e}")
         with z:
-            src_root = _check_archive(z)
+            src_root, infos = _check_archive(z)
             mid = new_mid(src_root)
             nonce = uuid.uuid4().hex
             base = _staging_root() / nonce
             try:
                 staging = base / mid
                 staging.mkdir(parents=True)
-                staging_resolved = staging.resolve()
-                for i in z.infolist():
-                    if i.is_dir():
-                        continue
-                    parts = _member_parts(i.filename)
-                    dest = staging.joinpath(*parts[1:])
-                    try:  # containment check (no Path.is_relative_to — 3.8-safe)
-                        dest.resolve().relative_to(staging_resolved)
-                    except ValueError:
-                        raise modules_pack.ModuleError(f"unsafe zip entry: {i.filename}")
-                    try:
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                        # atomic-ok: unpublished staging tree, published as a
-                        # unit by _publish's single rename; a per-member
-                        # temp+fsync would only slow large imports
-                        dest.write_bytes(z.read(i))
-                    except (OSError, RuntimeError, NotImplementedError,
-                            zipfile.BadZipFile):
-                        # pathological names (reserved device names CON/NUL,
-                        # trailing dots/spaces on Windows) can raise a raw
-                        # OSError from mkdir/write_bytes; z.read(i) itself
-                        # can raise RuntimeError (encrypted member),
-                        # NotImplementedError (unsupported compression), or
-                        # BadZipFile (bad CRC/corrupt data) — none of those
-                        # may escape uncontained (codex review finding).
-                        raise modules_pack.ModuleError(f"unextractable zip entry: {i.filename}")
+                ziputil.extract(z, infos, staging, strip=1,
+                                err=modules_pack.ModuleError)
                 pack = modules_pack.load_pack_at(staging, mid)
                 if pack["errors"]:
                     raise modules_pack.ModuleError(

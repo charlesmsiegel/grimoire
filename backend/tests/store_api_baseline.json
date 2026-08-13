@@ -2,6 +2,7 @@
   "all": [
     "AppearError",
     "BuiltInStyleImmutable",
+    "BundleError",
     "CampaignNotFound",
     "CardParseError",
     "CharacterNotFound",
@@ -89,12 +90,15 @@
     "uniquify",
     "voice_anchors",
     "voice_drift",
+    "world_bundle",
     "worlds",
-    "write_config"
+    "write_config",
+    "ziputil"
   ],
   "dir": [
     "AppearError",
     "BuiltInStyleImmutable",
+    "BundleError",
     "CampaignNotFound",
     "CardParseError",
     "CharacterNotFound",
@@ -204,7 +208,9 @@
     "voice_anchors",
     "voice_drift",
     "weather",
+    "world_bundle",
     "worlds",
-    "write_config"
+    "write_config",
+    "ziputil"
   ]
 }

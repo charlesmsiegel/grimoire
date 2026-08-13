@@ -6,6 +6,7 @@ import io
 import json
 import re
 import time
+import zipfile
 
 from PIL import Image
 import pytest
@@ -10912,3 +10913,59 @@ def test_campaign_cover_upload_advances_activity(client):
     assert client.get(f"/api/campaigns/{cid}/cover").status_code == 200
     after = next(c for c in client.get("/api/campaigns").json() if c["id"] == cid)["activity"]
     assert after > before
+
+
+# ---- world bundles: export / import (#54) ----
+
+def test_world_export_zip_route(client):
+    wid = _world(client, "Saltmarch")
+    client.post(f"/api/worlds/{wid}/locations", json={"name": "The Drowned Library"})
+    r = client.get(f"/api/worlds/{wid}/export.zip")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/zip"
+    assert r.headers["content-disposition"] == f'attachment; filename="{wid}-world.zip"'
+    assert r.content[:2] == b"PK"
+    assert int(r.headers["content-length"]) == len(r.content)
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        assert "grimoire-bundle.json" in z.namelist()
+        assert "world/world.md" in z.namelist()
+        assert json.loads(z.read("grimoire-bundle.json"))["world_id"] == wid
+
+
+def test_world_export_unknown_world_404(client):
+    assert client.get("/api/worlds/nope/export.zip").status_code == 404
+
+
+def test_world_export_zip_is_not_read_as_an_entity_kind(client):
+    """`export.zip` is a literal third segment competing with the generic
+    /worlds/{wid}/{kind}; an entity-listing body would mean that one won."""
+    wid = _world(client)
+    assert client.get(f"/api/worlds/{wid}/export.zip").headers["content-type"] == "application/zip"
+
+
+def test_world_import_round_trip_route(client):
+    wid = _world(client, "Saltmarch")
+    client.post(f"/api/worlds/{wid}/locations", json={"name": "The Drowned Library"})
+    blob = client.get(f"/api/worlds/{wid}/export.zip").content
+
+    r = client.post("/api/worlds/import", content=blob,
+                    headers={"content-type": "application/zip"})
+    assert r.status_code == 200
+    new = r.json()["id"]
+    assert new != wid
+    assert {w["id"] for w in client.get("/api/worlds").json()} == {wid, new}
+    assert client.get(f"/api/worlds/{new}").json()["meta"]["name"] == "Saltmarch"
+    assert len(client.get(f"/api/worlds/{new}/locations").json()) == 1
+
+
+def test_world_import_rejects_a_non_bundle(client):
+    r = client.post("/api/worlds/import", content=b"not a zip",
+                    headers={"content-type": "application/zip"})
+    assert r.status_code == 400
+    assert client.get("/api/worlds").json() == []
+
+
+def test_world_import_413(client):
+    r = client.post("/api/worlds/import", content=b"x",
+                    headers={"content-length": str(5 * 1024 * 1024 * 1024)})
+    assert r.status_code == 413

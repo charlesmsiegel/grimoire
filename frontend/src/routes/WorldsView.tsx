@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, type WorldMeta } from "../api/client";
 
@@ -17,6 +17,9 @@ export default function WorldsView() {
   const [worlds, setWorlds] = useState<WorldMeta[]>([]);
   const [name, setName] = useState("");
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api.listWorlds().then(setWorlds);
@@ -48,6 +51,26 @@ export default function WorldsView() {
     setWorlds(await api.listWorlds());
   }
 
+  // An import always lands as a NEW world, so the grid is sorted by the
+  // imported world's own `updated` stamp and it can appear anywhere in it --
+  // navigating there is what makes the import visible.
+  async function onImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file later
+    if (!file) return;
+    setError(null);
+    setImporting(true);
+    try {
+      const { id } = await api.importWorld(file);
+      setWorlds(await api.listWorlds());
+      navigate(`/worlds/${id}`);
+    } catch (err: any) {
+      setError(err?.detail ?? err?.message ?? "Could not import that bundle.");
+    } finally {
+      setImporting(false);
+    }
+  }
+
   return (
     <div className="page view-anim">
       <div className="page-head">
@@ -59,8 +82,20 @@ export default function WorldsView() {
             onKeyDown={(e) => { if (e.key === "Enter") create(); }}
           />
           <button className="btn-accent" onClick={create} disabled={!name.trim()}>Create</button>
+          <button className="subtle" disabled={importing} onClick={() => fileRef.current?.click()}>
+            {importing ? "Importing…" : "Import"}
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".zip"
+            aria-label="Import world bundle"
+            style={{ display: "none" }}
+            onChange={onImportFile}
+          />
         </div>
       </div>
+      {error && <div className="error">{error}</div>}
       <div className="count-label">{worlds.length} {worlds.length === 1 ? "world" : "worlds"}</div>
       <div className="world-grid">
         {worlds.map((w) => (
@@ -79,6 +114,8 @@ export default function WorldsView() {
               </button>
             )}
             <div className="row-actions">
+              <a aria-label={`Export ${w.name}`} title="Export as a bundle"
+                 href={api.exportWorldUrl(w.id)} download>⭳</a>
               <button aria-label={`Rename ${w.name}`} onClick={() => setRenaming({ id: w.id, name: w.name })}>✎</button>
               <button aria-label={`Delete ${w.name}`} onClick={() => remove(w)}>✕</button>
             </div>

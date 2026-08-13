@@ -3,15 +3,12 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
-from pathlib import Path
-
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 
 from .. import store
+from .common import _spooled_upload
 from .models import (ModuleCheckBody, ModuleContentBody, ModuleCreate, ModuleDefaultsBody,
                      ModuleGroupBody, ModuleLayoutBody, ModuleManifestBody, ModuleRenameBody,
                      ModuleRuleBody, ModuleSheetTypeBody, ModuleThemeBody)
@@ -179,20 +176,7 @@ IMPORT_CAP = 16 * 1024 * 1024
 
 @router.post("/modules/import")
 async def post_module_import(request: Request):
-    cl = request.headers.get("content-length")
-    if cl and cl.isdigit() and int(cl) > IMPORT_CAP:
-        raise HTTPException(status_code=413, detail="zip too large")
-    fd, tmp_name = tempfile.mkstemp(suffix=".zip")
-    total = 0
-    try:
-        # atomic-ok: a system temp file for the uploaded zip, not a store
-        # record; read by import_module and unlinked in the finally below
-        with os.fdopen(fd, "wb") as f:
-            async for chunk in request.stream():
-                total += len(chunk)
-                if total > IMPORT_CAP:
-                    raise HTTPException(status_code=413, detail="zip too large")
-                f.write(chunk)
+    async with _spooled_upload(request, IMPORT_CAP, "zip too large") as tmp:
         # In a worker thread (#234). import_module takes the module-edit lock,
         # which is now cross-process: when another backend holds it, acquire
         # sleeps in its retry loop for up to LOCK_TIMEOUT. This route is
@@ -201,12 +185,7 @@ async def post_module_import(request: Request):
         # (Sync `def` routes get FastAPI's threadpool for free; the `async`
         # ones have to ask.)
         return {"id": await run_in_threadpool(
-            _module_edit_call, store.module_edit.import_module, Path(tmp_name))}
-    finally:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
+            _module_edit_call, store.module_edit.import_module, tmp)}
 
 
 # Grouped with the other module-content routes for readability; its path

@@ -258,3 +258,18 @@ def test_setup_done_survives_an_unrelated_config_write(client):
     client.put("/api/config", json={"setup_done": "on"})
     client.put("/api/config", json={"theme": "manuscript"})
     assert client.get("/api/config").json()["setup_done"] == "on"
+
+
+def test_importing_a_world_records_setup_done(client, tmp_path):
+    """Arriving by import is arriving (#54). A user whose whole library came
+    from a bundle has set this store up just as much as one who typed a name,
+    so deleting that world later must not reopen the wizard."""
+    wid = _world(client, "Saltmarch")
+    blob = client.get(f"/api/worlds/{wid}/export.zip").content
+    # Wipe the store's memory of having been set up, so the assertion below can
+    # only be satisfied by the import route recording it again.
+    client.put("/api/config", json={"setup_done": "off"})
+
+    assert client.post("/api/worlds/import", content=blob,
+                       headers={"content-type": "application/zip"}).status_code == 200
+    assert store.read_config()["setup_done"] == "on"
