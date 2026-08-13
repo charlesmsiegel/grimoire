@@ -59,8 +59,12 @@ def _seed_world(name: str = "Saltmarch") -> str:
     (gassets / "embed-def456.png").write_bytes(PNG)
 
     tags.add_tag(root, "Coastal")
-    greetings.set_edges(root, gid, leads_to=[])
+    greetings.set_edges(root, gid, leads_to=[gid])
     (root / "calendar.json").write_text(json.dumps({"primary": "gregorian"}), encoding="utf-8")
+    # The round-trip tests are only worth anything if the seed really produced
+    # each of these; an elided plotmap would let a whole category pass untested.
+    for rel in ("world.md", "plotmap.json", "tags.md", "calendar.json"):
+        assert (root / rel).is_file(), f"seed did not produce {rel}"
     return wid
 
 
@@ -145,7 +149,12 @@ def test_round_trip_preserves_content_and_repoints_urls(monkeypatch, tmp_path):
 
     new = world_bundle.import_bundle(bundle)
     assert new != old                      # importing beside the original dedupes
-    assert worlds.read_world(new)["counts"] == worlds.read_world(old)["counts"]
+    # Concrete counts, not just equality with the source: two empty worlds are
+    # equal too, and that is exactly the bug this is meant to catch.
+    counts = worlds.read_world(new)["counts"]
+    assert (counts["locations"], counts["lore"], counts["characters"],
+            counts["greetings"]) == (1, 1, 1, 1)
+    assert counts == worlds.read_world(old)["counts"]
     assert worlds.read_world(new)["meta"]["name"] == "Saltmarch"
 
     before, after = _tree(worlds.world_root(old)), _tree(worlds.world_root(new))
@@ -411,6 +420,118 @@ def test_export_keeps_a_file_that_merely_looks_like_a_write_temp(monkeypatch, tm
         names = z.namelist()
     assert f"{world_bundle.WORLD_PREFIX}/.notes.tmp" in names
     assert f"{world_bundle.WORLD_PREFIX}/.world.md.a1b2c3d4.tmp" not in names
+
+
+def test_a_failure_partway_through_extraction_also_leaves_no_trace(monkeypatch, tmp_path):
+    """The rejection tests above all fail during *scanning*, before staging
+    exists -- so none of them would notice the cleanup disappearing. This one
+    fails after files have already been written (Codex review)."""
+    _home(monkeypatch, tmp_path)
+    bundle = _export(_seed_world(), tmp_path)
+    real_open = zipfile.ZipFile.open
+
+    def boom(self, name, *a, **k):
+        target = name.filename if isinstance(name, zipfile.ZipInfo) else str(name)
+        if target.endswith("tide-accord.md"):     # not the first member extracted
+            raise zipfile.BadZipFile("Bad CRC-32")
+        return real_open(self, name, *a, **k)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", boom)
+    with pytest.raises(world_bundle.BundleError):
+        world_bundle.import_bundle(bundle)
+    monkeypatch.setattr(zipfile.ZipFile, "open", real_open)
+
+    assert [w["id"] for w in worlds.list_worlds()] == ["saltmarch"]   # only the source
+    staging = world_bundle._staging_root()
+    assert not staging.is_dir() or not any(staging.iterdir())
+
+
+def test_only_record_extensions_are_rewritten(monkeypatch, tmp_path):
+    """#54 scoped the rewrite to `.md` and `.json`. Two files decide whether
+    that is what happens: an `.svg` outside any assets directory (a text format
+    that is also an image -- it must NOT be touched) and an `.md` inside one (a
+    record that must be, whatever directory it sits in)."""
+    _home(monkeypatch, tmp_path)
+    old = _seed_world()
+    root = worlds.world_root(old)
+    url = f"/api/worlds/{old}/greetings/x/images/y".encode()
+    (root / "maps").mkdir()
+    (root / "maps" / "crest.svg").write_bytes(b"<svg><desc>" + url + b"</desc></svg>")
+    (root / "characters" / "seraphine" / "assets" / "default" / "notes.md").write_bytes(
+        b"see " + url + b"\n")
+
+    new = world_bundle.import_bundle(_export(old, tmp_path))
+    assert new != old
+    nroot = worlds.world_root(new)
+    assert url in (nroot / "maps" / "crest.svg").read_bytes()          # image: verbatim
+    assert url not in (
+        nroot / "characters" / "seraphine" / "assets" / "default" / "notes.md").read_bytes()
+
+
+def test_export_does_not_follow_a_symlink_out_of_the_world(monkeypatch, tmp_path):
+    """`is_file()` follows links, so a link inside the world would be packed as
+    a copy of whatever it points at -- and the bundle is a file the user hands
+    to someone else (Codex review)."""
+    _home(monkeypatch, tmp_path)
+    secret = tmp_path / "secret.md"
+    secret.write_text("private", encoding="utf-8")
+    wid = _seed_world()
+    try:
+        (worlds.world_root(wid) / "lore" / "leak.md").symlink_to(secret)
+    except (OSError, NotImplementedError):
+        pytest.skip("this platform/user cannot create symlinks")
+
+    with zipfile.ZipFile(_export(wid, tmp_path)) as z:
+        names = z.namelist()
+        assert not any(b"private" in z.read(n) for n in names)
+    assert f"{world_bundle.WORLD_PREFIX}/lore/leak.md" not in names
+
+
+def test_publish_retries_when_the_chosen_id_is_taken(monkeypatch, tmp_path):
+    """Losing an id race is not a reason to reject a good bundle: the id is
+    re-picked, the URLs re-pointed at it, and the import succeeds."""
+    _home(monkeypatch, tmp_path)
+    bundle = _export(_seed_world(), tmp_path)
+    worlds.create_world("Occupied")          # the id the first pick will collide with
+
+    real_uniquify = world_bundle.uniquify
+    picks: list[str] = []
+
+    def racing(base, exists):
+        picks.append(base)
+        # First pick lands on a live world, exactly as a concurrent import that
+        # published between our uniquify and our rename would leave it.
+        return "occupied" if len(picks) == 1 else real_uniquify(base, exists)
+
+    monkeypatch.setattr(world_bundle, "uniquify", racing)
+    new = world_bundle.import_bundle(bundle)
+    monkeypatch.setattr(world_bundle, "uniquify", real_uniquify)
+
+    assert new not in ("occupied", "saltmarch")
+    assert worlds.read_world("occupied")["meta"]["name"] == "Occupied"   # untouched
+    for data in _tree(worlds.world_root(new)).values():
+        assert b"/api/worlds/occupied/" not in data
+        assert b"/api/worlds/saltmarch/" not in data
+    assert any(f"/api/worlds/{new}/".encode() in d
+               for d in _tree(worlds.world_root(new)).values())
+
+
+def test_manifest_carries_the_app_version(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    with zipfile.ZipFile(_export(_seed_world(), tmp_path)) as z:
+        manifest = json.loads(z.read(world_bundle.MANIFEST_NAME))
+    assert manifest["app_version"] == world_bundle.app_version()
+    assert manifest["app_version"]
+
+
+def test_import_rejects_a_boolean_format(monkeypatch, tmp_path):
+    """JSON `true` is a Python bool, bool subclasses int, and `True == 1` --
+    so a naive equality check reads `{"format": true}` as format 1."""
+    _home(monkeypatch, tmp_path)
+    _reject(tmp_path, "bool-format", {
+        world_bundle.MANIFEST_NAME: json.dumps(
+            {"format": True, "kind": "world", "world_id": "saltmarch", "name": "S"}),
+        **GOOD_WORLD})
 
 
 def test_import_accepts_a_hand_built_minimal_bundle(monkeypatch, tmp_path):

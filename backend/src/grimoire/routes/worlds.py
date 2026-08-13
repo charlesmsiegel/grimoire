@@ -137,6 +137,11 @@ async def post_world_import(request: Request):
             # In a worker thread: unzipping a large world would otherwise block
             # the event loop for the whole import (see post_module_import).
             wid = await run_in_threadpool(store.world_bundle.import_bundle, tmp)
+        except store.world_bundle.BundleConflict as exc:
+            # A good bundle that lost an id race, not a bad upload -- 409, so a
+            # client can retry it rather than reading 400 as "this file is
+            # broken" (Codex review). Must be caught before BundleError.
+            raise HTTPException(status_code=409, detail=str(exc))
         except store.world_bundle.BundleError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     # Same reason as `post_world`: a store someone imported a world into has

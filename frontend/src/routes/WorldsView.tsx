@@ -104,7 +104,7 @@ export default function WorldsView() {
           />
         </div>
       </div>
-      {error && <div className="error">{error}</div>}
+      {error && <div className="error" role="alert">{error}</div>}
       <div className="count-label">{worlds.length} {worlds.length === 1 ? "world" : "worlds"}</div>
       <div className="world-grid">
         {worlds.map((w) => (

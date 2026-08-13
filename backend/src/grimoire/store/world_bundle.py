@@ -8,10 +8,18 @@ the import puts it back. Nothing enumerates the kinds, which is the point: a
 kind added next month rides along without touching this file.
 
 A ``grimoire-bundle.json`` manifest sits at the archive root beside the
-``world/`` prefix, recording the format version, the source world id and its
-name. It buys two things a bare directory zip cannot: an import can refuse a
-bundle from a future grimoire with an honest message instead of half-extracting
-one, and it carries the **source world id**, which the import needs.
+``world/`` prefix, recording the format version, the source world id, its name
+and the exporting grimoire's version. It buys two things a bare directory zip
+cannot: an import can refuse a bundle from a future grimoire with an honest
+message instead of half-extracting one, and it carries the **source world id**,
+which the import needs.
+
+The ``world/`` prefix is a deliberate departure from #54's "paths relative to
+the world root", and the manifest is what forces it: with world files at the
+archive root there is no way to tell bundle metadata from world content except
+by knowing every filename grimoire will ever use, and the whole point of
+zipping the directory is that no such list exists. One prefix keeps the two
+apart forever. Anything outside it is refused rather than guessed at.
 
 That id is the one thing that does not travel: ``store/localize.py`` writes
 absolute serving URLs into card and greeting text --
@@ -34,6 +42,7 @@ discarded whole. A rejected import leaves no partial world in the library.
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import re
 import shutil
@@ -56,24 +65,45 @@ WORLD_PREFIX = "world"
 MAX_MEMBERS = 100_000
 MAX_UNCOMPRESSED = 8 * 1024 * 1024 * 1024
 
-# What the import rewrites and the export bothers to compress. Everything else
-# -- PNG, WebP, JPEG -- is already compressed, so deflating it costs real CPU
-# on a gigabyte-scale world and saves nothing, and rewriting it would corrupt
-# it.
-_TEXT_SUFFIXES = frozenset({".md", ".json", ".txt", ".csv", ".css", ".html",
-                            ".svg", ".yaml", ".yml"})
+# Two different questions, deliberately answered by two different sets (Codex
+# review found them conflated, and an `.svg` portrait rewritten as a result).
+#
+# What is worth deflating on the way out: anything textual. Getting this wrong
+# costs CPU, nothing else.
+_COMPRESSIBLE = frozenset({".md", ".json", ".txt", ".csv", ".css", ".html",
+                           ".svg", ".yaml", ".yml"})
+# What the import may rewrite: exactly the two extensions the store writes its
+# *records* in. Getting this wrong edits a user's asset, so it is a closed list
+# rather than "textual and not under a directory called assets" -- `.svg` is a
+# text format and an image at once, and no directory-name heuristic can tell
+# which one a given file is.
+_REWRITABLE = frozenset({".md", ".json"})
 
 
 class BundleError(Exception):
     """A bundle that cannot be read, or is not one."""
 
 
-def _is_text(path: Path) -> bool:
-    return path.suffix.lower() in _TEXT_SUFFIXES
+class BundleConflict(BundleError):
+    """A readable bundle that could not be published -- a lost id race, not a
+    bad file. Separated so the route can answer 409 rather than blaming the
+    upload with a 400 (Codex review)."""
 
 
 def _staging_root() -> Path:
     return home() / ".world-staging"
+
+
+def app_version() -> str:
+    """The running grimoire's version, for the manifest. Purely informational:
+    compatibility is decided by ``format``, and this is what someone reads when
+    a bundle behaves oddly. Best-effort -- an uninstalled source checkout (or a
+    packaging layout without metadata, which the Android build may be) has no
+    distribution to ask, and that must not fail an export."""
+    try:
+        return importlib.metadata.version("grimoire")
+    except Exception:  # noqa: BLE001 -- any metadata problem is "unknown", never a failed export
+        return "unknown"
 
 
 def bundle_filename(wid: str) -> str:
@@ -110,6 +140,13 @@ def write_bundle(wid: str, dest: Path) -> None:
     can be packed half-old and half-new. Files that vanish mid-walk are skipped
     rather than failing the export: by then they are genuinely not part of the
     world any more.
+
+    Symlinks are skipped. ``is_file()`` follows them, so a link inside the world
+    would otherwise be packed as a *copy of whatever it points at* -- and the
+    bundle is a file the user hands to somebody else, which makes that an
+    exfiltration path out of a directory the user may not have written
+    themselves (Codex review). Import already refuses symlink members, so
+    nothing that round-trips through here can contain one either way.
     """
     root = worlds_paths.world_root(wid)                     # rejects an unsafe id
     meta_path = worlds_paths.world_meta_path(wid)
@@ -117,16 +154,21 @@ def write_bundle(wid: str, dest: Path) -> None:
         raise worlds_paths.WorldNotFound(wid)
     meta, _body = parse_frontmatter(meta_path.read_text(encoding="utf-8"))
     manifest = {"format": FORMAT, "kind": "world", "world_id": wid,
-                "name": meta.get("name", wid), "exported": now_iso()}
+                "name": meta.get("name", wid), "app_version": app_version(),
+                "exported": now_iso()}
 
     with zipfile.ZipFile(dest, "w") as z:
         z.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2) + "\n",
                    compress_type=zipfile.ZIP_DEFLATED)
         for p in sorted(root.rglob("*")):
-            if _is_write_temp(p) or not p.is_file():
-                continue
+            try:
+                if _is_write_temp(p) or p.is_symlink() or not p.is_file():
+                    continue
+            except OSError:
+                continue                                    # vanished mid-walk
             arc = f"{WORLD_PREFIX}/{p.relative_to(root).as_posix()}"
-            compress = zipfile.ZIP_DEFLATED if _is_text(p) else zipfile.ZIP_STORED
+            compress = (zipfile.ZIP_DEFLATED if p.suffix.lower() in _COMPRESSIBLE
+                        else zipfile.ZIP_STORED)
             try:
                 z.write(p, arc, compress_type=compress)
             except FileNotFoundError:
@@ -150,10 +192,13 @@ def _read_manifest(z: zipfile.ZipFile, infos: list[zipfile.ZipInfo]) -> dict:
     if manifest.get("kind") != "world":
         raise BundleError(f"not a world bundle: kind is {manifest.get('kind')!r}")
     fmt = manifest.get("format")
-    if fmt != FORMAT:
+    # `type(...) is int`, not isinstance: JSON `true` is a Python bool, bool is
+    # a subclass of int, and `True == 1` -- so `{"format": true}` would have
+    # been read as format 1 (Codex review).
+    if type(fmt) is not int or fmt != FORMAT:
         # Named separately because the fix differs: a newer bundle needs a
         # newer grimoire, anything else is a broken file.
-        if isinstance(fmt, int) and fmt > FORMAT:
+        if type(fmt) is int and fmt > FORMAT:
             raise BundleError(
                 f"bundle format {fmt} is newer than this grimoire understands ({FORMAT})")
         raise BundleError(f"unsupported bundle format: {fmt!r}")
@@ -203,25 +248,27 @@ def _world_name(staging: Path, manifest: dict) -> str:
 def _repoint_urls(staging: Path, old_wid: str, new_wid: str) -> int:
     """Rewrite localized image URLs from `old_wid` to `new_wid` in place.
 
-    Byte-level, and only over the text records: a substitution that had to
-    decode every file would fail on the first asset, and one that touched an
-    asset would corrupt it. The prefix carries its trailing slash so a world id
-    that is a prefix of another (``realm`` beside ``realm-2``) cannot be
-    rewritten by half.
+    Byte-level, and over ``.md``/``.json`` only -- the two extensions the store
+    writes its records in, which is also exactly the scope #54 specified. A
+    substitution that had to decode every file would fail on the first asset,
+    and one that touched an asset would corrupt it. The prefix carries its
+    trailing slash so a world id that is a prefix of another (``realm`` beside
+    ``realm-2``) cannot be rewritten by half.
 
-    Asset subtrees are excluded by *path*, not just by suffix. Suffix alone let
-    an ``.svg`` portrait through, which broke the byte-identical promise for a
-    real asset (Codex review) -- and nothing there needs rewriting anyway:
-    ``store/localize.py`` writes serving URLs into card and greeting text, and
-    the only sidecars under ``assets/`` (``subjects.json``, ``focus.json``)
-    hold ids and offsets, never URLs.
+    A file's *extension* decides this, with no exception for where it sits.
+    Widening to every textual suffix pulled in ``.svg``, which is a text format
+    and an image at once, so a portrait got edited (Codex review); narrowing
+    that back out with a "not under a directory called assets" rule only traded
+    one guess for another, and would have skipped a genuine ``.md`` record that
+    happened to live under such a directory. The sidecars that do sit under
+    ``assets/`` (``subjects.json``, ``focus.json``) hold ids and offsets and
+    contain no URLs, so scanning them is a no-op rather than a hazard.
     """
     old = f"/api/worlds/{old_wid}/".encode()
     new = f"/api/worlds/{new_wid}/".encode()
     touched = 0
     for p in staging.rglob("*"):
-        rel = p.relative_to(staging).parts
-        if "assets" in rel or not _is_text(p) or not p.is_file():
+        if p.suffix.lower() not in _REWRITABLE or not p.is_file():
             continue
         data = p.read_bytes()
         if old in data:
@@ -230,23 +277,36 @@ def _repoint_urls(staging: Path, old_wid: str, new_wid: str) -> int:
     return touched
 
 
-def _publish(staging: Path, wid: str) -> str:
-    dest = worlds_paths.world_root(wid)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
-        # Lost a race with another import that took this id between our
-        # uniquify and here. Rare, and a plain rename would merge into it on
-        # POSIX when the directory happens to be empty -- so refuse rather than
-        # publish a world that is half somebody else's.
-        raise BundleError(f"world id {wid} was taken while the import ran")
-    try:
-        staging.rename(dest)
-    except OSError as e:
-        # The same race, lost in the window between the check above and here.
-        # A refused import is the right answer; a bare OSError reaching the
-        # route as a 500 is not (Codex review).
-        raise BundleError(f"could not publish the imported world as {wid}: {e}")
-    return wid
+_PUBLISH_ATTEMPTS = 4
+
+
+def _publish(staging: Path, base: str, current: str) -> str:
+    """Move the staged tree into the library under a free id; return that id.
+
+    ``uniquify`` picked ``current`` a moment ago, so a concurrent import can
+    have taken it in between -- and a plain rename would *merge into* it on
+    POSIX when the destination happens to be an empty directory. So the id is
+    re-picked and retried rather than refused: losing a race is not a reason to
+    reject a perfectly good bundle (Codex review). Each retry re-points the
+    URLs from the id the records currently carry to the new candidate, so the
+    published world always references itself.
+    """
+    for attempt in range(_PUBLISH_ATTEMPTS):
+        dest = worlds_paths.world_root(current)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if not dest.exists():
+            try:
+                staging.rename(dest)
+                return current
+            except OSError:
+                pass          # lost the race inside the check-to-rename window
+        if attempt == _PUBLISH_ATTEMPTS - 1:
+            break
+        nxt = uniquify(base, lambda c: worlds_paths.world_root(c).exists())
+        _repoint_urls(staging, current, nxt)
+        current = nxt
+    raise BundleConflict(
+        f"could not claim a world id for the import (last tried {current})")
 
 
 def import_bundle(path: Path) -> str:
@@ -266,10 +326,10 @@ def import_bundle(path: Path) -> str:
             staging = base / WORLD_PREFIX
             staging.mkdir(parents=True)
             ziputil.extract(z, members, staging, strip=1, err=BundleError)
-            wid = uniquify(slugify(_world_name(staging, manifest)),
-                           lambda c: worlds_paths.world_root(c).exists())
+            base = slugify(_world_name(staging, manifest))
+            wid = uniquify(base, lambda c: worlds_paths.world_root(c).exists())
             if wid != manifest["world_id"]:
                 _repoint_urls(staging, manifest["world_id"], wid)
-            return _publish(staging, wid)
+            return _publish(staging, base, wid)
         finally:
             shutil.rmtree(base, ignore_errors=True)

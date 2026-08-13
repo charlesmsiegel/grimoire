@@ -104,16 +104,21 @@ test("a blocked world delete shows the server's message", async () => {
 
 // ---- world bundles (#54) ----
 
-test("each card offers a download link to its export bundle", async () => {
+test("every card offers a download link to its own export bundle", async () => {
+  // Two worlds, so an implementation that renders Export on the first card
+  // only -- or points every card at one world -- fails here.
   (api.listWorlds as any).mockResolvedValue([
     { id: "w1", name: "Saltmarch", created: "", updated: "", counts: {} },
+    { id: "w2", name: "Realm", created: "", updated: "", counts: {} },
   ]);
   renderView();
-  const link = await screen.findByLabelText("Export Saltmarch");
   // A plain href, not a fetch: the browser streams a gigabyte-scale zip to
   // disk itself rather than the page holding it in a Blob.
-  expect(link).toHaveAttribute("href", "/api/worlds/w1/export.zip");
-  expect(link).toHaveAttribute("download");
+  for (const [name, wid] of [["Saltmarch", "w1"], ["Realm", "w2"]]) {
+    const link = await screen.findByLabelText(`Export ${name}`);
+    expect(link).toHaveAttribute("href", `/api/worlds/${wid}/export.zip`);
+    expect(link).toHaveAttribute("download");
+  }
 });
 
 test("importing a bundle posts the file, refreshes, and opens the new world", async () => {
@@ -139,7 +144,9 @@ test("a failed refresh after a successful import is not reported as a failure", 
   const file = new File(["zip"], "saltmarch-world.zip", { type: "application/zip" });
   fireEvent.change(screen.getByLabelText("Import world bundle"), { target: { files: [file] } });
   await waitFor(() => expect(navigate).toHaveBeenCalledWith("/worlds/imported"));
-  expect(screen.queryByText(/could not import/i)).not.toBeInTheDocument();
+  // No error shown *at all* -- matching only on "could not import" would let
+  // the refresh's own message ("network") through as a passing test.
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
 test("a rejected bundle shows the server's reason and creates nothing", async () => {
@@ -148,6 +155,7 @@ test("a rejected bundle shows the server's reason and creates nothing", async ()
   await waitFor(() => expect(api.listWorlds).toHaveBeenCalled());
   const file = new File(["junk"], "notes.zip", { type: "application/zip" });
   fireEvent.change(screen.getByLabelText("Import world bundle"), { target: { files: [file] } });
-  expect(await screen.findByText(/not a world bundle/i)).toBeInTheDocument();
+  expect(await screen.findByRole("alert")).toHaveTextContent(/not a world bundle/i);
   expect(navigate).not.toHaveBeenCalled();
+  expect(api.listWorlds).toHaveBeenCalledTimes(1);   // no refresh, nothing changed
 });

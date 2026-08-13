@@ -1,4 +1,4 @@
-import { api, invalidateConfigCache } from "./client";
+import { api, ApiError, invalidateConfigCache } from "./client";
 import { onCampaignsChanged, onConfigChanged } from "../appEvents";
 import type { LocalizeEvent } from "./stream";
 
@@ -734,6 +734,10 @@ test("importWorld surfaces the server's rejection as an ApiError", async () => {
     ok: false, status: 400, statusText: "Bad Request",
     json: async () => ({ detail: "not a world bundle: no grimoire-bundle.json" }),
   }) as unknown as typeof fetch;
+  // toBeInstanceOf, not toMatchObject: a plain object carrying the same two
+  // fields would satisfy a shape match while callers that branch on ApiError
+  // stopped working.
+  await expect(api.importWorld(new Blob([]))).rejects.toBeInstanceOf(ApiError);
   await expect(api.importWorld(new Blob([]))).rejects.toMatchObject({
     status: 400, detail: "not a world bundle: no grimoire-bundle.json",
   });
