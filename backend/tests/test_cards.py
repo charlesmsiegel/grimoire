@@ -214,12 +214,12 @@ def test_charx_dumps_bundles_the_avatar_and_references_it():
     assert icon["uri"] == "embeded://assets/avatar.png"
 
 
-def test_dumps_replaces_the_stale_icon_and_leaves_the_caller_card_alone():
-    """The exported icon must be the only one: `_avatar_candidates` walks
-    `assets` in order and takes the first that resolves, so a stale entry left
-    in front of ours would win on re-import. Other asset kinds are not ours to
-    drop — and none of this may mutate the caller's card, which export reads
-    straight from the store."""
+def test_dumps_puts_its_icon_first_and_keeps_what_was_there():
+    """Being first is enough — `_avatar_candidates` takes the first entry that
+    RESOLVES — and deleting the rest would strip the card's own provenance: the
+    remote URL an import kept would vanish on a round trip, taking the
+    character's `card_hash` with it (Codex review). None of this may mutate the
+    caller's card, which export reads straight from the store."""
     card = _v3()
     card["data"]["assets"] = [
         {"type": "icon", "uri": "https://x/old.png", "name": "main", "ext": "png"},
@@ -227,29 +227,39 @@ def test_dumps_replaces_the_stale_icon_and_leaves_the_caller_card_alone():
     ]
     out = cards.loads(cards.dumps(card, "json", avatar=(_real_png(), "png")), "json")
     assets_out = out["data"]["assets"]
-    assert [a["type"] for a in assets_out] == ["icon", "background"]
     assert assets_out[0]["uri"].startswith("data:image/png;base64,")
-    assert card["data"]["assets"][0]["uri"] == "https://x/old.png"
-
-
-def test_dumps_drops_the_stale_icon_the_upconvert_relocated_into_extensions():
-    """A V2 card's `assets` land in `extensions` — where `_avatar_candidates`
-    also looks. Leaving a stale icon there exports two avatars pointing at
-    different images, and this copy must not reach the caller's card either."""
-    card = _v3()
-    ext = {"assets": [{"type": "icon", "uri": "https://x/old.png", "name": "main", "ext": "png"},
-                      {"type": "background", "uri": "https://x/bg.png", "name": "bg", "ext": "png"}]}
-    card["data"]["extensions"] = ext
-
-    out = cards.loads(cards.dumps(card, "json", avatar=(_real_png(), "png")), "json")
-
-    assert [a["type"] for a in out["data"]["extensions"]["assets"]] == ["background"]
-    assert len(_icons(out)) == 1
-    assert [a["type"] for a in ext["assets"]] == ["icon", "background"]
+    assert [a["uri"] for a in assets_out[1:]] == ["https://x/old.png", "https://x/bg.png"]
+    assert len(card["data"]["assets"]) == 2  # the caller's card is untouched
 
 
 def test_dumps_without_an_avatar_adds_no_asset_entry():
     assert _icons(cards.loads(cards.dumps(_v3(), "json"), "json")) == []
+
+
+def test_read_charx_asset_refuses_a_member_that_would_inflate_past_the_cap(monkeypatch):
+    """An uploaded CHARX is untrusted, and a zip states up front how big a
+    member inflates to: believe the header and refuse, rather than decompress a
+    few compressed kilobytes into a great deal of memory."""
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("assets/avatar.png", b"\x00" * 4096)
+    blob = buf.getvalue()
+    assert cards.read_charx_asset(blob, "assets/avatar.png") is not None
+    monkeypatch.setattr(cards, "_MAX_ASSET_BYTES", 1024)
+    assert cards.read_charx_asset(blob, "assets/avatar.png") is None
+
+
+def test_read_charx_asset_treats_an_unopenable_member_as_a_miss(monkeypatch):
+    """An encrypted member raises RuntimeError out of `read` (an unsupported
+    compression method raises NotImplementedError, which subclasses it). Import
+    is best-effort: that is a candidate we could not resolve, not a 500."""
+    out = cards.dumps(_v3(), "charx", avatar=(_real_png(), "png"))
+
+    def encrypted(self, name):
+        raise RuntimeError(f"File {name} is encrypted, password required")
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", encrypted)
+    assert cards.read_charx_asset(out, "assets/avatar.png") is None
 
 
 def test_read_charx_asset_reads_a_bundled_file_and_misses_cleanly():

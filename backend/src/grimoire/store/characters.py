@@ -394,6 +394,14 @@ def find_unlinked_versions(root: Path) -> list[dict]:
     return out
 
 
+# How many bundled members one import may inflate looking for an avatar. A card
+# needs one; the cap is what stops a hostile CHARX from spending the size limit
+# once per listed candidate (Codex review).
+_MAX_BUNDLED_READS = 4
+# The V3 asset types that mean "this is the character's picture".
+_AVATAR_TYPES = ("icon", "avatar")
+
+
 def _avatar_candidates(card: dict) -> list[str]:
     """Every place a card might carry an avatar: V3 `assets`, a top-level `avatar`
     string, and either relocated into `extensions` by the V2->V3 upconvert."""
@@ -402,7 +410,7 @@ def _avatar_candidates(card: dict) -> list[str]:
     out: list[str] = []
     for assets_src in (data.get("assets"), ext.get("assets")):
         for a in assets_src or []:
-            if isinstance(a, dict) and a.get("type") in ("icon", "avatar"):
+            if isinstance(a, dict) and a.get("type") in _AVATAR_TYPES:
                 uri = a.get("uri")
                 if isinstance(uri, str) and uri:
                     out.append(uri)
@@ -412,34 +420,52 @@ def _avatar_candidates(card: dict) -> list[str]:
     return out
 
 
-def _resolve_avatar(card: dict, data: bytes, fmt: str, *,
-                    network: bool) -> tuple[bytes, str, str] | None:
-    """Best-effort avatar bytes from a card: (bytes, ext, the URI they came from).
+def _embedded_avatar(card: dict, data: bytes, fmt: str) -> tuple[bytes, str, str] | None:
+    """Avatar bytes the imported file itself carries: (bytes, ext, their URI).
 
     Scans every avatar location (assets/avatar, and their extensions-relocated
-    forms) in order and takes the first that resolves: an embedded data-URI, a
-    file bundled in this CHARX under `embeded://` (#25), or — only when
-    `network` — an http(s) URL. Never raises into the import path; a miss just
-    means no avatar.
+    forms) in order and takes the first that resolves: an embedded data-URI, or
+    a file bundled in this CHARX under `embeded://` (#25). No network — this
+    runs before `_download_avatar`, so bytes already in hand beat a remote URL
+    listed ahead of them. Never raises into the import path; a miss just means
+    no avatar.
 
     Bundled and embedded bytes are sniffed rather than trusted: the extension
     written in the URI decides nothing, since `assets.put_image` will store the
     file under whatever type we name here.
+
+    Candidates are deduplicated and bundled reads are capped, because an
+    uploaded CHARX is untrusted: a card listing the same over-compressed member
+    a thousand times would otherwise inflate it a thousand times over — a small
+    upload, an unbounded amount of work (Codex review).
     """
-    for uri in _avatar_candidates(card):
+    reads = _MAX_BUNDLED_READS
+    for uri in dict.fromkeys(_avatar_candidates(card)):
         embedded = fetch.decode_data_uri(uri)
         if embedded:
             return embedded[0], embedded[1], uri
         path = cards.embedded_path(uri)
-        if path is not None:
-            blob = cards.read_charx_asset(data, path) if fmt == "charx" else None
-            ext = fetch.sniff_ext(blob) if blob else None
-            if blob and ext:
-                return blob, ext, uri
-        elif network and uri.startswith(("http://", "https://")):
+        if path is None or fmt != "charx" or reads <= 0:
+            continue  # not bundled, nothing to open it against, or budget spent
+        reads -= 1
+        blob = cards.read_charx_asset(data, path)
+        ext = fetch.sniff_ext(blob) if blob else None
+        if blob and ext:
+            return blob, ext, uri
+    return None
+
+
+def _download_avatar(card: dict) -> tuple[bytes, str] | None:
+    """Avatar bytes from the first remote candidate that downloads, or None.
+
+    The fallback for a card that only points at its picture — `_embedded_avatar`
+    has already exhausted everything the file carries by the time this runs.
+    """
+    for uri in dict.fromkeys(_avatar_candidates(card)):
+        if uri.startswith(("http://", "https://")):
             got = fetch.download_url(uri)
             if got:
-                return got[0], got[1], uri
+                return got
     return None
 
 
@@ -452,6 +478,10 @@ def _drop_avatar_uri(card: dict, uri: str) -> None:
     card with base64 and give a re-imported character a different hash from the
     one it was exported from. Remote URLs are left alone — they are cheap
     provenance, not a copy of the image.
+
+    Only avatar-ish entries go: an asset of another kind that happens to share
+    the URI (one image serving as both icon and background) is somebody else's
+    reference, and dropping it would lose an asset nothing replaced.
     """
     data = card.get("data")
     holders = [h for h in (card, data if isinstance(data, dict) else None,
@@ -460,7 +490,9 @@ def _drop_avatar_uri(card: dict, uri: str) -> None:
     for holder in holders:
         entries = holder.get("assets")
         if isinstance(entries, list):
-            kept = [a for a in entries if not (isinstance(a, dict) and a.get("uri") == uri)]
+            kept = [a for a in entries
+                    if not (isinstance(a, dict) and a.get("uri") == uri
+                            and a.get("type") in _AVATAR_TYPES)]
             # An emptied list is removed, not left behind: a card that arrived
             # with nothing but its avatar in `assets` must come back out of a
             # round-trip byte-identical, hash included.
@@ -478,9 +510,9 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
     cards.bake_char_name(card)
     # Resolve (and unhook) a carried avatar BEFORE the card is written: the
     # writes below persist whatever `card` holds at that moment.
-    avatar = _resolve_avatar(card, data, fmt, network=False)
-    if avatar:
-        _drop_avatar_uri(card, avatar[2])
+    embedded = _embedded_avatar(card, data, fmt)
+    if embedded:
+        _drop_avatar_uri(card, embedded[2])
     if update_vid is not None:
         cid, vid = into_cid, update_vid
         update_version(root, cid, vid, card)
@@ -491,12 +523,14 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
         else:
             cid = into_cid
             vid = create_version(root, into_cid, card.get("data", {}).get("character_version") or cname, card)
-    if avatar is None and fmt == "png":
+    if embedded:
+        avatar = (embedded[0], embedded[1])
+    elif fmt == "png":
         # The PNG file itself is the avatar — unless the card carried one, which
         # is how a non-PNG avatar survives a PNG export (cards.dumps).
-        avatar = (data, "png", "")
-    if avatar is None:
-        avatar = _resolve_avatar(card, data, fmt, network=True)
+        avatar = (data, "png")
+    else:
+        avatar = _download_avatar(card)
     if avatar:
         assets.put_image(root, cid, vid, assets.AVATAR, avatar[0], avatar[1])
     return cid, vid

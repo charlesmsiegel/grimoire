@@ -35,7 +35,6 @@ _V2_KNOWN = {
 # The V3 spec's scheme for an asset bundled inside the card's own container --
 # spelled with the spec's typo, because interoperability beats orthography.
 EMBEDDED_SCHEME = "embeded://"
-_AVATAR_ASSET_TYPES = ("icon", "avatar")
 _PNG_SIG = b"\x89PNG\r\n\x1a\n"
 # tEXt keywords that carry a card payload rather than a caption: an avatar that
 # is itself an exported card PNG arrives with one already in it.
@@ -204,7 +203,10 @@ def read_charx_asset(data: bytes, path: str) -> bytes | None:
             if z.getinfo(path).file_size > _MAX_ASSET_BYTES:
                 return None
             return z.read(path)
-    except (KeyError, OSError, ValueError, zipfile.BadZipFile):
+    # RuntimeError covers an encrypted member (and NotImplementedError, an
+    # unsupported compression method, which subclasses it): a file we cannot
+    # open is an unresolved candidate, not a 500 out of the import route.
+    except (KeyError, OSError, RuntimeError, ValueError, zipfile.BadZipFile):
         return None
 
 
@@ -266,35 +268,21 @@ def _data_uri(blob: bytes, ext: str) -> str:
     return f"data:{_EXT_MIME[ext]};base64," + base64.b64encode(blob).decode("ascii")
 
 
-def _other_assets(entries: object) -> list:
-    """`entries` without its avatar-ish members (assets of other kinds stay)."""
-    if not isinstance(entries, list):
-        return []
-    return [a for a in entries
-            if not (isinstance(a, dict) and a.get("type") in _AVATAR_ASSET_TYPES)]
-
-
 def _with_avatar_asset(card: dict, uri: str, ext: str) -> dict:
-    """A copy of `card` whose one avatar asset points at `uri`.
+    """A copy of `card` with an avatar asset for `uri` at the head of `assets`.
 
-    A copy because export reads the caller's stored card and must not touch it —
-    including `data.extensions`, which `to_v3` leaves shared with the original.
+    A copy because export reads the caller's stored card and must not touch it.
 
-    Ours goes first and every other icon/avatar entry goes, from both the places
-    `characters._avatar_candidates` looks (`data.assets`, and the copy the
-    V2->V3 upconvert relocates into `extensions`): that walk takes the first
-    candidate that resolves, so a stale entry ahead of ours would win the
-    re-import. Assets of other kinds are not ours to drop.
+    Prepended, not substituted: `characters._avatar_candidates` walks these in
+    order and takes the first that RESOLVES, so being first is all it takes to
+    win the re-import — while deleting what was there would quietly strip a
+    card's own provenance (the remote URL an import kept) and hand the
+    re-imported character a different `card_hash` from the one it came from.
     """
     out = dict(card)
     data = dict(out.get("data") or {})
     data["assets"] = [{"type": "icon", "uri": uri, "name": "main", "ext": ext},
-                      *_other_assets(data.get("assets"))]
-    extensions = data.get("extensions")
-    if isinstance(extensions, dict) and isinstance(extensions.get("assets"), list):
-        extensions = dict(extensions)
-        extensions["assets"] = _other_assets(extensions["assets"])
-        data["extensions"] = extensions
+                      *(data.get("assets") or [])]
     out["data"] = data
     return out
 

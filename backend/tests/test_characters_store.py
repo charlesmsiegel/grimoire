@@ -202,18 +202,18 @@ def test_download_avatar_blocks_internal_hosts(tmp_path):
     # SSRF guard: internal/loopback targets resolve but must be refused (no avatar, no raise).
     card = ch.blank_card("Imp")
     card["data"]["assets"] = [{"type": "icon", "uri": "http://127.0.0.1/pic.png"}]
-    assert ch._resolve_avatar(card, b"", "json", network=True) is None
+    assert ch._download_avatar(card) is None
     card["data"]["assets"] = [{"type": "icon", "uri": "http://10.0.0.1/pic.png"}]
-    assert ch._resolve_avatar(card, b"", "json", network=True) is None
+    assert ch._download_avatar(card) is None
 
 
-def test_resolve_avatar_makes_no_call_without_network(tmp_path, monkeypatch):
+def test_embedded_avatar_never_reaches_the_network(tmp_path, monkeypatch):
     # the import resolves what the file itself carries before it will fetch
     # anything, so a card whose only avatar is remote yields nothing here.
     card = ch.blank_card("Imp")
     card["data"]["assets"] = [{"type": "icon", "uri": "https://x/pic.png"}]
     monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: pytest.fail("no fetch expected"))
-    assert ch._resolve_avatar(card, b"", "json", network=False) is None
+    assert ch._embedded_avatar(card, b"", "json") is None
 
 
 def test_json_import_no_url_makes_no_call(tmp_path, monkeypatch):
@@ -1154,6 +1154,99 @@ def test_export_without_an_avatar_is_the_bare_card(tmp_path):
     for fmt in ("json", "png", "charx"):
         blob, _filename = ch.export_card(tmp_path, cid, vid, fmt)
         assert blob == cards.dumps(ch.read_card(tmp_path, cid, vid), fmt)
+
+
+def test_export_keeps_a_remote_avatar_reference_across_a_round_trip(tmp_path):
+    # An import stores the picture and leaves the URL in the card. Export must
+    # not strip that provenance to make room for its own entry: the character
+    # would come back from a round trip hashing differently (Codex review).
+    from grimoire.store import assets
+    card = ch.blank_card("Seraphine")
+    card["data"]["assets"] = [{"type": "icon", "uri": "https://x/pic.png", "name": "main", "ext": "png"}]
+    cid, vid = ch.create_character(tmp_path, "Seraphine", card=card)
+    assets.put_image(tmp_path, cid, vid, assets.AVATAR, _avatar_png(), "png")
+
+    blob, _filename = ch.export_card(tmp_path, cid, vid, "json")
+
+    dest = tmp_path / "elsewhere"
+    dest.mkdir()
+    new_cid, new_vid = ch.import_card(dest, blob, "json")
+    assert [a["uri"] for a in ch.read_card(dest, new_cid, new_vid)["data"]["assets"]] \
+        == ["https://x/pic.png"]
+    assert ch.card_hash(dest, new_cid, new_vid) == ch.card_hash(tmp_path, cid, vid)
+
+
+def test_import_prefers_what_the_file_carries_over_a_remote_url(tmp_path, monkeypatch):
+    # Embedded bytes beat a URL listed ahead of them: they are already in hand,
+    # and reaching for the network when the file has the image is both slower
+    # and a fetch we do not need to make.
+    import base64 as _b64
+    import json as _json
+    from grimoire.store import assets
+    card = ch.blank_card("Seraphine")
+    card["data"]["assets"] = [
+        {"type": "icon", "uri": "https://x/remote.png", "name": "remote", "ext": "png"},
+        {"type": "icon", "uri": "data:image/png;base64," + _b64.b64encode(b"\x89PNG\r\n\x1a\nLOCAL").decode(),
+         "name": "main", "ext": "png"},
+    ]
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: pytest.fail("no fetch expected"))
+
+    cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")
+
+    p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
+    assert p is not None and p.read_bytes() == b"\x89PNG\r\n\x1a\nLOCAL"
+    # only the consumed entry goes; the remote one stays as provenance
+    assert [a["uri"] for a in ch.read_card(tmp_path, cid, vid)["data"]["assets"]] \
+        == ["https://x/remote.png"]
+
+
+def test_import_keeps_an_asset_of_another_kind_sharing_the_avatar_uri(tmp_path):
+    # One image can serve as both icon and background. Consuming the icon must
+    # not take the background's reference with it (Codex review).
+    import base64 as _b64
+    import json as _json
+    uri = "data:image/png;base64," + _b64.b64encode(b"\x89PNG\r\n\x1a\nSHARED").decode()
+    card = ch.blank_card("Seraphine")
+    card["data"]["assets"] = [{"type": "icon", "uri": uri, "name": "main", "ext": "png"},
+                              {"type": "background", "uri": uri, "name": "bg", "ext": "png"}]
+
+    cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")
+
+    kept = ch.read_card(tmp_path, cid, vid)["data"]["assets"]
+    assert [a["type"] for a in kept] == ["background"]
+
+
+def test_import_bounds_how_many_bundled_members_one_card_can_inflate(tmp_path):
+    # A hostile CHARX can list the same over-compressed member as its avatar
+    # hundreds of times. Each miss costs a decompression, so the walk is capped
+    # rather than paid per candidate (Codex review).
+    import json as _json
+    import zipfile as _zip
+    from io import BytesIO
+    from grimoire.store import cards
+    card = ch.blank_card("Seraphine")
+    card["data"]["assets"] = [
+        {"type": "icon", "uri": f"embeded://assets/decoy_{i}.png", "name": f"d{i}", "ext": "png"}
+        for i in range(50)
+    ]
+    buf = BytesIO()
+    with _zip.ZipFile(buf, "w", _zip.ZIP_DEFLATED) as z:
+        z.writestr("card.json", _json.dumps(card))
+        for i in range(50):
+            z.writestr(f"assets/decoy_{i}.png", b"\x00" * 8192)  # not an image: never resolves
+
+    reads: list[str] = []
+    real = cards.read_charx_asset
+
+    def counting(data: bytes, path: str):
+        reads.append(path)
+        return real(data, path)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cards, "read_charx_asset", counting)
+        ch.import_card(tmp_path, buf.getvalue(), "charx")
+
+    assert len(reads) <= ch._MAX_BUNDLED_READS
 
 
 def test_export_filename_is_derived_from_the_card_name_and_version(tmp_path):
