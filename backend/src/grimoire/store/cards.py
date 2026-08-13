@@ -42,7 +42,9 @@ _CARD_KEYWORDS = (b"ccv3", b"chara")
 # Local, rather than fetch's copy: this module is deliberately stdlib-only.
 _EXT_MIME = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
              "gif": "image/gif", "webp": "image/webp"}
-_MAX_ASSET_BYTES = 100 * 1024 * 1024  # matches fetch.MAX_BYTES
+# The most one import may inflate out of a CHARX, in total: `read_charx_asset`
+# defaults to it, and `characters._resolve_avatar` spends it across members.
+MAX_ASSET_BYTES = 100 * 1024 * 1024  # matches fetch.MAX_BYTES
 
 
 class CardParseError(Exception):
@@ -190,17 +192,19 @@ def _loads_charx(data: bytes) -> dict:
         raise CardParseError(f"invalid charx: {exc}") from exc
 
 
-def read_charx_asset(data: bytes, path: str) -> bytes | None:
+def read_charx_asset(data: bytes, path: str, max_bytes: int = MAX_ASSET_BYTES) -> bytes | None:
     """Bytes of a file bundled inside a CHARX, or None if it isn't readable.
 
     `path` comes out of a card's `embeded://` URI, i.e. from an uploaded file:
     nothing is written to disk from it (a zip member is only *read* by name, so
-    a `../` in there escapes nothing), and a member claiming to inflate past the
-    asset cap is refused rather than decompressed.
+    a `../` in there escapes nothing), and a member whose header claims it
+    inflates past `max_bytes` is refused rather than decompressed. Callers that
+    read more than one member pass what is left of their budget, so a handful
+    of over-compressed decoys cannot each cost the full cap (Codex review).
     """
     try:
         with zipfile.ZipFile(BytesIO(data)) as z:
-            if z.getinfo(path).file_size > _MAX_ASSET_BYTES:
+            if z.getinfo(path).file_size > max_bytes:
                 return None
             return z.read(path)
     # RuntimeError covers an encrypted member (and NotImplementedError, an
@@ -245,23 +249,52 @@ def _placeholder_png_pixels() -> bytes:
 def _png_image_plane(data: bytes) -> bytes | None:
     """`data`'s picture-bearing chunks, ready to sit under a fresh card chunk.
 
-    IEND is dropped (the caller re-appends it last) and so is any card payload a
-    previous export left in a tEXt chunk: `_loads_png` keeps the FIRST such
-    chunk it finds, so carrying an old one through would export the stale card
-    rather than this one. None if `data` is not a PNG we can take apart, which
-    is the signal to fall back to the placeholder.
+    IEND ends the walk (the caller re-appends its own, and anything after it is
+    not part of the image) and any card payload a previous export left in a
+    tEXt chunk is dropped: `_loads_png` keeps the FIRST such chunk it finds, so
+    carrying an old one through would export the stale card rather than this
+    one.
+
+    None unless `data` is a PNG this can vouch for — signature, IHDR first, at
+    least one IDAT, IEND present, every chunk's CRC intact. These bytes are
+    re-emitted as an image other apps will try to open, so "it began with the
+    right magic" is not enough; a file that fails any of it falls back to the
+    placeholder, where the card still carries the picture as a data URI.
     """
     try:
         chunks = list(_iter_png_chunks(data))
     except CardParseError:
         return None
-    kinds = {ctype for ctype, _payload, _raw in chunks}
-    if not {b"IHDR", b"IEND"} <= kinds:
-        return None  # truncated or not an image; nothing safe to re-emit
-    keep = [raw for ctype, payload, raw in chunks
-            if ctype != b"IEND"
-            and not (ctype == b"tEXt" and payload.partition(b"\x00")[0] in _CARD_KEYWORDS)]
-    return b"".join(keep)
+    keep, seen_idat, ended = [], False, False
+    for i, (ctype, payload, raw) in enumerate(chunks):
+        if (i == 0) != (ctype == b"IHDR"):
+            return None  # IHDR must come first, and only first
+        if zlib.crc32(ctype + payload) & 0xFFFFFFFF != struct.unpack(">I", raw[-4:])[0]:
+            return None
+        if ctype == b"IEND":
+            ended = True
+            break
+        seen_idat = seen_idat or ctype == b"IDAT"
+        if not (ctype == b"tEXt" and payload.partition(b"\x00")[0] in _CARD_KEYWORDS):
+            keep.append(raw)
+    return b"".join(keep) if seen_idat and ended else None
+
+
+def is_placeholder_png(data: bytes) -> bool:
+    """Is this one of our own 1x1 stand-ins rather than somebody's picture?
+
+    What tells a PNG export that could not encode the avatar (a jpg, say, so
+    the bytes ride in the card instead) from an ordinary card PNG whose image
+    IS the avatar. Cheap and specific: the placeholder is the only 1x1 image
+    this app ever writes.
+    """
+    try:
+        for ctype, payload, _raw in _iter_png_chunks(data):
+            if ctype == b"IHDR":
+                return struct.unpack(">II", payload[:8]) == (1, 1)
+    except (CardParseError, struct.error):
+        return False
+    return False
 
 
 def _data_uri(blob: bytes, ext: str) -> str:

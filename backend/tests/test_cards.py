@@ -193,6 +193,34 @@ def test_png_dumps_drops_a_stale_card_chunk_carried_by_the_avatar():
     assert cards.loads(out, "png")["data"]["name"] == "Seraphine"
 
 
+@pytest.mark.parametrize("broken", ["no-idat", "bad-crc", "no-ihdr-first"])
+def test_png_dumps_refuses_an_image_plane_it_cannot_vouch_for(broken):
+    """These bytes are re-emitted as an image other apps open, so a file that
+    merely starts with the PNG magic is not enough: a plane with no IDAT, a
+    corrupt CRC, or chunks out of order falls back to the placeholder (and the
+    card still carries the picture as a data URI)."""
+    ihdr = struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0)
+    idat = _chunk(b"IDAT", zlib.compress(b"\x00\x00\x00\x00" * 2))
+    if broken == "no-idat":
+        bad = b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr) + _chunk(b"IEND", b"")
+    elif broken == "bad-crc":
+        good = _chunk(b"IHDR", ihdr)
+        bad = b"\x89PNG\r\n\x1a\n" + good[:-4] + b"\x00\x00\x00\x00" + idat + _chunk(b"IEND", b"")
+    else:
+        bad = b"\x89PNG\r\n\x1a\n" + idat + _chunk(b"IHDR", ihdr) + _chunk(b"IEND", b"")
+
+    out = cards.dumps(_v3(), "png", avatar=(bad, "png"))
+
+    assert _png_size(out) == (1, 1)
+    assert base64.b64decode(_icons(cards.loads(out, "png"))[0]["uri"].split(",", 1)[1]) == bad
+
+
+def test_is_placeholder_png_tells_our_stand_in_from_a_picture():
+    assert cards.is_placeholder_png(cards.dumps(_v3(), "png")) is True
+    assert cards.is_placeholder_png(cards.dumps(_v3(), "png", avatar=(_real_png(), "png"))) is False
+    assert cards.is_placeholder_png(b"not a png") is False
+
+
 def test_png_dumps_falls_back_to_a_data_uri_for_a_non_png_avatar():
     """No Pillow here, so a JPEG cannot become the PNG's image plane. The card
     still has to carry it, or a jpg avatar is simply lost on PNG export."""
@@ -236,7 +264,7 @@ def test_dumps_without_an_avatar_adds_no_asset_entry():
     assert _icons(cards.loads(cards.dumps(_v3(), "json"), "json")) == []
 
 
-def test_read_charx_asset_refuses_a_member_that_would_inflate_past_the_cap(monkeypatch):
+def test_read_charx_asset_refuses_a_member_that_would_inflate_past_the_cap():
     """An uploaded CHARX is untrusted, and a zip states up front how big a
     member inflates to: believe the header and refuse, rather than decompress a
     few compressed kilobytes into a great deal of memory."""
@@ -245,8 +273,7 @@ def test_read_charx_asset_refuses_a_member_that_would_inflate_past_the_cap(monke
         z.writestr("assets/avatar.png", b"\x00" * 4096)
     blob = buf.getvalue()
     assert cards.read_charx_asset(blob, "assets/avatar.png") is not None
-    monkeypatch.setattr(cards, "_MAX_ASSET_BYTES", 1024)
-    assert cards.read_charx_asset(blob, "assets/avatar.png") is None
+    assert cards.read_charx_asset(blob, "assets/avatar.png", max_bytes=1024) is None
 
 
 def test_read_charx_asset_treats_an_unopenable_member_as_a_miss(monkeypatch):
