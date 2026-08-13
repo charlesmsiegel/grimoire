@@ -38,6 +38,9 @@ from an up-to-date world.
 - **Import character cards** — bring in character cards (including PNG cards
   with embedded lorebooks) and import directly from [chub.ai](https://chub.ai/),
   with galleries, avatars, and multiple versions per character.
+- **Export character cards** — send any version back out as JSON, PNG, or
+  CHARX from the character editor's Export menu, avatar embedded, so the file
+  carries the whole character into another app (or back into Grimoire).
 - **Lorebooks / world info** — parse and import character-book / world-info
   entries into a world's lore.
 - **LLM-generated taglines** and **image localization** for characters.

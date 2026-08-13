@@ -23,6 +23,7 @@ vi.mock("../api/client", async () => {
       generateCharacterVoiceAnchor: vi.fn(),
       listImageAppearances: vi.fn(), copyGreetingImage: vi.fn(), listGreetings: vi.fn(),
       imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
+      exportUrl: (w: string, c: string, v: string, f: string) => `/export/${w}/${c}/${v}/${f}`,
       putSheetCreation: vi.fn(),
     },
   };
@@ -1650,4 +1651,66 @@ test("a campaign-local character gets the anchor controls too (#59)", async () =
   fireEvent.click(screen.getByText("Save voice anchor"));
   await waitFor(() => expect(api.setCharacterVoiceAnchor).toHaveBeenCalledWith(
     { kind: "campaign", id: "run" }, "seraphine", "Campaign-local voice."));
+});
+
+// ---- export (#10) ---------------------------------------------------------
+
+const TWO_VERSIONS = {
+  meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+  versions: [
+    { id: "default", name: "default", card: CARD, images: ["avatar"] },
+    { id: "winter", name: "Winter", card: CARD, images: [] },
+  ],
+};
+
+/** The three download links behind the Export disclosure. */
+function exportLinks() {
+  return {
+    json: screen.getByRole("link", { name: /^json$/i }),
+    png: screen.getByRole("link", { name: /^png$/i }),
+    charx: screen.getByRole("link", { name: /^charx$/i }),
+  };
+}
+
+test("detail offers a JSON/PNG/CHARX download for the viewed version", async () => {
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await screen.findByText("Images");
+  const links = exportLinks();
+  expect(links.json).toHaveAttribute("href", "/export/w/seraphine/default/json");
+  expect(links.png).toHaveAttribute("href", "/export/w/seraphine/default/png");
+  expect(links.charx).toHaveAttribute("href", "/export/w/seraphine/default/charx");
+  // `download` is what makes the browser save the response instead of showing it
+  expect(links.json).toHaveAttribute("download");
+  expect(links.png).toHaveAttribute("download");
+  expect(links.charx).toHaveAttribute("download");
+});
+
+test("the export links follow the selected version", async () => {
+  (api.readCharacter as any).mockResolvedValue(TWO_VERSIONS);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await screen.findByText("Images");
+  fireEvent.click(screen.getByRole("button", { name: "Winter" }));
+  await waitFor(() => expect(exportLinks().json)
+    .toHaveAttribute("href", "/export/w/seraphine/winter/json"));
+  expect(exportLinks().charx).toHaveAttribute("href", "/export/w/seraphine/winter/charx");
+});
+
+test("the edit form exports the version being edited", async () => {
+  (api.readCharacter as any).mockResolvedValue(TWO_VERSIONS);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  fireEvent.change(screen.getByLabelText("Version"), { target: { value: "winter" } });
+  await waitFor(() => expect(exportLinks().png)
+    .toHaveAttribute("href", "/export/w/seraphine/winter/png"));
+});
+
+test("campaign scope has no export control — the route is world-scoped", async () => {
+  (api.listAppearances as any).mockResolvedValue(appearedRoster("seraphine"));
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await screen.findByText("Images");
+  expect(screen.queryByText("Export")).toBeNull();
+  expect(screen.queryByRole("link", { name: /^charx$/i })).toBeNull();
 });

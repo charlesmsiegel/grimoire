@@ -139,3 +139,121 @@ def test_png_roundtrip():
 def test_charx_roundtrip():
     out = cards.dumps(_v3(), "charx")
     assert cards.loads(out, "charx")["data"]["name"] == "Seraphine"
+
+
+# ---- avatar embedding on export (#25) -------------------------------------
+# The card format's own way of carrying an image, so an export is a whole
+# character rather than its text: every format has to hand the avatar back to
+# `loads` -> `import_card`, which is what the round-trip tests below check.
+
+
+def _chunk(typ: bytes, payload: bytes) -> bytes:
+    body = typ + payload
+    return struct.pack(">I", len(payload)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+
+def _real_png(w: int = 2, h: int = 2) -> bytes:
+    """A PNG with real pixels — distinguishable from dumps' 1x1 placeholder."""
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+    raw = b"".join(b"\x00" + b"\x00\x00\x00" * w for _ in range(h))
+    return (b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr)
+            + _chunk(b"IDAT", zlib.compress(raw)) + _chunk(b"IEND", b""))
+
+
+def _png_size(data: bytes) -> tuple[int, int]:
+    return struct.unpack(">II", data[16:24])  # IHDR payload: 8 sig + 4 len + 4 type
+
+
+def _icons(card: dict) -> list[dict]:
+    return [a for a in card["data"].get("assets", []) if a.get("type") == "icon"]
+
+
+def test_json_dumps_embeds_the_avatar_as_a_data_uri():
+    avatar = _real_png()
+    card = cards.loads(cards.dumps(_v3(), "json", avatar=(avatar, "png")), "json")
+    (icon,) = _icons(card)
+    assert icon["uri"].startswith("data:image/png;base64,")
+    assert base64.b64decode(icon["uri"].split(",", 1)[1]) == avatar
+    assert icon["ext"] == "png"
+
+
+def test_png_dumps_carries_the_avatar_pixels_not_the_placeholder():
+    out = cards.dumps(_v3(), "png", avatar=(_real_png(4, 3), "png"))
+    assert _png_size(out) == (4, 3)
+    assert cards.loads(out, "png")["data"]["name"] == "Seraphine"
+
+
+def test_png_dumps_drops_a_stale_card_chunk_carried_by_the_avatar():
+    """An avatar that is itself an imported card PNG already holds a `ccv3`
+    chunk. `_loads_png` keeps the FIRST chunk it finds, so re-using those bytes
+    without dropping the old one would export the stale card, not this one."""
+    stale = cards.dumps({"spec": "chara_card_v3", "spec_version": "3.0",
+                         "data": {"name": "Winifred", "extensions": {}}}, "png")
+    out = cards.dumps(_v3(), "png", avatar=(stale, "png"))
+    assert cards.loads(out, "png")["data"]["name"] == "Seraphine"
+
+
+def test_png_dumps_falls_back_to_a_data_uri_for_a_non_png_avatar():
+    """No Pillow here, so a JPEG cannot become the PNG's image plane. The card
+    still has to carry it, or a jpg avatar is simply lost on PNG export."""
+    jpg = b"\xff\xd8\xff" + b"JPEGDATA"
+    out = cards.dumps(_v3(), "png", avatar=(jpg, "jpg"))
+    assert _png_size(out) == (1, 1)  # the placeholder stays
+    (icon,) = _icons(cards.loads(out, "png"))
+    assert icon["uri"].startswith("data:image/jpeg;base64,")
+    assert base64.b64decode(icon["uri"].split(",", 1)[1]) == jpg
+
+
+def test_charx_dumps_bundles_the_avatar_and_references_it():
+    avatar = _real_png()
+    out = cards.dumps(_v3(), "charx", avatar=(avatar, "png"))
+    with zipfile.ZipFile(BytesIO(out)) as z:
+        assert z.read("assets/avatar.png") == avatar
+        card = json.loads(z.read("card.json"))
+    (icon,) = _icons(card)
+    assert icon["uri"] == "embeded://assets/avatar.png"
+
+
+def test_dumps_replaces_the_stale_icon_and_leaves_the_caller_card_alone():
+    """The exported icon must be the only one: `_avatar_candidates` walks
+    `assets` in order and takes the first that resolves, so a stale entry left
+    in front of ours would win on re-import. Other asset kinds are not ours to
+    drop — and none of this may mutate the caller's card, which export reads
+    straight from the store."""
+    card = _v3()
+    card["data"]["assets"] = [
+        {"type": "icon", "uri": "https://x/old.png", "name": "main", "ext": "png"},
+        {"type": "background", "uri": "https://x/bg.png", "name": "bg", "ext": "png"},
+    ]
+    out = cards.loads(cards.dumps(card, "json", avatar=(_real_png(), "png")), "json")
+    assets_out = out["data"]["assets"]
+    assert [a["type"] for a in assets_out] == ["icon", "background"]
+    assert assets_out[0]["uri"].startswith("data:image/png;base64,")
+    assert card["data"]["assets"][0]["uri"] == "https://x/old.png"
+
+
+def test_dumps_drops_the_stale_icon_the_upconvert_relocated_into_extensions():
+    """A V2 card's `assets` land in `extensions` — where `_avatar_candidates`
+    also looks. Leaving a stale icon there exports two avatars pointing at
+    different images, and this copy must not reach the caller's card either."""
+    card = _v3()
+    ext = {"assets": [{"type": "icon", "uri": "https://x/old.png", "name": "main", "ext": "png"},
+                      {"type": "background", "uri": "https://x/bg.png", "name": "bg", "ext": "png"}]}
+    card["data"]["extensions"] = ext
+
+    out = cards.loads(cards.dumps(card, "json", avatar=(_real_png(), "png")), "json")
+
+    assert [a["type"] for a in out["data"]["extensions"]["assets"]] == ["background"]
+    assert len(_icons(out)) == 1
+    assert [a["type"] for a in ext["assets"]] == ["icon", "background"]
+
+
+def test_dumps_without_an_avatar_adds_no_asset_entry():
+    assert _icons(cards.loads(cards.dumps(_v3(), "json"), "json")) == []
+
+
+def test_read_charx_asset_reads_a_bundled_file_and_misses_cleanly():
+    out = cards.dumps(_v3(), "charx", avatar=(_real_png(), "png"))
+    assert cards.read_charx_asset(out, "assets/avatar.png") == _real_png()
+    assert cards.read_charx_asset(out, "assets/nope.png") is None
+    assert cards.read_charx_asset(b"not a zip", "assets/avatar.png") is None

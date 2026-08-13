@@ -202,9 +202,18 @@ def test_download_avatar_blocks_internal_hosts(tmp_path):
     # SSRF guard: internal/loopback targets resolve but must be refused (no avatar, no raise).
     card = ch.blank_card("Imp")
     card["data"]["assets"] = [{"type": "icon", "uri": "http://127.0.0.1/pic.png"}]
-    assert ch._download_avatar(card) is None
+    assert ch._resolve_avatar(card, b"", "json", network=True) is None
     card["data"]["assets"] = [{"type": "icon", "uri": "http://10.0.0.1/pic.png"}]
-    assert ch._download_avatar(card) is None
+    assert ch._resolve_avatar(card, b"", "json", network=True) is None
+
+
+def test_resolve_avatar_makes_no_call_without_network(tmp_path, monkeypatch):
+    # the import resolves what the file itself carries before it will fetch
+    # anything, so a card whose only avatar is remote yields nothing here.
+    card = ch.blank_card("Imp")
+    card["data"]["assets"] = [{"type": "icon", "uri": "https://x/pic.png"}]
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: pytest.fail("no fetch expected"))
+    assert ch._resolve_avatar(card, b"", "json", network=False) is None
 
 
 def test_json_import_no_url_makes_no_call(tmp_path, monkeypatch):
@@ -1033,3 +1042,134 @@ def test_find_unlinked_versions_reads_no_cards_when_unchanged(tmp_path, monkeypa
     out = ch.find_unlinked_versions(tmp_path)
     assert [r for r in reads if r.endswith(".json")] == []
     assert [v["version"] for v in out] == ["alt"]
+
+
+# ---- export: the avatar rides along, the stored card does not move (#25) ----
+
+
+def _avatar_png(w: int = 2, h: int = 2) -> bytes:
+    """A PNG with real pixels, unlike the 1x1 placeholder `cards.dumps` writes."""
+    import struct
+    import zlib
+
+    def chunk(typ: bytes, payload: bytes) -> bytes:
+        body = typ + payload
+        return struct.pack(">I", len(payload)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+    raw = b"".join(b"\x00" + b"\x00\x00\x00" * w for _ in range(h))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+def _image_plane(png: bytes) -> bytes:
+    """Everything but the tEXt chunks: PNG export writes the card into one, so a
+    re-imported avatar is never byte-equal to the original even when the picture
+    is."""
+    import struct
+
+    out, pos = b"", 8
+    while pos + 8 <= len(png):
+        (length,) = struct.unpack(">I", png[pos:pos + 4])
+        end = pos + 12 + length
+        if png[pos + 4:pos + 8] != b"tEXt":
+            out += png[pos:end]
+        pos = end
+    return out
+
+
+@pytest.mark.parametrize("fmt", ["json", "png", "charx"])
+def test_export_roundtrips_the_stored_avatar(tmp_path, fmt):
+    from grimoire.store import assets
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    avatar = _avatar_png(4, 3)
+    assets.put_image(tmp_path, cid, vid, assets.AVATAR, avatar, "png")
+
+    blob, _filename = ch.export_card(tmp_path, cid, vid, fmt)
+
+    dest = tmp_path / "elsewhere"
+    dest.mkdir()
+    new_cid, new_vid = ch.import_card(dest, blob, fmt)
+    p = assets.image_path(dest, new_cid, new_vid, assets.AVATAR)
+    assert p is not None
+    assert _image_plane(p.read_bytes()) == _image_plane(avatar)
+
+
+def test_png_export_roundtrips_a_non_png_avatar_through_the_card(tmp_path):
+    # The image plane can only hold a PNG, so a jpg avatar travels in the card's
+    # `assets` instead -- and the import has to prefer that over the placeholder
+    # pixels it would otherwise adopt as the avatar.
+    from grimoire.store import assets
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    jpg = b"\xff\xd8\xff" + b"JPEGDATA"
+    assets.put_image(tmp_path, cid, vid, assets.AVATAR, jpg, "jpg")
+
+    blob, _filename = ch.export_card(tmp_path, cid, vid, "png")
+
+    dest = tmp_path / "elsewhere"
+    dest.mkdir()
+    new_cid, new_vid = ch.import_card(dest, blob, "png")
+    p = assets.image_path(dest, new_cid, new_vid, assets.AVATAR)
+    assert p is not None and p.read_bytes() == jpg and p.suffix == ".jpg"
+
+
+def test_export_leaves_the_stored_card_and_its_hash_alone(tmp_path):
+    # Images are deliberately outside the card hash (sync must not see an avatar
+    # edit), so embedding one at export time must not reach the stored card.
+    from grimoire.store import assets
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    assets.put_image(tmp_path, cid, vid, assets.AVATAR, _avatar_png(), "png")
+    before_hash = ch.card_hash(tmp_path, cid, vid)
+    before_text = ch._card_path(tmp_path, cid, vid).read_text(encoding="utf-8")
+
+    for fmt in ("json", "png", "charx"):
+        ch.export_card(tmp_path, cid, vid, fmt)
+
+    assert ch._card_path(tmp_path, cid, vid).read_text(encoding="utf-8") == before_text
+    assert ch.card_hash(tmp_path, cid, vid) == before_hash
+
+
+@pytest.mark.parametrize("fmt", ["json", "png", "charx"])
+def test_import_keeps_the_embedded_avatar_out_of_the_stored_card(tmp_path, fmt):
+    # The consumed asset entry is dropped once the bytes are in the asset store:
+    # keeping it would bloat every card with base64 and give a re-imported
+    # character a different card_hash from the one it was exported from.
+    from grimoire.store import assets
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    assets.put_image(tmp_path, cid, vid, assets.AVATAR, _avatar_png(), "png")
+    blob, _filename = ch.export_card(tmp_path, cid, vid, fmt)
+
+    dest = tmp_path / "elsewhere"
+    dest.mkdir()
+    new_cid, new_vid = ch.import_card(dest, blob, fmt)
+
+    card = ch.read_card(dest, new_cid, new_vid)
+    assert card["data"].get("assets", []) == []
+    assert ch.card_hash(dest, new_cid, new_vid) == ch.card_hash(tmp_path, cid, vid)
+
+
+def test_export_without_an_avatar_is_the_bare_card(tmp_path):
+    from grimoire.store import cards
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    for fmt in ("json", "png", "charx"):
+        blob, _filename = ch.export_card(tmp_path, cid, vid, fmt)
+        assert blob == cards.dumps(ch.read_card(tmp_path, cid, vid), fmt)
+
+
+def test_export_filename_is_derived_from_the_card_name_and_version(tmp_path):
+    # from the VERSION's card name -- that is the card being exported -- and
+    # only the non-default version needs its id to tell the files apart.
+    cid, vid = ch.create_character(tmp_path, "Seraphine of the Saltmarch")
+    alt = ch.create_version(tmp_path, cid, "Winter Court", ch.blank_card("Winifred"))
+
+    assert ch.export_card(tmp_path, cid, vid, "json")[1] == "seraphine-of-the-saltmarch.json"
+    assert ch.export_card(tmp_path, cid, alt, "charx")[1] == f"winifred-{alt}.charx"
+
+
+def test_export_filename_survives_a_card_name_with_nothing_sluggable(tmp_path):
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    card = ch.read_card(tmp_path, cid, vid)
+    card["data"]["name"] = "???"
+    ch.update_version(tmp_path, cid, vid, card)
+
+    assert ch.export_card(tmp_path, cid, vid, "png")[1] == f"{cid}.png"

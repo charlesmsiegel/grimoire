@@ -301,12 +301,15 @@ def get_character_export(wid: str, cid: str, vid: str, format: str = "json"):
     if format not in _EXPORT_MEDIA:
         raise HTTPException(status_code=400, detail="unknown format")
     try:
-        blob = store.characters.export_card(root, cid, vid, format)
+        blob, filename = store.characters.export_card(root, cid, vid, format)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
     except store.characters.VersionNotFound:
         raise HTTPException(status_code=404, detail="version not found")
-    return Response(content=blob, media_type=_EXPORT_MEDIA[format])
+    # Named like the campaign exports: the frontend offers these as plain
+    # download links, and without the header the browser saves them as "export".
+    return Response(content=blob, media_type=_EXPORT_MEDIA[format],
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/localize")

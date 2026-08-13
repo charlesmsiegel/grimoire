@@ -1,8 +1,18 @@
 """Import/export SillyTavern cards: V3/V2 JSON, PNG tEXt, and CHARX zip.
 
 Pure stdlib (struct/zlib/base64/zipfile) — no Pillow. PNG export writes the card
-into a `ccv3` tEXt chunk over a 1x1 placeholder. Avatars from imported PNG/CHARX
-are preserved on disk under assets/ (not re-embedded this iteration).
+into a `ccv3` tEXt chunk; avatars live on disk under assets/ and are embedded on
+the way out (#25), each format carrying the bytes the way its container allows:
+
+- json  — a `data:` URI in `data.assets`, so one file is the whole character.
+- png   — the avatar's own pixels become the image plane. Without Pillow that
+          only works for a PNG; any other type falls back to the 1x1
+          placeholder plus a `data:` URI, which the import prefers.
+- charx — the file is bundled at `assets/avatar.<ext>` and referenced with the
+          V3 spec's `embeded://` scheme (spelled as the spec spells it).
+
+Embedding happens at export time only: the stored card never carries the avatar,
+so `characters.card_hash` — and therefore sync — stays blind to image edits.
 """
 
 from __future__ import annotations
@@ -21,6 +31,19 @@ _V2_KNOWN = {
     "alternate_greetings", "character_book", "tags", "creator",
     "character_version", "extensions",
 }
+
+# The V3 spec's scheme for an asset bundled inside the card's own container --
+# spelled with the spec's typo, because interoperability beats orthography.
+EMBEDDED_SCHEME = "embeded://"
+_AVATAR_ASSET_TYPES = ("icon", "avatar")
+_PNG_SIG = b"\x89PNG\r\n\x1a\n"
+# tEXt keywords that carry a card payload rather than a caption: an avatar that
+# is itself an exported card PNG arrives with one already in it.
+_CARD_KEYWORDS = (b"ccv3", b"chara")
+# Local, rather than fetch's copy: this module is deliberately stdlib-only.
+_EXT_MIME = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+             "gif": "image/gif", "webp": "image/webp"}
+_MAX_ASSET_BYTES = 100 * 1024 * 1024  # matches fetch.MAX_BYTES
 
 
 class CardParseError(Exception):
@@ -117,15 +140,27 @@ def _loads_json(data: bytes) -> dict:
         raise CardParseError(f"invalid card JSON: {exc}") from exc
 
 
-def _iter_png_text(data: bytes):
-    if data[:8] != b"\x89PNG\r\n\x1a\n":
+def _iter_png_chunks(data: bytes):
+    """(type, payload, raw bytes of the whole chunk) for each complete chunk.
+
+    Stops at the first chunk the file is too short to hold, rather than yielding
+    a truncated payload as if it were whole — `_png_image_plane` re-emits these
+    verbatim, so a half-read chunk would become a corrupt export.
+    """
+    if data[:8] != _PNG_SIG:
         raise CardParseError("not a PNG")
     pos = 8
     while pos + 8 <= len(data):
         (length,) = struct.unpack(">I", data[pos:pos + 4])
-        ctype = data[pos + 4:pos + 8]
-        payload = data[pos + 8:pos + 8 + length]
-        pos += 12 + length  # 4 len + 4 type + payload + 4 crc
+        end = pos + 12 + length  # 4 len + 4 type + payload + 4 crc
+        if end > len(data):
+            return
+        yield data[pos + 4:pos + 8], data[pos + 8:pos + 8 + length], data[pos:end]
+        pos = end
+
+
+def _iter_png_text(data: bytes):
+    for ctype, payload, _raw in _iter_png_chunks(data):
         if ctype == b"tEXt":
             keyword, _, text = payload.partition(b"\x00")
             yield keyword.decode("latin-1"), text.decode("latin-1")
@@ -156,6 +191,32 @@ def _loads_charx(data: bytes) -> dict:
         raise CardParseError(f"invalid charx: {exc}") from exc
 
 
+def read_charx_asset(data: bytes, path: str) -> bytes | None:
+    """Bytes of a file bundled inside a CHARX, or None if it isn't readable.
+
+    `path` comes out of a card's `embeded://` URI, i.e. from an uploaded file:
+    nothing is written to disk from it (a zip member is only *read* by name, so
+    a `../` in there escapes nothing), and a member claiming to inflate past the
+    asset cap is refused rather than decompressed.
+    """
+    try:
+        with zipfile.ZipFile(BytesIO(data)) as z:
+            if z.getinfo(path).file_size > _MAX_ASSET_BYTES:
+                return None
+            return z.read(path)
+    except (KeyError, OSError, ValueError, zipfile.BadZipFile):
+        return None
+
+
+def embedded_path(uri: str) -> str | None:
+    """The in-container path an `embeded://` URI names, or None for any other URI."""
+    return uri[len(EMBEDDED_SCHEME):] if uri.startswith(EMBEDDED_SCHEME) else None
+
+
+def charx_avatar_path(ext: str) -> str:
+    return f"assets/avatar.{ext}"
+
+
 def loads(data: bytes, fmt: str) -> dict:
     if fmt == "json":
         return _loads_json(data)
@@ -179,19 +240,104 @@ def _placeholder_png_pixels() -> bytes:
     return _png_chunk(b"IHDR", ihdr) + _png_chunk(b"IDAT", idat)
 
 
-def dumps(card: dict, fmt: str, avatar: bytes | None = None) -> bytes:
+def _png_image_plane(data: bytes) -> bytes | None:
+    """`data`'s picture-bearing chunks, ready to sit under a fresh card chunk.
+
+    IEND is dropped (the caller re-appends it last) and so is any card payload a
+    previous export left in a tEXt chunk: `_loads_png` keeps the FIRST such
+    chunk it finds, so carrying an old one through would export the stale card
+    rather than this one. None if `data` is not a PNG we can take apart, which
+    is the signal to fall back to the placeholder.
+    """
+    try:
+        chunks = list(_iter_png_chunks(data))
+    except CardParseError:
+        return None
+    kinds = {ctype for ctype, _payload, _raw in chunks}
+    if not {b"IHDR", b"IEND"} <= kinds:
+        return None  # truncated or not an image; nothing safe to re-emit
+    keep = [raw for ctype, payload, raw in chunks
+            if ctype != b"IEND"
+            and not (ctype == b"tEXt" and payload.partition(b"\x00")[0] in _CARD_KEYWORDS)]
+    return b"".join(keep)
+
+
+def _data_uri(blob: bytes, ext: str) -> str:
+    return f"data:{_EXT_MIME[ext]};base64," + base64.b64encode(blob).decode("ascii")
+
+
+def _other_assets(entries: object) -> list:
+    """`entries` without its avatar-ish members (assets of other kinds stay)."""
+    if not isinstance(entries, list):
+        return []
+    return [a for a in entries
+            if not (isinstance(a, dict) and a.get("type") in _AVATAR_ASSET_TYPES)]
+
+
+def _with_avatar_asset(card: dict, uri: str, ext: str) -> dict:
+    """A copy of `card` whose one avatar asset points at `uri`.
+
+    A copy because export reads the caller's stored card and must not touch it —
+    including `data.extensions`, which `to_v3` leaves shared with the original.
+
+    Ours goes first and every other icon/avatar entry goes, from both the places
+    `characters._avatar_candidates` looks (`data.assets`, and the copy the
+    V2->V3 upconvert relocates into `extensions`): that walk takes the first
+    candidate that resolves, so a stale entry ahead of ours would win the
+    re-import. Assets of other kinds are not ours to drop.
+    """
+    out = dict(card)
+    data = dict(out.get("data") or {})
+    data["assets"] = [{"type": "icon", "uri": uri, "name": "main", "ext": ext},
+                      *_other_assets(data.get("assets"))]
+    extensions = data.get("extensions")
+    if isinstance(extensions, dict) and isinstance(extensions.get("assets"), list):
+        extensions = dict(extensions)
+        extensions["assets"] = _other_assets(extensions["assets"])
+        data["extensions"] = extensions
+    out["data"] = data
+    return out
+
+
+def _usable_avatar(avatar: tuple[bytes, str] | None) -> tuple[bytes, str] | None:
+    """Drop an avatar whose type we have no MIME for — it could only produce an
+    asset entry no reader could interpret. `store.assets` allows exactly the
+    types in `_EXT_MIME`, so this is a guard, not a path exports take."""
+    if avatar is None:
+        return None
+    blob, ext = avatar
+    ext = ext.lstrip(".").lower()
+    return (blob, ext) if blob and ext in _EXT_MIME else None
+
+
+def dumps(card: dict, fmt: str, avatar: tuple[bytes, str] | None = None) -> bytes:
+    """Serialize `card`, embedding `(bytes, ext)` as its avatar where the format
+    allows (see the module docstring). Pure: `card` is never mutated."""
     card = to_v3(card)
+    avatar = _usable_avatar(avatar)
     if fmt == "json":
+        if avatar:
+            card = _with_avatar_asset(card, _data_uri(*avatar), avatar[1])
         return (json.dumps(card, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
     if fmt == "png":
+        pixels = _png_image_plane(avatar[0]) if avatar else None
+        if avatar and pixels is None:
+            # A jpg/gif/webp avatar cannot become the image plane without a
+            # decoder, and this module has none. Rather than lose the picture,
+            # send it in the card and let the import prefer it over these pixels.
+            card = _with_avatar_asset(card, _data_uri(*avatar), avatar[1])
         text = base64.b64encode(_canonical(card).encode("utf-8")).decode("latin-1")
-        sig = b"\x89PNG\r\n\x1a\n"
-        return sig + _placeholder_png_pixels() + _png_chunk(
+        return _PNG_SIG + (pixels or _placeholder_png_pixels()) + _png_chunk(
             b"tEXt", b"ccv3\x00" + text.encode("latin-1")
         ) + _png_chunk(b"IEND", b"")
     if fmt == "charx":
+        path = charx_avatar_path(avatar[1]) if avatar else None
+        if path:
+            card = _with_avatar_asset(card, EMBEDDED_SCHEME + path, avatar[1])
         buf = BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             z.writestr("card.json", _canonical(card))
+            if path:
+                z.writestr(path, avatar[0])
         return buf.getvalue()
     raise CardParseError(f"unknown format: {fmt}")
