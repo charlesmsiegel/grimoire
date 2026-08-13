@@ -284,6 +284,8 @@ export type CardData = {
   [k: string]: unknown;
 };
 export type Card = { spec: string; spec_version: string; data: CardData };
+/** The card containers the backend reads and writes (`_EXPORT_MEDIA`). */
+export type CardFormat = "json" | "png" | "charx";
 export type VersionRef = { id: string; name: string };
 export type CharacterSummary = {
   id: string; name: string; default_version: string; has_avatar?: boolean;
@@ -1132,6 +1134,10 @@ export const api = {
       `/api/worlds/${wid}/characters/${cid}/versions/${vid}/localize`, undefined, onEvent),
   imageUrl: (wid: string, cid: string, vid: string, name: string) =>
     `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${name}`,
+  /** A card download for one version. Not a `request` — the response is binary
+   *  and the route names the file, so this is an href for a `<a download>`. */
+  exportUrl: (wid: string, cid: string, vid: string, format: CardFormat) =>
+    `/api/worlds/${wid}/characters/${cid}/versions/${vid}/export?format=${format}`,
   campaignImageUrl: (cid: string, char: string, vid: string, name: string) =>
     `/api/campaigns/${cid}/characters/${char}/versions/${vid}/images/${name}`,
   putImage: (scope: EntityScope, cid: string, vid: string, name: string, file: File) => {

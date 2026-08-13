@@ -389,6 +389,18 @@ def test_character_import_export_json(client):
     assert json.loads(exp.content)["data"]["name"] == "Imported"
 
 
+def test_character_export_names_the_download(client):
+    # the browser has only the headers to name the file by: without this the
+    # download lands as "export", or "export.json" at best (#10).
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    for fmt, ext in (("json", "json"), ("png", "png"), ("charx", "charx")):
+        exp = client.get(f"/api/worlds/{wid}/characters/{cid}/versions/default/export",
+                         params={"format": fmt})
+        assert exp.status_code == 200
+        assert exp.headers["content-disposition"] == f'attachment; filename="seraphine.{ext}"'
+
+
 def test_character_image_routes(client):
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]

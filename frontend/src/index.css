@@ -697,6 +697,23 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
   padding: 6px 12px; cursor: pointer; font-family: var(--fm); font-size: 11px;
   letter-spacing: 0.06em; text-transform: uppercase; }
 .subtle:hover { color: var(--accent); border-color: var(--accent); }
+
+/* One card download per format (#10). The subheader has its own campaign-export
+   menu in chrome colours; this one wears `.subtle`, since it sits among the
+   editor's own buttons. */
+.export-menu { position: relative; }
+.export-toggle { display: inline-block; background: transparent; color: var(--subtle);
+  border: var(--rw2) solid var(--rule); padding: 6px 12px; cursor: pointer;
+  font-family: var(--fm); font-size: 11px; letter-spacing: 0.06em;
+  text-transform: uppercase; list-style: none; white-space: nowrap; }
+.export-toggle::-webkit-details-marker { display: none; }
+.export-toggle:hover, .export-menu[open] .export-toggle { color: var(--accent); border-color: var(--accent); }
+.export-options { position: absolute; right: 0; top: 100%; z-index: 10; display: flex;
+  flex-direction: column; min-width: 120px; background: var(--surface);
+  border: var(--rw2) solid var(--rule); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2); }
+.export-options a { padding: 8px 12px; color: var(--ink); font-family: var(--fm);
+  font-size: 11px; letter-spacing: 0.06em; text-decoration: none; }
+.export-options a:hover { background: var(--rule); color: var(--accent); }
 .cast-panel { border: var(--rw2) solid var(--rule); background: var(--surface); color: var(--ink); margin: 14px 22px; }
 .changes-panel {
   background: var(--panel2); border-bottom: var(--rw) solid var(--rule); color: var(--ink);

@@ -775,3 +775,14 @@ test("one frozen snapshot IS shared, because it cannot go stale", async () => {
   expect(await a).toEqual({ id: "000001", sections: [] });
   expect(await b).toEqual({ id: "000001", sections: [] });
 });
+
+test("exportUrl points at the version's export route, one URL per format", () => {
+  // A plain link the browser downloads, like the campaign exports — no fetch,
+  // so there is nothing here to mock.
+  expect(api.exportUrl("w", "seraphine", "default", "json"))
+    .toBe("/api/worlds/w/characters/seraphine/versions/default/export?format=json");
+  expect(api.exportUrl("w", "seraphine", "winter", "png"))
+    .toBe("/api/worlds/w/characters/seraphine/versions/winter/export?format=png");
+  expect(api.exportUrl("w", "seraphine", "winter", "charx"))
+    .toBe("/api/worlds/w/characters/seraphine/versions/winter/export?format=charx");
+});

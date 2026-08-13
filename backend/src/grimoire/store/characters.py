@@ -412,27 +412,75 @@ def _avatar_candidates(card: dict) -> list[str]:
     return out
 
 
-def _download_avatar(card: dict) -> tuple[bytes, str] | None:
-    """Best-effort avatar bytes from a card: embedded data-URI first, else a URL fetch.
+def _resolve_avatar(card: dict, data: bytes, fmt: str, *,
+                    network: bool) -> tuple[bytes, str, str] | None:
+    """Best-effort avatar bytes from a card: (bytes, ext, the URI they came from).
 
-    Scans every avatar location (assets/avatar, and their extensions-relocated forms);
-    never raises into the import path — a miss just means no avatar.
+    Scans every avatar location (assets/avatar, and their extensions-relocated
+    forms) in order and takes the first that resolves: an embedded data-URI, a
+    file bundled in this CHARX under `embeded://` (#25), or — only when
+    `network` — an http(s) URL. Never raises into the import path; a miss just
+    means no avatar.
+
+    Bundled and embedded bytes are sniffed rather than trusted: the extension
+    written in the URI decides nothing, since `assets.put_image` will store the
+    file under whatever type we name here.
     """
     for uri in _avatar_candidates(card):
         embedded = fetch.decode_data_uri(uri)
         if embedded:
-            return embedded
-        if uri.startswith(("http://", "https://")):
+            return embedded[0], embedded[1], uri
+        path = cards.embedded_path(uri)
+        if path is not None:
+            blob = cards.read_charx_asset(data, path) if fmt == "charx" else None
+            ext = fetch.sniff_ext(blob) if blob else None
+            if blob and ext:
+                return blob, ext, uri
+        elif network and uri.startswith(("http://", "https://")):
             got = fetch.download_url(uri)
             if got:
-                return got
+                return got[0], got[1], uri
     return None
+
+
+def _drop_avatar_uri(card: dict, uri: str) -> None:
+    """Remove the avatar reference whose bytes we are about to store on disk.
+
+    Avatars live under assets/ and are deliberately outside `card_hash`, so a
+    consumed data-URI (or `embeded://` path, which means nothing outside its
+    container) must not reach the stored card: it would bloat every imported
+    card with base64 and give a re-imported character a different hash from the
+    one it was exported from. Remote URLs are left alone — they are cheap
+    provenance, not a copy of the image.
+    """
+    data = card.get("data")
+    holders = [h for h in (card, data if isinstance(data, dict) else None,
+                           (data or {}).get("extensions") if isinstance(data, dict) else None)
+               if isinstance(h, dict)]
+    for holder in holders:
+        entries = holder.get("assets")
+        if isinstance(entries, list):
+            kept = [a for a in entries if not (isinstance(a, dict) and a.get("uri") == uri)]
+            # An emptied list is removed, not left behind: a card that arrived
+            # with nothing but its avatar in `assets` must come back out of a
+            # round-trip byte-identical, hash included.
+            if kept:
+                holder["assets"] = kept
+            else:
+                holder.pop("assets")
+        if holder.get("avatar") == uri:
+            holder.pop("avatar")
 
 
 def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
                 name: str | None = None, update_vid: str | None = None) -> tuple[str, str]:
     card = cards.loads(data, fmt)  # raises cards.CardParseError on bad input
     cards.bake_char_name(card)
+    # Resolve (and unhook) a carried avatar BEFORE the card is written: the
+    # writes below persist whatever `card` holds at that moment.
+    avatar = _resolve_avatar(card, data, fmt, network=False)
+    if avatar:
+        _drop_avatar_uri(card, avatar[2])
     if update_vid is not None:
         cid, vid = into_cid, update_vid
         update_version(root, cid, vid, card)
@@ -443,12 +491,14 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
         else:
             cid = into_cid
             vid = create_version(root, into_cid, card.get("data", {}).get("character_version") or cname, card)
-    if fmt == "png":
-        assets.put_image(root, cid, vid, assets.AVATAR, data, "png")  # the PNG is the avatar
-    else:
-        dl = _download_avatar(card)
-        if dl:
-            assets.put_image(root, cid, vid, assets.AVATAR, dl[0], dl[1])
+    if avatar is None and fmt == "png":
+        # The PNG file itself is the avatar — unless the card carried one, which
+        # is how a non-PNG avatar survives a PNG export (cards.dumps).
+        avatar = (data, "png", "")
+    if avatar is None:
+        avatar = _resolve_avatar(card, data, fmt, network=True)
+    if avatar:
+        assets.put_image(root, cid, vid, assets.AVATAR, avatar[0], avatar[1])
     return cid, vid
 
 
@@ -658,5 +708,39 @@ def download_chub_lorebooks(root: Path, cid: str, vid: str) -> dict:
     return _download_lorebooks(root, resolve_chub_node(root, cid, vid))
 
 
-def export_card(root: Path, cid: str, vid: str, fmt: str) -> bytes:
-    return cards.dumps(read_card(root, cid, vid), fmt)
+def _stored_avatar(root: Path, cid: str, vid: str) -> tuple[bytes, str] | None:
+    p = assets.image_path(root, cid, vid, assets.AVATAR)
+    if p is None:
+        return None
+    try:
+        return p.read_bytes(), p.suffix.lstrip(".").lower()
+    except OSError:
+        return None  # an export must not fail over an image it cannot read
+
+
+def _export_filename(root: Path, cid: str, vid: str, card: dict, fmt: str) -> str:
+    """`<card name>[-<version>].<fmt>` — the name a download lands under.
+
+    The version id is only appended when it is not the default one, so the
+    common case is just the character's name; a card whose name slugifies to
+    nothing falls back to the character id, which is a slug by construction.
+    """
+    stem = slugify((card.get("data") or {}).get("name") or "")
+    if stem == "untitled":  # slugify's sentinel: the name held nothing usable
+        stem = cid
+    meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
+    if vid != meta.get("default_version", "default"):
+        stem = f"{stem}-{vid}"
+    return f"{stem}.{fmt}"
+
+
+def export_card(root: Path, cid: str, vid: str, fmt: str) -> tuple[bytes, str]:
+    """The card as `fmt` bytes, plus the filename to offer it under.
+
+    A pair, like the campaign export builders: the route has nothing else to
+    name the download by, and the stored avatar rides along inside the bytes
+    (#25) so an export is the whole character rather than only its text.
+    """
+    card = read_card(root, cid, vid)
+    blob = cards.dumps(card, fmt, avatar=_stored_avatar(root, cid, vid))
+    return blob, _export_filename(root, cid, vid, card, fmt)

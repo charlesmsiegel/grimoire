@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Appearance, type Card, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type ModuleDetail, type VersionRef } from "../api/client";
+import { api, type Appearance, type Card, type CardFormat, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type ModuleDetail, type VersionRef } from "../api/client";
 import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import CreationWizard from "./CreationWizard";
@@ -37,6 +37,31 @@ function describeChubResult(result: ChubImportResult): string {
 }
 
 type Mode = "grid" | "detail" | "edit";
+
+const EXPORT_FORMATS: { format: CardFormat; label: string; hint: string }[] = [
+  { format: "json", label: "JSON", hint: "card text plus the avatar, embedded" },
+  { format: "png", label: "PNG", hint: "the avatar, with the card written into it" },
+  { format: "charx", label: "CHARX", hint: "card and avatar in one zip" },
+];
+
+/** Download the viewed version as a card. Plain links, like the campaign
+ *  exports: the response is binary and the route names the file, so there is
+ *  nothing for the client to assemble. World scope only — the export route
+ *  hangs off /worlds. */
+function ExportMenu({ wid, cid, vid }: { wid: string; cid: string; vid: string }) {
+  return (
+    <details className="export-menu">
+      <summary className="export-toggle">Export</summary>
+      <div className="export-options">
+        {EXPORT_FORMATS.map(({ format, label, hint }) => (
+          <a key={format} href={api.exportUrl(wid, cid, vid, format)} download title={hint}>
+            {label}
+          </a>
+        ))}
+      </div>
+    </details>
+  );
+}
 
 function focusStyle(f?: number | null): React.CSSProperties | undefined {
   return f == null ? undefined : { objectPosition: `${f}% ${f}%` };
@@ -1200,6 +1225,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                   </div>
                 )}
                 <button className="primary" onClick={() => setMode("edit")}>Edit</button>
+                {worldScope && <ExportMenu wid={wid} cid={detail.meta.id} vid={vid} />}
                 {worldScope && <button className="subtle" onClick={() => deleteCharacter(detail.meta.id, detail.meta.name)}>Delete</button>}
               </div>
             </div>
@@ -1405,6 +1431,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
               <button className="subtle" onClick={() => versionFileRef.current?.click()}>Import version</button>
               <input ref={versionFileRef} type="file" accept=".json,.png,.charx" hidden
                      aria-label="Import version" onChange={onImportVersion} />
+              <ExportMenu wid={wid} cid={detail.meta.id} vid={vid} />
             </>}
             <button className="subtle" onClick={setDefault}>Set default</button>
             {worldScope && <>
