@@ -10958,6 +10958,38 @@ def test_world_import_round_trip_route(client):
     assert len(client.get(f"/api/worlds/{new}/locations").json()) == 1
 
 
+def test_imported_localized_image_urls_actually_serve(client):
+    """The point of rewriting the URLs: after an import, the URL sitting in the
+    imported card must return the image over HTTP. Asserting the rewritten path
+    exists on disk would pass even if the route could not serve it."""
+    wid, cid = _world_char(client)
+    png = _png_bytes()
+    name = "embed-abc123"
+    assert client.put(f"/api/worlds/{wid}/characters/{cid}/versions/main/images/{name}",
+                      files={"file": ("a.png", io.BytesIO(png), "image/png")}).status_code == 200
+    def _card(world: str) -> dict:
+        detail = client.get(f"/api/worlds/{world}/characters/{cid}").json()
+        return next(v for v in detail["versions"] if v["id"] == "main")["card"]
+
+    card = _card(wid)
+    url = f"/api/worlds/{wid}/characters/{cid}/versions/main/images/{name}"
+    card["data"]["description"] = f"A tidewitch.\n\n![]({url})\n"
+    assert client.put(f"/api/worlds/{wid}/characters/{cid}/versions/main",
+                      json={"card": card}).status_code == 200
+    assert client.get(url).status_code == 200          # serves before the round trip
+
+    blob = client.get(f"/api/worlds/{wid}/export.zip").content
+    new = client.post("/api/worlds/import", content=blob,
+                      headers={"content-type": "application/zip"}).json()["id"]
+    assert new != wid
+
+    new_url = _card(new)["data"]["description"].split("](")[1].split(")")[0]
+    assert new_url == f"/api/worlds/{new}/characters/{cid}/versions/main/images/{name}"
+    served = client.get(new_url)
+    assert served.status_code == 200
+    assert served.content == png
+
+
 def test_world_import_rejects_a_non_bundle(client):
     r = client.post("/api/worlds/import", content=b"not a zip",
                     headers={"content-type": "application/zip"})
