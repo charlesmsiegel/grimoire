@@ -5,9 +5,14 @@ into a `ccv3` tEXt chunk; avatars live on disk under assets/ and are embedded on
 the way out (#25), each format carrying the bytes the way its container allows:
 
 - json  — a `data:` URI in `data.assets`, so one file is the whole character.
-- png   — the avatar's own pixels become the image plane. Without Pillow that
-          only works for a PNG; any other type falls back to the 1x1
-          placeholder plus a `data:` URI, which the import prefers.
+- png   — the avatar's own pixels become the image plane. Without a decoder
+          that only works for a PNG: a jpg/gif/webp avatar falls back to the
+          1x1 placeholder plus a `data:` URI, which our own import prefers on
+          seeing those placeholder pixels. That fallback is a KNOWN LIMIT of
+          the format, not a round trip other apps can follow — a SillyTavern
+          reading such an export sees a blank image with the card intact.
+          #25 allowed for it explicitly; encoding a real PNG from arbitrary
+          image bytes needs a dependency this module does not have.
 - charx — the file is bundled at `assets/avatar.<ext>` and referenced with the
           V3 spec's `embeded://` scheme (spelled as the spec spells it).
 
@@ -314,8 +319,12 @@ def _with_avatar_asset(card: dict, uri: str, ext: str) -> dict:
     """
     out = dict(card)
     data = dict(out.get("data") or {})
+    existing = data.get("assets")
+    # Anything but a list is not an asset array — spreading it would turn a
+    # dict's keys (or a string's characters) into entries, corrupting on export
+    # a card we merely passed through (Codex review).
     data["assets"] = [{"type": "icon", "uri": uri, "name": "main", "ext": ext},
-                      *(data.get("assets") or [])]
+                      *(existing if isinstance(existing, list) else [])]
     out["data"] = data
     return out
 
