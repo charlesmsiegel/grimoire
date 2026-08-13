@@ -25,6 +25,7 @@ vi.mock("../api/client", () => ({
     getGreetingSubjects: vi.fn(),
     listUntaggedImages: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
+    exportUrl: (w: string, c: string, v: string, f: string) => `/export/${w}/${c}/${v}/${f}`,
     actorImageUrl: (sc: { id: string }, c: string, v: string, n: string) => `/img/${sc.id}/${c}/${v}/${n}`,
     listAppearances: vi.fn(), markGreeting: vi.fn(), pickVersion: vi.fn(), importVersion: vi.fn(),
     listModules: vi.fn(), setWorldModule: vi.fn(),
