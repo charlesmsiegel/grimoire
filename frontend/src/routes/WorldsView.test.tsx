@@ -127,6 +127,21 @@ test("importing a bundle posts the file, refreshes, and opens the new world", as
   expect(api.listWorlds).toHaveBeenCalledTimes(2);
 });
 
+test("a failed refresh after a successful import is not reported as a failure", async () => {
+  // Receiving the id is the commit point -- the world exists. Reporting the
+  // refresh's failure as the import's would send the user to retry, and the
+  // retry imports a second copy.
+  (api.listWorlds as any)
+    .mockResolvedValueOnce([])
+    .mockRejectedValueOnce(new Error("network"));
+  renderView();
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalled());
+  const file = new File(["zip"], "saltmarch-world.zip", { type: "application/zip" });
+  fireEvent.change(screen.getByLabelText("Import world bundle"), { target: { files: [file] } });
+  await waitFor(() => expect(navigate).toHaveBeenCalledWith("/worlds/imported"));
+  expect(screen.queryByText(/could not import/i)).not.toBeInTheDocument();
+});
+
 test("a rejected bundle shows the server's reason and creates nothing", async () => {
   (api.importWorld as any).mockRejectedValue({ detail: "not a world bundle: no grimoire-bundle.json" });
   renderView();

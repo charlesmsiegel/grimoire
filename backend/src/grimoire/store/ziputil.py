@@ -16,6 +16,7 @@ already has a vocabulary for "this upload is no good".
 from __future__ import annotations
 
 import re
+import shutil
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
@@ -36,6 +37,22 @@ def _err(err: ErrFactory | None, message: str) -> Exception:
 
 _DRIVE_OR_UNC = re.compile(r"^[A-Za-z]:|^[/\\]{2}")
 _S_IFMT, _S_IFLNK = 0o170000, 0o120000
+
+# Win32 resolves these to devices, extension and case regardless -- opening
+# ``NUL`` for writing *succeeds* and discards every byte, so an archive member
+# named after one would vanish during extraction with no error to notice
+# (Codex review). Rejected on every platform for the same reason ``safe_id``
+# rejects trailing dots on every platform: a store is synced between them, and
+# a name has to mean the same thing on both.
+_RESERVED = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{n}" for n in range(1, 10)} | {f"LPT{n}" for n in range(1, 10)})
+
+_COPY_BUF = 1024 * 1024
+
+
+def _names_a_device(component: str) -> bool:
+    return component.split(".", 1)[0].upper() in _RESERVED
 
 
 def member_parts(raw_name: str, *, min_parts: int = 1, err: ErrFactory | None = None) -> list[str]:
@@ -61,6 +78,14 @@ def member_parts(raw_name: str, *, min_parts: int = 1, err: ErrFactory | None = 
     parts = name.split("/")
     if len(parts) < min_parts or any(p in ("", ".", "..") or ":" in p for p in parts):
         raise _err(err, f"unsafe zip entry: {raw_name}")
+    # Both of these are silent-corruption cases rather than escapes, which is
+    # why they are rejected rather than sanitized: Win32 trims a trailing dot
+    # or space off a path component, so `item.md.` and `item.md` are one file
+    # and the second member overwrites the first; and a reserved device name
+    # swallows its member's bytes whole (Codex review).
+    for p in parts:
+        if p != p.rstrip(". ") or _names_a_device(p):
+            raise _err(err, f"unsafe zip entry: {raw_name}")
     return parts
 
 
@@ -72,16 +97,29 @@ def scan(z: zipfile.ZipFile, *, max_members: int, max_uncompressed: int,
     scale: a module pack is a handful of small files, a world carries every
     character portrait its owner ever downloaded.
     """
-    infos = [i for i in z.infolist() if not i.is_dir()]
-    if len(infos) > max_members:
+    everything = z.infolist()
+    # Counted before directories are dropped: an archive of a million empty
+    # directory entries has two *files* in it, so a cap applied to the filtered
+    # list would wave through the very thing the cap exists to stop (Codex
+    # review).
+    if len(everything) > max_members:
         raise _err(err, f"zip has too many entries (> {max_members})")
+    infos = [i for i in everything if not i.is_dir()]
     if sum(i.file_size for i in infos) > max_uncompressed:
         raise _err(err, "zip expands past the size cap")
     seen_ci: set[str] = set()
+    dirs_ci: dict[str, str] = {}         # folded directory prefix -> as spelled
     for i in infos:
         if (i.external_attr >> 16) & _S_IFMT == _S_IFLNK:
             raise _err(err, f"zip contains a symlink: {i.filename}")
         parts = member_parts(i.filename, min_parts=min_parts, err=err)
+        # Two spellings of one directory (`world/Foo/a.md`, `world/foo/b.md`)
+        # are distinct paths but one directory on a case-insensitive
+        # filesystem, so the extracted tree would not be the archive's.
+        for n in range(1, len(parts)):
+            prefix = "/".join(parts[:n])
+            if dirs_ci.setdefault(prefix.casefold(), prefix) != prefix:
+                raise _err(err, f"case-colliding zip directories: {i.filename}")
         ci = "/".join(parts).casefold()   # normalized + case-folded collisions
         if ci in seen_ci:
             raise _err(err, f"case-colliding zip entries: {i.filename}")
@@ -116,10 +154,15 @@ def extract(z: zipfile.ZipFile, infos: list[zipfile.ZipInfo], staging: Path, *,
             raise _err(err, f"unsafe zip entry: {i.filename}")
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
+            # Copied through a bounded buffer, not `z.read(i)`: a world bundle
+            # legitimately carries a single multi-gigabyte asset, and reading a
+            # member whole would turn that into an OOM rather than an import
+            # (Codex review).
             # atomic-ok: unpublished staging tree, published as a unit by the
             # caller's single rename; a per-member temp+fsync would only slow
             # large imports
-            dest.write_bytes(z.read(i))
+            with z.open(i) as src, open(dest, "wb") as out:
+                shutil.copyfileobj(src, out, _COPY_BUF)
         except (OSError, RuntimeError, NotImplementedError, zipfile.BadZipFile):
             # pathological names (reserved device names CON/NUL, trailing dots
             # or spaces on Windows) can raise a raw OSError from mkdir or

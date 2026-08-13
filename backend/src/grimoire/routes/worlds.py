@@ -141,8 +141,14 @@ async def post_world_import(request: Request):
             raise HTTPException(status_code=400, detail=str(exc))
     # Same reason as `post_world`: a store someone imported a world into has
     # been set up, so deleting that world later must not reopen the wizard
-    # (#194).
-    store.config.mark_setup_done()
+    # (#194). Past the rename the world exists, so a failure here must not be
+    # reported as a failed import -- the caller would retry and import a second
+    # copy (Codex review). The flag is backfilled by the next config read
+    # anyway; this only saves that read a scan.
+    try:
+        store.config.mark_setup_done()
+    except OSError:
+        pass
     return {"id": wid}
 
 
