@@ -710,6 +710,54 @@ test("prompt-list reads never coalesce, so a post-generation refresh sees the ne
   expect(await older).toEqual({ entries: [] });
 });
 
+test("exportWorldUrl is a plain href the browser can download", () => {
+  expect(api.exportWorldUrl("saltmarch")).toBe("/api/worlds/saltmarch/export.zip");
+});
+
+test("importWorld POSTs the raw zip body", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "saltmarch-2" }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const file = new Blob([new Uint8Array([0x50, 0x4b])], { type: "application/zip" });
+  expect(await api.importWorld(file)).toEqual({ id: "saltmarch-2" });
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/worlds/import",
+    expect.objectContaining({
+      method: "POST",
+      body: file,                                  // raw body, not FormData
+      headers: { "content-type": "application/zip" },
+    }),
+  );
+});
+
+test("importWorld surfaces the server's rejection as an ApiError", async () => {
+  globalThis.fetch = vi.fn().mockResolvedValue({
+    ok: false, status: 400, statusText: "Bad Request",
+    json: async () => ({ detail: "not a world bundle: no grimoire-bundle.json" }),
+  }) as unknown as typeof fetch;
+  await expect(api.importWorld(new Blob([]))).rejects.toMatchObject({
+    status: 400, detail: "not a world bundle: no grimoire-bundle.json",
+  });
+});
+
+test("a successful world import invalidates the cached config", async () => {
+  // Importing into an empty store flips `first_run`, exactly as createWorld
+  // does -- a stale cached config would leave the setup wizard showing.
+  invalidateConfigCache();
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk(CFG));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.getConfig();
+  await api.getConfig();
+  expect(fetchMock).toHaveBeenCalledTimes(1);   // cached
+
+  fetchMock.mockResolvedValue(jsonOk({ id: "w" }));
+  await api.importWorld(new Blob([]));
+
+  fetchMock.mockResolvedValue(jsonOk({ ...CFG, first_run: false }));
+  await api.getConfig();                        // must re-fetch, not serve the cache
+  expect(fetchMock).toHaveBeenCalledTimes(3);
+  invalidateConfigCache();
+});
+
 test("one frozen snapshot IS shared, because it cannot go stale", async () => {
   // The exception to the exception: a captured prompt never changes, so two
   // readers of the same entry may share one answer.

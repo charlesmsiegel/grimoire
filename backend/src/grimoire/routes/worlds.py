@@ -7,10 +7,16 @@ Characters and greetings have their own modules; the generic
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+import os
+import tempfile
+from pathlib import Path
+
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from .. import store
-from .common import _content_fields, _dump, _world_root_or_404
+from .common import _content_fields, _dump, _spooled_upload, _world_root_or_404
 from .models import (LorebookCommit, ModuleSetting, NameBody, PCCreate, PCUpdate,
                      PersonaVersionCreate, PersonaVersionUpdate, SheetBody, SheetCreationBody)
 
@@ -68,6 +74,76 @@ def delete_world(wid: str):
 @router.get("/worlds/{wid}/campaigns")
 def get_world_campaigns(wid: str):
     return store.sync.campaigns_for_world(wid)
+
+
+# ---- world bundles: export / import (#54) ----
+#
+# `export.zip` is a literal third segment and `entities` registers the generic
+# `/worlds/{wid}/{kind}` that would swallow it -- safe because `entities` is
+# included last (see routes/__init__), and pinned by tests/test_route_order.py.
+IMPORT_CAP = 4 * 1024 * 1024 * 1024
+
+
+@router.get("/worlds/{wid}/export.zip")
+def get_world_export(wid: str):
+    """The whole world directory as a bundle.
+
+    Built to a temp file and streamed rather than returned as bytes: a world
+    with a full character gallery runs past a gigabyte, and buffering that into
+    a response is how the Android build dies. A sync `def` route, so FastAPI
+    runs the zipping in its threadpool and the event loop keeps serving.
+    """
+    _world_root_or_404(wid)
+    fd, tmp_name = tempfile.mkstemp(suffix=".zip")
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        store.world_bundle.write_bundle(wid, tmp)
+        size = tmp.stat().st_size
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+    def stream():
+        try:
+            with open(tmp, "rb") as f:      # atomic guard: read-only, not a record write
+                while chunk := f.read(1024 * 1024):
+                    yield chunk
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    return StreamingResponse(
+        stream(), media_type="application/zip",
+        # `identity` is what makes GZipMiddleware stand aside (it skips any
+        # response that already declares an encoding). Deflating a zip of
+        # already-deflated records buys nothing and costs a full pass over a
+        # gigabyte -- and standing aside is also what keeps Content-Length,
+        # so the browser can show real download progress.
+        headers={"Content-Disposition":
+                 f'attachment; filename="{store.world_bundle.bundle_filename(wid)}"',
+                 "Content-Encoding": "identity",
+                 "Content-Length": str(size)})
+
+
+@router.post("/worlds/import")
+async def post_world_import(request: Request):
+    """Import a bundle as a **new** world; the body is the raw zip.
+
+    Raw rather than multipart, matching `POST /modules/import`: the two are the
+    same operation, and a gigabyte of multipart framing buys nothing.
+    """
+    async with _spooled_upload(request, IMPORT_CAP, "bundle too large") as tmp:
+        try:
+            # In a worker thread: unzipping a large world would otherwise block
+            # the event loop for the whole import (see post_module_import).
+            wid = await run_in_threadpool(store.world_bundle.import_bundle, tmp)
+        except store.world_bundle.BundleError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    # Same reason as `post_world`: a store someone imported a world into has
+    # been set up, so deleting that world later must not reopen the wizard
+    # (#194).
+    store.config.mark_setup_done()
+    return {"id": wid}
 
 
 @router.put("/worlds/{wid}/module")

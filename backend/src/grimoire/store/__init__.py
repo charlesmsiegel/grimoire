@@ -24,7 +24,8 @@ from . import (
     image_subjects, length_drift, lengths, llm_connections, localize, locks, lorebook, migrations, module_edit, modules, overlay, pcs, playing,
     playstate, plot, prompt_log, proposals, relationships, response_presets, rolling_summary, rolls, scene_ids, scene_refs, scenes, sheets,
     styles, suggest,
-    sync, tags, taglines, thumbs, turnstate, voice_anchors, voice_drift, worlds,
+    sync, tags, taglines, thumbs, turnstate, voice_anchors, voice_drift, world_bundle, worlds,
+    ziputil,
 )
 # `module_display` was never exported here: it was bound as an attribute of
 # this package only as a side effect of the flat `modules.py` importing it.
@@ -53,6 +54,7 @@ from .paths import (
     data_dir_info, ensure_home, home, now_iso, set_data_dir, slugify, uniquify,
 )
 from .scenes import SceneNotFound
+from .world_bundle import BundleError
 from .worlds import WorldNotFound
 
 __all__ = [
@@ -81,6 +83,9 @@ __all__ = [
     "UnknownKind",
     "worlds",
     "WorldNotFound",
+    "world_bundle",
+    "BundleError",
+    "ziputil",
     "campaigns",
     "campaign_climate",
     "CampaignNotFound",
