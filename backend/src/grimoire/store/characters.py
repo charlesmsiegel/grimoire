@@ -420,52 +420,52 @@ def _avatar_candidates(card: dict) -> list[str]:
     return out
 
 
-def _embedded_avatar(card: dict, data: bytes, fmt: str) -> tuple[bytes, str, str] | None:
-    """Avatar bytes the imported file itself carries: (bytes, ext, their URI).
+def _carried_uri(uri: str) -> bool:
+    """Does this URI *contain* the image, rather than point at one elsewhere?"""
+    return uri.startswith("data:") or cards.embedded_path(uri) is not None
+
+
+def _resolve_avatar(card: dict, data: bytes, fmt: str, *,
+                    network: bool) -> tuple[bytes, str, str] | None:
+    """Best-effort avatar bytes from a card: (bytes, ext, the URI they came from).
 
     Scans every avatar location (assets/avatar, and their extensions-relocated
-    forms) in order and takes the first that resolves: an embedded data-URI, or
-    a file bundled in this CHARX under `embeded://` (#25). No network — this
-    runs before `_download_avatar`, so bytes already in hand beat a remote URL
-    listed ahead of them. Never raises into the import path; a miss just means
-    no avatar.
+    forms) in the order `_avatar_candidates` yields them and takes the first
+    that resolves — an embedded data-URI, a file bundled in this CHARX under
+    `embeded://` (#25), or an http(s) URL — leaving that long-standing
+    precedence exactly as it was. `network=False` covers PNG import, which has
+    never fetched anything (the file is normally its own avatar). Never raises
+    into the import path; a miss just means no avatar.
 
     Bundled and embedded bytes are sniffed rather than trusted: the extension
     written in the URI decides nothing, since `assets.put_image` will store the
     file under whatever type we name here.
 
-    Candidates are deduplicated and bundled reads are capped, because an
-    uploaded CHARX is untrusted: a card listing the same over-compressed member
-    a thousand times would otherwise inflate it a thousand times over — a small
-    upload, an unbounded amount of work (Codex review).
+    Candidates are deduplicated and bundled reads share one byte budget,
+    because an uploaded CHARX is untrusted: a card listing over-compressed
+    members as its avatar would otherwise inflate each of them in full — a
+    small upload, a great deal of work (Codex review).
     """
-    reads = _MAX_BUNDLED_READS
+    budget = cards.MAX_ASSET_BYTES
     for uri in dict.fromkeys(_avatar_candidates(card)):
         embedded = fetch.decode_data_uri(uri)
         if embedded:
             return embedded[0], embedded[1], uri
         path = cards.embedded_path(uri)
-        if path is None or fmt != "charx" or reads <= 0:
-            continue  # not bundled, nothing to open it against, or budget spent
-        reads -= 1
-        blob = cards.read_charx_asset(data, path)
-        ext = fetch.sniff_ext(blob) if blob else None
-        if blob and ext:
-            return blob, ext, uri
-    return None
-
-
-def _download_avatar(card: dict) -> tuple[bytes, str] | None:
-    """Avatar bytes from the first remote candidate that downloads, or None.
-
-    The fallback for a card that only points at its picture — `_embedded_avatar`
-    has already exhausted everything the file carries by the time this runs.
-    """
-    for uri in dict.fromkeys(_avatar_candidates(card)):
-        if uri.startswith(("http://", "https://")):
+        if path is not None:
+            if fmt != "charx" or budget <= 0:
+                continue  # nothing to open it against, or the budget is spent
+            blob = cards.read_charx_asset(data, path, max_bytes=budget)
+            if blob is None:
+                continue
+            budget -= len(blob)
+            ext = fetch.sniff_ext(blob)
+            if ext:
+                return blob, ext, uri
+        elif network and uri.startswith(("http://", "https://")):
             got = fetch.download_url(uri)
             if got:
-                return got
+                return got[0], got[1], uri
     return None
 
 
@@ -482,17 +482,26 @@ def _drop_avatar_uri(card: dict, uri: str) -> None:
     Only avatar-ish entries go: an asset of another kind that happens to share
     the URI (one image serving as both icon and background) is somebody else's
     reference, and dropping it would lose an asset nothing replaced.
+
+    And only the FIRST match, which is the one export prepends. A card that
+    already listed that exact URI keeps its own entry, so a round trip returns
+    the character it started as rather than one asset lighter (Codex review).
     """
     data = card.get("data")
     holders = [h for h in (card, data if isinstance(data, dict) else None,
                            (data or {}).get("extensions") if isinstance(data, dict) else None)
                if isinstance(h, dict)]
+    dropped = False
     for holder in holders:
         entries = holder.get("assets")
         if isinstance(entries, list):
-            kept = [a for a in entries
-                    if not (isinstance(a, dict) and a.get("uri") == uri
-                            and a.get("type") in _AVATAR_TYPES)]
+            kept = []
+            for a in entries:
+                if (not dropped and isinstance(a, dict) and a.get("uri") == uri
+                        and a.get("type") in _AVATAR_TYPES):
+                    dropped = True
+                    continue
+                kept.append(a)
             # An emptied list is removed, not left behind: a card that arrived
             # with nothing but its avatar in `assets` must come back out of a
             # round-trip byte-identical, hash included.
@@ -500,8 +509,9 @@ def _drop_avatar_uri(card: dict, uri: str) -> None:
                 holder["assets"] = kept
             else:
                 holder.pop("assets")
-        if holder.get("avatar") == uri:
+        if not dropped and holder.get("avatar") == uri:
             holder.pop("avatar")
+            dropped = True
 
 
 def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
@@ -510,9 +520,16 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
     cards.bake_char_name(card)
     # Resolve (and unhook) a carried avatar BEFORE the card is written: the
     # writes below persist whatever `card` holds at that moment.
-    embedded = _embedded_avatar(card, data, fmt)
-    if embedded:
-        _drop_avatar_uri(card, embedded[2])
+    avatar = _resolve_avatar(card, data, fmt, network=(fmt != "png"))
+    if fmt == "png" and avatar and not cards.is_placeholder_png(data):
+        # A PNG's own pixels are the character's picture -- as they have always
+        # been on import. The card's copy only wins when those pixels are the
+        # placeholder our export writes for an avatar it could not encode
+        # (Codex review: preferring it outright would swap the portrait of any
+        # third-party card whose payload happens to carry an embedded icon).
+        avatar = None
+    if avatar and _carried_uri(avatar[2]):
+        _drop_avatar_uri(card, avatar[2])
     if update_vid is not None:
         cid, vid = into_cid, update_vid
         update_version(root, cid, vid, card)
@@ -523,14 +540,8 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
         else:
             cid = into_cid
             vid = create_version(root, into_cid, card.get("data", {}).get("character_version") or cname, card)
-    if embedded:
-        avatar = (embedded[0], embedded[1])
-    elif fmt == "png":
-        # The PNG file itself is the avatar — unless the card carried one, which
-        # is how a non-PNG avatar survives a PNG export (cards.dumps).
-        avatar = (data, "png")
-    else:
-        avatar = _download_avatar(card)
+    if avatar is None and fmt == "png":
+        avatar = (data, "png", "")  # the PNG file itself is the avatar
     if avatar:
         assets.put_image(root, cid, vid, assets.AVATAR, avatar[0], avatar[1])
     return cid, vid
