@@ -66,8 +66,18 @@ class SPAStaticFiles(StaticFiles):
         with ``os.path`` -- so on Windows it is spelled ``api\\endpoint`` and a
         comparison against ``"api/"`` never fires, handing every mistyped
         endpoint the SPA fallback and a 200 (#313). Ubuntu CI cannot produce
-        that separator, so both are normalized here rather than trusting the
-        platform's.
+        that separator, so BOTH are normalized here rather than trusting the
+        platform's: a fix keyed to ``os.sep`` would be correct and untestable.
+
+        The *resolved* path is deliberately what gets asked, rather than the
+        raw ``scope["path"]`` -- which would sidestep the separator question
+        entirely and be worse. ``get_path`` has already collapsed ``..``, so
+        ``/x/../api/gone`` arrives here as ``api/gone``; a check against the URL
+        would read the literal spelling, miss it, and hand back the SPA for a
+        request the file lookup had already resolved into ``/api``.
+
+        Whole first segment, not a prefix: ``/apiary`` is a client route, and
+        answering it with a 404 would cost a real page its fallback.
         """
         return path.replace("\\", "/").split("/", 1)[0] == "api"
 
