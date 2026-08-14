@@ -168,15 +168,19 @@ def now(cid: str, fallback: str | None = None) -> str:
     return read(cid)["now"] or _seed(cid, fallback)
 
 
-def state(cid: str, fallback: str | None = None) -> dict:
+def state(cid: str) -> dict:
     """`{"now": <resolved>, "log": [...]}` — one read of clock.json for both.
 
     What the panel wants in one call: `now`'s precedence applied, and the log
     beside it. `now(cid)` plus `read(cid)["log"]` is the same answer from two
     parses of one file.
+
+    No `fallback` parameter, unlike `now`: the one caller is a route with no
+    chronicle read of its own to reuse, and a parameter nothing passes is a
+    guess about a second caller that does not exist yet.
     """
     stored = read(cid)
-    return {"now": stored["now"] or _seed(cid, fallback), "log": stored["log"]}
+    return {"now": stored["now"] or _seed(cid, None), "log": stored["log"]}
 
 
 def _write(cid: str, data: dict) -> None:
