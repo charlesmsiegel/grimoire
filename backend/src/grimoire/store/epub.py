@@ -84,23 +84,21 @@ def build_epub(cid: str) -> tuple[bytes, str]:
     # cover deleted mid-export leave a cover page and a manifest entry pointing
     # at a file that never got written. A vanished cover simply produces the
     # no-cover book, which is what an export owes the user over an exception.
+    # Named from the bytes like every other packed image, and dropped on the
+    # same terms (#321): a cover we cannot declare would invalidate the book it
+    # is the first page of. An uploaded cover is already validated
+    # (`covers.validate`), so that only answers for one a sync client or a
+    # hand-edit dropped into the campaign's assets directory -- and it lands in
+    # the same no-cover book as a cover that vanished, below.
     cover_bytes, cover_name = None, ""
     if data["cover"] is not None:
         try:
-            cover_bytes = data["cover"].read_bytes()
-            # Named from the bytes like every other packed image, and dropped on
-            # the same terms (#321): a cover we cannot declare would invalidate
-            # the book it is the first page of. An uploaded cover is already
-            # validated (`covers.validate`), so this only answers for one a sync
-            # client or a hand-edit dropped into the campaign's assets
-            # directory -- and a dropped one lands in the no-cover book below,
-            # the same degradation a cover that vanishes mid-export gets.
-            ext = _export.packed_ext(cover_bytes)
-            if ext is None:
-                raise OSError("cover is not an image we can declare")
-            cover_name = f"cover.{ext}"
+            raw = data["cover"].read_bytes()
         except OSError:
-            cover_bytes, cover_name = None, ""
+            raw = None
+        ext = _export.packed_ext(raw) if raw is not None else None
+        if ext is not None:
+            cover_bytes, cover_name = raw, f"cover.{ext}"
 
     docs = []
     if cover_bytes is not None:
