@@ -32,6 +32,7 @@ class ConfigUpdate(BaseModel):
     turnstate_depth: str | None = None
     promote_streak: str | None = None
     rolling_summary_every: str | None = None
+    offscene_known_limit: str | None = None
     embeddings_connection_id: str | None = None
     embeddings_model: str | None = None
     semantic_recall_depth: str | None = None

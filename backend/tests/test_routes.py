@@ -1353,6 +1353,39 @@ def test_scene_context_breakdown(client):
     assert all(s["dropped"] is False and s["tier"] for s in body["sections"])
 
 
+def test_scene_context_prices_the_two_off_scene_tiers_apart(client):
+    """The two off-scene cast tiers reach the inspector as separate rows with
+    independent token counts (#2) -- tier 3's share of the budget is the number
+    that decides whether it needs bounding, and one merged row hid it."""
+    wid, cid = _campaign(client)
+    for name, desc in (("Seraphine", "She serves the Drowned King."),
+                       ("Winifred", "She keeps the tide-ledger."),
+                       ("Mara", "She walks the Saltmarch road.")):
+        card = {"spec": "chara_card_v3", "spec_version": "3.0",
+                "data": {"name": name, "description": desc, "extensions": {}}}
+        client.post(f"/api/worlds/{wid}/characters", json={"name": name, "card": card})
+    # Mara is briefed but never cast -> tier 3.
+    store.taglines.write(store.worlds.world_root(wid), "mara", "A courier with cold hands.")
+
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"kind": "characters", "id": "seraphine"})
+    # Winifred appeared in another scene, so she is on the roster but not here;
+    # with a campaign dossier that makes her tier 2.
+    other = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Other"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{other}/cast", json={"kind": "characters", "id": "winifred"})
+    store.dossiers.write(store.campaigns.campaign_root(cid), "winifred",
+                         "Winifred counts the tide in the counting-house.")
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
+    rows = {s["label"]: s for s in body["sections"]}
+    assert "Off-scene cast" not in rows
+    active = rows["Off-scene cast · active elsewhere"]
+    known = rows["Off-scene cast · known to exist"]
+    assert "counting-house" in active["text"] and "cold hands" not in active["text"]
+    assert "cold hands" in known["text"] and "counting-house" not in known["text"]
+    assert active["tokens"] > 0 and known["tokens"] > 0
+
+
 def test_scene_context_reports_what_the_budget_dropped(client):
     """The breakdown must account for a drop, not hide it: the dropped section
     keeps its text and its tokens move out of the total that was sent."""

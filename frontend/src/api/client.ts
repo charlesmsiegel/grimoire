@@ -164,6 +164,9 @@ export type Config = {
   /** Posts between live rolling-summary refreshes; "0" turns the automatic
    *  refresh off, leaving only the inspector's own Refresh button. */
   rolling_summary_every: string;
+  /** Characters the off-scene cast's "known to exist" tier may name; "0" = no
+   *  ceiling. Over it, the ones the in-scene cast mentions are kept first. */
+  offscene_known_limit: string;
   /** Semantic recall: the openai_compatible connection serving /embeddings, "" = off. */
   embeddings_connection_id: string;
   embeddings_model: string;
@@ -198,6 +201,7 @@ export type ConfigUpdate = Partial<Pick<Config,
   "llm_retries" | "fallback_connection_id" |
   "context_budget" | "archive_depth" | "setup_done" | "prompt_log_depth" |
   "turnstate_depth" | "promote_streak" | "rolling_summary_every" |
+  "offscene_known_limit" |
   "embeddings_connection_id" | "embeddings_model" |
   "semantic_recall_depth" | "semantic_recall_threshold" |
   "prompt_layout_enabled" | "speaker_turn_taking" |

@@ -1,0 +1,23 @@
+{#- Tier 3 of the off-scene cast directory: every other character the campaign
+    can see that has a tagline, one line each. Vars:
+      offscene_known — [{id, name, tagline, versions: [str]}], already scoped
+                       to the configured ceiling by `context.cast`
+      offscene_active — tier 2's data, read only to decide who carries the
+                        shared heading (see off_scene_cast_active.j2)
+
+    Bounded upstream rather than here: which characters survive the ceiling is
+    a relevance judgement about the scene, and dropping them in the template
+    would make the omission invisible to the token breakdown that is measuring
+    this section. -#}
+{%- set lines = [] -%}
+{%- for k in offscene_known -%}
+{%- set suffix = (" (available as: " ~ (k.versions | join(", ")) ~ ")") if k.versions else "" -%}
+{%- set _ = lines.append(k.name ~ ": " ~ k.tagline ~ suffix) -%}
+{%- endfor -%}
+{%- if lines -%}
+{%- from "scene/_off_scene_cast.j2" import heading -%}
+{%- set parts = [] -%}
+{%- if not offscene_active -%}{%- set _ = parts.append(heading()) -%}{%- endif -%}
+{%- set _ = parts.append("## Known to exist\n" ~ (lines | join("\n"))) -%}
+{{ parts | join("\n\n") }}
+{%- endif -%}

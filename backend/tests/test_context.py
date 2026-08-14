@@ -611,6 +611,160 @@ def test_cast_directory_tiers(monkeypatch, tmp_path):
     assert "Ghost" not in sys                                            # no tagline -> skipped
     assert "Myval" not in sys.split("## Known to exist")[1]              # roster char not in tier 3
 
+    # The two tiers are priced apart (#2): one labelled section each, each with
+    # its own token count, rather than one "Off-scene cast" number that hid how
+    # much of the budget the unbounded tier was spending.
+    rows = {s["label"]: s for s in context.context_sections(cid, sid)}
+    assert "Off-scene cast" not in rows
+    active = rows["Off-scene cast · active elsewhere"]
+    known = rows["Off-scene cast · known to exist"]
+    assert "Myval prowls the dusk road." in active["text"] and "Akane" not in active["text"]
+    assert "An eager doggirl." in known["text"] and "Myval" not in known["text"]
+    assert active["tokens"] > 0 and known["tokens"] > 0
+
+    # ...and splitting them did not move a byte of the prompt: the two sections
+    # joined the way system.j2 joins every section reproduce the single block
+    # this was one template for, heading and all.
+    assert ("# Other characters in this world\n"
+            "\n"
+            "# (Not present. Introduce them only if the story calls for it.)\n"
+            "\n"
+            "## Active in this campaign, elsewhere\n"
+            "Myval: Myval prowls the dusk road.\n"
+            "\n"
+            "## Known to exist\n"
+            "Akane: An eager doggirl. (available as: futa, main)") in sys
+
+
+def test_cast_directory_heading_travels_to_tier_three_alone(monkeypatch, tmp_path):
+    """With no tier 2 to carry it, the directory's heading rides on tier 3 --
+    so the prompt opens the same way whichever tiers a campaign happens to have."""
+    from grimoire.store import taglines
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Aese", "main", _npc_card("Aese", description="d"))
+    characters.create_character(wroot, "Akane", "main", _npc_card("Akane", description="a"))
+    taglines.write(wroot, "akane", "An eager doggirl.")
+
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "S")
+    ap.appear(cid, sid, "characters", "aese", "main", "npc")
+    scenes.append_message(cid, sid, "user", "hi")
+
+    sys = context.build_messages(cid, sid)[0]["content"]
+    assert ("# Other characters in this world\n"
+            "\n"
+            "# (Not present. Introduce them only if the story calls for it.)\n"
+            "\n"
+            "## Known to exist\n"
+            "Akane: An eager doggirl. (available as: main)") in sys
+    assert sys.count("# Other characters in this world") == 1
+    labels = [s["label"] for s in context.context_sections(cid, sid)]
+    assert "Off-scene cast · known to exist" in labels
+    assert "Off-scene cast · active elsewhere" not in labels   # empty -> no noise row
+
+
+def _known_world(monkeypatch, tmp_path, n):
+    """A world whose tier 3 is `n` briefed characters (`char00`…), plus `Aese`
+    in the scene whose card names the LAST of them."""
+    from grimoire.store import taglines
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    names = [f"Char{i:02d}" for i in range(n)]
+    for name in names:
+        characters.create_character(wroot, name, "main", _npc_card(name, description="x"))
+        taglines.write(wroot, name.lower(), f"{name} exists.")
+    # The in-scene card mentions the last one, which is also the one a flat
+    # order-preserving cut would drop first.
+    characters.create_character(wroot, "Aese", "main",
+                                _npc_card("Aese", description=f"Aese knows {names[-1]} well."))
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "S")
+    ap.appear(cid, sid, "characters", "aese", "main", "npc")
+    scenes.append_message(cid, sid, "user", "hi")
+    return cid, sid, names
+
+
+def test_known_tier_capped_keeping_the_mentioned_and_logging_the_rest(monkeypatch, tmp_path, caplog):
+    """Tier 3 is bounded (#3), relevance decides who survives, and the omitted
+    names are logged rather than silently gone."""
+    import logging
+    from grimoire.store import config
+    cid, sid, names = _known_world(monkeypatch, tmp_path, 6)
+    config.write_config(offscene_known_limit="3")
+
+    with caplog.at_level(logging.INFO, logger="grimoire.store.context.cast"):
+        sys = context.build_messages(cid, sid)[0]["content"]
+    listed = [n for n in names if f"{n} exists." in sys]
+    assert len(listed) == 3
+    assert names[-1] in listed                 # mentioned by the in-scene card -> kept
+    assert listed == sorted(listed)            # survivors still read in directory order
+
+    dropped = [n for n in names if n not in listed]
+    assert dropped                             # the cap really cut something
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "tier 3 capped to 3 of 6" in logged
+    for name in dropped:
+        assert name in logged
+
+
+def test_known_tier_drop_log_summarises_a_long_tail(monkeypatch, tmp_path, caplog):
+    """The count is exact; the names are a bounded sample. A world big enough to
+    trip the ceiling is big enough that spelling out every omission on every
+    generated turn is its own problem."""
+    import logging
+    from grimoire.store import config
+    n, limit = context_cast._LOGGED_DROPS + 5, 2
+    cid, sid, names = _known_world(monkeypatch, tmp_path, n)
+    config.write_config(offscene_known_limit=str(limit))
+
+    with caplog.at_level(logging.INFO, logger="grimoire.store.context.cast"):
+        context.build_messages(cid, sid)
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert f"capped to {limit} of {n}" in logged
+    assert f"… and {n - limit - context_cast._LOGGED_DROPS} more" in logged
+    assert logged.count("Char") == context_cast._LOGGED_DROPS
+
+
+def test_known_tier_uncapped_when_limit_is_zero(monkeypatch, tmp_path):
+    """"0" is the escape hatch back to the unbounded listing."""
+    from grimoire.store import config
+    cid, sid, names = _known_world(monkeypatch, tmp_path, 6)
+    config.write_config(offscene_known_limit="0")
+    sys = context.build_messages(cid, sid)[0]["content"]
+    assert all(f"{n} exists." in sys for n in names)
+
+
+def test_known_tier_under_the_ceiling_is_untouched(monkeypatch, tmp_path):
+    """A campaign inside the ceiling never pays for the scoping pass -- not the
+    relevance scan, and not a reordering of its directory."""
+    cid, sid, names = _known_world(monkeypatch, tmp_path, 4)   # default ceiling is 40
+    called = []
+    monkeypatch.setattr(context_cast.appearances_transitions, "suggestions",
+                        lambda *a, **k: called.append(a) or [])
+    sys = context.build_messages(cid, sid)[0]["content"]
+    tier3 = sys.split("## Known to exist\n")[1].split("\n\n")[0].splitlines()
+    assert [line.split(":")[0] for line in tier3] == names
+    assert called == []
+
+
+def test_known_tier_cap_survives_an_unreadable_relevance_signal(monkeypatch, tmp_path):
+    """The bound is the feature; the ranking is the refinement. A relevance scan
+    that raises must cost the ordering, not the turn."""
+    from grimoire.store import config
+    cid, sid, names = _known_world(monkeypatch, tmp_path, 6)
+    config.write_config(offscene_known_limit="3")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("card unreadable")
+
+    monkeypatch.setattr(context_cast.appearances_transitions, "suggestions", boom)
+    sys = context.build_messages(cid, sid)[0]["content"]
+    listed = [n for n in names if f"{n} exists." in sys]
+    assert listed == names[:3]                 # capped, in directory order
+
 
 def test_cast_directory_absent_when_no_artifacts(monkeypatch, tmp_path):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)

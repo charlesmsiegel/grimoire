@@ -626,7 +626,7 @@
     },
     {
       "dropped": false,
-      "label": "Off-scene cast",
+      "label": "Off-scene cast \u00b7 active elsewhere",
       "tier": "background",
       "trimmed": 0
     },

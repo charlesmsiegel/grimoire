@@ -440,6 +440,27 @@ test("a section the budget dropped is shown as dropped, not hidden", async () =>
   await screen.findByText(/40 tok dropped to fit the budget/i);
 });
 
+test("the two off-scene cast tiers read as separate rows with their own numbers", async () => {
+  // The backend splits the directory into a section per tier (#2) precisely so
+  // the unbounded one can be priced on its own; the panel has to show them as
+  // two readouts rather than collapsing them back into a single row.
+  (api.getSceneContext as any).mockResolvedValue({
+    model: "m", total_tokens: 100, dropped_tokens: 0, budget_tokens: 200,
+    sections: [
+      { label: "Off-scene cast · active elsewhere", text: "Winifred: she counts the tide.",
+        tokens: 20, tier: "background", dropped: false, trimmed: 0 },
+      { label: "Off-scene cast · known to exist", text: "Mara: a courier with cold hands.",
+        tokens: 80, tier: "background", dropped: false, trimmed: 0 },
+    ],
+  });
+  renderInspector();
+  const active = await screen.findByText("Off-scene cast · active elsewhere");
+  const known = await screen.findByText("Off-scene cast · known to exist");
+  expect(active.closest("details")).not.toBe(known.closest("details"));
+  await screen.findByText("20 · 10%");
+  await screen.findByText("80 · 40%");
+});
+
 test("percentages measure against the configured budget, not the model window", async () => {
   (api.getSceneContext as any).mockResolvedValue({
     model: "m", total_tokens: 100, dropped_tokens: 0, budget_tokens: 200,

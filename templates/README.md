@@ -286,8 +286,13 @@ substituted by code:
   secrecy. The secret list renders in the same section under
   `scene/_secrecy.j2`'s heading rather than relying on the (separately
   dropped) World info section to carry it
-- `offscene_active` / `offscene_known` — the cast-directory tiers
-  (dossiers / taglines + version ids)
+- `offscene_active` / `offscene_known` — the cast-directory tiers, rendered as
+  two adjacent sections so the token breakdown can price them apart:
+  `[{name, dossier}]` for the campaign-active tier and
+  `[{id, name, tagline, versions}]` for the known-to-exist one, the latter
+  already cut to `offscene_known_limit` by `context.cast._scope_known`. The
+  directory's shared heading lives in `scene/_off_scene_cast.j2` and is emitted
+  by whichever of the two sections renders first
 - `player_names` — seated player names (the response-format guard)
 - `mechanics_rules` — `list[str]`, activated rules-doc bodies (frontmatter
   `always` docs, then docs gated on a present cast member's sheet type, then

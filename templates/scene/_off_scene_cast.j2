@@ -1,0 +1,13 @@
+{#- The heading the off-scene cast directory opens with, shared by its two tier
+    sections (off_scene_cast_active.j2, off_scene_cast_known.j2).
+
+    A macro rather than a copy in each file: the directory used to be one
+    template and one section, and splitting it so the two tiers could be
+    measured separately (#2) must not turn a single line of instruction into
+    two that can drift apart. Exactly one section emits it — whichever renders
+    first, which is tier 2 when it has content and tier 3 otherwise. -#}
+{%- macro heading() -%}
+# Other characters in this world
+
+# (Not present. Introduce them only if the story calls for it.)
+{%- endmacro -%}
