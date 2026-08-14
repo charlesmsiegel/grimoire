@@ -150,3 +150,27 @@ def forget(cid: str, keys) -> None:
         for k in keys:
             data.pop(k, None)
         atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
+def forget_scene(cid: str, sid: str) -> int:
+    """Drop every citation this scene left. Returns how many went (#75).
+
+    `forget`'s rule, applied by source instead of by field: a quote pulled from a
+    post that has been deleted cannot explain anything, and a cascade delete is
+    the one operation that can name the posts. Each row stores the scene it was
+    cited from, so this needs no guessing.
+
+    Deliberately independent of whether the field's VALUE was put back. A
+    reversal that was refused leaves the value where the deleted scene left it,
+    and the citation for it still quotes a post the player has erased -- an
+    uncited value is the accurate state either way.
+    """
+    with locks.campaign_lock(cid):
+        data = read(cid)
+        doomed = [k for k, row in data.items()
+                  if isinstance(row, dict) and row.get("scene") == sid]
+        for k in doomed:
+            del data[k]
+        if doomed:
+            atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+        return len(doomed)

@@ -71,6 +71,45 @@ def restore(cid: str, pid: str, thread: dict | None) -> None:
     _write(cid, data)
 
 
+def forget_scene(cid: str, sid: str) -> int:
+    """Drop every beat this scene contributed. Returns how many went (#75).
+
+    The scene-attributable half of a cascade delete: a beat records what one
+    scene did to a thread, so a transcript that no longer says it leaves the beat
+    quoting nothing. `last_scene` falls back to the newest surviving beat's scene
+    — it orders the ledger (`open_threads` sorts by it) and pointing it at a
+    scene with no beats left would sort a thread by a contribution that has been
+    erased.
+
+    The THREAD survives even when this empties it. A thread with no beats left is
+    not necessarily one this scene created — an earlier absorb may have opened it
+    and had its beat trimmed out of the journal long ago — and deleting a record
+    on that guess is the destructive direction. `store/cascade.py` reverses the
+    creations it can prove, through `restore`; this is the sweep behind it, and a
+    sweep may only remove what carries the scene's name.
+    """
+    data = read(cid)
+    gone = 0
+    for thread in data.values():
+        if not isinstance(thread, dict):
+            continue
+        beats = thread.get("beats")
+        if not isinstance(beats, list):
+            continue
+        kept = [b for b in beats
+                if not (isinstance(b, dict) and b.get("scene") == sid)]
+        if len(kept) == len(beats):
+            continue
+        gone += len(beats) - len(kept)
+        thread["beats"] = kept
+        if thread.get("last_scene") == sid:
+            last = kept[-1] if kept else None
+            thread["last_scene"] = last.get("scene", "") if isinstance(last, dict) else ""
+    if gone:
+        _write(cid, data)
+    return gone
+
+
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     """Follow renamed scene ids in beats and last_scene markers."""
     data = read(cid)

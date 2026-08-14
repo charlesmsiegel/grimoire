@@ -1474,6 +1474,58 @@ def test_edit_message_route_resolves_roll_macro_once(client):
     assert "{{roll" not in content
 
 
+def test_cascade_delete_route_cuts_the_transcript(client):
+    """DELETE .../messages/{index} takes that post and everything after it (#75).
+    The reply is a report rather than an `{"ok": true}`: the cascade reverses
+    records the transcript does not show, and the player is told what moved."""
+    _, cid = _campaign(client)
+    sid = _long_scene(client, cid, 4)
+    r = client.delete(f"/api/campaigns/{cid}/scenes/{sid}/messages/1")
+    assert r.status_code == 200
+    assert r.json()["removed"] == 3 and r.json()["was_absorbed"] is False
+    assert [m["content"] for m in
+            client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]] == ["post 0"]
+
+
+def test_cascade_delete_route_rejects_an_index_that_removes_nothing(client):
+    _, cid = _campaign(client)
+    sid = _long_scene(client, cid, 2)
+    assert client.delete(f"/api/campaigns/{cid}/scenes/{sid}/messages/2").status_code == 400
+    assert client.delete(f"/api/campaigns/{cid}/scenes/{sid}/messages/-1").status_code == 400
+    assert len(client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]) == 2
+
+
+def test_cascade_delete_route_unknown_scene_and_campaign_are_404(client):
+    _, cid = _campaign(client)
+    assert client.delete(f"/api/campaigns/{cid}/scenes/nope/messages/0").status_code == 404
+    assert client.delete("/api/campaigns/nope/scenes/nope/messages/0").status_code == 404
+
+
+def test_cascade_delete_route_reverts_an_absorbed_scene(client):
+    """The end-to-end contract: a scene that has been absorbed loses its
+    chronicle record, gets its write-back put back, and goes back to unfinished
+    so it can be absorbed again."""
+    _, cid = _campaign(client)
+    sid = _long_scene(client, cid, 3)
+    store.entities.create_entity(store.campaigns.campaign_root(cid), "lore", "Pact",
+                                 body="old body")
+    store.absorb.apply_edits(cid, [{
+        "id": "lore:pact", "kind": "lore", "target": {"kind": "lore", "id": "pact"},
+        "label": "The Pact — lore", "field": "body",
+        "before": "old body", "after": "new body", "authored": False}], sid)
+    store.chronicle.absorb(cid, {"id": sid, "one_line": "They swore.", "summary": "s",
+                                 "keywords": [], "cast": [], "location": "", "date": ""})
+    store.scenes.mark_absorbed(cid, sid, "They swore.", "s")
+
+    report = client.delete(f"/api/campaigns/{cid}/scenes/{sid}/messages/1").json()
+    assert report["was_absorbed"] is True and report["records"] == 1
+    assert report["chronicle"] is True and report["refused"] == []
+    assert store.chronicle.read_chronicle(cid) == {}
+    assert store.entities.read_entity(store.campaigns.campaign_root(cid),
+                                      "lore", "pact")["body"] == "old body"
+    assert client.get(f"/api/campaigns/{cid}/scenes").json()[0]["done"] is False
+
+
 def test_edit_message_route_refuses_a_manual_roll_line(client):
     _, cid = _campaign(client)
     sid = _scene(client, cid)

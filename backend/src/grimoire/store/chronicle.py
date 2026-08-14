@@ -49,6 +49,27 @@ def absorb(cid: str, record: dict) -> dict:
     return stored
 
 
+def forget(cid: str, sid: str) -> bool:
+    """Drop one scene's chronicle record. Returns whether there was one (#75).
+
+    The record IS the absorbed reading of a transcript, so a cut into that
+    transcript leaves it describing posts that no longer exist — and it is keyed
+    by scene id, which makes "which record belongs to this scene" the one
+    question this store can answer exactly. Deleting rather than rewriting: what
+    the remaining posts add up to is an extraction, not a subtraction, and the
+    scene is left un-absorbed so the player can re-run it.
+
+    `timeline.md` is deliberately untouched. It is an append-only dated log with
+    no scene attribution at all — the same gap `relationships.json` has, and the
+    same answer: nothing here may guess which lines came from which scene.
+    """
+    data = read_chronicle(cid)
+    if data.pop(sid, None) is None:
+        return False
+    atomic.write_text(_chronicle_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+    return True
+
+
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     """Follow renamed scene ids: rewrite record keys and their id fields."""
     data = read_chronicle(cid)

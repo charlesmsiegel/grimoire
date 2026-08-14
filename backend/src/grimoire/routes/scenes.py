@@ -2523,3 +2523,24 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage):
     except store.scenes.RollMessageImmutable:
         raise HTTPException(status_code=400, detail="a dice roll's transcript line can't be edited")
     return {"ok": True}
+
+
+@router.delete("/campaigns/{cid}/scenes/{sid}/messages/{index}")
+def delete_scene_messages_from(cid: str, sid: str, index: int):
+    """Delete this post and everything after it, undoing what the scene wrote (#75).
+
+    The reply is a report of what the cascade actually did, not an `{"ok": true}`:
+    a cascade delete reverses records the player cannot see from the transcript,
+    and one whose compare-and-swap was refused is exactly what they need told.
+    `store.cascade` carries the reasoning for every step and for each store it
+    leaves alone.
+
+    A cut that would remove nothing (`index` past the last post, or negative) is a
+    400 rather than a silent success — the client addresses a post it is looking
+    at, so an out-of-range index means the two disagree about the transcript.
+    """
+    _require_scene(cid, sid)
+    try:
+        return store.cascade.delete_from(cid, sid, index)
+    except IndexError:
+        raise HTTPException(status_code=400, detail="message index out of range")

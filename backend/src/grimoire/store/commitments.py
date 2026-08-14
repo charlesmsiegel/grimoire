@@ -135,6 +135,37 @@ def restore(cid: str, mid: str, record: dict | None) -> None:
         _write(cid, data)
 
 
+def forget_scene(cid: str, sid: str) -> int:
+    """Drop every beat this scene contributed. Returns how many went (#75).
+
+    `plot.forget_scene`'s sibling, with the same record shape and the same rules
+    — that docstring carries the reasoning for both, including why an emptied
+    commitment is left standing rather than deleted. Takes the campaign lock, as
+    every mutator in this module does.
+    """
+    with locks.campaign_lock(cid):
+        data = read(cid)
+        gone = 0
+        for rec in data.values():
+            if not isinstance(rec, dict):
+                continue
+            beats = rec.get("beats")
+            if not isinstance(beats, list):
+                continue
+            kept = [b for b in beats
+                    if not (isinstance(b, dict) and b.get("scene") == sid)]
+            if len(kept) == len(beats):
+                continue
+            gone += len(beats) - len(kept)
+            rec["beats"] = kept
+            if rec.get("last_scene") == sid:
+                last = kept[-1] if kept else None
+                rec["last_scene"] = last.get("scene", "") if isinstance(last, dict) else ""
+        if gone:
+            _write(cid, data)
+        return gone
+
+
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     """Follow renamed scene ids in beats and last_scene markers.
 
