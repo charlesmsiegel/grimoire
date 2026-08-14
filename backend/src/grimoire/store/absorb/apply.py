@@ -14,7 +14,8 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from .. import (cards, changes, characters, commitments, dossiers, entities, facts,
-                groupstate, overlay, playstate, plot, relationships, voice_drift)
+                groupstate, overlay, playstate, plot, provenance, relationships,
+                voice_drift)
 from ..appearances import (paths as appearances_paths,
                            transitions as appearances_transitions,
                            versions as appearances_versions)
@@ -564,6 +565,10 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
     # through, so a commit that died mid-list would otherwise lose the deltas of
     # everything it had already applied.
     recorded: dict = journal.setdefault("recorded", {})
+    # The citations behind the rows that land. Journalled beside `recorded` and
+    # published in the same guarded block below, because it is the same kind of
+    # rolling upsert with the same replay hazard.
+    cited: dict = journal.setdefault("cited", {})
     applied: list[str] = []
     failures: list[dict] = []
     # One pass over the whole batch before the first write (#111): applying one
@@ -614,6 +619,14 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
                 prior["read"] = conflicts.current_value(cid, e)
         if prior.get("state") == "applied":
             applied.append(prior.get("id", ""))
+            # Every kind, not just the browsable ones `recorded` covers: a fact
+            # and a plot beat are exactly the continuity lines this exists to
+            # make checkable, and neither is browsable.
+            if sid:
+                pkey = provenance.key(e)
+                prow = provenance.row(e, sid) if pkey else None
+                if pkey and prow:
+                    cited[pkey] = prow
             read, key = prior.get("read"), conflicts.target_key(e)
             # Recomputed from the edit rather than journalled beside the reading:
             # the token's fingerprint has already refused any retry whose body
@@ -636,11 +649,11 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
     # -- and errs the safe way: a resume that cannot tell reports a possibly
     # stale panel instead of rewriting it.
     prior_changes = journal.get("changes")
-    if sid and recorded and prior_changes is None:
+    if sid and (recorded or cited) and prior_changes is None:
         journal["changes"] = "pending"
     if checkpoint:
         checkpoint()      # the last edit's outcome, so a crash before `record` resumes clean
-    if sid and recorded:
+    if sid and (recorded or cited):
         if isinstance(prior_changes, dict):
             # An earlier attempt tried and got a definite answer. changes.record
             # publishes by atomic rename, so its exception PROVED nothing landed
@@ -653,6 +666,11 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
         else:
             try:
                 changes.record(cid, sid, recorded)
+                # After the diffs, and inside their try: both are display logs
+                # written once the edits have already landed, both are rolling
+                # upserts, and a failure of either is the same class of loss —
+                # the record is right and the panel explaining it is stale.
+                provenance.record(cid, cited)
             except Exception as exc:  # noqa: BLE001 — the edits landed; the delta log did not
                 reason = f"the changes panel could not be updated: {exc}"
                 # Settled, not left pending: if this commit also fails to record

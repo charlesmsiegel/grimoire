@@ -43,6 +43,15 @@ export const LIBRARY_SECTIONS: LibrarySection[] = [
     blurb: "Weather models that regions and locations draw their seasons from.",
     count: () => api.listClimates().then((r) => r.climates.length),
   },
+  // Connections used to sit outside the library, beside it in the nav rail.
+  // Nothing justified that: an LLM connection is a thing a campaign is built
+  // from in exactly the sense the other five are, and it is edited from the
+  // same kind of list page. It is a library section now.
+  {
+    to: "/connections", label: "Connections", unit: "connection",
+    blurb: "Providers and models the narrator can be run on.",
+    count: () => api.listConnections().then((r) => r.length),
+  },
 ];
 
 /** Segment-aware, so /modules-of-my-own is not mistaken for a child of

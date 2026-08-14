@@ -7,23 +7,27 @@ import {
   type Message, type RosterEntry, type SceneAbsorb, type SceneAlternates,
   type SceneDatetime, type StagedEdit, type ProposalRecord, type SceneCheckActor,
   type ResponsePresetSummary, type ResponseOverride, type ResponseBundle,
+  type Briefing, type Casefile, type Provenance, type SceneLocation, type SceneWeather,
 } from "../api/client";
 import { isAbortError, type ChatEvent } from "../api/stream";
-import { EditableRow } from "../components/EditableRow";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import { CastPanel } from "../components/CastPanel";
 import { NewSceneChooser } from "../components/NewSceneChooser";
 import { ChangesPanel } from "../components/ChangesPanel";
-import { LedgerPanel } from "../components/LedgerPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CampaignCover";
+import { SceneInspector } from "../components/SceneInspector";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
-import { Portrait } from "../components/Portrait";
+import { initialsOf, Portrait } from "../components/Portrait";
 import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
-import { SceneInspector } from "../components/SceneInspector";
 import { usePublishShellContext } from "../components/ShellStatus";
 import { RollProposal, type ResolveBody } from "../components/RollProposal";
+import { ColumnSection, PageShell } from "../components/PageShell";
+import CastColumn from "../components/play/CastColumn";
+import DossierColumn from "../components/play/DossierColumn";
+import Conditions from "../components/play/Conditions";
+import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { commentPlugin } from "../markdown/commentPlugin";
 import { quotePlugin } from "../markdown/quotePlugin";
 
@@ -97,6 +101,35 @@ const PHASE_LABELS: Record<AbsorbPhase["name"], string> = {
 // Staged edit kinds whose payload stamps the scene the beat came from, and so
 // have to follow a scene rename made while the review is open — see
 // `reviewSceneRenamed`.
+/** Which drawer of the review a proposal belongs in.
+ *
+ *  Grouped by *store* rather than by edit kind, because that is the question a
+ *  reviewer is actually asking — "what is this absorb claiming about her
+ *  state", not "how many `bond` rows are there". Two kinds that write the same
+ *  file are one group. */
+const EDIT_GROUPS: { key: string; label: string; kinds: StagedEdit["kind"][] }[] = [
+  { key: "state", label: "Character state", kinds: ["character_state", "dossier"] },
+  { key: "relationships", label: "Relationships", kinds: ["relationship", "bond"] },
+  { key: "facts", label: "Facts", kinds: ["fact"] },
+  { key: "plot", label: "Plot & commitments", kinds: ["plot", "commitment"] },
+  { key: "new", label: "New records", kinds: ["new_character", "new_location", "new_lore"] },
+  { key: "records", label: "Lore & cards", kinds: ["lore", "authored"] },
+  { key: "sheets", label: "Sheets", kinds: ["sheet"] },
+  { key: "voice", label: "Voice", kinds: ["voice_drift"] },
+];
+
+function groupOf(e: StagedEdit): string {
+  return EDIT_GROUPS.find((g) => g.kinds.includes(e.kind))?.key ?? "records";
+}
+
+/** A row nothing in the transcript was cited for. These are the ones the panel
+ *  puts first and in `--alert`: an uncited proposal is not wrong, but it is the
+ *  one kind of proposal a reviewer cannot check against anything, so it is the
+ *  one that most needs a human. */
+function isUncited(e: StagedEdit): boolean {
+  return !e.review || !e.review.quote.trim();
+}
+
 const SCENE_STAMPED: StagedEdit["kind"][] = ["plot", "commitment", "fact"];
 
 // What the backend proved about a proposal's cited speaker (#112), said the way
@@ -184,7 +217,6 @@ function responseScopeLabel(scope: string | undefined): string {
   }
 }
 
-type SceneSort = "updated" | "date" | "order";
 
 // A superseded or narrated proposal is finished. `declined` is NOT, and used to
 // be filtered out with them: the backend keeps re-streaming a declined record's
@@ -202,21 +234,6 @@ function liveProposal(record: ProposalRecord | null): ProposalRecord | null {
 // API's own order, most-recently-edited first — the existing default):
 // "date" is latest in-story date first, "order" is the highest scene number
 // first. Scenes with no in-story date always sort after every dated scene.
-function sortScenes(scenes: SceneMeta[], sort: SceneSort): SceneMeta[] {
-  if (sort === "updated") return scenes;
-  const arr = [...scenes];
-  if (sort === "order") {
-    arr.sort((a, b) => sceneNumber(b.id, 0) - sceneNumber(a.id, 0));
-  } else {
-    arr.sort((a, b) => {
-      if (!a.date && !b.date) return 0;
-      if (!a.date) return 1;
-      if (!b.date) return -1;
-      return b.date.localeCompare(a.date);
-    });
-  }
-  return arr;
-}
 
 // Memoized so typing in the input bar (which re-renders CampaignView on every
 // keystroke) doesn't re-parse the markdown of every unchanged message.
@@ -256,7 +273,6 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // two cannot drift; the one plain `setScenes` left is a rename re-keying the
   // list it already has, which cannot change whose list it is.
   const [sceneListCid, setSceneListCid] = useState<string | null>(null);
-  const [sceneSort, setSceneSort] = useState<SceneSort>("updated");
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   // Which transcript is actually ON SCREEN, campaign and scene. `activeId` is
@@ -512,9 +528,26 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [labels, setLabels] = useState({ user: "You", assistant: "Grimoire" });
   const [cast, setCast] = useState<Actor[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
+  /** The whole dossier feature. `null` is the cast grid; a ref is one actor's
+   *  casefile in the column. Deliberately the only state the swap has —
+   *  "which mode is the column in" is derived from this and never stored
+   *  twice, so the two can never disagree. */
+  const [selectedActor, setSelectedActor] = useState<{ kind: string; id: string } | null>(null);
+  const [casefile, setCasefile] = useState<Casefile | null>(null);
+  const [briefing, setBriefing] = useState<Briefing | null>(null);
+  /** Why each stored line is there (#4a). Campaign-scoped and read once per
+   *  absorb rather than per scene: it is a rolling log of citations for values
+   *  already on screen, so a copy one absorb old is stale about a line the
+   *  reader has not been shown yet either. `{}` is a normal state — a campaign
+   *  absorbed before the store existed has no citations at all. */
+  const [provenance, setProvenance] = useState<Provenance>({});
+  /** The quote the reader is hovering a citation for, highlighted in the
+   *  transcript. "" is nothing hovered. */
+  const [citedQuote, setCitedQuote] = useState("");
+  const [sceneLocation, setSceneLocation] = useState<SceneLocation | null>(null);
+  const [weather, setWeather] = useState<SceneWeather | null>(null);
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
   const [showChanges, setShowChanges] = useState(false);
-  const [showLedger, setShowLedger] = useState(false);
   const [absorb, setAbsorb] = useState<SceneAbsorb | null>(null);
   // The scene this review was absorbed FROM. Switching scenes leaves the panel
   // open, so saving against the currently selected scene would commit scene A's
@@ -560,12 +593,23 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [retryingDossiers, setRetryingDossiers] = useState(false);
   const [absorbing, setAbsorbing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [editRows, setEditRows] = useState<(StagedEdit & { approved: boolean })[]>([]);
+  /** `approved` is what the save sends. `rejected` is the reviewer saying no
+   *  out loud, which is NOT the same as leaving a row alone: an undecided row
+   *  is one nobody has looked at yet, and the footer counts those so a save
+   *  cannot quietly drop a proposal the reviewer never saw. Both false is
+   *  undecided; both true is impossible (the controls are exclusive). */
+  const [editRows, setEditRows] =
+    useState<(StagedEdit & { approved: boolean; rejected?: boolean; judged?: boolean })[]>([]);
+  /** Which drawer of the review is open: a group key, "uncited", or
+   *  "chronicle" (the scene summary itself). */
+  const [reviewSection, setReviewSection] = useState("uncited");
+  /** The quote of the row the reviewer picked, highlighted in the transcript
+   *  pane beside it. */
+  const [reviewQuote, setReviewQuote] = useState("");
   // Whether the collapsed low-confidence rows are showing (#110). Rows stay in
   // `editRows` at their original index either way: the conflict verdicts the
   // server sends back are bound to positions in the submitted batch, so the
   // routing is a rendering decision and never a reordering one.
-  const [showLow, setShowLow] = useState(false);
 
   // Every in-flight operation that rewrites the open review. `saveAbsorb`'s
   // conflict bookkeeping is built on "`saving` latches the panel for the whole
@@ -655,37 +699,22 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // vanishes a moment later once the read lands.
   const [moduleBound, setModuleBound] = useState<boolean | null>(null);
   const streamRef = useRef<HTMLDivElement>(null);
-  const [railCollapsed, setRailCollapsed] = useState(
-    () => localStorage.getItem("grimoire.rail.collapsed") === "1");
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(
-    () => localStorage.getItem("grimoire.inspector.collapsed") === "1");
-
-  function toggleRail() {
-    setRailCollapsed((v) => {
-      localStorage.setItem("grimoire.rail.collapsed", v ? "0" : "1");
-      return !v;
-    });
-  }
-  function toggleInspector() {
-    setInspectorCollapsed((v) => {
-      localStorage.setItem("grimoire.inspector.collapsed", v ? "0" : "1");
-      return !v;
-    });
-  }
-  // Below the narrow breakpoint the inspector is an overlay rather than a
-  // column (see index.css), so it must not start open on top of the transcript
-  // -- and `inspectorCollapsed` defaults to OPEN. Forced closed here without
-  // touching localStorage, deliberately: the stored value is the reader's
-  // wide-screen preference, and a window they happened to narrow once should
-  // not overwrite it for every later session. The cost is that widening again
-  // within one session leaves it closed until they click the tab.
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 900px)");
-    const apply = () => { if (mq.matches) setInspectorCollapsed(true); };
-    apply();
-    mq.addEventListener("change", apply);
-    return () => mq.removeEventListener("change", apply);
-  }, []);
+  /** The scene inspector, which used to be a permanently-open third column.
+   *
+   *  It is a panel now, opened from the composer's "What the model saw →".
+   *  That is a promotion rather than a demotion: what it answers — what went
+   *  into the last prompt, and what was dropped to fit — is a question about a
+   *  turn, so it belongs beside the control that takes the next one. The
+   *  continuity it also carried (who is here, where, when) does not live here
+   *  any more; that is the context column, permanently visible, which is the
+   *  whole point of the redesign.
+   *
+   *  Closed by default: an open panel over the transcript is the state the old
+   *  third column was in permanently. */
+  const [showInspector, setShowInspector] = useState(false);
+  /** The scene being renamed in place, or null. The rail's `EditableRow` used
+   *  to own this; the control moved to the scene's own heading with it. */
+  const [renamingScene, setRenamingScene] = useState<{ id: string; title: string } | null>(null);
   // Read on every `cid` change and again whenever MechanicsConfig saves, so
   // binding or clearing a pack updates the input bar without a reload.
   //
@@ -722,15 +751,6 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // transient failure from retracting the dice button and discarding a
       // half-typed roll with it (Codex review round 2).
       .catch(() => { if (reset) settle(false); });
-  }
-
-  const [subheaderCollapsed, setSubheaderCollapsed] = useState(
-    () => localStorage.getItem("grimoire.subheader.collapsed") === "1");
-  function toggleSubheader() {
-    setSubheaderCollapsed((v) => {
-      localStorage.setItem("grimoire.subheader.collapsed", v ? "0" : "1");
-      return !v;
-    });
   }
 
   useEffect(() => {
@@ -1207,6 +1227,27 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     api.getSceneDatetime(cid, id).then(setDt).catch(() => setDt(null));
     api.getCast(cid, id).then(setCast).catch(() => setCast([]));
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
+    // The context column's own reads. Each settles independently and each
+    // empties only its own block on failure -- the column is continuity, and a
+    // weather request that 500s must not take the cast down with it.
+    //
+    // The dossier is deliberately NOT re-read here: it is keyed to
+    // `selectedActor`, which selecting a scene clears, so a stale casefile
+    // cannot outlive the scene it was opened from.
+    // Started inside a promise so a read that throws *synchronously* empties
+    // its own block like one that rejects, rather than taking the whole scene
+    // selection down with it — this runs before the transcript is fetched.
+    const columnRead = <T,>(read: () => Promise<T>, set: (v: T | null) => void) =>
+      Promise.resolve().then(read).then(set).catch(() => set(null));
+    columnRead(() => api.sceneBriefing(cid, id), setBriefing);
+    Promise.resolve().then(() => api.campaignProvenance(cid))
+      .then((p) => setProvenance(p ?? {}))
+      // Uncited rows are a normal state, so a failed read degrades to exactly
+      // that rather than to an error the reader can do nothing about.
+      .catch(() => setProvenance({}));
+    columnRead(() => api.getSceneLocation(cid, id), setSceneLocation);
+    columnRead(() => api.getSceneWeather(cid, id), setWeather);
+    setSelectedActor(null);
     const claim = claimProposalRead();
     api.getRollProposal(cid, id).then((r) => applyProposalRead(claim, r.record))
       .catch(() => applyProposalRead(claim, null));
@@ -1277,6 +1318,119 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   function newScene() {
     setChooserOpen(true);
   }
+
+  /** Scroll the transcript to the post a citation was taken from.
+   *
+   *  Matched by substring against the post bodies, which is the only join
+   *  available: the citation records the model's excerpt, not a post index, and
+   *  an index would rot the moment a post was edited or a reroll replaced one.
+   *  A quote that matches nothing scrolls nowhere rather than guessing — the
+   *  transcript may simply be paged past it, and jumping to an arbitrary post
+   *  would be worse than not moving.
+   */
+  function goToQuote(quote: string) {
+    const needle = quote.trim().toLowerCase();
+    if (!needle) return;
+    if (!messages.some((m) => m.content.toLowerCase().includes(needle))) return;
+    setCitedQuote(quote);
+    // Queued behind the render that paints the highlight, so the element it
+    // scrolls to is the one that is about to be marked.
+    requestAnimationFrame(() => {
+      const el = streamRef.current?.querySelector(".msg.cited") as HTMLElement | null;
+      el?.scrollIntoView?.({ block: "center" });
+    });
+  }
+
+  // ---- the context column's cast/dossier swap (2a) ----
+
+  /** Open one actor in the column. Deliberately does NOT touch the transcript,
+   *  the composer or focus: this is a column state, not a modal, and the whole
+   *  claim of the design is that reading a dossier costs you nothing you were
+   *  holding. */
+  function openActor(kind: string, id: string) {
+    setSelectedActor({ kind, id });
+  }
+
+  function closeActor() {
+    setSelectedActor(null);
+  }
+
+  useEffect(() => {
+    if (!selectedActor || !activeId) { setCasefile(null); return; }
+    // Cleared first so the column shows its reading state rather than the
+    // previous actor's dossier under the new one's name -- these are two
+    // people's private states, and briefly attributing one to the other is the
+    // one failure this panel must not have.
+    setCasefile(null);
+    let live = true;
+    api.getCasefile(cid, activeId, selectedActor.kind, selectedActor.id)
+      .then((c) => { if (live) setCasefile(c); })
+      // An actor whose record cannot be read is one this column cannot
+      // describe; going back to the cast is the honest outcome, and the grid
+      // still shows she is there. Every route in here names someone in the
+      // scene's cast -- a tile, or a transcript plate, which is only a button
+      // when its speaker resolves against that same cast -- so the grid the
+      // fallback lands on is one she is in.
+      .catch(() => { if (live) setSelectedActor(null); });
+    return () => { live = false; };
+    // `ctxKey` bumps on every successful absorb save, which is exactly when
+    // every file behind this panel was rewritten.
+  }, [cid, activeId, selectedActor, ctxKey]);
+
+  async function removeSelectedActor() {
+    if (!selectedActor || !activeId) return;
+    try {
+      await api.removeFromCast(cid, activeId, selectedActor.kind, selectedActor.id);
+      setSelectedActor(null);
+      api.getCast(cid, activeId).then(setCast).catch(() => {});
+      // A join/leave appends a transition post (#85), so the transcript moved.
+      readScene(activeId);
+    } catch (err: any) {
+      fail(err, false);
+    }
+  }
+
+  /** What this page contributes to ⌘K: its scenes, its cast, and the two
+   *  actions that used to be buttons in a chrome bar.
+   *
+   *  This is where the scene rail went. A rail is a list you pay for in width
+   *  on every turn of every scene, to answer a question you ask a few times a
+   *  session; the same list behind ⌘K costs nothing until asked and searches,
+   *  which the rail never did. */
+  const paletteSource = useCallback((): PaletteItem[] => {
+    const out: PaletteItem[] = [];
+    for (const a of cast) {
+      out.push({
+        id: `cast:${a.kind}/${a.id}`, group: "IN THIS CAMPAIGN", label: a.name,
+        meta: `${a.role === "player" ? "player" : "character"} · in scene`,
+        badge: initialsOf(a.name),
+        run: () => openActor(a.kind, a.id),
+      });
+    }
+    for (const t of briefing?.plot ?? []) {
+      out.push({ id: `thread:${t.id}`, group: "IN THIS CAMPAIGN", label: t.title,
+                 meta: `thread · ${t.status}` });
+    }
+    for (const c of briefing?.commitments ?? []) {
+      out.push({ id: `owed:${c.id}`, group: "IN THIS CAMPAIGN", label: c.title,
+                 meta: `${c.kind} · ${c.due || "no deadline"}` });
+    }
+    for (const [i, sc] of scenes.entries()) {
+      out.push({
+        id: `scene:${sc.id}`, group: "SCENES", label: sc.title,
+        meta: [`scene ${sceneNumber(sc.id, scenes.length - i)}`,
+               sc.done ? "absorbed" : null].filter(Boolean).join(" · "),
+        run: () => goToScene(sc.id),
+      });
+    }
+    out.push({ id: "action:new-scene", group: "SCENES", label: "New scene",
+               meta: "in this campaign", action: true, run: newScene });
+    out.push({ id: "action:campaign-world", group: "ELSEWHERE", label: "This campaign's world",
+               meta: "locations, lore, cast", to: `/campaigns/${cid}/world` });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cid, cast, briefing, scenes]);
+  usePaletteSource(paletteSource);
 
   // Dismissing the chooser (Escape/backdrop) after a soft failure -- once
   // SceneConfirmForm's "Continue to scene" is the only OTHER exit -- still
@@ -1603,6 +1757,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         }
       }
     }
+  }
+
+  async function commitSceneRename() {
+    if (!renamingScene) return;
+    const { id, title } = renamingScene;
+    setRenamingScene(null);
+    await renameScene(id, title);
   }
 
   async function deleteScene(s: SceneMeta) {
@@ -2473,7 +2634,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       setAbsorb(a);
       setAbsorbSid(activeId);
       setEditRows(a.edits.map((e) => ({ ...e, approved: approvedByDefault(e) })));
-      setShowLow(false);
+      // A fresh review opens on whichever drawer needs a person, which
+      // `openSection` works out — but the *stored* choice has to be reset, or
+      // the drawer the last review left open is the one this one lands in.
+      setReviewSection("uncited");
+      setReviewQuote("");
     } catch (err: any) {
       // Same guard on the failure path: A's banner over B is the same category
       // of wrong answer, just a cheaper one.
@@ -2542,7 +2707,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         // goes false the instant the reviewer clicks Keep stored (which
         // unapproves the row and drops its verdict), collapsing the section
         // and the row they are looking at out from under them.
-        if (rows.some(({ row }) => editBand(editRows[row]) === "low")) setShowLow(true);
+        // A conflict on a withheld row: open the drawer holding it, or the panel
+        // insists something is unanswered with nothing on screen to answer.
+        const stuck = rows.find(({ row }) => editRows[row] && drawerKey(editRows[row]) !== "uncited"
+                                             && editBand(editRows[row]) === "low");
+        if (stuck) setReviewSection("low");
         setSaveError(null);
         return;
       }
@@ -2563,6 +2732,49 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     return out;
   }, [conflicts, editRows]);
 
+  /** Set one row's verdict. Exclusive: approving clears a rejection and vice
+   *  versa, so a row can never be counted in two columns at once. */
+  function decide(i: number, verdict: "approved" | "rejected" | "undecided") {
+    setEditRows((rows) => rows.map((r, j) => (j === i ? {
+      ...r,
+      approved: verdict === "approved",
+      rejected: verdict === "rejected",
+      // Only a verdict the reviewer *gave* folds the row away. Rows arrive
+      // pre-approved by band (`approvedByDefault`), and folding those would
+      // hide the bulk of a good absorb behind an Undo apiece — the collapse is
+      // there to clear what you have finished with, not to hide what you have
+      // not started.
+      judged: verdict !== "undecided",
+    } : r)));
+  }
+
+  /** Which drawer a row belongs in. The two NEEDS YOU drawers cut across the
+   *  stores on purpose: they hold exactly the rows that did NOT arrive
+   *  pre-approved, which is the only question a reviewer has to answer before
+   *  saving. A row is uncited *or* low, never filed in both.
+   *
+   *  This is also what retired the Show/Hide low-confidence disclosure: a
+   *  drawer with a live count in the column says "these were withheld" more
+   *  plainly than a collapsed section nested inside another drawer did, which
+   *  is exactly what that disclosure existed to say.
+   */
+  const drawerKey = (e: StagedEdit): string =>
+    isUncited(e) ? "uncited" : editBand(e) === "low" ? "low" : groupOf(e);
+
+  const approvedCount = editRows.filter((e) => e.approved).length;
+  const rejectedCount = editRows.filter((e) => e.rejected).length;
+  const undecidedCount = editRows.length - approvedCount - rejectedCount;
+  const uncitedRows = editRows.flatMap((e, i) => (isUncited(e) ? [[e, i] as const] : []));
+  /** How many proposals each store drawer holds, for the column's counts. */
+  const groupCounts = EDIT_GROUPS.map((g) => ({
+    ...g, n: editRows.filter((e) => drawerKey(e) === g.key).length,
+  })).filter((g) => g.n > 0);
+  /** The rows the open drawer shows, each carrying the index it holds in
+   *  `editRows` — which is what the conflict verdicts (#111) and the submitted
+   *  batch are both keyed on, so it travels with the row rather than being
+   *  recomputed from this list's own ordering. */
+  // The drawer to open when a review arrives: NEEDS YOU when it has anything in
+  // it, otherwise the first store that does. Landing on an empty NEEDS YOU
   // The low-confidence rows, each carrying the index it holds in `editRows`
   // (#110). Kept as pairs rather than filtered into a second array: every
   // handler on a row addresses it positionally, and a row rendered under its
@@ -2571,6 +2783,15 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const lowRows = useMemo(
     () => editRows.flatMap((e, i) => (editBand(e) === "low" ? [[e, i] as const] : [])),
     [editRows]);
+  // would make a fully-cited absorb look like it proposed nothing.
+  const defaultSection = uncitedRows.length > 0 ? "uncited"
+    : lowRows.length > 0 ? "low"
+    : (groupCounts[0]?.key ?? "uncited");
+  const openSection = editRows.some((e) => drawerKey(e) === reviewSection)
+    ? reviewSection : defaultSection;
+  const shownRows = editRows.flatMap((e, i) =>
+    (drawerKey(e) === openSection ? [[e, i] as const] : []));
+
   // The reviewer's answer to one conflict. **keep** is not here: it unapproves
   // the row, which drops it from the batch entirely -- the stored value wins by
   // the edit never being sent. `replace` keeps the staged text, `merge` swaps in
@@ -2736,19 +2957,56 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // SAME index. `i` is the row's position in `editRows`, which is what the
   // conflict verdicts (#111) and the submitted batch are both keyed on, so it
   // is passed in rather than recomputed from either list's own ordering.
-  function renderEditRow(e: StagedEdit & { approved: boolean }, i: number) {
+  function renderEditRow(
+    e: StagedEdit & { approved: boolean; rejected?: boolean; judged?: boolean },
+    i: number,
+  ) {
     const isNewRecord = e.kind === "new_character" || e.kind === "new_location" || e.kind === "new_lore";
     const conflict = conflictByRow.get(i);
     const setPayload = (patch: Record<string, unknown>) =>
       setEditRows((rows) => rows.map((r, j) =>
         j === i ? { ...r, payload: { ...r.payload, ...patch } } : r));
+    // An approved row collapses to one dimmed line. Not hidden — a decision you
+    // cannot see is a decision you cannot revisit, and UNDO has to have
+    // something to sit on. A row with an unanswered conflict never collapses:
+    // it is approved AND blocking, and folding it away would hide the only
+    // thing standing between the reviewer and a refused save.
+    if (e.approved && e.judged && !conflict) {
+      return (
+        <div className="absorb-edit done" key={e.id}>
+          <span className="absorb-done-mark" aria-hidden>✓</span>
+          <span className="absorb-done-label">
+            APPROVED · {e.label}{e.authored ? " · card edit" : ""}
+          </span>
+          <button className="subtle absorb-undo" aria-label={`Undo ${e.label}`}
+                  onClick={() => decide(i, "undecided")}>Undo</button>
+        </div>
+      );
+    }
     return (
-      <div className={"absorb-edit" + (e.authored ? " authored" : "")} key={e.id}>
-        <label>
-          <input type="checkbox" aria-label={`Approve ${e.label}`} checked={e.approved}
-                 onChange={() => setEditRows((rows) => rows.map((r, j) =>
-                   j === i ? { ...r, approved: !r.approved } : r))} />
-          {e.label}{e.authored ? " · card edit" : ""}
+      // `.approved` is the card's standing verdict made visible: a row that
+      // arrived pre-approved by band looks different from one still waiting on
+      // a reviewer, and that difference is the panel's whole claim about which
+      // rows need them.
+      <div className={"absorb-edit" + (e.authored ? " authored" : "")
+                      + (isUncited(e) ? " uncited" : "")
+                      + (e.approved ? " approved" : "")
+                      + (e.rejected ? " rejected" : "")} key={e.id}>
+        <div className="absorb-edit-head">
+          <span className="absorb-edit-label">
+            {e.label}{e.authored ? " · card edit" : ""}
+          </span>
+          {/* The stamp says what the row rests on, in the words the reviewer
+              needs: not "medium · self" but whether anybody was quoted and how
+              sure the model was. An uncited row reads NO QUOTE, which is the
+              whole reason it is in the panel's first drawer. */}
+          <span className={"absorb-stamp" + (isUncited(e) ? " alert" : "")}>
+            {isUncited(e) ? "NO QUOTE" : (e.review?.speaker || "NO SPEAKER")}
+            {" · "}
+            {e.review && e.review.certainty !== null
+              ? `CERTAINTY ${e.review.certainty.toFixed(2)}`
+              : "CERTAINTY UNRATED"}
+          </span>
           {e.review && (
             <span className={`chip absorb-band absorb-band-${e.review.band}`}
                   title={`certainty ${e.review.certainty ?? "not given"}` +
@@ -2756,7 +3014,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               {e.review.band} · {AUTHORITY_LABELS[e.review.authority] ?? e.review.authority}
             </span>)}
           {conflict && <span className="chip on absorb-conflict-badge">Changed</span>}
-        </label>
+        </div>
         {/* Under the label rather than the diff for the rows whose "diff" is an
             editable textarea: the citation is what the proposal RESTS on, and a
             reviewer weighing the row needs it before they start rewriting the
@@ -2851,6 +3109,32 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             This is where the scene happened
           </label>
         )}
+        <div className="absorb-verdict">
+          <button className="btn-accent" aria-label={`Approve ${e.label}`}
+                  onClick={() => decide(i, "approved")}>Approve</button>
+          {/* "Edit" is where the caret already is: every one of these rows
+              renders its `after` as a textarea, so the button focuses it rather
+              than opening a second editing mode nobody asked for. */}
+          <button className="subtle" aria-label={`Edit ${e.label}`}
+                  onClick={(ev) => {
+                    const card = (ev.currentTarget.closest(".absorb-edit") as HTMLElement | null);
+                    card?.querySelector("textarea")?.focus();
+                  }}>Edit</button>
+          <button className="subtle" aria-label={`Reject ${e.label}`}
+                  aria-pressed={!!e.rejected}
+                  onClick={() => decide(i, e.rejected ? "undecided" : "rejected")}>
+            {e.rejected ? "Rejected" : "Reject"}
+          </button>
+          {/* Only offered when there is something to find: a quote the
+              transcript pane can scroll to. */}
+          {!isUncited(e) && (
+            <button className="subtle absorb-find"
+                    aria-label={`Find ${e.label} in transcript`}
+                    onClick={() => setReviewQuote(e.review!.quote)}>
+              Find in transcript →
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -2943,6 +3227,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     return prefixed.length === 1 ? prefixed[0] : undefined;
   }
 
+  // One highlight, two sources: the dossier's provenance popover and the
+  // review's "find in transcript". They can never both be open — the review
+  // replaces the play view outright — so one piece of state serves both.
+  const citedNeedle = (citedQuote || reviewQuote).trim().toLowerCase();
+  const isCited = (text: string) =>
+    citedNeedle !== "" && text.toLowerCase().includes(citedNeedle);
+
   // consecutive messages by the same speaker form one run under a single plate
   type Run = { speaker: string; pc: boolean; actor: Actor | undefined;
                posts: { m: Message; index: number }[] };
@@ -2967,29 +3258,154 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   }
 
   const sceneTitle = scenes.find((s) => s.id === activeId)?.title ?? "";
+  /** The scene the open review was absorbed FROM, which is not necessarily the
+   *  one selected: a review survives a scene switch, and `saveAbsorb` already
+   *  commits against `absorbSid` for that reason. Naming `activeId`'s title
+   *  here would tell the reviewer they are judging a scene they are not. */
+  const absorbTitle = absorbSid
+    ? scenes.find((s) => s.id === absorbSid)?.title || absorbSid
+    : sceneTitle;
   // The global status bar can't work this out for itself: the router hands it
   // a cid, not a name, and which scene is open is state that lives only here.
-  usePublishShellContext(name ? { campaign: name, scene: sceneTitle } : null);
+  // During a review it names the scene being absorbed, not the one selected —
+  // the scene is off the screen, so the pill is the only thing still saying it.
+  usePublishShellContext(
+    name ? { campaign: name, scene: absorb ? `Absorbing ${absorbTitle}` : sceneTitle } : null);
+
+  // The column is one swap zone: cast, or one actor. `columnMode` is derived
+  // from `selectedActor` rather than stored beside it, so the two can never
+  // disagree about which is showing.
+  /** While a review is open the column belongs to it, not to the scene: what
+   *  you are navigating is eighteen proposals, and the cast grid behind them is
+   *  answering a question nobody is asking yet. */
+  const reviewColumn = (
+    <>
+      <div className="column-section">
+        <div className="eyebrow" style={{ padding: "0 16px" }}>Proposed</div>
+        <h3 className="review-count">
+          {editRows.length} {editRows.length === 1 ? "edit" : "edits"}
+        </h3>
+        <div className="review-tally">
+          {approvedCount} approved · {rejectedCount} rejected · {undecidedCount} left
+        </div>
+        {/* Approved and rejected are both *judged*; the bar fills with the work
+            done rather than with the work approved, or rejecting everything
+            would read as making no progress. */}
+        <div className="review-bar" role="img"
+             aria-label={`${approvedCount + rejectedCount} of ${editRows.length} judged`}>
+          <span className="review-bar-approved"
+                style={{ width: `${(approvedCount / Math.max(1, editRows.length)) * 100}%` }} />
+          <span className="review-bar-rejected"
+                style={{ width: `${(rejectedCount / Math.max(1, editRows.length)) * 100}%` }} />
+        </div>
+      </div>
+
+      {/* The two drawers that hold the rows which did NOT arrive pre-approved.
+          They cut across the stores deliberately: "what must I answer before I
+          can save" is a different question from "what is this absorb claiming
+          about her state", and it is the one with a deadline. */}
+      <ColumnSection label="Needs you">
+        <button className={"column-row alert" + (openSection === "uncited" ? " active" : "")}
+                onClick={() => setReviewSection("uncited")}>
+          <span className="column-row-label">Uncited</span>
+          <span className="column-row-count">{uncitedRows.length}</span>
+        </button>
+        {lowRows.length > 0 && (
+          <button className={"column-row alert" + (openSection === "low" ? " active" : "")}
+                  onClick={() => setReviewSection("low")}>
+            <span className="column-row-label">Low confidence</span>
+            <span className="column-row-count">{lowRows.length}</span>
+          </button>
+        )}
+      </ColumnSection>
+
+      <ColumnSection label="By store">
+        {groupCounts.map((g) => (
+          <button key={g.key}
+                  className={"column-row" + (openSection === g.key ? " active" : "")}
+                  onClick={() => setReviewSection(g.key)}>
+            <span className="column-row-label">{g.label}</span>
+            <span className="column-row-count">{g.n}</span>
+          </button>
+        ))}
+      </ColumnSection>
+    </>
+  );
+
+  const column = selectedActor
+    ? <DossierColumn cid={cid} casefile={casefile} provenance={provenance}
+                     onHoverQuote={setCitedQuote} onGoToTurn={goToQuote}
+                     onBack={closeActor}
+                     onOpenActor={(kind, id) => setDrawer(
+                       { type: "actor", kind: kind as "characters" | "pcs", id })}
+                     onRemove={removeSelectedActor} busy={sceneLocked} />
+    : <CastColumn cid={cid} cast={cast} roster={roster} briefing={briefing}
+                  onOpen={openActor} />;
+
+  /** Approve every proposal the transcript backs, and leave the ones it does
+   *  not. The whole routing argument in one button: a cited row is one the
+   *  reviewer can check *later* if they want to; an uncited one is the only
+   *  kind they cannot, so it is the only kind this refuses to answer for. */
+  function approveAllCited() {
+    setEditRows((rows) => rows.map((r) =>
+      (isUncited(r) ? r : { ...r, approved: true, rejected: false })));
+  }
 
   return (
-    <div className="workspace">
-      <div className="chrome-bar">
-        <button className="chrome-toggle" aria-pressed={!topbarCollapsed} onClick={onToggleTopbar}>
-          {topbarCollapsed ? "▾ Nav" : "▴ Nav"}
-        </button>
-        <button className="chrome-toggle" aria-pressed={!subheaderCollapsed} onClick={toggleSubheader}>
-          {subheaderCollapsed ? "▾ Bar" : "▴ Bar"}
-        </button>
-      </div>
-      {!subheaderCollapsed && (
-      <div className="subheader">
-        <Link to="/" className="sub-back">‹ Campaigns</Link>
-        <span className="sub-divider" />
-        <span className="sub-name">{name}</span>
-        {worldName && (
-          <Link to={`/campaigns/${cid}/world`} className="sub-world">World ▸ {worldName} ↗</Link>
-        )}
-        <div className="sub-actions">
+    <PageShell
+      className={absorb ? "review" : "play"}
+      columnLabel={absorb ? "Proposals" : selectedActor ? "Dossier" : "Cast and continuity"}
+      column={absorb ? reviewColumn : column}
+      footer={absorb
+        ? <button className="column-primary" onClick={approveAllCited}>
+            Approve all cited
+          </button>
+        : <Conditions cid={cid} worldName={worldName} location={sceneLocation}
+                      datetime={dt} weather={weather} />}
+    >
+      <div className="workspace">
+        {/* Export, Ledger, Calendar, Cover, End scene: all of them act on the
+            scene, and a review is not the scene. The bar is replaced by one
+            that names what is being judged, so the header still says where you
+            are once the transcript stops being the thing on screen. */}
+        {absorb ? (
+        <div className="scene-actions review-actions">
+          <span className="eyebrow">{name}</span>
+          {/* Rename lives here during a review, and is the one scene control
+              that does. The rest act on a transcript this screen is not
+              showing, but a scene's id is derived from its title — so a rename
+              mints a new id, and `renameScene` migrates the open review's
+              `absorbSid` and every staged edit's scene ref onto it. Dropping
+              the control with the scene head would leave that migration with no
+              way to be reached, and take with it the only chance to fix a title
+              at the moment you are reading what the scene actually contained. */}
+          {renamingScene ? (
+            <input className="row-rename scene-rename" aria-label="Rename scene" autoFocus
+                   value={renamingScene.title}
+                   onChange={(e) => setRenamingScene({ id: renamingScene.id, title: e.target.value })}
+                   onKeyDown={(e) => {
+                     if (e.key === "Enter") commitSceneRename();
+                     if (e.key === "Escape") setRenamingScene(null);
+                   }} />
+          ) : (
+            <button className="review-absorbing" aria-label="Rename scene"
+                    title="Rename this scene"
+                    onClick={() => setRenamingScene({ id: absorbSid ?? activeId ?? "",
+                                                      title: absorbTitle })}>
+              Absorbing {absorbTitle}
+            </button>
+          )}
+          <span className="header-spacer" />
+          {/* The audit's verdict, and deliberately not a count of proposals:
+              the column already carries "18 edits · 14 approved · 1 rejected ·
+              3 left" and the footer the tally again. This is the one fact about
+              the absorb that neither of them states. */}
+          <span className="review-audit">Audit {absorb.mechanics.status}</span>
+        </div>
+        ) : (
+        <div className="scene-actions">
+          <span className="eyebrow">{name}</span>
+          <span className="header-spacer" />
           <details className="sub-export-menu">
             <summary className="sub-export">Export</summary>
             <div className="sub-export-options">
@@ -3000,15 +3416,18 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               <a href={`/api/campaigns/${cid}/export.json`} download>JSON</a>
             </div>
           </details>
-          <button className="sub-changes" onClick={() => setShowLedger((v) => !v)}>
-            {showLedger ? "Close" : "Ledger"}
-          </button>
-          <button className="sub-changes" onClick={() => setShowChanges((v) => !v)}>
+          {/* A link, not a toggle: the ledger is its own route now (4e). */}
+          <Link className="scene-action" to={`/campaigns/${cid}/ledger`}>Ledger</Link>
+          <button className="scene-action" onClick={() => setShowChanges((v) => !v)}>
             {showChanges ? "Close" : "Changes"}
           </button>
-          <button className="sub-mechanics" onClick={() => setShowMechanics((v) => !v)}>
+          <button className="scene-action" onClick={() => setShowMechanics((v) => !v)}>
             {showMechanics ? "Close" : "Mechanics"}
           </button>
+          <button className="scene-action" onClick={() => setShowCalendar((v) => !v)}>Calendar</button>
+          <button className="scene-action" onClick={() => setShowStyle((v) => !v)}>Response</button>
+          <button className="scene-action" onClick={() => setShowCover((v) => !v)}>Cover</button>
+          <button className="scene-action" onClick={newScene}>+ New scene</button>
           {/* `busy` is not the whole of "a turn can still write here": it clears
               when the socket dies, and the backend's shielded abort write lands
               seconds later — which is the window `streamingId` covers. Absorb
@@ -3016,650 +3435,685 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               has not reached yet, then the partial lands underneath a scene
               already marked absorbed. That one does not come back: the review
               is committed against a transcript that no longer matches (#95). */}
-          <button className="sub-end" onClick={endScene}
+          <button className="scene-action end" onClick={endScene}
                   disabled={!activeId || absorbing || busy || sceneLocked || rolling}>
             {absorbing ? "Ending…" : "End scene"}
           </button>
         </div>
-      </div>
-      )}
-      <div className={"layout" + (railCollapsed ? " rail-collapsed" : "") + (inspectorCollapsed ? " inspector-collapsed" : "")}>
-      {railCollapsed ? (
-        <button className="rail-tab" aria-label="Expand scene list" onClick={toggleRail}>›</button>
-      ) : (
-      <aside className="scene-rail">
-        <button className="rail-collapse" aria-label="Collapse scene list" onClick={toggleRail}>‹</button>
-        <div className="rail-counter">Scenes / {String(scenes.length).padStart(2, "0")}</div>
-        <button className="btn-chrome rail-new" onClick={newScene}>+ New Scene</button>
-        <select className="rail-sort" aria-label="Sort scenes by" value={sceneSort}
-                onChange={(e) => setSceneSort(e.target.value as SceneSort)}>
-          <option value="updated">Sort: Last updated</option>
-          <option value="date">Sort: Scene date</option>
-          <option value="order">Sort: Order</option>
-        </select>
-        <div className="rail-scenes">
-          {sortScenes(scenes, sceneSort).map((s, i) => (
-            <EditableRow
-              key={s.id}
-              label={s.title}
-              prefix={String(sceneNumber(s.id, scenes.length - i)).padStart(2, "0")}
-              subtitle={s.pcless ? "Offscreen" : undefined}
-              done={s.done}
-              active={s.id === activeId}
-              // A scene's id is its filename, and renaming re-slugs it — so a
-              // rename mid-turn moves the file out from under the stream, and
-              // the abort write that would have saved the partial fails with
-              // `SceneNotFound` and is swallowed during teardown. Deleting is
-              // the same mechanism. Locked for the turn's duration; the other
-              // rows stay editable, since only this scene is being written to
-              // (review, #95).
-              //
-              // Keyed on the scene being *streamed into*, not the one on screen:
-              // navigating away mid-turn does not move the write, so a lock that
-              // followed the view would unlock the very row that is still being
-              // written to — and lock an unrelated one.
-              locked={s.id === streamingId}
-              lockedReason={LOCKED_WHILE_GENERATING}
-              onSelect={() => goToScene(s.id)}
-              onRename={(title) => renameScene(s.id, title)}
-              onDelete={() => deleteScene(s)}
-            />
-          ))}
-        </div>
-        <div className="rail-foot">
-          <button className="btn-outline rail-world" onClick={() => navigate(`/campaigns/${cid}/world`)}>
-            Campaign World ↗
-          </button>
-          {dt?.current && (
-            <button className="rail-date" onClick={() => setShowCalendar((v) => !v)}
-                    title="Calendar settings">
-              {dt.current.weekday} {dt.current.friendly}
-              {dt.current.holidays_today.length > 0 && (
-                <span className="rail-holiday">✦ {dt.current.holidays_today[0]}</span>
+        )}
+        {/* The scene rail is gone. It cost 220px of transcript on every turn of every scene
+            to answer a question asked a few times a session, and it could not be
+            searched. ⌘K lists the same scenes, costs nothing until asked, and
+            covers the rest of the app besides. */}
+        <section className="main">
+          {/* A review REPLACES the scene; it does not sit on top of it (4c).
+              The transcript, the composer, the scene's own actions and every
+              panel they open are the play view, and a reviewer judging eighteen
+              proposals is not playing — leaving them mounted underneath put the
+              review at the top of a scroll that still ran on past it, and put
+              End scene one mis-click from discarding every proposal already
+              judged. The transcript is still on screen, as the third pane
+              below: read-only, and there to check a quote against. */}
+          {/* Both banners sit ABOVE that split, and are the only things that do.
+              They are the page's, not the scene's: `error` is deliberately
+              global and tagged with `from` because a review outlives a scene
+              switch, and a scoped retry that fails inside the review reports
+              through it — so hiding it during a review would swallow the
+              failure of the one button the review offers. */}
+          {!ready && (
+            <div className="banner">
+              No LLM connection ready. <Link to="/config">Set one up in Config</Link>.
+            </div>
+          )}
+          {error && (
+            <div className="banner error-banner">
+              <span>{error.text}</span>
+              {error.retryable && (
+                <button className="retry" onClick={retry} disabled={busy || rolling}>
+                  Retry
+                </button>
               )}
-            </button>
-          )}
-          <button className="rail-date" onClick={() => setShowStyle((v) => !v)}
-                  title="Response preset and length settings">
-            Response
-          </button>
-          <button className="rail-date" onClick={() => setShowCover((v) => !v)}
-                  title="Cover image, used on the campaigns list and in the EPUB export">
-            Cover
-          </button>
-        </div>
-      </aside>
-      )}
-      <section className="main">
-        {showCalendar && (
-          <div className="panel-slot">
-            <CalendarConfig cid={cid} />
-          </div>
-        )}
-        {showMechanics && (
-          <div className="panel-slot">
-            {/* Guarded against a save that settles after the reader has moved
-                on: the callback this panel holds is the one it was handed, so
-                it can name a campaign that is no longer on screen. */}
-            {/* No cid check on the callback. A save settling after the reader
-                moved on does fire a stale `onChanged`, but `readModuleBound`
-                keys off `liveCid`, so it reads and commits the campaign on
-                SCREEN -- harmless, and the correct answer. Filtering by the
-                saved cid would only skip a request MechanicsConfig's own
-                `load()` has already made anyway, while masking that keying in
-                any test (Codex review round 2). */}
-            {/* `key` remounts it per campaign. Its own save is a PUT followed
-                by a re-read, both against the `cid` its render captured, and
-                every commit in that chain is unguarded -- so a save started in
-                one campaign and settling after a switch would write the old
-                campaign's module into the new campaign's editor, and the next
-                Save would then persist that selection to the wrong campaign.
-                A fresh instance has no state for the stale chain to land in
-                (Codex review round 2). */}
-            <MechanicsConfig key={cid} cid={cid} onChanged={() => readModuleBound()} />
-          </div>
-        )}
-        {showStyle && (
-          <div className="panel-slot">
-            <ResponsePresetPicker scope="campaign" cid={cid}
-                                  onChanged={() => activeId && selectScene(activeId)} />
-          </div>
-        )}
-        {showCover && (
-          <div className="panel-slot">
-            <CampaignCover cid={cid} />
-          </div>
-        )}
-        {/* `ctxKey` bumps on every successful absorb save (and on scene select),
-            which is what re-reads a ledger the user left open across one — the
-            mount alone only covers toggling it shut and back. */}
-        {showLedger && <LedgerPanel cid={cid} refreshKey={ctxKey} />}
-        {showChanges && <ChangesPanel cid={cid} />}
-        {editFailures.length > 0 && (
-          <div className="mechanics-notice">
-            <p>{editFailures.length} change{editFailures.length === 1 ? "" : "s"} did not apply</p>
-            {editFailures.map((f, i) => (
-              <p className="field-hint" key={i}>{f.label}: {f.reason} ({f.kind})</p>
-            ))}
-            <button className="subtle" onClick={() => setEditFailures([])}>Dismiss</button>
-          </div>
-        )}
-        {absorb && (
-          <div className="absorb-panel">
-            <h4>Review scene summary</h4>
-            <label className="field-hint" htmlFor="absorb-oneline">One line</label>
-            <input id="absorb-oneline" aria-label="Scene one-line" value={absorb.one_line}
-                   onChange={(e) => setAbsorb({ ...absorb, one_line: e.target.value })} />
-            <label className="field-hint" htmlFor="absorb-summary">Summary</label>
-            <textarea id="absorb-summary" aria-label="Scene summary" rows={5} value={absorb.summary}
-                      onChange={(e) => setAbsorb({ ...absorb, summary: e.target.value })} />
-            {absorb.timeline_events.length > 0 && (
-              <ul className="absorb-timeline">
-                {absorb.timeline_events.map((t, i) => (
-                  <li key={i}><strong>{t.date}</strong> {t.text}</li>
-                ))}
-              </ul>
-            )}
-            {budgetCutPhases.length > 0 && (
-              <div className="mechanics-notice">
-                <p>This scene was only partly absorbed: the absorb time budget ran out.</p>
-                {/* Deliberately does NOT point at End scene: that button posts the
-                    *active* scene and replaces this review wholesale, discarding
-                    every edit the reviewer has already approved or typed. The audit
-                    and the dossier phase each have their own scoped Retry below
-                    (#286); the voice check does not, so the setting is still the
-                    only honest remedy for that one. */}
-                <p className="field-hint">
-                  Cut short: {budgetCutPhases.map((p) => PHASE_LABELS[p.name]).join(", ")}. The
-                  summary and its edits above are complete and safe to save. Where a step
-                  below offers a Retry, that re-runs it alone on a fresh budget; otherwise
-                  raise the absorb budget on the Configuration page so the next scene gets
-                  the rest.
-                </p>
-              </div>)}
-            {absorb.mechanics.status === "ok" && absorb.mechanics.warnings.length === 0 && (
-              <p className="field-hint">mechanics audited clean</p>)}
-            {absorb.mechanics.warnings.length > 0 && (
-              <ul className="mechanics-warnings">
-                {absorb.mechanics.warnings.map((w, i) => <li key={i}>⚠ {w}</li>)}
-              </ul>)}
-            {(absorb.mechanics.status === "failed" || absorb.mechanics.status === "degraded") && (
-              <div className="mechanics-notice">
-                {/* "never ran" vs "failed": an audit the clock refused to start
-                    asked nothing of the model, so there is no finding to doubt —
-                    only work still owed. Retry (which gets a fresh budget) is the
-                    fix for both, which is why both keep the button. */}
-                <p>{absorb.mechanics.status !== "failed"
-                    ? "Some mechanics findings could not be validated"
-                    : absorb.mechanics.budget_exhausted && !absorb.mechanics.attempted
-                      ? `Mechanics validation never ran: ${absorb.mechanics.reason}`
-                      : `Mechanics validation failed: ${absorb.mechanics.reason}`}</p>
-                {absorb.mechanics.dropped.map((d, i) => (
-                  <p className="field-hint" key={i}>{d.id} {d.field ?? ""}: {d.reason}</p>))}
-                <button onClick={retryAudit} disabled={reviewBusy}>
-                  {retryingAudit ? "Retrying…" : "Retry validation"}</button>
-              </div>)}
-            {(absorb.dossiers.status === "failed" || absorb.dossiers.status === "degraded") && (
-              <div className="mechanics-notice">
-                <p>{dossierNotice(absorb.dossiers)}</p>
-                {absorb.dossiers.failed.map((d, i) => (
-                  <p className="field-hint" key={i}>{d.id}: {d.reason}</p>))}
-                {absorb.dossiers.skipped.length > 0 && (
-                  <p className="field-hint">
-                    Never attempted, skipped: {absorb.dossiers.skipped.join(", ")}
-                  </p>)}
-                {/* Offered for a budget skip and an outright failure alike, for
-                    the audit's reason: a fresh budget is what the retry gets, and
-                    a phase that broke on its own merits is still worth one more
-                    ask before the reviewer gives up on it. */}
-                <button onClick={retryDossiers} disabled={reviewBusy}>
-                  {retryingDossiers ? "Retrying…" : "Retry dossiers"}</button>
-              </div>)}
-            {(absorb.voice.status === "failed" || absorb.voice.status === "degraded") && (
-              <div className="mechanics-notice">
-                {/* A voice check that did not run is worth saying out loud: silence
-                    would read as "everyone stayed in voice" (#59). */}
-                {/* Status first, then failures: a phase that only ran out of
-                    budget is degraded with an empty `failed`, and calling that
-                    "failed" would overstate it. */}
-                <p>{absorb.voice.status === "degraded"
-                    ? "Some voice checks could not be run"
-                    : absorb.voice.failed.length > 0
-                      ? "No voice check could be run"
-                      : `Voice check failed: ${absorb.voice.reason}`}</p>
-                {absorb.voice.failed.map((d, i) => (
-                  <p className="field-hint" key={i}>{d.id}: {d.reason}</p>))}
-                {absorb.voice.skipped.length > 0 && (
-                  <p className="field-hint">
-                    Never attempted, skipped: {absorb.voice.skipped.join(", ")}
-                  </p>)}
-              </div>)}
-            {conflictByRow.size > 0 && (
-              <div className="mechanics-notice">
-                <p>{conflictByRow.size === 1
-                  ? "One proposed change no longer matches what is stored"
-                  : `${conflictByRow.size} proposed changes no longer match what is stored`}
-                  {" — nothing was saved. Answer each one below, then save again."}</p>
-              </div>)}
-            {editRows.length > 0 && (
-              <div className="absorb-edits">
-                <h5>Proposed changes</h5>
-                {editRows.map((e, i) => (editBand(e) === "low" ? null : renderEditRow(e, i)))}
-                {lowRows.length > 0 && (
-                  <div className="absorb-low">
-                    {/* The count is stated whether or not the section is open:
-                        a proposal withheld from the default approval has to be
-                        visible AS withheld, or routing becomes a silent drop. */}
-                    <button className="subtle" aria-expanded={showLow}
-                            onClick={() => setShowLow((v) => !v)}>
-                      {showLow ? "Hide" : "Show"} {lowRows.length} low-confidence
-                      {lowRows.length === 1 ? " change" : " changes"}
-                    </button>
-                    {!showLow && (
-                      <p className="field-hint">
-                        Not approved by default — the transcript does not clearly support them.
-                      </p>)}
-                    {showLow && lowRows.map(([e, i]) => renderEditRow(e, i))}
-                  </div>)}
-              </div>
-            )}
-            {saveError && (
-              <div className="mechanics-notice">
-                <p>Could not save this review: {saveError}</p>
-                <button className="subtle" onClick={saveAbsorb} disabled={reviewBusy}>
-                  Try saving again</button>
-              </div>
-            )}
-            <div className="form-actions">
-              {/* Deliberately NOT disabled by `reviewBusy`: a retry runs on the
-                  absorb budget, which is unbounded at 0, so Cancel is the only
-                  way out of a request that may never answer. Safe because
-                  `releaseRetries` invalidates that request on the way out. */}
-              <button className="subtle" disabled={saving}
-                      onClick={() => { releaseRetries();
-                                       setAbsorb(null); setAbsorbSid(null); setEditRows([]);
-                                       setEditFailures([]); setSaveError(null);
-                                       setConflicts([]); }}>Cancel</button>
-              <button className="primary" onClick={saveAbsorb} disabled={reviewBusy}>
-                {saving ? "Saving…" : "Save summary"}</button>
-            </div>
-          </div>
-        )}
-        {!ready && (
-          <div className="banner">
-            No LLM connection ready. <Link to="/config">Set one up in Config</Link>.
-          </div>
-        )}
-        {error && (
-          <div className="banner error-banner">
-            <span>{error.text}</span>
-            {error.retryable && (
-              <button className="retry" onClick={retry} disabled={busy || rolling}>
-                Retry
-              </button>
-            )}
-          </div>
-        )}
-        {activeId && messages.length === 0 && (
-          <CastPanel
-            cid={cid}
-            sid={activeId}
-            ready={ready}
-            onSeeded={() => refreshAndAsk(activeId)}
-            onSceneRenamed={sceneRenamed}
-            initialPrompt={seedPrompt?.cid === cid && seedPrompt.sid === activeId
-                             ? seedPrompt.prompt : undefined}
-            pcless={activePcless}
-            sceneLocked={sceneLocked}
-            onRenaming={markRenaming}
-          />
-        )}
-        {activeId && (
-          <h2 className="scene-title">
-            {sceneTitle}
-            {activePcless && <span className="chip on offscreen-badge">Offscreen</span>}
-          </h2>
-        )}
-        <div className={"stream" + (colorQuotes ? " color-quotes" : "")} ref={streamRef}
-             onScroll={onStreamScroll}>
-          {firstIndex > 0 && (
-            <div className="stream-older">
-              <button className="subtle" onClick={loadOlder} disabled={loadingOlder}>
-                {loadingOlder ? "Loading…" : (() => {
-                  const n = Math.min(PAGE_SIZE, firstIndex);
-                  return `Load ${n} older post${n === 1 ? "" : "s"}`;
-                })()}
-              </button>
             </div>
           )}
-          {runs.map((run) => (
-            <div className={"run" + (run.pc ? " pc" : "")} key={run.posts[0].index}>
-              <div className={"plate" + (run.pc ? " pc" : "")}>
-                {run.actor ? (
-                  <>
-                    <button className="plate-avatar" aria-label={`Open ${run.speaker} record`}
-                            onClick={() => setDrawer({ type: "actor", kind: run.actor!.kind, id: run.actor!.id })}>
-                      <Portrait src={plateAvatar(run)} name={run.speaker} />
-                    </button>
-                    <button className="plate-name"
-                            onClick={() => setDrawer({ type: "actor", kind: run.actor!.kind, id: run.actor!.id })}>
-                      {run.speaker}
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <span className="plate-avatar"><Portrait src={null} name={run.speaker} /></span>
-                    <span className="plate-name">{run.speaker}</span>
-                  </>
-                )}
-                <span className="role-chip">{run.pc ? "pc" : "npc"}</span>
+          {!absorb && (<>
+          {showCalendar && (
+            <div className="panel-slot">
+              <CalendarConfig cid={cid} />
+            </div>
+          )}
+          {showMechanics && (
+            <div className="panel-slot">
+              {/* Guarded against a save that settles after the reader has moved
+                  on: the callback this panel holds is the one it was handed, so
+                  it can name a campaign that is no longer on screen. */}
+              {/* No cid check on the callback. A save settling after the reader
+                  moved on does fire a stale `onChanged`, but `readModuleBound`
+                  keys off `liveCid`, so it reads and commits the campaign on
+                  SCREEN -- harmless, and the correct answer. Filtering by the
+                  saved cid would only skip a request MechanicsConfig's own
+                  `load()` has already made anyway, while masking that keying in
+                  any test (Codex review round 2). */}
+              {/* `key` remounts it per campaign. Its own save is a PUT followed
+                  by a re-read, both against the `cid` its render captured, and
+                  every commit in that chain is unguarded -- so a save started in
+                  one campaign and settling after a switch would write the old
+                  campaign's module into the new campaign's editor, and the next
+                  Save would then persist that selection to the wrong campaign.
+                  A fresh instance has no state for the stale chain to land in
+                  (Codex review round 2). */}
+              <MechanicsConfig key={cid} cid={cid} onChanged={() => readModuleBound()} />
+            </div>
+          )}
+          {showStyle && (
+            <div className="panel-slot">
+              <ResponsePresetPicker scope="campaign" cid={cid}
+                                    onChanged={() => activeId && selectScene(activeId)} />
+            </div>
+          )}
+          {showCover && (
+            <div className="panel-slot">
+              <CampaignCover cid={cid} />
+            </div>
+          )}
+          {showChanges && <ChangesPanel cid={cid} />}
+          {editFailures.length > 0 && (
+            <div className="mechanics-notice">
+              <p>{editFailures.length} change{editFailures.length === 1 ? "" : "s"} did not apply</p>
+              {editFailures.map((f, i) => (
+                <p className="field-hint" key={i}>{f.label}: {f.reason} ({f.kind})</p>
+              ))}
+              <button className="subtle" onClick={() => setEditFailures([])}>Dismiss</button>
+            </div>
+          )}
+          </>)}
+          {absorb && (
+            <div className="absorb-panel">
+              <h4>Review scene summary</h4>
+              <label className="field-hint" htmlFor="absorb-oneline">One line</label>
+              <input id="absorb-oneline" aria-label="Scene one-line" value={absorb.one_line}
+                     onChange={(e) => setAbsorb({ ...absorb, one_line: e.target.value })} />
+              <label className="field-hint" htmlFor="absorb-summary">Summary</label>
+              <textarea id="absorb-summary" aria-label="Scene summary" rows={5} value={absorb.summary}
+                        onChange={(e) => setAbsorb({ ...absorb, summary: e.target.value })} />
+              {absorb.timeline_events.length > 0 && (
+                <ul className="absorb-timeline">
+                  {absorb.timeline_events.map((t, i) => (
+                    <li key={i}><strong>{t.date}</strong> {t.text}</li>
+                  ))}
+                </ul>
+              )}
+              {budgetCutPhases.length > 0 && (
+                <div className="mechanics-notice">
+                  <p>This scene was only partly absorbed: the absorb time budget ran out.</p>
+                  {/* Deliberately does NOT point at End scene: that button posts the
+                      *active* scene and replaces this review wholesale, discarding
+                      every edit the reviewer has already approved or typed. The audit
+                      and the dossier phase each have their own scoped Retry below
+                      (#286); the voice check does not, so the setting is still the
+                      only honest remedy for that one. */}
+                  <p className="field-hint">
+                    Cut short: {budgetCutPhases.map((p) => PHASE_LABELS[p.name]).join(", ")}. The
+                    summary and its edits above are complete and safe to save. Where a step
+                    below offers a Retry, that re-runs it alone on a fresh budget; otherwise
+                    raise the absorb budget on the Configuration page so the next scene gets
+                    the rest.
+                  </p>
+                </div>)}
+              {absorb.mechanics.status === "ok" && absorb.mechanics.warnings.length === 0 && (
+                <p className="field-hint">mechanics audited clean</p>)}
+              {absorb.mechanics.warnings.length > 0 && (
+                <ul className="mechanics-warnings">
+                  {absorb.mechanics.warnings.map((w, i) => <li key={i}>⚠ {w}</li>)}
+                </ul>)}
+              {(absorb.mechanics.status === "failed" || absorb.mechanics.status === "degraded") && (
+                <div className="mechanics-notice">
+                  {/* "never ran" vs "failed": an audit the clock refused to start
+                      asked nothing of the model, so there is no finding to doubt —
+                      only work still owed. Retry (which gets a fresh budget) is the
+                      fix for both, which is why both keep the button. */}
+                  <p>{absorb.mechanics.status !== "failed"
+                      ? "Some mechanics findings could not be validated"
+                      : absorb.mechanics.budget_exhausted && !absorb.mechanics.attempted
+                        ? `Mechanics validation never ran: ${absorb.mechanics.reason}`
+                        : `Mechanics validation failed: ${absorb.mechanics.reason}`}</p>
+                  {absorb.mechanics.dropped.map((d, i) => (
+                    <p className="field-hint" key={i}>{d.id} {d.field ?? ""}: {d.reason}</p>))}
+                  <button onClick={retryAudit} disabled={reviewBusy}>
+                    {retryingAudit ? "Retrying…" : "Retry validation"}</button>
+                </div>)}
+              {(absorb.dossiers.status === "failed" || absorb.dossiers.status === "degraded") && (
+                <div className="mechanics-notice">
+                  <p>{dossierNotice(absorb.dossiers)}</p>
+                  {absorb.dossiers.failed.map((d, i) => (
+                    <p className="field-hint" key={i}>{d.id}: {d.reason}</p>))}
+                  {absorb.dossiers.skipped.length > 0 && (
+                    <p className="field-hint">
+                      Never attempted, skipped: {absorb.dossiers.skipped.join(", ")}
+                    </p>)}
+                  {/* Offered for a budget skip and an outright failure alike, for
+                      the audit's reason: a fresh budget is what the retry gets, and
+                      a phase that broke on its own merits is still worth one more
+                      ask before the reviewer gives up on it. */}
+                  <button onClick={retryDossiers} disabled={reviewBusy}>
+                    {retryingDossiers ? "Retrying…" : "Retry dossiers"}</button>
+                </div>)}
+              {(absorb.voice.status === "failed" || absorb.voice.status === "degraded") && (
+                <div className="mechanics-notice">
+                  {/* A voice check that did not run is worth saying out loud: silence
+                      would read as "everyone stayed in voice" (#59). */}
+                  {/* Status first, then failures: a phase that only ran out of
+                      budget is degraded with an empty `failed`, and calling that
+                      "failed" would overstate it. */}
+                  <p>{absorb.voice.status === "degraded"
+                      ? "Some voice checks could not be run"
+                      : absorb.voice.failed.length > 0
+                        ? "No voice check could be run"
+                        : `Voice check failed: ${absorb.voice.reason}`}</p>
+                  {absorb.voice.failed.map((d, i) => (
+                    <p className="field-hint" key={i}>{d.id}: {d.reason}</p>))}
+                  {absorb.voice.skipped.length > 0 && (
+                    <p className="field-hint">
+                      Never attempted, skipped: {absorb.voice.skipped.join(", ")}
+                    </p>)}
+                </div>)}
+              {conflictByRow.size > 0 && (
+                <div className="mechanics-notice">
+                  <p>{conflictByRow.size === 1
+                    ? "One proposed change no longer matches what is stored"
+                    : `${conflictByRow.size} proposed changes no longer match what is stored`}
+                    {" — nothing was saved. Answer each one below, then save again."}</p>
+                </div>)}
+              {editRows.length > 0 && (
+                <div className="absorb-edits">
+                  {/* One drawer at a time, chosen in the column. `uncited` is a
+                      cross-cutting view of the same rows the store groups hold:
+                      a row can be uncited AND a fact, and it needs to be
+                      reachable as both. */}
+                  {shownRows.map(([e, i]) => renderEditRow(e, i))}
+                  {shownRows.length === 0 && (
+                    <p className="empty-state">
+                      <span className="empty-what">Nothing proposed here.</span> Pick
+                      another store from the column.
+                    </p>
+                  )}
+                  {openSection === "uncited" && uncitedRows.length === 0 && (
+                    <p className="empty-state">
+                      <span className="empty-what">Every proposal is cited.</span> The
+                      model quoted a line of transcript for all {editRows.length} of them.
+                    </p>
+                  )}
+                  {openSection === "low" && (
+                    <p className="field-hint">
+                      Not approved by default — the transcript does not clearly support
+                      them. Each one is here, in full, to be answered.
+                    </p>)}
+                </div>
+              )}
+              {saveError && (
+                <div className="mechanics-notice">
+                  <p>Could not save this review: {saveError}</p>
+                  <button className="subtle" onClick={saveAbsorb} disabled={reviewBusy}>
+                    Try saving again</button>
+                </div>
+              )}
+              <div className="review-footer">
+                <span className="review-left">
+                  {undecidedCount} still to judge
+                </span>
+                {/* Deliberately NOT disabled by `reviewBusy`: a retry runs on the
+                    absorb budget, which is unbounded at 0, so Cancel is the only
+                    way out of a request that may never answer. Safe because
+                    `releaseRetries` invalidates that request on the way out. */}
+                <button className="subtle" disabled={saving}
+                        onClick={() => { releaseRetries();
+                                         setAbsorb(null); setAbsorbSid(null); setEditRows([]);
+                                         setEditFailures([]); setSaveError(null);
+                                         setConflicts([]); setReviewQuote(""); }}>
+                  Cancel absorb</button>
+                <button className="primary" onClick={saveAbsorb} disabled={reviewBusy}>
+                  {saving ? "Saving…" : "Save chronicle"}</button>
               </div>
-              {run.posts.map(({ m, index }) => (
-                <div className={`msg ${m.role}`} key={index}>
-                  <span className="msg-gutter">
-                    {editing?.index !== index && !busy && (
-                      <span className="gutter-icons">
-                        {index === rerollAt && canReroll && (
-                          <button className="msg-edit" title="Reroll" aria-label="Reroll"
-                                  disabled={rolling} onClick={() => setRerollPrompt("")}>↻</button>
-                        )}
-                        {index === rerollAt && canSwipe && (
-                          <span className="swipe-nav">
-                            <button className="msg-edit" aria-label="Previous alternate"
-                                    disabled={rolling || editing !== null || sceneLocked}
-                                    onClick={() => pickAlternate(stepAlternate(-1))}>‹</button>
-                            <span className="swipe-count" title={altTitle}>
-                              {alternates.active === null ? "–" : alternates.active + 1}/{altCount}
+            </div>
+          )}
+          {!absorb && (<>
+          {activeId && messages.length === 0 && (
+            <CastPanel
+              cid={cid}
+              sid={activeId}
+              ready={ready}
+              onSeeded={() => refreshAndAsk(activeId)}
+              onSceneRenamed={sceneRenamed}
+              initialPrompt={seedPrompt?.cid === cid && seedPrompt.sid === activeId
+                               ? seedPrompt.prompt : undefined}
+              pcless={activePcless}
+              sceneLocked={sceneLocked}
+              onRenaming={markRenaming}
+            />
+          )}
+          {showInspector && activeId && (
+            <div className="panel-slot">
+              <SceneInspector cid={cid} sid={activeId} refreshKey={ctxKey}
+                              onSceneChanged={() => selectScene(activeId)}
+                              onSceneRenamed={sceneRenamed} pcless={activePcless}
+                              sceneLocked={sceneLocked}
+                              onRenaming={markRenaming}
+                              posts={messages.length} />
+            </div>
+          )}
+          {activeId && (
+            <div className="scene-head">
+              <div className="eyebrow">
+                SCENE {sceneNumber(activeId, scenes.length)} · {messages.length}{" "}
+                {messages.length === 1 ? "TURN" : "TURNS"}
+              </div>
+              {renamingScene ? (
+                <input
+                  className="row-rename scene-rename" aria-label="Rename scene" autoFocus
+                  value={renamingScene.title}
+                  onChange={(e) => setRenamingScene({ id: renamingScene.id, title: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitSceneRename();
+                    if (e.key === "Escape") setRenamingScene(null);
+                  }}
+                />
+              ) : (
+                <h2 className="scene-title">
+                  {sceneTitle}
+                  {activePcless && <span className="chip on offscreen-badge">Offscreen</span>}
+                </h2>
+              )}
+              {/* Rename and delete belong to the scene you are reading, and to
+                  no other. They used to sit on every row of the rail, where a
+                  ✕ was one mis-click from deleting a transcript you were not
+                  even looking at. Locked while this scene is the one being
+                  streamed into: renaming re-slugs the file, which moves it out
+                  from under the write in flight (#95). */}
+              <div className="row-actions">
+                <button aria-label="Rename scene" disabled={sceneLocked}
+                        title={sceneLocked ? LOCKED_WHILE_GENERATING : "Rename scene"}
+                        onClick={() => setRenamingScene({ id: activeId, title: sceneTitle })}>✎</button>
+                <button aria-label="Delete scene" disabled={sceneLocked}
+                        title={sceneLocked ? LOCKED_WHILE_GENERATING : "Delete scene"}
+                        onClick={() => {
+                          const meta = scenes.find((x) => x.id === activeId);
+                          if (meta) deleteScene(meta);
+                        }}>✕</button>
+              </div>
+            </div>
+          )}
+          <div className={"stream" + (colorQuotes ? " color-quotes" : "")} ref={streamRef}
+               data-testid="stream" onScroll={onStreamScroll}>
+            {firstIndex > 0 && (
+              <div className="stream-older">
+                <button className="subtle" onClick={loadOlder} disabled={loadingOlder}>
+                  {loadingOlder ? "Loading…" : (() => {
+                    const n = Math.min(PAGE_SIZE, firstIndex);
+                    return `Load ${n} older post${n === 1 ? "" : "s"}`;
+                  })()}
+                </button>
+              </div>
+            )}
+            {runs.map((run) => (
+              <div className={"run" + (run.pc ? " pc" : "")} key={run.posts[0].index}>
+                <div className={"plate" + (run.pc ? " pc" : "")}>
+                  {run.actor ? (
+                    <>
+                      {/* The same thing clicking them in the cast grid does, and
+                          for the same reason: a speaker in the transcript is in
+                          this scene, so the column has a dossier for them. A
+                          drawer over the transcript to read about someone who
+                          is standing in it was a modal answering a question the
+                          column beside it already answers. */}
+                      <button className="plate-avatar" aria-label={`Open ${run.speaker} record`}
+                              onClick={() => openActor(run.actor!.kind, run.actor!.id)}>
+                        <Portrait src={plateAvatar(run)} name={run.speaker} />
+                      </button>
+                      <button className="plate-name"
+                              onClick={() => openActor(run.actor!.kind, run.actor!.id)}>
+                        {run.speaker}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="plate-avatar"><Portrait src={null} name={run.speaker} /></span>
+                      <span className="plate-name">{run.speaker}</span>
+                    </>
+                  )}
+                  <span className="role-chip">{run.pc ? "pc" : "npc"}</span>
+                </div>
+                {run.posts.map(({ m, index }) => (
+                  /* `.cited` marks the line a hovered citation was taken from.
+                     Substring, for the reason `goToQuote` gives: the citation
+                     records an excerpt, and there is no index to trust. */
+                  <div className={`msg ${m.role}` + (isCited(m.content) ? " cited" : "")}
+                       key={index}>
+                    <span className="msg-gutter">
+                      {editing?.index !== index && !busy && (
+                        <span className="gutter-icons">
+                          {index === rerollAt && canReroll && (
+                            <button className="msg-edit" title="Reroll" aria-label="Reroll"
+                                    disabled={rolling} onClick={() => setRerollPrompt("")}>↻</button>
+                          )}
+                          {index === rerollAt && canSwipe && (
+                            <span className="swipe-nav">
+                              <button className="msg-edit" aria-label="Previous alternate"
+                                      disabled={rolling || editing !== null || sceneLocked}
+                                      onClick={() => pickAlternate(stepAlternate(-1))}>‹</button>
+                              <span className="swipe-count" title={altTitle}>
+                                {alternates.active === null ? "–" : alternates.active + 1}/{altCount}
+                              </span>
+                              <button className="msg-edit" aria-label="Next alternate"
+                                      disabled={rolling || editing !== null || sceneLocked}
+                                      onClick={() => pickAlternate(stepAlternate(1))}>›</button>
                             </span>
-                            <button className="msg-edit" aria-label="Next alternate"
-                                    disabled={rolling || editing !== null || sceneLocked}
-                                    onClick={() => pickAlternate(stepAlternate(1))}>›</button>
-                          </span>
-                        )}
-                        {m.speaker !== ROLL_SPEAKER && transcriptIsActive && (
-                          <button className="msg-edit" title="Edit message" aria-label={`Edit message ${index + 1}`}
-                                  disabled={rolling}
-                                  onClick={() => setEditing({ index, text: m.content })}>✎</button>
-                        )}
-                      </span>
-                    )}
-                    {rerollPrompt !== null && !busy &&
-                     index === rerollAt && canReroll && (
-                      <span className="reroll-pop">
-                        <input
-                          autoFocus
-                          placeholder="Guide the reroll (optional)…"
-                          aria-label="Reroll guidance"
-                          value={rerollPrompt}
-                          onChange={(e) => setRerollPrompt(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") reroll();
-                            if (e.key === "Escape") setRerollPrompt(null);
-                          }}
-                        />
-                        <button className="btn-chrome" onClick={() => reroll()} disabled={rolling}>Reroll ▸</button>
-                      </span>
-                    )}
-                  </span>
-                  <div className="msg-body">
-                    {editing?.index === index ? (
-                      <div className="msg-edit-form">
-                        <textarea aria-label="Edit message" rows={4} value={editing.text}
-                                  onChange={(e) => setEditing({ index, text: e.target.value })} />
-                        <div className="form-actions">
-                          <button className="subtle" onClick={() => setEditing(null)}>Cancel</button>
-                          <button className="primary" onClick={saveEdit} disabled={rolling}>Save</button>
+                          )}
+                          {m.speaker !== ROLL_SPEAKER && transcriptIsActive && (
+                            <button className="msg-edit" title="Edit message" aria-label={`Edit message ${index + 1}`}
+                                    disabled={rolling}
+                                    onClick={() => setEditing({ index, text: m.content })}>✎</button>
+                          )}
+                        </span>
+                      )}
+                      {rerollPrompt !== null && !busy &&
+                       index === rerollAt && canReroll && (
+                        <span className="reroll-pop">
+                          <input
+                            autoFocus
+                            placeholder="Guide the reroll (optional)…"
+                            aria-label="Reroll guidance"
+                            value={rerollPrompt}
+                            onChange={(e) => setRerollPrompt(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") reroll();
+                              if (e.key === "Escape") setRerollPrompt(null);
+                            }}
+                          />
+                          <button className="btn-chrome" onClick={() => reroll()} disabled={rolling}>Reroll ▸</button>
+                        </span>
+                      )}
+                    </span>
+                    <div className="msg-body">
+                      {editing?.index === index ? (
+                        <div className="msg-edit-form">
+                          <textarea aria-label="Edit message" rows={4} value={editing.text}
+                                    onChange={(e) => setEditing({ index, text: e.target.value })} />
+                          <div className="form-actions">
+                            <button className="subtle" onClick={() => setEditing(null)}>Cancel</button>
+                            <button className="primary" onClick={saveEdit} disabled={rolling}>Save</button>
+                          </div>
                         </div>
-                      </div>
-                    ) : (
-                      <RenderedMarkdown content={m.content} />
-                    )}
+                      ) : (
+                        <RenderedMarkdown content={m.content} />
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))}
+            {directorNote && busy && (
+              <div className="run director-note">
+                <div className="msg assistant">
+                  <span className="msg-gutter" />
+                  <div className="msg-body">🎬 {directorNote}</div>
+                </div>
+              </div>
+            )}
+            {streaming && (
+              <div className="run">
+                {(messages.length === 0 ||
+                  speakerOf(messages[messages.length - 1]) !== labels.assistant) && (
+                  <div className="plate">
+                    <span className="plate-avatar"><Portrait src={null} name={labels.assistant} /></span>
+                    <span className="plate-name">{labels.assistant}</span>
+                    <span className="role-chip">npc</span>
+                  </div>
+                )}
+                <div className="msg assistant">
+                  <span className="msg-gutter" />
+                  <div className="msg-body">
+                    <RenderedMarkdown content={streaming} />
+                    <span className="cursor" />
                   </div>
                 </div>
+              </div>
+            )}
+          </div>
+          {proposal && activeId && (
+            <RollProposal key={proposal.id} record={proposal} busy={busy || rolling}
+                          onResolve={resolve} />
+          )}
+          {activeDone ? (
+            /* The whole composer, not a disabled entry box. This scene's summary
+               is written and its changes are applied, so a post added now would
+               sit outside the record taken of it -- and a greyed-out textarea
+               still says "you could type here". Editing and rerolling existing
+               posts stay available: those change what was absorbed, rather than
+               adding to a scene that is closed. */
+            <div className="scene-complete">✓ Scene complete</div>
+          ) : (
+          <div className="composer">
+          {/* Its own row, not a cell inside the input bar. As a cell it was
+              `flex: none` at 334px of un-shrinkable nowrap text -- 63% of the
+              bar's 529px minimum -- so a narrow column squeezed the textarea to
+              36px and then pushed Send clean out of the column. Here it is free
+              to shrink and Send cannot be displaced. */}
+          <div className="composer-meta">
+            <label className="composer-meta-label" htmlFor="response-length">Response</label>
+            <select id="response-length" aria-label="Response length"
+                    value={responseChipPresetId}
+                    aria-describedby={responseChipPending ? "response-length-oneshot" : undefined}
+                    onChange={(e) => (e.target.value
+                      ? chooseResponseOverride(e.target.value)
+                      : clearResponseOverride())}>
+              {/* Offered only while nothing is picked. With no preset named at
+                  scene level the value comes from campaign or global scope, which
+                  names nothing the scene knows about -- so this option reports the
+                  effective budget and its source instead of claiming a preset.
+                  Rendering it always would also turn it into a "revert to
+                  inherited" action, which this control has never had. */}
+              {!responseChipPresetId && <option value="">{responseChipLabel}</option>}
+              {responsePresets.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
               ))}
+              {/* Same fallback ResponsePresetPicker carries: a scene can name a
+                  preset the list has not loaded yet, or one since deleted. With no
+                  matching option a native select silently displays the FIRST one,
+                  so the strip would confidently name a preset that is not in
+                  effect. Show the id instead (Codex review). */}
+              {responseChipPresetId
+                && !responsePresets.some((p) => p.id === responseChipPresetId) && (
+                <option value={responseChipPresetId}>{responseChipPresetId}</option>
+              )}
+            </select>
+            {/* A one-shot pick and a standing setting read identically without
+                this — and they mean very different things: one is spent by the
+                next reply, the other is the scene's standing answer. It used to
+                sit INSIDE the control and so formed part of its accessible name;
+                as a sibling it has to be tied back on with `aria-describedby`, or
+                the distinction is visual only (Codex review). */}
+            {responseChipPending && (
+              <span className="chip-oneshot" id="response-length-oneshot">next reply only</span>
+            )}
+            {responseChipPending && (
+              <button type="button" className="chip-clear" title="Cancel the one-shot pick"
+                      aria-label="Cancel the one-shot response length"
+                      onClick={clearResponseOverride}>×</button>
+            )}
+            {!responseChipPending && responseChipPresetId && sceneResponse && (
+              <span className="composer-meta-hint">
+                {sceneResponse.effective.reply_words} words
+              </span>
+            )}
+            <span className="header-spacer" />
+            {/* Opening a dossier does not take the turn away from you, and this
+                is where the app says so — beside the control you were about to
+                use, while the draft and the caret are still exactly where you
+                left them. */}
+            {selectedActor && (
+              <span className="composer-notice">Still your turn · dossier open</span>
+            )}
+            <button type="button" className="composer-link"
+                    aria-expanded={showInspector}
+                    onClick={() => setShowInspector((v) => !v)}>
+              {showInspector ? "Hide what the model saw" : "What the model saw →"}
+            </button>
+          </div>
+          <div className="inputbar">
+            {/* Dice are a mechanics affordance: both the popover's tabs lead to
+                routes that only mean something with a pack bound (Check needs one
+                outright; freeform Dice is offered alongside it as part of the same
+                tool). An unbound campaign is freeform play, so the button is not
+                there at all -- and not merely while the read is still out, which
+                would flash a control and then remove it. */}
+            {moduleBound === true && (
+              <button className="roll-btn"
+                      title={sceneLocked ? LOCKED_WHILE_GENERATING : "Roll dice"}
+                      aria-label="Roll dice"
+                      disabled={!activeId || busy || sceneLocked || messages.length === 0}
+                      onClick={toggleRollPop}>
+                🎲
+              </button>
+            )}
+            {rollForm && (
+              <div className="roll-pop">
+                <div className="roll-mode-toggle">
+                  <button type="button" className={rollForm.mode === "dice" ? "active" : ""}
+                          disabled={rolling}
+                          onClick={() => setRollForm({ ...rollForm, mode: "dice" })}>
+                    Dice
+                  </button>
+                  <button type="button" className={rollForm.mode === "check" ? "active" : ""}
+                          disabled={rolling}
+                          onClick={enterCheckMode}>
+                    Check
+                  </button>
+                </div>
+                {rollForm.mode === "check" ? (
+                  <div className="check-pop">
+                    <select aria-label="Check actor" value={rollForm.checkActor} disabled={rolling}
+                            onChange={(e) => setRollForm({ ...rollForm, checkActor: e.target.value, checkId: "" })}>
+                      <option value="">Choose an actor…</option>
+                      {checkActors.map((a) => <option key={a.ref} value={a.ref}>{a.label}</option>)}
+                    </select>
+                    <select aria-label="Check" value={rollForm.checkId} disabled={rolling}
+                            onChange={(e) => setRollForm({ ...rollForm, checkId: e.target.value })}>
+                      <option value="">Choose a check…</option>
+                      {(checkActors.find((a) => a.ref === rollForm.checkActor)?.checks ?? [])
+                        .map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                    </select>
+                    <input type="number" aria-label="Difficulty" value={rollForm.difficulty} disabled={rolling}
+                           placeholder="default"
+                           onChange={(e) => setRollForm({ ...rollForm,
+                             difficulty: e.target.value === "" ? "" : Number(e.target.value) })} />
+                    <input type="number" aria-label="Modifier" value={rollForm.modifier} disabled={rolling}
+                           onChange={(e) => setRollForm({ ...rollForm, modifier: Number(e.target.value) })} />
+                    <button className="btn-chrome" onClick={doCheck}
+                            disabled={rolling || !rollForm.checkActor || !rollForm.checkId}>
+                      Roll ▸
+                    </button>
+                    {rollForm.error && <span className="roll-error">{rollForm.error}</span>}
+                  </div>
+                ) : (
+                <>
+                <input
+                  autoFocus
+                  placeholder="2d6+3, 4d6kh3, 7d10t6…"
+                  aria-label="Dice notation"
+                  value={rollForm.notation}
+                  disabled={rolling}
+                  onChange={(e) => setRollForm({ ...rollForm, notation: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") doRoll();
+                    if (e.key === "Escape") setRollForm(null);
+                  }}
+                />
+                <input
+                  placeholder="Label (optional)"
+                  aria-label="Roll label"
+                  value={rollForm.label}
+                  disabled={rolling}
+                  onChange={(e) => setRollForm({ ...rollForm, label: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") doRoll();
+                    if (e.key === "Escape") setRollForm(null);
+                  }}
+                />
+                <button className="btn-chrome" onClick={doRoll} disabled={rolling}>Roll ▸</button>
+                <button type="button" className="roll-syntax-help" aria-label="Dice notation syntax"
+                        aria-expanded={showRollSyntax}
+                        onClick={() => setShowRollSyntax((v) => !v)}>syntax {showRollSyntax ? "▾" : "▸"}</button>
+                {rollForm.error && <span className="roll-error">{rollForm.error}</span>}
+                {showRollSyntax && (
+                  <div className="roll-syntax">
+                    <div><code>NdM</code> — roll N dice with M sides (default N = 1), e.g. <code>2d6</code></div>
+                    <div><code>khN</code> / <code>klN</code> — keep highest/lowest N, e.g. <code>4d6kh3</code></div>
+                    <div><code>dhN</code> / <code>dlN</code> — drop highest/lowest N instead of keeping</div>
+                    <div><code>!</code> — exploding dice: max face rolls again, e.g. <code>5d6!</code></div>
+                    <div><code>+K</code> / <code>-K</code> — flat modifier on the total, e.g. <code>2d6+3</code></div>
+                    <div><code>tN</code> — pool mode: count dice ≥ N as successes, e.g. <code>7d10t6</code></div>
+                    <div><code>vs N</code> — grade the total success/failure vs a target, e.g. <code>1d20+5 vs 15</code></div>
+                    <div>Clauses combine freely (e.g. <code>4d6kh3!+2</code>); <code>tN</code> and <code>vs N</code> are mutually exclusive.</div>
+                  </div>
+                )}
+                </>
+                )}
+              </div>
+            )}
+            <textarea
+              rows={3}
+              placeholder={activePcless ? "Direct the scene (optional)…" : "Speak your intent…"}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+            />
+            {/* Replaces Send rather than sitting beside it: Send is already
+                disabled for the whole turn, so the slot is dead space at exactly
+                the moment a way out is wanted. */}
+            {busy ? (
+              <button className="send cancel-turn" onClick={cancelTurn}>Stop ■</button>
+            ) : (
+              <button className="send" onClick={send} disabled={rolling || renamesInFlight > 0}>
+                {!input.trim() ? "Continue ▶" : "Send ▸"}
+              </button>
+            )}
+          </div>
+          </div>
+          )}
+          </>)}
+        </section>
+        {drawer && activeId && (
+          <RecordDrawer cid={cid} sid={activeId} target={drawer} onClose={() => setDrawer(null)} />
+        )}
+        {/* The third pane, and the reason the review is worth its own layout:
+            judging a proposal means reading the line it came from, and reading
+            it in another tab means losing the row. Rendered flat — speaker,
+            then text — rather than through the transcript's own machinery,
+            which carries edit, reroll and alternate controls that have no
+            business in a review. */}
+        {chooserOpen && (
+          <NewSceneChooser cid={cid} afterSid={activeId} ready={ready}
+                           onClose={closeChooser} onCreated={sceneCreated} />
+        )}
+      </div>
+      {/* A SIBLING of the workspace, not a child of it. `.shell.review
+          .shell-main` is a row flex whose two items are the review and this —
+          which is the whole "three panes" layout — and nested inside the
+          workspace's column flex it was never beside the review at all, only
+          stacked under it and clipped to 320px. */}
+      {absorb && (
+        <aside className="review-transcript" aria-label="The scene, for checking">
+          <div className="section-label">The scene, for checking</div>
+          {messages.map((m, i) => (
+            <div className={"review-post" + (isCited(m.content) ? " cited" : "")} key={i}>
+              <div className="review-post-speaker">{speakerOf(m)}</div>
+              <div className="review-post-body">{m.content}</div>
             </div>
           ))}
-          {directorNote && busy && (
-            <div className="run director-note">
-              <div className="msg assistant">
-                <span className="msg-gutter" />
-                <div className="msg-body">🎬 {directorNote}</div>
-              </div>
-            </div>
+          {messages.length === 0 && (
+            <p className="column-empty">This scene has no transcript to check against.</p>
           )}
-          {streaming && (
-            <div className="run">
-              {(messages.length === 0 ||
-                speakerOf(messages[messages.length - 1]) !== labels.assistant) && (
-                <div className="plate">
-                  <span className="plate-avatar"><Portrait src={null} name={labels.assistant} /></span>
-                  <span className="plate-name">{labels.assistant}</span>
-                  <span className="role-chip">npc</span>
-                </div>
-              )}
-              <div className="msg assistant">
-                <span className="msg-gutter" />
-                <div className="msg-body">
-                  <RenderedMarkdown content={streaming} />
-                  <span className="cursor" />
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-        {proposal && activeId && (
-          <RollProposal key={proposal.id} record={proposal} busy={busy || rolling}
-                        onResolve={resolve} />
-        )}
-        {activeDone ? (
-          /* The whole composer, not a disabled entry box. This scene's summary
-             is written and its changes are applied, so a post added now would
-             sit outside the record taken of it -- and a greyed-out textarea
-             still says "you could type here". Editing and rerolling existing
-             posts stay available: those change what was absorbed, rather than
-             adding to a scene that is closed. */
-          <div className="scene-complete">✓ Scene complete</div>
-        ) : (
-        <div className="composer">
-        <div className="inputbar">
-          {/* Dice are a mechanics affordance: both the popover's tabs lead to
-              routes that only mean something with a pack bound (Check needs one
-              outright; freeform Dice is offered alongside it as part of the same
-              tool). An unbound campaign is freeform play, so the button is not
-              there at all -- and not merely while the read is still out, which
-              would flash a control and then remove it. */}
-          {moduleBound === true && (
-            <button className="roll-btn"
-                    title={sceneLocked ? LOCKED_WHILE_GENERATING : "Roll dice"}
-                    aria-label="Roll dice"
-                    disabled={!activeId || busy || sceneLocked || messages.length === 0}
-                    onClick={toggleRollPop}>
-              🎲
-            </button>
-          )}
-          {rollForm && (
-            <div className="roll-pop">
-              <div className="roll-mode-toggle">
-                <button type="button" className={rollForm.mode === "dice" ? "active" : ""}
-                        disabled={rolling}
-                        onClick={() => setRollForm({ ...rollForm, mode: "dice" })}>
-                  Dice
-                </button>
-                <button type="button" className={rollForm.mode === "check" ? "active" : ""}
-                        disabled={rolling}
-                        onClick={enterCheckMode}>
-                  Check
-                </button>
-              </div>
-              {rollForm.mode === "check" ? (
-                <div className="check-pop">
-                  <select aria-label="Check actor" value={rollForm.checkActor} disabled={rolling}
-                          onChange={(e) => setRollForm({ ...rollForm, checkActor: e.target.value, checkId: "" })}>
-                    <option value="">Choose an actor…</option>
-                    {checkActors.map((a) => <option key={a.ref} value={a.ref}>{a.label}</option>)}
-                  </select>
-                  <select aria-label="Check" value={rollForm.checkId} disabled={rolling}
-                          onChange={(e) => setRollForm({ ...rollForm, checkId: e.target.value })}>
-                    <option value="">Choose a check…</option>
-                    {(checkActors.find((a) => a.ref === rollForm.checkActor)?.checks ?? [])
-                      .map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-                  </select>
-                  <input type="number" aria-label="Difficulty" value={rollForm.difficulty} disabled={rolling}
-                         placeholder="default"
-                         onChange={(e) => setRollForm({ ...rollForm,
-                           difficulty: e.target.value === "" ? "" : Number(e.target.value) })} />
-                  <input type="number" aria-label="Modifier" value={rollForm.modifier} disabled={rolling}
-                         onChange={(e) => setRollForm({ ...rollForm, modifier: Number(e.target.value) })} />
-                  <button className="btn-chrome" onClick={doCheck}
-                          disabled={rolling || !rollForm.checkActor || !rollForm.checkId}>
-                    Roll ▸
-                  </button>
-                  {rollForm.error && <span className="roll-error">{rollForm.error}</span>}
-                </div>
-              ) : (
-              <>
-              <input
-                autoFocus
-                placeholder="2d6+3, 4d6kh3, 7d10t6…"
-                aria-label="Dice notation"
-                value={rollForm.notation}
-                disabled={rolling}
-                onChange={(e) => setRollForm({ ...rollForm, notation: e.target.value })}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") doRoll();
-                  if (e.key === "Escape") setRollForm(null);
-                }}
-              />
-              <input
-                placeholder="Label (optional)"
-                aria-label="Roll label"
-                value={rollForm.label}
-                disabled={rolling}
-                onChange={(e) => setRollForm({ ...rollForm, label: e.target.value })}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") doRoll();
-                  if (e.key === "Escape") setRollForm(null);
-                }}
-              />
-              <button className="btn-chrome" onClick={doRoll} disabled={rolling}>Roll ▸</button>
-              <button type="button" className="roll-syntax-help" aria-label="Dice notation syntax"
-                      aria-expanded={showRollSyntax}
-                      onClick={() => setShowRollSyntax((v) => !v)}>syntax {showRollSyntax ? "▾" : "▸"}</button>
-              {rollForm.error && <span className="roll-error">{rollForm.error}</span>}
-              {showRollSyntax && (
-                <div className="roll-syntax">
-                  <div><code>NdM</code> — roll N dice with M sides (default N = 1), e.g. <code>2d6</code></div>
-                  <div><code>khN</code> / <code>klN</code> — keep highest/lowest N, e.g. <code>4d6kh3</code></div>
-                  <div><code>dhN</code> / <code>dlN</code> — drop highest/lowest N instead of keeping</div>
-                  <div><code>!</code> — exploding dice: max face rolls again, e.g. <code>5d6!</code></div>
-                  <div><code>+K</code> / <code>-K</code> — flat modifier on the total, e.g. <code>2d6+3</code></div>
-                  <div><code>tN</code> — pool mode: count dice ≥ N as successes, e.g. <code>7d10t6</code></div>
-                  <div><code>vs N</code> — grade the total success/failure vs a target, e.g. <code>1d20+5 vs 15</code></div>
-                  <div>Clauses combine freely (e.g. <code>4d6kh3!+2</code>); <code>tN</code> and <code>vs N</code> are mutually exclusive.</div>
-                </div>
-              )}
-              </>
-              )}
-            </div>
-          )}
-          <textarea
-            rows={3}
-            placeholder={activePcless ? "Direct the scene (optional)…" : "Speak your intent…"}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onKeyDown}
-          />
-          {/* Replaces Send rather than sitting beside it: Send is already
-              disabled for the whole turn, so the slot is dead space at exactly
-              the moment a way out is wanted. */}
-          {busy ? (
-            <button className="send cancel-turn" onClick={cancelTurn}>Stop ■</button>
-          ) : (
-            <button className="send" onClick={send} disabled={rolling || renamesInFlight > 0}>
-              {!input.trim() ? "Continue ▶" : "Send ▸"}
-            </button>
-          )}
-        </div>
-        {/* Its own row under the bar, not a cell inside it. As a cell it was
-            `flex: none` at 334px of un-shrinkable nowrap text -- 63% of the
-            bar's 529px minimum -- so a narrow middle column squeezed the
-            textarea to 36px and then pushed Send clean out of the column, over
-            the inspector. Here it is free to shrink and Send cannot be
-            displaced. */}
-        <div className="composer-meta">
-          <label className="composer-meta-label" htmlFor="response-length">Response</label>
-          <select id="response-length" aria-label="Response length"
-                  value={responseChipPresetId}
-                  aria-describedby={responseChipPending ? "response-length-oneshot" : undefined}
-                  onChange={(e) => (e.target.value
-                    ? chooseResponseOverride(e.target.value)
-                    : clearResponseOverride())}>
-            {/* Offered only while nothing is picked. With no preset named at
-                scene level the value comes from campaign or global scope, which
-                names nothing the scene knows about -- so this option reports the
-                effective budget and its source instead of claiming a preset.
-                Rendering it always would also turn it into a "revert to
-                inherited" action, which this control has never had. */}
-            {!responseChipPresetId && <option value="">{responseChipLabel}</option>}
-            {responsePresets.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-            {/* Same fallback ResponsePresetPicker carries: a scene can name a
-                preset the list has not loaded yet, or one since deleted. With no
-                matching option a native select silently displays the FIRST one,
-                so the strip would confidently name a preset that is not in
-                effect. Show the id instead (Codex review). */}
-            {responseChipPresetId
-              && !responsePresets.some((p) => p.id === responseChipPresetId) && (
-              <option value={responseChipPresetId}>{responseChipPresetId}</option>
-            )}
-          </select>
-          {/* A one-shot pick and a standing setting read identically without
-              this — and they mean very different things: one is spent by the
-              next reply, the other is the scene's standing answer. It used to
-              sit INSIDE the control and so formed part of its accessible name;
-              as a sibling it has to be tied back on with `aria-describedby`, or
-              the distinction is visual only (Codex review). */}
-          {responseChipPending && (
-            <span className="chip-oneshot" id="response-length-oneshot">next reply only</span>
-          )}
-          {responseChipPending && (
-            <button type="button" className="chip-clear" title="Cancel the one-shot pick"
-                    aria-label="Cancel the one-shot response length"
-                    onClick={clearResponseOverride}>×</button>
-          )}
-          {!responseChipPending && responseChipPresetId && sceneResponse && (
-            <span className="composer-meta-hint">
-              {sceneResponse.effective.reply_words} words
-            </span>
-          )}
-        </div>
-        </div>
-        )}
-      </section>
-      {inspectorCollapsed ? (
-        <button className="inspector-tab" aria-label="Expand sidebar" onClick={toggleInspector}>‹</button>
-      ) : (
-        <div className="inspector-slot">
-          <button className="inspector-collapse" aria-label="Collapse sidebar" onClick={toggleInspector}>›</button>
-          {activeId && (
-            <SceneInspector cid={cid} sid={activeId} refreshKey={ctxKey}
-                            onSceneChanged={() => selectScene(activeId)}
-                            onSceneRenamed={sceneRenamed} pcless={activePcless}
-                            sceneLocked={sceneLocked}
-                            onRenaming={markRenaming}
-                            posts={messages.length} />
-          )}
-        </div>
+        </aside>
       )}
-      {drawer && activeId && (
-        <RecordDrawer cid={cid} sid={activeId} target={drawer} onClose={() => setDrawer(null)} />
-      )}
-      {chooserOpen && (
-        <NewSceneChooser cid={cid} afterSid={activeId} ready={ready}
-                         onClose={closeChooser} onCreated={sceneCreated} />
-      )}
-      </div>
-    </div>
+    </PageShell>
   );
 }

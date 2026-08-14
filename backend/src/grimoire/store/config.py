@@ -9,7 +9,11 @@ from .paths import ensure_home, home
 from . import atomic, locks
 
 DEFAULT_MODEL = "anthropic/claude-opus-4.1"
-DEFAULT_THEME = "codex"
+# One theme in two modes. The field is free-form here on purpose: the frontend
+# owns what a value means, and it still answers to `codex`/`manuscript`/`astral`
+# from the three-theme era by mapping them on read. "system" defers to the OS's
+# prefers-color-scheme, which is the only default that is never wrong at 2am.
+DEFAULT_THEME = "system"
 DEFAULT_SCAN_DEPTH = "8"
 DEFAULT_RECAP_DEPTH = "5"
 # How many older scenes keyword-triggered archive retrieval may recall at once

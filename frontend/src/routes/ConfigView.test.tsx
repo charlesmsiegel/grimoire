@@ -7,9 +7,14 @@ vi.mock("../api/client", () => ({
   api: {
     getConfig: vi.fn(), putConfig: vi.fn(), getDataDir: vi.fn(), putDataDir: vi.fn(),
     listStyles: vi.fn(), listConnections: vi.fn(),
+    listCampaigns: vi.fn(), listScenes: vi.fn(),
+    listScenePrompts: vi.fn(), getScenePrompt: vi.fn(),
   },
 }));
-vi.mock("../theme/ThemeProvider", () => ({ useTheme: () => ({ setTheme: vi.fn() }) }));
+const setTheme = vi.fn();
+vi.mock("../theme/ThemeProvider", () => ({
+  useTheme: () => ({ mode: "system", name: "light", setTheme }),
+}));
 vi.mock("../components/ResponsePresetPicker", () => ({
   ResponsePresetPicker: () => <div data-testid="response-preset-picker" />,
 }));
@@ -19,10 +24,11 @@ const cfg = {
   theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
   active_connection_id: "openrouter",
   active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true,
+  data_dir: "/home/u/.grimoire",
   llm_timeout: "120", absorb_budget: "600", llm_call_budget: "300",
   context_budget: "0", archive_depth: "3",
   prompt_log_depth: "50",
-  turnstate_depth: "0", promote_streak: "3",
+  turnstate_depth: "0", promote_streak: "3", rolling_summary_every: "10",
   embeddings_connection_id: "", embeddings_model: "", semantic_recall_depth: "0",
   semantic_recall_threshold: "0.4",
 };
@@ -46,6 +52,12 @@ beforeEach(() => {
     { id: "noir-detective", name: "Noir Detective", description: "", tags: [], built_in: true },
   ]);
   (api.listConnections as any).mockResolvedValue(connections);
+  // The context bar's source: no campaigns unless a test says otherwise, which
+  // is also the "nothing to draw" case.
+  (api.listCampaigns as any).mockResolvedValue([]);
+  (api.listScenes as any).mockResolvedValue([]);
+  (api.listScenePrompts as any).mockResolvedValue({ entries: [] });
+  (api.getScenePrompt as any).mockResolvedValue(null);
 });
 
 // ConfigView renders a <Link to="/connections">, which throws outside a
@@ -58,28 +70,166 @@ function renderView() {
   );
 }
 
+/** Main shows one section at a time, so every field test opens its section
+ *  first. The row's accessible name can carry a trailing state word ("unsaved",
+ *  "off", "ready"), hence the anchored patterns. */
+async function open(name: RegExp) {
+  fireEvent.click(await screen.findByRole("button", { name }));
+}
+
+const save = () => fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+test("the column indexes every section in three groups", async () => {
+  renderView();
+  await screen.findByRole("button", { name: /^Storage/ });
+  // Queried by selector rather than by text: a group heading and the head that
+  // wraps it have the same text content, so getByText matches both.
+  const groups = [...document.querySelectorAll(".column-section-head .section-label")];
+  expect(groups.map((g) => g.textContent))
+    .toEqual(["The install", "What the model sees", "What you see"]);
+  for (const label of [
+    /^Storage/, /^Connection/, /^Timeouts/, /^Context/, /^Transient state/,
+    /^Semantic recall/, /^System prompt/, /^Response preset/, /^Transcript/,
+    /^While playing/, /^Appearance/,
+  ]) {
+    expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+  }
+});
+
+test("main shows one section at a time", async () => {
+  renderView();
+  // Storage is what it opens on; nothing else is mounted beside it.
+  expect(await screen.findByLabelText(/storage location/i)).toBeInTheDocument();
+  expect(screen.queryByLabelText(/context budget/i)).toBeNull();
+
+  await open(/^Context/);
+  expect(screen.getByLabelText(/context budget/i)).toBeInTheDocument();
+  expect(screen.queryByLabelText(/storage location/i)).toBeNull();
+});
+
+test("the theme control is pinned under the column and previews without saving", async () => {
+  renderView();
+  fireEvent.click(await screen.findByText("DARK"));
+  expect(setTheme).toHaveBeenCalledWith("dark");        // applied, so it can be seen
+  expect(api.putConfig).not.toHaveBeenCalled();          // but not written
+  expect(screen.getByText("1 unsaved change")).toBeInTheDocument();
+
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ theme: "dark" }));
+});
+
+test("the stored theme survives the collapse: codex is not an unsaved change", async () => {
+  renderView();
+  // The store still holds `codex`; the picker shows LIGHT. Nothing has been
+  // edited, so the count must not read the mapping as a pending edit.
+  await screen.findByText("LIGHT");
+  expect(screen.getByText("No unsaved changes")).toBeInTheDocument();
+  expect(screen.getByText("LIGHT")).toHaveAttribute("aria-pressed", "true");
+});
+
+test("editing a field marks the draft dirty and writes nothing", async () => {
+  renderView();
+  await open(/^Timeouts/);
+  fireEvent.change(screen.getByLabelText(/no-reply timeout/i), { target: { value: "45" } });
+  expect(api.putConfig).not.toHaveBeenCalled();
+  expect(screen.getByText("1 unsaved change")).toBeInTheDocument();
+  // …and the column says which section is holding it.
+  expect(screen.getByRole("button", { name: /^Timeouts unsaved/ })).toBeInTheDocument();
+});
+
+test("Save commits every dirty field, across sections, in one call", async () => {
+  renderView();
+  await open(/^Timeouts/);
+  fireEvent.change(screen.getByLabelText(/no-reply timeout/i), { target: { value: "45" } });
+  fireEvent.change(screen.getByLabelText(/absorb budget/i), { target: { value: "300" } });
+  await open(/^Context/);
+  fireEvent.change(screen.getByLabelText(/context budget/i), { target: { value: "32000" } });
+  await open(/^Transcript/);
+  fireEvent.change(screen.getByLabelText(/your label/i), { target: { value: "Kestrel" } });
+  fireEvent.click(screen.getByLabelText(/color quoted/i));
+  expect(screen.getByText("5 unsaved changes")).toBeInTheDocument();
+
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledTimes(1));
+  // Exactly the dirty fields — a whole-form PUT would carry the other fourteen.
+  expect(api.putConfig).toHaveBeenCalledWith({
+    llm_timeout: "45", absorb_budget: "300", context_budget: "32000",
+    quote_color: "on", user_label: "Kestrel",
+  });
+});
+
+test("an edit made while the write is in flight is not swallowed by it", async () => {
+  // Save disables its own buttons, not the fields. Adopting the response
+  // wholesale would revert whatever was typed in the gap.
+  let land: (c: unknown) => void = () => {};
+  (api.putConfig as any).mockReturnValue(new Promise((r) => { land = r; }));
+  renderView();
+  await open(/^Transcript/);
+  fireEvent.change(screen.getByLabelText(/your label/i), { target: { value: "Kestrel" } });
+  save();
+  fireEvent.change(screen.getByLabelText(/narrator label/i), { target: { value: "The Loom" } });
+  land({ ...cfg, user_label: "Kestrel" });
+
+  await waitFor(() => expect(screen.getByText("1 unsaved change")).toBeInTheDocument());
+  expect(screen.getByLabelText(/your label/i)).toHaveValue("Kestrel");   // committed
+  expect(screen.getByLabelText(/narrator label/i)).toHaveValue("The Loom");  // still pending
+});
+
+test("Revert discards every edit, the theme preview included", async () => {
+  renderView();
+  await open(/^Transcript/);
+  fireEvent.change(await screen.findByLabelText(/your label/i), { target: { value: "Kestrel" } });
+  fireEvent.click(screen.getByText("DARK"));
+  expect(screen.getByText("2 unsaved changes")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: /^revert$/i }));
+  expect(api.putConfig).not.toHaveBeenCalled();
+  expect(screen.getByText("No unsaved changes")).toBeInTheDocument();
+  expect(screen.getByLabelText(/your label/i)).toHaveValue("You");
+  // The preview goes back with everything else, or the screen keeps showing a
+  // look nothing on disk agrees with. `codex` maps to light.
+  expect(setTheme).toHaveBeenLastCalledWith("light");
+});
+
+test("switching the active connection waits for Save like everything else", async () => {
+  renderView();
+  await open(/^Connection/);
+  const select = screen.getByLabelText("LLM connection");
+  expect(Array.from(select.querySelectorAll("option")).map((o) => (o as HTMLOptionElement).value))
+    .toEqual(["openrouter", "claude", "local"]);
+  expect((select as HTMLSelectElement).value).toBe("openrouter");
+
+  fireEvent.change(select, { target: { value: "claude" } });
+  expect(api.putConfig).not.toHaveBeenCalled();
+  save();
+  await waitFor(() =>
+    expect(api.putConfig).toHaveBeenCalledWith({ active_connection_id: "claude" }));
+});
+
+test("links to the Connections page to manage keys/endpoints", async () => {
+  renderView();
+  await open(/^Connection/);
+  expect(screen.getByRole("link", { name: /connections/i })).toHaveAttribute("href", "/connections");
+});
+
 test("saves the system prompt", async () => {
   renderView();
-  const ta = await screen.findByLabelText(/system prompt/i);
-  fireEvent.change(ta, { target: { value: "Never speak for the PC." } });
-  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await open(/^System prompt/);
+  fireEvent.change(screen.getByLabelText(/system prompt/i), { target: { value: "Never speak for the PC." } });
+  save();
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
-    expect.objectContaining({ system_prompt: "Never speak for the PC." })));
+    { system_prompt: "Never speak for the PC." }));
 });
 
 test("mounts the response preset picker for the global scope", async () => {
   renderView();
+  await open(/^Response preset/);
   expect(await screen.findByTestId("response-preset-picker")).toBeInTheDocument();
 });
 
-test("toggling quote color saves immediately", async () => {
-  renderView();
-  const cb = await screen.findByLabelText(/color quoted/i);
-  fireEvent.click(cb);
-  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ quote_color: "on" }));
-});
-
-test("moving the storage location saves the new path", async () => {
+test("moving the storage location still saves immediately", async () => {
+  // The one exception to the one-Save rule, and deliberately so: the move
+  // relocates the file Save writes to.
   (api.putDataDir as any).mockResolvedValue({ ...dataDir, data_dir: "/sync/grimoire", is_default: false, source: "custom" });
   renderView();
   const input = await screen.findByLabelText(/storage location/i);
@@ -88,81 +238,42 @@ test("moving the storage location saves the new path", async () => {
   await waitFor(() => expect(api.putDataDir).toHaveBeenCalledWith("/sync/grimoire"));
 });
 
-test("edits transcript labels and saves them", async () => {
+test("shows the stored timeouts", async () => {
   renderView();
-  const user = await screen.findByLabelText(/your label/i);
-  fireEvent.change(user, { target: { value: "Kestrel" } });
-  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-  await waitFor(() =>
-    expect(api.putConfig).toHaveBeenCalledWith(expect.objectContaining({ user_label: "Kestrel" })));
-});
-
-test("shows the three theme cards", async () => {
-  renderView();
-  expect(await screen.findByText("CODEX")).toBeInTheDocument();
-  expect(screen.getByText("MANUSCRIPT")).toBeInTheDocument();
-  expect(screen.getByText("ASTRAL")).toBeInTheDocument();
-});
-
-test("shows every connection in the LLM connection dropdown", async () => {
-  renderView();
-  const select = await screen.findByLabelText("LLM connection");
-  const values = Array.from(select.querySelectorAll("option")).map((o) => (o as HTMLOptionElement).value);
-  expect(values).toEqual(["openrouter", "claude", "local"]);
-  expect((select as HTMLSelectElement).value).toBe("openrouter");
-});
-
-test("switching the active connection saves immediately", async () => {
-  renderView();
-  const select = await screen.findByLabelText("LLM connection");
-  fireEvent.change(select, { target: { value: "claude" } });
-  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ active_connection_id: "claude" }));
-});
-
-test("shows the configured timeout and absorb budget", async () => {
-  renderView();
-  expect(await screen.findByLabelText(/no-reply timeout/i)).toHaveValue("120");
+  await open(/^Timeouts/);
+  expect(screen.getByLabelText(/no-reply timeout/i)).toHaveValue("120");
   expect(screen.getByLabelText(/absorb budget/i)).toHaveValue("600");
   expect(screen.getByLabelText(/one-shot call ceiling/i)).toHaveValue("300");
 });
 
-test("edits the timeouts and saves them", async () => {
+test("edits the context budget, recalled-scene cap and kept turn prompts", async () => {
   renderView();
-  const timeout = await screen.findByLabelText(/no-reply timeout/i);
-  fireEvent.change(timeout, { target: { value: "45" } });
-  fireEvent.change(screen.getByLabelText(/absorb budget/i), { target: { value: "300" } });
-  fireEvent.change(screen.getByLabelText(/one-shot call ceiling/i), { target: { value: "90" } });
-  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
-    expect.objectContaining({ llm_timeout: "45", absorb_budget: "300",
-                             llm_call_budget: "90" })));
-});
-
-test("edits the context budget and recalled-scene cap and saves them", async () => {
-  renderView();
-  const budget = await screen.findByLabelText(/context budget/i);
-  expect(budget).toHaveValue("0");                       // unbounded by default
+  await open(/^Context/);
+  expect(screen.getByLabelText(/context budget/i)).toHaveValue("0");   // unbounded by default
   expect(screen.getByLabelText(/recalled scenes/i)).toHaveValue("3");
-  fireEvent.change(budget, { target: { value: "32000" } });
+  expect(screen.getByLabelText(/kept turn prompts/i)).toHaveValue("50");
   fireEvent.change(screen.getByLabelText(/recalled scenes/i), { target: { value: "5" } });
-  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  fireEvent.change(screen.getByLabelText(/kept turn prompts/i), { target: { value: "0" } });
+  save();
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
-    expect.objectContaining({ context_budget: "32000", archive_depth: "5" })));
+    { archive_depth: "5", prompt_log_depth: "0" }));
 });
 
-test("edits how many turn prompts are kept and saves it", async () => {
+test("saves the transient-state settings", async () => {
   renderView();
-  const kept = await screen.findByLabelText(/kept turn prompts/i);
-  expect(kept).toHaveValue("50");
-  fireEvent.change(kept, { target: { value: "0" } });    // 0 turns capture off
-  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await open(/^Transient state/);
+  expect(screen.getByLabelText(/tracked posts/i)).toHaveValue("0");
+  fireEvent.change(screen.getByLabelText(/tracked posts/i), { target: { value: "6" } });
+  fireEvent.change(screen.getByLabelText(/promote after/i), { target: { value: "2" } });
+  save();
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
-    expect.objectContaining({ prompt_log_depth: "0" })));
+    { turnstate_depth: "6", promote_streak: "2" }));
 });
 
 test("semantic recall is off by default and offers only openai-compatible connections", async () => {
   renderView();
-  const picker = await screen.findByLabelText(/embeddings connection/i);
+  await open(/^Semantic recall/);
+  const picker = screen.getByLabelText(/embeddings connection/i);
   expect(picker).toHaveValue("");                        // off until pointed somewhere
   expect(screen.getByLabelText(/recalled entries/i)).toHaveValue("0");
   expect(screen.getByLabelText(/similarity threshold/i)).toHaveValue("0.4");
@@ -173,40 +284,93 @@ test("semantic recall is off by default and offers only openai-compatible connec
 
 test("turns semantic recall on and saves every knob together", async () => {
   renderView();
-  fireEvent.change(await screen.findByLabelText(/embeddings connection/i), { target: { value: "local" } });
+  await open(/^Semantic recall/);
+  fireEvent.change(screen.getByLabelText(/embeddings connection/i), { target: { value: "local" } });
   fireEvent.change(screen.getByLabelText(/embedding model/i), { target: { value: "text-embedding-3-small" } });
   fireEvent.change(screen.getByLabelText(/recalled entries/i), { target: { value: "4" } });
   fireEvent.change(screen.getByLabelText(/similarity threshold/i), { target: { value: "0.55" } });
-  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
-    expect.objectContaining({
-      embeddings_connection_id: "local", embeddings_model: "text-embedding-3-small",
-      semantic_recall_depth: "4", semantic_recall_threshold: "0.55",
-    })));
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({
+    embeddings_connection_id: "local", embeddings_model: "text-embedding-3-small",
+    semantic_recall_depth: "4", semantic_recall_threshold: "0.55",
+  }));
 });
 
-test("links to the Connections page to manage keys/endpoints", async () => {
+test("saves the rolling-summary cadence", async () => {
   renderView();
-  await screen.findByLabelText("LLM connection");
-  expect(screen.getByRole("link", { name: /connections/i })).toHaveAttribute("href", "/connections");
+  await open(/^While playing/);
+  expect(screen.getByLabelText(/summarize the scene every/i)).toHaveValue("10");
+  fireEvent.change(screen.getByLabelText(/summarize the scene every/i), { target: { value: "4" } });
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ rolling_summary_every: "4" }));
 });
 
+// ---- the context budget bar ----
 
-test("saves the transient-state settings", async () => {
+const snapshot = {
+  model: "m", total_tokens: 13_180, dropped_tokens: 0, budget_tokens: 32_000,
+  sections: [
+    { label: "Character descriptions", text: "", tokens: 2_700, tier: "lock-in", dropped: false, trimmed: 0 },
+    { label: "Character state", text: "", tokens: 1_840, tier: "spotlight", dropped: false, trimmed: 0 },
+    { label: "Conversation history", text: "", tokens: 3_900, tier: "history", dropped: false, trimmed: 0 },
+    { label: "Earlier scenes", text: "", tokens: 1_040, tier: "archive", dropped: false, trimmed: 0 },
+    // Rendered but left out by the packer: it was not sent, so it is not in
+    // the stack — the verdict is where a drop is reported.
+    { label: "Message examples", text: "", tokens: 900, tier: "background", dropped: true, trimmed: 0 },
+  ],
+};
+
+function withLastPrompt() {
+  (api.listCampaigns as any).mockResolvedValue([
+    { id: "old-realm", name: "Realm", world: "w", created: "", updated: "2024-01-01", scenes: 2, last_scene: "", activity: "2024-01-01" },
+    { id: "saltmarch", name: "Saltmarch", world: "w", created: "", updated: "2024-05-01", scenes: 11, last_scene: "", activity: "2024-06-02" },
+  ]);
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s11", title: "The long tide", model: "m", created: "", updated: "2024-06-02", date: "" },
+  ]);
+  (api.listScenePrompts as any).mockResolvedValue({
+    entries: [{ id: "e9", scene: "s11", ts: "", model: "m", task: "chat", total_tokens: 13_180, dropped_tokens: 0, budget_tokens: 32_000 }],
+  });
+  (api.getScenePrompt as any).mockResolvedValue(snapshot);
+}
+
+test("draws the last prompt against the budget, and names whose it is", async () => {
+  withLastPrompt();
   renderView();
-  fireEvent.change(await screen.findByLabelText(/tracked posts/i), { target: { value: "6" } });
-  fireEvent.change(screen.getByLabelText(/promote after/i), { target: { value: "2" } });
-  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-  await waitFor(() =>
-    expect(api.putConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ turnstate_depth: "6", promote_streak: "2" }),
-    ),
-  );
+  await open(/^Context/);
+
+  // The most recently played campaign by `activity`, not by `updated`.
+  expect(await screen.findByText("LAST TURN IN SALTMARCH, AGAINST THIS BUDGET")).toBeInTheDocument();
+  expect(api.listScenePrompts).toHaveBeenCalledWith("saltmarch", "s11");
+  expect(screen.getByText("13,180 / 32,000 · 41%")).toBeInTheDocument();
+  expect(screen.getByText(/CHARACTERS 2,700/)).toBeInTheDocument();
+  expect(screen.getByText(/STANDING FRAME 1,840/)).toBeInTheDocument();
+  expect(screen.getByText(/CONVERSATION 3,900/)).toBeInTheDocument();
+  expect(screen.getByText(/RECALLED 1,040/)).toBeInTheDocument();
+  expect(screen.getByText("NOTHING DROPPED")).toBeInTheDocument();
 });
 
-test("shows the stored transient-state settings", async () => {
-  (api.getConfig as any).mockResolvedValue({ ...cfg, turnstate_depth: "4", promote_streak: "5" });
+test("the bar is only fetched by the section that shows it", async () => {
+  withLastPrompt();
   renderView();
-  expect(await screen.findByLabelText(/tracked posts/i)).toHaveValue("4");
-  expect(screen.getByLabelText(/promote after/i)).toHaveValue("5");
+  await screen.findByLabelText(/storage location/i);
+  expect(api.listCampaigns).not.toHaveBeenCalled();
+  await open(/^Context/);
+  await waitFor(() => expect(api.listCampaigns).toHaveBeenCalled());
+});
+
+test("reports what the packer actually dropped", async () => {
+  withLastPrompt();
+  (api.getScenePrompt as any).mockResolvedValue({ ...snapshot, dropped_tokens: 900 });
+  renderView();
+  await open(/^Context/);
+  expect(await screen.findByText("900 TOKENS DROPPED")).toBeInTheDocument();
+});
+
+test("no stored prompt, no bar — the numbers are never invented", async () => {
+  renderView();                                  // listCampaigns answers []
+  await open(/^Context/);
+  await waitFor(() => expect(api.listCampaigns).toHaveBeenCalled());
+  expect(screen.queryByText(/AGAINST THIS BUDGET/)).toBeNull();
+  expect(screen.queryByText(/NOTHING DROPPED/)).toBeNull();
 });

@@ -143,6 +143,13 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # of that has to be one critical section with the scene writes it brackets,
     # or a concurrent reply lands between the decision and the swap.
     "store.alternates",
+    # `provenance.record` is a read-modify-write of one whole file, so two
+    # unserialized callers lose one of the two writes. Its only caller
+    # (`absorb.apply.apply_edits`, under `PUT /chronicle`) already holds this
+    # lock, and the lock is an RLock, so taking it inside `record` costs a
+    # reentrant acquire and buys the module a place in the domain rather than
+    # another entry on `UNREVIEWED`'s frozen backlog.
+    "store.provenance",
     # The three `store.scenes` submodules that mutate. Each public mutator in
     # them either wears the package's `@locking._serialized` -- `campaign_lock`
     # around the whole body -- or delegates to a private one that does, which is

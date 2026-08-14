@@ -3,6 +3,8 @@ OLD/
 
 # Git worktrees
 .worktrees/
+# ...and the ones agent tooling creates inside the repo
+.claude/worktrees/
 
 # Brainstorming visual companion
 .superpowers/

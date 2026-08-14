@@ -1,9 +1,13 @@
 """GET /campaigns/{cid}/ledger — the continuity ledger view (#117).
 
-One route, four sections, and a tolerance contract: a garbled plot.json,
-commitments.json or facts.json empties its own section and nothing else. The
-panel is a pure render of this, so anything it must not crash on has to be
-answered here.
+One route, six sections, and a tolerance contract: a garbled plot.json,
+commitments.json, facts.json or relationships.json empties its own section and
+nothing else. The page is a pure render of this, so anything it must not crash
+on has to be answered here.
+
+`retired` and `relationships` arrived with screen 4e, and the first is the point
+of that screen: a fact that stopped being true, the scene that ended it and the
+fact that replaced it have been on disk since #114 and never left the server.
 """
 
 import importlib
@@ -32,10 +36,11 @@ def test_unknown_campaign_is_404(client):
     assert client.get("/api/campaigns/nope/ledger").status_code == 404
 
 
-def test_empty_campaign_returns_four_empty_sections(client):
+def test_empty_campaign_returns_six_empty_sections(client):
     cid = _campaign(client)
     assert client.get(f"/api/campaigns/{cid}/ledger").json() == {
-        "plot": [], "commitments": [], "facts": [], "chronicle": []}
+        "plot": [], "commitments": [], "facts": [], "retired": [],
+        "relationships": [], "chronicle": []}
 
 
 def test_open_threads_and_commitments_carry_their_scene(client):
@@ -307,3 +312,218 @@ def test_a_fact_whose_scene_is_the_wrong_shape_loses_its_label_not_the_view(clie
     (row,) = r.json()["facts"]
     assert row["text"] == "The pier is condemned."
     assert row["scene"] == {"id": "", "title": "", "date": ""}
+
+
+# ---- the supersession chain (screen 4e) ------------------------------------
+
+def _dated_scene(cid, title, date):
+    sid = store.scenes.create_scene(cid, title)
+    store.chronicle.absorb(cid, {"id": sid, "one_line": f"{title} happened.", "date": date})
+    return sid
+
+
+def test_a_superseded_fact_leaves_the_server_with_both_of_its_scenes(client):
+    """The whole reason this route grew. The retired half of facts.json has been
+    written since #114 and no reader could see it, so the ledger could show that
+    a truth stands but never that another one stopped — or which fact ended it.
+
+    Two scenes on the row, and neither is decoration: `scene` is where the fact
+    was RECORDED, which is the date it keeps on the ledger, and `retired_scene`
+    is where it ENDED, which is the only thing on the row saying when it stopped
+    being true.
+    """
+    cid = _campaign(client)
+    early = _dated_scene(cid, "The Priory Door", "28 Sowing")
+    late = _dated_scene(cid, "The Long Tide", "3 Reaping")
+    old = store.facts.record(cid, "Mara speaks of the drowned freely.", "28 Sowing", early)
+    new = store.facts.record(cid, "Mara will not speak of the drowned aloud.", "3 Reaping",
+                             late, supersedes=old)
+
+    body = client.get(f"/api/campaigns/{cid}/ledger").json()
+    assert [f["id"] for f in body["facts"]] == [new]          # standing: unchanged
+    (gone,) = body["retired"]
+    assert gone["id"] == old
+    assert gone["text"] == "Mara speaks of the drowned freely."
+    assert gone["superseded_by"] == new
+    assert gone["scene"] == {"id": early, "title": "The Priory Door", "date": "28 Sowing"}
+    assert gone["retired_scene"] == {"id": late, "title": "The Long Tide", "date": "3 Reaping"}
+
+
+def test_a_chain_three_deep_reads_end_to_end(client):
+    """f1 ← f2 ← f3, with only f3 standing. Each retired record points at the one
+    that replaced it, so the view can walk the chain back from the standing fact
+    through everything it descends from — which is what a ledger is for."""
+    cid = _campaign(client)
+    sids = [_dated_scene(cid, f"Night {n}", f"{n} Reaping") for n in (1, 2, 3)]
+    f1 = store.facts.record(cid, "The bridge stands.", "", sids[0])
+    f2 = store.facts.record(cid, "The bridge is closed.", "", sids[1], supersedes=f1)
+    f3 = store.facts.record(cid, "The bridge is rubble.", "", sids[2], supersedes=f2)
+
+    body = client.get(f"/api/campaigns/{cid}/ledger").json()
+    assert [f["id"] for f in body["facts"]] == [f3]
+    assert [(f["id"], f["superseded_by"]) for f in body["retired"]] == [(f1, f2), (f2, f3)]
+
+
+def test_a_fact_retired_outright_names_no_replacement(client):
+    """Retirement's other shape — it stopped applying with nothing to say in its
+    place — and the one the view's SHOW RETIRED toggle is actually for. A blank
+    `superseded_by` is what separates the two, so it has to survive the trip."""
+    cid = _campaign(client)
+    sid = _dated_scene(cid, "The Long Tide", "3 Reaping")
+    fid = store.facts.record(cid, "The gate is watched.", "", sid)
+    store.facts.retire(cid, fid, sid)
+
+    (row,) = client.get(f"/api/campaigns/{cid}/ledger").json()["retired"]
+    assert row["superseded_by"] == ""
+    assert row["retired_scene"]["title"] == "The Long Tide"
+
+
+def test_a_retired_fact_whose_retiring_scene_was_deleted_still_lists(client):
+    """Same degradation the standing sections already promise: the label falls
+    back to the id and the row survives. A deleted scene must not be able to
+    delete the record of what it ended."""
+    cid = _campaign(client)
+    (store.campaigns.campaign_root(cid) / "facts.json").write_text(json.dumps(
+        {"f1": {"text": "The gate is watched.", "date": "", "scene": "0001-gone",
+                "status": "retired", "superseded_by": "", "retired_scene": "0009-also-gone"}}),
+        encoding="utf-8")
+    (row,) = client.get(f"/api/campaigns/{cid}/ledger").json()["retired"]
+    assert row["scene"] == {"id": "0001-gone", "title": "0001-gone", "date": ""}
+    assert row["retired_scene"] == {"id": "0009-also-gone", "title": "0009-also-gone",
+                                    "date": ""}
+
+
+@pytest.mark.parametrize("bad", [[], {}, 7, None])
+def test_a_retiring_scene_of_the_wrong_shape_costs_its_label_not_the_view(client, bad):
+    """`retired_scene` is a second scene id per row, and so a second unhashable
+    key reaching `scenes_by_id.get`. These projections run outside `_tolerant`,
+    so without the coercion this is a 500 rather than a missing label."""
+    cid = _campaign(client)
+    (store.campaigns.campaign_root(cid) / "facts.json").write_text(json.dumps(
+        {"f1": {"text": "The gate is watched.", "date": "", "scene": "s1",
+                "status": "retired", "superseded_by": bad, "retired_scene": bad}}),
+        encoding="utf-8")
+    r = client.get(f"/api/campaigns/{cid}/ledger")
+    assert r.status_code == 200
+    (row,) = r.json()["retired"]
+    assert row["text"] == "The gate is watched."
+    assert row["superseded_by"] == ""
+    assert row["retired_scene"] == {"id": "", "title": "", "date": ""}
+
+
+def test_a_garbled_facts_file_empties_both_halves_and_nothing_else(client):
+    """The two fact sections are one file, so they fail together — but the
+    tolerance is still per section: the four others are untouched."""
+    cid = _campaign(client)
+    sid = _dated_scene(cid, "Now", "")
+    store.plot.set_movement(cid, "t", "A thread", "open", "beat", sid)
+    store.commitments.set_movement(cid, "c", "A promise", "promise", "open", "", "beat", sid)
+    (store.campaigns.campaign_root(cid) / "facts.json").write_text("{ not json",
+                                                                  encoding="utf-8")
+    body = client.get(f"/api/campaigns/{cid}/ledger").json()
+    assert body["facts"] == [] and body["retired"] == []
+    assert len(body["plot"]) == 1 and len(body["commitments"]) == 1
+    assert len(body["chronicle"]) == 1
+
+
+def test_both_halves_of_the_ledger_are_read_under_the_one_lock(client, monkeypatch):
+    """`facts.record` retires a fact and files its replacement in ONE write, so a
+    pair of unlocked reads is exactly where a chain shows up with both ends
+    standing, or with neither — the contradiction this view must never print."""
+    cid = _campaign(client)
+    held = {}
+
+    def _watch(name, real):
+        def wrapper(*a, **kw):
+            held[name] = store.locks.campaign_lock(cid)._is_owned()
+            return real(*a, **kw)
+        return wrapper
+
+    monkeypatch.setattr(store.facts, "active", _watch("active", store.facts.active))
+    monkeypatch.setattr(store.facts, "retired", _watch("retired", store.facts.retired))
+    monkeypatch.setattr(store.relationships, "read",
+                        _watch("relationships", store.relationships.read))
+    assert client.get(f"/api/campaigns/{cid}/ledger").status_code == 200
+    assert held == {"active": True, "retired": True, "relationships": True}
+
+
+# ---- relationships ---------------------------------------------------------
+
+def _cast(client):
+    """A campaign with two characters the ledger can name."""
+    wid = client.post("/api/worlds", json={"name": "W"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    mara, _v = store.characters.create_character(store.worlds.world_root(wid), "Sister Mara")
+    reeve, _v2 = store.characters.create_character(store.worlds.world_root(wid), "The Reeve")
+    return cid, f"characters:{mara}", f"characters:{reeve}"
+
+
+def test_feelings_and_bonds_arrive_as_one_named_list(client):
+    """Two shapes, one section: a feeling is directed and metered, a bond is
+    symmetric and dated. The reader's question is what stands between two
+    people, and answering it in two tables makes them read both to find out."""
+    cid, mara, reeve = _cast(client)
+    sid = _dated_scene(cid, "The Long Tide", "3 Reaping")
+    store.relationships.set_feeling(cid, mara, reeve, 1, 0, 4, "He took the money.")
+    store.relationships.set_bond(cid, mara, reeve, "kin", sid)
+
+    rows = client.get(f"/api/campaigns/{cid}/ledger").json()["relationships"]
+    feeling = next(r for r in rows if r["kind"] == "feeling")
+    assert feeling["a_name"] == "Sister Mara" and feeling["b_name"] == "The Reeve"
+    assert (feeling["trust"], feeling["affection"], feeling["tension"]) == (1, 0, 4)
+    assert feeling["note"] == "He took the money."
+    assert feeling["scene"] == {"id": "", "title": "", "date": ""}   # a feeling has no date
+
+    bond = next(r for r in rows if r["kind"] == "bond")
+    assert bond["type"] == "kin"
+    assert bond["scene"] == {"id": sid, "title": "The Long Tide", "date": "3 Reaping"}
+
+
+def test_a_meter_is_clamped_and_a_nonsense_one_reads_as_zero(client):
+    """The client draws five pips. A hand-edited 9 would draw four that do not
+    exist, and a string would draw none of them and take the section down."""
+    cid, mara, reeve = _cast(client)
+    (store.campaigns.campaign_root(cid) / "relationships.json").write_text(json.dumps(
+        {"feelings": {f"{mara}->{reeve}": {"trust": 9, "affection": -3, "tension": "high",
+                                           "note": {"nope": 1}}}, "bonds": {}}),
+        encoding="utf-8")
+    (row,) = client.get(f"/api/campaigns/{cid}/ledger").json()["relationships"]
+    assert (row["trust"], row["affection"], row["tension"]) == (5, 0, 0)
+    assert row["note"] == ""
+
+
+def test_an_actor_with_no_readable_card_falls_back_to_its_id(client):
+    """A name is the least of what the row says: the meters and the note are
+    still true about two actors whose cards this campaign no longer holds."""
+    cid = _campaign(client)
+    (store.campaigns.campaign_root(cid) / "relationships.json").write_text(json.dumps(
+        {"feelings": {"characters:ghost->characters:other": {
+            "trust": 2, "affection": 2, "tension": 0, "note": ""}}, "bonds": {}}),
+        encoding="utf-8")
+    (row,) = client.get(f"/api/campaigns/{cid}/ledger").json()["relationships"]
+    assert row["a_name"] == "ghost" and row["b_name"] == "other"
+
+
+@pytest.mark.parametrize("doc", ["{ not json", "[]", '{"feelings": [], "bonds": 7}'])
+def test_a_garbled_relationships_file_empties_only_its_own_section(client, doc):
+    """Valid JSON of the wrong shape counts as garbled here for the reason the
+    chronicle check gives: `relationships.read` raises nothing for it, so the
+    shape is checked where it is used."""
+    cid = _campaign(client)
+    sid = _dated_scene(cid, "Now", "")
+    store.facts.record(cid, "The pier is condemned.", "", sid)
+    (store.campaigns.campaign_root(cid) / "relationships.json").write_text(
+        doc, encoding="utf-8")
+    r = client.get(f"/api/campaigns/{cid}/ledger")
+    assert r.status_code == 200
+    assert r.json()["relationships"] == []
+    assert len(r.json()["facts"]) == 1
+
+
+def test_a_relationship_record_that_is_not_a_dict_is_skipped(client):
+    cid, mara, reeve = _cast(client)
+    (store.campaigns.campaign_root(cid) / "relationships.json").write_text(json.dumps(
+        {"feelings": {f"{mara}->{reeve}": ["nope"]},
+         "bonds": {f"{mara}|{reeve}": {"type": "kin", "since_scene": ""}}}), encoding="utf-8")
+    rows = client.get(f"/api/campaigns/{cid}/ledger").json()["relationships"]
+    assert [r["kind"] for r in rows] == ["bond"]

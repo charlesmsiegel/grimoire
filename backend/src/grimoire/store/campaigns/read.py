@@ -85,6 +85,20 @@ def has_campaigns() -> bool:
     return any_child_record(paths._campaigns_dir(), "campaign.md")
 
 
+def _first_paragraph(body: str) -> str:
+    """The opening paragraph of a campaign.md body, blank-line delimited.
+
+    Markdown headings and rules are skipped rather than returned: a campaign
+    whose body opens with `# Saltmarch` would otherwise blurb its own title.
+    """
+    for block in body.split("\n\n"):
+        text = " ".join(line.strip() for line in block.strip().splitlines() if line.strip())
+        if not text or text.startswith("#") or set(text) <= set("-=*_ "):
+            continue
+        return text
+    return ""
+
+
 def list_campaigns() -> list[dict]:
     ensure_home()
     out: list[dict] = []
@@ -96,13 +110,19 @@ def list_campaigns() -> list[dict]:
             # stray directory can't abort a listing -- or the startup migration
             if not d.is_dir() or not mp.exists() or not safe_id(d.name):
                 continue
-            meta, _ = parse_frontmatter(mp.read_text(encoding="utf-8"))
+            meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
             out.append({
                 "id": d.name,
                 "name": meta.get("name", d.name),
                 "world": meta.get("world", ""),
                 "created": meta.get("created", ""),
                 "updated": meta.get("updated", ""),
+                # The pitch the campaign was started from. The list has always
+                # parsed the body and thrown it away; the campaigns page shows
+                # it as each card's blurb, so a shelf of campaigns reads as a
+                # shelf of books rather than a list of slugs. First paragraph
+                # only -- this is a card, not the record.
+                "blurb": _first_paragraph(body),
             })
     out.sort(key=lambda m: m["updated"], reverse=True)
     return out

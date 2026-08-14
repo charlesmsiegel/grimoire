@@ -18,7 +18,9 @@ vi.mock("../api/client", () => ({
 vi.mock("../api/models", () => ({ getModels: vi.fn(), priceLabel: () => "", contextLabel: () => "" }));
 
 const setTheme = vi.fn();
-vi.mock("../theme/ThemeProvider", () => ({ useTheme: () => ({ name: "codex", setTheme }) }));
+vi.mock("../theme/ThemeProvider", () => ({
+  useTheme: () => ({ mode: "system", name: "light", setTheme }),
+}));
 
 import { api } from "../api/client";
 import { getModels } from "../api/models";
@@ -57,7 +59,10 @@ async function goToStep(n: number) {
 
 test("opens on the storage step, showing the current data dir", async () => {
   renderWizard();
-  expect(await screen.findByRole("heading", { name: /welcome to grimoire/i })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: /^grimoire$/i })).toBeInTheDocument();
+  // The promise the app makes, before it asks anything — and the answer to the
+  // very question this step is about.
+  expect(screen.getByText(/stays yours, as plain files/i)).toBeInTheDocument();
   expect(await screen.findByLabelText(/storage location/i)).toHaveValue("/home/u/.grimoire");
 });
 
@@ -129,7 +134,7 @@ test("the theme step will not advance while its save is in flight", async () => 
   let settle: (v: any) => void = () => {};
   (api.putConfig as any).mockReturnValue(new Promise((r) => { settle = r; }));
   await goToStep(3);
-  fireEvent.click(await screen.findByText("ASTRAL"));
+  fireEvent.click(await screen.findByText("DARK"));
 
   // PUT /api/config is a read-modify-write of one file; letting the user reach
   // Finish here would race the setup_done write against this one.
@@ -157,17 +162,17 @@ test("a failed activation retries the activation, not the creation", async () =>
   expect(api.createConnection).toHaveBeenCalledTimes(1);   // still one connection on disk
 });
 
-test("theme cards are locked while a pick is saving, so two picks cannot race", async () => {
+test("the appearance segments are locked while a pick is saving, so two picks cannot race", async () => {
   let settle: (v: any) => void = () => {};
   (api.putConfig as any).mockReturnValue(new Promise((r) => { settle = r; }));
   await goToStep(3);
-  fireEvent.click(await screen.findByText("ASTRAL"));
+  fireEvent.click(await screen.findByText("DARK"));
 
-  await waitFor(() => expect(screen.getByText("MANUSCRIPT")).toBeDisabled());
-  expect(screen.getByText("ASTRAL")).toBeDisabled();
+  await waitFor(() => expect(screen.getByText("LIGHT")).toBeDisabled());
+  expect(screen.getByText("DARK")).toBeDisabled();
 
   settle({});
-  await waitFor(() => expect(screen.getByText("MANUSCRIPT")).toBeEnabled());
+  await waitFor(() => expect(screen.getByText("LIGHT")).toBeEnabled());
 });
 
 test("Finish later is locked while the world is being created", async () => {
@@ -340,9 +345,9 @@ test("a theme that could not be saved does not stay applied", async () => {
   // vanishes on reload, which reads as the app losing the setting.
   (api.putConfig as any).mockRejectedValue({ detail: "disk full" });
   await goToStep(3);
-  fireEvent.click(await screen.findByText("ASTRAL"));
+  fireEvent.click(await screen.findByText("DARK"));
   await waitFor(() => expect(screen.getByText(/disk full/i)).toBeInTheDocument());
-  expect(setTheme).toHaveBeenLastCalledWith("codex");   // reverted to the stored one
+  expect(setTheme).toHaveBeenLastCalledWith("system");   // reverted to the stored one
 });
 
 test("finishing reports which store the answer belongs to", async () => {
@@ -397,9 +402,9 @@ test("the connection step is skippable — playing by hand is allowed", async ()
 
 test("the theme step applies the theme and saves it", async () => {
   await goToStep(3);
-  fireEvent.click(await screen.findByText("ASTRAL"));
-  expect(setTheme).toHaveBeenCalledWith("astral");
-  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ theme: "astral" }));
+  fireEvent.click(await screen.findByText("DARK"));
+  expect(setTheme).toHaveBeenCalledWith("dark");
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ theme: "dark" }));
 });
 
 test("the world step creates the first world and hands off to the campaign wizard", async () => {
@@ -459,4 +464,23 @@ test("Back returns to the previous step", async () => {
   await goToStep(2);
   fireEvent.click(await screen.findByRole("button", { name: /^back$/i }));
   expect(await screen.findByLabelText(/storage location/i)).toBeInTheDocument();
+});
+
+test("all four steps are named, not only the one you are on", async () => {
+  // Four questions is short enough to show whole, and seeing the whole of it is
+  // what makes it read as short.
+  renderWizard();
+  await screen.findByRole("heading", { name: /^grimoire$/i });
+  for (const label of ["Storage", "Model", "Look", "World"]) {
+    expect(screen.getByText(label)).toBeInTheDocument();
+  }
+});
+
+test("Skip setup is offered beside the step's own Next, not only at the end", async () => {
+  // Leaving is a real answer to "four questions"; it should not take reading a
+  // paragraph to find.
+  renderWizard();
+  await screen.findByRole("heading", { name: /^grimoire$/i });
+  expect(screen.getByRole("button", { name: /skip setup/i })).toBeEnabled();
+  expect(screen.getByRole("button", { name: /next/i })).toBeEnabled();
 });

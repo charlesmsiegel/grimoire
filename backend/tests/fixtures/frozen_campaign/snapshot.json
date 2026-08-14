@@ -52,6 +52,7 @@
   ],
   "campaigns.list_campaigns": [
     {
+      "blurb": "",
       "created": "2026-01-01T09:02:00Z",
       "id": "the-drowned-ledger",
       "name": "The Drowned Ledger",

@@ -203,6 +203,14 @@ export type CampaignMeta = {
   updated: string;
   scenes: number;
   last_scene: string;
+  /** The opening paragraph of campaign.md's body — the pitch the campaign was
+   *  started from, shown as each card's blurb. "" when the body is empty. */
+  blurb?: string;
+  /** Title of the newest scene carrying an absorb mark: how far the chronicle,
+   *  the ledger and the dossiers are caught up to. Deliberately not derivable
+   *  from `scenes` — playing a scene ahead of the absorb is the normal state
+   *  of a campaign in progress. "" when nothing has been absorbed yet. */
+  absorbed_through?: string;
   /** Whole-campaign high-water mark: the later of campaign.md's `updated` and
    *  its newest scene's. `updated` alone misses play entirely, so anything
    *  ranking by "recently worked on" wants this. Only the list endpoint
@@ -403,7 +411,9 @@ export type Appearance = { gid: string; greeting_name: string; name: string; url
 
 // cast
 export type Actor = { kind: "characters" | "pcs"; id: string; role: "player" | "npc"; name: string };
-export type RosterEntry = { kind: string; id: string; version: string; role: string; scenes: string[] };
+export type RosterEntry = {
+  kind: string; id: string; version: string; role: string; scenes: string[];
+};
 export type SceneLocationRef = { id: string; name: string };
 export type SceneLocation = { current: SceneLocationRef | null; visited: SceneLocationRef[] };
 export type SceneDatetimeCast = { kind: string; id: string; name: string; age: number | null; birthday_today: boolean };
@@ -524,7 +534,51 @@ export type RollingSummary = {
  *  scene, or a provider that answered with no text. */
 export type RollingSummaryRefresh = RollingSummary & { refreshed: boolean };
 export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
+/** One feeling this actor holds toward another in the room. The three axes run
+ *  0–5 and the column draws them as five pips each. */
+export type Feeling = {
+  ref: string; kind: string; id: string; name: string;
+  trust: number; affection: number; tension: number; note: string;
+};
+/** Everything the campaign has decided about one actor — the play view's
+ *  dossier column. Every field is a record the absorb pass already writes;
+ *  `standing` / `knows` / `suspects` and `feels_toward` had no reader outside a
+ *  staged review row until this existed. */
+export type Casefile = {
+  kind: string; id: string; name: string; version: string; role: string;
+  /** The scenes she is cast in, oldest first, labelled — a scene id is a
+   *  filename, and the column puts these in a sentence. */
+  scenes: { id: string; title: string }[];
+  /** The title of the newest of them. */
+  last_seen: string;
+  standing: string; knows: string; suspects: string;
+  dossier: string;
+  /** The one-line identity, meaningful only for someone never played. */
+  tagline: string;
+  feels_toward: Feeling[];
+  standing_facts: StandingFact[];
+};
 export type TimelineEvent = { date: string; text: string };
+/** Why one stored field is what it is: the excerpt the extractor cited, who it
+ *  attributed it to, its own 0–1 rating (`null` when it gave none) and the band
+ *  `absorb/routing.py` weighed those into.
+ *
+ *  `band` is stored rather than derived here on purpose — it is certainty
+ *  weighted by authority, and a second copy of that table on the client is how
+ *  the panel and the review end up disagreeing about the same row. */
+export type Citation = {
+  quote: string; speaker: string; certainty: number | null;
+  authority: string; band: string;
+  /** The recording scene's id, and its title resolved at read time — a title
+   *  frozen into the stored citation would name a scene a later rename
+   *  retired. */
+  scene: string; scene_title?: string;
+  recorded: string;
+};
+/** Keyed `"<kind>/<id>#<field>"`. A field with no entry is the normal case: the
+ *  later absorb phases rest on no transcript citation, and anything written
+ *  before the store existed — or edited by hand — has none. */
+export type Provenance = Record<string, Citation>;
 /** How much weight one staged proposal has earned (#110/#112), computed by
  *  `store/absorb/routing.py`. Display and default-checkbox state only — the
  *  server never reads it back on save, and a `low` row a reviewer ticks anyway
@@ -673,9 +727,33 @@ export type Commitment = PlotThread & { kind: string; due: string };
 export type StandingFact = {
   id: string; text: string; date: string; scene: LedgerScene;
 };
+/** A fact that stopped being true (#114), and the half of facts.json that never
+ *  left the server until the ledger got its own screen (4e).
+ *
+ *  `scene` is still the scene that RECORDED it — a retired fact keeps its dated
+ *  place in the ledger — and `retired_scene` is the one that ENDED it.
+ *  `superseded_by` names the fact that replaced this one and is "" when nothing
+ *  did, which is the whole difference between a truth another truth overtook
+ *  and one that simply lapsed. It is a bare id pointing into `facts` or back
+ *  into `retired` of the same response: the replacement's text is on its own
+ *  row, and shipping it twice would let the two copies disagree. */
+export type RetiredFact = StandingFact & {
+  superseded_by: string; retired_scene: LedgerScene;
+};
+/** One line of relationships.json. Two shapes share it because the reader's
+ *  question is what stands between two people: `kind: "feeling"` is directed
+ *  (a→b, metered 0–5, not reciprocated by construction) and `kind: "bond"` is
+ *  symmetric, `type`d ("kin", "sworn") and dated to `scene`, which is the empty
+ *  label for every feeling. */
+export type LedgerRelationship = {
+  id: string; kind: string; a: string; b: string; a_name: string; b_name: string;
+  trust: number; affection: number; tension: number;
+  note: string; type: string; since_scene: string; scene: LedgerScene;
+};
 export type LedgerFact = { id: string; one_line: string; date: string; title: string };
 export type Ledger = {
   plot: PlotThread[]; commitments: Commitment[]; facts: StandingFact[];
+  retired: RetiredFact[]; relationships: LedgerRelationship[];
   chronicle: LedgerFact[];
 };
 
@@ -952,6 +1030,11 @@ export const api = {
   // precisely when the records behind it have moved (an absorb save, a scene
   // rename), and the dedupe would answer that with the pre-change response.
   // It has one consumer, so the sharing it opts out of was buying nothing.
+  // Not `fresh`: this is a rolling log of citations for values that are already
+  // on screen, so a copy one absorb old is stale about a line the reader has
+  // not been shown yet either.
+  campaignProvenance: (cid: string) =>
+    request<Provenance>("GET", `/api/campaigns/${cid}/provenance`),
   campaignLedger: (cid: string) =>
     request<Ledger>("GET", `/api/campaigns/${cid}/ledger`, undefined, { fresh: true }),
 
@@ -1446,6 +1529,11 @@ export const api = {
       { text, offscreen }),
   getCastDetail: (cid: string, sid: string, kind: string, id: string) =>
     request<CastDetail>("GET", `/api/campaigns/${cid}/scenes/${sid}/cast/${kind}/${id}`),
+  // `fresh`, like the ledger and the briefing: this is a continuity view, and
+  // the absorb that rewrote every file behind it has just run.
+  getCasefile: (cid: string, sid: string, kind: string, id: string) =>
+    request<Casefile>("GET", `/api/campaigns/${cid}/scenes/${sid}/cast/${kind}/${id}/casefile`,
+                      undefined, { fresh: true }),
   editMessage: (cid: string, sid: string, index: number, content: string) =>
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/messages/${index}`, { content }),
   // `force` re-runs an absorb the backend has already recorded in the chronicle;

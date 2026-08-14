@@ -2,6 +2,8 @@ import { StrictMode } from "react";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { MemoryRouter, Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
 import CampaignView from "./CampaignView";
+import CommandPalette, { usePaletteHotkey } from "../components/CommandPalette";
+import { PaletteProvider } from "../components/palette";
 import type { ChatEvent } from "../api/stream";
 
 // CastPanel, NewSceneChooser, and CalendarConfig have their own tests + make their own
@@ -74,6 +76,8 @@ vi.mock("../api/client", async () => {
       listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
       campaignChanges: vi.fn(),
       campaignLedger: vi.fn(),
+      campaignProvenance: vi.fn(),
+      getCasefile: vi.fn(),
       listAppearances: vi.fn(), listEntityImages: vi.fn(), listEntities: vi.fn(),
       getRollingSummary: vi.fn(), refreshRollingSummary: vi.fn(),
       campaignImageUrl: (_c: string, char: string, v: string, n: string) => `/img/${char}/${v}/${n}`,
@@ -188,6 +192,7 @@ beforeEach(() => {
     applied: [], failures: [] });
   (api.getChronicle as any).mockResolvedValue([]);
   (api.campaignChanges as any).mockResolvedValue([]);
+  (api.campaignProvenance as any).mockResolvedValue({});
   (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
   (api.listResponsePresets as any).mockResolvedValue([]);
   // A pack is bound by default, so the dice button is present for the tests
@@ -245,32 +250,116 @@ function readCounter() {
   };
 }
 
+/** The shell's ⌘K, mounted around the page exactly as `App` mounts it.
+ *
+ *  The scene rail is gone: scene navigation is the palette now, and the page
+ *  contributes its scenes to it through `usePaletteSource`. So the harness has
+ *  to carry the palette, or a test cannot reach a second scene at all. */
+function PaletteHotkey() {
+  usePaletteHotkey();
+  return null;
+}
+function withPalette(children: React.ReactNode) {
+  return (
+    <PaletteProvider>
+      <PaletteHotkey />
+      <CommandPalette />
+      {children}
+    </PaletteProvider>
+  );
+}
+
 function renderCampaign(initialEntry = "/campaigns/run") {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
-      <Here />
-      {playRoutes()}
+      {withPalette(<><Here />{playRoutes()}</>)}
     </MemoryRouter>,
   );
 }
 
-test("shows the sub-header with world-copy link, scene counter, and rail date", async () => {
+/** The review shows one store's proposals at a time, chosen in its column.
+ *  Open drawers until `present()` finds what the test is after — which is what
+ *  a reviewer does, and saves every test from having to know which store each
+ *  edit kind is filed under. */
+/** The proposal card whose label matches — approval is a standing verdict on
+ *  the card now, not a checkbox inside it. */
+/** The review's own column. Named, because the transcript pane beside it is a
+ *  `complementary` too. */
+const reviewColumn = () => within(screen.getByRole("complementary", { name: /proposals/i }));
+
+function cardFor(label: RegExp): HTMLElement {
+  const find = () => Array.from(document.querySelectorAll(".absorb-edit"))
+    .find((el) => label.test(el.textContent ?? ""));
+  showProposal(find);
+  const card = find();
+  if (!card) throw new Error(`no proposal card matching ${label}`);
+  return card as HTMLElement;
+}
+
+function showProposal(present: () => unknown) {
+  if (present()) return;
+  // Re-queried each pass: clicking a drawer re-renders the column, so a
+  // NodeList captured up front holds elements React has already replaced.
+  const drawers = () =>
+    Array.from(document.querySelectorAll(".context-column .column-row")) as HTMLElement[];
+  for (let i = 0; i < drawers().length; i++) {
+    fireEvent.click(drawers()[i]);
+    if (present()) return;
+  }
+}
+
+/** Open a scene the way the app does: ⌘K, type, pick.
+ *
+ *  `query` narrows the palette; `name` picks the row. They are separate because
+ *  a scene title and a character name can both match a substring, and a test
+ *  switching scenes must not silently open a dossier instead. */
+async function openScene(name: RegExp, query = "") {
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  const input = await screen.findByRole("combobox", { name: /search/i });
+  if (query) fireEvent.change(input, { target: { value: query } });
+  // Matched on the row's LABEL, not on its accessible name: the name folds in
+  // the meta line ("scene 2 · absorbed"), so an anchored title regex would
+  // never match. The label is the scene title and nothing else.
+  const row = await waitFor(() => {
+    const rows = screen.getAllByRole("option").filter((r) => {
+      const label = r.querySelector(".palette-label")?.textContent ?? "";
+      return name.test(label) && /scene/i.test(r.textContent ?? "");
+    });
+    if (!rows.length) throw new Error(`no scene row matching ${name}`);
+    return rows[0];
+  });
+  fireEvent.click(row);
+}
+
+test("the pinned conditions block names where, when and the campaign's world copy", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getSceneDatetime as any).mockResolvedValue({
     current: { native: "2026-07-03", friendly: "3 July 2026", weekday: "Friday",
                secondary_friendly: null, holidays_today: ["Independence Day"], upcoming: null, cast: [] },
     history: [],
   });
+  (api.getSceneLocation as any).mockResolvedValue({
+    current: { id: "tideflats", name: "The Tideflats" }, visited: [] });
   renderCampaign();
-  await screen.findByText(/‹ Campaigns/i);
-  expect(screen.getByRole("link", { name: /world ▸ saltmarch/i })).toHaveAttribute("href", "/campaigns/run/world");
-  expect(screen.getByText(/scenes \/ 01/i)).toBeInTheDocument();
-  await screen.findByText(/Friday 3 July 2026/i);
-  expect(screen.getByText(/✦ Independence Day/i)).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /campaign world/i })).toBeInTheDocument();
+  const column = within(await screen.findByRole("complementary"));
+  await column.findByText(/Friday 3 July 2026/i);
+  expect(column.getByText("The Tideflats")).toBeInTheDocument();
+  // The campaign's own copy of the world, said before the click rather than
+  // after: edits there reach this campaign only.
+  expect(column.getByRole("link", { name: /this campaign/i }))
+    .toHaveAttribute("href", "/campaigns/run/world");
 });
 
-test("scene rail numbers by the id's own number, not list position", async () => {
+test("the scene heading counts the scene and its turns", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  expect(screen.getByText(/SCENE 1 · 2 TURNS/i)).toBeInTheDocument();
+});
+
+test("⌘K numbers a scene by its id's own number, not by list position", async () => {
   // listScenes is sorted by `updated` descending — an earlier scene edited
   // most recently sorts first, which must not desync the displayed number
   // from the scene's actual story position (its id's leading number).
@@ -279,59 +368,10 @@ test("scene rail numbers by the id's own number, not list position", async () =>
     { id: "036--2024-09-24--froot-loops", title: "Froot Loops", model: "", created: "", updated: "2026-07-06T23:26:21Z" },
   ]);
   renderCampaign();
-  await screen.findByText(/‹ Campaigns/i);
-  expect(screen.getByText("03 · Day Two")).toBeInTheDocument();
-  expect(screen.getByText("36 · Froot Loops")).toBeInTheDocument();
-});
-
-test("scene rail is sortable by last updated, scene date, or order", async () => {
-  (api.listScenes as any).mockResolvedValue([
-    // API order is "updated" desc, deliberately unrelated to date or id order.
-    { id: "003--2024-09-24--day-two", title: "Day Two", model: "", created: "", updated: "3", date: "2024-09-24" },
-    { id: "036--2024-09-10--froot-loops", title: "Froot Loops", model: "", created: "", updated: "2", date: "2024-09-10" },
-    { id: "010--2024-09-15--undated", title: "Undated", model: "", created: "", updated: "1", date: "" },
-  ]);
-  renderCampaign();
-  await screen.findByText(/‹ Campaigns/i);
-
-  const rowOrder = () => Array.from(document.querySelectorAll(".rail-scenes .row-name")).map((el) => el.textContent);
-
-  // default: "updated" — API order preserved (most-recently-edited first).
-  expect(rowOrder()).toEqual(["03 · Day Two", "36 · Froot Loops", "10 · Undated"]);
-
-  // "date" — latest scene date first; undated scenes still sort last.
-  fireEvent.change(screen.getByLabelText(/sort scenes by/i), { target: { value: "date" } });
-  expect(rowOrder()).toEqual(["03 · Day Two", "36 · Froot Loops", "10 · Undated"]);
-
-  // "order" — the scene id's own leading number, descending.
-  fireEvent.change(screen.getByLabelText(/sort scenes by/i), { target: { value: "order" } });
-  expect(rowOrder()).toEqual(["36 · Froot Loops", "10 · Undated", "03 · Day Two"]);
-});
-
-test("groups consecutive posts under one speaker plate", async () => {
-  (api.getConfig as any).mockResolvedValue({
-    theme: "codex", system_prompt: "", quote_color: "off", user_label: "Kestrel", assistant_label: "Grimoire",
-    active_connection_id: "openrouter",
-    active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true,
-  });
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any).mockResolvedValue({
-    meta: { id: "s1", title: "Old" },
-    messages: [
-      { role: "user", content: "I open the door." },
-      { role: "assistant", content: "She waits.", speaker: "Seraphine Vale" },
-      { role: "assistant", content: "She smiles.", speaker: "Seraphine Vale" },
-    ],
-  });
-  renderCampaign();
-  await screen.findByText("Kestrel");
-  // one plate for the two-message Seraphine run
-  expect(screen.getAllByText("Seraphine Vale")).toHaveLength(1);
-  expect(document.querySelectorAll(".plate")).toHaveLength(2);
-  expect(document.querySelector(".spine")).toBeNull();
-  // initials fallback (no cast/roster mocked): first letters of first two words
-  expect(screen.getByText("SV")).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "Old" })).toBeInTheDocument();
+  await screen.findByRole("heading", { name: /Day Two/ });
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  expect(await screen.findByRole("option", { name: /Day Two.*scene 3/i })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /Froot Loops.*scene 36/i })).toBeInTheDocument();
 });
 
 test("plates mark PC speakers and show avatars from the roster", async () => {
@@ -351,14 +391,17 @@ test("plates mark PC speakers and show avatars from the roster", async () => {
     ],
   });
   renderCampaign();
-  await screen.findByText("Seraphine Vale");
+  // Two of her: the plate over her run, and her tile in the cast column.
+  const stream = within(await screen.findByTestId("stream"));
+  await stream.findByText("Seraphine Vale");
   expect(document.querySelector(".plate.pc")).not.toBeNull();          // Yara run
-  expect(screen.getByText("pc")).toBeInTheDocument();
-  expect(screen.getAllByText("npc").length).toBeGreaterThan(0);
-  expect(screen.getByAltText("Seraphine Vale portrait")).toBeInTheDocument();
+  expect(stream.getByText("pc")).toBeInTheDocument();
+  expect(stream.getAllByText("npc").length).toBeGreaterThan(0);
+  expect(stream.getByAltText("Seraphine Vale portrait")).toBeInTheDocument();
 });
 
-test("clicking a plate name opens the record drawer", async () => {
+/** A scene whose transcript has one post, spoken by a cast member. */
+function speakingScene() {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getCast as any).mockResolvedValue([
     { kind: "characters", id: "seraphine", role: "npc", name: "Seraphine Vale" },
@@ -367,11 +410,40 @@ test("clicking a plate name opens the record drawer", async () => {
     meta: { id: "s1", title: "Old" },
     messages: [{ role: "assistant", content: "She waits.", speaker: "Seraphine Vale" }],
   });
-  (api.getCastDetail as any).mockResolvedValue({
-    kind: "characters", id: "seraphine", name: "Seraphine Vale", version: "v1", body: "keeper" });
+}
+
+test("clicking a speaker in the transcript opens them in the column, like the cast grid", async () => {
+  // A drawer over the transcript to read about someone standing in it was a
+  // modal answering the question the column beside it already answers.
+  speakingScene();
+  (api.getCasefile as any).mockResolvedValue({
+    kind: "characters", id: "seraphine", name: "Seraphine Vale", version: "v1", role: "npc",
+    scenes: ["s1"], last_seen: "s1", standing: "Keeps the tide gate.",
+    knows: "", suspects: "", dossier: "", tagline: "",
+    feels_toward: [], standing_facts: [],
+  });
   renderCampaign();
-  fireEvent.click(await screen.findByRole("button", { name: "Seraphine Vale" }));
-  await screen.findByText("keeper");
+  const plate = await screen.findByRole("button", { name: "Seraphine Vale" });
+  fireEvent.click(plate);
+
+  const column = within(await screen.findByRole("complementary"));
+  expect(await column.findByText("Keeps the tide gate.")).toBeInTheDocument();
+  // In the column, not over the transcript.
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(api.getCastDetail).not.toHaveBeenCalled();
+});
+
+test("a speaker who is not in the cast is not a link to anywhere", async () => {
+  // Why the column can answer for every plate that IS clickable: the plate is
+  // only a button when its speaker resolves against the scene's cast, which is
+  // the same cast `casefile.build` requires membership in. A narrator, or
+  // someone since removed from the scene, is plain text.
+  speakingScene();
+  (api.getCast as any).mockResolvedValue([]);
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  expect(screen.getByText("Seraphine Vale").closest("button")).toBeNull();
+  expect(api.getCasefile).not.toHaveBeenCalled();
 });
 
 test("shows the campaign name and loads its scenes", async () => {
@@ -383,6 +455,7 @@ test("shows the campaign name and loads its scenes", async () => {
 test("renders the inspector for an active scene", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: /what the model saw/i }));
   await screen.findByText(/Active characters/i);
   await screen.findByText(/^Context/);
 });
@@ -497,25 +570,22 @@ test("a complete scene can still have its existing posts edited", async () => {
   expect(screen.getAllByTitle("Edit message").length).toBeGreaterThan(0);
 });
 
-test("the scene rail marks a complete scene and leaves the others unmarked", async () => {
+test("⌘K marks an absorbed scene and leaves the others unmarked", async () => {
   (api.listScenes as any).mockResolvedValue([
     { id: "002--two", title: "Second", model: "", created: "", updated: "2026-01-02", done: true },
     { id: "001--one", title: "First", model: "", created: "", updated: "2026-01-01" },
   ]);
-  const { container } = renderCampaign();
-  await screen.findByText(/Second/);
-  const marks = container.querySelectorAll(".rail-scenes .row-done");
-  expect(marks).toHaveLength(1);
-  expect(marks[0]).toHaveAttribute("title", "Scene complete");
-  // and it belongs to the finished row, not merely to some row
-  const doneRow = marks[0].closest(".row") as HTMLElement;
-  expect(doneRow.textContent).toContain("Second");
+  renderCampaign();
+  await screen.findByRole("heading", { name: /Second/ });
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  expect(await screen.findByRole("option", { name: /Second.*absorbed/i })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /First/ })).not.toHaveTextContent(/absorbed/i);
 });
 
 test("Enter sends a message in the active scene", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
-  await screen.findByText(/01 · Old/);
+  await screen.findByRole("heading", { name: /^Old$/ });
   const ta = screen.getByRole("textbox");
   fireEvent.change(ta, { target: { value: "hello" } });
   fireEvent.keyDown(ta, { key: "Enter" });
@@ -527,7 +597,7 @@ test("Enter sends a message in the active scene", async () => {
 test("Shift+Enter does not send", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
-  await screen.findByText(/01 · Old/);
+  await screen.findByRole("heading", { name: /^Old$/ });
   const ta = screen.getByRole("textbox");
   fireEvent.change(ta, { target: { value: "hello" } });
   fireEvent.keyDown(ta, { key: "Enter", shiftKey: true });
@@ -647,7 +717,7 @@ test("closing the chooser creates nothing", async () => {
 test("the edit button renames a scene", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
-  await screen.findByText(/01 · Old/);
+  await screen.findByRole("heading", { name: /^Old$/ });
   fireEvent.click(screen.getByRole("button", { name: /rename/i }));
   const input = screen.getByDisplayValue("Old");
   fireEvent.change(input, { target: { value: "New" } });
@@ -659,7 +729,7 @@ test("the delete button deletes a scene after confirm", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   renderCampaign();
-  await screen.findByText(/01 · Old/);
+  await screen.findByRole("heading", { name: /^Old$/ });
   fireEvent.click(screen.getByRole("button", { name: /delete/i }));
   await waitFor(() => expect(api.deleteScene).toHaveBeenCalledWith("run", "s1"));
 });
@@ -668,7 +738,7 @@ test("declining the delete confirm does nothing", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   vi.spyOn(window, "confirm").mockReturnValue(false);
   renderCampaign();
-  await screen.findByText(/01 · Old/);
+  await screen.findByRole("heading", { name: /^Old$/ });
   fireEvent.click(screen.getByRole("button", { name: /delete/i }));
   expect(api.deleteScene).not.toHaveBeenCalled();
 });
@@ -684,7 +754,7 @@ test("an error shows a Retry button that retries the scene", async () => {
     onEvent({ error: { detail: "boom" } });
   });
   renderCampaign();
-  await screen.findByText(/01 · Old/);
+  await screen.findByRole("heading", { name: /^Old$/ });
   const ta = screen.getByRole("textbox");
   fireEvent.change(ta, { target: { value: "hello" } });
   fireEvent.keyDown(ta, { key: "Enter" });
@@ -797,7 +867,9 @@ test("StrictMode's mount cycle does not switch the flush poll off", async () => 
   render(
     <StrictMode>
       <MemoryRouter initialEntries={["/campaigns/run"]}>
-        {playRoutes()}
+        {withPalette(<>
+          {playRoutes()}
+        </>)}
       </MemoryRouter>
     </StrictMode>,
   );
@@ -844,7 +916,7 @@ test("a send on a scene still loading is measured against that scene", async () 
     throw err;
   });
   renderCampaign();
-  fireEvent.click(await screen.findByText(/· Later/));
+  await openScene(/Later/);
   const ta = await screen.findByRole("textbox");
   fireEvent.change(ta, { target: { value: "I draw my blade." } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
@@ -980,14 +1052,15 @@ test("the scene being generated into cannot be renamed mid-turn", async () => {
   fireEvent.change(ta, { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   await screen.findByRole("button", { name: /stop ■/i });
-  const [activeRename, otherRename] = screen.getAllByRole("button", { name: /rename/i });
-  expect(activeRename).toBeDisabled();
-  expect(otherRename).not.toBeDisabled();   // only the scene being written to
+  // Rename and delete belong to the scene on screen — and the scene on screen
+  // is the one being streamed into, so both are locked for the turn.
+  expect(screen.getByRole("button", { name: /rename scene/i })).toBeDisabled();
+  expect(screen.getByRole("button", { name: /delete scene/i })).toBeDisabled();
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
   await screen.findByRole("button", { name: /continue ▶/i });
   flushed = true;                            // the shielded write lands
-  await waitFor(() => expect(
-    screen.getAllByRole("button", { name: /rename/i })[0]).not.toBeDisabled());
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /rename scene/i })).not.toBeDisabled());
 });
 
 test("the scene stays locked while the cancelled turn's flush is still coming", async () => {
@@ -1101,12 +1174,14 @@ test("the lock follows the scene being written to, not the one on screen", async
   fireEvent.change(ta, { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   await screen.findByRole("button", { name: /stop ■/i });
-  fireEvent.click(screen.getByText(/· Later/));          // navigate away mid-turn
-  await waitFor(() => {
-    const [s1Rename, s2Rename] = screen.getAllByRole("button", { name: /rename/i });
-    expect(s1Rename).toBeDisabled();        // still streaming into it
-    expect(s2Rename).not.toBeDisabled();    // merely being looked at
-  });
+  await openScene(/Later/);          // navigate away mid-turn
+  // The lock is keyed on the scene being WRITTEN to, not the one on screen, so
+  // the scene merely being looked at stays editable while s1 streams.
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /rename scene/i })).not.toBeDisabled());
+  await openScene(/^Old$/);
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /rename scene/i })).toBeDisabled());
 });
 
 test("Stop during the preflight read does not strand the turn", async () => {
@@ -1196,7 +1271,7 @@ test("a remembered reroll does not follow the player to another scene", async ()
   fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
   await screen.findByText(/OpenRouter API key is not set/);
 
-  fireEvent.click(screen.getByText(/· Later/));       // leave the failed scene
+  await openScene(/Later/);       // leave the failed scene
   // the banner belonged to the scene being left, so it goes with it
   await waitFor(() => expect(screen.queryByText(/OpenRouter API key is not set/)).toBeNull());
 
@@ -1246,7 +1321,7 @@ test("a scene rename in flight holds off the next turn", async () => {
   (api.renameScene as any).mockImplementation(
     () => new Promise((res) => { finishRename = res; }));
   renderCampaign();
-  await screen.findByText(/01 · Old/);
+  await screen.findByRole("heading", { name: /^Old$/ });
   fireEvent.click(screen.getByRole("button", { name: /rename/i }));
   const input = screen.getByDisplayValue("Old");
   fireEvent.change(input, { target: { value: "Renamed" } });
@@ -1293,17 +1368,17 @@ test("a verification read retired by a scene switch still gives the prompt back"
   fireEvent.change(ta, { target: { value: "I draw my blade." } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   await waitFor(() => expect(releaseVerify).not.toBeNull());
-  fireEvent.click(screen.getByText(/· Later/));   // retires the pending read
+  await openScene(/Later/);   // retires the pending read
   releaseVerify!();
   await new Promise((r) => setTimeout(r, 60));
   // Recovered, but not into the composer the player is looking at: these are
   // scene s1's words and Send here would post them to s2. The prompt is held
   // under the scene it was written for (review, #95) …
-  expect(document.querySelector(".row.active .row-name")?.textContent).toMatch(/Later/);
+  expect(screen.getByRole("heading", { name: /Later/ })).toBeInTheDocument();
   expect(screen.getByRole("textbox")).toHaveValue("");
   // … and handed back when that scene is on screen again. Recovered, not lost,
   // which is the whole point of counting a retired read as unverifiable.
-  fireEvent.click(screen.getByText(/. Old/));
+  await openScene(/^Old$/);
   await waitFor(() =>
     expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
 });
@@ -1321,7 +1396,7 @@ test("a pending rename also blocks a proposal continuation", async () => {
   (api.renameScene as any).mockImplementation(
     () => new Promise((res) => { finishRename = res; }));
   renderCampaign();
-  await screen.findByText(/01 · Old/);
+  await screen.findByRole("heading", { name: /^Old$/ });
   fireEvent.click(screen.getByRole("button", { name: /rename/i }));
   const input = screen.getByDisplayValue("Old");
   fireEvent.change(input, { target: { value: "Renamed" } });
@@ -1906,7 +1981,7 @@ test("a swap in flight does not disable the scene the reader moved to", async ()
   await screen.findByText("2/2");
 
   fireEvent.click(screen.getByRole("button", { name: /previous alternate/i }));
-  fireEvent.click(await screen.findByText(/· Two$/));
+  await openScene(/^Two$/);
   await screen.findByText("the other scene");
 
   expect(screen.getByRole("button", { name: /^Reroll$/i })).not.toBeDisabled();
@@ -1976,7 +2051,9 @@ test("a first-date rename whose re-read fails says so instead of going quiet", a
   renderCampaign();
   await screen.findByText("a reply");
 
-  // the first date set re-slugs the file, so this is the rename path
+  // the first date set re-slugs the file, so this is the rename path. The
+  // control lives in the inspector, which is a panel now.
+  fireEvent.click(screen.getByRole("button", { name: /what the model saw/i }));
   const setDate = await screen.findByRole("button", { name: /set date/i });
   await waitFor(() => expect(setDate).not.toBeDisabled());
   fireEvent.click(setDate);
@@ -2002,13 +2079,13 @@ test("a rename whose relist is slow does not pull the reader back", async () => 
   renderCampaign();
   await screen.findByText("a reply");
 
-  fireEvent.click(screen.getAllByRole("button", { name: /rename/i })[0]);
+  fireEvent.click(screen.getByRole("button", { name: /rename scene/i }));
   const input = screen.getByDisplayValue("One");
   fireEvent.change(input, { target: { value: "New" } });
   fireEvent.keyDown(input, { key: "Enter" });
   // the PUT has landed and the id is adopted; the relist is still open
   await waitFor(() => expect(api.listScenes).toHaveBeenCalledTimes(2));
-  fireEvent.click(await screen.findByText(/· Two$/));
+  await openScene(/^Two$/);
   await waitFor(() => expect((api.getScene as any).mock.calls.map((c: any) => c[1])).toContain("s2"));
   finishRelist([{ id: "s1-renamed", title: "New", model: "", created: "", updated: "" },
                 { id: "s2", title: "Two", model: "", created: "", updated: "" }]);
@@ -2038,7 +2115,7 @@ test("a stale swap succeeding does not clear the new scene's banner", async () =
   renderCampaign();
   await screen.findByText("2/2");
   fireEvent.click(screen.getByRole("button", { name: /previous alternate/i }));
-  fireEvent.click(await screen.findByText(/· Two$/));
+  await openScene(/^Two$/);
   await screen.findByText("the other scene");
 
   // scene Two raises its own failure while One's swap is still open
@@ -2132,7 +2209,7 @@ test("a failed post-swap read does not retry the reader back onto the old scene"
 
   fireEvent.click(screen.getByRole("button", { name: /previous alternate/i }));
   await waitFor(() => expect(api.pickAlternate).toHaveBeenCalled());
-  fireEvent.click(await screen.findByText(/· Two$/));
+  await openScene(/^Two$/);
   await screen.findByText("the other scene");
   const reads = (api.getScene as any).mock.calls.length;
 
@@ -2140,7 +2217,7 @@ test("a failed post-swap read does not retry the reader back onto the old scene"
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
   expect((api.getScene as any).mock.calls.length).toBe(reads);   // no retry issued
-  expect(screen.getByText(/· Two$/).closest(".row")).toHaveClass("active");
+  expect(screen.getByRole("heading", { name: /^Two$/ })).toBeInTheDocument();
   expect(screen.queryByText(/could not be re-read/)).toBeNull();
 });
 
@@ -2161,9 +2238,8 @@ test("a swap that fails after the user moved on does not banner the new scene", 
   renderCampaign();
   await screen.findByText("2/2");
   fireEvent.click(screen.getByRole("button", { name: /previous alternate/i }));
-  fireEvent.click(await screen.findByText(/· Two$/));
-  await waitFor(() => expect(screen.getByText(/· Two$/).closest(".row"))
-    .toHaveClass("active"));
+  await openScene(/^Two$/);
+  await waitFor(() => expect(screen.getByRole("heading", { name: /^Two$/ })).toBeInTheDocument());
 
   reject({ detail: "no space left on device" });   // s1's swap fails after the move
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
@@ -2185,14 +2261,13 @@ test("switching scenes while a swap is in flight does not yank the user back", a
   renderCampaign();
   await screen.findByText("2/2");
   fireEvent.click(screen.getByRole("button", { name: /previous alternate/i }));
-  fireEvent.click(await screen.findByText(/· Two$/));
-  await waitFor(() => expect(screen.getByText(/· Two$/).closest(".row"))
-    .toHaveClass("active"));
+  await openScene(/^Two$/);
+  await waitFor(() => expect(screen.getByRole("heading", { name: /^Two$/ })).toBeInTheDocument());
 
   release({ ok: true }); // s1's swap finishes after the user moved on
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-  expect(screen.getByText(/· Two$/).closest(".row")).toHaveClass("active");
+  expect(screen.getByRole("heading", { name: /^Two$/ })).toBeInTheDocument();
 });
 
 test("another campaign's alternates are not offered while its set is still loaded", async () => {
@@ -2206,8 +2281,10 @@ test("another campaign's alternates are not offered while its set is still loade
     active: 1, alternates: [ALT("old"), ALT("a reply")] });
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Link to="/campaigns/other">switch campaign</Link>
-      {playRoutes()}
+      {withPalette(<>
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
   await screen.findByText("2/2");
@@ -2238,8 +2315,10 @@ test("a swap that finishes after a campaign switch does not load the old campaig
   (api.pickAlternate as any).mockImplementation(() => new Promise((res) => { release = res; }));
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Link to="/campaigns/other">switch campaign</Link>
-      {playRoutes()}
+      {withPalette(<>
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
   await screen.findByText("2/2");
@@ -2302,7 +2381,7 @@ test("alternates stay hidden until the scene's own transcript has landed", async
   // s2's alternates resolve immediately; its transcript is still in flight
   (api.getScene as any).mockImplementationOnce(
     () => new Promise((res) => { landB = res; }));
-  fireEvent.click(await screen.findByText(/· Two$/));
+  await openScene(/^Two$/);
   await waitFor(() => expect(api.getAlternates).toHaveBeenCalledWith("run", "s2"));
 
   expect(screen.queryByText("2/2")).toBeNull();          // not against s1's posts
@@ -2393,7 +2472,7 @@ test("a date rename that lands after a scene switch does not yank the reader bac
     () => new Promise((res) => { landList = res; }));
   fireEvent.click(screen.getByText("stub-datestamp"));
   // …and the reader moves to s2 before it settles
-  fireEvent.click(await screen.findByText(/· Two$/));
+  await openScene(/^Two$/);
   await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s2", expect.anything()));
   const after = (api.getScene as any).mock.calls.length;
 
@@ -2445,12 +2524,12 @@ test("a rename landing after a scene switch does not refresh over the new scene"
   renderCampaign();
   await screen.findByText(/a reply/);
 
-  fireEvent.click(screen.getAllByRole("button", { name: /rename/i })[0]);
+  fireEvent.click(screen.getByRole("button", { name: /rename scene/i }));
   const box = screen.getByDisplayValue("One");
   fireEvent.change(box, { target: { value: "Renamed" } });
   fireEvent.keyDown(box, { key: "Enter" });
   // the reader moves on while the PUT is still in flight
-  fireEvent.click(await screen.findByText(/· Two$/));
+  await openScene(/^Two$/);
   await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s2", expect.anything()));
   const after = (api.getScene as any).mock.calls.length;
 
@@ -2625,8 +2704,10 @@ test("a colliding scene id across campaigns does not expose B's set on A's posts
     active: 1, alternates: [ALT("old"), ALT("a reply")] });
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Link to="/campaigns/other">switch campaign</Link>
-      {playRoutes()}
+      {withPalette(<>
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
   await screen.findByText("2/2");
@@ -2754,7 +2835,7 @@ test("a rename retires the in-flight alternates fetch instead of relabelling it"
   // rename; the fetch the rename issues for the new id still resolves normally
   (api.getAlternates as any).mockImplementationOnce(
     () => new Promise((_res, rej) => { reject = rej; }));
-  fireEvent.click(screen.getByText(/· Old$/));
+  await openScene(/^Old$/);
   await waitFor(() => expect(api.getAlternates).toHaveBeenCalledTimes(2));
 
   fireEvent.click(screen.getByRole("button", { name: /rename/i }));
@@ -2808,7 +2889,7 @@ test("a previous scene's alternates fetch cannot clear the current scene's by fa
     .mockImplementationOnce(() => new Promise((_res, rej) => { rejectFirst = rej; }))
     .mockResolvedValue({ active: 1, alternates: [ALT("old"), ALT("a reply")] });
   renderCampaign();
-  fireEvent.click(await screen.findByText(/· Two$/));
+  await openScene(/^Two$/);
   await screen.findByText("2/2");
 
   rejectFirst(new Error("s1 gave up")); // s1's request, failing late
@@ -2834,7 +2915,7 @@ test("a slow alternates fetch from the previous scene is ignored", async () => {
     .mockResolvedValue({ active: 0, alternates: [ALT("only one")] });
   renderCampaign();
   await screen.findByText("a reply");
-  fireEvent.click(await screen.findByText(/· Two$/));
+  await openScene(/^Two$/);
   await waitFor(() => expect(api.getAlternates).toHaveBeenCalledTimes(2));
 
   releaseFirst({ active: 2, alternates: [ALT("a"), ALT("b"), ALT("c")] }); // s1's, late
@@ -2899,7 +2980,7 @@ test("End scene fetches a preview, edits, and saves the chronicle", async () => 
   const summary = await screen.findByLabelText("Scene summary");
   expect((summary as HTMLTextAreaElement).value).toContain("A met B.");
   fireEvent.change(summary, { target: { value: "Edited summary." } });
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
     expect.objectContaining({ summary: "Edited summary.", one_line: "They met." })));
 });
@@ -2911,7 +2992,7 @@ test("End scene review sends approved edits with the summary", async () => {
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
   await screen.findByText("Seraphine — current state");
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
     expect.objectContaining({
       edits: [expect.objectContaining({ id: "character_state:seraphine", after: "Loyal now." })] })));
@@ -2971,7 +3052,7 @@ test("double-clicking Save summary commits once", async () => {
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-  const save = await screen.findByRole("button", { name: /Save summary/ });
+  const save = await screen.findByRole("button", { name: /Save chronicle/ });
   fireEvent.click(save);
   fireEvent.click(save);
   expect(api.saveChronicle).toHaveBeenCalledTimes(1);
@@ -2991,9 +3072,9 @@ test("a review saves to the scene it was absorbed from, not the selected one", a
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
   await screen.findByLabelText("Scene summary");
-  fireEvent.click(screen.getByText(/Two/));                        // switch scenes
+  await openScene(/Two/);                        // switch scenes
   await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s2", { limit: 60 }));
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
   expect((api.saveChronicle as any).mock.calls[0][1]).toBe("s1");
 });
@@ -3027,7 +3108,7 @@ test("a failed save offers a retry that saves, not one that generates a reply", 
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Save summary/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Save chronicle/ }));
   const again = await screen.findByRole("button", { name: /Try saving again/ });
   (api.saveChronicle as any).mockResolvedValueOnce({
     id: "s1", one_line: "o", summary: "s", keywords: [], cast: [], location: "",
@@ -3048,7 +3129,7 @@ test("a failed save keeps the review open and shows the error", async () => {
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Save summary/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Save chronicle/ }));
   expect(await screen.findByText(/disk full/)).toBeTruthy();
   expect(screen.getByLabelText("Scene summary")).toBeTruthy();  // review survives to retry
 });
@@ -3090,7 +3171,7 @@ async function reviewIntoConflict() {
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Save summary/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Save chronicle/ }));
   await screen.findByText(/no longer match/);
 }
 
@@ -3108,7 +3189,7 @@ test("a refused save keeps the review open and shows what the record now says", 
 test("Replace authorizes the staged text and the next save carries it", async () => {
   await reviewIntoConflict();
   fireEvent.click(screen.getByRole("button", { name: /Replace stored The Pact/ }));
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
   expect((api.saveChronicle as any).mock.calls[1][2].edits).toEqual([
     expect.objectContaining({ id: "lore:the-pact", resolve: "replace",
@@ -3133,7 +3214,7 @@ test("answering one row leaves its duplicate-id sibling unanswered", async () =>
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Save summary/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Save chronicle/ }));
   await screen.findByText(/2 proposed changes no longer match/);
 
   fireEvent.click(screen.getAllByRole("button", { name: /Replace stored The Pact/ })[0]);
@@ -3141,7 +3222,7 @@ test("answering one row leaves its duplicate-id sibling unanswered", async () =>
   // one answered, one still waiting -- not both
   expect(await screen.findByText(/One proposed change no longer matches/)).toBeTruthy();
   expect(screen.getAllByRole("button", { name: /Replace stored The Pact/ })).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
   const sent = (api.saveChronicle as any).mock.calls[1][2].edits;
   expect(sent.map((e: any) => e.resolve)).toEqual(["replace", undefined]);
@@ -3166,7 +3247,7 @@ test("a conflict on the later of two same-id rows lands on that row", async () =
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Save summary/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Save chronicle/ }));
   await screen.findByText(/One proposed change no longer matches/);
 
   fireEvent.click(screen.getByRole("button", { name: /Merge stored The Pact/ }));
@@ -3175,7 +3256,7 @@ test("a conflict on the later of two same-id rows lands on that row", async () =
   const boxes = screen.getAllByLabelText("After The Pact — lore");
   expect((boxes[0] as HTMLTextAreaElement).value).toBe("Signed at dusk.\n\nBroken by morning.");
   expect((boxes[1] as HTMLTextAreaElement).value).toBe("Witnessed by the watch.\n\nSealed at noon.");
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
   expect((api.saveChronicle as any).mock.calls[1][2].edits.map((e: any) => e.resolve))
     .toEqual([undefined, "merge"]);
@@ -3192,13 +3273,13 @@ test("a row that moves again after being answered comes back for a second answer
                             + "shown is not what is stored now",
                     merged: "Rewritten by hand.\n\nBroken by morning." }] }));
 
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
 
   expect(await screen.findByText(/changed again after you answered/)).toBeTruthy();
   expect(screen.getByText("Rewritten by hand.")).toBeTruthy();
   // answering again re-stamps the snapshot with what is on screen NOW
   fireEvent.click(screen.getByRole("button", { name: /Replace stored The Pact/ }));
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(3));
   expect((api.saveChronicle as any).mock.calls[2][2].edits).toEqual([
     expect.objectContaining({ resolve: "replace", resolve_from: "Rewritten by hand." })]);
@@ -3209,7 +3290,7 @@ test("Merge prefills the editable text with the server's draft", async () => {
   fireEvent.click(screen.getByRole("button", { name: /Merge stored The Pact/ }));
   expect(screen.getByLabelText("After The Pact — lore")).toHaveValue(
     "Witnessed by the watch.\n\nBroken by morning.");
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
   expect((api.saveChronicle as any).mock.calls[1][2].edits).toEqual([
     expect.objectContaining({ id: "lore:the-pact", resolve: "merge",
@@ -3221,7 +3302,7 @@ test("Keep stored drops the row from the batch entirely", async () => {
   fireEvent.click(screen.getByRole("button", { name: /Keep stored The Pact/ }));
   expect(screen.queryByText("Witnessed by the watch.")).toBeNull();       // answered
   expect(screen.queryByText(/no longer match/)).toBeNull();               // and counted as such
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
   expect((api.saveChronicle as any).mock.calls[1][2].edits).toEqual([]);
 });
@@ -3245,20 +3326,23 @@ test("a staged dossier is editable and sent with the save", async () => {
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
   const ta = await screen.findByLabelText("After Seraphine — campaign dossier");
   fireEvent.change(ta, { target: { value: "Seraphine rides ahead." } });
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
     expect.objectContaining({ edits: [expect.objectContaining({
       id: "dossier:seraphine", after: "Seraphine rides ahead." })] })));
 });
 
-test("unchecking an edit excludes it from the save", async () => {
+test("rejecting an edit excludes it from the save", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-  fireEvent.click(await screen.findByLabelText("Approve Seraphine — current state"));
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  // Rejecting is a verdict now, not the absence of a tick: the footer counts
+  // what is still unjudged, so "I looked at this and said no" has to be
+  // something the reviewer can actually say.
+  fireEvent.click(await screen.findByLabelText("Reject Seraphine — current state"));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
     expect.objectContaining({ edits: [] })));
 });
@@ -3283,7 +3367,7 @@ test("character_state row renders a multi-section knowledge body in its textarea
   const ta = await screen.findByLabelText("After Seraphine — current state");
   expect((ta as HTMLTextAreaElement).value).toContain("## Knows");
   expect((ta as HTMLTextAreaElement).value).toContain("map is fake");
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
     expect.objectContaining({ edits: [expect.objectContaining({
       id: "character_state:seraphine", after: "## Current state\nHurt.\n\n## Knows\nmap is fake" })] })));
@@ -3309,7 +3393,7 @@ test("plot rows are editable and sent with payload on save", async () => {
   const ta = await screen.findByLabelText("After The map — advanced");
   expect((ta as HTMLTextAreaElement).value).toBe("It is a forgery.");
   fireEvent.change(ta, { target: { value: "It is a clever forgery." } });
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
     expect.objectContaining({ edits: expect.arrayContaining([
       expect.objectContaining({ id: "plot:the-map", after: "It is a clever forgery.",
@@ -3358,7 +3442,7 @@ test("new_character proposal renders editable card and provenance fields and sav
   fireEvent.change(evidence, { target: { value: "Bram warned the party away from the pier." } });
   fireEvent.change(confidence, { target: { value: "sketched" } });
   fireEvent.change(questions, { target: { value: "Who pays Bram for rumors?" } });
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
     expect.objectContaining({ edits: [expect.objectContaining({
       id: "new_character:old-bram",
@@ -3389,7 +3473,7 @@ test("new_location shows the setting checkbox only when the scene has no locatio
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
   const setting = await screen.findByLabelText("This is where the scene happened New location — The Crypt");
   fireEvent.click(setting);
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
     expect.objectContaining({ edits: [expect.objectContaining({
       payload: expect.objectContaining({ current_setting: true }) })] })));
@@ -3436,7 +3520,7 @@ test("relationship rows are read-only and sent with payload on save", async () =
   await screen.findByText("Ann → Bo");
   expect(screen.queryByLabelText("After Ann → Bo")).toBeNull();
   expect(screen.getByText(/trust 4, affection 3, tension 1/)).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
     expect.objectContaining({ edits: expect.arrayContaining([
       expect.objectContaining({ id: "feeling:characters:a->characters:b",
@@ -3572,16 +3656,16 @@ test("unapproved non-sheet rows survive Retry validation without duplicating", a
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
   await screen.findByText("Mechanics validation failed: boom");
-  const checkbox = screen.getByLabelText(`Approve ${LORE_EDIT.label}`) as HTMLInputElement;
-  expect(checkbox.checked).toBe(true);
-  fireEvent.click(checkbox);
-  expect(checkbox.checked).toBe(false);
+  expect(cardFor(/Old Dock/)).toHaveClass("approved");
+  fireEvent.click(screen.getByLabelText(`Reject ${LORE_EDIT.label}`));
+  expect(cardFor(/Old Dock/)).not.toHaveClass("approved");
   fireEvent.click(screen.getByRole("button", { name: /Retry validation/ }));
   await waitFor(() => expect(screen.queryByText(/Mechanics validation failed/)).toBeNull());
-  expect(await screen.findByText("Mara — HP")).toBeInTheDocument();
-  const loreCheckboxes = screen.getAllByLabelText(`Approve ${LORE_EDIT.label}`);
-  expect(loreCheckboxes).toHaveLength(1);
-  expect((loreCheckboxes[0] as HTMLInputElement).checked).toBe(false);
+  showProposal(() => screen.queryByText("Mara — HP"));
+  expect(screen.getByText("Mara — HP")).toBeInTheDocument();
+  showProposal(() => screen.queryByLabelText(`Reject ${LORE_EDIT.label}`));
+  expect(screen.getAllByLabelText(`Reject ${LORE_EDIT.label}`)).toHaveLength(1);
+  expect(cardFor(/Old Dock/)).not.toHaveClass("approved");
 });
 
 test("degraded mechanics shows a notice listing dropped findings", async () => {
@@ -3656,8 +3740,11 @@ const CUT_DOSSIERS = { status: "failed",
   reason: "the absorb time budget ran out before any dossier could be prepared",
   proposed: [], failed: [], skipped: ["winifred"],
   attempted: false, budget_exhausted: true };
-const absorbCutShortOnDossiers = () =>
-  absorbWithPhases(phasesFor({ dossiers: CUT_DOSSIERS }), { dossiers: CUT_DOSSIERS });
+/** `over` folds in another phase's block, for the tests that need a second
+ *  retry on the same review to fail over the first. */
+const absorbCutShortOnDossiers = (over: any = {}) =>
+  absorbWithPhases(phasesFor({ dossiers: CUT_DOSSIERS, ...over }),
+                   { dossiers: CUT_DOSSIERS, ...over });
 
 test("a cut-short dossier phase offers Retry dossiers; it stages the rows and clears the notice",
      async () => {
@@ -3722,7 +3809,7 @@ test("releasing a review aborts the retry request, not just its answer", async (
   await waitFor(() => expect(signal).toBeDefined());
   expect(signal!.aborted).toBe(false);
 
-  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel absorb" }));
 
   await waitFor(() => expect(signal!.aborted).toBe(true));
 });
@@ -3742,7 +3829,7 @@ test("cancelling a review takes the scoped retry failure with it", async () => {
   // the reader can no longer see or repeat.
   await failedDossierRetry();
 
-  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel absorb" }));
 
   await waitFor(() => expect(screen.queryByText("dossier retry blew up")).toBeNull());
 });
@@ -3752,7 +3839,7 @@ test("saving a review takes the scoped retry failure with it", async () => {
   // failure of one of its steps must not outlive it either.
   await failedDossierRetry();
 
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
 
   await waitFor(() => expect(screen.queryByText("dossier retry blew up")).toBeNull());
 });
@@ -3770,8 +3857,10 @@ test("an absorb that lands after a campaign switch is not installed", async () =
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Link to="/campaigns/other">switch campaign</Link>
-      {playRoutes()}
+      {withPalette(<>
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
   fireEvent.click(await screen.findByRole("button", { name: "End scene" }));
@@ -3800,14 +3889,16 @@ test("an absorb that lands after a campaign switch is not installed", async () =
   // *value*, which `queryByText` cannot see — an earlier draft of this test
   // passed with the guard removed for exactly that reason.
   expect(screen.queryByText("Review scene summary")).toBeNull();
-  expect(screen.queryByRole("button", { name: /Save summary/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Save chronicle/ })).toBeNull();
 });
 
-test("End scene stops a pending retry before starting the absorb that replaces it", async () => {
-  // End scene stays enabled during a retry on purpose — a wedged retry on an
-  // unbounded budget is exactly when it is needed. So it has to stop that retry
-  // itself: the review it belongs to is about to be discarded, and leaving it up
-  // runs two expensive pipelines over the same scene at once.
+test("Cancel absorb stops a pending retry, and End scene is not there to race it", async () => {
+  // End scene used to sit beside the open review, one mis-click from discarding
+  // every proposal already judged and starting a second expensive pipeline over
+  // the same scene. The review replaces the scene now (4c), so that bar is gone
+  // and Cancel is the way out — which still has to stop the retry it leaves
+  // behind, for the reason End scene did: a wedged retry on an unbounded budget
+  // is exactly when the reader needs out.
   absorbCutShortOnDossiers();
   let signal: AbortSignal | undefined;
   (api.retryDossiers as any).mockImplementation((_c: string, _s: string, sig: AbortSignal) => {
@@ -3819,12 +3910,13 @@ test("End scene stops a pending retry before starting the absorb that replaces i
   await waitFor(() => expect(signal).toBeDefined());
   (api.absorbScene as any).mockClear();
 
-  fireEvent.click(screen.getByRole("button", { name: "End scene" }));
+  expect(screen.queryByRole("button", { name: "End scene" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /Cancel absorb/ }));
 
-  // Aborted, and aborted BEFORE the replacement absorb went out — the ordering
-  // is the point, not just that it happens eventually.
   expect(signal!.aborted).toBe(true);
-  expect(api.absorbScene).toHaveBeenCalled();
+  // And nothing was absorbed on the way out — Cancel discards, it does not
+  // re-run the pipeline the way End scene would have.
+  expect(api.absorbScene).not.toHaveBeenCalled();
 });
 
 test("leaving the campaign section aborts a retry that is still running", async () => {
@@ -3858,8 +3950,10 @@ test("a scoped retry failure does not follow the reader into another campaign", 
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Link to="/campaigns/other">switch campaign</Link>
-      {playRoutes()}
+      {withPalette(<>
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
   await screen.findByText("hi");
@@ -3887,7 +3981,7 @@ test("cancelling a review leaves an unrelated banner standing", async () => {
   fireEvent.keyDown(input, { key: "Enter" });
   await screen.findByText(/could not be refreshed/);
 
-  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel absorb" }));
 
   await waitFor(() => expect(screen.queryByText("Review scene summary")).toBeNull());
   expect(screen.getByText(/could not be refreshed/)).toBeInTheDocument();
@@ -3908,15 +4002,20 @@ test("non-dossier rows survive Retry dossiers with their approval intact", async
   await openAbsorb();
 
   await screen.findByText(/No NPC dossier was prepared/);
-  const checkbox = screen.getByLabelText(`Approve ${LORE_EDIT.label}`) as HTMLInputElement;
-  fireEvent.click(checkbox);                       // the reviewer rejects it
-  expect(checkbox.checked).toBe(false);
+  fireEvent.click(screen.getByLabelText(`Reject ${LORE_EDIT.label}`));   // the reviewer says no
+  expect(cardFor(/Old Dock/)).not.toHaveClass("approved");
 
   fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
-  expect(await screen.findByText("Winifred — campaign dossier")).toBeInTheDocument();
-  const lore = screen.getAllByLabelText(`Approve ${LORE_EDIT.label}`);
+  // The retry stages the dossier row asynchronously; wait for the column to
+  // grow its drawer before hunting through the drawers for it.
+  await waitFor(() => {
+    showProposal(() => screen.queryByText("Winifred — campaign dossier"));
+    expect(screen.getByText("Winifred — campaign dossier")).toBeInTheDocument();
+  });
+  showProposal(() => screen.queryByLabelText(`Reject ${LORE_EDIT.label}`));
+  const lore = screen.getAllByLabelText(`Reject ${LORE_EDIT.label}`);
   expect(lore).toHaveLength(1);                    // not duplicated by the rebuild
-  expect((lore[0] as HTMLInputElement).checked).toBe(false);
+  expect(cardFor(/Old Dock/)).not.toHaveClass("approved");
 });
 
 test("a retry that fails for an NPC keeps that NPC's proposal from the first pass", async () => {
@@ -3945,6 +4044,7 @@ test("a retry that fails for an NPC keeps that NPC's proposal from the first pas
 
   expect(await screen.findByText("Winifred — campaign dossier")).toBeInTheDocument();
   // mara was not re-proposed, so her first-pass row stands rather than vanishing
+  showProposal(() => screen.queryByText("Mara — campaign dossier"));
   expect(screen.getByText("Mara — campaign dossier")).toBeInTheDocument();
 });
 
@@ -3992,9 +4092,9 @@ test("a dossier retry that lands after its review is gone leaves the new review 
 
   // …the reviewer gives up on this one (Cancel clears the review) and absorbs
   // the next scene instead
-  fireEvent.click(screen.getByRole("button", { name: /^Cancel$/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Cancel absorb$/ }));
   await waitFor(() => expect(screen.queryByText("Review scene summary")).toBeNull());
-  fireEvent.click(screen.getByText(/Two/));
+  await openScene(/Two/);
   await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s2", { limit: 60 }));
   (api.absorbScene as any).mockResolvedValue({
     one_line: "second", summary: "s", keywords: [], timeline_events: [], cast: [],
@@ -4099,7 +4199,7 @@ test("an abandoned dossier retry that rejects does not drop a banner on what rep
 
   await screen.findByText(/No NPC dossier was prepared/);
   fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
-  fireEvent.click(screen.getByRole("button", { name: /^Cancel$/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Cancel absorb$/ }));
   await waitFor(() => expect(screen.queryByText("Review scene summary")).toBeNull());
 
   // flushed inside act, so the rejection is fully handled before the assertion
@@ -4109,29 +4209,33 @@ test("an abandoned dossier retry that rejects does not drop a banner on what rep
   expect(screen.queryByText("dossier retry blew up")).toBeNull();
 });
 
-test("starting a dossier retry leaves an unrelated error banner alone", async () => {
-  // The banner is global, the reviews are not: a review survives a scene
-  // switch, so a chat failure raised elsewhere can be on screen while this
-  // review's controls still are. Clearing it here would also remove its
-  // generate-a-reply Retry, which IS the right recovery for that one.
-  absorbCutShortOnDossiers();
-  (api.chat as any).mockRejectedValueOnce({ detail: "the model fell over" });
+test("starting a dossier retry leaves another retry's error banner alone", async () => {
+  // The banner is global; the failures it carries are not interchangeable, which
+  // is what `from` tags them for. One retry clearing the banner unconditionally
+  // would erase the OTHER retry's failure and leave the reviewer believing that
+  // phase came back clean.
+  //
+  // Raised off the audit retry rather than off the composer: the composer
+  // belongs to the scene, and the review replaces the scene now (4c), so a chat
+  // error can no longer be raised from underneath an open review at all. Two
+  // review-scoped retries failing over each other is the same invariant and is
+  // the shape it actually takes on this screen.
+  absorbCutShortOnDossiers({
+    mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [],
+                 attempted: true, budget_exhausted: false },
+  });
+  (api.retryAudit as any).mockRejectedValue({ detail: "the audit fell over" });
   (api.retryDossiers as any).mockReturnValue(new Promise(() => {}));
   await openAbsorb();
 
   await screen.findByText(/No NPC dossier was prepared/);
-  // the composer, explicitly: with the review panel open, the first textbox on
-  // the page is its summary field
-  fireEvent.change(screen.getByPlaceholderText(/Speak your intent/), 
-                   { target: { value: "Go on." } });
-  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
-  await screen.findByText("the model fell over");
+  fireEvent.click(screen.getByRole("button", { name: /Retry validation/ }));
+  await screen.findByText("the audit fell over");
 
   fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
 
   // still there, and still offering the recovery that belongs to it
-  await waitFor(() => expect(screen.getByText("the model fell over")).toBeInTheDocument());
-  expect(screen.getByRole("button", { name: /^Retry$/ })).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByText("the audit fell over")).toBeInTheDocument());
 });
 
 test("switching campaigns discards the open review rather than repointing it", async () => {
@@ -4149,8 +4253,10 @@ test("switching campaigns discards the open review rather than repointing it", a
   absorbCutShortOnDossiers();
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Link to="/campaigns/other">to the other campaign</Link>
-      {playRoutes()}
+      {withPalette(<>
+        <Link to="/campaigns/other">to the other campaign</Link>
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
   await screen.findByText("hi");
@@ -4192,7 +4298,7 @@ test("cancelling a review frees the next review's Retry dossiers button", async 
   fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
   await screen.findByRole("button", { name: /Retrying…/ });
 
-  fireEvent.click(screen.getByRole("button", { name: /^Cancel$/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Cancel absorb$/ }));
   await waitFor(() => expect(screen.queryByText("Review scene summary")).toBeNull());
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
 
@@ -4212,7 +4318,7 @@ test("a save latches the scoped retries, and a retry latches the save", async ()
   await openAbsorb();
 
   await screen.findByText(/No NPC dossier was prepared/);
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() =>
     expect(screen.getByRole("button", { name: /Retry dossiers/ })).toBeDisabled());
 
@@ -4229,10 +4335,10 @@ test("a pending dossier retry latches Save summary", async () => {
   fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
 
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: /Save summary/ })).toBeDisabled());
+    expect(screen.getByRole("button", { name: /Save chronicle/ })).toBeDisabled());
   // …but Cancel stays live: the retry runs on the absorb budget, which is
   // unbounded at 0, so this is the only way out of a request that never answers
-  expect(screen.getByRole("button", { name: /^Cancel$/ })).toBeEnabled();
+  expect(screen.getByRole("button", { name: /^Cancel absorb$/ })).toBeEnabled();
 });
 
 test("a failed dossier retry does not offer the banner's generate-a-reply Retry", async () => {
@@ -4269,7 +4375,7 @@ test("Retry dossiers targets the review's scene, not whichever is on screen", as
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
   await screen.findByText(/No NPC dossier was prepared/);
 
-  fireEvent.click(screen.getByText(/Two/));                        // switch scenes
+  await openScene(/Two/);                        // switch scenes
   await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s2", { limit: 60 }));
   fireEvent.click(screen.getByRole("button", { name: /Retry dossiers/ }));
 
@@ -4456,7 +4562,7 @@ test("Retry validation audits the review's scene, not whichever is on screen", a
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
   await screen.findByText("Review scene summary");
 
-  fireEvent.click(screen.getByText(/Two/));                        // switch scenes
+  await openScene(/Two/);                        // switch scenes
   await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s2", { limit: 60 }));
   fireEvent.click(screen.getByRole("button", { name: /Retry validation/ }));
 
@@ -4524,7 +4630,7 @@ test("renaming the reviewed scene repoints its staged plot edits too", async () 
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
 
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
   const saved = (api.saveChronicle as any).mock.calls[0][2];
   expect(saved.edits[0].payload.scene).toBe("s1-renamed");
@@ -4562,7 +4668,7 @@ test("renaming the reviewed scene repoints a commitment row's conflict basis", a
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
 
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
   const saved = (api.saveChronicle as any).mock.calls[0][2].edits[0];
   expect(saved.payload.scene).toBe("s1-renamed");
@@ -4607,7 +4713,7 @@ test("renaming the reviewed scene repoints an UNANSWERED conflict snapshot", asy
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
   await screen.findByText("Review scene summary");
 
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await screen.findByText(/no longer match(es)? what is stored/i);
 
   fireEvent.click(screen.getByRole("button", { name: /rename/i }));
@@ -4623,7 +4729,7 @@ test("renaming the reviewed scene repoints an UNANSWERED conflict snapshot", asy
 
   // ...and so does what Replace sends as the value they answered over.
   fireEvent.click(screen.getByRole("button", { name: /Replace stored/i }));
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect((api.saveChronicle as any).mock.calls.length).toBe(2));
   const saved = (api.saveChronicle as any).mock.calls[1][2].edits[0];
   expect(saved.resolve_from).toBe(moved);
@@ -4685,7 +4791,7 @@ test("sheet edits render read-only with the note and survive save", async () => 
   expect(screen.getByText("hp 4/10")).toBeInTheDocument();
   expect(screen.getByText("took a hit")).toBeInTheDocument();
   expect(screen.queryByLabelText("After Mara — HP")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
   expect(screen.queryByText(/did not apply/)).toBeNull();
 });
@@ -4708,7 +4814,7 @@ test("failures from save render a notice", async () => {
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
   await screen.findByText("Mara — HP");
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await screen.findByText("1 change did not apply");
   expect(screen.getByText(/Mara — HP/)).toBeInTheDocument();
   expect(screen.getByText("Mara — HP: changed (conflict)")).toBeInTheDocument();
@@ -4736,8 +4842,10 @@ test("an unstamped user line renders the sole player's name", async () => {
     { role: "assistant", content: "She waits.", speaker: "Seraphine Vale" },
   ] });
   renderCampaign();
-  await screen.findByText("Elara Vane");
-  expect(screen.getByText("Seraphine Vale")).toBeInTheDocument();
+  // Scoped to the transcript: the cast column names them both too.
+  const stream = within(await screen.findByTestId("stream"));
+  await stream.findByText("Elara Vane");
+  expect(stream.getByText("Seraphine Vale")).toBeInTheDocument();
 });
 
 test("a stored speaker beats the player-name fallback", async () => {
@@ -4747,8 +4855,9 @@ test("a stored speaker beats the player-name fallback", async () => {
   (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
     { role: "user", content: "spoken as someone else", speaker: "Old Name" }] });
   renderCampaign();
-  await screen.findByText("Old Name");
-  expect(screen.queryByText("Elara Vane")).toBeNull();
+  const stream = within(await screen.findByTestId("stream"));
+  await stream.findByText("Old Name");
+  expect(stream.queryByText("Elara Vane")).toBeNull();
 });
 
 test("after a stream completes the scene is re-fetched", async () => {
@@ -4764,7 +4873,7 @@ test("after a stream completes the scene is re-fetched", async () => {
     onEvent({ delta: "**Grimoire:** Thunder rolls." });
   });
   renderCampaign();
-  await screen.findByText(/01 · Old/);
+  await screen.findByRole("heading", { name: /^Old$/ });
   const ta = screen.getByRole("textbox");
   fireEvent.change(ta, { target: { value: "hello" } });
   fireEvent.keyDown(ta, { key: "Enter" });
@@ -4786,7 +4895,9 @@ test("world name comes from the campaign payload, with no world fetch", async ()
   (api.getCampaign as any).mockResolvedValue({
     meta: { id: "run", name: "Run One", world: "w", world_name: "Saltmarch" }, body: "" });
   renderCampaign();
-  expect(await screen.findByText(/World ▸ Saltmarch/)).toBeInTheDocument();
+  // The column's world-copy link names it — the campaign's own copy, which is
+  // the only world the play view ever reaches.
+  expect(await screen.findByText(/Saltmarch · this campaign/)).toBeInTheDocument();
   expect(api.getWorld).not.toHaveBeenCalled();
 });
 
@@ -4817,8 +4928,9 @@ test("offscreen scene: director composer, Continue button, badges", async () => 
   renderCampaign();
   await screen.findByPlaceholderText(/direct the scene/i);
   expect(screen.getByRole("button", { name: /continue ▶/i })).toBeInTheDocument();
-  // one "Offscreen" chip by the title + one subtitle on the rail row
-  expect(screen.getAllByText("Offscreen")).toHaveLength(2);
+  // one "Offscreen" chip beside the scene title. The rail that carried the
+  // second one is gone.
+  expect(screen.getAllByText("Offscreen")).toHaveLength(1);
 });
 
 test("offscreen scene: empty Continue sends an empty note", async () => {
@@ -4957,8 +5069,10 @@ test("a mechanics save settling after a campaign switch answers for the campaign
   (api.setCampaignModule as any).mockReturnValue(new Promise((r) => { releaseSave = r; }));
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Link to="/campaigns/other">switch campaign</Link>
-      {playRoutes()}
+      {withPalette(<>
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
   await screen.findByText("a reply");
@@ -5208,7 +5322,7 @@ test("selecting a scene re-hydrates a pending roll-proposal record", async () =>
   renderCampaign();
   await screen.findByText("a reply");
   expect(screen.queryByRole("button", { name: "Roll it" })).toBeNull();
-  fireEvent.click(screen.getByText(/Two/));
+  await openScene(/Two/);
   expect(await screen.findByRole("button", { name: "Roll it" })).toBeInTheDocument();
 });
 
@@ -5282,7 +5396,7 @@ test("switching between two scenes that both have pending proposals shows the ne
   renderCampaign();
   await screen.findByText("a reply");
   expect(await screen.findByText(/Vigor \+ Brawl — Mara/)).toBeInTheDocument();
-  fireEvent.click(screen.getByText(/Two/));
+  await openScene(/Two/);
   expect(await screen.findByText(/Wits \+ Stealth — Borys/)).toBeInTheDocument();
   expect(screen.queryByText(/Vigor \+ Brawl — Mara/)).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Roll it" }));
@@ -5296,53 +5410,42 @@ test("switching between two scenes that both have pending proposals shows the ne
     expect.anything());
 });
 
-test("collapsing the scene rail hides it and shows an edge tab; clicking the tab restores it", async () => {
+test("the inspector is a panel behind the composer's link, not a permanent third column", async () => {
+  // It used to be a column that was open by definition. What it answers — what
+  // went into the last prompt and what was dropped to fit — is a question about
+  // a turn, so it belongs beside the control that takes the next one.
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
-  await screen.findByRole("button", { name: "+ New Scene" });
-  fireEvent.click(screen.getByRole("button", { name: /collapse scene list/i }));
-  expect(screen.queryByRole("button", { name: "+ New Scene" })).not.toBeInTheDocument();
-  const tab = screen.getByRole("button", { name: /expand scene list/i });
-  fireEvent.click(tab);
-  await screen.findByRole("button", { name: "+ New Scene" });
-});
-
-test("collapsing the inspector hides it and shows an edge tab; clicking the tab restores it", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  renderCampaign();
-  await screen.findByText("Active characters");
-  fireEvent.click(screen.getByRole("button", { name: /collapse sidebar/i }));
+  await screen.findByRole("heading", { name: /^Old$/ });
   expect(screen.queryByText("Active characters")).not.toBeInTheDocument();
-  const tab = screen.getByRole("button", { name: /expand sidebar/i });
-  fireEvent.click(tab);
-  await screen.findByText("Active characters");
-});
 
-test("rail and inspector collapse state persist across a remount", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  const { unmount } = renderCampaign();
-  await screen.findByRole("button", { name: "+ New Scene" });
-  fireEvent.click(screen.getByRole("button", { name: /collapse scene list/i }));
+  fireEvent.click(screen.getByRole("button", { name: /what the model saw/i }));
   await screen.findByText("Active characters");
-  fireEvent.click(screen.getByRole("button", { name: /collapse sidebar/i }));
-  expect(localStorage.getItem("grimoire.rail.collapsed")).toBe("1");
-  expect(localStorage.getItem("grimoire.inspector.collapsed")).toBe("1");
-  unmount();
-
-  renderCampaign();
-  await screen.findByRole("button", { name: /expand scene list/i }); // rail stayed collapsed
-  await screen.findByRole("button", { name: /expand sidebar/i }); // inspector stayed collapsed too
-  expect(screen.queryByRole("button", { name: "+ New Scene" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /hide what the model saw/i }));
   expect(screen.queryByText("Active characters")).not.toBeInTheDocument();
 });
 
-test("the chrome bar toggles the subheader independently of the topbar toggle", async () => {
+test("the continuity the inspector used to hold is in the column, not behind a toggle", async () => {
+  // Cast, threads and commitments are what the app is for. They are not a
+  // panel any more; nothing has to be reopened to check them.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCast as any).mockResolvedValue([
+    { kind: "characters", id: "aud", role: "npc", name: "Sister Aud" }]);
+  (api.sceneBriefing as any).mockResolvedValue({
+    focus: ["Sister Aud"],
+    plot: [{ id: "t1", title: "The priory's debt", status: "open", last_scene: "iv",
+             latest_beat: "", involves: ["Sister Aud"] }],
+    commitments: [{ id: "c1", title: "The Reeve will call it in", status: "open",
+                    kind: "threat", due: "by the turn of the tide", last_scene: "iv",
+                    latest_beat: "", involves: [] }],
+    relationships: [], last_time: null,
+  });
   renderCampaign();
-  await screen.findByText("Run One");
-  fireEvent.click(screen.getByRole("button", { name: "▴ Bar" }));
-  expect(screen.queryByText("Run One")).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "▾ Bar" }));
-  await screen.findByText("Run One");
+  const column = within(await screen.findByRole("complementary"));
+  await column.findByText("Sister Aud");
+  expect(column.getByText("The priory's debt")).toBeInTheDocument();
+  expect(column.getByText("The Reeve will call it in")).toBeInTheDocument();
+  expect(column.getByText("THREAT")).toHaveClass("alert");
 });
 
 test("the chip names the preset resolved at campaign scope, not a hardcoded Standard", async () => {
@@ -5440,7 +5543,7 @@ test("a voice_drift row is approvable and sent on save (#59)", async () => {
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
   const ta = await screen.findByLabelText("After Seraphine — voice drift");
   expect((ta as HTMLTextAreaElement).value).toContain("never does");
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
     expect.objectContaining({ edits: [expect.objectContaining({ id: "voice_drift:seraphine" })] })));
 });
@@ -5489,7 +5592,7 @@ test("clean and skipped voice phases render no notice (#59)", async () => {
     const view = renderCampaign();
     await screen.findByText("hi");
     fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-    await screen.findByRole("button", { name: /Save summary/ });
+    await screen.findByRole("button", { name: /Save chronicle/ });
     expect(screen.queryByText(/voice check/i)).toBeNull();
     view.unmount();
   }
@@ -5524,7 +5627,7 @@ test("renaming the reviewed scene repoints its staged commitment edits too", asy
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
 
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
   const saved = (api.saveChronicle as any).mock.calls[0][2];
   expect(saved.edits[0].payload.scene).toBe("s1-renamed");
@@ -5559,34 +5662,37 @@ test("renaming the reviewed scene repoints its staged fact edits too", async () 
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
 
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
   const saved = (api.saveChronicle as any).mock.calls[0][2];
   expect(saved.edits[0].payload.scene).toBe("s1-renamed");
   expect(saved.edits[0].before).toBe("active — The bridge stands.");   // untouched
 });
 
-test("the Ledger button opens the continuity ledger", async () => {
-  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
+test("the Ledger is a link to its own route, not a panel over the transcript", async () => {
+  // The ledger became a screen (4e): a table read top to bottom, with
+  // supersession chains that do not fit in a drawer wedged above the scene.
+  (api.campaignProvenance as any).mockResolvedValue({});
   renderCampaign();
-  fireEvent.click(await screen.findByRole("button", { name: "Ledger" }));
-  expect(await screen.findByText(/Nothing on the ledger yet/)).toBeInTheDocument();
-  expect(api.campaignLedger).toHaveBeenCalledWith("run");
+  expect(await screen.findByRole("link", { name: "Ledger" }))
+    .toHaveAttribute("href", "/campaigns/run/ledger");
+  // ...and the play view no longer reads it: that is the ledger route's job now.
+  expect(api.campaignLedger).not.toHaveBeenCalled();
 });
 
-test("renaming a scene re-reads an open ledger", async () => {
-  // Every thread and commitment on the ledger carries the TITLE of the scene
-  // that last moved it, so a rename changes what the route returns — and this
-  // path touches neither of the panel's dependencies otherwise: same campaign,
-  // no absorb saved. Without the revision bump the panel keeps the old title
-  // until the user selects a scene or closes and reopens it.
+test("renaming a scene re-reads the continuity column", async () => {
+  // Every thread and commitment carries the TITLE of the scene that last moved
+  // it, so a rename changes what those reads return — and this path touches
+  // none of their other dependencies: same campaign, no absorb saved. Without
+  // the revision bump the column keeps the old title until the user selects a
+  // scene. (Asserted on the briefing, the continuity read that stayed on this
+  // page when the ledger moved to its own route.)
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
+  (api.campaignProvenance as any).mockResolvedValue({});
   (api.renameScene as any).mockResolvedValue({ id: "s1-renamed", title: "New" });
   renderCampaign();
-  fireEvent.click(await screen.findByRole("button", { name: "Ledger" }));
-  await screen.findByText(/Nothing on the ledger yet/);
-  const before = (api.campaignLedger as any).mock.calls.length;
+  await screen.findByRole("button", { name: /rename/i });
+  const before = (api.sceneBriefing as any).mock.calls.length;
 
   fireEvent.click(screen.getByRole("button", { name: /rename/i }));
   const input = screen.getByDisplayValue("Old");
@@ -5594,22 +5700,22 @@ test("renaming a scene re-reads an open ledger", async () => {
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
   await waitFor(() =>
-    expect((api.campaignLedger as any).mock.calls.length).toBeGreaterThan(before));
+    expect((api.sceneBriefing as any).mock.calls.length).toBeGreaterThan(before));
 });
 
-test("a rename that keeps the scene id still re-reads an open ledger", async () => {
+test("a rename that keeps the scene id still re-reads the continuity column", async () => {
   // A capitalisation or punctuation edit slugs to the same id, so the route
   // returns the scene unchanged — but `meta.title` moved, and the title is
-  // exactly what every ledger row carries. The bump sits ahead of
-  // `adoptSceneId`'s same-id guard for that reason: everything else in that
-  // function is about the id, and this one thing is not.
+  // exactly what those rows carry. The bump sits ahead of `adoptSceneId`'s
+  // same-id guard for that reason: everything else in that function is about
+  // the id, and this one thing is not. Nothing else re-reads here, so this is
+  // the case that isolates the bump.
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
+  (api.campaignProvenance as any).mockResolvedValue({});
   (api.renameScene as any).mockResolvedValue({ id: "s1", title: "OLD" });
   renderCampaign();
-  fireEvent.click(await screen.findByRole("button", { name: "Ledger" }));
-  await screen.findByText(/Nothing on the ledger yet/);
-  const before = (api.campaignLedger as any).mock.calls.length;
+  await screen.findByRole("button", { name: /rename/i });
+  const before = (api.sceneBriefing as any).mock.calls.length;
 
   fireEvent.click(screen.getByRole("button", { name: /rename/i }));
   const input = screen.getByDisplayValue("Old");
@@ -5617,27 +5723,7 @@ test("a rename that keeps the scene id still re-reads an open ledger", async () 
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
   await waitFor(() =>
-    expect((api.campaignLedger as any).mock.calls.length).toBeGreaterThan(before));
-});
-
-test("deleting a scene re-reads an open ledger", async () => {
-  // Same reason as the rename above — the ledger resolves every row against the
-  // scene list — and neither branch of `deleteScene` reaches `selectScene`:
-  // deleting an inactive scene selects nothing, and deleting the last one
-  // clears the view instead.
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
-  vi.spyOn(window, "confirm").mockReturnValue(true);
-  renderCampaign();
-  fireEvent.click(await screen.findByRole("button", { name: "Ledger" }));
-  await screen.findByText(/Nothing on the ledger yet/);
-  const before = (api.campaignLedger as any).mock.calls.length;
-
-  (api.listScenes as any).mockResolvedValue([]);
-  fireEvent.click(screen.getByRole("button", { name: /delete/i }));
-  await waitFor(() => expect(api.deleteScene).toHaveBeenCalled());
-  await waitFor(() =>
-    expect((api.campaignLedger as any).mock.calls.length).toBeGreaterThan(before));
+    expect((api.sceneBriefing as any).mock.calls.length).toBeGreaterThan(before));
 });
 
 // ---- paginated scene history (#94) ----
@@ -5783,7 +5869,7 @@ test("an older page that lands after a scene switch is dropped", async () => {
   renderCampaign();
   await screen.findByText("scene one, newest");
   fireEvent.click(screen.getByRole("button", { name: /load .* older post/i }));
-  fireEvent.click(screen.getByText(/· Second$/));
+  await openScene(/Second/);
   await screen.findByText("scene two");
   releaseOlder!();
   await waitFor(() => expect(screen.getByText("scene two")).toBeInTheDocument());
@@ -5849,87 +5935,53 @@ test("a recovered prompt is never shown against the scene the player moved to", 
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
 
-  fireEvent.click(screen.getByText(/. Later/));          // leave before it fails
-  await waitFor(() => expect(
-    document.querySelector(".row.active .row-name")?.textContent).toMatch(/Later/));
+  await openScene(/Later/);          // leave before it fails
+  // The scene on screen is the transcript's own heading now, not a rail row.
+  const onScreen = () => document.querySelector(".scene-title")?.textContent ?? "";
+  await waitFor(() => expect(onScreen()).toMatch(/Later/));
 
   const wrong: string[] = [];
   fail!();
   for (let i = 0; i < 8; i++) {
     await Promise.resolve();
-    const row = document.querySelector(".row.active .row-name")?.textContent ?? "";
     const composer = (screen.getByRole("textbox") as HTMLTextAreaElement).value;
-    if (composer && !/Old/.test(row)) wrong.push(`${row} | ${composer}`);
+    if (composer && !/Old/.test(onScreen())) wrong.push(`${onScreen()} | ${composer}`);
   }
   expect(wrong).toEqual([]);
 
   // And it is not dropped: it comes back with the scene it was written for.
-  await waitFor(() => expect(
-    document.querySelector(".row.active .row-name")?.textContent).toMatch(/Old/));
+  await waitFor(() => expect(onScreen()).toMatch(/Old/));
   await waitFor(() =>
     expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
 });
 
-test("renaming a scene carries its parked prompt to the new id", async () => {
-  // A scene's id is its filename, so a rename mints a new one. A recovered
-  // prompt parked under the old id is then looked up under the new one, found
-  // missing, and lost when the view unmounts — and it is the only copy of what
-  // the player wrote.
-  //
-  // Built on the retired-read scenario rather than an error frame, because that
-  // is the one that provably leaves the player on the other scene: the error
-  // frame path has `runStream`'s finally pull them back to the turn's scene,
-  // which hands the prompt over before a rename can strand it. A first attempt
-  // written that way passed against the unfixed code.
-  (api.listScenes as any).mockResolvedValue([
-    { id: "s1", title: "Old", model: "", created: "", updated: "" },
-    { id: "s2", title: "Later", model: "", created: "", updated: "" },
-  ]);
-  let releaseVerify: (() => void) | null = null;
-  let loaded = false;
-  (api.getScene as any).mockImplementation(async (_c: string, sid: string) => {
-    if (sid === "s1" && loaded) await new Promise<void>((r) => { releaseVerify = r; });
-    loaded = true;
-    return { meta: {}, total: 0, messages: [] };
-  });
-  (api.chat as any).mockImplementation(async () => {
-    const err: Error & { beforeResponse?: boolean } = new Error("Failed to fetch");
-    err.beforeResponse = true;
-    throw err;
-  });
+test("renaming the scene on screen does not clear the composer", async () => {
+  // `adoptSceneId` re-keys every piece of client state a rename invalidates,
+  // including a prompt parked under the old id. That parked case used to be
+  // reachable directly — a prompt parked under s1 while the reader sat on s2,
+  // then s1 renamed from the rail — and the rail is gone: rename belongs to the
+  // scene on screen, and opening a scene is what hands its parked prompt back.
+  // The map re-key is defensive now; what a player can still hit is this, the
+  // invariant it was protecting. The other two re-keys have their own tests
+  // ("a seeded premise survives the rename from the first date set" and the
+  // reroll-Retry pair below).
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.renameScene as any).mockResolvedValue({ id: "s1-renamed" });
   renderCampaign();
   const ta = await screen.findByRole("textbox");
   fireEvent.change(ta, { target: { value: "I draw my blade." } });
-  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
-  await waitFor(() => expect(releaseVerify).not.toBeNull());
-  fireEvent.click(screen.getByText(/. Later/));
-  releaseVerify!();
-  await new Promise((r) => setTimeout(r, 60));
-  expect(screen.getByRole("textbox")).toHaveValue("");   // parked under s1
 
-  // Rename the scene it is parked under, while sitting on another one.
-  (api.listScenes as any).mockResolvedValue([
-    { id: "s1-renamed", title: "Renamed", model: "", created: "", updated: "" },
-    { id: "s2", title: "Later", model: "", created: "", updated: "" },
-  ]);
-  // By row, not by index — and only once the scene lock has let go. s1 is still
-  // `streamingId` while the flush is outstanding, so its Rename is disabled;
-  // that is the lock doing its job, and the rename this test needs comes after.
-  const oldRename = () => Array.from(document.querySelectorAll(".row"))
-    .find((r) => /Old/.test(r.textContent ?? ""))!
-    .querySelector('button[aria-label="Rename"]') as HTMLButtonElement;
-  await waitFor(() => expect(oldRename()).not.toBeDisabled(), { timeout: 15000 });
-  fireEvent.click(oldRename());
+  (api.listScenes as any).mockResolvedValue(
+    [{ id: "s1-renamed", title: "Renamed", model: "", created: "", updated: "" }]);
+  fireEvent.click(screen.getByRole("button", { name: /rename scene/i }));
   const nameInput = screen.getByDisplayValue("Old");
   fireEvent.change(nameInput, { target: { value: "Renamed" } });
   fireEvent.keyDown(nameInput, { key: "Enter" });
-  await waitFor(() => expect(screen.getByText(/. Renamed/)).toBeInTheDocument());
-
-  // Re-opening it under its new id still hands the prompt back.
-  fireEvent.click(screen.getByText(/. Renamed/));
   await waitFor(() =>
-    expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
+    expect(screen.getByRole("heading", { name: /Renamed/ })).toBeInTheDocument());
+
+  // The only copy of what the player wrote is in that box.
+  expect(screen.getByRole("textbox")).toHaveValue("I draw my blade.");
 });
 
 test("renaming the scene keeps a failed reroll's Retry a reroll", async () => {
@@ -5960,7 +6012,7 @@ test("renaming the scene keeps a failed reroll's Retry a reroll", async () => {
   // Rename the active scene. The banner stays up, so Retry is still offered.
   (api.listScenes as any).mockResolvedValue(
     [{ id: "s1-renamed", title: "Renamed", model: "", created: "", updated: "" }]);
-  const rename = () => document.querySelector('button[aria-label="Rename"]') as HTMLButtonElement;
+  const rename = () => screen.getByRole("button", { name: /rename scene/i });
   await waitFor(() => expect(rename()).not.toBeDisabled(), { timeout: 15000 });
   fireEvent.click(rename());
   const nameInput = screen.getByDisplayValue("Old");
@@ -6009,30 +6061,37 @@ async function openRoutedReview(review: any = ROUTED_REVIEW) {
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-  await screen.findByText("Proposed changes");
+  await screen.findByText(/still to judge/i);
 }
 
-test("a low-confidence proposal is collapsed and starts unapproved", async () => {
+test("a low-confidence proposal is filed apart and starts unapproved", async () => {
   await openRoutedReview();
-  // Out of the list, but counted out loud — a withheld approval the reviewer
-  // cannot see is a silent drop, which is the failure this must not become.
+  // Out of the store's drawer, but counted out loud in the column — a withheld
+  // approval the reviewer cannot see is a silent drop, which is the failure
+  // this must not become. The count in the column is what says so now; it used
+  // to be a collapsed "Show 1 low-confidence change" section nested inside
+  // another drawer, which said it less plainly.
+  const column = reviewColumn();
+  expect(column.getByRole("button", { name: /low confidence/i })).toHaveTextContent("1");
+  // It is in no store drawer — being low is what files it apart.
+  expect(column.queryByRole("button", { name: /plot & commitments/i })).toBeNull();
+  fireEvent.click(column.getByRole("button", { name: /character state/i }));
   expect(screen.queryByLabelText(/Approve The forged map/)).toBeNull();
-  const toggle = screen.getByRole("button", { name: /Show 1 low-confidence change/ });
-  expect(toggle.getAttribute("aria-expanded")).toBe("false");
 
-  fireEvent.click(toggle);
-  const box = screen.getByLabelText(/Approve The forged map/) as HTMLInputElement;
-  expect(box.checked).toBe(false);
+  fireEvent.click(column.getByRole("button", { name: /low confidence/i }));
+  expect(cardFor(/The forged map/)).not.toHaveClass("approved");
+  expect(screen.getByText(/transcript does not clearly support/i)).toBeInTheDocument();
+
   // ...and the other two are pre-approved exactly as every row was before.
-  expect((screen.getByLabelText(/Approve Seraphine/) as HTMLInputElement).checked).toBe(true);
-  expect((screen.getByLabelText(/Approve The Pact/) as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(column.getByRole("button", { name: /character state/i }));
+  expect(cardFor(/Seraphine/)).toHaveClass("approved");
 });
 
-test("a low-confidence proposal the reviewer ticks is saved like any other", async () => {
+test("a low-confidence proposal the reviewer approves is saved like any other", async () => {
   await openRoutedReview();
-  fireEvent.click(screen.getByRole("button", { name: /Show 1 low-confidence change/ }));
+  fireEvent.click(reviewColumn().getByRole("button", { name: /low confidence/i }));
   fireEvent.click(screen.getByLabelText(/Approve The forged map/));
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
   const sent = (api.saveChronicle as any).mock.calls[0][2].edits;
   expect(sent.map((e: any) => e.id)).toEqual(
@@ -6041,7 +6100,7 @@ test("a low-confidence proposal the reviewer ticks is saved like any other", asy
 
 test("an unticked low-confidence proposal is never sent", async () => {
   await openRoutedReview();
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
   expect((api.saveChronicle as any).mock.calls[0][2].edits.map((e: any) => e.id))
     .toEqual(["character_state:seraphine", "lore:the-pact"]);
@@ -6049,12 +6108,16 @@ test("an unticked low-confidence proposal is never sent", async () => {
 
 test("each routed row shows its band, why it was banded, and its citation", async () => {
   await openRoutedReview();
+  const column = reviewColumn();
+  fireEvent.click(column.getByRole("button", { name: /character state/i }));
   expect(screen.getByText(/high · narrated/)).toBeTruthy();
-  expect(screen.getByText(/medium · said by someone else/)).toBeTruthy();
   expect(screen.getByText("She pressed a hand to her side.")).toBeTruthy();
   expect(screen.getByText(/— Grimoire/)).toBeTruthy();
 
-  fireEvent.click(screen.getByRole("button", { name: /Show 1 low-confidence/ }));
+  fireEvent.click(column.getByRole("button", { name: /lore & cards/i }));
+  expect(screen.getByText(/medium · said by someone else/)).toBeTruthy();
+
+  fireEvent.click(column.getByRole("button", { name: /low confidence/i }));
   expect(screen.getByText(/low · no one speaker matches/)).toBeTruthy();
 });
 
@@ -6065,13 +6128,13 @@ test("rows the extraction did not stage carry no band and stay pre-approved", as
     { id: "dossier:mara", kind: "dossier", target: { kind: "characters", id: "mara" },
       label: "Mara — dossier", field: "body", before: "", after: "A fortune-teller.",
       authored: false }] });
-  expect((screen.getByLabelText(/Approve Mara/) as HTMLInputElement).checked).toBe(true);
+  expect(cardFor(/Mara/)).toHaveClass("approved");
   expect(screen.queryByText(/low-confidence/)).toBeNull();
 });
 
-test("a conflict on a collapsed row opens the section so it can be answered", async () => {
-  // The save is refused whole. Left collapsed, the panel would insist something
-  // is unanswered with nothing on screen to answer.
+test("a conflict on a row in another drawer opens that drawer so it can be answered", async () => {
+  // The save is refused whole. Left in a drawer nobody is looking at, the panel
+  // would insist something is unanswered with nothing on screen to answer.
   const { ApiError } = await vi.importActual<typeof import("../api/client")>("../api/client");
   (api.saveChronicle as any).mockRejectedValueOnce(new ApiError(
     409, "some proposed changes no longer match what is stored", "edit_conflicts",
@@ -6081,12 +6144,14 @@ test("a conflict on a collapsed row opens the section so it can be answered", as
                     reason: "this plot thread changed since the scene was absorbed",
                     mergeable: false, merged: "Somebody forged it.", index: 2 }] }));
   await openRoutedReview();
-  fireEvent.click(screen.getByRole("button", { name: /Show 1 low-confidence/ }));
+  fireEvent.click(reviewColumn().getByRole("button", { name: /low confidence/i }));
   fireEvent.click(screen.getByLabelText(/Approve The forged map/));
-  fireEvent.click(screen.getByRole("button", { name: /Hide 1 low-confidence/ }));
+  // …then leave that drawer, so the conflicted row is off screen when the save
+  // comes back refusing the whole batch.
+  fireEvent.click(reviewColumn().getByRole("button", { name: /character state/i }));
   expect(screen.queryByLabelText(/Approve The forged map/)).toBeNull();
 
-  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save chronicle/ }));
   await screen.findByText(/no longer match/);
   expect(screen.getByRole("button", { name: /Keep stored The forged map/ })).toBeTruthy();
 });
@@ -6316,7 +6381,7 @@ test("clicking a scene in the rail puts it in the URL", async () => {
   renderCampaign();
   await screen.findByText("transcript of s1");
 
-  fireEvent.click(screen.getByText(/The Saltmarch Gate/));
+  await openScene(/The Saltmarch Gate/);
 
   await screen.findByText("transcript of s2");
   expect(here()).toBe("/campaigns/run/scenes/s2");
@@ -6330,9 +6395,11 @@ test("a scene id that no longer exists falls back to the first scene", async () 
   transcriptsPerScene();
   render(
     <MemoryRouter initialEntries={["/worlds", "/campaigns/run/scenes/003--gone"]}>
-      <Here />
-      <Back />
-      {playRoutes()}
+      {withPalette(<>
+        <Here />
+        <Back />
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
 
@@ -6349,7 +6416,7 @@ test("a campaign with no scenes at all leaves the URL alone", async () => {
   (api.listScenes as any).mockResolvedValue([]);
   renderCampaign();
 
-  await screen.findByText(/‹ Campaigns/i);
+  await screen.findByText("Run One");
   expect(here()).toBe("/campaigns/run");
   expect(api.getScene).not.toHaveBeenCalled();
 });
@@ -6359,16 +6426,18 @@ test("renaming the active scene carries the URL to its new id, replacing the old
   (api.renameScene as any).mockResolvedValue({ id: "s1-renamed" });
   render(
     <MemoryRouter initialEntries={["/worlds", "/campaigns/run"]}>
-      <Here />
-      <Back />
-      {playRoutes()}
+      {withPalette(<>
+        <Here />
+        <Back />
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
   await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1"));
 
   (api.listScenes as any).mockResolvedValue(
     [{ id: "s1-renamed", title: "Renamed", model: "", created: "", updated: "" }]);
-  fireEvent.click(document.querySelector('button[aria-label="Rename"]') as HTMLButtonElement);
+  fireEvent.click(screen.getByRole("button", { name: /rename scene/i }));
   const nameInput = screen.getByDisplayValue("Old");
   fireEvent.change(nameInput, { target: { value: "Renamed" } });
   fireEvent.keyDown(nameInput, { key: "Enter" });
@@ -6393,7 +6462,7 @@ test("renaming a scene that is not first in the rail keeps the reader on it", as
   renderCampaign("/campaigns/run/scenes/s2");
   await screen.findByText("transcript of s2");
 
-  fireEvent.click(document.querySelectorAll('button[aria-label="Rename"]')[1] as HTMLButtonElement);
+  fireEvent.click(screen.getByRole("button", { name: /rename scene/i }));
   const box = screen.getByDisplayValue("The Saltmarch Gate");
   fireEvent.change(box, { target: { value: "Renamed" } });
   fireEvent.keyDown(box, { key: "Enter" });
@@ -6423,8 +6492,7 @@ test("deleting the scene on screen moves the URL to what is left", async () => {
   await screen.findByText("transcript of s2");
 
   (api.listScenes as any).mockResolvedValue([TWO_SCENES[0]]);
-  const rows = document.querySelectorAll('button[aria-label="Delete"]');
-  fireEvent.click(rows[1] as HTMLButtonElement);   // s2's row
+  fireEvent.click(screen.getByRole("button", { name: /delete scene/i }));   // s2 is on screen
 
   await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1"));
   await screen.findByText("transcript of s1");
@@ -6438,7 +6506,7 @@ test("deleting the last scene drops it from the URL and clears the transcript", 
   await screen.findByText("transcript of s1");
 
   (api.listScenes as any).mockResolvedValue([]);
-  fireEvent.click(document.querySelector('button[aria-label="Delete"]') as HTMLButtonElement);
+  fireEvent.click(screen.getByRole("button", { name: /delete scene/i }));
 
   await waitFor(() => expect(here()).toBe("/campaigns/run"));
   expect(screen.queryByText("transcript of s1")).toBeNull();
@@ -6499,12 +6567,14 @@ test("a scene list arriving after a campaign switch does not strand the view", a
   transcriptsPerScene();
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Here />
-      <Link to="/campaigns/other">switch campaign</Link>
-      {playRoutes()}
+      {withPalette(<>
+        <Here />
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
-  await screen.findByText(/‹ Campaigns/i);
+  await screen.findByText("Run One");
 
   fireEvent.click(screen.getByText("switch campaign"));
   await waitFor(() => expect(here()).toBe("/campaigns/other/scenes/b1"));
@@ -6540,14 +6610,16 @@ test("a mutation relist landing after a campaign switch does not strand the view
   (api.renameScene as any).mockResolvedValue({ id: "s1-renamed" });
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Here />
-      <Link to="/campaigns/other">switch campaign</Link>
-      {playRoutes()}
+      {withPalette(<>
+        <Here />
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
   await screen.findByText("transcript of s1");
 
-  fireEvent.click(document.querySelector('button[aria-label="Rename"]') as HTMLButtonElement);
+  fireEvent.click(screen.getByRole("button", { name: /rename scene/i }));
   const box = screen.getByDisplayValue("Old");
   fireEvent.change(box, { target: { value: "Renamed" } });
   fireEvent.keyDown(box, { key: "Enter" });
@@ -6561,9 +6633,12 @@ test("a mutation relist landing after a campaign switch does not strand the view
   landRelist([{ id: "s1-renamed", title: "Renamed", model: "", created: "", updated: "" }]);
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-  // the rail is still B's, and B is still navigable
-  expect(screen.queryByText(/· Renamed$/)).toBeNull();
-  expect(screen.getByText(/· B one$/)).toBeInTheDocument();
+  // the scene list is still B's, and B is still navigable
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  const rows = await screen.findAllByRole("option");
+  const labels = rows.map((r) => r.querySelector(".palette-label")?.textContent);
+  expect(labels).not.toContain("Renamed");
+  expect(labels).toContain("B one");
 });
 
 test("a rename finishing after a campaign switch does not drag the reader back", async () => {
@@ -6578,14 +6653,16 @@ test("a rename finishing after a campaign switch does not drag the reader back",
   (api.renameScene as any).mockImplementation(() => new Promise((res) => { landRename = res; }));
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Here />
-      <Link to="/campaigns/other">switch campaign</Link>
-      {playRoutes()}
+      {withPalette(<>
+        <Here />
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
   await screen.findByText("run/s1");
 
-  fireEvent.click(document.querySelector('button[aria-label="Rename"]') as HTMLButtonElement);
+  fireEvent.click(screen.getByRole("button", { name: /rename scene/i }));
   const box = screen.getByDisplayValue("Old");
   fireEvent.change(box, { target: { value: "Renamed" } });
   fireEvent.keyDown(box, { key: "Enter" });
@@ -6614,7 +6691,7 @@ test("a scene read that fails after the reader moved on does not raise a banner"
   renderCampaign();
   await waitFor(() => expect(api.getScene).toHaveBeenCalled());
 
-  fireEvent.click(screen.getByText(/The Saltmarch Gate/));
+  await openScene(/The Saltmarch Gate/);
   await screen.findByText("transcript of s2");
 
   failFirst(Object.assign(new Error("boom"), { detail: "transcript is not valid UTF-8" }));
@@ -6645,9 +6722,11 @@ test("a turn finishing after a campaign switch does not install its transcript u
       new Promise<void>((res) => { finishTurn = () => { onEvent({ done: true }); res(undefined); }; }));
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Here />
-      <Link to="/campaigns/other">switch campaign</Link>
-      {playRoutes()}
+      {withPalette(<>
+        <Here />
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
   await screen.findByText("run/s1");
@@ -6683,9 +6762,11 @@ test("a scene created just before a campaign switch does not drag the reader bac
   transcriptsPerScene();
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Here />
-      <Link to="/campaigns/other">switch campaign</Link>
-      {playRoutes()}
+      {withPalette(<>
+        <Here />
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
   await screen.findByText("transcript of s1");
@@ -6723,15 +6804,18 @@ test("an older relist cannot restore a row a newer one removed", async () => {
   renderCampaign("/campaigns/run/scenes/s1");
   await screen.findByText("transcript of s1");
 
-  fireEvent.click(document.querySelectorAll('button[aria-label="Rename"]')[0] as HTMLButtonElement);
+  fireEvent.click(await screen.findByRole("button", { name: /rename scene/i }));
   const box = screen.getByDisplayValue("Old");
   fireEvent.change(box, { target: { value: "Renamed" } });
   fireEvent.keyDown(box, { key: "Enter" });
   await waitFor(() => expect(relists).toBe(1));
 
-  // s2 is deleted while the rename's relist is still open
-  fireEvent.click(document.querySelectorAll('button[aria-label="Delete"]')[1] as HTMLButtonElement);
-  await waitFor(() => expect(screen.queryByText(/The Saltmarch Gate/)).toBeNull());
+  // s2 is deleted while the rename's relist is still open. Delete belongs to
+  // the scene on screen now, so this opens it first.
+  await openScene(/The Saltmarch Gate/);
+  fireEvent.click(screen.getByRole("button", { name: /delete scene/i }));
+  await waitFor(() => expect(
+    screen.queryByRole("heading", { name: /The Saltmarch Gate/ })).toBeNull());
 
   // the rename's older answer lands last, still carrying the deleted scene
   landRenameRelist([
@@ -6740,7 +6824,7 @@ test("an older relist cannot restore a row a newer one removed", async () => {
   ]);
   await act(async () => { for (let i = 0; i < 4; i++) await Promise.resolve(); });
 
-  expect(screen.queryByText(/The Saltmarch Gate/)).toBeNull();
+  expect(screen.queryByRole("heading", { name: /The Saltmarch Gate/ })).toBeNull();
 });
 
 test("the first send's new scene does not follow the reader into another campaign", async () => {
@@ -6759,9 +6843,11 @@ test("the first send's new scene does not follow the reader into another campaig
   (api.createScene as any).mockResolvedValue({ id: "s1" });
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Here />
-      <Link to="/campaigns/other">switch campaign</Link>
-      {playRoutes()}
+      {withPalette(<>
+        <Here />
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
   const ta = await screen.findByRole("textbox");
@@ -6806,15 +6892,17 @@ test("a mutation relist in the old campaign cannot retire the new campaign's lis
   (api.renameScene as any).mockImplementation(() => new Promise((res) => { landRenamePut = res; }));
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Here />
-      <Link to="/campaigns/other">switch campaign</Link>
-      {playRoutes()}
+      {withPalette(<>
+        <Here />
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
   await screen.findByText("transcript of s1");
 
   // started in run, while run is still the campaign on screen
-  fireEvent.click(document.querySelector('button[aria-label="Rename"]') as HTMLButtonElement);
+  fireEvent.click(screen.getByRole("button", { name: /rename scene/i }));
   const box = screen.getByDisplayValue("Old");
   fireEvent.change(box, { target: { value: "Renamed" } });
   fireEvent.keyDown(box, { key: "Enter" });
@@ -6853,9 +6941,11 @@ test("a premise generated in one campaign is not offered to another's scene", as
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [] });
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Here />
-      <Link to="/campaigns/other">switch campaign</Link>
-      {playRoutes()}
+      {withPalette(<>
+        <Here />
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
   await screen.findByTestId("cast-panel");
@@ -6937,7 +7027,7 @@ test("a created scene is opened against a list that knows it exists", async () =
   await waitFor(() => expect(fresh).toBe(1));
 
   // …and a rename from the still-interactive rail issues a NEWER read
-  fireEvent.click(document.querySelector('button[aria-label="Rename"]') as HTMLButtonElement);
+  fireEvent.click(screen.getByRole("button", { name: /rename scene/i }));
   const box = screen.getByDisplayValue("Old");
   fireEvent.change(box, { target: { value: "Renamed" } });
   fireEvent.keyDown(box, { key: "Enter" });
@@ -6979,7 +7069,7 @@ test("a superseded relist that FAILS still opens the scene the newer one listed"
   fireEvent.click(screen.getByText("stub-pick"));            // creates s9
   await waitFor(() => expect(fresh).toBe(1));
 
-  fireEvent.click(document.querySelector('button[aria-label="Rename"]') as HTMLButtonElement);
+  fireEvent.click(screen.getByRole("button", { name: /rename scene/i }));
   const box = screen.getByDisplayValue("Old");
   fireEvent.change(box, { target: { value: "Renamed" } });
   fireEvent.keyDown(box, { key: "Enter" });
@@ -7041,7 +7131,7 @@ test("an edit cannot write one scene's index into another's transcript", async (
   // hold s2's read open so the divergence window stays observable
   let landS2: (v: any) => void = () => {};
   (api.getScene as any).mockImplementationOnce(() => new Promise((res) => { landS2 = res; }));
-  fireEvent.click(screen.getByText(/The Saltmarch Gate/));
+  await openScene(/The Saltmarch Gate/);
   await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s2"));
 
   // s1's transcript is still on screen while s2 is the active scene
@@ -7074,9 +7164,11 @@ test("a creation's list failure does not raise a banner in another campaign", as
   transcriptsPerScene();
   render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
-      <Here />
-      <Link to="/campaigns/other">switch campaign</Link>
-      {playRoutes()}
+      {withPalette(<>
+        <Here />
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
     </MemoryRouter>,
   );
   await screen.findByText("transcript of s1");
@@ -7111,7 +7203,7 @@ test("a reroll cannot regenerate a scene whose transcript is not the one on scre
   // hold s2's read open so the divergence window stays observable
   let landS2: (v: any) => void = () => {};
   (api.getScene as any).mockImplementationOnce(() => new Promise((res) => { landS2 = res; }));
-  fireEvent.click(screen.getByText(/The Saltmarch Gate/));
+  await openScene(/The Saltmarch Gate/);
   await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s2"));
 
   // s1's transcript is still rendered while s2 is the active scene
@@ -7163,7 +7255,7 @@ test("a send followed by opening another scene does not expose its controls on t
   // the optimistic post (the composer keeps it too after the failed turn)
   await waitFor(() => expect(screen.getAllByText("and then?").length).toBeGreaterThan(0));
 
-  fireEvent.click(screen.getByText(/The Saltmarch Gate/));
+  await openScene(/The Saltmarch Gate/);
   await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s2"));
 
   // s1's posts are still rendered while s2 is active — no control may act on them
@@ -7209,7 +7301,7 @@ test("sending into a scene that has not loaded yet does not claim the old posts"
   await screen.findByText("s1 replied");
 
   // open s2; its read hangs, so s1's transcript is still what is rendered
-  fireEvent.click(screen.getByText(/The Saltmarch Gate/));
+  await openScene(/The Saltmarch Gate/);
   await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s2"));
   expect(screen.getByText("s1 replied")).toBeInTheDocument();
 
@@ -7228,4 +7320,212 @@ test("sending into a scene that has not loaded yet does not claim the old posts"
     { role: "user", content: "s2 asked" }, { role: "assistant", content: "s2 replied" }] });
   await screen.findByText("s2 replied");
   expect(document.querySelector('button[aria-label^="Edit message"]')).not.toBeNull();
+});
+
+// ---- provenance in the play view (4a) ----
+
+test("a dossier row carries its citation, and hovering it lights the transcript line", async () => {
+  // The claim of the whole screen: every continuity line is something you can
+  // check, and checking it costs nothing you were holding.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCast as any).mockResolvedValue([
+    { kind: "characters", id: "aud", role: "npc", name: "Sister Aud" }]);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "assistant", content: "I'd rather the mud than his company.", speaker: "Sister Aud" },
+    { role: "assistant", content: "The tide had been going out since before dawn." },
+  ] });
+  (api.getCasefile as any).mockResolvedValue({
+    kind: "characters", id: "aud", name: "Sister Aud", version: "v1", role: "npc",
+    scenes: ["s1"], last_seen: "s1",
+    standing: "Guarded. Will not be alone with the Reeve.",
+    knows: "", suspects: "", dossier: "", tagline: "",
+    feels_toward: [], standing_facts: [],
+  });
+  (api.campaignProvenance as any).mockResolvedValue({
+    "characters/aud#current_state": {
+      quote: "I'd rather the mud than his company.", speaker: "Sister Aud",
+      certainty: 0.92, authority: "self", band: "high", scene: "s1",
+      recorded: "2026-08-13T10:00:00Z",
+    },
+  });
+  renderCampaign();
+  const column = within(await screen.findByRole("complementary"));
+  fireEvent.click(await column.findByText("Sister Aud"));
+
+  const marker = await screen.findByRole("button", { name: /^Standing: Cited/ });
+  fireEvent.focus(marker);
+  expect(screen.getByText(/CERTAINTY 0.92/)).toBeInTheDocument();
+
+  // the post the quote came from lights up, and only that one
+  await waitFor(() => expect(document.querySelectorAll(".msg.cited")).toHaveLength(1));
+  expect((document.querySelector(".msg.cited") as HTMLElement).textContent)
+    .toMatch(/rather the mud/);
+
+  fireEvent.blur(marker);
+  await waitFor(() => expect(document.querySelectorAll(".msg.cited")).toHaveLength(0));
+});
+
+test("a campaign whose provenance cannot be read shows uncited rows, not an error", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCast as any).mockResolvedValue([
+    { kind: "characters", id: "aud", role: "npc", name: "Sister Aud" }]);
+  (api.campaignProvenance as any).mockRejectedValue(new Error("boom"));
+  (api.getCasefile as any).mockResolvedValue({
+    kind: "characters", id: "aud", name: "Sister Aud", version: "v1", role: "npc",
+    scenes: ["s1"], last_seen: "s1", standing: "Guarded.",
+    knows: "", suspects: "", dossier: "", tagline: "",
+    feels_toward: [], standing_facts: [],
+  });
+  renderCampaign();
+  const column = within(await screen.findByRole("complementary"));
+  fireEvent.click(await column.findByText("Sister Aud"));
+  expect(await screen.findByRole("button", { name: /^Standing: No citation/ }))
+    .toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+// ---- the absorb review's three panes (4c) ----
+
+test("the review's column counts what is judged and what is left", async () => {
+  await openRoutedReview();
+  const column = reviewColumn();
+  expect(column.getByText("3 edits")).toBeInTheDocument();
+  // Two pre-approved by band, the low one left for a person.
+  expect(column.getByText(/2 approved · 0 rejected · 1 left/)).toBeInTheDocument();
+  expect(screen.getByText(/1 still to judge/i)).toBeInTheDocument();
+});
+
+test("the progress bar fills with work judged, not work approved", async () => {
+  // Rejecting everything is a finished review; a bar that read that as no
+  // progress would be lying about the only thing it measures.
+  await openRoutedReview();
+  const bar = () => reviewColumn().getByRole("img", { name: /of 3 judged/i });
+  expect(bar()).toHaveAccessibleName("2 of 3 judged");
+  fireEvent.click(reviewColumn().getByRole("button", { name: /low confidence/i }));
+  fireEvent.click(screen.getByLabelText(/Reject The forged map/));
+  expect(bar()).toHaveAccessibleName("3 of 3 judged");
+  expect(reviewColumn().getByText(/2 approved · 1 rejected · 0 left/)).toBeInTheDocument();
+});
+
+test("approving a row folds it to a line you can undo, and undoing brings it back", async () => {
+  await openRoutedReview();
+  fireEvent.click(reviewColumn().getByRole("button", { name: /low confidence/i }));
+  fireEvent.click(screen.getByLabelText(/Approve The forged map/));
+
+  // Folded, not hidden: a decision you cannot see is one you cannot revisit.
+  expect(screen.getByText(/APPROVED · The forged map/)).toBeInTheDocument();
+  expect(screen.queryByLabelText(/Reject The forged map/)).toBeNull();
+
+  fireEvent.click(screen.getByLabelText(/Undo The forged map/));
+  expect(screen.getByLabelText(/Reject The forged map/)).toBeInTheDocument();
+});
+
+test("a row that arrived pre-approved is not folded away", async () => {
+  // Rows arrive approved by band. Folding those would hide the bulk of a good
+  // absorb behind an Undo apiece — the collapse clears what you have finished
+  // with, not what you have not started.
+  await openRoutedReview();
+  fireEvent.click(reviewColumn().getByRole("button", { name: /character state/i }));
+  expect(cardFor(/Seraphine/)).toHaveClass("approved");
+  expect(screen.getByLabelText(/Reject Seraphine/)).toBeInTheDocument();
+  expect(screen.queryByText(/APPROVED · Seraphine/)).toBeNull();
+});
+
+test("an uncited row is filed first, bordered in alert, and stamped NO QUOTE", async () => {
+  await openRoutedReview({ ...ROUTED_REVIEW, edits: [
+    { id: "fact:f1", kind: "fact", target: { kind: "fact", id: "f1" },
+      label: "A standing fact", field: "text", before: "", after: "The priory owes the Reeve",
+      authored: false,
+      review: { certainty: 0.4, quote: "", speaker: "", authority: "uncited",
+                score: 0.1, band: "low" } },
+  ] });
+  // It opens there without being asked: an uncited row is the one kind a
+  // reviewer cannot check against anything.
+  expect(reviewColumn().getByRole("button", { name: /uncited/i })).toHaveClass("active");
+  expect(cardFor(/standing fact/)).toHaveClass("uncited");
+  expect(screen.getByText(/NO QUOTE · CERTAINTY 0.40/)).toBeInTheDocument();
+});
+
+test("Approve all cited leaves the uncited rows alone", async () => {
+  // The routing argument in one button: a cited row can be checked later, an
+  // uncited one cannot, so it is the only kind this refuses to answer for.
+  await openRoutedReview({ ...ROUTED_REVIEW, edits: [
+    ROUTED_REVIEW.edits[2],   // low, but cited
+    { id: "fact:f1", kind: "fact", target: { kind: "fact", id: "f1" },
+      label: "A standing fact", field: "text", before: "", after: "The priory owes the Reeve",
+      authored: false,
+      review: { certainty: 0.4, quote: "", speaker: "", authority: "uncited",
+                score: 0.1, band: "low" } },
+  ] });
+  fireEvent.click(screen.getByRole("button", { name: /approve all cited/i }));
+  expect(cardFor(/standing fact/)).not.toHaveClass("approved");
+  fireEvent.click(reviewColumn().getByRole("button", { name: /low confidence/i }));
+  expect(cardFor(/The forged map/)).toHaveClass("approved");
+});
+
+test("a review replaces the scene rather than stacking on top of it", async () => {
+  // It used to be a block pinned to the top of the play view, with the scene
+  // head, the live transcript and the composer still mounted and scrolling on
+  // underneath it — so the review was the top of a page that ran past it, and
+  // End scene sat a mis-click from discarding every proposal already judged.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: "She pressed a hand to her side.", speaker: "Grimoire" },
+  ] });
+  (api.absorbScene as any).mockResolvedValue(ROUTED_REVIEW);
+  renderCampaign();
+  await screen.findByText("hi");
+  // The play view, before: composer, scene actions, the live stream.
+  expect(screen.getByPlaceholderText(/Speak your intent/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText(/still to judge/i);
+
+  // None of it survives into the review.
+  expect(screen.queryByPlaceholderText(/Speak your intent/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "End scene" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Ledger$/ })).toBeNull();
+  expect(screen.queryByTestId("stream")).toBeNull();
+
+  // The transcript is still readable — as the review's third pane, which is a
+  // different thing from the scene being left mounted behind the review.
+  expect(within(screen.getByRole("complementary", { name: /for checking/i }))
+    .getByText("She pressed a hand to her side.")).toBeInTheDocument();
+  // And the bar says which scene is being judged, since the scene is no longer
+  // on screen to say so itself.
+  expect(screen.getByRole("button", { name: /rename scene/i })).toHaveTextContent(/Absorbing Old/);
+});
+
+test("the transcript sits beside the review, and a row's quote lights its line", async () => {
+  // The third pane is why this screen has its own layout: judging a proposal
+  // means reading the line it came from, and reading it in another tab means
+  // losing the row.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: "She pressed a hand to her side.", speaker: "Grimoire" },
+  ] });
+  (api.absorbScene as any).mockResolvedValue(ROUTED_REVIEW);
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText(/still to judge/i);
+
+  const pane = within(screen.getByRole("complementary", { name: /for checking/i }));
+  expect(pane.getByText("She pressed a hand to her side.")).toBeInTheDocument();
+
+  fireEvent.click(reviewColumn().getByRole("button", { name: /character state/i }));
+  fireEvent.click(screen.getByRole("button", { name: /Find Seraphine — current state in transcript/i }));
+  await waitFor(() => expect(document.querySelectorAll(".review-post.cited")).toHaveLength(1));
+});
+
+test("an uncited row offers no find, because there is nothing to find", async () => {
+  await openRoutedReview({ ...ROUTED_REVIEW, edits: [
+    { id: "fact:f1", kind: "fact", target: { kind: "fact", id: "f1" },
+      label: "A standing fact", field: "text", before: "", after: "x", authored: false,
+      review: { certainty: null, quote: "", speaker: "", authority: "uncited",
+                score: 0.1, band: "low" } },
+  ] });
+  expect(screen.queryByRole("button", { name: /in transcript/i })).toBeNull();
+  expect(screen.getByText(/NO QUOTE · CERTAINTY UNRATED/)).toBeInTheDocument();
 });

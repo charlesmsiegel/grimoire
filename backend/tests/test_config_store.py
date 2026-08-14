@@ -12,7 +12,7 @@ def reload_with_home(monkeypatch, tmp_path):
 def test_first_read_creates_defaults(monkeypatch, tmp_path):
     s = reload_with_home(monkeypatch, tmp_path)
     cfg = s.read_config()
-    assert cfg["theme"] == "codex"
+    assert cfg["theme"] == "system"
     assert (tmp_path / "config.md").exists()
 
 
