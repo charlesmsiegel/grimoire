@@ -297,6 +297,45 @@ def test_public_group_state_section_is_unchanged(monkeypatch, tmp_path):
     assert section["text"] == "# Group state\nDock Union:\n  Goals: Raise the pier tariff."
 
 
+def test_no_budget_renders_a_secret_without_its_heading(monkeypatch, tmp_path):
+    """The packer drops sections WHOLE, and each of the three carriers renders
+    its own heading — so squeezing the budget can lose a secret but must never
+    strip the instruction off one it keeps.
+
+    Checked per section rather than per prompt: "a heading somewhere in the
+    prompt" would pass even if Group state kept its secrets while World info
+    (which used to be the only thing carrying the heading) was dropped.
+    """
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    secrets = ["WI-SECRET the harbourmaster took the coin.",
+               "GS-SECRET they hold the Guildmaster's debt.",
+               "LOC-SECRET a ledger lies open on the desk."]
+    entities.create_entity(croot, "lore", "Open", "Public tide fact. " * 40)
+    entities.create_entity(croot, "lore", "Twist", secrets[0], secrecy="secret")
+    gid = entities.create_entity(croot, "groups", "Quiet Office", "", secrecy="secret")
+    groupstate.write_state(croot, gid, "## Secrets\n" + secrets[1])
+    loc = entities.create_entity(croot, "locations", "Vault", secrets[2], secrecy="secret")
+    scenes.set_location(cid, sid, loc)
+    scenes.append_message(cid, sid, "user", "look around")
+
+    from grimoire.store import config          # local, as the other budget tests do
+
+    full = context.context_breakdown(cid, sid)["total_tokens"]
+    carrying = set()
+    for budget in range(20, full + 40, max((full + 20) // 12, 1)):
+        config.write_config(context_budget=str(budget))
+        for section in context.context_sections(cid, sid):
+            for body in secrets:
+                if body in section["text"]:
+                    carrying.add(section["label"])
+                    assert "Secret knowledge" in section["text"], (
+                        f"{section['label']} kept a secret without its heading "
+                        f"at budget {budget}")
+    # the sweep has to have actually exercised all three, or it proves nothing
+    assert carrying == {"World info", "Group state", "Current setting"}
+
+
 def test_no_secret_lore_leaves_the_world_info_section_as_it_was(monkeypatch, tmp_path):
     """The unmarked library's prompt is unchanged, heading and all."""
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
