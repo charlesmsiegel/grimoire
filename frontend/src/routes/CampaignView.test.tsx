@@ -648,6 +648,10 @@ test("sends the one-shot override in the chat request payload", async () => {
   (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   renderCampaign();
   const picker = await screen.findByLabelText("Response length");
+  // Same wait, and for the same reason, as the test above: the scene's own
+  // preset arrives on the `getScene` chain AFTER the <select> renders, so an
+  // override picked before it lands is overwritten by it.
+  await waitFor(() => expect(picker).toHaveValue("cinematic"));
   fireEvent.change(picker, { target: { value: "terse" } });
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
   fireEvent.click(screen.getByRole("button", { name: /Send/ }));
@@ -663,6 +667,7 @@ test("a failed stream keeps the override, and retry carries it", async () => {
   (api.chat as any).mockRejectedValueOnce(new Error("stream failed"));
   renderCampaign();
   const picker = await screen.findByLabelText("Response length");
+  await waitFor(() => expect(picker).toHaveValue("cinematic"));  // see above
   fireEvent.change(picker, { target: { value: "terse" } });
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
   fireEvent.click(screen.getByRole("button", { name: /Send/ }));
