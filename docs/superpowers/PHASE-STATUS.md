@@ -116,7 +116,11 @@ worktree — the editable `backend/.venv` is pinned to this checkout). Progress 
   payloads already carry an `evidence` key meaning something else entirely (the
   thin/sketched/established provenance sentence).
 - Phase-1 Minor: re-absorbing a scene re-appends `timeline.md` lines (no timeline reader
-  yet; fix when one lands).
+  yet; fix when one lands). **Still open after #198.** The timeline *view* landed, but it
+  derives its cards from `scenes` + `chronicle.json` + `plot.json` (`store/timeline.py`)
+  and never opens `timeline.md` — those lines carry no delimiters and no scene ids, so
+  reading them back needs a format decision and a migration first. Nothing depends on
+  them, so the duplicate append is still cosmetic.
 - Relationship metrics are approve/reject only in review (no inline number editing yet).
 - Phase-4 knowledge is edited as one prose blob in the existing `character_state` textarea
   (no per-field/structured editing). Residual parse edge: a `current_state` whose *first*

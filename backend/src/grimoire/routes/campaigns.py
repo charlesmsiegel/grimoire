@@ -868,6 +868,26 @@ def get_ledger(cid: str):
     }
 
 
+@router.get("/campaigns/{cid}/timeline")
+def get_timeline(cid: str):
+    """The play timeline (#198): every scene in play order, with the plot beats
+    that landed in it and the threads to filter them by.
+
+    Thin on purpose — the join, the tolerance and the lock all live in
+    ``store.timeline``, whose docstring carries the argument for each. Same
+    split as ``get_scene_briefing``, and for the same reason: this is a read
+    that fans across three files with one failure policy, which is a store
+    question rather than an HTTP one.
+
+    The ledger's own ``timeline`` section is a different view of a subset — the
+    last few chronicle one-liners as table rows — and stays where it is. This
+    route reaches the scenes that were never absorbed, which is most of the ones
+    a campaign in progress has, and the per-scene beats nothing else reads back.
+    """
+    _campaign_root_or_404(cid)
+    return store.timeline.build(cid)
+
+
 # ---- campaign cast & suggestions ----
 @router.get("/campaigns/{cid}/appearances")
 def get_appearances(cid: str):

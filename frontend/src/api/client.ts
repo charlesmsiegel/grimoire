@@ -901,6 +901,30 @@ export type SearchResult = {
   corpus?: number;
 };
 
+// the play timeline (#198) — the ledger's other half. The ledger answers what
+// is still open; this answers what happened, in play order, one card per scene.
+//
+// `one_line`, `summary`, `location` and `done` exist only after the absorb, and
+// a campaign being played is normally a scene or two ahead of it — so the
+// ORDINARY card carries none of them and falls back to its title and its own
+// date. Treat them as optional content, never as "still loading".
+/** One beat of a plot thread, on the card of the scene it landed in — the
+ *  "thread pair" the timeline is for: what moved, and where. `title`/`status`
+ *  are the THREAD's, repeated per beat so a card needs no second lookup. */
+export type TimelineBeat = {
+  thread: string; title: string; status: string; text: string;
+};
+export type TimelineScene = {
+  id: string; title: string; one_line: string; summary: string;
+  /** The scene's own opening moment, falling back to the chronicle's date. */
+  date: string;
+  location: string; done: boolean; pcless: boolean; beats: TimelineBeat[];
+};
+/** Only the threads with a beat on some card: a chip that filters to nothing
+ *  is worse than no chip. */
+export type TimelineThread = { id: string; title: string; status: string };
+export type Timeline = { scenes: TimelineScene[]; threads: TimelineThread[] };
+
 // pre-scene briefing (#118) — the ledger's per-scene sibling. The rows are the
 // ledger's, minus the `scene` label (this view is about who, not when) and plus
 // `involves`: the display names of the scene's cast this row can be traced to,
@@ -1227,6 +1251,12 @@ export const api = {
     request<Provenance>("GET", `/api/campaigns/${cid}/provenance`),
   campaignLedger: (cid: string) =>
     request<Ledger>("GET", `/api/campaigns/${cid}/ledger`, undefined, { fresh: true }),
+  // `fresh`, for the reason the ledger opts out of sharing: the timeline is
+  // re-read precisely when the records behind it have moved — a scene ended, a
+  // beat recorded, a scene renamed — and the dedupe would answer that with the
+  // response from before the absorb landed.
+  campaignTimeline: (cid: string) =>
+    request<Timeline>("GET", `/api/campaigns/${cid}/timeline`, undefined, { fresh: true }),
 
   // search (#33). Never coalesced with an in-flight read: a search page issues
   // one of these per settled keystroke, and the shared-promise cache is keyed
