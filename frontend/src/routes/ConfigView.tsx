@@ -13,10 +13,10 @@ import { useTheme } from "../theme/ThemeProvider";
 
 /** Every config field this page edits. One list, because it is what the draft
  *  is built from, what the dirty count is counted over, and what Save sends —
- *  three copies of the same nineteen names is how a field gets added to the
+ *  three copies of the same list of names is how a field gets added to the
  *  form and quietly never saved. */
 const DRAFT_FIELDS = [
-  "active_connection_id",
+  "active_connection_id", "fallback_connection_id", "llm_retries",
   "llm_timeout", "absorb_budget", "llm_call_budget",
   "context_budget", "archive_depth", "prompt_log_depth",
   "turnstate_depth", "promote_streak",
@@ -58,7 +58,8 @@ type SectionId =
 type SectionDef = { id: SectionId; group: string; label: string; fields: DraftField[] };
 const SECTIONS: SectionDef[] = [
   { id: "storage", group: "The install", label: "Storage", fields: [] },
-  { id: "connection", group: "The install", label: "Connection", fields: ["active_connection_id"] },
+  { id: "connection", group: "The install", label: "Connection",
+    fields: ["active_connection_id", "fallback_connection_id", "llm_retries"] },
   { id: "timeouts", group: "The install", label: "Timeouts",
     fields: ["llm_timeout", "absorb_budget", "llm_call_budget"] },
   { id: "context", group: "What the model sees", label: "Context",
@@ -320,6 +321,20 @@ export default function ConfigView() {
               connections (add a custom OpenAI-compatible endpoint, edit keys, pull a
               model list) on the <Link to="/connections">Connections</Link> page.
             </p>
+            <p className="config-copy">
+              A call that fails for a passing reason — a rate limit, a dropped
+              connection — is re-sent up to the retry count, with a growing pause
+              between tries. Only ever <em>before</em> the reply starts arriving: once
+              text is on screen it is never re-requested, because a second attempt
+              would repeat what you have already read. <code>0</code> retries sends
+              once and reports the failure.
+            </p>
+            <p className="config-copy">
+              If the connection still cannot answer, the fallback gets one attempt.
+              It is a whole connection, not just another model name, so it can be an
+              entirely different provider — which also means it can be a bad key or a
+              deleted connection, and a fallback that cannot send is simply not used.
+            </p>
             <div className="config-fields">
               <div className="config-field">
                 <label htmlFor="cfg-connection">LLM connection</label>
@@ -336,6 +351,32 @@ export default function ConfigView() {
                   {connections.find((c) => c.id === draft.active_connection_id)?.key_set
                     ? "key set"
                     : "no key set — scenes will not send"}
+                </p>
+              </div>
+              <NumField id="cfg-llm-retries" label="Retries" placeholder="2"
+                        caption="0 = send once, then report the failure"
+                        value={draft.llm_retries}
+                        onChange={(v) => edit("llm_retries", v)} />
+              <div className="config-field">
+                <label htmlFor="cfg-fallback-connection">Fallback connection</label>
+                <select id="cfg-fallback-connection" aria-label="Fallback connection"
+                        value={draft.fallback_connection_id}
+                        onChange={(e) => edit("fallback_connection_id", e.target.value)}>
+                  <option value="">None</option>
+                  {connections.filter((c) => c.id !== draft.active_connection_id)
+                              .map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+                {/* The active connection is filtered out of the list rather
+                    than merely ignored by the backend: offering it would look
+                    like a working setting, and falling back to the connection
+                    that just failed is a third attempt wearing a different
+                    name. A saved value that has since become the active one
+                    shows as None here, which is what it now does. */}
+                <p className="config-caption">
+                  {draft.fallback_connection_id &&
+                   draft.fallback_connection_id !== draft.active_connection_id
+                    ? "tried once when the connection above is exhausted"
+                    : "no fallback — an exhausted connection is an error"}
                 </p>
               </div>
             </div>

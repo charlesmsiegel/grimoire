@@ -24,10 +24,54 @@ from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
 
 
+def _connection_problem(conn: dict) -> str | None:
+    """Why this connection cannot send, or None if it can.
+
+    The credential check `_require_connection` turns into a 409 and
+    `_fallback_connection` turns into "there is no fallback" — one function,
+    because a fallback that is silently unusable is exactly the failure a
+    fallback exists to prevent, and two copies of this rule would drift.
+    """
+    if conn["kind"] == "openrouter" and not conn.get("api_key"):
+        return "OpenRouter key not set"
+    if conn["kind"] == "openai_compatible" and not conn.get("base_url"):
+        return "Endpoint base URL not set"
+    return None
+
+
+def _fallback_connection() -> dict | None:
+    """The connection a generation falls back to on exhaustion (#144), or None.
+
+    Resolved per generation rather than at import, so repointing it on the
+    Configuration page lands without a restart — the same contract the timeout
+    resolver has.
+
+    Every way of not having a usable one answers None, and none of them raise:
+    an unset key, a fallback pointing at a connection that has since been
+    deleted, an unreadable store, and — the one worth spelling out — a
+    connection missing the credential it needs to send. Surfacing *that* as an
+    error would replace the primary's real failure ("OpenRouter is rate
+    limiting you") with a confusing second one about a connection the user was
+    not using, on exactly the request where they need the first message. So a
+    misconfigured fallback is no fallback, and the primary's error stands.
+    """
+    try:
+        fid = store.read_config().get("fallback_connection_id", "")
+        if not fid:
+            return None
+        conn = store.llm_connections.read_connection_raw(fid)
+    except (store.llm_connections.ConnectionNotFound, store.locks.StoreBusy, OSError):
+        return None
+    return None if _connection_problem(conn) else conn
+
+
 # The idle bound is passed as a resolver, not a number: llm.py must not import
 # the store (#239), and reading config.md per call is what lets a
-# Configuration-page change land without a restart (#243).
-_llm = LLMClient(timeout=store.config.llm_timeout)
+# Configuration-page change land without a restart (#243). The retry count and
+# the fallback route (#144) ride the same seam for the same two reasons.
+_llm = LLMClient(timeout=store.config.llm_timeout,
+                 retries=store.config.llm_retries,
+                 fallback=_fallback_connection)
 _openai_compatible_client = OpenAICompatibleClient()
 
 
@@ -329,12 +373,9 @@ def _require_connection() -> dict:
     if conn is None:
         raise HTTPException(
             status_code=409, detail={"detail": "No LLM connection selected", "kind": "missing_key"})
-    if conn["kind"] == "openrouter" and not conn["api_key"]:
-        raise HTTPException(
-            status_code=409, detail={"detail": "OpenRouter key not set", "kind": "missing_key"})
-    if conn["kind"] == "openai_compatible" and not conn["base_url"]:
-        raise HTTPException(
-            status_code=409, detail={"detail": "Endpoint base URL not set", "kind": "missing_key"})
+    problem = _connection_problem(conn)
+    if problem is not None:
+        raise HTTPException(status_code=409, detail={"detail": problem, "kind": "missing_key"})
     return conn
 
 

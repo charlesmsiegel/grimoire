@@ -114,6 +114,52 @@ def test_non_positive_duration_means_no_bound(monkeypatch, tmp_path):
     assert s.config.llm_call_budget() == 0.0
 
 
+# ---- retry + fallback settings (#144) ----
+
+def test_retry_defaults(monkeypatch, tmp_path):
+    s = reload_with_home(monkeypatch, tmp_path)
+    cfg = s.read_config()
+    assert cfg["llm_retries"] == "2"
+    assert cfg["fallback_connection_id"] == ""   # no fallback until one is picked
+    assert s.config.llm_retries() == 2
+
+
+def test_zero_retries_is_the_pre_144_behaviour(monkeypatch, tmp_path):
+    s = reload_with_home(monkeypatch, tmp_path)
+    s.write_config(llm_retries="0")
+    assert s.config.llm_retries() == 0
+
+
+def test_an_unparseable_retry_count_falls_back_to_the_default(monkeypatch, tmp_path):
+    """Same posture as every other knob: a hand-edited config.md or a field
+    cleared in the UI must not take generation down."""
+    s = reload_with_home(monkeypatch, tmp_path)
+    s.write_config(llm_retries="lots")
+    assert s.config.llm_retries() == 2
+
+
+def test_a_negative_retry_count_reads_as_none(monkeypatch, tmp_path):
+    s = reload_with_home(monkeypatch, tmp_path)
+    s.write_config(llm_retries="-3")
+    assert s.config.llm_retries() == 0
+
+
+def test_the_retry_count_is_clamped(monkeypatch, tmp_path):
+    """Retries are cheap one at a time and expensive in a row, and a streamed
+    turn has no total-duration ceiling above them — so a hand-typed 500 must not
+    be able to leave a scene apparently hung for an hour."""
+    s = reload_with_home(monkeypatch, tmp_path)
+    s.write_config(llm_retries="500")
+    assert s.config.llm_retries() == s.config.MAX_LLM_RETRIES
+
+
+def test_the_fallback_connection_round_trips(monkeypatch, tmp_path):
+    s = reload_with_home(monkeypatch, tmp_path)
+    s.write_config(fallback_connection_id="backup")
+    assert s.read_config()["fallback_connection_id"] == "backup"
+
+
+
 # ---- transient state settings (#120 / #121) ----
 
 def test_transient_state_ships_disabled(monkeypatch, tmp_path):

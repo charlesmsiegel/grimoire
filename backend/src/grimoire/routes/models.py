@@ -23,6 +23,8 @@ class ConfigUpdate(BaseModel):
     llm_timeout: str | None = None
     absorb_budget: str | None = None
     llm_call_budget: str | None = None
+    llm_retries: str | None = None
+    fallback_connection_id: str | None = None
     context_budget: str | None = None
     archive_depth: str | None = None
     setup_done: str | None = None
