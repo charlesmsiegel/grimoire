@@ -1,0 +1,9 @@
+{#- Who carries this turn in a group scene (#29). Renders nothing unless
+    `speaker` is set: the layer is off by default, and it stays quiet below two
+    present NPCs, where naming a lead says only what the cast list already
+    said. Selection (direct address, then longest silence) happens in code —
+    context/speaker.py; this template receives the nomination.
+    Vars: speaker (None | {lead, quiet, reason, spoken, silent_for}). -#}
+{%- if speaker %}# Active speaker
+{{ speaker.lead }} carries this turn{% if speaker.reason == "addressed" %} — the last post spoke to them directly{% elif not speaker.spoken %} — they have not spoken yet in this scene{% elif speaker.silent_for %} — they have been silent for {{ speaker.silent_for }} posts{% endif %}.
+{% if speaker.quiet %}{{ speaker.quiet | join(", ") }} {{ "is" if speaker.quiet | length == 1 else "are" }} also present: let them react briefly, or not at all. Do not give every character a turn.{% endif %}{% endif -%}

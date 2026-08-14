@@ -3690,3 +3690,158 @@ def test_every_breakdown_row_carries_an_id(monkeypatch, tmp_path):
     ids = [r["id"] for r in rows]
     assert all(ids) and len(ids) == len(set(ids))
     assert "character_descriptions" in ids and "history" in ids
+
+
+# ------------------------------------------------------------- the layout
+
+def _layout_scene(monkeypatch, tmp_path):
+    """A scene whose World info and Response budget sections are both non-empty,
+    so a reorder and a drop are both observable."""
+    from grimoire.store import config
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Seraphine", "default",
+                                _npc_card("Seraphine", description="keeper"))
+    ap.appear(cid, sid, "characters", "seraphine", "default", "npc")
+    entities.create_entity(worlds.world_root(wid), "lore", "Saltmarch",
+                           "The tide gate is older than the town.",
+                           keys="saltmarch")
+    scenes.append_message(cid, sid, "user", "Tell me about Saltmarch.")
+    config.write_config(system_prompt="Never speak for the PC.")
+    return cid, sid
+
+
+def _full_layout(**overrides):
+    """The whole catalog as an editable layout, the way the editor saves it.
+
+    A PARTIAL layout barely reorders anything, and that is the insert rule
+    working: every section the layout never mentioned is put back beside its
+    catalog neighbours, which for a two-entry layout is all twenty-eight of
+    them. The UI always sends the full list -- `describe` hands it every row --
+    so the tests do too.
+    """
+    return [{"id": s.id, "label": "", "enabled": True, **overrides.get(s.id, {})}
+            for s in context.SECTIONS]
+
+
+def test_layout_reorders_and_drops_sections_in_the_real_prompt(monkeypatch, tmp_path):
+    from grimoire.store import config
+    cid, sid = _layout_scene(monkeypatch, tmp_path)
+    before = [r["id"] for r in context.context_sections(cid, sid)]
+    assert "world_info" in before and "response_budget" in before
+    assert before.index("world_info") < before.index("response_budget")
+
+    entries = [e for e in _full_layout(world_info={"enabled": False})
+               if e["id"] != "response_budget"]
+    context.layout.write_layout([{"id": "response_budget", "label": "", "enabled": True},
+                                 *entries])
+    config.write_config(prompt_layout_enabled="on")
+
+    after = [r["id"] for r in context.context_sections(cid, sid)]
+    assert after[0] == "response_budget"
+    assert "world_info" not in after
+    # ...and the section really left the prompt, not just the breakdown.
+    system = context.build_messages(cid, sid)[0]["content"]
+    assert "tide gate" not in system
+
+
+def test_relabelling_changes_the_row_name_and_nothing_else(monkeypatch, tmp_path):
+    """The label is the inspector's row name; the text the model reads is the
+    template's. Relabelling must not touch a byte of the prompt."""
+    from grimoire.store import config
+    cid, sid = _layout_scene(monkeypatch, tmp_path)
+    before = context.build_messages(cid, sid)
+
+    context.layout.write_layout(_full_layout(world_info={"label": "Lore"}))
+    config.write_config(prompt_layout_enabled="on")
+
+    row = next(r for r in context.context_sections(cid, sid) if r["id"] == "world_info")
+    assert row["label"] == "Lore"
+    assert context.build_messages(cid, sid) == before
+
+
+def test_a_layout_that_predates_a_section_still_renders_it(monkeypatch, tmp_path):
+    """The upgrade rule, end to end: a layout naming only two sections must not
+    silently drop the twenty-eight it has never heard of."""
+    from grimoire.store import config
+    cid, sid = _layout_scene(monkeypatch, tmp_path)
+    context.layout.write_layout([{"id": "response_budget"}, {"id": "world_info"}])
+    config.write_config(prompt_layout_enabled="on")
+
+    ids = [r["id"] for r in context.context_sections(cid, sid)]
+    assert "character_descriptions" in ids and "global_system_prompt" in ids
+
+
+def test_a_stored_layout_is_inert_until_the_toggle_is_on(monkeypatch, tmp_path):
+    cid, sid = _layout_scene(monkeypatch, tmp_path)
+    before = context.build_messages(cid, sid)
+    context.layout.write_layout([{"id": "response_budget"},
+                                 {"id": "world_info", "enabled": False}])
+    assert context.build_messages(cid, sid) == before
+
+
+# ------------------------------------------------------ the active speaker
+
+def _group_scene(monkeypatch, tmp_path, names=("Seraphine", "Mara", "Winifred")):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    for name in names:
+        characters.create_character(worlds.world_root(wid), name, "default",
+                                    _npc_card(name, description=f"{name} is here."))
+        ap.appear(cid, sid, "characters", name.lower(), "default", "npc")
+    scenes.append_message(cid, sid, "user", "Who is holding the gate?")
+    return cid, sid
+
+
+def test_the_speaker_section_appears_only_when_turned_on(monkeypatch, tmp_path):
+    from grimoire.store import config
+    cid, sid = _group_scene(monkeypatch, tmp_path)
+    assert "active_speaker" not in [r["id"] for r in context.context_sections(cid, sid)]
+
+    config.write_config(speaker_turn_taking="on")
+    rows = {r["id"]: r for r in context.context_sections(cid, sid)}
+    assert "active_speaker" in rows
+    assert rows["active_speaker"]["tier"] == context.SPOTLIGHT
+    assert "carries this turn" in rows["active_speaker"]["text"]
+
+
+def test_no_speaker_section_in_a_two_hander(monkeypatch, tmp_path):
+    from grimoire.store import config
+    cid, sid = _group_scene(monkeypatch, tmp_path, names=("Seraphine",))
+    config.write_config(speaker_turn_taking="on")
+    assert "active_speaker" not in [r["id"] for r in context.context_sections(cid, sid)]
+
+
+def test_the_speaker_section_sits_after_transient_state(monkeypatch, tmp_path):
+    from grimoire.store import config
+    cid, sid = _group_scene(monkeypatch, tmp_path)
+    config.write_config(speaker_turn_taking="on")
+    ids = [s.id for s in context.SECTIONS]
+    assert ids.index("active_speaker") == ids.index("transient_state") + 1
+
+
+def test_the_speaker_section_names_the_addressed_npc(monkeypatch, tmp_path):
+    from grimoire.store import config
+    cid, sid = _group_scene(monkeypatch, tmp_path)
+    config.write_config(speaker_turn_taking="on")
+    scenes.append_message(cid, sid, "user", "Winifred, what did you see?")
+    row = next(r for r in context.context_sections(cid, sid) if r["id"] == "active_speaker")
+    assert row["text"].startswith("# Active speaker\nWinifred carries this turn")
+    assert "spoke to them directly" in row["text"]
+
+
+def test_the_speaker_layer_is_inert_while_off(monkeypatch, tmp_path):
+    cid, sid = _group_scene(monkeypatch, tmp_path)
+    before = context.build_messages(cid, sid)
+    scenes.append_message(cid, sid, "assistant", "Something happened.")
+    after_off = context.build_messages(cid, sid)
+    assert "Active speaker" not in after_off[0]["content"]
+    assert "Active speaker" not in before[0]["content"]
+
+
+def test_both_layers_off_change_nothing(monkeypatch, tmp_path):
+    """The claim the defaults rest on: an install that never opens the new UI
+    sends the bytes it always sent, even with a layout sitting on disk."""
+    cid, sid = _group_scene(monkeypatch, tmp_path)
+    before = context.build_messages(cid, sid)
+    context.layout.write_layout(_full_layout(world_info={"enabled": False},
+                                             character_state={"label": "Mood"}))
+    assert context.build_messages(cid, sid) == before

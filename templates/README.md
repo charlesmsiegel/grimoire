@@ -233,6 +233,16 @@ substituted by code:
   into posts, so it is never part of a transcript. The section carries
   `except_opener=True` — the opener is streamed unpersisted into a box the user
   adopts by hand, and there is no reply after it to strip the block from
+- `speaker` — `None`, or `{lead, quiet, reason, spoken, silent_for}`: who
+  carries this turn in a group scene (#29), for `sections/active_speaker.j2`.
+  `reason` is `"addressed"` (the last player post named exactly one present
+  NPC) or `"rotation"` (longest silence, then fewest blocks, then cast order);
+  `spoken`/`silent_for` are why. `None` — and so no section — when
+  `speaker_turn_taking` is off, which is the shipped default, and whenever
+  fewer than two NPCs are present, since naming a lead in a two-hander only
+  repeats the cast list. Derived from the transcript on every pass and never
+  stored, so a regenerate reproduces it rather than advancing a rotation —
+  `store/context/speaker.py`
 - `relationship_lines` — `relationships.render_present()` lines
 - `players` — seated players: `{kind: "pcs", name, pronouns, summary,
   description}` (persona) or `{kind: "characters", name, description,

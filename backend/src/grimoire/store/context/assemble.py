@@ -27,8 +27,8 @@ from ..campaigns import paths as campaigns_paths, read as campaigns_read
 from ..scenes import read as scenes_read, turns as scenes_turns
 # Module objects, not names: `_assemble` binds a local `cast` (hence the alias),
 # and `cast._drift_roster` has to stay patchable from the test that counts it.
-from . import (archive, cast as cast_data, macros, mechanics, pack, story,
-               tokens, world_state)
+from . import (archive, cast as cast_data, layout, macros, mechanics, pack, speaker,
+               story, tokens, world_state)
 
 OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
 
@@ -202,6 +202,13 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # the wrong one for it (see `world_state._actor_aliases`).
         "states": world_state._character_states(aroot, cid, cast, pcless),
         "transient_states": world_state._transient_states(cast, live_turnstate),
+        # Derived on every pass and never stored -- see speaker.py. Off by
+        # default because it adds tokens to every group turn, and `None`
+        # (the toggle off, or fewer than two NPCs) renders no section at all.
+        # `history`, not `sub_history`: the raw messages still carry the
+        # `speaker` stamp that `_project_history` folds into the text.
+        "speaker": (speaker.nominate(npc_names, history)
+                    if config.speaker_turn_taking() else None),
         "transient_tracker": config.turnstate_depth() > 0,
         "transient_fields": list(turnstate.FIELDS),
         "relationship_lines": story._relationship_lines(cid, cast),
@@ -315,6 +322,11 @@ SECTIONS = [
     # about the same characters, with a shorter half-life.
     Section("transient_state", "Transient state",
             "scene/sections/transient_state.j2", pack.SPOTLIGHT),
+    # Beside the state sections and at their tier, because it is the same kind
+    # of claim: who is live right now. AFTER them, so the model reads what each
+    # character is feeling before it reads which of them should carry the turn.
+    Section("active_speaker", "Active speaker",
+            "scene/sections/active_speaker.j2", pack.SPOTLIGHT),
     Section("relationships", "Relationships", "scene/sections/relationships.j2", pack.SPOTLIGHT),
     Section("player_personas", "Player personas",
             "scene/sections/player_personas.j2", pack.LOCK_IN),
@@ -376,10 +388,17 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False) -> list[
     system message and `context_sections` reports the same list, so a section
     the inspector shows as sent is a section that was sent. Empty sections drop
     out here, exactly as system.j2's per-section `if s.strip()` used to.
+
+    `layout.apply` is what makes the order the READER's (#29) — the catalog
+    while they have no layout or have switched theirs off, their merge of it
+    otherwise. It sits here rather than beside the catalog for the same reason
+    the catalog is walked here at all: this is the one render, so a section the
+    layout dropped is dropped from the inspector too, and the two cannot
+    disagree about what went out.
     """
     data = {**a["data"], "opener": opener}
     out = []
-    for section in SECTIONS:
+    for section in layout.apply(SECTIONS):
         if section.pcless_only and not data["pcless"]:
             continue
         if section.opener_only and not opener:

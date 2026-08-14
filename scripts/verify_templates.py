@@ -272,8 +272,10 @@ from grimoire.store import (audit, calendars, campaigns, characters, checks,  # 
 # turnstate_depth is non-zero for the same reason the fixture writes a playstate
 # and a group state: the transient-state sections (#120) ship disabled, and a
 # section that renders "" on both sides of the comparison proves nothing.
+# speaker_turn_taking is on for exactly that reason too (#29) — it ships off,
+# and the multi-NPC scenes below are what make its section non-empty.
 config.write_config(system_prompt="Global GM rules: be vivid, be fair.", recap_depth="1",
-                    turnstate_depth="4")
+                    turnstate_depth="4", speaker_turn_taking="on")
 
 # a bound mechanics module (#162 Task 6): one sheet type, one check, one
 # always-on rules doc -- so mechanics_rules/mechanics_sheets/mechanics_checks
@@ -652,6 +654,12 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
             "npc_cards": npc_cards,
             "states": states, "transient_states": transient_states,
+            # Mirrors context._assemble: derived from the present NPCs' card
+            # names and the raw transcript, and None while the toggle is off.
+            "speaker": (context.speaker.nominate(
+                [d.get("name", "") for d in npc_cards if d.get("name")],
+                [dict(m) for m in scene["messages"]])
+                if config.speaker_turn_taking() else None),
             "transient_tracker": depth > 0, "transient_fields": list(turnstate.FIELDS),
             "relationship_lines": relationship_lines, "players": players,
             "ref_names": ref_names, "refs": refs, "story_entries": story_entries,
@@ -694,6 +702,7 @@ def rendered_system(data: dict, opener: bool = False) -> str:
               "scene/sections/character_descriptions.j2",
               "scene/sections/character_state.j2",
               "scene/sections/transient_state.j2",
+              "scene/sections/active_speaker.j2",
               "scene/sections/relationships.j2",
               "scene/sections/player_personas.j2"]
     if data["pcless"]:
