@@ -367,3 +367,21 @@ def test_no_field_can_turn_a_bookkeeping_call_into_a_failed_turn(home):
                 {"completion_tokens": []}):
         assert usage.record(task="chat", model="realm/opus", **bad) is None, bad
     assert _rows(home) == []
+
+
+def test_a_caller_walking_away_from_a_one_shot_call_is_aborted_not_an_error(home):
+    """`asyncio.CancelledError` unwinds the `with` at every `.complete()` site
+    when a client disconnects. Recording it as an error would make a user who
+    closes a tab mid-suggestion look like a provider failing them -- which is
+    exactly what the streaming path takes care to avoid."""
+    import asyncio
+
+    for cancellation in (asyncio.CancelledError(), GeneratorExit()):
+        with pytest.raises(BaseException):
+            with usage.meter("suggestions", campaign="saltmarch") as m:
+                m.usage.update(_SENT)
+                raise cancellation
+
+    rows = _rows(home)
+    assert [r["status"] for r in rows] == ["aborted", "aborted"]
+    assert all("error" not in r for r in rows)
