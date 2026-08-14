@@ -375,6 +375,13 @@ def _require_connection() -> dict:
             status_code=409, detail={"detail": "No LLM connection selected", "kind": "missing_key"})
     problem = _connection_problem(conn)
     if problem is not None:
+        # Deliberately *before* the facade, so a configured fallback does not
+        # rescue this and the 409 still fires. The two look inconsistent — the
+        # facade happily falls back on `auth` — and the distinction is real: a
+        # key the provider rejected is a runtime failure, worth routing around
+        # silently, while no key at all is a setup mistake. Quietly serving it
+        # from the fallback would leave someone playing for weeks on the wrong
+        # connection, wondering why the model they picked never sounds right.
         raise HTTPException(status_code=409, detail={"detail": problem, "kind": "missing_key"})
     return conn
 

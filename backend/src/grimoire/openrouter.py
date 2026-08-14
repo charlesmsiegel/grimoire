@@ -10,7 +10,7 @@ from typing import AsyncIterator
 import certifi
 import httpx
 
-from .llm_errors import LLMError
+from .llm_errors import LLMError, retry_after_seconds
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -81,7 +81,12 @@ class OpenRouterClient:
             ) as resp:
                 if resp.status_code >= 400:
                     await resp.aread()
-                    raise OpenRouterError(_status_kind(resp.status_code), _extract_error(resp.text))
+                    # The provider's own window, when it names one. A guessed
+                    # backoff is what you use for not knowing; Retry-After is
+                    # knowing (#144).
+                    raise OpenRouterError(_status_kind(resp.status_code),
+                                         _extract_error(resp.text),
+                                         retry_after_seconds(resp.headers))
                 async for line in resp.aiter_lines():
                     # Every frame is proof of life, including the ones this
                     # parser drops: a comment keep-alive, or a delta carrying

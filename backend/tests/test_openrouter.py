@@ -114,3 +114,49 @@ async def test_streaming_leaves_the_read_bound_to_the_facade():
     [c async for c in make_client(handler).stream([], "m", "sk-or-x")]
     assert seen["read"] is None
     assert seen["connect"] == 30.0
+
+
+# ---- Retry-After (#144) ----
+
+async def test_a_429_carries_the_providers_retry_after():
+    """A guessed backoff is what you use for not knowing. When the provider
+    names its own window, `llm._resilient` waits that long instead — so the
+    number has to survive the raise rather than being dropped with the rest of
+    the response headers."""
+    def handler(request):
+        return httpx.Response(429, headers={"Retry-After": "42"}, text='{"error":{"message":"slow down"}}')
+
+    client = make_client(handler)
+    with pytest.raises(OpenRouterError) as exc:
+        [c async for c in client.stream([], "m", "sk-or-x")]
+    assert exc.value.kind == "rate_limit"
+    assert exc.value.retry_after == 42.0
+
+
+async def test_an_error_without_the_header_names_no_window():
+    def handler(request):
+        return httpx.Response(500, text="boom")
+
+    client = make_client(handler)
+    with pytest.raises(OpenRouterError) as exc:
+        [c async for c in client.stream([], "m", "sk-or-x")]
+    assert exc.value.retry_after is None
+
+
+@pytest.mark.parametrize("value", [
+    "Wed, 21 Oct 2015 07:28:00 GMT",   # the HTTP-date form, deliberately unread
+    "soon", "", "-5", "0", "nan", "inf",
+])
+async def test_an_unreadable_retry_after_is_the_same_as_none(value):
+    """Every unreadable case has to mean "back off on our own schedule". The
+    two that would actually hurt are the non-finite ones: `inf` compares past
+    every cap and `nan` compares false against all of them, so one would refuse
+    to retry forever and the other would sail through as if the header said
+    nothing while still being used as a delay."""
+    def handler(request):
+        return httpx.Response(429, headers={"Retry-After": value}, text="{}")
+
+    client = make_client(handler)
+    with pytest.raises(OpenRouterError) as exc:
+        [c async for c in client.stream([], "m", "sk-or-x")]
+    assert exc.value.retry_after is None

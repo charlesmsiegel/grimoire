@@ -232,6 +232,23 @@ test("says when there is no fallback and when there is one", async () => {
     .toBeInTheDocument();
 });
 
+test("a fallback that has become the active connection reads as None", async () => {
+  // A <select> whose value matches no option renders blank — not the stale
+  // name, not None, nothing. The setting is kept in the draft (so it comes
+  // back if the active connection changes back) but shown as what it now
+  // behaves as: no fallback.
+  (api.getConfig as any).mockResolvedValue({ ...cfg, fallback_connection_id: "openrouter" });
+  renderView();
+  await open(/^Connection/);
+  const select = screen.getByLabelText("Fallback connection") as HTMLSelectElement;
+  expect(select.value).toBe("");
+  expect(screen.getByText(/no fallback/i)).toBeInTheDocument();
+  // and showing it as None did not make the page think it changed, so nothing
+  // is rewritten on disk behind the user's back
+  save();
+  expect(api.putConfig).not.toHaveBeenCalled();
+});
+
 test("saves the retry count", async () => {
   renderView();
   await open(/^Connection/);

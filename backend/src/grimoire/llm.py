@@ -73,17 +73,36 @@ DEFAULT_RETRIES = 2
 #: setting `RETRY_BASE` to 0 makes a retry test instant.
 RETRY_BASE = 0.5
 RETRY_CAP = 8.0
+#: The longest provider-named `Retry-After` worth waiting out, in seconds.
+#:
+#: A `Retry-After` is not advice, it is the provider saying when it will serve
+#: this request — so the backoff schedule above yields to it whenever it is
+#: longer, and retrying sooner is just a request guaranteed to be rejected.
+#: But a window that runs into minutes is the provider saying it will *not*
+#: serve this soon, and sitting on it holds a scene hostage on a promise
+#: nothing enforces. Past this line, retrying stops: the fallback route gets
+#: its turn immediately, and failing that the user is told about the rate
+#: limit now rather than after a wait they did not choose.
+RETRY_AFTER_CAP = 30.0
 
 
 def _backoff_delay(attempt: int) -> float:
     """Seconds to wait before retry `attempt` (0-based).
 
-    Exponential, capped, and jittered. The jitter is not decoration: a rate
-    limit is usually hit by several calls at once (an absorb fires extraction
-    and one dossier per present NPC), and an unjittered schedule has every one
-    of them retry at the same instant, re-creating the burst that got them
-    rejected. Half the delay is fixed and half is random ("equal jitter"), so
-    the spread is real without ever collapsing the wait to nearly nothing.
+    Exponential, capped, and jittered. This is the schedule for when the
+    provider did *not* say when to come back; `_resilient` prefers a
+    `Retry-After` over it whenever there is one.
+
+    The jitter covers the case where several callers hit one account's limit
+    together and an unjittered schedule has all of them retry at the same
+    instant, re-creating the burst that got them rejected. Note what that is
+    and is not here: absorb's calls are strictly sequential (extraction, then
+    each dossier, each awaited in turn), so they cannot collide with each
+    other. The real colliders are two browser tabs generating at once and two
+    grimoire installs sharing one API key — thinner than a server's fan-out,
+    which is why the jitter is "equal jitter" (half the delay fixed, half
+    random) rather than full: enough spread to break a tie, never a wait that
+    collapses to nearly nothing.
     """
     ceiling = min(RETRY_CAP, RETRY_BASE * (2 ** attempt))
     return ceiling / 2 + random.uniform(0, ceiling / 2)
@@ -282,7 +301,9 @@ async def _resilient(open_stream, routes, timeout: float,
     **Retrying and falling back are two different questions and are gated
     separately.** A retry re-runs the request that just failed, so it is only
     worth doing for the failures a repeat could plausibly fix and detect
-    cheaply (`RETRYABLE_KINDS`). Moving to the *next route* is a different
+    cheaply (`RETRYABLE_KINDS`) — and only when the provider has not told us
+    the wait would be longer than we are willing to sit out
+    (`RETRY_AFTER_CAP`). Moving to the *next route* is a different
     request to a different place, so it is worth doing for any failure at all
     -- a bad key, an uninstalled SDK, a timeout, a 500 -- because "the primary
     could not serve this" is the entire condition the user configured a
@@ -309,12 +330,21 @@ async def _resilient(open_stream, routes, timeout: float,
     SSE comment -- framing, carrying no content, so a fresh attempt after one
     duplicates nothing.
 
-    Retries are bounded but not free: they run *inside* whatever ceiling the
-    caller already imposes (`routes.common._bounded_call` for the one-shots,
-    the absorb budget for absorb), so a retry sequence can be cut short by
-    those but can never overrun them.
+    Retries are bounded but not free, in two currencies. Time: they run
+    *inside* whatever ceiling the caller already imposes
+    (`routes.common._bounded_call` for the one-shots, the absorb budget for
+    absorb), so a sequence can be cut short by those but can never overrun
+    them. And money: a connection that drops after the provider generated but
+    before the first delta arrived is billed for work nobody received, and the
+    retry is billed again. That is inherent to retrying at all -- there is no
+    way to tell that case from a connection refused -- and it is why the count
+    is a setting with a documented 0.
+
+    When both routes fail the caller gets the *primary's* kind, with the
+    fallback's failure appended: see the tail of this function.
     """
     sent = False
+    first: LLMError | None = None
     last: LLMError | None = None
     for index, (conn, retries) in enumerate(routes):
         retryable = True
@@ -328,7 +358,12 @@ async def _resilient(open_stream, routes, timeout: float,
                 # seconds in total), not at the ten the setting allows, where
                 # the backoffs add up to well past the interval a proxy will
                 # hold a silent connection for.
-                delay = _backoff_delay(attempt - 1)
+                # The provider's own window wins whenever it named one and it is
+                # longer than ours: retrying before it is a request the provider
+                # has already told us it will reject. `max`, not a replacement,
+                # so a `Retry-After: 1` on the third attempt cannot walk the
+                # backoff back down to a shorter wait than the second one had.
+                delay = max(_backoff_delay(attempt - 1), (last.retry_after or 0.0))
                 while delay > 0:
                     step = delay if HEARTBEAT_INTERVAL <= 0 else min(delay, HEARTBEAT_INTERVAL)
                     await asyncio.sleep(step)
@@ -345,7 +380,9 @@ async def _resilient(open_stream, routes, timeout: float,
                 if sent:
                     raise
                 last = exc
-                retryable = exc.kind in RETRYABLE_KINDS
+                first = first if first is not None else exc
+                retryable = (exc.kind in RETRYABLE_KINDS
+                             and not (exc.retry_after or 0.0) > RETRY_AFTER_CAP)
             finally:
                 # A no-op for the exhausted and the raised cases, and the whole
                 # point in the third one: when the *caller* closes us mid-yield
@@ -361,8 +398,18 @@ async def _resilient(open_stream, routes, timeout: float,
             log.warning("LLM connection %r gave up (%s: %s); falling back to %r",
                         _label(conn), last.kind, last.detail, _label(nxt))
     # Only reachable with every attempt swallowed above, which is the only way
-    # out of the loops without a return or a raise -- so `last` is always set.
-    raise last
+    # out of the loops without a return or a raise -- so both are always set.
+    if first is last:
+        raise last  # one route, one story: the original exception, untouched
+    # Both routes failed, and neither error alone is the whole truth. The kind
+    # stays the PRIMARY's, because that is the connection the user chose and
+    # the one the frontend branches on -- reporting a refused connection to a
+    # local fallback would send someone off to debug an endpoint they were not
+    # using while their real problem was a rate limit. But dropping the
+    # fallback's failure is just as misleading: it leaves them fixing the
+    # primary and still getting nothing.
+    raise LLMError(first.kind,
+                   f"{first.detail} — and the fallback failed too: {last.detail}")
 
 
 class LLMClient:
@@ -418,7 +465,13 @@ class LLMClient:
         routes = [(conn, self._retry_count())]
         try:
             fallback = self._fallback() if callable(self._fallback) else self._fallback
-        except Exception:  # noqa: BLE001 - see the docstring; resolution is best-effort
+        except Exception as exc:  # noqa: BLE001 - see the docstring; best-effort
+            # Logged rather than swallowed in silence: the symptom of a broken
+            # resolver is a fallback that is configured and simply never fires,
+            # which is invisible from the outside and indistinguishable from
+            # "the primary kept working". One line here is the difference
+            # between a diagnosable bug and a haunted setting.
+            log.warning("could not resolve the fallback connection: %s", exc)
             fallback = None
         if fallback and not _same_route(conn, fallback):
             routes.append((fallback, 0))
