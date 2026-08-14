@@ -228,3 +228,52 @@ def test_an_absorb_step_the_budget_refuses_files_no_row(client, home, monkeypatc
     rows = _rows(home)
     assert [r["task"] for r in rows] == ["absorb"], (
         "only the extraction was ever sent")
+
+
+def test_the_whole_chain_from_the_wire_to_the_ledger(client, home):
+    """The one test with nothing faked between the SSE body and the row.
+
+    Every other test here swaps in `FakeLLM` at the `get_llm` seam, so the
+    adapter, `llm_usage`, the facade's stamping and the meter are each proved
+    against a stand-in for the next one. This drives a real `OpenRouterClient`
+    over a mock transport instead, which is the only way the request field, the
+    chunk the block rides on, and the row it becomes are checked as one thing.
+    """
+    import httpx
+    from grimoire.llm import LLMClient
+    from grimoire.openrouter import OpenRouterClient
+
+    sent = {}
+
+    def handler(request):
+        sent.update(json.loads(request.content))
+        return httpx.Response(200, text=(
+            'data: {"model":"realm/opus-2026-08","choices":[{"delta":{"content":"Hi"}}]}\n\n'
+            'data: {"model":"realm/opus-2026-08","choices":[],'
+            '"usage":{"prompt_tokens":1204,"completion_tokens":37,"cost":0.00915}}\n\n'
+            "data: [DONE]\n\n"))
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    real = LLMClient(openrouter=OpenRouterClient(http=http), timeout=0, retries=0)
+    client.app.dependency_overrides[routes.get_llm] = lambda: real
+
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
+    assert r.status_code == 200
+
+    assert sent["usage"] == {"include": True}, "the block has to be asked for"
+    row, = _rows(home)
+    assert row["prompt_tokens"] == 1204
+    assert row["completion_tokens"] == 37
+    assert row["cost_usd"] == 0.00915
+    assert row["cost_basis"] == "billed"
+    # The dated snapshot the provider answered with, not the alias the scene
+    # asked for -- a ledger that names the wrong one cannot be reconciled.
+    assert row["model"] == "realm/opus-2026-08"
+    assert row["provider"] == "openrouter"
+
+    body = client.get(f"/api/campaigns/{cid}/usage").json()
+    assert body["totals"]["cost_usd"] == 0.00915
+    assert body["totals"]["total_tokens"] == 1241
+    assert body["totals"]["unpriced_calls"] == 0
