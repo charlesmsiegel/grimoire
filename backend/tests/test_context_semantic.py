@@ -679,6 +679,51 @@ def _lore_scene(similarity, provider, owners=""):
     return cid, sid
 
 
+SECRET_BODY = "The blade was forged from her mother's own bones."
+
+
+def _secret_lore_scene(provider, secrecy):
+    """The recall path, carrying an entry at `secrecy`. Keyed on a word nobody
+    says, so the keyword rule cannot reach it — only recall can."""
+    croot, cid, sid = _campaign()
+    entities.create_entity(croot, "lore", "Sablewrought", SECRET_BODY,
+                           keys="sablewrought", secrecy=secrecy)
+    scenes.append_message(cid, sid, "user", TURN)
+    configure(depth="1")
+    provider.mapping = {TURN: QUERY,
+                        semantic.entry_text({"name": "Sablewrought",
+                                             "keys": ["sablewrought"],
+                                             "body": SECRET_BODY}): NEAR}
+    return cid, sid
+
+
+def test_a_recalled_secret_arrives_under_its_heading(store, provider):
+    """Recall is a way of REACHING an entry, not a licence to publish it.
+
+    Without this, routing every recalled secret into the plain list passed the
+    whole suite: the Recalled lore section's secret branch had a template and
+    no test, so a mis-wired variable published the entry silently.
+    """
+    cid, sid = _secret_lore_scene(provider, "secret")
+    section = next(s for s in ctx.context_sections(cid, sid) if s["label"] == "Recalled lore")
+    assert SECRET_BODY in section["text"]
+    assert section["text"].index("Secret knowledge") < section["text"].index(SECRET_BODY)
+
+
+def test_a_recalled_public_entry_keeps_the_plain_section(store, provider):
+    cid, sid = _secret_lore_scene(provider, "public")
+    section = next(s for s in ctx.context_sections(cid, sid) if s["label"] == "Recalled lore")
+    assert section["text"] == SECRET_BODY
+    assert "Secret knowledge" not in section["text"]
+
+
+def test_a_gm_only_entry_is_never_recalled_into_the_prompt(store, provider):
+    """`activate` drops it before the strategy is offered it at all, so no
+    similarity score can pull it back."""
+    cid, sid = _secret_lore_scene(provider, "gm-only")
+    assert SECRET_BODY not in ctx.build_messages(cid, sid)[0]["content"]
+
+
 def test_a_missed_lore_entry_reaches_the_built_prompt(store, provider):
     """The end-to-end wiring: `_world_info` -> `activate` -> `semantic.recall`.
 
