@@ -26,9 +26,17 @@ const SECRECY_HINTS: Record<Secrecy, string> = {
 };
 
 // Anything unrecognised (a hand-edited file) reads as public, exactly as
-// store.entities.normalize_secrecy does on the other side.
-const asSecrecy = (v: unknown): Secrecy =>
-  (SECRECY_LEVELS as readonly string[]).includes(String(v ?? "")) ? (v as Secrecy) : "public";
+// store.entities.normalize_secrecy does on the other side -- INCLUDING the trim
+// and the lowercase. Matching only the canonical spelling looked harmless and
+// was not: the backend reads `secrecy: Secret` as secret and keeps the entry
+// out of ignorant characters' mouths, while this returned "public", badged the
+// entry Public, and made the next save send `secrecy: "public"` -- a valid
+// level, so the route accepts it and the key is deleted. Editing the body of a
+// hand-marked secret silently published it.
+const asSecrecy = (v: unknown): Secrecy => {
+  const level = String(v ?? "").trim().toLowerCase();
+  return (SECRECY_LEVELS as readonly string[]).includes(level) ? (level as Secrecy) : "public";
+};
 
 export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, onOpenOwner, onOpenLore, module = null }: {
   wid: string;

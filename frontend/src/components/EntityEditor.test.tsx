@@ -562,3 +562,40 @@ test("'+ New' after viewing a secret entry does not inherit its level", async ()
   fireEvent.click(screen.getByRole("button", { name: /\+ new lore entry/i }));
   expect(screen.getByRole("radio", { name: "Public" })).toBeChecked();
 });
+
+test("a hand-edited secrecy value is read the way the backend reads it", async () => {
+  // `store.entities.normalize_secrecy` trims and lowercases, because frontmatter
+  // is hand-editable. Matching only the canonical spelling here badged the entry
+  // Public and made the next save send "public" — a valid level, so the route
+  // accepted it and the entry was silently published.
+  (api.listEntities as any).mockResolvedValue([{ id: "twist", name: "Twist", secrecy: " Secret " }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "twist", name: "Twist", secrecy: " Secret " }, body: "x" });
+  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByText("Twist"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).getByText("Secret")).toBeInTheDocument();
+  expect(within(side).queryByText("Public")).toBeNull();
+
+  // and an unrelated edit must not downgrade it on the way back out
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  expect(screen.getByRole("radio", { name: "Secret" })).toBeChecked();
+  fireEvent.change(screen.getByLabelText("Body"), { target: { value: "edited" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() =>
+    expect(api.updateEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore", "twist",
+      expect.objectContaining({ body: "edited", secrecy: "secret" })),
+  );
+});
+
+test("an unrecognised secrecy value still reads as public", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "typo", name: "Typo", secrecy: "sercet" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "typo", name: "Typo", secrecy: "sercet" }, body: "x" });
+  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByText("Typo"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).getByText("Public")).toBeInTheDocument();
+});
