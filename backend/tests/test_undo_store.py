@@ -17,7 +17,7 @@ import pytest
 
 from grimoire.store import (absorb, appearances, campaigns, characters, commitments,
                             dossiers, entities, groupstate, journal, playstate, plot,
-                            relationships, scenes, undo, worlds)
+                            overlay, relationships, scenes, undo, worlds)
 
 
 @pytest.fixture
@@ -486,3 +486,139 @@ def test_a_commitment_whose_id_was_reallocated_carries_no_reversal(cid, sid):
     assert entry["undo"] is None and entry["why"] == undo.GENERIC
     # ...and the record the snapshot came from is untouched by any of it.
     assert len(commitments.get(cid, "pay-mara")["beats"]) == 1
+
+
+# --- a sidecar whose owner is gone ------------------------------------------
+
+def test_undo_will_not_conjure_a_flag_for_a_deleted_character(cid, sid):
+    """`absorb.apply`'s voice_drift branch refuses to write a flag for a
+    character that does not exist -- "a forged row must not conjure a phantom".
+    The reversal writes through the same store function and has to keep the same
+    promise, or Undo becomes the way around the guard.
+
+    Reachable with no hand-editing at all: a CLEAR is an ordinary absorb outcome
+    and leaves {"note": "", "anchor": ""}, which is exactly what a missing file
+    reads as -- so the compare-and-swap passes for a character deleted since.
+    """
+    from grimoire.store import voice_drift
+    croot = campaigns.campaign_root(cid)
+    aid = _cast(cid, sid)
+    fp = voice_drift.anchor_fingerprint("terse and dry", "")
+    voice_drift.write(croot, aid, "She has stopped hedging.", fp)
+    edit = {"id": "vd", "kind": "voice_drift",
+            "target": {"kind": "characters", "id": aid},
+            "label": "Mara — voice drift", "field": "note",
+            "before": "She has stopped hedging.", "after": "", "authored": False,
+            "payload": {"op": "clear", "before_anchor": fp}}
+    applied, failures = absorb.apply_edits(cid, [edit], sid)
+    assert applied and not failures
+    characters.delete_character(croot, aid)
+
+    with pytest.raises(undo.UndoConflict) as exc:
+        undo.undo(cid, "j1")
+    assert "no longer exists" in str(exc.value)
+    assert not voice_drift.flag_path(croot, aid).exists()
+    # The id outlives the record (`overlay.forget_world_record`), so a flag left
+    # here would be adopted by whatever claims the slug next.
+    assert not (croot / "characters" / aid).exists()
+
+
+def test_undo_will_not_conjure_play_state_for_a_deleted_character(cid, sid):
+    """`character_state` has no blank guard, so this one needs no redo to reach:
+    an approved edit that clears the state leaves "" behind, and "" is what a
+    missing state.md reads as."""
+    croot = campaigns.campaign_root(cid)
+    aid = _cast(cid, sid)
+    playstate.write_state(croot, aid, "calm")
+    edit = {"id": "cs", "kind": "character_state",
+            "target": {"kind": "characters", "id": aid},
+            "label": "Mara — current state", "field": "current_state",
+            "before": "calm", "after": "", "authored": False}
+    assert absorb.apply_edits(cid, [edit], sid)[0]
+    characters.delete_character(croot, aid)
+    with pytest.raises(undo.UndoConflict):
+        undo.undo(cid, "j1")
+    assert not playstate.state_path(croot, aid).exists()
+
+
+def test_undo_will_not_conjure_group_state_for_a_deleted_group(cid, sid):
+    croot = campaigns.campaign_root(cid)
+    gid = entities.create_entity(croot, "groups", "The Harbourmen")
+    groupstate.write_state(croot, gid, groupstate.compose_body({"goals": "hold the pier"}))
+    edit = {"id": "gs", "kind": "group_state", "target": {"kind": "groups", "id": gid},
+            "label": "The Harbourmen — goals", "field": "goals",
+            "before": "hold the pier", "after": "", "authored": False}
+    assert absorb.apply_edits(cid, [edit], sid)[0]
+    overlay.delete_entity(cid, "groups", gid)
+    with pytest.raises(undo.UndoConflict):
+        undo.undo(cid, "j1")
+    assert not groupstate.state_path(croot, gid).exists()
+
+
+def test_a_living_record_is_unaffected_by_the_owner_check(cid, sid):
+    """The guard must refuse a deleted owner and nothing else — a check that
+    also blocks the ordinary case would be the more expensive bug."""
+    croot = campaigns.campaign_root(cid)
+    aid = _cast(cid, sid)
+    playstate.write_state(croot, aid, "calm")
+    edit = {"id": "cs", "kind": "character_state",
+            "target": {"kind": "characters", "id": aid},
+            "label": "Mara — current state", "field": "current_state",
+            "before": "calm", "after": "shaken", "authored": False}
+    absorb.apply_edits(cid, [edit], sid)
+    undo.undo(cid, "j1")
+    assert playstate.read_state(croot, aid)["current_state"] == "calm"
+
+
+# --- claims made in the docstrings, held to by a test -----------------------
+
+def test_undoing_a_plot_beat_leaves_sibling_threads_alone(cid, sid):
+    """`plot.restore` is scoped to one id on purpose. A whole-file restore from
+    the snapshot would pass every other assertion in this file and quietly
+    rewind threads the reversal has no business touching."""
+    plot.set_movement(cid, "the-map", "The map", "open", "It surfaced.", "s0")
+    absorb.apply_edits(cid, [_plot_edit("It moved.", before="open — It surfaced.")], sid)
+    plot.set_movement(cid, "the-debt", "The debt", "advanced", "She called it in.", "s2")
+    undo.undo(cid, "j1")
+    other = plot.get(cid, "the-debt")
+    assert other["status"] == "advanced"
+    assert [b["text"] for b in other["beats"]] == ["She called it in."]
+
+
+def test_undoing_a_feeling_leaves_other_pairs_alone(cid, sid):
+    absorb.apply_edits(cid, [_feeling_edit("trust 4, affection 3, tension 1")], sid)
+    relationships.set_feeling(cid, "characters:winifred", "characters:mara", 2, 2, 2, "")
+    undo.undo(cid, "j1")
+    assert relationships.get_feeling(cid, "characters:winifred", "characters:mara") == {
+        "trust": 2, "affection": 2, "tension": 2, "note": ""}
+
+
+def test_a_card_edit_will_not_land_in_a_version_swapped_in_since(cid, sid):
+    """The reversal pins the version it wrote. If `import-version` swapped the
+    lock since, writing the old text into whichever version is locked now would
+    edit a card nobody was looking at — so the reading carries the locked id
+    beside the field text, and the compare-and-swap refuses."""
+    wid = campaigns.read_campaign(cid)["meta"]["world"]
+    wroot = worlds.world_root(wid)
+    card = characters.blank_card("Seraphine")
+    card["data"]["personality"] = "aloof"
+    aid, vid = characters.create_character(wroot, "Seraphine", "main", card)
+    other = characters.create_version(wroot, aid, "alt", characters.blank_card("Seraphine"))
+    appearances.appear(cid, sid, "characters", aid, vid, "npc")
+    edit = {"id": "au", "kind": "authored",
+            "target": {"kind": "characters", "id": aid},
+            "label": "Seraphine — personality (card edit)", "field": "personality",
+            "before": "aloof", "after": "warmer", "authored": True}
+    applied, failures = absorb.apply_edits(cid, [edit], sid)
+    assert applied and not failures
+
+    appearances.import_version(cid, "characters", aid, other)
+    assert appearances.locked_version(cid, "characters", aid) == other
+    with pytest.raises(undo.UndoConflict):
+        undo.undo(cid, "j1")
+    # The swap purges the version this edit landed in (one version per locked
+    # actor), so the text it wrote is gone either way — what the pin buys is
+    # that the reversal does not write "aloof" into the version that replaced
+    # it, which is a card nobody was looking at when the edit was approved.
+    aroot = appearances.locked_actor_root(cid)
+    assert characters.read_card(aroot, aid, other)["data"]["personality"] == ""

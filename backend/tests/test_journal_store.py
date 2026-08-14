@@ -141,3 +141,27 @@ def test_both_caps_apply(cid, monkeypatch):
     for _ in range(6):
         journal.append(cid, [_row()])
     assert [e["id"] for e in journal.read(cid)] == ["j4", "j5", "j6"]
+
+
+def test_a_row_cannot_take_an_id_already_in_use(cid):
+    """The allocated id is applied over the row, not under it: a row carrying
+    its own `id` would otherwise re-point `get` and `mark_undone` at somebody
+    else's entry."""
+    journal.append(cid, [_row()])
+    journal.append(cid, [_row(id="j1", ts="1999-01-01T00:00:00Z", label="forged")])
+    entries = journal.read(cid)
+    assert [e["id"] for e in entries] == ["j1", "j2"]
+    assert journal.get(cid, "j1")["label"] == "Saltmarch — locations"
+    assert entries[1]["ts"] != "1999-01-01T00:00:00Z"
+
+
+def test_a_commit_with_more_edits_than_the_row_cap_keeps_all_of_them(cid, monkeypatch):
+    """The row cap must honour the same floor the byte cap does, or a large
+    commit trims away rows of the write it is in the middle of recording."""
+    monkeypatch.setattr(journal, "RETENTION", 3)
+    written = journal.append(cid, [_row() for _ in range(6)])
+    assert len(written) == 6
+    assert [e["id"] for e in journal.read(cid)] == [e["id"] for e in written]
+    # ...and the next ordinary append trims back down to the cap.
+    journal.append(cid, [_row()])
+    assert len(journal.read(cid)) == 3

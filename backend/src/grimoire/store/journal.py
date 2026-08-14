@@ -139,7 +139,11 @@ def append(cid: str, rows: list[dict]) -> list[dict]:
         written: list[dict] = []
         for row in rows:
             doc["seq"] += 1
-            entry = {"id": f"j{doc['seq']}", "ts": ts, **row}
+            # The allocated id and stamp go LAST, so a row carrying its own
+            # `id` cannot take one already in use -- which would silently
+            # re-point `get` and `mark_undone` at somebody else's entry. No
+            # caller does that today; the ordering is what keeps it that way.
+            entry = {**row, "id": f"j{doc['seq']}", "ts": ts}
             doc["entries"].append(entry)
             written.append(entry)
         doc["entries"] = _trim(doc["entries"], keep=len(written))
@@ -159,7 +163,12 @@ def _trim(entries: list[dict], keep: int) -> list[dict]:
     Sizes are measured once per entry rather than by re-serializing the list on
     each pop, which would be quadratic in exactly the case that reaches here.
     """
-    entries = entries[-RETENTION:] if len(entries) > RETENTION else entries
+    # The floor applies to the row cap too, not only to the byte cap below. A
+    # commit with more edits than `RETENTION` would otherwise have this trim
+    # away rows of the write it is in the middle of recording -- the same thing
+    # the byte cap is careful not to do, so the two must not disagree.
+    room = max(RETENTION, keep)
+    entries = entries[-room:] if len(entries) > room else entries
     sizes = [len(json.dumps(e, default=str)) for e in entries]
     total, first = sum(sizes), 0
     while total > MAX_BYTES and len(entries) - first > keep:
