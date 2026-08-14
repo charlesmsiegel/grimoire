@@ -31,10 +31,19 @@ not have — the one outcome a backup must never have — so the error propagate
 and, because the archive is built into a temp and published by rename
 (`atomic.streaming_write`), nothing is left behind for a listing to offer as a
 restore point.
+
+A file that has *vanished* is the one exception, and it is not the same thing.
+The store is live while this runs, and every atomic write in it creates a temp
+beside its target and renames it away a moment later; a walk that listed one
+of those and then found it gone has not lost any state, because the state it
+named stopped existing before it could be copied. Failing there would mean a
+backup could not be taken while anyone was playing, which is precisely when
+one is worth having.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import zipfile
@@ -56,6 +65,8 @@ _NAME_RE = re.compile(r"^grimoire-(\d{8}T\d{6}Z)(?:-(\d+))?\.zip$")
 
 #: Rebuildable derived data, relative to the store root.
 _DERIVED = ".cache"
+
+_log = logging.getLogger(__name__)
 
 
 def backup_dir() -> Path:
@@ -106,16 +117,20 @@ def _is_skipped(path: Path, skip: tuple[Path, ...]) -> bool:
     return any(candidate == s or s in candidate.parents for s in skip)
 
 
-def _is_own_archive(path: Path, directory: Path) -> bool:
-    """An archive this module wrote, sitting in the backup directory.
+def _is_backup_artifact(name: str) -> bool:
+    """A file this module put in the backup directory: a finished archive, or
+    the temp an in-flight one is being built into.
 
-    The one case `_skips` cannot express: a backup directory set to the store
-    root itself. Excluding that directory would exclude the whole store, and
-    excluding nothing would have each archive swallow every archive before it.
-    Excluding them by name costs a user's own `grimoire-<stamp>.zip` parked at
-    the store root, which is a trade nobody will ever notice.
+    Both have to be invisible to a walk that reaches the backup directory —
+    which happens only when that directory IS the store root, since anywhere
+    else inside the store is pruned outright. Excluding the directory itself is
+    not available in that case (it would exclude the whole store), and
+    excluding nothing archived each archive into the next *and* copied the
+    half-written temp into itself. The cost is a user's own
+    `grimoire-<stamp>.zip` parked at the store root, which nobody will notice.
     """
-    return _NAME_RE.match(path.name) is not None and _norm(path.parent) == _norm(directory)
+    return bool(_NAME_RE.match(name)) or (
+        name.startswith(f".{_PREFIX}") and name.endswith(".tmp"))
 
 
 def _store_file(z: zipfile.ZipFile, path: Path, arcname: str) -> None:
@@ -136,21 +151,39 @@ def _archive_into(fh, root: Path, skip: tuple[Path, ...]) -> None:
     archive unbounded. Anything that is not a regular file (a broken link, a
     socket, a fifo) is skipped rather than opened.
 
+    A member that disappears between the listing and the copy is skipped, for
+    the reason in the module docstring. Every other failure propagates.
+
+    The skip check is per *directory*, not per file: `_norm` calls `getcwd`,
+    and running it over every file in a library to re-answer a question the
+    pruning above already settled is work for nothing.
+
+    ``strict_timestamps=False`` because the zip format cannot represent a
+    timestamp before 1980 or after 2107, and a member outside that range makes
+    `write` raise -- one file restored out of an old tarball with an epoch-0
+    mtime took the entire backup down with it. The flag clamps the stored stamp
+    at both ends instead. A member's mtime is metadata about the file; losing a
+    1970 on one of them is not a reason to have no backup at all.
+
     Entries are sorted so two archives of an unchanged store list their members
     in the same order.
     """
-    directory = backup_dir()
-    with zipfile.ZipFile(fh, "w", zipfile.ZIP_DEFLATED) as z:
+    directory = _norm(backup_dir())
+    with zipfile.ZipFile(fh, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as z:
         for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
             here = Path(dirpath)
             dirnames[:] = sorted(d for d in dirnames if not _is_skipped(here / d, skip))
+            in_backup_dir = _norm(here) == directory
             for name in sorted(filenames):
                 path = here / name
-                if _is_skipped(path, skip) or _is_own_archive(path, directory):
+                if in_backup_dir and _is_backup_artifact(name):
                     continue
-                if not path.is_file():
+                try:
+                    if not path.is_file():
+                        continue
+                    _store_file(z, path, path.relative_to(root).as_posix())
+                except FileNotFoundError:
                     continue
-                _store_file(z, path, path.relative_to(root).as_posix())
 
 
 def _utc(when: datetime | None) -> datetime:
@@ -267,19 +300,32 @@ def sweep(keep: int | None = None) -> list[str]:
         return [row["name"] for row in doomed]
 
 
+def _taken_at(name: str) -> datetime:
+    return datetime.strptime(_order(name)[0], _STAMP).replace(tzinfo=timezone.utc)
+
+
 def due(now: datetime | None = None) -> bool:
     """Whether the interval has elapsed since the newest archive.
 
     Derived from the archives themselves rather than a recorded "last run", so
     it survives a restart, a moved store, and two machines sharing one library
     through a synced folder. A store with no archive is always due.
+
+    Archives stamped in the *future* are ignored when answering, which is not
+    fussiness: a store synced from a machine whose clock is ahead — or one
+    restored with a nonsense stamp — otherwise makes this return False for as
+    long as that stamp is in the future, and automatic backups stop dead with
+    nothing anywhere saying so. Skipping them means one backup is taken now and
+    the schedule then runs off *its* stamp, so the series converges instead of
+    either stalling forever or re-running every tick.
     """
     rows = list_backups()
-    if not rows:
+    at = _utc(now)
+    past = [r for r in rows if _taken_at(r["name"]) <= at]
+    if not past:
         return True
-    newest = datetime.strptime(_order(rows[0]["name"])[0], _STAMP).replace(
-        tzinfo=timezone.utc)
-    return _utc(now) - newest >= timedelta(hours=config.backup_interval_hours())
+    return at - _taken_at(past[0]["name"]) >= timedelta(
+        hours=config.backup_interval_hours())
 
 
 def run_scheduled(now: datetime | None = None) -> Path | None:
@@ -292,6 +338,13 @@ def run_scheduled(now: datetime | None = None) -> Path | None:
     `due` and `create_backup` share one hold of the backup lock: apart, two
     processes ticking together would both see the same stale newest archive and
     both zip the library.
+
+    A sweep that fails is logged and does not take the archive down with it.
+    The archive is what this call is for and it has already landed; raising
+    here would have the ticker report a written backup as a skipped one, and
+    "your backup failed" is the opposite of what happened. The unpruned
+    directory is not hidden — the next manual run reports the same failure to
+    the caller, who can act on it.
     """
     if not config.backup_enabled():
         return None
@@ -300,5 +353,9 @@ def run_scheduled(now: datetime | None = None) -> Path | None:
         if not due(at):
             return None
         made = create_backup(when=at)
-    sweep()
+    try:
+        sweep()
+    except OSError as exc:
+        _log.warning("backup %s written, but retention could not run -- %s",
+                     made.name, exc)
     return made

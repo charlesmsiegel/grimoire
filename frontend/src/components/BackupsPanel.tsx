@@ -30,7 +30,7 @@ export function BackupsPanel({ dir }: { dir: string }) {
   const [where, setWhere] = useState("");
   const [rows, setRows] = useState<BackupEntry[] | null>(null);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [msg, setMsg] = useState<{ kind: "ok" | "warn" | "err"; text: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -58,13 +58,18 @@ export function BackupsPanel({ dir }: { dir: string }) {
       const run = await api.createBackup();
       setWhere(run.dir);
       setRows(run.backups);
-      setMsg({
-        kind: "ok",
-        text: run.swept.length
-          ? `Backed up to ${run.created} — ${run.swept.length} older ${
-              run.swept.length === 1 ? "archive" : "archives"} removed`
-          : `Backed up to ${run.created}`,
-      });
+      // The archive landed either way, so this is never an error state — but a
+      // retention failure that only showed up as a growing folder would be the
+      // kind of silence this whole block exists to break.
+      setMsg(run.retention_error
+        ? { kind: "warn", text: `Backed up to ${run.created}. ${run.retention_error}` }
+        : {
+            kind: "ok",
+            text: run.swept.length
+              ? `Backed up to ${run.created} — ${run.swept.length} older ${
+                  run.swept.length === 1 ? "archive" : "archives"} removed`
+              : `Backed up to ${run.created}`,
+          });
     } catch (e) {
       setMsg({
         kind: "err",
@@ -77,14 +82,19 @@ export function BackupsPanel({ dir }: { dir: string }) {
 
   return (
     <>
-      <div className="joined">
-        <input className="mono-input" aria-label="Current backup folder" readOnly value={where} />
-        <button className="btn-accent" onClick={backUpNow} disabled={busy}>
-          {busy ? "Backing up…" : "Back up now"}
-        </button>
-      </div>
+      {/* Prose and a button, not a read-only text box beside one: the folder
+          here is the server's *resolved* answer (the field above is blank for
+          the default), so it is something to read, and dressing it as an input
+          would put a focusable control on the page that cannot be used. */}
+      <p className="field-hint">
+        Archives are written to <code>{where}</code>.
+      </p>
+      <button className="btn-accent" onClick={backUpNow} disabled={busy}>
+        {busy ? "Backing up…" : "Back up now"}
+      </button>
       {msg && (
-        <p className={msg.kind === "err" ? "config-msg err" : "config-msg save-flash"}>
+        <p role={msg.kind === "ok" ? undefined : "alert"}
+           className={msg.kind === "ok" ? "config-msg save-flash" : "config-msg err"}>
           {msg.text}
         </p>
       )}

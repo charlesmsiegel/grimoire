@@ -142,6 +142,63 @@ def test_a_file_that_cannot_be_read_fails_the_backup_and_publishes_nothing(
     assert list((root / "backups").glob("*.zip")) == []
 
 
+def test_a_file_that_vanishes_mid_walk_does_not_fail_the_backup(monkeypatch, tmp_path):
+    """The store is live: every atomic write drops a temp beside its target and
+    renames it away a moment later, so a walk that lists one and then finds it
+    gone is the normal case, not a failure. Backing up only while nobody is
+    playing would defeat the point."""
+    root = home(monkeypatch, tmp_path)
+    small_store(root)
+    doomed = root / "campaigns" / "saltmarch" / ".scene.md.ab12cd.tmp"
+    doomed.write_text("mid-write", encoding="utf-8")
+    real_store = backups._store_file
+
+    def vanish(z, path, arcname):
+        if path == doomed:
+            path.unlink()               # exactly what atomic's rename does
+        return real_store(z, path, arcname)
+
+    monkeypatch.setattr(backups, "_store_file", vanish)
+    archive = backups.create_backup(when=AT)
+
+    assert "worlds/realm/world.md" in names_in(archive)
+    assert not any(n.endswith(".tmp") for n in names_in(archive))
+
+
+def test_a_file_older_than_the_zip_format_is_stored_with_a_clamped_stamp(
+        monkeypatch, tmp_path):
+    """Zip cannot represent a timestamp before 1980, and `ZipFile.write` raises
+    on one. A file restored out of an old tarball carries an epoch-0 mtime, and
+    that must not be the reason a library has no backups."""
+    root = home(monkeypatch, tmp_path)
+    small_store(root)
+    ancient = root / "worlds" / "realm" / "ancient.md"
+    ancient.write_text("from before the format", encoding="utf-8")
+    os.utime(ancient, (0, 0))
+
+    archive = backups.create_backup(when=AT)
+
+    with zipfile.ZipFile(archive) as z:
+        info = z.getinfo("worlds/realm/ancient.md")
+        assert info.date_time == (1980, 1, 1, 0, 0, 0)
+        assert z.read("worlds/realm/ancient.md") == b"from before the format"
+
+
+def test_the_archive_never_contains_the_temp_it_is_being_built_into(
+        monkeypatch, tmp_path):
+    """Only reachable with the backup directory set to the store root — the one
+    layout where the walk reaches the archives at all. It copied the
+    half-written temp into itself."""
+    root = home(monkeypatch, tmp_path)
+    small_store(root)
+    config.write_config(backup_dir=str(root))
+
+    archive = backups.create_backup(when=AT)
+
+    assert not any(n.endswith(".tmp") for n in names_in(archive))
+    assert "worlds/realm/world.md" in names_in(archive)
+
+
 # ---- listing ---------------------------------------------------------------
 
 def test_the_listing_is_newest_first_and_carries_size_and_date(monkeypatch, tmp_path):
@@ -243,6 +300,42 @@ def test_nothing_is_due_again_until_the_interval_has_passed(monkeypatch, tmp_pat
 
     assert not backups.due(now=AT + timedelta(hours=23, minutes=59))
     assert backups.due(now=AT + timedelta(hours=24))
+
+
+def test_an_archive_stamped_in_the_future_does_not_stall_the_schedule(
+        monkeypatch, tmp_path):
+    """A store synced from a machine whose clock is ahead, or restored with a
+    nonsense stamp, used to make `due` False for as long as that stamp was in
+    the future — automatic backups stopping dead with nothing saying so."""
+    root = home(monkeypatch, tmp_path)
+    small_store(root)
+    config.write_config(backup_enabled="on", backup_interval_hours="24")
+    (root / "backups").mkdir()
+    (root / "backups" / "grimoire-20990101T000000Z.zip").write_bytes(
+        b"PK\x05\x06" + b"\0" * 18)
+
+    assert backups.due(now=AT)
+
+    # ...and having taken one, the schedule runs off ITS stamp rather than
+    # re-firing every tick against the impossible one.
+    backups.create_backup(when=AT)
+    assert not backups.due(now=AT + timedelta(hours=1))
+    assert backups.due(now=AT + timedelta(hours=24))
+
+
+def test_a_sweep_that_fails_does_not_take_the_written_backup_with_it(
+        monkeypatch, tmp_path):
+    """The archive is what the call is for and it has already landed. Raising
+    here made the ticker log a written backup as a skipped one."""
+    root = home(monkeypatch, tmp_path)
+    small_store(root)
+    config.write_config(backup_enabled="on", backup_keep="1")
+    monkeypatch.setattr(backups, "sweep", lambda *a, **kw: (_ for _ in ()).throw(
+        PermissionError("cannot prune")))
+
+    made = backups.run_scheduled(now=AT)
+
+    assert made is not None and made.exists()
 
 
 def test_run_scheduled_does_nothing_while_backups_are_off(monkeypatch, tmp_path):
