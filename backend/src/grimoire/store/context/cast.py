@@ -166,10 +166,21 @@ def _cast_directory_data(croot, cid: str, sid: str) -> tuple[list[dict], list[di
         tag = overlay.tagline(cid, char_id)
         if not tag:
             continue
-        versions = [v["id"] for v in characters.read_character(overlay.char_root(cid, char_id), char_id)["versions"]]
-        known.append({"id": char_id,
-                      "name": _char_name(overlay.char_root(cid, char_id), char_id),
-                      "tagline": tag, "versions": versions})
+        # ONE read for both the name and the version list, off one resolved
+        # root. This used to be two `read_character` calls on the same file
+        # (`_char_name` makes its own) plus three `char_root` resolutions, per
+        # candidate, on every generated turn -- and tier 3 iterates the whole
+        # world, which is the very growth this section is being bounded for.
+        # Deliberately unguarded, exactly as before: the old pair read versions
+        # FIRST and unguarded, so a character that vanished between the listing
+        # and this read raised then and raises now. `_char_name`'s
+        # CharacterNotFound fallback was unreachable here for that reason, and
+        # this is a read-once refactor -- turning that raise into a degraded
+        # entry would be a different change, with its own test.
+        record = characters.read_character(overlay.char_root(cid, char_id), char_id)
+        known.append({"id": char_id, "name": record["meta"]["name"],
+                      "tagline": tag,
+                      "versions": [v["id"] for v in record["versions"]]})
     # Asked only when it can bite: `_scope_known` reads a card per in-scene
     # actor to rank the tail, and a campaign inside the ceiling has no tail.
     limit = _known_limit()
