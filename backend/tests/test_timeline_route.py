@@ -82,17 +82,27 @@ def test_scenes_come_back_in_play_order_not_recency(client):
 
 # ---- the card --------------------------------------------------------------
 
-def test_an_absorbed_scene_carries_its_one_line_summary_date_and_location(client):
+def test_an_absorbed_scene_carries_its_one_line_date_and_location(client):
     cid = _campaign(client)
     sid = _absorbed(cid, "The Long Tide", "They argued until the tide turned.",
                     date="3 Reaping", location="The Pier")
     (card,) = _timeline(client, cid)["scenes"]
     assert card["id"] == sid and card["title"] == "The Long Tide"
     assert card["one_line"] == "They argued until the tide turned."
-    assert card["summary"] == "They argued until the tide turned. At length."
     assert card["date"] == "3 Reaping"
     assert card["location"] == "The Pier"
     assert card["done"] is True
+
+
+def test_the_absorbs_full_summary_never_reaches_the_wire(client):
+    """A card is one line. `summary` is the largest field in a chronicle record
+    and nothing renders it, so shipping it would put the whole campaign's
+    absorbed prose in a response that shows none of it."""
+    cid = _campaign(client)
+    _absorbed(cid, "The Long Tide", "They argued until the tide turned.")
+    (card,) = _timeline(client, cid)["scenes"]
+    assert "summary" not in card
+    assert "At length." not in json.dumps(card)
 
 
 def test_a_scene_that_was_never_absorbed_still_gets_a_card(client):
@@ -103,7 +113,7 @@ def test_a_scene_that_was_never_absorbed_still_gets_a_card(client):
     sid = store.scenes.create_scene(cid, "The Priory Door")
     (card,) = _timeline(client, cid)["scenes"]
     assert card["id"] == sid and card["title"] == "The Priory Door"
-    assert card["one_line"] == "" and card["summary"] == "" and card["location"] == ""
+    assert card["one_line"] == "" and card["location"] == ""
     assert card["done"] is False
     assert card["beats"] == []
 
@@ -191,6 +201,57 @@ def test_every_thread_with_a_beat_on_a_card_is_offered_as_a_filter(client):
     assert _timeline(client, cid)["threads"] == [
         {"id": "z-thread", "title": "A debt unpaid", "status": "open"},
         {"id": "a-thread", "title": "The sea wall", "status": "closed"}]
+
+
+def test_a_thread_keeps_its_live_beats_when_one_of_them_is_orphaned(client):
+    """The partial case, which is the one that can go wrong quietly: a thread
+    that moved in a scene since deleted and in one still here must lose the
+    orphan and keep the rest — and must still be offered as a filter, because it
+    demonstrably touches a card."""
+    cid = _campaign(client)
+    sid = _absorbed(cid, "The Long Tide", "They argued.")
+    store.plot.set_movement(cid, "t", "The sea wall", "open", "Lost with its scene.",
+                            "0007--gone")
+    store.plot.set_movement(cid, "t", "The sea wall", "advanced", "Still here.", sid)
+
+    body = _timeline(client, cid)
+    assert [t["id"] for t in body["threads"]] == ["t"]
+    (card,) = body["scenes"]
+    assert [b["text"] for b in card["beats"]] == ["Still here."]
+
+
+def test_an_absorbed_scene_that_was_deleted_is_not_resurrected_by_its_record(client):
+    """The timeline is a list of SCENES, joined to the chronicle — not a list of
+    chronicle records labelled with scenes, which is how the ledger reads. So a
+    deleted scene stays deleted even though `chronicle.json` still holds
+    everything the absorb wrote about it."""
+    cid = _campaign(client)
+    kept = _absorbed(cid, "The Long Tide", "They argued.")
+    gone = _absorbed(cid, "The Turning", "It ended.")
+    store.scenes.delete_scene(cid, gone)
+    # The premise, asserted rather than assumed: `delete_scene` retires the
+    # commit ledger, the turn state and the alternates sidecar and deliberately
+    # leaves the chronicle alone. If that ever changes this test passes for the
+    # wrong reason, so it fails here instead.
+    assert gone in store.chronicle.read_chronicle(cid)
+
+    body = _timeline(client, cid)
+    assert [s["id"] for s in body["scenes"]] == [kept]
+    assert "It ended." not in json.dumps(body)
+
+
+@pytest.mark.parametrize("beats", ["nope", 7, {}, None])
+def test_a_thread_whose_beats_are_not_a_list_costs_only_itself(client, beats):
+    cid = _campaign(client)
+    sid = _absorbed(cid, "The Long Tide", "They argued.")
+    (store.campaigns.campaign_root(cid) / "plot.json").write_text(json.dumps(
+        {"bad": {"title": "Malformed", "status": "open", "last_scene": sid, "beats": beats},
+         "good": {"title": "A thread", "status": "open", "last_scene": sid,
+                  "beats": [{"scene": sid, "text": "Named."}]}}), encoding="utf-8")
+
+    body = _timeline(client, cid)
+    assert [t["id"] for t in body["threads"]] == ["good"]
+    assert [b["text"] for b in body["scenes"][0]["beats"]] == ["Named."]
 
 
 def test_a_thread_whose_beats_all_point_at_deleted_scenes_is_not_offered(client):

@@ -1,82 +1,57 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, type Timeline, type TimelineScene } from "../api/client";
+import { api, type Timeline } from "../api/client";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { usePublishShellContext } from "../components/ShellStatus";
+import { boundRank, inSpan, spanOf } from "./timelineSpan";
 
 /** What a failed load degrades to: the empty state, never a stuck "Reading…" —
  *  the policy the ledger runs on. */
 const EMPTY: Timeline = { scenes: [], threads: [] };
 
-type State = "all" | "absorbed" | "open";
+/** Which half of the campaign to show: everything, the scenes whose absorb has
+ *  run, or the ones still in play. */
+type AbsorbFilter = "all" | "absorbed" | "open";
 
-const STATES: { key: State; label: string }[] = [
+const ABSORB_FILTERS: { key: AbsorbFilter; label: string }[] = [
   { key: "all", label: "Every scene" },
   { key: "absorbed", label: "Absorbed" },
   { key: "open", label: "Not absorbed" },
 ];
 
-/** The distinct in-fiction dates, in **play order** — first appearance walking
- *  the scenes as the server sorted them.
- *
- *  Play order, not sorted order, and that is the whole of it: a native date is
- *  `<year>-<month key>-<day>` where the month key is a *string* a calendar
- *  provider supplies, so sorting those strings orders months alphabetically.
- *  The scene sequence is the authority on when things happened (a flashback is
- *  out of date order on purpose), so the dates inherit its order rather than
- *  imposing one of their own. */
-function momentsOf(scenes: TimelineScene[]): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const s of scenes) {
-    if (s.date && !seen.has(s.date)) { seen.add(s.date); out.push(s.date); }
-  }
-  return out;
-}
-
-/** Each scene's position in that sequence of moments, by index.
- *
- *  A scene with no date **carries the rank of the last dated scene before it**,
- *  which is exactly what an undated scene means on a timeline: it happened
- *  after that date and before the next. Without the carry-forward every
- *  undated scene — the ordinary case for anything not yet absorbed, and for
- *  any scene whose datetime has not been set — would drop out of every span
- *  the reader picked, which is the opposite of what a span is for.
- *
- *  A scene before *any* dated one ranks -1: it genuinely precedes the first
- *  known moment, so it belongs to no span that starts at one. */
-function ranksOf(scenes: TimelineScene[], moments: string[]): number[] {
-  let running = -1;
-  return scenes.map((s) => {
-    if (s.date) running = moments.indexOf(s.date);
-    return running;
-  });
-}
-
 export default function TimelineView() {
   const { cid = "" } = useParams();
-  const [name, setName] = useState("");
-  // Held with the campaign the cards came FROM, the way the ledger holds its
-  // rows: the route is not keyed on `cid`, so a campaign switch keeps this
-  // component mounted and a bare `Timeline | null` would go on showing one
-  // game's scenes under the other's name until the new request settled.
+  // Held with the campaign it names, and dropped rather than raced, for exactly
+  // the reason the timeline below is: the route is not keyed on `cid`, so a
+  // campaign switch keeps this component mounted, and an unheld name would sit
+  // over the other game's scenes — in the heading, the back link and the shell
+  // context at once — until this settled. Two reads can also be in flight at
+  // once, and nothing orders their responses.
+  const [named, setNamed] = useState<{ cid: string; name: string } | null>(null);
   const [loaded, setLoaded] = useState<{ cid: string; data: Timeline } | null>(null);
 
   // The three filters the view offers. Threads are multi-select (OR): asking
   // "the sea wall or the debt" is the ordinary way a reader narrows a play
   // history, and forcing one at a time would make that two passes.
   const [threads, setThreads] = useState<string[]>([]);
-  const [state, setState] = useState<State>("all");
-  // Indices into `moments`, or null for "no bound". Held as dates rather than
-  // indices would break the moment a scene is re-dated under them.
-  const [from, setFrom] = useState<number | null>(null);
-  const [to, setTo] = useState<number | null>(null);
+  const [absorb, setAbsorb] = useState<AbsorbFilter>("all");
+  // The span bounds, held as **dates** rather than as positions — see
+  // `boundRank`, which carries the argument: a position is an index into a list
+  // derived from the data, so a scene re-dated underneath it re-points the
+  // filter at a different moment with nothing on screen changing.
+  const [from, setFrom] = useState<string | null>(null);
+  const [to, setTo] = useState<string | null>(null);
 
+  const name = named && named.cid === cid ? named.name : "";
   usePublishShellContext(name ? { campaign: name, scene: "" } : null);
 
   useEffect(() => {
-    api.getCampaign(cid).then((c) => setName(c.meta.name)).catch(() => setName(cid));
+    let live = true;
+    api.getCampaign(cid)
+      .then((c) => { if (live) setNamed({ cid, name: c.meta.name }); })
+      .catch(() => { if (live) setNamed({ cid, name: cid }); });
+    return () => { live = false; };
   }, [cid]);
 
   useEffect(() => {
@@ -90,41 +65,73 @@ export default function TimelineView() {
     return () => { live = false; };
   }, [cid]);
 
+  const clear = useCallback(() => {
+    setThreads([]); setAbsorb("all"); setFrom(null); setTo(null);
+  }, []);
+
   // The filters describe *this* campaign's threads and moments, so a switch has
   // to clear them — a thread id from the campaign you left narrows the one you
   // arrived at to nothing, with no visible cause.
-  useEffect(() => { setThreads([]); setState("all"); setFrom(null); setTo(null); }, [cid]);
+  //
+  // On a *switch*, which is why the first cid is remembered rather than just
+  // calling `clear()` on every run: the filters start cleared, and `setThreads([])`
+  // installs a new array every time, so an unguarded effect would fail the
+  // Object.is bail-out and spend a second render on mount saying nothing.
+  const priorCid = useRef(cid);
+  useEffect(() => {
+    if (priorCid.current === cid) return;
+    priorCid.current = cid;
+    clear();
+  }, [cid, clear]);
 
   const timeline = loaded && loaded.cid === cid ? loaded.data : null;
   const scenes = useMemo(() => timeline?.scenes ?? [], [timeline]);
-  const moments = useMemo(() => momentsOf(scenes), [scenes]);
-  const ranks = useMemo(() => ranksOf(scenes, moments), [scenes, moments]);
+  const { moments, ranks } = useMemo(() => spanOf(scenes), [scenes]);
 
-  /** How many scenes each thread touches — the count beside its chip, and the
+  // The bounds resolved to positions — `null` both when nothing is chosen and
+  // when what was chosen is a date this campaign no longer has. Resolved once,
+  // here, and everything downstream reads THESE rather than the raw held
+  // strings: the filter, the "is anything filtering" test behind the pinned
+  // control, and the selects' own displayed values. A vanished bound has to
+  // read as absent in all three or the page disagrees with itself — a select
+  // showing "The beginning" over state that still says otherwise.
+  const fromRank = boundRank(moments, from);
+  const toRank = boundRank(moments, to);
+
+  /** Everything the OTHER two filters admit. The thread chips are counted
+   *  against this rather than against the whole campaign, and `shown` is this
+   *  narrowed by them.
+   *
+   *  That split is the point: a count taken over every scene reads "2" beside a
+   *  chip that, with NOT ABSORBED also on, produces nothing when clicked — the
+   *  column contradicting the page it labels. `LedgerView` learned the same
+   *  thing about SHOW RETIRED and its section counts. */
+  const base = useMemo(() => scenes.filter((s, i) =>
+    !(absorb === "absorbed" && !s.done)
+    && !(absorb === "open" && s.done)
+    && inSpan(ranks[i], fromRank, toRank)),
+  [scenes, absorb, fromRank, toRank, ranks]);
+
+  /** How many of those each thread touches — the count beside its chip, and the
    *  reason the roster is worth a column of its own. */
   const perThread = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const s of scenes) {
+    for (const s of base) {
       for (const t of new Set(s.beats.map((b) => b.thread))) {
         counts.set(t, (counts.get(t) ?? 0) + 1);
       }
     }
     return counts;
-  }, [scenes]);
+  }, [base]);
 
-  const shown = useMemo(() => scenes.filter((s, i) => {
-    if (threads.length && !s.beats.some((b) => threads.includes(b.thread))) return false;
-    if (state === "absorbed" && !s.done) return false;
-    if (state === "open" && s.done) return false;
-    if (from !== null && ranks[i] < from) return false;
-    if (to !== null && ranks[i] > to) return false;
-    return true;
-  }), [scenes, threads, state, from, to, ranks]);
+  const shown = useMemo(() => (
+    threads.length
+      ? base.filter((s) => s.beats.some((b) => threads.includes(b.thread)))
+      : base
+  ), [base, threads]);
 
-  const filtered = threads.length > 0 || state !== "all" || from !== null || to !== null;
-  const clear = useCallback(() => {
-    setThreads([]); setState("all"); setFrom(null); setTo(null);
-  }, []);
+  const filtered = threads.length > 0 || absorb !== "all"
+                   || fromRank !== null || toRank !== null;
   const toggleThread = useCallback((id: string) => {
     setThreads((cur) => cur.includes(id) ? cur.filter((t) => t !== id) : [...cur, id]);
   }, []);
@@ -149,10 +156,14 @@ export default function TimelineView() {
       </div>
 
       <ColumnSection label="Scenes" count={timeline ? `${shown.length}/${scenes.length}` : "—"}>
-        {STATES.map((s) => (
-          <button key={s.key} className={"column-row" + (state === s.key ? " active" : "")}
-                  onClick={() => setState(s.key)}>
-            <span className="column-row-label">{s.label}</span>
+        {/* `aria-pressed`, like the thread chips below: the `.active` class is
+            the only other thing saying which of the three is on, and a class is
+            not something a screen reader can read. */}
+        {ABSORB_FILTERS.map((f) => (
+          <button key={f.key} className={"column-row" + (absorb === f.key ? " active" : "")}
+                  aria-pressed={absorb === f.key}
+                  onClick={() => setAbsorb(f.key)}>
+            <span className="column-row-label">{f.label}</span>
           </button>
         ))}
       </ColumnSection>
@@ -182,20 +193,25 @@ export default function TimelineView() {
           over zero moments is furniture. */}
       {moments.length > 0 && (
         <ColumnSection label="Span">
+          {/* The option VALUE is the date itself, so the bound survives the
+              list being rebuilt under it — see `boundRank`. Displayed back
+              through `moments[rank]` rather than the held string, which is
+              the same date whenever it resolves and needs no cast to prove
+              an option exists for it. */}
           <label className="timeline-span">
             <span>From</span>
-            <select value={from === null ? "" : from}
-                    onChange={(e) => setFrom(e.target.value === "" ? null : Number(e.target.value))}>
+            <select value={fromRank === null ? "" : moments[fromRank]}
+                    onChange={(e) => setFrom(e.target.value || null)}>
               <option value="">The beginning</option>
-              {moments.map((m, i) => <option key={m} value={i}>{m}</option>)}
+              {moments.map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
           </label>
           <label className="timeline-span">
             <span>To</span>
-            <select value={to === null ? "" : to}
-                    onChange={(e) => setTo(e.target.value === "" ? null : Number(e.target.value))}>
+            <select value={toRank === null ? "" : moments[toRank]}
+                    onChange={(e) => setTo(e.target.value || null)}>
               <option value="">Now</option>
-              {moments.map((m, i) => <option key={m} value={i}>{m}</option>)}
+              {moments.map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
           </label>
         </ColumnSection>
@@ -271,6 +287,7 @@ export default function TimelineView() {
                               to see "the sea wall" on a card is to ask what
                               else it touched. */}
                           <button className={"chip" + (threads.includes(b.thread) ? " on" : "")}
+                                  aria-pressed={threads.includes(b.thread)}
                                   onClick={() => toggleThread(b.thread)}>
                             {/* Cased as written, not upper-cased here: `.chip`
                                 already carries `text-transform`, and doing it

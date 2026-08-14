@@ -2719,9 +2719,11 @@ a.column-back { text-decoration: none; }
   color: var(--subtle);
 }
 /* An absorbed scene reads as settled; one still in play keeps the accent edge,
-   because it is the one you can still change. */
-.timeline-card:not(.done) { border-left: 2px solid var(--accent); padding-left: 14px; }
-.timeline-card.done { border-left: 2px solid transparent; padding-left: 14px; }
+   because it is the one you can still change. The edge is always drawn, merely
+   transparent when settled: a border that came and went would shift every
+   absorbed card 2px left of the ones around it. */
+.timeline-card { border-left: 2px solid transparent; padding-left: 14px; }
+.timeline-card:not(.done) { border-left-color: var(--accent); }
 /* The two span selects, stacked in the column. */
 .timeline-span {
   display: flex; align-items: center; gap: 10px; padding: 4px 16px 8px;

@@ -904,10 +904,15 @@ export type SearchResult = {
 // the play timeline (#198) — the ledger's other half. The ledger answers what
 // is still open; this answers what happened, in play order, one card per scene.
 //
-// `one_line`, `summary`, `location` and `done` exist only after the absorb, and
-// a campaign being played is normally a scene or two ahead of it — so the
-// ORDINARY card carries none of them and falls back to its title and its own
-// date. Treat them as optional content, never as "still loading".
+// `one_line`, `location` and `done` exist only after the absorb, and a campaign
+// being played is normally a scene or two ahead of it — so the ORDINARY card
+// carries none of them and falls back to its title and its own date. Treat them
+// as optional content, never as "still loading".
+//
+// The absorb's full `summary` is deliberately absent: a card is one line, and
+// shipping the whole campaign's prose for a view that renders none of it is the
+// biggest thing on the wire paying for nothing. `one_line` already falls back
+// to it server-side for the save that left `one_line` empty.
 /** One beat of a plot thread, on the card of the scene it landed in — the
  *  "thread pair" the timeline is for: what moved, and where. `title`/`status`
  *  are the THREAD's, repeated per beat so a card needs no second lookup. */
@@ -915,7 +920,7 @@ export type TimelineBeat = {
   thread: string; title: string; status: string; text: string;
 };
 export type TimelineScene = {
-  id: string; title: string; one_line: string; summary: string;
+  id: string; title: string; one_line: string;
   /** The scene's own opening moment, falling back to the chronicle's date. */
   date: string;
   location: string; done: boolean; pcless: boolean; beats: TimelineBeat[];
