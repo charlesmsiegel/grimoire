@@ -18,6 +18,8 @@ vi.mock("../api/client", () => ({
     listPCs: vi.fn(),
     listTags: vi.fn(),
     listEntities: vi.fn(),
+    readEntity: vi.fn(),
+    listEntityImages: vi.fn(),
     listGreetings: vi.fn(),
     readCharacter: vi.fn(),
     getCharacterTagline: vi.fn(), getCharacterVoiceAnchor: vi.fn(),
@@ -65,6 +67,11 @@ beforeEach(() => {
   (api.listPCs as any).mockResolvedValue([]);
   (api.listTags as any).mockResolvedValue({});
   (api.listEntities as any).mockResolvedValue([]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "the-salt-pact", name: "The Salt Pact", keys: "", owners: "" },
+    body: "Debts written in salt.",
+  });
+  (api.listEntityImages as any).mockResolvedValue([]);
   (api.listGreetings as any).mockResolvedValue([]);
   (api.readCharacter as any).mockResolvedValue({
     meta: { id: "mira", name: "Mira", default_version: "main" },
@@ -92,6 +99,16 @@ beforeEach(() => {
 function renderAt() {
   render(
     <MemoryRouter initialEntries={["/worlds/w"]}>
+      <Routes>
+        <Route path="/worlds/:wid" element={<WorldView />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+function renderAtUrl(url: string) {
+  render(
+    <MemoryRouter initialEntries={[url]}>
       <Routes>
         <Route path="/worlds/:wid" element={<WorldView />} />
       </Routes>
@@ -298,4 +315,38 @@ test("the standalone world route publishes no campaign — there isn't one", asy
   );
   await waitFor(() => expect(api.getWorld).toHaveBeenCalled());
   expect(seen.every((c) => c === null)).toBe(true);
+});
+
+
+// ---- deep links (#33): a search hit is a record, and following one has to
+// land on that record rather than on the section it lives in.
+
+test("?section=&id= opens the entity the URL names", async () => {
+  (api.listEntities as any).mockResolvedValue([
+    { id: "the-salt-pact", name: "The Salt Pact" },
+    { id: "the-tide-table", name: "The Tide Table" },
+  ]);
+  renderAtUrl("/worlds/w?section=lore&id=the-salt-pact");
+  expect(await screen.findByRole("heading", { name: "Lore" })).toBeInTheDocument();
+  // The record is open, not merely listed: its detail view is on screen.
+  await waitFor(() =>
+    expect(screen.getByRole("heading", { level: 3, name: "The Salt Pact" })).toBeInTheDocument());
+});
+
+test("a nav aimed at one kind is not consumed by another editor", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "the-salt-pact", name: "The Salt Pact" }]);
+  renderAtUrl("/worlds/w?section=items&id=the-salt-pact");
+  // Items is what the URL asked for, so that is the section that opens --
+  // every EntityEditor is the same component, and only the kind tells them
+  // apart.
+  expect(await screen.findByRole("heading", { name: "Items" })).toBeInTheDocument();
+  expect(indexRow("Items")).toHaveClass("active");
+});
+
+test("?section=characters&v= opens that character's version", async () => {
+  (api.listCharacters as any).mockResolvedValue([{ id: "mira", name: "Mira", versions: 1 }]);
+  renderAtUrl("/worlds/w?section=characters&id=mira&v=main");
+  await waitFor(() => expect(api.readCharacter).toHaveBeenCalledWith(
+    expect.objectContaining({ id: "w" }), "mira"));
+  expect(indexRow("Characters")).toHaveClass("active");
 });

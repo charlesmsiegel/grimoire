@@ -161,26 +161,28 @@ def _flat(text: str) -> str:
     return " ".join(text.split())
 
 
-def _markdown_doc(path: Path) -> tuple[str, str]:
-    """(display name, searchable text) for any frontmatter-and-body file.
+def _markdown_doc(path: Path) -> tuple[str, str, str]:
+    """(display name, searchable text, prose) for any frontmatter-and-body file.
 
     Covers every markdown record the store writes -- entities, greetings,
     scenes, world/campaign meta, PC personas, actor `state.md` -- because they
     all share that shape. A plain-text file (a `dossier.md`) parses as a body
     with no frontmatter and works the same way.
+
+    The prose is the body alone, and is what a snippet is cut from when the
+    match is in it: the searchable text carries the frontmatter too, so a
+    snippet taken from that would tail off into a comma-separated key list on
+    every short record. A metadata-only hit still snippets from the metadata,
+    because that is where its match is.
     """
     meta, body = parse_frontmatter(_read_text(path))
     name = str(meta.get("name") or meta.get("title") or path.stem)
-    # Body first, frontmatter after: the snippet is cut from the front of the
-    # first match, so leading with the metadata would open half the snippets in
-    # the store with a comma-separated key list instead of the prose that
-    # matched. A metadata-only hit still snippets from the metadata, because
-    # that is where its match is.
-    parts = [body] + [str(meta.get(key, "")) for key in _META_KEYS]
-    return name, _flat(" ".join(p for p in parts if p))
+    prose = _flat(body)
+    parts = [prose] + [str(meta.get(key, "")) for key in _META_KEYS]
+    return name, _flat(" ".join(p for p in parts if p)), prose
 
 
-def _card_doc(path: Path) -> tuple[str, str]:
+def _card_doc(path: Path) -> tuple[str, str, str]:
     """(display name, searchable text) for a character card version.
 
     Reads `data` when the card has one (v2/v3) and the card itself when it does
@@ -190,9 +192,9 @@ def _card_doc(path: Path) -> tuple[str, str]:
     try:
         card = json.loads(_read_text(path) or "{}")
     except ValueError:
-        return path.stem, ""
+        return path.stem, "", ""
     if not isinstance(card, dict):
-        return path.stem, ""
+        return path.stem, "", ""
     data = card.get("data") if isinstance(card.get("data"), dict) else card
     parts = [str(data.get(field, "")) for field in _CARD_FIELDS]
     for key in _CARD_LISTS:
@@ -200,10 +202,13 @@ def _card_doc(path: Path) -> tuple[str, str]:
         if isinstance(value, list):
             parts.extend(str(item) for item in value if item)
     name = str(data.get("name") or path.stem)
-    return name, _flat(" ".join(p for p in parts if p))
+    text = _flat(" ".join(p for p in parts if p))
+    # A card is prose all the way down -- there is no metadata tail to keep out
+    # of the snippet -- so the two are the same string.
+    return name, text, text
 
 
-def _doc(reader, path: Path) -> tuple[str, str] | None:
+def _doc(reader, path: Path) -> tuple[str, str, str] | None:
     """`reader(path)`, memoized on the file's stat signature. None if missing.
 
     The memo is what makes a re-query cheap: the second search of a session
@@ -230,6 +235,18 @@ def _s(value, fallback: str = "") -> str:
 
 # ---- the corpus walk ----
 
+def _row(kind: str, rid: str, sub: str, name: str, text: str, prose: str) -> dict:
+    """One searchable document.
+
+    `text` is what a term has to appear in; `prose` is what a snippet is cut
+    from when the term appears there. They differ only where a record carries
+    machinery a reader would not want quoted back at them -- a markdown
+    record's frontmatter -- and the split exists because a snippet is evidence
+    that this is the right record, so it has to read like the record.
+    """
+    return {"kind": kind, "id": rid, "sub": sub, "name": name, "text": text, "prose": prose}
+
+
 def _record_docs(root: Path, meta_file: str, self_kind: str, rid: str) -> Iterator[dict]:
     """Every searchable content document under one record root.
 
@@ -241,7 +258,7 @@ def _record_docs(root: Path, meta_file: str, self_kind: str, rid: str) -> Iterat
     """
     doc = _doc(_markdown_doc, root / meta_file)
     if doc is not None:
-        yield {"kind": self_kind, "id": rid, "sub": "", "name": doc[0], "text": doc[1]}
+        yield _row(self_kind, rid, "", doc[0], doc[1], doc[2])
 
     # Flat `<root>/<kind>/<id>.md` records. `scenes` rides along because it has
     # exactly that shape; a world simply has no such directory.
@@ -254,8 +271,7 @@ def _record_docs(root: Path, meta_file: str, self_kind: str, rid: str) -> Iterat
                 continue
             doc = _doc(_markdown_doc, path)
             if doc is not None:
-                yield {"kind": kind, "id": path.stem, "sub": "",
-                       "name": doc[0], "text": doc[1]}
+                yield _row(kind, path.stem, "", doc[0], doc[1], doc[2])
 
     yield from _actor_docs(root)
     yield from _pc_docs(root)
@@ -283,12 +299,11 @@ def _actor_docs(root: Path) -> Iterator[dict]:
         for card_path in sorted(meta_path.parent.glob("*.json")):
             card = _doc(_card_doc, card_path)
             if card is not None:
-                yield {"kind": "characters", "id": cid, "sub": card_path.stem,
-                       "name": card[0] or name, "text": card[1]}
+                yield _row("characters", cid, card_path.stem, card[0] or name, card[1], card[2])
         for filename, kind in (("state.md", "state"), ("dossier.md", "dossier")):
             side = _doc(_markdown_doc, meta_path.parent / filename)
             if side is not None and side[1]:
-                yield {"kind": kind, "id": cid, "sub": "", "name": name, "text": side[1]}
+                yield _row(kind, cid, "", name, side[1], side[2])
 
 
 def _pc_docs(root: Path) -> Iterator[dict]:
@@ -316,10 +331,10 @@ def _pc_docs(root: Path) -> Iterator[dict]:
             if version is None:
                 continue
             found = True
-            yield {"kind": "pcs", "id": pid, "sub": version_path.stem,
-                   "name": version[0] or name, "text": _flat(f"{version[1]} {extra}")}
+            yield _row("pcs", pid, version_path.stem, version[0] or name,
+                       _flat(f"{version[1]} {extra}"), version[2])
         if not found and meta is not None:
-            yield {"kind": "pcs", "id": pid, "sub": "", "name": name, "text": extra}
+            yield _row("pcs", pid, "", name, extra, meta[2])
 
 
 def _mapping(read, *args) -> dict:
@@ -354,8 +369,7 @@ def _fact_docs(cid: str, root: Path) -> Iterator[dict]:
             parts.extend(_s(k) for k in keywords)
         text = _flat(" ".join(p for p in parts if p))
         if text:
-            yield {"kind": "chronicle", "id": sid, "sub": "",
-                   "name": _s(rec.get("one_line")) or sid, "text": text}
+            yield _row("chronicle", sid, "", _s(rec.get("one_line")) or sid, text, text)
 
     # The timeline is an append-only list of dated lines, so a line is the
     # record. The leading "- " and the heading are formatting, not content.
@@ -363,8 +377,7 @@ def _fact_docs(cid: str, root: Path) -> Iterator[dict]:
         line = raw.strip().lstrip("-").strip()
         if not line or line.startswith("#"):
             continue
-        yield {"kind": "timeline", "id": "timeline", "sub": str(n),
-               "name": "Timeline", "text": _flat(line)}
+        yield _row("timeline", "timeline", str(n), "Timeline", _flat(line), _flat(line))
 
     for pid, thread in sorted(_mapping(plot.read, cid).items()):
         if not isinstance(thread, dict):
@@ -374,8 +387,8 @@ def _fact_docs(cid: str, root: Path) -> Iterator[dict]:
         parts = [title, _s(thread.get("status"))]
         if isinstance(beats, list):
             parts.extend(_s(b.get("text")) for b in beats if isinstance(b, dict))
-        yield {"kind": "plot", "id": pid, "sub": "", "name": title,
-               "text": _flat(" ".join(p for p in parts if p))}
+        text = _flat(" ".join(p for p in parts if p))
+        yield _row("plot", pid, "", title, text, text)
 
     for fid, rec in sorted(_mapping(facts.read, cid).items()):
         if not isinstance(rec, dict):
@@ -383,8 +396,8 @@ def _fact_docs(cid: str, root: Path) -> Iterator[dict]:
         text = _s(rec.get("text"))
         if not text:
             continue
-        yield {"kind": "facts", "id": fid, "sub": _s(rec.get("scene")),
-               "name": text, "text": _flat(" ".join([text, _s(rec.get("date"))]))}
+        yield _row("facts", fid, _s(rec.get("scene")), text,
+                   _flat(" ".join([text, _s(rec.get("date"))])), text)
 
     yield from _relationship_docs(cid)
 
@@ -412,8 +425,8 @@ def _relationship_docs(cid: str) -> Iterator[dict]:
                 continue
             a, _, b = key.partition("->")
             label = f"{name_of(a)} → {name_of(b)}"
-            yield {"kind": "relationships", "id": key, "sub": "feeling", "name": label,
-                   "text": _flat(" ".join([label, _s(rec.get("note"))]))}
+            yield _row("relationships", key, "feeling", label,
+                       _flat(" ".join([label, _s(rec.get("note"))])), _s(rec.get("note")))
 
     bonds = data.get("bonds")
     if isinstance(bonds, dict):
@@ -422,8 +435,8 @@ def _relationship_docs(cid: str) -> Iterator[dict]:
                 continue
             a, _, b = key.partition("|")
             label = f"{name_of(a)} ↔ {name_of(b)}"
-            yield {"kind": "relationships", "id": key, "sub": "bond", "name": label,
-                   "text": _flat(" ".join([label, _s(rec.get("type"))]))}
+            yield _row("relationships", key, "bond", label,
+                       _flat(" ".join([label, _s(rec.get("type"))])), _s(rec.get("type")))
 
 
 def _roots(scope: str, root_id: str) -> Iterator[tuple[str, str, str, Path, str]]:
@@ -479,13 +492,21 @@ def _score(name: str, text: str, terms: list[str]) -> float:
     return total
 
 
-def _snippet(text: str, terms: list[str]) -> str:
-    """A one-line window of `text` around its first matching term.
+def _snippet(prose: str, text: str, terms: list[str]) -> str:
+    """A one-line window around the query's first matching term.
 
-    Falls back to the head of the text when the match was on the name alone --
+    Cut from the record's prose when the match is in it, and from the whole
+    searchable text otherwise -- which is what puts a metadata-only hit's
+    snippet on the metadata that matched, without letting every other hit's
+    snippet tail off into a frontmatter key list.
+
+    Falls back to the head of the prose when the match was on the name alone --
     a hit whose snippet is blank reads as an empty record, and the opening of
     the body is what a reader would look at next anyway.
     """
+    if terms and prose and any(term in prose.lower() for term in terms):
+        text = prose
+    text = text or prose
     if not text:
         return ""
     low = text.lower()
@@ -520,7 +541,8 @@ def _hit(scope_name: str, rid: str, root_name: str, doc: dict, terms: list[str])
         return None
     return {"scope": scope_name, "root": rid, "root_name": root_name,
             "kind": doc["kind"], "id": doc["id"], "sub": doc["sub"],
-            "name": doc["name"], "snippet": _snippet(doc["text"] or doc["name"], terms),
+            "name": doc["name"],
+            "snippet": _snippet(doc["prose"], doc["text"] or doc["name"], terms),
             "score": _score(doc["name"], doc["text"], terms)}
 
 

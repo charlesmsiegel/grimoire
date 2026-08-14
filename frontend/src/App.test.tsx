@@ -73,7 +73,11 @@ async function goVia(query: string, name: RegExp) {
   fireEvent.keyDown(window, { key: "k", metaKey: true });
   const input = await screen.findByRole("combobox", { name: /search/i });
   fireEvent.change(input, { target: { value: query } });
-  fireEvent.click(await screen.findByRole("option", { name }));
+  // All, not one: the palette's last offer is "Search for <query>", whose
+  // label necessarily contains what was typed, so a name matcher aimed at a
+  // record matches that row too. The record is first; the search row is the
+  // fallback for when nothing named it.
+  fireEvent.click((await screen.findAllByRole("option", { name }))[0]);
 }
 
 // CampaignsView's own heading, NOT `api.listCampaigns`. The palette lists

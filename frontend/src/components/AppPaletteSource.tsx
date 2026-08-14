@@ -26,7 +26,7 @@ export default function AppPaletteSource() {
     return () => { live = false; };
   }, [open]);
 
-  const source = useCallback((): PaletteItem[] => {
+  const source = useCallback((query: string): PaletteItem[] => {
     const out: PaletteItem[] = [];
     for (const c of campaigns) {
       out.push({
@@ -52,12 +52,27 @@ export default function AppPaletteSource() {
     }
     out.push({ id: "section:/library", group: "ELSEWHERE", label: "The Library",
                meta: "library section", to: "/library" });
+    out.push({ id: "section:/search", group: "ELSEWHERE", label: "Search",
+               meta: "content and facts", to: "/search" });
     out.push({ id: "section:/connections", group: "ELSEWHERE", label: "Connections",
                meta: "library section", to: "/connections" });
     out.push({ id: "action:new-campaign", group: "ELSEWHERE", label: "New campaign",
                meta: "start one", action: true, to: "/campaigns/new" });
     out.push({ id: "section:/config", group: "ELSEWHERE", label: "Configuration",
                meta: "storage, model, appearance", to: "/config" });
+    // Full-text search, offered from the palette rather than from a topbar box
+    // that would sit unused on every screen: the palette matches names, and
+    // this row is how the same keystrokes reach bodies, transcripts and facts.
+    // Last, and only once there is something to search FOR — it is the offer
+    // for when nothing NAMED what you typed, so it must never outrank a record
+    // that did.
+    if (query) {
+      out.push({
+        id: "action:search", group: "ELSEWHERE", label: `Search for “${query}”`,
+        meta: "everything · content and facts", action: true,
+        to: `/search?q=${encodeURIComponent(query)}`,
+      });
+    }
     return out;
   }, [campaigns, worlds]);
 
