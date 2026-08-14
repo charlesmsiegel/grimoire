@@ -81,31 +81,44 @@ def forget_scene(cid: str, sid: str) -> int:
     scene with no beats left would sort a thread by a contribution that has been
     erased.
 
+    The `last_scene` repair is deliberately NOT conditional on this thread having
+    lost a beat. `set_movement` stamps `last_scene` on every call but only appends
+    a beat when it was given text, so a scene that moved a thread's status without
+    narrating one leaves its id there with nothing else to show for it — and that
+    is precisely the thread a beat-gated repair would walk past. It matters
+    because `open_threads` sorts the ledger by this field: left alone, a thread
+    sorts by a scene that no longer contributes anything to it.
+
     The THREAD survives even when this empties it. A thread with no beats left is
     not necessarily one this scene created — an earlier absorb may have opened it
     and had its beat trimmed out of the journal long ago — and deleting a record
     on that guess is the destructive direction. `store/cascade.py` reverses the
     creations it can prove, through `restore`; this is the sweep behind it, and a
     sweep may only remove what carries the scene's name.
+
+    Returns the beat count rather than the thread count because that is what the
+    report means by "how much of this scene was in here": a status-only movement
+    is repaired above and correctly contributes nothing to the number.
     """
     data = read(cid)
-    gone = 0
+    gone, dirty = 0, False
     for thread in data.values():
         if not isinstance(thread, dict):
             continue
         beats = thread.get("beats")
-        if not isinstance(beats, list):
-            continue
         kept = [b for b in beats
-                if not (isinstance(b, dict) and b.get("scene") == sid)]
-        if len(kept) == len(beats):
-            continue
-        gone += len(beats) - len(kept)
-        thread["beats"] = kept
+                if not (isinstance(b, dict) and b.get("scene") == sid)] \
+            if isinstance(beats, list) else None
+        if kept is not None and len(kept) != len(beats):
+            gone += len(beats) - len(kept)
+            thread["beats"] = kept
+            dirty = True
         if thread.get("last_scene") == sid:
-            last = kept[-1] if kept else None
+            survivors = kept if kept is not None else []
+            last = survivors[-1] if survivors else None
             thread["last_scene"] = last.get("scene", "") if isinstance(last, dict) else ""
-    if gone:
+            dirty = True
+    if dirty:
         _write(cid, data)
     return gone
 

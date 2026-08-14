@@ -145,23 +145,27 @@ def forget_scene(cid: str, sid: str) -> int:
     """
     with locks.campaign_lock(cid):
         data = read(cid)
-        gone = 0
+        gone, dirty = 0, False
         for rec in data.values():
             if not isinstance(rec, dict):
                 continue
             beats = rec.get("beats")
-            if not isinstance(beats, list):
-                continue
             kept = [b for b in beats
-                    if not (isinstance(b, dict) and b.get("scene") == sid)]
-            if len(kept) == len(beats):
-                continue
-            gone += len(beats) - len(kept)
-            rec["beats"] = kept
+                    if not (isinstance(b, dict) and b.get("scene") == sid)] \
+                if isinstance(beats, list) else None
+            if kept is not None and len(kept) != len(beats):
+                gone += len(beats) - len(kept)
+                rec["beats"] = kept
+                dirty = True
+            # Repaired whether or not a beat went — `set_movement` stamps
+            # `last_scene` on every call and appends a beat only when given text.
+            # See `plot.forget_scene`.
             if rec.get("last_scene") == sid:
-                last = kept[-1] if kept else None
+                survivors = kept if kept is not None else []
+                last = survivors[-1] if survivors else None
                 rec["last_scene"] = last.get("scene", "") if isinstance(last, dict) else ""
-        if gone:
+                dirty = True
+        if dirty:
             _write(cid, data)
         return gone
 

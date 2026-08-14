@@ -2538,9 +2538,30 @@ def delete_scene_messages_from(cid: str, sid: str, index: int):
     A cut that would remove nothing (`index` past the last post, or negative) is a
     400 rather than a silent success — the client addresses a post it is looking
     at, so an out-of-range index means the two disagree about the transcript.
+
+    `SceneNotFound` is caught even though `_require_scene` has just run: that
+    check is outside the campaign lock the cascade takes, so a delete of this
+    scene landing in between would otherwise surface as a 500 for a scene that is
+    simply not there — the same 404 the guard above exists to give.
+
+    **The index is trusted, and that boundary is deliberate.** A caller addresses
+    a post by position, so a transcript that moved between the client rendering
+    it and this request arriving would cut from somewhere else — and here that
+    means taking everything after it, not overwriting one post. Requiring the
+    caller to also send what it believes is AT that index (the shape
+    `scenes.remove_trailing_user_post` uses, and for a less destructive removal)
+    was considered and not done: the client hides these controls entirely while a
+    turn is in flight, `rolling` latches them across every other transcript
+    write, and the remaining writer is another device on a store shared through a
+    synced folder — which `store/locks.py` already documents as outside what any
+    lock here can promise. An optional check would be no guarantee at all, and a
+    required one would break a plain API caller for a race this route cannot be
+    the place to close. Editing a post (`PUT`) accepts exactly the same exposure.
     """
     _require_scene(cid, sid)
     try:
         return store.cascade.delete_from(cid, sid, index)
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
+    except (store.SceneNotFound, store.CampaignNotFound):
+        raise HTTPException(status_code=404, detail="scene not found")

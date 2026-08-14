@@ -502,7 +502,7 @@ test("editing a message saves and reloads", async () => {
 
 const CASCADE_OK = { index: 1, removed: 2, was_absorbed: false, records: 0,
                      refused: [], chronicle: false, plot_beats: 0,
-                     commitment_beats: 0, changes: 0, citations: 0 };
+                     commitment_beats: 0, changes: 0, citations: 0, failed: [] };
 
 function twoPostScene() {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
@@ -567,6 +567,45 @@ test("a record the reversal could not put back is reported", async () => {
   // what the deleted scene gave it.
   await screen.findByText(/The Pact — lore/);
   expect(document.body.textContent).toMatch(/could not be put back/i);
+});
+
+test("a cut in flight latches the gutter against a second one", async () => {
+  twoPostScene();
+  let land: (r: any) => void = () => {};
+  (api.deleteMessagesFrom as any).mockReturnValue(new Promise((res) => { land = res; }));
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderCampaign();
+  await screen.findByText("a reply");
+
+  const cut = screen.getByLabelText("Delete message 1 and everything after it");
+  fireEvent.click(cut);
+  await waitFor(() => expect(api.deleteMessagesFrom).toHaveBeenCalledTimes(1));
+  // The same latch reroll and the roll paths take. A second cut landing against
+  // indices the first is in the middle of moving is the least reversible
+  // mistake this view can make.
+  await waitFor(() => expect((cut as HTMLButtonElement).disabled).toBe(true));
+  fireEvent.click(cut);
+  expect(api.deleteMessagesFrom).toHaveBeenCalledTimes(1);
+
+  await act(async () => { land(CASCADE_OK); });
+  await waitFor(() => expect((api.listScenes as any).mock.calls.length).toBeGreaterThan(1));
+});
+
+test("cleanup that could not run is reported separately from a refused record", async () => {
+  twoPostScene();
+  (api.deleteMessagesFrom as any).mockResolvedValue({
+    ...CASCADE_OK, was_absorbed: true, failed: ["plot_beats"] });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderCampaign();
+  await screen.findByText("a reply");
+
+  fireEvent.click(screen.getByLabelText("Delete message 1 and everything after it"));
+  // A store file the cut could not parse. The cut still happened, so silence
+  // would leave stale continuity looking authoritative — and this is NOT the
+  // "could not be put back" story, which is about record VALUES.
+  await screen.findByText(/could not be cleaned up/i);
+  expect(document.body.textContent).toContain("plot_beats");
+  expect(document.body.textContent).not.toMatch(/could not be put back/i);
 });
 
 test("a manual dice roll's transcript line has no Edit control", async () => {

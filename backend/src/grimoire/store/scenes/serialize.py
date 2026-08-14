@@ -44,6 +44,36 @@ TRANSITION_SPEAKER = "⁣Scene"
 # (its transcript line must stay in lockstep with rolls.json), a trailing
 # transition is stepped over and preserved.
 SYNTHETIC_SPEAKERS = (ROLL_SPEAKER, TRANSITION_SPEAKER)
+# How a transition line reads for each of the scene's OWN moves. `moment.py`
+# formats them and `write.delete_from` reads them back to work out how much of
+# `location_history` / `time_history` a cut leaves standing (#75) — so the two
+# live here, together, rather than as a literal in the writer and a guess in the
+# reader. Actor join/leave lines carry this same speaker and are deliberately
+# not here: they are `appearances`' business, not the scene's own setting.
+LOCATION_MOVE = "*The scene moves to {name}.*"
+TIME_ADVANCE = "*Time passes. It is now {friendly}.*"
+
+
+def transition_kind(m: dict) -> str | None:
+    """Which of the scene's own moves a transition line records — `"location"`,
+    `"time"`, or None for anything else.
+
+    Matched on the fixed head of each format above, since the tail is a name or
+    a date. That is content sniffing, and the caller treats it as such: it only
+    ACTS on the answer when the lines it finds account exactly for the history
+    they would explain, so a scene written by an older build with different
+    wording is left alone rather than mis-trimmed.
+    """
+    if m.get("speaker") != TRANSITION_SPEAKER:
+        return None
+    content = m.get("content", "")
+    if not isinstance(content, str):
+        return None
+    if content.startswith(LOCATION_MOVE.split("{", 1)[0]):
+        return "location"
+    if content.startswith(TIME_ADVANCE.split("{", 1)[0]):
+        return "time"
+    return None
 _MARKER = re.compile(r"^\*\*([^*\n]{1,64}?)(?: \(([^)\n]+)\))?:\*\*[ ]?", re.MULTILINE)
 # `\Z`, not `$`: `$` also matches just before a trailing newline, so "Aese\n"
 # satisfied this and `_label` emitted `**Aese\n:**` -- a marker split across two

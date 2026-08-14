@@ -37,7 +37,8 @@ def set_location(cid: str, sid: str, eid: str) -> dict:
         return {"moved": False, "name": name}
     moved = bool(history)
     if moved:
-        write.append_message(cid, sid, "assistant", f"*The scene moves to {name}.*",
+        write.append_message(cid, sid, "assistant",
+                             serialize.LOCATION_MOVE.format(name=name),
                              speaker=serialize.TRANSITION_SPEAKER)
     # re-read after the possible append_message rewrite, then record the new current
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
@@ -72,7 +73,8 @@ def _apply_datetime(cid: str, sid: str, canonical: str, friendly: str) -> dict:
         return {"advanced": False, "friendly": friendly, "id": sid}
     advanced = bool(history)
     if advanced:
-        write.append_message(cid, sid, "assistant", f"*Time passes. It is now {friendly}.*",
+        write.append_message(cid, sid, "assistant",
+                             serialize.TIME_ADVANCE.format(friendly=friendly),
                              speaker=serialize.TRANSITION_SPEAKER)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta.pop("suggested_date", None)  # the hint is stale once a real date exists

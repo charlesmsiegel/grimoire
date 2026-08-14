@@ -436,6 +436,22 @@ def delete_from(cid: str, sid: str, index: int) -> int:
     prefix a total-based comparison keeps a stale boundary and segmentation then
     reads legacy messages as a turn. Body and boundaries go out in ONE write —
     see `turns._set_turn_sizes`.
+
+    `location_history` and `time_history` are rolled back with the transcript,
+    which is what `_rewound_history` is for and why this is not merely a slice.
+    Both are the scene's OWN state and both poison every later turn if left: the
+    last entry of each is the scene's current setting and current moment, and
+    `chronicle.scene_facts` feeds them straight into the absorb prompt and the
+    rolling-summary facts digest while the context builder puts the location in
+    front of the model. A cut back past the move to the wharf that leaves the
+    scene at the wharf is a scene prompted somewhere its transcript never goes.
+
+    Everything else the frontmatter carries is deliberately untouched:
+    `dismissed` is a per-scene preference, not a consequence of a post; the
+    rolling summary invalidates itself (`routes.scenes._rolling_view` refuses a
+    stored `at` past the transcript's length and re-checks the digest); and cast
+    membership is `appearances`' record, not this file's — see `store/cascade.py`
+    for why a join is not un-done.
     """
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
@@ -450,10 +466,45 @@ def delete_from(cid: str, sid: str, index: int) -> int:
     tracked_after = max(len(turns._model_blocks(kept)) - prefix, 0)
     while sizes and sum(sizes) > tracked_after:
         sizes.pop()
+    for key, kind in (("location_history", "location"), ("time_history", "time")):
+        rewound = _rewound_history(meta.get(key, ""), messages, kept, kind)
+        if rewound is not None:
+            meta[key] = rewound
     meta["updated"] = now_iso()
     turns._set_turn_sizes(meta, sizes)
     atomic.write_text(p, dump_frontmatter(meta, serialize._serialize_messages(kept)))
     return len(messages) - index
+
+
+def _rewound_history(raw: str, before: list[dict], after: list[dict],
+                     kind: str) -> str | None:
+    """`location_history` / `time_history` as the surviving transcript leaves it,
+    or None to leave the stored value alone.
+
+    The mapping is exact by construction: `moment.set_location` and
+    `moment._apply_datetime` append one entry per move, and every move but the
+    FIRST also appends one transition line (the first is silent — there is no
+    "from" to narrate). So n entries imply exactly n-1 lines, and the entries a
+    cut leaves standing are one more than the lines it leaves standing.
+
+    Which makes the accounting check the whole safety argument, and it is the
+    same discipline `turns._tracked_suffix_fits` applies before a deletion:
+    **validate first, and let data that does not add up authorize nothing.** The
+    classifier reads a line's prose (`serialize.transition_kind`), so a scene
+    written by an older build with different wording, or one whose transition
+    lines were edited or hand-placed, will not tally — and every one of those
+    cases returns None and keeps what is stored. Trimming a history on a
+    miscount would silently move a scene's setting to somewhere the player never
+    left, which is worse than the stale value this is fixing.
+    """
+    entries = [x for x in raw.split(",") if x]
+    if not entries:
+        return None
+    lines = sum(1 for m in before if serialize.transition_kind(m) == kind)
+    if lines != len(entries) - 1:
+        return None                 # the two do not account for each other
+    survivors = sum(1 for m in after if serialize.transition_kind(m) == kind)
+    return ",".join(entries[:survivors + 1])
 
 
 @locking._serialized
