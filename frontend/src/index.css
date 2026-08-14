@@ -1389,6 +1389,9 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .msg-edit { background: transparent; border: none; color: var(--page-muted); cursor: pointer; font-size: 13px; padding: 0; }
 .msg-edit:hover { color: var(--accent); }
 .msg-edit:disabled { opacity: 0.4; cursor: default; }
+/* The cascade cut (#75) takes this post and every one after it, so its hover
+   reads as the destructive action it is rather than as another accent icon. */
+.msg-edit.msg-cut:hover { color: var(--alert); }
 /* reroll alternates: ‹ n/m › in the gutter, on the message Reroll acts on */
 .swipe-nav { display: flex; align-items: center; gap: 3px; }
 .swipe-count { color: var(--page-muted); font-family: var(--fm); font-size: 10px; }

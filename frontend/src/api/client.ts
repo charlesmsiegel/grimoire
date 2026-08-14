@@ -813,6 +813,17 @@ export type ChronicleEntry = {
   id: string; one_line: string; summary: string; keywords: string[];
   cast: string[]; location: string; date: string; absorbed: string;
 };
+/** What a cascade post-delete actually did (#75). Counts rather than a bare
+ *  ack, because the reversal reaches records the transcript does not show:
+ *  `records` is how many of the scene's write-backs were put back, and
+ *  `refused` names the ones whose record had moved since — those keep the value
+ *  the deleted scene gave them, and only this reply says so. */
+export type CascadeReport = {
+  index: number; removed: number; was_absorbed: boolean;
+  records: number; refused: { label: string; reason: string }[];
+  chronicle: boolean; plot_beats: number; commitment_beats: number;
+  changes: number; citations: number;
+};
 export type DiffLine = { op: "equal" | "insert" | "delete"; text: string };
 export type FieldDiff = { field: string; label: string; diff: DiffLine[] };
 export type RecordChange = {
@@ -1852,6 +1863,12 @@ export const api = {
                       undefined, { fresh: true }),
   editMessage: (cid: string, sid: string, index: number, content: string) =>
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/messages/${index}`, { content }),
+  // Cascade post-delete (#75): this post and everything after it, plus the
+  // reversal of what the scene wrote. The reply is a report, not an ack — a
+  // record the compare-and-swap refused to put back is the one thing the
+  // transcript afterwards cannot show, so the caller has to be able to say so.
+  deleteMessagesFrom: (cid: string, sid: string, index: number) =>
+    request<CascadeReport>("DELETE", `/api/campaigns/${cid}/scenes/${sid}/messages/${index}`),
   // `force` re-runs an absorb the backend has already recorded in the chronicle;
   // without it that POST is a 409 (kind "already_absorbed") -- see #235.
   absorbScene: (cid: string, sid: string, force = false) =>

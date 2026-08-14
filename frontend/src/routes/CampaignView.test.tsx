@@ -53,7 +53,7 @@ vi.mock("../api/client", async () => {
       getRollProposal: vi.fn(), resolveProposal: vi.fn(),
       getSceneChecks: vi.fn(), rollCheck: vi.fn(),
       getConfig: vi.fn(),
-      editMessage: vi.fn(),
+      editMessage: vi.fn(), deleteMessagesFrom: vi.fn(),
       absorbScene: vi.fn(), saveChronicle: vi.fn(), getChronicle: vi.fn(), retryAudit: vi.fn(),
       retryDossiers: vi.fn(),
       // consumed by the embedded SceneInspector
@@ -492,6 +492,83 @@ test("editing a message saves and reloads", async () => {
   await waitFor(() => expect(api.editMessage).toHaveBeenCalledWith("run", "s1", 0, "hello"));
 });
 
+// ---- cascade post-delete (#75) ----
+//
+// The gutter's 🗑 takes the post it sits on and every one after it, and (for a
+// scene that has been absorbed) reverses what that scene wrote. The confirm is
+// part of the contract, not decoration: what the cascade reverts is invisible in
+// the transcript afterwards, so the prompt has to name it before the fact and
+// the reply has to report anything it could not put back.
+
+const CASCADE_OK = { index: 1, removed: 2, was_absorbed: false, records: 0,
+                     refused: [], chronicle: false, plot_beats: 0,
+                     commitment_beats: 0, changes: 0, citations: 0 };
+
+function twoPostScene() {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+}
+
+test("the cut deletes the post and everything after it", async () => {
+  twoPostScene();
+  (api.deleteMessagesFrom as any).mockResolvedValue(CASCADE_OK);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderCampaign();
+  await screen.findByText("a reply");
+
+  fireEvent.click(screen.getByLabelText("Delete message 1 and everything after it"));
+  await waitFor(() => expect(api.deleteMessagesFrom).toHaveBeenCalledWith("run", "s1", 0));
+  // The rail is re-read too: an absorbed scene has just stopped being done, and
+  // the composer is hidden off that flag.
+  await waitFor(() => expect((api.listScenes as any).mock.calls.length).toBeGreaterThan(1));
+});
+
+test("declining the cut's confirm does nothing", async () => {
+  twoPostScene();
+  vi.spyOn(window, "confirm").mockReturnValue(false);
+  renderCampaign();
+  await screen.findByText("a reply");
+
+  fireEvent.click(screen.getByLabelText("Delete message 2 and everything after it"));
+  expect(api.deleteMessagesFrom).not.toHaveBeenCalled();
+});
+
+test("the confirm counts the posts and names what an absorbed scene loses", async () => {
+  (api.listScenes as any).mockResolvedValue(DONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" },
+    { role: "user", content: "and then?" }] });
+  (api.deleteMessagesFrom as any).mockResolvedValue({ ...CASCADE_OK, was_absorbed: true });
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderCampaign();
+  await screen.findByText("and then?");
+
+  fireEvent.click(screen.getByLabelText("Delete message 2 and everything after it"));
+  const asked = confirm.mock.calls[0][0] as string;
+  expect(asked).toContain("this post and the 1 after it");
+  expect(asked).toMatch(/chronicle record/i);
+  // The two records this deliberately does not touch, said before the fact.
+  expect(asked).toMatch(/roll log/i);
+  expect(asked).toMatch(/timeline/i);
+});
+
+test("a record the reversal could not put back is reported", async () => {
+  twoPostScene();
+  (api.deleteMessagesFrom as any).mockResolvedValue({
+    ...CASCADE_OK, was_absorbed: true, records: 1,
+    refused: [{ label: "The Pact — lore", reason: "this record changed after the edit" }] });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderCampaign();
+  await screen.findByText("a reply");
+
+  fireEvent.click(screen.getByLabelText("Delete message 1 and everything after it"));
+  // The one outcome the shortened transcript cannot show: the record still holds
+  // what the deleted scene gave it.
+  await screen.findByText(/The Pact — lore/);
+  expect(document.body.textContent).toMatch(/could not be put back/i);
+});
+
 test("a manual dice roll's transcript line has no Edit control", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
@@ -500,6 +577,10 @@ test("a manual dice roll's transcript line has no Edit control", async () => {
   renderCampaign();
   await screen.findByText(/2d6 = 7/);
   expect(screen.getAllByTitle("Edit message")).toHaveLength(1);
+  // The cascade cut IS offered on it (#75). Edit is refused because a roll
+  // line's text must stay in lockstep with the immutable rolls.json entry; a cut
+  // removes the line rather than rewriting it, and the ledger entry survives.
+  expect(screen.getByLabelText("Delete message 2 and everything after it")).toBeTruthy();
 });
 
 // Author notes live in the transcript as HTML comments: kept in the stored text

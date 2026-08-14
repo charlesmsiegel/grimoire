@@ -2302,6 +2302,78 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     askForRollingSummary(activeId, seen);   // #85
   }
 
+  /** Cascade post-delete: this post and everything after it (#75).
+   *
+   *  The confirmation is not a formality. A cascade delete reaches records the
+   *  transcript does not show — the chronicle entry, plot and commitment beats,
+   *  the change history — and puts back what the scene's absorb wrote. So the
+   *  prompt states the post count, names what a finished scene additionally
+   *  loses, and names the two things that survive on purpose (the roll log is
+   *  append-only; the timeline carries no scene attribution). Guessing at any of
+   *  that after the fact is not something the player can do from what is left.
+   *
+   *  Guarded exactly as `saveEdit` is, and for the same reasons: `rolling`,
+   *  because a swap in flight is rewriting the posts this index addresses, and
+   *  `transcriptIsActive`, because during a background refresh the messages on
+   *  screen can belong to a different scene than `activeId` — which here would
+   *  cut an unrelated scene at an index taken from this one.
+   */
+  async function deleteMessagesFrom(index: number) {
+    if (!activeId || rolling || !transcriptIsActive) return;
+    // The window is always the transcript's TAIL, so this is the real total
+    // however few posts have been paged in.
+    const n = firstIndex + messages.length - index;
+    const ask = [
+      n === 1 ? "Delete this post?"
+              : `Delete this post and the ${n - 1} after it?`,
+      activeDone
+        ? "This scene has been absorbed. Its chronicle record, plot and commitment " +
+          "beats, change history and citations go with it, and it becomes unfinished " +
+          "so it can be absorbed again. Every recorded write-back is put back, except " +
+          "where the record has changed since — those are reported and left alone."
+        : "This cannot be undone.",
+      "Dice rolls stay in the roll log and the timeline is not rewritten.",
+    ].join("\n\n");
+    if (!window.confirm(ask)) return;
+    setEditing(null);
+    let report;
+    try {
+      report = await api.deleteMessagesFrom(cid, activeId, index);
+    } catch (err: any) {
+      // Not retryable: Retry re-runs the CHAT retry, which would generate a
+      // reply into the scene the player was trying to cut back.
+      fail(err, false);
+      return;
+    }
+    // The rail carries `done`, which an absorbed scene has just lost — without
+    // this the composer stays hidden and the row still reads as absorbed.
+    await loadScenes();
+    const seen = await selectScene(activeId);
+    // The ledger resolves every thread, commitment and fact against the scenes,
+    // and this has just removed beats from it — same reason `deleteScene` bumps.
+    setCtxKey((k) => k + 1);
+    // The stored fold covers a prefix that may no longer exist. The server
+    // reports that as stale on its own (`at > total`, or a moved digest); this
+    // is what turns the flag back into a correct summary.
+    askForRollingSummary(activeId, seen);   // #85
+    if (report.refused.length) {
+      // The one outcome the transcript afterwards cannot show: these records
+      // still hold what the deleted scene gave them. Two different situations
+      // land here — a record something else wrote to after this scene did (the
+      // reversal refuses rather than discarding that later change), and a kind
+      // that has no reversal at all, a character or lore entry the scene
+      // CREATED being the one a player is most likely to meet. Deliberately not
+      // claiming which: naming the records is what lets the player go and look,
+      // and asserting the wrong reason is worse than asserting none.
+      setError({
+        retryable: false,
+        text: `${report.refused.length} record${report.refused.length === 1 ? "" : "s"} ` +
+              `could not be put back and ${report.refused.length === 1 ? "was" : "were"} ` +
+              "left as it stands: " + report.refused.map((r) => r.label).join(", "),
+      });
+    }
+  }
+
   // What the error banner's Retry re-runs. `/retry` continues from the
   // transcript as it stands, which is the right redo for a chat or a retry —
   // but not for a reroll. A failed reroll now puts the old reply back (#95), so
@@ -3814,6 +3886,16 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                             <button className="msg-edit" title="Edit message" aria-label={`Edit message ${index + 1}`}
                                     disabled={rolling}
                                     onClick={() => setEditing({ index, text: m.content })}>✎</button>
+                          )}
+                          {/* Offered on a dice-roll line too, where Edit is not:
+                              that line is refused because its text must stay in
+                              lockstep with an immutable rolls.json entry, and a
+                              cut removes the line rather than rewriting it. */}
+                          {transcriptIsActive && (
+                            <button className="msg-edit msg-cut" title="Delete this post and everything after it"
+                                    aria-label={`Delete message ${index + 1} and everything after it`}
+                                    disabled={rolling}
+                                    onClick={() => deleteMessagesFrom(index)}>🗑</button>
                           )}
                         </span>
                       )}
