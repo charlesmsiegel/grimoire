@@ -41,7 +41,7 @@ async function renderPanel() {
 }
 
 async function openHistory() {
-  fireEvent.click(screen.getByRole("button", { name: "History" }));
+  fireEvent.click(screen.getByRole("tab", { name: "History" }));
   await act(async () => {});
 }
 
@@ -129,4 +129,18 @@ test("shows an empty state when nothing has ever been changed", async () => {
   await renderPanel();
   await openHistory();
   expect(await screen.findByText(/Nothing has been changed/)).toBeInTheDocument();
+});
+
+test("a hand edit, which belongs to no scene, still says when it happened", async () => {
+  (api.campaignJournal as any).mockResolvedValue([{
+    ...ENTRY, source: "manual", scene: { id: "", title: "", date: "" },
+  }]);
+  await renderPanel();
+  await openHistory();
+  const row = await screen.findByRole("button", { name: /Harbor — locations/ });
+  expect(row.textContent).toContain("edited by hand");
+  fireEvent.click(row);
+  // The rail's only "when" for an absorbed row is its scene; a hand edit has
+  // none, so the timestamp has to carry it.
+  expect(screen.getByText(new RegExp(String(new Date(ENTRY.ts).getFullYear())))).toBeInTheDocument();
 });

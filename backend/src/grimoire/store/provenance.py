@@ -123,3 +123,30 @@ def record(cid: str, rows: dict[str, dict]) -> None:
         data = read(cid)
         data.update(rows)
         atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
+def forget(cid: str, keys) -> None:
+    """Drop the citations for these fields. No-op for a field that has none.
+
+    The module's rule is that a citation explains the value the field currently
+    holds; keeping an older one would have the panel explaining text that is no
+    longer there. Every writer upserts, which is enough while values only move
+    forward -- and `store/undo.py` (#31) is the first thing that moves one
+    BACKWARD. The quote that justified the edit does not justify the value the
+    reversal put back, and there is no earlier citation to fall back to (the
+    upsert overwrote it), so the honest state is uncited: "we do not know why
+    this is here", which the panel already renders and which is now true.
+
+    Takes the campaign lock for the reason `record` does -- a read-modify-write
+    of one whole file -- and its caller holds it already, reentrantly.
+    """
+    keys = [k for k in keys if isinstance(k, str)]
+    if not keys:
+        return
+    with locks.campaign_lock(cid):
+        data = read(cid)
+        if not any(k in data for k in keys):
+            return
+        for k in keys:
+            data.pop(k, None)
+        atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")

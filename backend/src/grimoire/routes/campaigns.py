@@ -419,8 +419,11 @@ def get_changes(cid: str):
 # entry in it.
 
 #: How many entries a listing returns, newest first. A cap rather than paging:
-#: the panel is a "what just happened, and can I take it back" view, and
-#: `journal.RETENTION` already bounds what exists.
+#: the panel is a "what just happened, and can I take it back" view, and each
+#: row carries a rendered diff, so returning everything the store retains would
+#: be a much larger response than anyone reads. The store keeps more than this
+#: (`journal.RETENTION` / `journal.MAX_BYTES`) and an older entry is still
+#: undoable by id — it is simply not in the list.
 JOURNAL_PAGE = 100
 
 
@@ -445,6 +448,11 @@ def _journal_row(cid: str, entry: dict, scenes_by_id: dict, chron: dict,
     sid = entry.get("scene") if isinstance(entry.get("scene"), str) else ""
     s, c = scenes_by_id.get(sid, {}), chron.get(sid, {})
     undone = entry.get("undone")
+    plan = entry.get("undo")
+    # The same predicate `undo.undo` refuses on, not merely "has an `undo` key":
+    # journal.json is hand-editable, and a row whose plan lost its target would
+    # otherwise render an enabled button that 400s.
+    reversible = isinstance(plan, dict) and isinstance(plan.get("target"), dict)
     return {
         "id": entry.get("id", "") if isinstance(entry.get("id"), str) else "",
         "ts": entry.get("ts", "") if isinstance(entry.get("ts"), str) else "",
@@ -460,7 +468,7 @@ def _journal_row(cid: str, entry: dict, scenes_by_id: dict, chron: dict,
             entry.get("after", "") if isinstance(entry.get("after"), str) else ""),
         # `undoable` is the server's answer, never the client's inference: the
         # button must not offer what the store would refuse.
-        "undoable": isinstance(entry.get("undo"), dict) and not undone,
+        "undoable": reversible and not undone,
         "why": entry.get("why", "") if isinstance(entry.get("why"), str) else "",
         "undone": undone if isinstance(undone, dict) else None,
     }

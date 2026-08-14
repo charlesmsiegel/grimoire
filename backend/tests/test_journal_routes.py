@@ -8,6 +8,7 @@ overwrite.
 """
 
 import importlib
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -194,3 +195,18 @@ def test_a_deleted_record_still_has_its_history(client, cid):
     assert row["name"] == "" and row["label"] == "The Pact — lore"
     # ...and undoing it is refused rather than resurrecting the record.
     assert client.post(f"/api/campaigns/{cid}/journal/j1/undo").status_code == 409
+
+
+def test_a_plan_that_lost_its_target_is_not_offered(client, cid):
+    """journal.json is hand-editable. `undoable` is the same predicate the store
+    refuses on, so a mangled plan cannot render an enabled button that 400s."""
+    sid = store.scenes.create_scene(cid, "The blockade")
+    _lore(cid)
+    _absorb_lore_edit(cid, sid)
+    p = store.campaigns.campaign_root(cid) / "journal.json"
+    doc = json.loads(p.read_text(encoding="utf-8"))
+    doc["entries"][0]["undo"] = {"restore": "old body"}      # no target
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    [row] = client.get(f"/api/campaigns/{cid}/journal").json()
+    assert row["undoable"] is False
+    assert client.post(f"/api/campaigns/{cid}/journal/j1/undo").status_code == 400
