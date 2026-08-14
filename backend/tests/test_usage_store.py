@@ -281,3 +281,42 @@ def test_the_meter_records_once_however_many_times_it_is_finished(home):
     with m:
         pass
     assert len(_rows(home)) == 1
+
+
+def test_the_session_bucket_is_clipped_to_the_window(home, monkeypatch):
+    """`summary` only reads the window, so a process older than it reports a
+    session that is really the window. Pinned rather than fixed -- see
+    `summary`'s docstring for why widening the scan is the worse trade."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage, "_SESSION_START", "2026-07-01T09:00:00Z")
+    _seed("2026-07-02", prompt_tokens=500)      # this session, outside days=2
+    _seed("2026-08-14", prompt_tokens=7)
+
+    out = usage.summary(days=2)
+    assert out["session"]["prompt_tokens"] == 7
+    assert out["session"] == out["totals"]
+
+
+def test_a_hand_edited_negative_count_cannot_subtract_from_a_total(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", prompt_tokens=100)
+    path = home / "usage" / "2026-08.jsonl"
+    path.write_text(path.read_text(encoding="utf-8")
+                    + json.dumps({"ts": "2026-08-14T12:00:00Z", "task": "chat",
+                                  "prompt_tokens": -999999, "status": "ok"}) + "\n",
+                    encoding="utf-8")
+
+    assert usage.summary(days=30)["totals"]["prompt_tokens"] == 100
+
+
+def test_a_month_file_is_never_slurped_whole(home, monkeypatch):
+    """A year of heavy play is tens of megabytes; a report that needs two rows
+    at a time must not hold all of them plus a list of every line."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", prompt_tokens=1)
+
+    def refuse(*_a, **_kw):
+        raise AssertionError("the ledger was read whole")
+
+    monkeypatch.setattr(usage.Path, "read_text", refuse)
+    assert usage.summary(days=30)["totals"]["calls"] == 1
