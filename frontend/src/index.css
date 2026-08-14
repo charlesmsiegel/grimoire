@@ -2208,7 +2208,8 @@ a.column-back { text-decoration: none; }
   font-family: var(--fb); font-size: 16px; line-height: 1.6; resize: vertical;
   transition: border-color 140ms ease-out;
 }
-/* The one checkbox on the page; the legacy rule for it is scoped to `.config`. */
+/* The page's checkboxes — quoted dialogue, and #29's two layer toggles; the
+   legacy rule for the first is scoped to `.config`. */
 .config-page .checkbox-row {
   display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer;
   font-family: var(--fb); font-size: 15px; color: var(--ink);
@@ -2217,6 +2218,47 @@ a.column-back { text-decoration: none; }
   width: 18px; height: 18px; accent-color: var(--accent);
 }
 .config-page .field-hint { max-width: 62ch; line-height: 1.5; }
+
+/* ---- the prompt layout editor (#29) ---- */
+.prompt-layout { margin: 20px 0 6px; }
+.prompt-layout-list {
+  margin: 0; padding: 0; list-style: none;
+  border: 1px solid var(--line); border-radius: 3px; background: var(--surface);
+  /* Thirty rows is a long list next to the settings around it, so the rail
+     scrolls rather than pushing the copy below it off the screen. */
+  max-height: 60vh; overflow-y: auto;
+}
+.prompt-layout-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px; min-height: 44px;
+  border-bottom: 1px solid var(--line);
+}
+.prompt-layout-row:last-child { border-bottom: none; }
+/* A switched-off section stays legible — it is still a row you have to find
+   again to switch back on — but reads as inactive. */
+.prompt-layout-row.off .prompt-layout-label,
+.prompt-layout-row.off .prompt-layout-tier { opacity: 0.55; }
+.prompt-layout-row input[type="checkbox"] {
+  flex: none; width: 18px; height: 18px; accent-color: var(--accent);
+}
+.prompt-layout-label {
+  flex: 1 1 auto; min-width: 0; padding: 6px 8px;
+  background: transparent; color: var(--ink);
+  border: 1px solid transparent; border-radius: 3px;
+  font-family: var(--fb); font-size: 15px;
+}
+.prompt-layout-label:hover { border-color: var(--line); }
+.prompt-layout-label:focus { border-color: var(--line-strong); outline: none; }
+.prompt-layout-tier {
+  flex: none; font-family: var(--fm); font-size: 10px; letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.prompt-layout-row button {
+  flex: none; width: 32px; height: 32px; padding: 0;
+  background: transparent; color: var(--ink);
+  border: 1px solid var(--line); border-radius: 3px; cursor: pointer;
+}
+.prompt-layout-row button:disabled { opacity: 0.3; cursor: default; }
 
 /* ---- the context budget bar ---- */
 .ctx-budget {

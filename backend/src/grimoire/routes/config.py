@@ -12,8 +12,8 @@ from ..openai_compatible import OpenAICompatibleClient
 from .common import (_dump, _response_body, _write_response,
                      get_openai_compatible_client)
 from .models import (ConfigUpdate, ConnectionCreate, ConnectionUpdate, DataDirUpdate,
-                     ResponsePresetCreate, ResponsePresetUpdate, ResponseSettings,
-                     StyleCreate, StyleUpdate)
+                     PromptLayoutUpdate, ResponsePresetCreate, ResponsePresetUpdate,
+                     ResponseSettings, StyleCreate, StyleUpdate)
 
 router = APIRouter()
 
@@ -48,6 +48,10 @@ def _public_config(cfg: dict[str, str]) -> dict:
                                              store.config.DEFAULT_SEMANTIC_RECALL_DEPTH),
             "semantic_recall_threshold": cfg.get("semantic_recall_threshold",
                                                  store.config.DEFAULT_SEMANTIC_RECALL_THRESHOLD),
+            "prompt_layout_enabled": cfg.get("prompt_layout_enabled",
+                                             store.config.DEFAULT_PROMPT_LAYOUT_ENABLED),
+            "speaker_turn_taking": cfg.get("speaker_turn_taking",
+                                           store.config.DEFAULT_SPEAKER_TURN_TAKING),
             "active_connection_id": active["id"] if active else "",
             # `model` rides along because the global status bar names the model
             # every scene will use, and that is only ever this connection's --
@@ -127,6 +131,31 @@ def get_config():
 def put_config(update: ConfigUpdate):
     fields = {k: v for k, v in _dump(update).items() if v is not None}
     return _public_config(store.write_config(**fields))
+
+
+# ---- prompt layout (#29) ----
+def _layout_body(stored: list[dict]) -> dict:
+    """The editor's view: the toggle, and every catalog section in the order it
+    would render — including the switched-off ones, or there would be no way
+    back on.
+
+    `layout.describe` builds it from the same merge `_render_sections` walks,
+    so the editor cannot claim an order the prompt does not use.
+    """
+    return {"enabled": store.context.layout.enabled(),
+            "sections": store.context.layout.describe(store.context.SECTIONS, stored)}
+
+
+@router.get("/prompt-layout")
+def get_prompt_layout():
+    return _layout_body(store.context.layout.read_layout())
+
+
+@router.put("/prompt-layout")
+def put_prompt_layout(update: PromptLayoutUpdate):
+    # The whole list replaces the stored one; an empty list is Reset.
+    return _layout_body(
+        store.context.layout.write_layout([_dump(s) for s in update.sections]))
 
 
 @router.get("/config/data-dir")

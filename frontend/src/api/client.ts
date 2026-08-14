@@ -171,6 +171,11 @@ export type Config = {
   semantic_recall_depth: string;
   /** Cosine floor a recalled entry must clear. */
   semantic_recall_threshold: string;
+  /** "on" applies the stored prompt layout; "off" (the default) renders the
+   *  catalog and LEAVES the layout on disk, so it can be A/B'd. */
+  prompt_layout_enabled: string;
+  /** "on" renders the active-speaker section in group scenes; "off" default. */
+  speaker_turn_taking: string;
 };
 /**
  * The subset of Config the Configuration page writes — the mirror of the
@@ -185,7 +190,8 @@ export type ConfigUpdate = Partial<Pick<Config,
   "context_budget" | "archive_depth" | "setup_done" | "prompt_log_depth" |
   "turnstate_depth" | "promote_streak" | "rolling_summary_every" |
   "embeddings_connection_id" | "embeddings_model" |
-  "semantic_recall_depth" | "semantic_recall_threshold">>;
+  "semantic_recall_depth" | "semantic_recall_threshold" |
+  "prompt_layout_enabled" | "speaker_turn_taking">>;
 export type DataDirInfo = {
   data_dir: string;
   default: string;
@@ -506,10 +512,22 @@ export type Climate = { id: string; name: string; persistence: number; seasons: 
  *  `trimmed` is how many history messages the packer dropped from the front —
  *  0 on every section except Conversation history. */
 export type ContextSection = {
+  /** Stable section identity (#29). OPTIONAL because a prompt snapshot frozen
+   *  before ids existed does not carry one — those predate editable labels
+   *  too, so their labels are still unique and are a safe fallback key. */
+  id?: string;
   label: string; text: string; tokens: number;
-  tier: "lock-in" | "spotlight" | "background" | "archive" | "history";
+  tier: "lock-in" | "spotlight" | "background" | "archive" | "recalled" | "history";
   dropped: boolean; trimmed: number;
 };
+/** One row of the prompt layout editor. `label` is what the INSPECTOR calls the
+ *  section — never what the model reads, which each template emits itself.
+ *  `default_label` is the catalog's, shown as the input's placeholder. */
+export type PromptLayoutSection = {
+  id: string; label: string; default_label: string;
+  tier: string; enabled: boolean;
+};
+export type PromptLayout = { enabled: boolean; sections: PromptLayoutSection[] };
 /** `total_tokens` counts kept sections only — what was actually sent.
  *  `budget_tokens` is 0 when no budget is configured (nothing is dropped). */
 export type SceneContext = {
@@ -1001,6 +1019,12 @@ export const api = {
       configCache = Promise.resolve(cfg); // the write's response is the fresh config
       return notifyConfig(cfg);
     }),
+  getPromptLayout: () => request<PromptLayout>("GET", "/api/prompt-layout"),
+  /** Replaces the stored layout wholesale — `[]` is Reset. A partial list is
+   *  not a patch: the server merges anything it omits back beside its catalog
+   *  neighbours, so sending a subset would barely reorder anything. */
+  putPromptLayout: (sections: { id: string; label: string; enabled: boolean }[]) =>
+    request<PromptLayout>("PUT", "/api/prompt-layout", { sections }),
   getDataDir: () => request<DataDirInfo>("GET", "/api/config/data-dir"),
   putDataDir: (data_dir: string | null) =>
     request<DataDirInfo>("PUT", "/api/config/data-dir", { data_dir })
