@@ -16,6 +16,13 @@ than a return value. Keys, all optional:
                                         from what was asked for (a provider
                                         routing an alias, or a fallback route)
 
+`tokens` and `money` are exported rather than private because `claude_agent`
+uses them too. Its wire shape is entirely different (an SDK object, not an SSE
+chunk), but "what counts as a token count" and "what counts as a price" are the
+same two questions, and two adapters answering them separately is the drift this
+module exists to prevent -- it was written with a private copy in the Claude
+path and immediately grew a different answer about infinity.
+
 Nothing here raises. A usage block is trailing metadata on a reply that has
 already been delivered, and a provider sending a shape we did not expect must
 cost the statistic, never the turn — so every value is type-checked on the way
@@ -30,18 +37,26 @@ from __future__ import annotations
 BILLED = "billed"
 
 
-def _int(value: object) -> int | None:
-    """A token count, or None for anything that is not one. `bool` is excluded
-    deliberately -- it is an `int` subclass, so `True` would otherwise be
-    recorded as a prompt of one token."""
+def tokens(value: object) -> int | None:
+    """A token count, or None for anything that is not one.
+
+    None rather than 0, and the distinction is load-bearing all the way to the
+    ledger: `store.usage` omits an absent count from the row rather than writing
+    zero, because a row saying zero tokens is a row saying the call used none.
+    A provider that sends `"input_tokens": "lots"` has not said that.
+
+    `bool` is excluded deliberately -- it is an `int` subclass, so `True` would
+    otherwise be recorded as a prompt of one token."""
     if isinstance(value, bool) or not isinstance(value, int):
         return None
     return value if value >= 0 else None
 
 
-def _money(value: object) -> float | None:
+def money(value: object) -> float | None:
     """A price, or None. Accepts an int (a provider reporting exactly 0) and
-    rejects NaN/inf, which would poison every total downstream of it."""
+    rejects NaN/inf, which would poison every total downstream of it -- and
+    which `json.dumps` happily writes as `Infinity`, producing a ledger line no
+    strict JSON reader can parse."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     value = float(value)
@@ -74,14 +89,14 @@ def from_openai_chunk(obj: object, usage: dict | None) -> None:
     if not isinstance(block, dict):
         return
     for key in ("prompt_tokens", "completion_tokens"):
-        count = _int(block.get(key))
+        count = tokens(block.get(key))
         if count is not None:
             usage[key] = count
     # OpenRouter's `cost` is denominated in credits, which are USD one-for-one.
     # A plain `usage` block with no cost at all is the ordinary case for every
     # other endpoint, and leaving the key absent is what lets a rollup count the
     # call as unpriced instead of as free.
-    cost = _money(block.get("cost"))
+    cost = money(block.get("cost"))
     if cost is not None:
         usage["cost_usd"] = cost
         usage["cost_basis"] = BILLED

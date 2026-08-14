@@ -231,6 +231,10 @@ def append_line(path: Path, line: str) -> None:
 
     ``O_APPEND`` is honoured on Windows too — CPython maps it to
     ``FILE_APPEND_DATA``, which the OS serializes the same way.
+
+    The parent directory is the caller's to create, exactly as it is for
+    ``write_text``: a missing one raises ``FileNotFoundError``, and every caller
+    here already knows where its file belongs.
     """
     data = (line.rstrip("\n") + "\n").encode("utf-8")
     # The mode matters on first creation only, and mirrors what `_carry_metadata`
