@@ -4,6 +4,7 @@ import {
   type ResponsePresetUsageEntry, type ResponsePresetUsageSkip, type Style,
 } from "../api/client";
 import { Field } from "../components/Field";
+import LibraryPage from "../components/LibraryPage";
 
 type Knobs = {
   reply_words: string; blocks: string; paragraphs: string; speakers: string; blocks_per_speaker: string;
@@ -221,185 +222,187 @@ export default function ResponsePresetsView() {
   }
 
   return (
-    <div className="page view-anim" style={{ maxWidth: 1080 }}>
-      <div className="page-head">
-        <h1 className="page-h1">Response Presets</h1>
-      </div>
-      <div className="editor">
-        <div className="editor-list">
-          <button className="primary new" onClick={resetForm}>+ New preset</button>
-          {presets.map((p) => (
-            <button key={p.id} className={"row" + (pid === p.id ? " active" : "")} onClick={() => select(p.id)}>
-              {p.name}
-              {p.built_in && <span className="mark-badge" aria-hidden="true">built-in</span>}
-              {/* A damaged record still occupies a scope's setting; the rail is
-                  where a user notices it supplies nothing. aria-hidden keeps the
-                  row's accessible name the preset's name. */}
-              {p.validity && !p.validity.valid && (
-                <span className="mark-badge" aria-hidden="true">broken</span>
-              )}
-            </button>
-          ))}
+    <LibraryPage>
+      <div className="page view-anim" style={{ maxWidth: 1080 }}>
+        <div className="page-head">
+          <h1 className="page-h1">Response Presets</h1>
         </div>
-
-        <div className="editor-body">
-          {error && <div className="banner">{error}</div>}
-
-          {mode === "view" && pid ? (
-            <div className="detail-view">
-              <div className="detail-main">
-                <h3>{form.name}</h3>
-                {validity && !validity.valid && (
-                  <div className="banner error-banner">This preset is broken — it supplies no fields.</div>
+        <div className="editor">
+          <div className="editor-list">
+            <button className="primary new" onClick={resetForm}>+ New preset</button>
+            {presets.map((p) => (
+              <button key={p.id} className={"row" + (pid === p.id ? " active" : "")} onClick={() => select(p.id)}>
+                {p.name}
+                {p.built_in && <span className="mark-badge" aria-hidden="true">built-in</span>}
+                {/* A damaged record still occupies a scope's setting; the rail is
+                    where a user notices it supplies nothing. aria-hidden keeps the
+                    row's accessible name the preset's name. */}
+                {p.validity && !p.validity.valid && (
+                  <span className="mark-badge" aria-hidden="true">broken</span>
                 )}
-                {validity && validity.valid && validity.issues.length > 0 && (
-                  <div className="field-hint">This preset is usable, but some fields are being skipped.</div>
-                )}
-                {form.description && <div className="detail-rendered">{form.description}</div>}
-              </div>
-              <aside className="detail-sidebar">
-                <div className="form-actions">
-                  {builtIn
-                    ? <button className="subtle" onClick={duplicate}>Duplicate</button>
-                    : <button className="subtle" onClick={() => setMode("edit")}>Edit</button>}
+              </button>
+            ))}
+          </div>
+
+          <div className="editor-body">
+            {error && <div className="banner">{error}</div>}
+
+            {mode === "view" && pid ? (
+              <div className="detail-view">
+                <div className="detail-main">
+                  <h3>{form.name}</h3>
+                  {validity && !validity.valid && (
+                    <div className="banner error-banner">This preset is broken — it supplies no fields.</div>
+                  )}
+                  {validity && validity.valid && validity.issues.length > 0 && (
+                    <div className="field-hint">This preset is usable, but some fields are being skipped.</div>
+                  )}
+                  {form.description && <div className="detail-rendered">{form.description}</div>}
                 </div>
-                <div className="side-section">
-                  <h4>Length</h4>
-                  {form.length_preset
-                    ? <span className="chip on">{form.length_preset}</span>
-                    : <div className="field-hint">custom knobs</div>}
-                </div>
-                <div className="side-section">
-                  <h4>Style</h4>
-                  <span className="chip on">
-                    {form.style_id === STYLE_CLEAR ? "no style (clears inherited)"
-                      : form.style_id || "— none —"}
-                  </span>
-                </div>
-                {validity && validity.issues.length > 0 && (
-                  <div className="side-section">
-                    <h4>Issues</h4>
-                    <ul className="field-hint">
-                      {validity.issues.map((issue, i) => <li key={i}>{issue}</li>)}
-                    </ul>
+                <aside className="detail-sidebar">
+                  <div className="form-actions">
+                    {builtIn
+                      ? <button className="subtle" onClick={duplicate}>Duplicate</button>
+                      : <button className="subtle" onClick={() => setMode("edit")}>Edit</button>}
                   </div>
-                )}
-              </aside>
-            </div>
-          ) : confirmingDelete ? (
-            <div className="form">
-              <h3>Delete "{form.name}"?</h3>
-              {affected === null ? (
-                <div className="field-hint">Checking affected scopes…</div>
-              ) : affected === "failed" ? (
-                <div className="banner error-banner" role="alert">
-                  The impact of this delete could not be checked — campaigns or scenes
-                  that inherit this preset may change, and this list is unknown.
-                </div>
-              ) : (
-                <>
-                  {/* An incomplete scan must never be rendered as a complete
-                      answer: the list below is a floor, not the impact. */}
-                  {unevaluated.length > 0 && (
-                    <div className="banner error-banner" role="alert">
-                      This impact list is incomplete — {unevaluated.length}{" "}
-                      {unevaluated.length === 1 ? "scope" : "scopes"} could not be checked,
-                      so more may change than is shown:
-                      <ul>
-                        {unevaluated.slice(0, AFFECTED_CAP).map((u, i) => (
-                          <li key={i}>{scopeNoun(u.scope)} <strong>{u.name}</strong>: {u.reason}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {affected.length === 0 ? (
-                    unevaluated.length === 0 && (
-                      <div className="field-hint">
-                        No campaigns or scenes inherit this preset — nothing else changes.
-                      </div>
-                    )
-                  ) : (
+                  <div className="side-section">
+                    <h4>Length</h4>
+                    {form.length_preset
+                      ? <span className="chip on">{form.length_preset}</span>
+                      : <div className="field-hint">custom knobs</div>}
+                  </div>
+                  <div className="side-section">
+                    <h4>Style</h4>
+                    <span className="chip on">
+                      {form.style_id === STYLE_CLEAR ? "no style (clears inherited)"
+                        : form.style_id || "— none —"}
+                    </span>
+                  </div>
+                  {validity && validity.issues.length > 0 && (
                     <div className="side-section">
-                      <h4>This will change:</h4>
-                      <ul>
-                        {affected.slice(0, AFFECTED_CAP).map((a, i) => (
-                          <li key={i}>{scopeNoun(a.scope)} <strong>{a.name}</strong>: {describeChange(a)}</li>
-                        ))}
+                      <h4>Issues</h4>
+                      <ul className="field-hint">
+                        {validity.issues.map((issue, i) => <li key={i}>{issue}</li>)}
                       </ul>
-                      {affected.length > AFFECTED_CAP && (
-                        <div className="field-hint">…and {affected.length - AFFECTED_CAP} more.</div>
-                      )}
                     </div>
                   )}
-                </>
-              )}
-              <div className="form-actions">
-                <button className="subtle" onClick={cancelDelete}>Cancel</button>
-                <button className="primary" onClick={confirmDelete}>Confirm delete</button>
+                </aside>
               </div>
-            </div>
-          ) : (
-            <div className="form">
-              <h3>{pid ? "Edit preset" : "New preset"}</h3>
-              <Field label="Name">
-                <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              </Field>
-              <Field label="Description">
-                <input type="text" value={form.description}
-                       onChange={(e) => setForm({ ...form, description: e.target.value })} />
-              </Field>
-              <Field label="Style">
-                <select value={form.style_id} onChange={(e) => setForm({ ...form, style_id: e.target.value })}>
-                  <option value="">— none —</option>
-                  <option value={STYLE_CLEAR}>— no style (clear inherited) —</option>
-                  {styles.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
-              </Field>
-
-              <div className="field">
-                <label>Length</label>
-                <div className="joined">
-                  <label>
-                    <input type="radio" name="length-mode" checked={form.lengthMode === "preset"}
-                           onChange={() => setLengthMode("preset")} />
-                    Named preset
-                  </label>
-                  <label>
-                    <input type="radio" name="length-mode" checked={form.lengthMode === "knobs"}
-                           onChange={() => setLengthMode("knobs")} />
-                    Custom knobs
-                  </label>
+            ) : confirmingDelete ? (
+              <div className="form">
+                <h3>Delete "{form.name}"?</h3>
+                {affected === null ? (
+                  <div className="field-hint">Checking affected scopes…</div>
+                ) : affected === "failed" ? (
+                  <div className="banner error-banner" role="alert">
+                    The impact of this delete could not be checked — campaigns or scenes
+                    that inherit this preset may change, and this list is unknown.
+                  </div>
+                ) : (
+                  <>
+                    {/* An incomplete scan must never be rendered as a complete
+                        answer: the list below is a floor, not the impact. */}
+                    {unevaluated.length > 0 && (
+                      <div className="banner error-banner" role="alert">
+                        This impact list is incomplete — {unevaluated.length}{" "}
+                        {unevaluated.length === 1 ? "scope" : "scopes"} could not be checked,
+                        so more may change than is shown:
+                        <ul>
+                          {unevaluated.slice(0, AFFECTED_CAP).map((u, i) => (
+                            <li key={i}>{scopeNoun(u.scope)} <strong>{u.name}</strong>: {u.reason}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {affected.length === 0 ? (
+                      unevaluated.length === 0 && (
+                        <div className="field-hint">
+                          No campaigns or scenes inherit this preset — nothing else changes.
+                        </div>
+                      )
+                    ) : (
+                      <div className="side-section">
+                        <h4>This will change:</h4>
+                        <ul>
+                          {affected.slice(0, AFFECTED_CAP).map((a, i) => (
+                            <li key={i}>{scopeNoun(a.scope)} <strong>{a.name}</strong>: {describeChange(a)}</li>
+                          ))}
+                        </ul>
+                        {affected.length > AFFECTED_CAP && (
+                          <div className="field-hint">…and {affected.length - AFFECTED_CAP} more.</div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+                <div className="form-actions">
+                  <button className="subtle" onClick={cancelDelete}>Cancel</button>
+                  <button className="primary" onClick={confirmDelete}>Confirm delete</button>
                 </div>
               </div>
-
-              {form.lengthMode === "preset" ? (
-                <Field label="Length preset">
-                  <select value={form.length_preset}
-                          onChange={(e) => setForm({ ...form, length_preset: e.target.value })}>
+            ) : (
+              <div className="form">
+                <h3>{pid ? "Edit preset" : "New preset"}</h3>
+                <Field label="Name">
+                  <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                </Field>
+                <Field label="Description">
+                  <input type="text" value={form.description}
+                         onChange={(e) => setForm({ ...form, description: e.target.value })} />
+                </Field>
+                <Field label="Style">
+                  <select value={form.style_id} onChange={(e) => setForm({ ...form, style_id: e.target.value })}>
                     <option value="">— none —</option>
-                    {Object.keys(lengthPresets).map((id) => <option key={id} value={id}>{id}</option>)}
+                    <option value={STYLE_CLEAR}>— no style (clear inherited) —</option>
+                    {styles.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
                 </Field>
-              ) : (
-                KNOB_FIELDS.map(({ key, label }) => (
-                  <Field key={key} label={label}>
-                    <input type="number" value={form.knobs[key]}
-                           onChange={(e) => setForm({ ...form, knobs: { ...form.knobs, [key]: e.target.value } })} />
-                  </Field>
-                ))
-              )}
 
-              <div className="form-actions">
-                {pid && !builtIn && <button className="subtle" onClick={startDelete}>Delete</button>}
-                {pid && <button className="subtle" onClick={() => setMode("view")}>Cancel</button>}
-                <button className="primary" onClick={save} disabled={!form.name.trim()}>
-                  {pid && !builtIn ? "Save preset" : "Create preset"}
-                </button>
+                <div className="field">
+                  <label>Length</label>
+                  <div className="joined">
+                    <label>
+                      <input type="radio" name="length-mode" checked={form.lengthMode === "preset"}
+                             onChange={() => setLengthMode("preset")} />
+                      Named preset
+                    </label>
+                    <label>
+                      <input type="radio" name="length-mode" checked={form.lengthMode === "knobs"}
+                             onChange={() => setLengthMode("knobs")} />
+                      Custom knobs
+                    </label>
+                  </div>
+                </div>
+
+                {form.lengthMode === "preset" ? (
+                  <Field label="Length preset">
+                    <select value={form.length_preset}
+                            onChange={(e) => setForm({ ...form, length_preset: e.target.value })}>
+                      <option value="">— none —</option>
+                      {Object.keys(lengthPresets).map((id) => <option key={id} value={id}>{id}</option>)}
+                    </select>
+                  </Field>
+                ) : (
+                  KNOB_FIELDS.map(({ key, label }) => (
+                    <Field key={key} label={label}>
+                      <input type="number" value={form.knobs[key]}
+                             onChange={(e) => setForm({ ...form, knobs: { ...form.knobs, [key]: e.target.value } })} />
+                    </Field>
+                  ))
+                )}
+
+                <div className="form-actions">
+                  {pid && !builtIn && <button className="subtle" onClick={startDelete}>Delete</button>}
+                  {pid && <button className="subtle" onClick={() => setMode("view")}>Cancel</button>}
+                  <button className="primary" onClick={save} disabled={!form.name.trim()}>
+                    {pid && !builtIn ? "Save preset" : "Create preset"}
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </LibraryPage>
   );
 }

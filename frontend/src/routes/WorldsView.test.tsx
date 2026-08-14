@@ -49,13 +49,18 @@ test("lists worlds as cards with count footers", async () => {
   expect(screen.getByRole("heading", { name: /worlds/i })).toBeInTheDocument();
 });
 
+// The library column beside the page counts Worlds from the same endpoint, so
+// every mount reads it twice: once for the grid, once for the count. `BASE` is
+// that baseline, and the assertions below are about the *refresh* on top of it.
+const BASE = 2;
+
 test("creating a world posts the name and refreshes the list", async () => {
   renderView();
   await waitFor(() => expect(api.listWorlds).toHaveBeenCalled());
   fireEvent.change(screen.getByPlaceholderText(/world name/i), { target: { value: "Realm" } });
   fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
   await waitFor(() => expect(api.createWorld).toHaveBeenCalledWith("Realm"));
-  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE + 1));
 });
 
 test("create is disabled with no name", async () => {
@@ -129,7 +134,7 @@ test("importing a bundle posts the file, refreshes, and opens the new world", as
   fireEvent.change(screen.getByLabelText("Import world bundle"), { target: { files: [file] } });
   await waitFor(() => expect(api.importWorld).toHaveBeenCalledWith(file));
   await waitFor(() => expect(navigate).toHaveBeenCalledWith("/worlds/imported"));
-  expect(api.listWorlds).toHaveBeenCalledTimes(2);
+  expect(api.listWorlds).toHaveBeenCalledTimes(BASE + 1);
 });
 
 test("a failed refresh after a successful import is not reported as a failure", async () => {
@@ -157,5 +162,5 @@ test("a rejected bundle shows the server's reason and creates nothing", async ()
   fireEvent.change(screen.getByLabelText("Import world bundle"), { target: { files: [file] } });
   expect(await screen.findByRole("alert")).toHaveTextContent(/not a world bundle/i);
   expect(navigate).not.toHaveBeenCalled();
-  expect(api.listWorlds).toHaveBeenCalledTimes(1);   // no refresh, nothing changed
+  expect(api.listWorlds).toHaveBeenCalledTimes(BASE);   // no refresh, nothing changed
 });

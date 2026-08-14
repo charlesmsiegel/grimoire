@@ -22,6 +22,8 @@ vi.mock("../api/client", async () => {
       getCharacterVoiceAnchor: vi.fn(), setCharacterVoiceAnchor: vi.fn(),
       generateCharacterVoiceAnchor: vi.fn(),
       listImageAppearances: vi.fn(), copyGreetingImage: vi.fn(), listGreetings: vi.fn(),
+      // The detail view's right pane: what one campaign has made of her.
+      getCampaign: vi.fn(), getCasefile: vi.fn(), listEntities: vi.fn(),
       imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
       exportUrl: (w: string, c: string, v: string, f: string) => `/export/${w}/${c}/${v}/${f}`,
       putSheetCreation: vi.fn(),
@@ -84,7 +86,37 @@ beforeEach(() => {
   // Campaign scope reads the roster to drive the appeared/all grid filter.
   // World scope never calls it, so this default is inert there.
   (api.listAppearances as any).mockResolvedValue([]);
+  // The detail view's campaign-local pane. Campaign scope only: the world route
+  // has no campaign to read, and asserts that it says so instead.
+  (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "The Long Tide" } });
+  (api.getCasefile as any).mockResolvedValue(CASEFILE);
+  (api.listEntities as any).mockResolvedValue([]);
 });
+
+/** What a campaign has decided about Seraphine, as `GET .../casefile` answers.
+ *  Only the fields 4f's right pane renders — the endpoint carries feelings and
+ *  standing facts too, which belong to the play view's dossier column, where
+ *  there is a scene for them to be relative to. */
+const CASEFILE = {
+  kind: "characters", id: "seraphine", name: "Seraphine", version: "default", role: "npc",
+  scenes: ["001--the-tide-gate", "004--the-priory-door"],
+  last_seen: "004--the-priory-door",
+  standing: "Guarded. Will not be alone with the Reeve.",
+  knows: "The priory's debt.", suspects: "",
+  dossier: "A novice who counts the tide instead of the hours.",
+  tagline: "", feels_toward: [], standing_facts: [],
+};
+
+/** Open a character from the grid and wait for the three-pane detail view. */
+async function openDetail(name = "Seraphine") {
+  fireEvent.click(await screen.findByText(name));
+  await screen.findByRole("heading", { name });
+}
+
+/** The detail view's middle pane is tabbed; the card is what opens. */
+async function openTab(label: RegExp) {
+  fireEvent.click(await screen.findByRole("tab", { name: label }));
+}
 
 /** A roster the appeared filter will keep every one of `ids` in. */
 function appearedRoster(...ids: string[]) {
@@ -112,7 +144,8 @@ test("detail shows the Images shelf with avatar tile, gallery promote, and add t
     versions: [{ id: "default", name: "default", card: CARD, images: ["avatar", "gallery_1"] }],
   });
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Seraphine"));
+  await openDetail();
+  await openTab(/^art/i);
   await screen.findByText("Images");
   expect(screen.getByText("avatar")).toBeInTheDocument();               // shelf caption
   fireEvent.click(screen.getByRole("button", { name: /set as avatar/i }));
@@ -126,7 +159,8 @@ test("detail without avatar shows the dashed placeholder tile", async () => {
     versions: [{ id: "default", name: "default", card: CARD, images: [] }],
   });
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Seraphine"));
+  await openDetail();
+  await openTab(/^art/i);
   await screen.findByText("no avatar");
   expect(screen.getByRole("button", { name: /\+ add/i })).toBeInTheDocument();
 });
@@ -153,8 +187,7 @@ test("detail view shows the suggested image prompt when set", async () => {
 
 test("detail view omits the image prompt section when unset", async () => {
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />); // DETAIL's CARD has extensions: {}
-  fireEvent.click(await screen.findByText("Seraphine"));
-  await screen.findByText("Images"); // wait for the detail view to settle
+  await openDetail();   // opens on the card tab, which is where it would be
   expect(screen.queryByText("Image prompt")).toBeNull();
 });
 
@@ -651,7 +684,8 @@ test("gallery images render as thumbnails, sorted numerically, opening full-size
     }],
   });
   const { container } = render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Seraphine"));
+  await openDetail();
+  await openTab(/^art/i);
   await screen.findByText("Images");
 
   const thumbs = Array.from(
@@ -691,11 +725,15 @@ test("gallery images downloaded while viewing a character appear without navigat
     },
   );
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Seraphine"));
+  await openDetail();
+  await openTab(/^art/i);
   await screen.findByText("Images");
   expect(screen.queryByRole("button", { name: /set as avatar/i })).toBeNull();
 
+  // the download is offered beside the chub link, on the card tab
+  await openTab(/^card/i);
   fireEvent.click(await screen.findByRole("button", { name: /^download gallery$/i }));
+  await openTab(/^art/i);
   await screen.findByRole("button", { name: /set as avatar/i }); // gallery_0 tile appeared
 });
 
@@ -775,7 +813,8 @@ test("greeting scene labels are demoted and single newlines keep line breaks", a
     versions: [{ id: "default", name: "default", card, images: ["avatar"] }],
   });
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Seraphine"));
+  await openDetail();
+  await openTab(/^greetings/i);
   // `#Scene Label#` lines become a small scene label (trailing # stripped), not an h1
   await screen.findByText("Rooftop Setting");
   expect(screen.queryByRole("heading", { name: /rooftop setting/i })).toBeNull();
@@ -801,10 +840,13 @@ test("first message and alternate greetings render markdown images; other fields
     versions: [{ id: "default", name: "default", card, images: ["avatar"] }],
   });
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Seraphine"));
+  await openDetail();
+  // the description is card content and stays literal on the card tab...
+  expect(screen.getByText("plain **stars** stay literal")).toBeInTheDocument();
+  // ...while both greeting kinds render their markdown, on the greetings tab
+  await openTab(/^greetings/i);
   await screen.findByRole("img", { name: "scene" });
   await screen.findByRole("img", { name: "alt-pic" });
-  expect(screen.getByText("plain **stars** stay literal")).toBeInTheDocument();
 });
 
 
@@ -883,9 +925,10 @@ test("appears-in gallery copies to avatar and world greetings link with primary 
   ]);
   const onOpenGreeting = vi.fn();
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" onOpenGreeting={onOpenGreeting} />);
-  fireEvent.click(await screen.findByText("Seraphine"));
+  await openDetail();
 
-  // appears-in strip: copy to avatar
+  // appears-in strip lives with the rest of her art
+  await openTab(/^art/i);
   const label = await screen.findByText("Appears in");
   const strip = label.parentElement as HTMLElement;
   fireEvent.click(within(strip).getByRole("button", { name: /set as avatar/i }));
@@ -893,7 +936,9 @@ test("appears-in gallery copies to avatar and world greetings link with primary 
     { kind: "world", id: "w" }, "seraphine", "default", { gid: "sol-1", name: "embed-a", slot: "avatar" }));
   expect(within(strip).getByRole("button", { name: /add to gallery/i })).toBeInTheDocument();
 
-  // world greetings: present-only listed, primary starred, absent one missing
+  // world greetings are references out of the card, not card greetings: they
+  // sit with the tags on the card tab and do not count toward GREETINGS n
+  await openTab(/^card/i);
   const wg = screen.getByText("World greetings").parentElement as HTMLElement;
   expect(within(wg).getByText(/★\s*SoL 1/)).toBeInTheDocument();
   expect(within(wg).getByText("SoL 2")).toBeInTheDocument();
@@ -1230,7 +1275,8 @@ test("campaign scope: gallery shelf allows adding an image and promoting to avat
   });
   (api.listAppearances as any).mockResolvedValue(appearedRoster("mara"));
   render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Mara"));
+  await openDetail("Mara");
+  await openTab(/^art/i);
   await screen.findByText("Images");
   fireEvent.click(screen.getByRole("button", { name: /set as avatar/i }));
   await waitFor(() => expect(api.promoteImage).toHaveBeenCalledWith(
@@ -1245,7 +1291,8 @@ test("appears-in tiles render the thumbnail and link to the full image", async (
       thumb: "/api/worlds/w/greetings/sol-1/images/embed-a?w=320&v=abc" },
   ]);
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Seraphine"));
+  await openDetail();
+  await openTab(/^art/i);
   const img = await screen.findByAltText("SoL 1 art");
   expect(img.getAttribute("src")).toBe("/api/worlds/w/greetings/sol-1/images/embed-a?w=320&v=abc");
   expect(img.closest("a")!.getAttribute("href")).toBe("/api/worlds/w/greetings/sol-1/images/embed-a?v=abc");
@@ -1674,8 +1721,7 @@ function exportLinks() {
 
 test("detail offers a JSON/PNG/CHARX download for the viewed version", async () => {
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Seraphine"));
-  await screen.findByText("Images");
+  await openDetail();
   const links = exportLinks();
   expect(links.json).toHaveAttribute("href", "/export/w/seraphine/default/json");
   expect(links.png).toHaveAttribute("href", "/export/w/seraphine/default/png");
@@ -1689,8 +1735,7 @@ test("detail offers a JSON/PNG/CHARX download for the viewed version", async () 
 test("the export links follow the selected version", async () => {
   (api.readCharacter as any).mockResolvedValue(TWO_VERSIONS);
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Seraphine"));
-  await screen.findByText("Images");
+  await openDetail();
   fireEvent.click(screen.getByRole("button", { name: "Winter" }));
   await waitFor(() => expect(exportLinks().json)
     .toHaveAttribute("href", "/export/w/seraphine/winter/json"));
@@ -1709,8 +1754,230 @@ test("the edit form exports the version being edited", async () => {
 test("campaign scope has no export control — the route is world-scoped", async () => {
   (api.listAppearances as any).mockResolvedValue(appearedRoster("seraphine"));
   render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
-  fireEvent.click(await screen.findByText("Seraphine"));
-  await screen.findByText("Images");
+  await openDetail();
   expect(screen.queryByText("Export")).toBeNull();
   expect(screen.queryByRole("link", { name: /^charx$/i })).toBeNull();
+});
+
+
+// ---- 4f: the card is the world's, the state beside it is one campaign's ----
+//
+// The detail view is three panes: who she is, the card that is sent to the
+// model and shared by every campaign built on this world, and what one
+// campaign has made of her. That last pane has no campaign-scoped endpoint of
+// its own -- the casefile route is nested under a scene and checks she is cast
+// in it -- so these cover what each scope can honestly answer.
+
+/** A roster whose entry for `id` carries the given scene ids. */
+function rosterWithScenes(id: string, scenes: string[], version = "default") {
+  return [{ kind: "characters", id, version, role: "npc", scenes }];
+}
+
+test("world scope says there is no campaign in scope rather than showing an empty frame", async () => {
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openDetail();
+  const pane = screen.getByRole("complementary", { name: "Campaign state" });
+  expect(within(pane).getByText(/no campaign in scope/i)).toBeInTheDocument();
+  expect(within(pane).getByText(/belongs to a campaign/i)).toBeInTheDocument();
+  // there is no campaign, so nothing was asked about one
+  expect(api.getCasefile).not.toHaveBeenCalled();
+  expect(api.getCampaign).not.toHaveBeenCalled();
+});
+
+test("campaign scope reads her state through the newest scene she is cast in", async () => {
+  (api.listAppearances as any).mockResolvedValue(
+    rosterWithScenes("seraphine", ["001--the-tide-gate", "004--the-priory-door"]));
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  await openDetail();
+
+  // The record is campaign-scoped; a scene is only how the route lets us ask
+  // for it, and the newest is the one whose cast check is certain to pass.
+  await waitFor(() => expect(api.getCasefile).toHaveBeenCalledWith(
+    "run", "004--the-priory-door", "characters", "seraphine"));
+
+  const pane = screen.getByRole("complementary", { name: "Campaign state" });
+  expect(await within(pane).findByText("Guarded. Will not be alone with the Reeve.")).toBeInTheDocument();
+  expect(within(pane).getByText("The priory's debt.")).toBeInTheDocument();
+  expect(within(pane).getByText("A novice who counts the tide instead of the hours.")).toBeInTheDocument();
+  expect(within(pane).getByText("dossier.md")).toBeInTheDocument();
+  // the campaign is named, so the pane's heading has a subject
+  expect(within(pane).getByText(/in the long tide/i)).toBeInTheDocument();
+  // scene numbers come from the ids' own leading number, not from list order
+  expect(within(pane).getByText("Scene 1")).toBeInTheDocument();
+  expect(within(pane).getByText("Scene 4")).toBeInTheDocument();
+  // none of it leaked into the card pane, which is the world's
+  expect(within(screen.getByRole("region", { name: "Character card" }))
+    .queryByText(/will not be alone/i)).toBeNull();
+});
+
+test("a character the campaign has never played is not asked about", async () => {
+  // A roster entry with no scenes: seated and removed again, or her only scene
+  // deleted. The casefile route would 404, and a 404 rendered as an empty pane
+  // reads as "nothing recorded about her" -- a different sentence.
+  (api.listAppearances as any).mockResolvedValue(rosterWithScenes("seraphine", []));
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  // no scenes is also "not appeared", so the grid's default filter hides her
+  fireEvent.click(await screen.findByRole("button", { name: /^all \(/i }));
+  await openDetail();
+  const pane = screen.getByRole("complementary", { name: "Campaign state" });
+  expect(await within(pane).findByText(/has not been in a scene in The Long Tide yet/i)).toBeInTheDocument();
+  expect(api.getCasefile).not.toHaveBeenCalled();
+});
+
+test("an unreadable casefile still reports the scenes instead of blanking the pane", async () => {
+  (api.listAppearances as any).mockResolvedValue(
+    rosterWithScenes("seraphine", ["004--the-priory-door"]));
+  (api.getCasefile as any).mockRejectedValue({ detail: "not in scene" });
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  await openDetail();
+  const pane = screen.getByRole("complementary", { name: "Campaign state" });
+  expect(await within(pane).findByText(/could not read/i)).toBeInTheDocument();
+  expect(within(pane).getByText("Scene 4")).toBeInTheDocument();
+});
+
+test("a campaign that has recorded nothing about her yet says so", async () => {
+  (api.listAppearances as any).mockResolvedValue(
+    rosterWithScenes("seraphine", ["004--the-priory-door"]));
+  (api.getCasefile as any).mockResolvedValue({
+    ...CASEFILE, standing: "", knows: "", suspects: "", dossier: "", tagline: "",
+  });
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  await openDetail();
+  const pane = screen.getByRole("complementary", { name: "Campaign state" });
+  expect(await within(pane).findByText(/no absorb pass has written/i)).toBeInTheDocument();
+  expect(within(pane).getByText("Scene 4")).toBeInTheDocument();   // she was still there
+});
+
+test("the previous character's campaign state does not sit under the next one's name", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", versions: [] },
+    { id: "winifred", name: "Winifred", default_version: "default", versions: [] },
+  ]);
+  (api.listAppearances as any).mockResolvedValue([
+    { kind: "characters", id: "seraphine", version: "default", role: "npc", scenes: ["004--the-priory-door"] },
+    { kind: "characters", id: "winifred", version: "default", role: "npc", scenes: [] },
+  ]);
+  (api.readCharacter as any).mockImplementation((_s: unknown, id: string) => Promise.resolve({
+    meta: { id, name: id === "winifred" ? "Winifred" : "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", images: [], card: { ...CARD, data: {
+      ...CARD.data, name: id === "winifred" ? "Winifred" : "Seraphine" } } }],
+  }));
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  // Winifred has no scenes, so the grid's default filter would hide her
+  fireEvent.click(await screen.findByRole("button", { name: /^all \(/i }));
+  await openDetail();
+  const pane = () => screen.getByRole("complementary", { name: "Campaign state" });
+  expect(await within(pane()).findByText("Guarded. Will not be alone with the Reeve.")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: /all characters/i }));
+  await openDetail("Winifred");
+  // Winifred has walked into nothing; Seraphine's standing must not follow her
+  expect(await within(pane()).findByText(/has not been in a scene/i)).toBeInTheDocument();
+  expect(within(pane()).queryByText(/will not be alone/i)).toBeNull();
+});
+
+test("the reach warning points the opposite way in each scope", async () => {
+  const { unmount } = render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openDetail();
+  // the world record is the one every campaign shares
+  expect(screen.getByText(/reach every campaign using this world/i)).toBeInTheDocument();
+  unmount();
+
+  (api.listAppearances as any).mockResolvedValue(appearedRoster("seraphine"));
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  await openDetail();
+  // ...and a campaign's copy is a fork, which is the opposite claim
+  expect(screen.getByText(/leave the world record untouched/i)).toBeInTheDocument();
+});
+
+test("the locked version is marked with the campaign that locked it", async () => {
+  (api.readCharacter as any).mockResolvedValue(TWO_VERSIONS);
+  (api.listAppearances as any).mockResolvedValue(
+    rosterWithScenes("seraphine", ["004--the-priory-door"], "winter"));
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  await openDetail();
+  const locked = await screen.findByText(/locked in The Long Tide/i);
+  // marked on the version it belongs to, not merely present on the page
+  expect(within(locked.parentElement as HTMLElement)
+    .getByRole("button", { name: "Winter" })).toBeInTheDocument();
+  // ...and the badge stays out of the button's accessible name, so a version
+  // is still picked by its own name
+  expect(screen.getByRole("button", { name: "Winter" })).toBeInTheDocument();
+});
+
+test("the middle pane opens on the card and counts only the card's own greetings", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", images: ["avatar", "gallery_1"], card: {
+      ...CARD,
+      data: { ...CARD.data, first_mes: "the tide is out", alternate_greetings: ["hi", "hello"] },
+    } }],
+  });
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "sol-1", name: "SoL 1", character: "other", version: "main",
+      present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
+  ]);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openDetail();
+  expect(screen.getByRole("tab", { name: /^card$/i })).toHaveAttribute("aria-selected", "true");
+  // first_mes + two alternates = 3; the world greeting featuring her is a
+  // reference out of the card, not one of its greetings
+  await waitFor(() => expect(screen.getByRole("tab", { name: /^greetings 3$/i })).toBeInTheDocument());
+  expect(screen.getByRole("tab", { name: /^art 2$/i })).toBeInTheDocument();   // avatar + one gallery
+});
+
+test("the description carries what it costs, every turn", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", images: [],
+                 card: { ...CARD, data: { ...CARD.data, description: "x".repeat(400) } } }],
+  });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openDetail();
+  // An estimate, and marked as one: there is no tokenizer in the browser.
+  expect(screen.getByText(/≈ 100 tokens · sent every turn she is in scene/i)).toBeInTheDocument();
+});
+
+test("the tab survives a version switch and resets on a different character", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", versions: [] },
+    { id: "winifred", name: "Winifred", default_version: "default", versions: [] },
+  ]);
+  (api.readCharacter as any).mockImplementation((_s: unknown, id: string) =>
+    Promise.resolve(id === "winifred"
+      ? { meta: { id, name: "Winifred", default_version: "default" },
+          versions: [{ id: "default", name: "default", images: [],
+                       card: { ...CARD, data: { ...CARD.data, name: "Winifred" } } }] }
+      : TWO_VERSIONS));
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openDetail();
+
+  await openTab(/^art/i);
+  // comparing two versions' art is exactly what the version list is for
+  fireEvent.click(screen.getByRole("button", { name: "Winter" }));
+  await waitFor(() => expect(screen.getByRole("tab", { name: /^art/i }))
+    .toHaveAttribute("aria-selected", "true"));
+
+  // a different character is a different record, and opens on her card
+  fireEvent.click(screen.getByRole("button", { name: /all characters/i }));
+  await openDetail("Winifred");
+  expect(screen.getByRole("tab", { name: /^card$/i })).toHaveAttribute("aria-selected", "true");
+});
+
+test("the lore tab is offered only when there is a lore view to route to", async () => {
+  (api.listEntities as any).mockResolvedValue([
+    { id: "pact", name: "The Pact", owners: "characters:seraphine" },
+    { id: "tide", name: "The Tide", owners: "characters:other" },
+  ]);
+  const onOpenLore = vi.fn();
+  const { unmount } = render(
+    <CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" onOpenLore={onOpenLore} />);
+  await openDetail();
+  // counted by owner, so a world's other lore does not inflate her tab
+  expect(await screen.findByRole("tab", { name: /^lore 1$/i })).toBeInTheDocument();
+  unmount();
+
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openDetail();
+  expect(screen.queryByRole("tab", { name: /^lore/i })).toBeNull();
 });

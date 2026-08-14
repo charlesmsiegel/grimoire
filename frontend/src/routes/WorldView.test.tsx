@@ -13,6 +13,7 @@ vi.mock("../api/client", () => ({
   api: {
     getWorld: vi.fn(),
     getCampaign: vi.fn(),
+    listCampaigns: vi.fn(),
     listCharacters: vi.fn(),
     listPCs: vi.fn(),
     listTags: vi.fn(),
@@ -53,6 +54,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   (api.getWorld as any).mockResolvedValue({ meta: { id: "w", name: "Drowned Realm" }, body: "", counts: {} });
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "c1", name: "Ashes of the Verdigris Crown", world: "w" } });
+  (api.listCampaigns as any).mockResolvedValue([
+    { id: "c1", name: "Ashes of the Verdigris Crown", world: "w" },
+    { id: "c2", name: "The Saltmarch Winter", world: "w" },
+    { id: "c3", name: "Elsewhere", world: "other" },
+  ]);
   (api.listCharacters as any).mockResolvedValue([]);
   // campaign scope reads the roster to drive the Characters grid's appeared filter
   (api.listAppearances as any).mockResolvedValue([]);
@@ -93,53 +99,119 @@ function renderAt() {
   );
 }
 
-test("shows the world name and defaults to the Overview tab", async () => {
+function renderCampaign() {
+  render(
+    <MemoryRouter initialEntries={["/campaigns/c1/world"]}>
+      <Routes><Route path="/campaigns/:cid/world" element={<WorldView campaign />} /></Routes>
+    </MemoryRouter>,
+  );
+}
+
+/** The column's row for a section. Its accessible name is the label and its
+ *  count, so every lookup here is a prefix match rather than an exact one. */
+function indexRow(label: string) {
+  return screen.getByRole("button", { name: new RegExp(`^${label}\\b`) });
+}
+
+test("shows the world name and opens on the Overview", async () => {
   renderAt();
   await screen.findByText("Drowned Realm");
-  expect(screen.getByRole("button", { name: "Overview" })).toHaveClass("active");
+  expect(indexRow("Overview")).toHaveClass("active");
+  expect(screen.getByRole("heading", { name: "Overview" })).toBeInTheDocument();
 });
 
-test("switching to the Characters tab renders the character editor", async () => {
+test("the index is grouped who / where & what / writing, each row counted", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mira", name: "Mira", default_version: "main", versions: [{ id: "main", name: "main" }] },
+    { id: "aud", name: "Aud", default_version: "main", versions: [{ id: "main", name: "main" }] },
+  ]);
+  (api.listEntities as any).mockImplementation((_scope: unknown, kind: string) =>
+    Promise.resolve(kind === "locations" ? [{ id: "the-wall", name: "The Wall" }] : []));
+  (api.listTags as any).mockResolvedValue({ tide: "Tide", dusk: "Dusk", salt: "Salt" });
   renderAt();
   await screen.findByText("Drowned Realm");
-  fireEvent.click(screen.getByRole("button", { name: "Characters" }));
+
+  for (const label of ["Who", "Where & what", "Writing"]) {
+    expect(screen.getByText(label)).toBeInTheDocument();
+  }
+  // A live count, not the world's stored one: it is the same read the section's
+  // own editor makes, so both shapes of the route can use it.
+  await waitFor(() => expect(indexRow("Characters")).toHaveTextContent("2"));
+  expect(indexRow("Locations")).toHaveTextContent("1");
+  expect(indexRow("Items")).toHaveTextContent("0");
+  expect(indexRow("Tags")).toHaveTextContent("3");
+  // ...and the facts a world has that are not records in it
+  expect(screen.getByText("3 tags · 2 campaigns")).toBeInTheDocument();
+});
+
+test("picking a section swaps main and leaves the index standing", async () => {
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(indexRow("Locations"));
+  await waitFor(() =>
+    expect(api.listEntities).toHaveBeenCalledWith({ kind: "world", id: "w" }, "locations"));
+
+  expect(screen.getByRole("heading", { name: "Locations" })).toBeInTheDocument();
+  expect(indexRow("Locations")).toHaveClass("active");
+  expect(indexRow("Overview")).not.toHaveClass("active");
+  // the whole index is still there to move on to
+  for (const label of ["Characters", "PCs", "Creatures", "Groups", "Items", "Lore", "Greetings", "Tags"]) {
+    expect(indexRow(label)).toBeInTheDocument();
+  }
+});
+
+test("picking Characters renders the character editor", async () => {
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(indexRow("Characters"));
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalledWith({ kind: "world", id: "w" }));
   expect(screen.getByRole("button", { name: /new character/i })).toBeInTheDocument();
 });
 
-test("switching to the PCs tab renders the PC editor", async () => {
+test("picking PCs renders the PC editor", async () => {
   renderAt();
   await screen.findByText("Drowned Realm");
-  fireEvent.click(screen.getByRole("button", { name: "PCs" }));
+  fireEvent.click(indexRow("PCs"));
   await waitFor(() => expect(api.listPCs).toHaveBeenCalledWith({ kind: "world", id: "w" }));
   expect(screen.getByRole("button", { name: /new pc/i })).toBeInTheDocument();
 });
 
+test("opening a record swaps only main — the column keeps its selection", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mira", name: "Mira", default_version: "main", versions: [{ id: "main", name: "main" }] },
+  ]);
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(indexRow("Characters"));
+  fireEvent.click(await screen.findByText("Mira"));               // grid -> detail
+  await waitFor(() => expect(api.readCharacter).toHaveBeenCalled());
+
+  expect(indexRow("Characters")).toHaveClass("active");
+  expect(screen.getByRole("heading", { name: "Characters" })).toBeInTheDocument();
+  expect(indexRow("Lore")).toBeInTheDocument();
+});
+
 test("world-copy mode shows the fork banner, campaign back link, and campaign entity scope", async () => {
-  render(
-    <MemoryRouter initialEntries={["/campaigns/c1/world"]}>
-      <Routes>
-        <Route path="/campaigns/:cid/world" element={<WorldView campaign />} />
-      </Routes>
-    </MemoryRouter>,
-  );
+  renderCampaign();
   await screen.findByText(/ashes of the verdigris crown \/ world copy/i);
   expect(screen.getByText(/campaign view/i)).toBeInTheDocument();
-  // entity tabs read from the campaign fork, not the source world
-  fireEvent.click(screen.getByRole("button", { name: "Locations" }));
+  // entity sections read from the campaign fork, not the source world
+  fireEvent.click(indexRow("Locations"));
   await waitFor(() =>
     expect(api.listEntities).toHaveBeenCalledWith({ kind: "campaign", id: "c1" }, "locations"));
 });
 
-test("the Lore tab hosts the lorebook importer", async () => {
+test("the Lore section hosts the lorebook importer, and the pinned row opens it", async () => {
   renderAt();
   await screen.findByText("Drowned Realm");
-  fireEvent.click(screen.getByRole("button", { name: "Lore" }));
-  fireEvent.click(screen.getByText(/import lorebook/i)); // expand the details
+  fireEvent.click(screen.getByRole("button", { name: /import lorebook/i }));
+  await screen.findByRole("heading", { name: "Lore" });
+  expect(screen.getByText(/import lorebook \/ world-info/i).parentElement)
+    .toHaveAttribute("open");
   expect(screen.getByRole("button", { name: /parse/i })).toBeInTheDocument();
 });
 
-test("openGreeting switches to the greetings tab and focuses the greeting", async () => {
+test("openGreeting switches to Greetings and focuses the greeting", async () => {
   (api.listCharacters as any).mockResolvedValue([
     { id: "mira", name: "Mira", default_version: "main", versions: [{ id: "main", name: "main" }] },
   ]);
@@ -148,26 +220,26 @@ test("openGreeting switches to the greetings tab and focuses the greeting", asyn
   ]);
   renderAt();
   await screen.findByText("Drowned Realm");
-  fireEvent.click(screen.getByRole("button", { name: "Characters" }));
+  fireEvent.click(indexRow("Characters"));
   fireEvent.click(await screen.findByText("Mira"));               // grid -> detail
   const wg = await screen.findByText("World greetings");
   fireEvent.click(within(wg.parentElement as HTMLElement).getByText("SoL 2"));
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "sol-2"));
-  expect(screen.getByRole("button", { name: "Greetings" })).toHaveClass("active");
+  expect(indexRow("Greetings")).toHaveClass("active");
 });
 
-
-test("campaign mode passes campaign scope and hides the Tags tab", async () => {
+test("campaign mode passes campaign scope and hides Tags and the Overview", async () => {
   (api.listAppearances as any).mockResolvedValue([]);
-  render(
-    <MemoryRouter initialEntries={["/campaigns/c1/world"]}>
-      <Routes><Route path="/campaigns/:cid/world" element={<WorldView campaign />} /></Routes>
-    </MemoryRouter>,
-  );
+  renderCampaign();
   await screen.findByText(/World Copy/);
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalledWith({ kind: "campaign", id: "c1" }));
-  expect(screen.queryByRole("button", { name: "Tags" })).toBeNull();
-  expect(screen.getByRole("button", { name: "Greetings" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^Tags\b/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Overview\b/ })).toBeNull();
+  // a campaign has no tag vocabulary of its own, so nothing asks for one
+  expect(api.listTags).not.toHaveBeenCalled();
+  expect(indexRow("Greetings")).toBeInTheDocument();
+  // the fork's way back to what it forked from
+  expect(screen.getByRole("link", { name: /source world/i })).toHaveAttribute("href", "/worlds/w");
 });
 
 test("campaign path resolves module context and threads it into the character editor's Sheet section", async () => {
@@ -179,11 +251,7 @@ test("campaign path resolves module context and threads it into the character ed
   // she has to have appeared, or the campaign grid's default filter hides her
   (api.listAppearances as any).mockResolvedValue(
     [{ kind: "characters", id: "mira", version: "main", role: "npc", scenes: ["01"] }]);
-  render(
-    <MemoryRouter initialEntries={["/campaigns/c1/world"]}>
-      <Routes><Route path="/campaigns/:cid/world" element={<WorldView campaign />} /></Routes>
-    </MemoryRouter>,
-  );
+  renderCampaign();
   await screen.findByText(/World Copy/);
   await waitFor(() => expect(api.getCampaignModule).toHaveBeenCalledWith("c1"));
   await waitFor(() => expect(api.readModule).toHaveBeenCalledWith("pool-basic"));

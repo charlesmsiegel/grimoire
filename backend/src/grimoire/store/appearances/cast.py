@@ -33,10 +33,18 @@ def cast_detail(cid: str, sid: str, kind: str, actor_id: str) -> dict:
 
 
 def roster(cid: str) -> list[dict]:
+    """Every actor that has ever appeared in this campaign, from the record alone.
+
+    Deliberately *not* name-resolving: this runs over the whole record on every
+    ``/appearances`` read, and a name costs a card read per actor at its locked
+    version. Callers that need names go through ``roster_names`` (drift
+    measurement) or ``scene_cast`` (the handful of actors on stage).
+    """
     out = []
     for ref, r in sorted(paths.record(cid).items()):
         kind, actor_id = paths._split(ref)
-        out.append({"kind": kind, "id": actor_id, "version": r["version"], "role": r["role"], "scenes": r["scenes"]})
+        out.append({"kind": kind, "id": actor_id, "version": r["version"],
+                    "role": r["role"], "scenes": r["scenes"]})
     return out
 
 

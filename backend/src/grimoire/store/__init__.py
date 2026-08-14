@@ -19,10 +19,10 @@ checked, and recorded, separately.
 from __future__ import annotations
 
 from . import (
-    absorb, alternates, appearances, assets, atomic, audit, briefing, campaign_climate, campaigns, cards, changes, characters, checks, chronicle, commitments, commits,
+    absorb, alternates, appearances, assets, atomic, audit, briefing, campaign_climate, campaigns, cards, casefile, changes, characters, checks, chronicle, commitments, commits,
     chub, climates, config, context, covers, dice, dossiers, entities, entity_schema, epub, export, facts, fence, fetch, greetings, groupstate,
     image_subjects, length_drift, lengths, llm_connections, localize, locks, lorebook, migrations, module_edit, modules, overlay, pcs, playing,
-    playstate, plot, prompt_log, proposals, relationships, response_presets, rolling_summary, rolls, scene_ids, scene_refs, scenes, sheets,
+    playstate, plot, prompt_log, proposals, provenance, relationships, response_presets, rolling_summary, rolls, scene_ids, scene_refs, scenes, sheets,
     styles, suggest,
     sync, tags, taglines, thumbs, turnstate, voice_anchors, voice_drift, world_bundle, worlds,
     ziputil,
@@ -61,6 +61,7 @@ __all__ = [
     "absorb",
     "alternates",
     "briefing",
+    "casefile",
     "parse_frontmatter",
     "dump_frontmatter",
     "home",
@@ -127,6 +128,7 @@ __all__ = [
     "playstate",
     "plot",
     "prompt_log",
+    "provenance",
     "relationships",
     "dice",
     "DiceError",

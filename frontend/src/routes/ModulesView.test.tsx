@@ -12,6 +12,11 @@ vi.mock("../api/client", () => ({
 }));
 import { api } from "../api/client";
 import ModulesView from "./ModulesView";
+import { MemoryRouter } from "react-router-dom";
+
+// The page lives in the library's shell now — a context column of sections
+// beside main — and every row in that column is a <NavLink>.
+const inShell = (el: React.ReactElement) => <MemoryRouter>{el}</MemoryRouter>;
 
 // minimal valid ModuleDetail — extend per-test with spreads
 const DETAIL = {
@@ -51,7 +56,7 @@ beforeEach(() => {
 });
 
 test("clicking a row shows the read-only module detail", async () => {
-  const { container } = render(<ModulesView />);
+  const { container } = render(inShell(<ModulesView />));
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Basic Pool"));
   await waitFor(() => expect(api.readModule).toHaveBeenCalledWith("pool-basic"));
@@ -77,7 +82,7 @@ test("renders valid sheet types and the Problems section without throwing on a b
     errors: ["sheet_types.broken: must be an object", "sheet_types.medium: unknown group ref 'ghost-group'"],
   };
   (api.readModule as any).mockResolvedValue(BROKEN);
-  const { container } = render(<ModulesView />);
+  const { container } = render(inShell(<ModulesView />));
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Basic Pool"));
   await waitFor(() => expect(api.readModule).toHaveBeenCalledWith("pool-basic"));
@@ -99,7 +104,7 @@ test("list row flags display issues; detail shows Display section", async () => 
     theme: { dots: "diamond" },
     display_errors: [{ source: "layout", sheet_type: "haven", message: "sheet_types.haven: bad" }],
   });
-  render(<ModulesView />);
+  render(inShell(<ModulesView />));
   expect(await screen.findByText(/display issues/)).toBeInTheDocument();
   fireEvent.click(screen.getByText("Pool Basic"));
   expect(await screen.findByText("Display")).toBeInTheDocument();
@@ -114,7 +119,7 @@ test("user module shows Edit; builtin shows duplicate hint", async () => {
     { id: "d20-basic", name: "Basic D20", source: "builtin", valid: true },
   ]);
   (api.readModule as any).mockResolvedValue({ ...DETAIL, id: "mine", source: "user" });
-  render(<ModulesView />);
+  render(inShell(<ModulesView />));
   fireEvent.click(await screen.findByText("Mine"));
   expect(await screen.findByRole("button", { name: "Edit" })).toBeInTheDocument();
   (api.readModule as any).mockResolvedValue({ ...DETAIL, id: "d20-basic", source: "builtin" });
@@ -130,7 +135,7 @@ test("Duplicate prompts for a name and selects the copy", async () => {
   ]);
   (api.readModule as any).mockResolvedValue({ ...DETAIL, id: "d20-basic", source: "builtin" });
   (api.duplicateModule as any).mockResolvedValue({ id: "basic-d20-copy" });
-  render(<ModulesView />);
+  render(inShell(<ModulesView />));
   fireEvent.click(await screen.findByText("Basic D20"));
   await waitFor(() =>
     expect(screen.getByText(/duplicate to customize/)).toBeInTheDocument());
@@ -143,7 +148,7 @@ test("Duplicate prompts for a name and selects the copy", async () => {
 test("Import posts the picked file, reloads the list, and selects the imported module", async () => {
   (api.importModule as any).mockResolvedValue({ id: "imported" });
   (api.readModule as any).mockResolvedValue({ ...DETAIL, id: "imported", source: "user" });
-  render(<ModulesView />);
+  render(inShell(<ModulesView />));
   const input = screen.getByLabelText("Import module zip") as HTMLInputElement;
   const file = new File(["zip"], "pack.zip", { type: "application/zip" });
   fireEvent.change(input, { target: { files: [file] } });
@@ -157,7 +162,7 @@ test("Edit mounts the module editor", async () => {
     { id: "mine", name: "Mine", source: "user", valid: true },
   ]);
   (api.readModule as any).mockResolvedValue({ ...DETAIL, id: "mine", source: "user" });
-  render(<ModulesView />);
+  render(inShell(<ModulesView />));
   fireEvent.click(await screen.findByText("Mine"));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   expect(await screen.findByText("Manifest")).toBeInTheDocument(); // section nav

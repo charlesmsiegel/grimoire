@@ -1,49 +1,17 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { LIBRARY_SECTIONS } from "../librarySections";
+import { Navigate } from "react-router-dom";
 
-function countLabel(n: number | null | undefined, unit: string): string {
-  // Undefined is "still loading", null is "that request failed" — both are
-  // genuinely unknown, and a dash says so where a 0 would claim the library
-  // is empty.
-  if (n === null || n === undefined) return "—";
-  return `${n} ${unit}${n === 1 ? "" : "s"}`;
-}
-
+/** The library's card hub is gone.
+ *
+ *  It was a landing page in front of six list routes: it answered "what is in
+ *  the library" once, and then cost a click on every visit afterwards. The six
+ *  sections are the context column now — permanently visible, with the same
+ *  counts, switchable in one click — so there is nothing left for a hub page
+ *  to do that the column does not do better.
+ *
+ *  The route survives as a redirect rather than being deleted, because
+ *  `/library` is a URL people have bookmarked and the palette still offers
+ *  "The Library" as a place to go. Worlds is the first section and the one
+ *  everything else is built on. */
 export default function LibraryView() {
-  const [counts, setCounts] = useState<Record<string, number | null>>({});
-
-  // Deliberately one request per section rather than a new aggregate endpoint:
-  // every one of these list routes already exists and is already cheap, and
-  // they settle independently, so a library whose request fails costs only its
-  // own count instead of blanking the whole page.
-  useEffect(() => {
-    let live = true;
-    for (const s of LIBRARY_SECTIONS) {
-      s.count()
-        .then((n) => { if (live) setCounts((c) => ({ ...c, [s.to]: n })); })
-        .catch(() => { if (live) setCounts((c) => ({ ...c, [s.to]: null })); });
-    }
-    return () => { live = false; };
-  }, []);
-
-  return (
-    <div className="page view-anim">
-      <div className="page-head">
-        <h1 className="page-h1">Library</h1>
-      </div>
-      <div className="count-label">Everything a campaign is built from</div>
-      <div className="library-grid">
-        {LIBRARY_SECTIONS.map((s) => (
-          <Link key={s.to} to={s.to} className="library-card">
-            <h3>{s.label}</h3>
-            <p className="library-blurb">{s.blurb}</p>
-            <footer data-testid={`count-${s.to.slice(1)}`}>
-              {countLabel(counts[s.to], s.unit)}
-            </footer>
-          </Link>
-        ))}
-      </div>
-    </div>
-  );
+  return <Navigate to="/worlds" replace />;
 }

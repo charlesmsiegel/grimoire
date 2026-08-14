@@ -1,6 +1,11 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ResponsePresetsView from "./ResponsePresetsView";
+import { MemoryRouter } from "react-router-dom";
+
+// The page lives in the library's shell now — a context column of sections
+// beside main — and every row in that column is a <NavLink>.
+const inShell = (el: React.ReactElement) => <MemoryRouter>{el}</MemoryRouter>;
 import { api, STYLE_CLEAR } from "../api/client";
 
 vi.mock("../api/client");
@@ -50,27 +55,27 @@ beforeEach(() => {
 });
 
 it("clicking a row shows the read-only view", async () => {
-  render(<ResponsePresetsView />);
+  render(inShell(<ResponsePresetsView />));
   await userEvent.click(await screen.findByRole("button", { name: "Slow Burn" }));
   expect(await screen.findByRole("heading", { name: "Slow Burn" })).toBeInTheDocument();
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 });
 
 it("Edit reveals the form", async () => {
-  render(<ResponsePresetsView />);
+  render(inShell(<ResponsePresetsView />));
   await userEvent.click(await screen.findByRole("button", { name: "Slow Burn" }));
   await userEvent.click(screen.getByRole("button", { name: "Edit" }));
   expect(screen.getByLabelText("Name")).toBeInTheDocument();
 });
 
 it("+ New preset opens the form directly", async () => {
-  render(<ResponsePresetsView />);
+  render(inShell(<ResponsePresetsView />));
   await userEvent.click(await screen.findByRole("button", { name: "+ New preset" }));
   expect(screen.getByLabelText("Name")).toBeInTheDocument();
 });
 
 it("a built-in offers Duplicate instead of Edit", async () => {
-  render(<ResponsePresetsView />);
+  render(inShell(<ResponsePresetsView />));
   await userEvent.click(await screen.findByRole("button", { name: "Terse" }));
   expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Duplicate" })).toBeInTheDocument();
@@ -81,7 +86,7 @@ it("flags a broken preset in the detail view", async () => {
     meta: { id: "broken", name: "Broken", built_in: false },
     validity: { valid: false, issues: ["unknown length preset 'nonesuch' — this preset supplies nothing"] },
   });
-  render(<ResponsePresetsView />);
+  render(inShell(<ResponsePresetsView />));
   await userEvent.click(await screen.findByRole("button", { name: "Broken" }));
   expect(await screen.findByText(/supplies nothing/)).toBeInTheDocument();
 });
@@ -91,7 +96,7 @@ it("flags an ignored malformed knob without calling the preset broken", async ()
     meta: { id: "sloppy", name: "Sloppy", built_in: false },
     validity: { valid: true, issues: ["reply_words: 'lots' is not a positive whole number — ignored"] },
   });
-  render(<ResponsePresetsView />);
+  render(inShell(<ResponsePresetsView />));
   await userEvent.click(await screen.findByRole("button", { name: "Sloppy" }));
   expect(await screen.findByText(/ignored/)).toBeInTheDocument();
 });
@@ -100,7 +105,7 @@ it("delete confirmation lists affected scopes and their post-deletion values", a
   (api.responsePresetUsage as any).mockResolvedValue({ affected: [
     { scope: "campaign", id: "saltmarch", name: "Saltmarch",
       before: { reply_words: 900 }, after: { reply_words: 550 } }] });
-  render(<ResponsePresetsView />);
+  render(inShell(<ResponsePresetsView />));
   await userEvent.click(await screen.findByRole("button", { name: "Slow Burn" }));
   await userEvent.click(screen.getByRole("button", { name: "Edit" }));
   await userEvent.click(screen.getByRole("button", { name: "Delete" }));
@@ -112,7 +117,7 @@ it("warns that the impact is unknown when the usage lookup fails", async () => {
   // A failed lookup is NOT an empty impact: rendering it as "nothing else
   // changes" is a false reassurance immediately before an irreversible delete.
   (api.responsePresetUsage as any).mockRejectedValue({ detail: "boom" });
-  render(<ResponsePresetsView />);
+  render(inShell(<ResponsePresetsView />));
   await userEvent.click(await screen.findByRole("button", { name: "Slow Burn" }));
   await userEvent.click(screen.getByRole("button", { name: "Edit" }));
   await userEvent.click(screen.getByRole("button", { name: "Delete" }));
@@ -129,7 +134,7 @@ it("warns that the impact list is incomplete when part of the scan failed", asyn
     unevaluated: [{ scope: "campaign", id: "saltmarch", name: "Saltmarch",
                     reason: "this campaign's scenes could not be listed" }],
   });
-  render(<ResponsePresetsView />);
+  render(inShell(<ResponsePresetsView />));
   await userEvent.click(await screen.findByRole("button", { name: "Slow Burn" }));
   await userEvent.click(screen.getByRole("button", { name: "Edit" }));
   await userEvent.click(screen.getByRole("button", { name: "Delete" }));
@@ -145,7 +150,7 @@ it("still lists the affected scopes alongside an incompleteness warning", async 
     unevaluated: [{ scope: "scene", id: "s1", name: "The Long Dark",
                     reason: "this scene could not be read" }],
   });
-  render(<ResponsePresetsView />);
+  render(inShell(<ResponsePresetsView />));
   await userEvent.click(await screen.findByRole("button", { name: "Slow Burn" }));
   await userEvent.click(screen.getByRole("button", { name: "Edit" }));
   await userEvent.click(screen.getByRole("button", { name: "Delete" }));
@@ -166,7 +171,7 @@ it("shows an unreadable preset in the rail and explains it in the detail view", 
     meta: { id: "smudged", name: "smudged", built_in: false },
     validity: { valid: false, issues: [issue] },
   });
-  render(<ResponsePresetsView />);
+  render(inShell(<ResponsePresetsView />));
   const row = await screen.findByRole("button", { name: "smudged" });
   expect(row).toHaveTextContent("broken");
   await userEvent.click(row);
@@ -174,7 +179,7 @@ it("shows an unreadable preset in the rail and explains it in the detail view", 
 });
 
 it("offers the clear sentinel as a style option distinct from inherit", async () => {
-  render(<ResponsePresetsView />);
+  render(inShell(<ResponsePresetsView />));
   await userEvent.click(await screen.findByRole("button", { name: "Slow Burn" }));
   await userEvent.click(screen.getByRole("button", { name: "Edit" }));
   const select = screen.getByRole("combobox", { name: "Style" });
@@ -186,7 +191,7 @@ it("offers the clear sentinel as a style option distinct from inherit", async ()
 
 it("surfaces an error when a preset row cannot be read", async () => {
   (api.getResponsePreset as any).mockRejectedValue({ detail: "preset file could not be read" });
-  render(<ResponsePresetsView />);
+  render(inShell(<ResponsePresetsView />));
   await userEvent.click(await screen.findByRole("button", { name: "Slow Burn" }));
   expect(await screen.findByText(/could not be read/)).toBeInTheDocument();
 });

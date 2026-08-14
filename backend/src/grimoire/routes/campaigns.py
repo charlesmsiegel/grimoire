@@ -104,9 +104,16 @@ def get_campaigns():
         # very field that may be the bad one, so element zero is only the
         # newest if the sort key can be trusted. The list is already in memory
         # for the count; validating it costs a strptime per scene.
+        # The newest scene carrying an absorb mark, which is how far the
+        # chronicle, the ledger and every dossier are caught up to. It is not
+        # the same question as "how many scenes are there" and a campaign
+        # answers them differently the moment you play one scene ahead of the
+        # absorb -- which is the normal state of a campaign being played.
+        absorbed = next((s["title"] for s in scene_list if s.get("done")), "")
         out.append({**c, "scenes": len(scene_list),
                     "cover": store.covers.cover_version(c["id"]),
                     "last_scene": scene_list[0]["title"] if scene_list else "",
+                    "absorbed_through": absorbed,
                     "activity": store.campaigns.best_stamp(
                         c["updated"], store.campaigns.read_activity(c["id"]),
                         *(s["updated"] for s in scene_list))})
@@ -405,24 +412,156 @@ def get_changes(cid: str):
 # while this is a standing overview meant to be read top to bottom.
 LEDGER_RECENT = 20
 
+#: `relationships.set_feeling` writes 0–5; the ledger draws the number back.
+FEELING_AXES = ("trust", "affection", "tension")
+
+
+def _ledger_text(value, fallback: str = "") -> str:
+    """A projected field as text. The ledger renders these directly, and React
+    refuses an object as a child -- so a hand-edited record with a dict-valued
+    `title` would blank the whole view rather than showing one odd row. The
+    per-section tolerance below cannot catch that: the read SUCCEEDS and the
+    failure happens in the browser. `commitments.open_commitments` normalizes
+    its own rows; `plot.open_threads` does not, and hardening `plot` is one of
+    the pre-existing items flagged on that PR, so the coercion sits here where
+    the ledger owns the projection.
+
+    Module level rather than nested in `get_ledger` because the relationships
+    projection below needs the same rule, and two copies of it is two places
+    for one of them to stop being applied.
+    """
+    return value.strip() if isinstance(value, str) else fallback
+
+
+def _ledger_relationships(cid: str) -> list[dict]:
+    """Who stands where with whom, as flat rows the ledger can put in a table.
+
+    relationships.json holds two shapes and both belong on this view. A
+    *feeling* is directed and metered -- A's trust, affection and tension
+    toward B, which B does not return by construction -- and a *bond* is
+    symmetric, named ("kin", "sworn") and dated to the scene it formed in. One
+    list with a `kind` rather than two sections: the reader's question is what
+    stands between two people, and answering it in two tables makes them read
+    both to find out.
+
+    Names are resolved once per token and cached. `relationships.actor_name`
+    reads a card per call, and a campaign with a dozen actors carries upwards of
+    a hundred directed pairs, so the uncached version is that many file reads
+    for a dozen answers. A token whose card will not parse falls back to its own
+    id rather than emptying the section -- `casefile.build` makes the same trade
+    for a cast member whose card is broken, and for the same reason: a name is
+    the least of what this row says.
+
+    The meters are clamped rather than trusted, like `casefile._pips`: the file
+    is hand-editable, the client draws five pips, and a stored 9 would draw four
+    that do not exist. A non-integer reads as 0 -- visibly nothing, rather than
+    a crash.
+    """
+    data = store.relationships.read(cid)
+    feelings = data.get("feelings") if isinstance(data.get("feelings"), dict) else {}
+    bonds = data.get("bonds") if isinstance(data.get("bonds"), dict) else {}
+    names: dict[str, str] = {}
+
+    def _name(token: str) -> str:
+        if token not in names:
+            try:
+                names[token] = store.relationships.actor_name(cid, token)
+            except Exception:  # noqa: BLE001 — an unreadable card costs a name, not the section
+                names[token] = token.partition(":")[2] or token
+        return names[token]
+
+    def _meter(value) -> int:
+        return min(5, max(0, value)) if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    rows: list[dict] = []
+    for key, f in feelings.items():
+        if not isinstance(key, str) or not isinstance(f, dict):
+            continue
+        a, _, b = key.partition("->")
+        rows.append({"id": key, "kind": "feeling", "a": a, "b": b,
+                     "a_name": _name(a), "b_name": _name(b),
+                     **{axis: _meter(f.get(axis)) for axis in FEELING_AXES},
+                     "note": _ledger_text(f.get("note")), "type": "", "since_scene": ""})
+    for key, b_rec in bonds.items():
+        if not isinstance(key, str) or not isinstance(b_rec, dict):
+            continue
+        a, _, b = key.partition("|")
+        rows.append({"id": key, "kind": "bond", "a": a, "b": b,
+                     "a_name": _name(a), "b_name": _name(b),
+                     **dict.fromkeys(FEELING_AXES, 0),
+                     "note": "", "type": _ledger_text(b_rec.get("type")),
+                     "since_scene": _ledger_text(b_rec.get("since_scene"))})
+    # Bonds after feelings, each group by its own key, so the table has a stable
+    # order across reads -- a row that moves between two identical-looking loads
+    # is a row the reader stops trusting.
+    rows.sort(key=lambda r: (r["kind"] == "bond", r["id"]))
+    return rows
+
+
+@router.get("/campaigns/{cid}/provenance")
+def get_provenance(cid: str):
+    """Why each continuity line is there: the quote, speaker and certainty
+    behind every edit that landed, keyed `"<kind>/<id>#<field>"`.
+
+    `absorb/parse.py` has always asked the extractor to cite itself and
+    `absorb/routing.py` has always weighed those citations into a band — and
+    both were thrown away the moment the edit applied, so the citation existed
+    for exactly as long as the review row you judged it on. Keeping it costs
+    disk and no tokens.
+
+    One flat read of one file: unlike the ledger this joins nothing, so it needs
+    neither the lock nor the per-section tolerance. `store.provenance.read` is
+    itself tolerant of a garbled file — this backs display markers, and one bad
+    byte must cost the markers rather than the page.
+
+    A field with no entry is the normal case and always will be: the later
+    absorb phases rest on no transcript citation, records written before this
+    existed have none, and a hand-edited record has none either. The client
+    renders those as uncited rather than hiding them.
+    """
+    _campaign_root_or_404(cid)
+    data = store.provenance.read(cid)
+    if not data:
+        return data
+    # The recording scene is labelled here rather than at write time, for the
+    # reason `get_ledger` labels its own: a scene can be renamed, and a title
+    # frozen into the citation would then name a scene that no longer exists.
+    # Tolerant — an unreadable scene list costs the labels, not the markers.
+    try:
+        titles = {s["id"]: s["title"] for s in store.scenes.list_scenes(cid)}
+    except Exception:  # noqa: BLE001 — labels degrade, the citations do not
+        titles = {}
+    return {k: {**v, "scene_title": titles.get(v.get("scene"), v.get("scene", ""))}
+            if isinstance(v, dict) else v
+            for k, v in data.items()}
+
 
 @router.get("/campaigns/{cid}/ledger")
 def get_ledger(cid: str):
     """The continuity ledger (#117): what the campaign still owes, in one read.
 
-    Four sections, and one route rather than four, because they are read
-    together and share one failure policy — a garbled plot.json, commitments.json
-    or facts.json costs its own section and nothing else, the same tolerance
-    `plot.render_open` and `get_changes` already apply. Splitting them would put
-    that policy in four places and make the panel reason about four loading
-    states to render one view.
+    Six sections, and one route rather than six, because they are read together
+    and share one failure policy — a garbled plot.json, commitments.json,
+    facts.json or relationships.json costs its own section and nothing else, the
+    same tolerance `plot.render_open` and `get_changes` already apply. Splitting
+    them would put that policy in six places and make the page reason about six
+    loading states to render one view.
 
     Each thread, commitment and standing fact carries the scene it came from,
     resolved the same way `get_changes` resolves its labels: the title from the
     scene list, the in-fiction date from the chronicle. For a thread or a
     commitment that is the scene that last moved it; for a fact it is the scene
     that recorded it, since a fact's text never changes after that (#114) — a
-    fact that stopped being true is retired and off this list, not rewritten.
+    fact that stopped being true is retired rather than rewritten.
+
+    `retired` is that other half, and it is the reason this route grew: a
+    retired fact and its `superseded_by` pointer have been on disk since #114
+    and never left the server, so the one thing the ledger keeps that a snapshot
+    cannot — the chain saying WHEN a truth stopped being true and what replaced
+    it — was unreadable from the client. Its rows carry two resolved scenes, the
+    one that recorded the fact and the one that ended it, because a retired row
+    is dated twice and both dates are the point of it.
+
     Contradictions are the section this view is named for and are absent until
     #111 gives them a record; commitment aging (overdue/stale) is #103's, which
     reads the `due` and `last_scene` this already returns.
@@ -435,16 +574,22 @@ def get_ledger(cid: str):
         except Exception:  # noqa: BLE001 — a garbled file empties its section, not the view
             return []
 
-    # All five sources are read under ONE campaign lock, because they are five
+    # All seven sources are read under ONE campaign lock, because they are seven
     # files and a save writes them one after another: `put_chronicle` holds this
     # same lock while it records the chronicle and then applies the absorb's
-    # plot, commitment and fact edits. Reading without it can catch that
-    # sequence half done and return a new fact beside the still-open commitment
-    # the very same save fulfilled — or, since #114, beside the standing fact
-    # that same save retired -- and the panel keeps that contradictory snapshot until
-    # something else bumps its revision. A continuity view that contradicts
-    # itself is worse than one that is a moment stale, which is the whole reason
-    # the writer takes the lock across the sequence rather than per file.
+    # plot, commitment, fact and relationship edits. Reading without it can catch
+    # that sequence half done and return a new fact beside the still-open
+    # commitment the very same save fulfilled — or, since #114, beside the
+    # standing fact that same save retired -- and the page keeps that
+    # contradictory snapshot until something else bumps its revision. A
+    # continuity view that contradicts itself is worse than one that is a moment
+    # stale, which is the whole reason the writer takes the lock across the
+    # sequence rather than per file.
+    #
+    # The two halves of the fact ledger are read here for a sharper version of
+    # the same reason: `facts.record` retires a fact and files its replacement in
+    # ONE write, so an unlocked pair of reads is exactly where a supersession
+    # chain shows up with both ends standing, or with neither.
     #
     # It is a read, so it holds the lock only for the reads: the projections
     # below work on data already in hand.
@@ -457,6 +602,11 @@ def get_ledger(cid: str):
         open_threads = _tolerant(lambda: store.plot.open_threads(cid))
         owed = _tolerant(lambda: store.commitments.open_commitments(cid))
         standing = _tolerant(lambda: store.facts.active(cid))
+        ended = _tolerant(lambda: store.facts.retired(cid))
+        # The whole projection sits inside `_tolerant`, not just the read: it
+        # resolves a name per actor off the cards, so a broken card empties this
+        # section rather than 500ing the view around it.
+        bonds = _tolerant(lambda: _ledger_relationships(cid))
     # Unparseable is not the only way that file can be wrong. `read_chronicle`
     # is a bare `json.loads`, so a chronicle.json holding `[]` -- valid JSON of
     # the wrong shape -- returns a list and raises nothing, and the `.get` below
@@ -465,16 +615,11 @@ def get_ledger(cid: str):
     if not isinstance(chron, dict):
         chron = {}
 
-    def _txt(value, fallback: str = "") -> str:
-        """A projected field as text. The panel renders these directly, and React
-        refuses an object as a child -- so a hand-edited record with a
-        dict-valued `title` would blank the whole view rather than showing one
-        odd row. `_tolerant` cannot catch that: the read SUCCEEDS and the failure
-        happens in the browser. `commitments.open_commitments` normalizes its own
-        rows; `plot.open_threads` does not, and hardening `plot` is one of the
-        pre-existing items flagged on this PR, so the coercion sits here where
-        the ledger owns the projection."""
-        return value.strip() if isinstance(value, str) else fallback
+    # The text coercion these projections run on now lives at module scope
+    # (`_ledger_text`), because the relationships projection needs the same rule
+    # and it has to be the same rule. Bound to the local name the projections
+    # below already use.
+    _txt = _ledger_text
 
     def _scene(sid) -> dict:
         # The row's OWN scene id is the third place a wrong shape can arrive,
@@ -514,6 +659,20 @@ def get_ledger(cid: str):
         # The fact ledger (#114). `facts.active` normalizes its own rows, like
         # `open_commitments` does, so only the scene label is resolved here.
         "facts": [{**f, "scene": _scene(f["scene"])} for f in standing],
+        # The other half of the same file: the facts that stopped being true.
+        # BOTH scenes are resolved and neither is redundant -- `scene` is still
+        # the one that RECORDED the fact, so a retired row keeps its dated place
+        # in the ledger, and `retired_scene` is the one that ended it, which is
+        # the only thing on the row saying when it stopped. `superseded_by` stays
+        # a bare fact id: it points INTO this same response, and inlining the
+        # replacement's text here would ship one sentence twice and let the two
+        # copies disagree the moment either is hand-edited.
+        "retired": [{**f, "scene": _scene(f["scene"]),
+                     "retired_scene": _scene(f["retired_scene"])} for f in ended],
+        # `since_scene` is a bond's only date and is blank for every feeling,
+        # which resolves to the empty label -- the same row shape the sections
+        # above carry, so one renderer serves all of them.
+        "relationships": [{**r, "scene": _scene(r["since_scene"])} for r in bonds],
         # Newest first: `chronicle.recent` returns the tail in ascending order,
         # which is right for a recap read forward and backwards for a ledger.
         # `one_line or summary`, the fallback every other chronicle consumer

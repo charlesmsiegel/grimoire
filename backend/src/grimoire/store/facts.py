@@ -353,6 +353,38 @@ def active(cid: str, as_of: str | None = None) -> list[dict]:
              "scene": _field(r.get("scene"))} for fid, r in items]
 
 
+def retired(cid: str) -> list[dict]:
+    """Every fact that has stopped standing, oldest RECORDING scene first.
+
+    `active`'s complement, shaped like it plus the two fields only a record that
+    ended carries: `superseded_by`, the fact that replaced this one, and
+    `retired_scene`, the scene that ended it. A blank `superseded_by` is
+    retirement's other shape -- the fact simply stopped applying, with nothing
+    to say in its place (see the module docstring).
+
+    This exists because the supersession chain never left the server. Every
+    reader of this ledger called `active`, so a truth and the truth that
+    overtook it could not be shown as the pair they are -- and the pair is the
+    only thing a ledger keeps that a snapshot does not.
+
+    Sorted by the recording scene, like `active`, and deliberately NOT by the
+    retiring one: a retired fact keeps the place in the ledger where it was
+    written, which is what makes it read as history under the fact that
+    replaced it rather than as news at the bottom of the list.
+
+    No `as_of`. `active` narrows because the absorb snapshot must not show the
+    model facts a later scene recorded; nothing generative reads this one, and a
+    reader looking at what a scene ended wants it in full.
+    """
+    items = [(fid, r) for fid, r in read(cid).items()
+             if isinstance(r, dict) and not is_active(r)]
+    items.sort(key=lambda fr: (_field(fr[1].get("scene")), len(fr[0]), fr[0]))
+    return [{"id": fid, "text": _field(r.get("text")), "date": _field(r.get("date")),
+             "scene": _field(r.get("scene")),
+             "superseded_by": _field(r.get("superseded_by")),
+             "retired_scene": _field(r.get("retired_scene"))} for fid, r in items]
+
+
 def render_active(cid: str, limit: int | None = None, as_of: str | None = None) -> list[str]:
     """Formatted lines for the standing facts, leading with the id so the absorb
     prompt's reply can cite one to supersede. The line format lives in

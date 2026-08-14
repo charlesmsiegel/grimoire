@@ -7,9 +7,12 @@ import {
 } from "../components/ConnectionForm";
 import { StorageLocation } from "../components/StorageLocation";
 import { ThemePicker } from "../components/ThemePicker";
+import { PlainShell } from "../components/PageShell";
 import { useTheme } from "../theme/ThemeProvider";
 
-const STEPS = ["Storage", "Connection", "Theme", "World"];
+// One word each, and the word is what the step is *about* rather than what it
+// does to a config file: "Model", not "Connection"; "Look", not "Theme".
+const STEPS = ["Storage", "Model", "Look", "World"];
 
 /** The first-run setup wizard (#194).
  *
@@ -36,7 +39,9 @@ export default function SetupWizard(
   { onDone }: { onDone: (store?: string) => void },
 ) {
   const navigate = useNavigate();
-  const { name: theme, setTheme } = useTheme();
+  // `mode`, not `name`: the control highlights the *choice*, so picking
+  // System must not read back as whichever look the OS resolved it to.
+  const { mode: theme, setTheme } = useTheme();
   const [step, setStep] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -237,155 +242,173 @@ export default function SetupWizard(
   }
 
   return (
-    <div className="page page-narrow view-anim wizard">
-      <h1 className="page-h1">Welcome to Grimoire</h1>
-
-      <ol className="wizard-steps">
-        {STEPS.map((label, i) => {
-          const n = i + 1;
-          const state = step === n ? "on" : step > n ? "done" : "";
-          return (
-            <li key={label} className={`wizard-step ${state}`}>
-              <span className="num">{step > n ? "✓" : n}</span>
-              {step === n && <span className="label">{label}</span>}
-            </li>
-          );
-        })}
-      </ol>
-
-      {error && <div className="banner error-banner">{error}</div>}
-
-      {step === 1 && (
-        <div className="wizard-body">
-          <h3>Where should your library live?</h3>
-          <p className="wizard-intro">
-            Everything you make stays yours, as plain files. The default is fine —
-            change it now only if you would rather it lived elsewhere.
-          </p>
-          <StorageLocation onPending={setMovingStore} onMoved={recheckStore} />
-          <div className="wizard-footer">
-            <span />
-            {/* Label stays "Next" — the Move button is already saying
-                "Moving…", and two controls with one name is a worse hint. */}
-            <button className="btn-accent" onClick={() => setStep(2)} disabled={writing}>Next ▸</button>
-          </div>
-        </div>
-      )}
-
-      {step === 2 && (
-        <div className="wizard-body">
-          <h3>Connect a model</h3>
-          <p className="wizard-intro">
-            Grimoire writes through whichever model you point it at. Add one now, or
-            skip — you can play by hand and set this up later on the Connections page.
-          </p>
-          {connected && <p className="config-msg save-flash">Connected to {connected} ✓</p>}
-          {/* Created but not active: the form is gone because re-submitting it
-              would create a second connection, and what is left to do is the
-              activation that failed. */}
-          {!connected && createdId && (
-            <p className="field-hint">
-              {form.name.trim()} was created but could not be made active.
-            </p>
-          )}
-          {!connected && !createdId && (
-            <ConnectionForm
-              value={form} onChange={setForm}
-              apiKey={key} onApiKey={setKey}
-              orModels={orModels} orError={orError}
-            />
-          )}
-          <div className="wizard-footer">
-            <button className="subtle" onClick={() => setStep(1)} disabled={writing}>Back</button>
-            {connected
-              ? <button className="btn-accent" onClick={() => setStep(3)} disabled={writing}>Next ▸</button>
-              : (
-                <span className="wizard-actions">
-                  <button className="subtle" onClick={() => setStep(3)} disabled={writing}>Skip</button>
-                  <button className="btn-accent" onClick={saveConnection}
-                          disabled={writing || (!createdId && !connectionUsable)}>
-                    {busy ? "Saving…" : createdId ? "Retry activation" : "Save connection"}
-                  </button>
-                </span>
-              )}
-          </div>
-        </div>
-      )}
-
-      {step === 3 && (
-        <div className="wizard-body">
-          <h3>Pick a look</h3>
-          <p className="wizard-intro">
-            Applies as you click, and is changeable any time from Config.
-          </p>
-          <ThemePicker value={theme} onPick={pickTheme} disabled={writing} />
-          <div className="wizard-footer">
-            <button className="subtle" onClick={() => setStep(2)} disabled={writing}>Back</button>
-            <button className="btn-accent" onClick={() => setStep(4)} disabled={writing}>
-              {savingTheme ? "Saving…" : "Next ▸"}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {step === 4 && (
-        <div className="wizard-body">
-          <h3>{existingLibrary ? "This library is already stocked" : "Create your first world"}</h3>
-          <p className="wizard-intro">
-            {existingLibrary
-              ? "The folder you chose in step one already holds worlds, so there is nothing to create here — open one from Worlds, or start a campaign from it."
-              : "A world holds the places, people and lore your campaigns draw on. Every campaign starts from one, so this is the last thing standing between you and play."}
-          </p>
-          {worldId
-            ? <p className="config-msg save-flash">Created {worldName.trim()} ✓</p>
-            : existingLibrary ? null : (
-              <div className="joined">
-                <input
-                  placeholder="World name…" aria-label="World name"
-                  value={worldName} onChange={(e) => setWorldName(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") createWorld(); }}
-                />
-                <button className="btn-accent" onClick={createWorld}
-                        disabled={writing || !worldName.trim()}>
-                  {busy ? "Creating…" : "Create"}
-                </button>
-              </div>
-            )}
-          <div className="wizard-footer">
-            <button className="subtle" onClick={() => setStep(3)} disabled={writing}>Back</button>
-            {worldId || existingLibrary
-              ? (
-                <span className="wizard-actions">
-                  <button className="subtle" onClick={() => finish("/")} disabled={writing}>Finish</button>
-                  <button className="btn-accent" onClick={() => finish("/campaigns/new")} disabled={writing}>
-                    Start a campaign ▸
-                  </button>
-                </span>
-              )
-              /* Disabled while a world is being created: leaving now unmounts
-                 the only place that would report the result, and dismisses
-                 setup for good whether or not the world landed. */
-              : <button className="subtle" onClick={() => finish("/")} disabled={writing}>
-                  Finish later
-                </button>}
-          </div>
-        </div>
-      )}
-
-      {/* A standing way out, for the steps whose own footer only moves forward.
-          Step 4's footer always offers one, so it does not need this too. */}
-      {step !== 4 && (
-        <p className="wizard-skip">
-          {/* Disabled for the same reason the step's own Next is: leaving
-              mid-write races this step's config write against finish()'s.
-              `busy` covers the connection step's activation, which is a config
-              write like the theme's and was missed the first time round. */}
-          <button className="link" onClick={() => finish("/")} disabled={writing}>
-            Skip setup
-          </button>
-          {" — you can do all of this later from Config."}
+    <PlainShell>
+      <div className="first-run view-anim">
+        <img className="wizard-mark" src="/grimoire-128.png" alt="" width={56} height={56} />
+        <h1 className="wizard-title">Grimoire</h1>
+        {/* The promise the app is making, said before anything is asked. It is
+            also the answer to the first question, which is why it comes first. */}
+        <p className="wizard-promise">
+          Everything you make stays yours, as plain files on this machine.
+          Four questions and you're playing.
         </p>
-      )}
-    </div>
+
+        {/* Every step is named, not only the one you are on. Four questions is
+            short enough to show whole, and seeing the whole of it is what makes
+            it read as short. */}
+        <ol className="wizard-steps">
+          {STEPS.map((label, i) => {
+            const n = i + 1;
+            const state = step === n ? "on" : step > n ? "done" : "";
+            return (
+              <li key={label} className={`wizard-step ${state}`}>
+                <span className="num">{step > n ? "✓" : n}</span>
+                <span className="label">{label}</span>
+              </li>
+            );
+          })}
+        </ol>
+
+        {error && <div className="banner error-banner">{error}</div>}
+
+        {step === 1 && (
+          <div className="wizard-body">
+            <h3>Where should your library live?</h3>
+            {/* The "plain files" half of this moved up to the page's own
+                promise, where it is the first thing said rather than the third.
+                What is left is the only part that asks for a decision. */}
+            <p className="wizard-intro">
+              The default is fine — change it now only if you would rather your
+              library lived elsewhere.
+            </p>
+            <StorageLocation onPending={setMovingStore} onMoved={recheckStore} />
+            <div className="wizard-footer">
+              <span />
+              {/* Label stays "Next" — the Move button is already saying
+                  "Moving…", and two controls with one name is a worse hint. */}
+              <button className="btn-accent" onClick={() => setStep(2)} disabled={writing}>Next ▸</button>
+            </div>
+          </div>
+        )}
+
+        {step === 2 && (
+          <div className="wizard-body">
+            <h3>Connect a model</h3>
+            <p className="wizard-intro">
+              Grimoire writes through whichever model you point it at. Add one now, or
+              skip — you can play by hand and set this up later on the Connections page.
+            </p>
+            {connected && <p className="config-msg save-flash">Connected to {connected} ✓</p>}
+            {/* Created but not active: the form is gone because re-submitting it
+                would create a second connection, and what is left to do is the
+                activation that failed. */}
+            {!connected && createdId && (
+              <p className="field-hint">
+                {form.name.trim()} was created but could not be made active.
+              </p>
+            )}
+            {!connected && !createdId && (
+              <ConnectionForm
+                value={form} onChange={setForm}
+                apiKey={key} onApiKey={setKey}
+                orModels={orModels} orError={orError}
+              />
+            )}
+            <div className="wizard-footer">
+              <button className="subtle" onClick={() => setStep(1)} disabled={writing}>Back</button>
+              {connected
+                ? <button className="btn-accent" onClick={() => setStep(3)} disabled={writing}>Next ▸</button>
+                : (
+                  <span className="wizard-actions">
+                    <button className="subtle" onClick={() => setStep(3)} disabled={writing}>Skip</button>
+                    <button className="btn-accent" onClick={saveConnection}
+                            disabled={writing || (!createdId && !connectionUsable)}>
+                      {busy ? "Saving…" : createdId ? "Retry activation" : "Save connection"}
+                    </button>
+                  </span>
+                )}
+            </div>
+          </div>
+        )}
+
+        {step === 3 && (
+          <div className="wizard-body">
+            <h3>Pick a look</h3>
+            <p className="wizard-intro">
+              Applies as you click, and is changeable any time from Config.
+            </p>
+            <ThemePicker value={theme} onPick={pickTheme} disabled={writing} />
+            <div className="wizard-footer">
+              <button className="subtle" onClick={() => setStep(2)} disabled={writing}>Back</button>
+              <button className="btn-accent" onClick={() => setStep(4)} disabled={writing}>
+                {savingTheme ? "Saving…" : "Next ▸"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === 4 && (
+          <div className="wizard-body">
+            <h3>{existingLibrary ? "This library is already stocked" : "Create your first world"}</h3>
+            <p className="wizard-intro">
+              {existingLibrary
+                ? "The folder you chose in step one already holds worlds, so there is nothing to create here — open one from Worlds, or start a campaign from it."
+                : "A world holds the places, people and lore your campaigns draw on. Every campaign starts from one, so this is the last thing standing between you and play."}
+            </p>
+            {worldId
+              ? <p className="config-msg save-flash">Created {worldName.trim()} ✓</p>
+              : existingLibrary ? null : (
+                <div className="joined">
+                  <input
+                    placeholder="World name…" aria-label="World name"
+                    value={worldName} onChange={(e) => setWorldName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") createWorld(); }}
+                  />
+                  <button className="btn-accent" onClick={createWorld}
+                          disabled={writing || !worldName.trim()}>
+                    {busy ? "Creating…" : "Create"}
+                  </button>
+                </div>
+              )}
+            <div className="wizard-footer">
+              <button className="subtle" onClick={() => setStep(3)} disabled={writing}>Back</button>
+              {worldId || existingLibrary
+                ? (
+                  <span className="wizard-actions">
+                    <button className="subtle" onClick={() => finish("/")} disabled={writing}>Finish</button>
+                    <button className="btn-accent" onClick={() => finish("/campaigns/new")} disabled={writing}>
+                      Start a campaign ▸
+                    </button>
+                  </span>
+                )
+                /* Disabled while a world is being created: leaving now unmounts
+                   the only place that would report the result, and dismisses
+                   setup for good whether or not the world landed. */
+                : <button className="subtle" onClick={() => finish("/")} disabled={writing}>
+                    Finish later
+                  </button>}
+            </div>
+          </div>
+        )}
+
+        {/* A standing way out, for the steps whose own footer only moves
+            forward. Step 4's footer always offers one, so it does not need this
+            too. It sits beside Next rather than under the card as a sentence:
+            leaving is a real answer to "four questions", and burying it in prose
+            made it read as a warning about giving up. */}
+        {step !== 4 && (
+          <p className="wizard-skip">
+            {/* Disabled for the same reason the step's own Next is: leaving
+                mid-write races this step's config write against finish()'s.
+                `busy` covers the connection step's activation, which is a config
+                write like the theme's and was missed the first time round. */}
+            <button className="link" onClick={() => finish("/")} disabled={writing}>
+              Skip setup
+            </button>
+            {" — you can do all of this later from Config."}
+          </p>
+        )}
+      </div>
+    </PlainShell>
   );
 }

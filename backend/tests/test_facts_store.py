@@ -367,6 +367,83 @@ def test_an_id_referenced_by_a_supersession_is_never_reallocated(monkeypatch, tm
     assert facts.get(cid, fresh)["text"] == "Something unrelated."
 
 
+# ---- the other half of the ledger: what stopped being true (screen 4e) -----
+
+def test_retired_returns_the_facts_active_leaves_out(monkeypatch, tmp_path):
+    """`active`'s complement, and the two halves partition the file: every
+    record is on exactly one of the lists, so a reader of both sees the whole
+    ledger and never one fact twice."""
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The bridge stands.", "the first night", "001--a")
+    new = facts.record(cid, "The bridge is rubble.", "the ninth night", "009--b",
+                       supersedes=old)
+    lapsed = facts.record(cid, "The gate is watched.", "", "002--c")
+    facts.retire(cid, lapsed, "009--b")
+
+    assert [f["id"] for f in facts.active(cid)] == [new]
+    assert [f["id"] for f in facts.retired(cid)] == [old, lapsed]
+
+
+def test_a_retired_fact_carries_what_replaced_it_and_what_ended_it(monkeypatch, tmp_path):
+    """The supersession chain, which is the one thing this store keeps that a
+    snapshot cannot — and which never left the server before screen 4e."""
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The bridge stands.", "the first night", "001--a")
+    new = facts.record(cid, "The bridge is rubble.", "", "009--b", supersedes=old)
+    assert facts.retired(cid) == [{"id": old, "text": "The bridge stands.",
+                                   "date": "the first night", "scene": "001--a",
+                                   "superseded_by": new, "retired_scene": "009--b"}]
+
+
+def test_a_fact_retired_outright_names_no_replacement(monkeypatch, tmp_path):
+    """Retirement's other shape: it stopped applying with nothing to say in its
+    place. A blank `superseded_by` is what tells the two apart, and the view
+    hides only this one behind its toggle."""
+    cid = _campaign(monkeypatch, tmp_path)
+    fid = facts.record(cid, "The gate is watched.", "", "001--a")
+    facts.retire(cid, fid, "004--b")
+    (row,) = facts.retired(cid)
+    assert row["superseded_by"] == "" and row["retired_scene"] == "004--b"
+
+
+def test_retired_orders_by_the_recording_scene_not_the_retiring_one(monkeypatch, tmp_path):
+    """A retired fact keeps the place in the ledger where it was WRITTEN, which
+    is what lets the view show it under the fact that replaced it rather than as
+    news at the bottom. Both were retired by the same late scene; they sort by
+    where they came from."""
+    cid = _campaign(monkeypatch, tmp_path)
+    early = facts.record(cid, "One.", "", "001--a")
+    late = facts.record(cid, "Two.", "", "005--b")
+    facts.retire(cid, late, "009--c")
+    facts.retire(cid, early, "009--c")
+    assert [f["id"] for f in facts.retired(cid)] == [early, late]
+
+
+def test_retired_projects_its_fields_rather_than_trusting_them(monkeypatch, tmp_path):
+    """Same rule as `active`, on the two fields only this list carries: a
+    hand-edited object-valued `superseded_by` reaching the view is a React child
+    React refuses, which blanks the table rather than showing one odd row. A
+    record that is not a dict at all is skipped rather than counted as retired —
+    `is_active` answers False for it, and "not standing" must not mean "ended"."""
+    cid = _campaign(monkeypatch, tmp_path)
+    _ledger_path(cid).write_text(json.dumps({
+        "f1": {"text": "One.", "date": [], "scene": 7, "status": "retired",
+               "superseded_by": {"f": 2}, "retired_scene": ["s9"]},
+        "f2": "not even a record"}), encoding="utf-8")
+    assert facts.retired(cid) == [{"id": "f1", "text": "One.", "date": "", "scene": "",
+                                   "superseded_by": "", "retired_scene": ""}]
+
+
+def test_a_garbled_ledger_raises_for_the_caller_to_empty_the_section(monkeypatch, tmp_path):
+    """Like `active`: the route wraps this in its per-section tolerance, so the
+    failure belongs to the section rather than being swallowed here into an
+    empty ledger that claims nothing was ever retired."""
+    cid = _campaign(monkeypatch, tmp_path)
+    _ledger_path(cid).write_text("[]", encoding="utf-8")
+    with pytest.raises(AttributeError):
+        facts.retired(cid)
+
+
 def test_find_is_the_one_definition_of_a_scenes_fact(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     fid = facts.record(cid, "The bridge stands.", "", "001--a")

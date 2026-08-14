@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Appearance, type Card, type CardFormat, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type ModuleDetail, type VersionRef } from "../api/client";
+import { api, type Appearance, type Card, type CardFormat, type Casefile, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type ModuleDetail, type VersionRef } from "../api/client";
 import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import CreationWizard from "./CreationWizard";
@@ -38,6 +38,33 @@ function describeChubResult(result: ChubImportResult): string {
 
 type Mode = "grid" | "detail" | "edit";
 
+/** The middle pane's tabs. Everything here is part of the *card* — the
+ *  world-level record that is sent to the model and shared by every campaign
+ *  built on this world. What one campaign has made of her lives in the right
+ *  pane and is deliberately not reachable from this strip. */
+type CardTab = "card" | "lore" | "greetings" | "art";
+
+/** A scene's story number, read out of its own id (`<NNN>--<date>--<slug>`).
+ *  The same read `CampaignView.sceneNumber` makes, and for the same reason: the
+ *  number belongs to the file, never to a list's ordering, which drifts the
+ *  moment an earlier scene is re-edited. */
+function sceneOrdinal(id: string): string {
+  const m = /^(\d+)--/.exec(id);
+  return m ? String(parseInt(m[1], 10)) : id;
+}
+
+/** A rough size for the description's cost stamp.
+ *
+ *  There is no tokenizer in the browser: the only real token counts grimoire
+ *  has come from the backend's context builder, which measures a whole
+ *  assembled prompt once per turn and never an individual field. So this is the
+ *  usual four-characters-a-token estimate, and it is rendered behind a `≈` so
+ *  it reads as the order of magnitude it is. Its job is to make the size of a
+ *  field legible *before* it costs a turn, not to be added up. */
+function estimateTokens(text: string): number {
+  return Math.max(1, Math.round(text.length / 4));
+}
+
 const EXPORT_FORMATS: { format: CardFormat; label: string; hint: string }[] = [
   { format: "json", label: "JSON", hint: "card text plus the avatar, embedded" },
   { format: "png", label: "PNG", hint: "the avatar, with the card written into it" },
@@ -65,6 +92,116 @@ function ExportMenu({ wid, cid, vid }: { wid: string; cid: string; vid: string }
 
 function focusStyle(f?: number | null): React.CSSProperties | undefined {
   return f == null ? undefined : { objectPosition: `${f}% ${f}%` };
+}
+
+function CampaignRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="local-row">
+      <span className="data-label">{label}</span>
+      <p className="local-value">{value}</p>
+    </div>
+  );
+}
+
+/** The right pane: what one campaign has made of her.
+ *
+ *  Nothing in here is part of the card and nothing in here is editable from
+ *  this screen — it is a readout of files the absorb pass writes, and looking
+ *  like a readout rather than a form is the point. The middle pane is a
+ *  document someone authors and every campaign then shares; this is one
+ *  campaign's record of what happened, and it belongs to that campaign alone.
+ *  Today both sit in one stack of fields, which is how a shared record gets
+ *  edited by someone who believes they are editing one campaign.
+ *
+ *  The world route has no campaign at all, so it says so rather than showing an
+ *  empty frame: a blank pane under a heading reads as "this campaign knows
+ *  nothing about her", which is a claim, and the wrong one. */
+function CampaignPane(
+  { worldScope, label, name, state }: {
+    worldScope: boolean;
+    /** The campaign's name, or its slug if the name could not be read. */
+    label: string;
+    name: string;
+    /** `null` while the campaign's record of her is still being read. */
+    state: { scenes: string[]; casefile: Casefile | null } | null;
+  },
+) {
+  if (worldScope) {
+    return (
+      <aside className="campaign-pane no-campaign" aria-label="Campaign state">
+        <div className="pane-stamp">
+          <span className="eyebrow">No campaign in scope</span>
+        </div>
+        <p className="local-empty">
+          You are editing the world's record of {name}. Play state — what she
+          currently knows, her dossier, the scenes she has walked into — belongs
+          to a campaign, and this page is not open in one. Open her from a
+          campaign's world copy to see it.
+        </p>
+      </aside>
+    );
+  }
+
+  return (
+    <aside className="campaign-pane" aria-label="Campaign state">
+      <div className="pane-stamp">
+        <span className="eyebrow accent">In {label}</span>
+        <span className="eyebrow">Campaign-local · not part of the card</span>
+      </div>
+
+      {state === null ? (
+        <p className="local-empty">Reading…</p>
+      ) : state.scenes.length === 0 ? (
+        <p className="local-empty">
+          {name} has not been in a scene in {label} yet. Play one and the absorb
+          pass writes her state and her dossier here — the card on the left does
+          not change.
+        </p>
+      ) : <>
+        {state.casefile === null ? (
+          <p className="local-empty">
+            Could not read {name}'s state in {label}. The scenes below are what
+            her appearance record still says.
+          </p>
+        ) : <>
+          {state.casefile.standing && <CampaignRow label="Current state" value={state.casefile.standing} />}
+          {state.casefile.knows && <CampaignRow label="Knows" value={state.casefile.knows} />}
+          {state.casefile.suspects && <CampaignRow label="Suspects" value={state.casefile.suspects} />}
+          {/* The tagline is the guess a dossier replaces, so it only stands in
+              while there is no dossier — showing both would present a first
+              impression and the record that outgrew it as equals. */}
+          {(state.casefile.dossier || state.casefile.tagline) && (
+            <div className="local-row">
+              <span className="data-label">Dossier</span>
+              <p className="local-value">{state.casefile.dossier || state.casefile.tagline}</p>
+              <span className="dossier-source">
+                {state.casefile.dossier ? "dossier.md" : "tagline.md"}
+              </span>
+            </div>
+          )}
+          {!state.casefile.standing && !state.casefile.knows && !state.casefile.suspects
+            && !state.casefile.dossier && !state.casefile.tagline && (
+            <p className="local-empty">
+              Nothing recorded yet. {label} has had her on stage but no absorb
+              pass has written her state or her dossier.
+            </p>
+          )}
+        </>}
+
+        <div className="local-row">
+          <span className="data-label">Appears in</span>
+          {/* Plain attributes, not links: a scene is somewhere this editor
+              cannot navigate to, and a chip that looks clickable and is not is
+              worse than one that never claimed to be. */}
+          <div className="chip-row">
+            {state.scenes.map((sid) => (
+              <span className="chip on" key={sid}>Scene {sceneOrdinal(sid)}</span>
+            ))}
+          </div>
+        </div>
+      </>}
+    </aside>
+  );
 }
 
 export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, onOpenGreeting, module = null }:
@@ -116,6 +253,24 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const [locked, setLocked] = useState<string | null>(null);       // campaign: locked version id
   const [worldVersions, setWorldVersions] = useState<VersionRef[]>([]);
   const [importVid, setImportVid] = useState("");
+  // Which half of the card the middle pane is showing. Reset per character
+  // below, not per version -- comparing two versions' art is exactly what the
+  // version list is for, and snapping back to CARD each click would undo it.
+  const [tab, setTab] = useState<CardTab>("card");
+  // campaign: what THIS campaign has made of the open character, for the right
+  // pane. `null` while it is still being read; in world scope it is never read
+  // at all, because there is no campaign to have made anything of her.
+  const [campaignState, setCampaignState] =
+    useState<{ scenes: string[]; casefile: Casefile | null } | null>(null);
+  // The campaign's display name, for the right pane's heading. The pane's whole
+  // job is naming an owner, and `scope.id` is a slug -- it stands in when the
+  // read fails, rather than the heading losing its subject.
+  const [campaignName, setCampaignName] = useState("");
+  // How many world-lore entries name this character as an owner, for the LORE
+  // tab's count. `OwnedLorePanel` reads the same list to render the entries
+  // themselves; both fire in the same tick, and `client.ts` shares in-flight
+  // GETs by path, so this is one request between them rather than two.
+  const [loreCount, setLoreCount] = useState<number | null>(null);
   // campaign: the ids that have ever been cast in this campaign. `null` while
   // the roster is still loading (or in world scope, where it has no meaning) --
   // distinct from the empty set, which is a campaign nobody has played yet, and
@@ -302,6 +457,42 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     api.listGreetings(scope).then(setWorldGreetings).catch(() => setWorldGreetings([]));
   }, [wid, worldScope, scope.kind, scope.id, detailCid]);  // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The middle pane always opens on the card. Keyed to the character rather
+  // than to the mode: coming back from the edit form should land where you
+  // left, and switching version keeps the tab on purpose (see `tab`).
+  useEffect(() => { setTab("card"); }, [detailCid]);
+
+  // How many owned lore entries there are, for the LORE tab's count. Only when
+  // there is a Lore tab to route to -- without `onOpenLore` the panel does not
+  // render and the count would label a tab that goes nowhere.
+  useEffect(() => {
+    if (!detailCid || !onOpenLore) { setLoreCount(null); return; }
+    let live = true;
+    api.listEntities(scope, "lore")
+      .then((items) => {
+        if (!live) return;
+        const ref = `characters:${detailCid}`;
+        setLoreCount(items.filter((e) =>
+          (e.owners ?? "").split(",").map((o) => o.trim()).includes(ref)).length);
+      })
+      // A count is an ornament on a tab; failing to read one must not cost the
+      // tab, which still opens the panel that will report the failure itself.
+      .catch(() => { if (live) setLoreCount(null); });
+    return () => { live = false; };
+  }, [scope.kind, scope.id, detailCid, !!onOpenLore]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The campaign that owns the right pane, by name. One read per scope, not per
+  // character: it is a property of the campaign, and the pane's heading is the
+  // only thing on this screen that needs it.
+  useEffect(() => {
+    if (worldScope) { setCampaignName(""); return; }
+    let live = true;
+    api.getCampaign(scope.id)
+      .then((c) => { if (live) setCampaignName(c.meta.name); })
+      .catch(() => { if (live) setCampaignName(""); });
+    return () => { live = false; };
+  }, [worldScope, scope.id]);
+
   const hasAvatar = (detail && card)
     ? (detail.versions.find((v) => v.id === vid)?.images ?? []).includes("avatar")
     : false;
@@ -451,14 +642,62 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   async function loadLockState(cid: string) {
     // token drops a slow earlier response so selecting A then B can't show A's lock on B
     const req = ++lockReq.current;
+    // Cleared before the await, not after it: the right pane is the *previous*
+    // character's campaign state until this lands, and a wrong dossier under a
+    // right name is worse than a pane that says it is still reading.
+    setCampaignState(null);
     const roster = await api.listAppearances(scope.id).catch(() => []);
     if (lockReq.current !== req) return;
-    setLocked(roster.find((r) => r.kind === "characters" && r.id === cid)?.version ?? null);
+    const entry = roster.find((r) => r.kind === "characters" && r.id === cid);
+    setLocked(entry?.version ?? null);
     setImportVid("");
+    loadCasefile(cid, entry?.scenes ?? [], req);
     // the source world's versions feed the import picker; a deleted world char offers none
     api.readCharacter({ kind: "world", id: wid }, cid)
       .then((w) => { if (lockReq.current === req) setWorldVersions(w.versions.map((v) => ({ id: v.id, name: v.name }))); })
       .catch(() => { if (lockReq.current === req) setWorldVersions([]); });
+  }
+
+  /** Read the campaign-local half of this screen: current state, what she
+   *  knows and suspects, and her dossier paragraph.
+   *
+   *  There is no campaign-scoped casefile endpoint. The one that exists is
+   *  nested under a scene — `GET .../scenes/{sid}/cast/{kind}/{id}/casefile` —
+   *  and checks she is really cast in that scene before answering, which is
+   *  that route's access control as much as its correctness condition. But the
+   *  record it returns is campaign-scoped, not scene-scoped: `store/casefile.
+   *  build` says so in as many words ("`sid` is not used to narrow anything").
+   *  So asking through the newest scene she is cast in returns exactly the
+   *  campaign's *current* state, and the membership check passes by
+   *  construction, because that scene came out of her own appearance record.
+   *
+   *  Someone cast in no scene is not asked about at all. The route would 404,
+   *  and a 404 rendered as an empty pane reads as "nothing recorded about her"
+   *  for a character the campaign has simply never played — a different
+   *  sentence, and the one the pane says instead.
+   *
+   *  `feels_toward` and `standing_facts` come back too and are deliberately not
+   *  shown: feelings are held toward *the rest of that scene's cast*, so on a
+   *  screen with no scene in it they would be a relationship set chosen by an
+   *  implementation detail of which scene we asked through. The play view's
+   *  dossier column, which does have a scene, is where those belong. */
+  async function loadCasefile(cid: string, scenes: string[], req: number) {
+    if (scenes.length === 0) {
+      setCampaignState({ scenes, casefile: null });
+      return;
+    }
+    try {
+      const casefile = await api.getCasefile(scope.id, scenes[scenes.length - 1], "characters", cid);
+      if (lockReq.current !== req) return;
+      setCampaignState({ scenes, casefile });
+    } catch {
+      // A scene deleted out from under the appearance record, a hand-edited
+      // state file, a cast change between the two reads: the pane still knows
+      // which scenes she is in and says only that, rather than claiming she has
+      // no recorded state or blanking the whole screen.
+      if (lockReq.current !== req) return;
+      setCampaignState({ scenes, casefile: null });
+    }
   }
 
   async function runPick() {
@@ -1173,6 +1412,39 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
 
   if (mode === "detail") {
     const tags = card.data.tags ?? [];
+    const name = card.data.name || detail.meta.name;
+    const description = (card.data[TEXT_FIELDS[0].key] as string) ?? "";
+    const firstMes = (card.data.first_mes as string) ?? "";
+    // World greetings that feature her: links to other records, not card
+    // content, which is why they do not count toward the tab's greeting count.
+    const featuring = worldGreetings.filter((g) => (g.present ?? []).includes(detail.meta.id));
+    const greetingCount = (firstMes.trim() ? 1 : 0) + greetings.length;
+    const artCount = (hasAvatar ? 1 : 0) + galleryImages.length;
+    // The campaign that owns the right pane. `scope.id` is a slug and a poor
+    // heading, but a heading with the wrong subject would be worse than a plain
+    // one, so it stands in only when the name could not be read.
+    const campaignLabel = campaignName || scope.id;
+
+    // Every card field except the description, which the CARD tab renders on
+    // its own above these with the cost stamp, and the two greeting fields,
+    // which are the GREETINGS tab. An empty field is dropped rather than framed
+    // and left blank: an empty frame claims there is something there.
+    const filled = (keys: string[]) => TEXT_FIELDS.filter((f) =>
+      keys.includes(f.key) && ((card.data[f.key] as string) ?? "").trim());
+    const cardField = (f: { key: string; label: string }) => {
+      const val = (card.data[f.key] as string) ?? "";
+      return (
+        <div className="card-field" key={f.key}>
+          <span className="data-label">{f.label}</span>
+          <div className="card-field-body">
+            {f.key === "creator_notes"
+              ? <HtmlNote html={val} title="Creator notes" />
+              : <div className="detail-text">{val}</div>}
+          </div>
+        </div>
+      );
+    };
+
     return (
       <div className="character-editor">
         {taglineQueue.length > 0 && (
@@ -1186,221 +1458,321 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                              onSave={saveFocus}
                              onClose={() => setCropOpen(false)} />
         )}
-        <div className="editor-body">
-          <button className="subtle back" onClick={backToGrid}>‹ All characters</button>
-          {error && <div className="banner">{error}</div>}
-          {importMsg && <span className="field-hint">{importMsg}</span>}
-          <div className="detail">
-            <div className="detail-head">
+        {error && <div className="banner">{error}</div>}
+
+        {/* 274px identity · the card · 300px campaign state. The middle and
+            right halves are the substance of this screen and are built to look
+            like they belong to different owners, because they do: the middle is
+            the world's record of her, sent to the model and shared by every
+            campaign; the right is what one campaign has made of her, and is a
+            readout rather than anything you can edit here. */}
+        <div className="char-detail">
+
+          <aside className="char-identity" aria-label="Character">
+            <div className="char-identity-scroll">
+              <button className="column-back" onClick={backToGrid}>‹ All characters</button>
+
               {hasAvatar
-                ? <button className="avatar-crop-btn" type="button" aria-label="Adjust avatar crop"
-                          title="Adjust avatar crop" onClick={() => setCropOpen(true)}>
+                ? <button className="identity-art avatar-crop-btn" type="button"
+                          aria-label="Adjust avatar crop" title="Adjust avatar crop"
+                          onClick={() => setCropOpen(true)}>
                     <img className="detail-avatar" alt="" style={focusStyle(avatarFocus)}
                          src={avatarSrc(detail.meta.id, vid, true)} />
                   </button>
-                : <div className="initials-avatar detail" aria-hidden>
-                    {(card.data.name || detail.meta.name).split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("")}
+                : <div className="identity-art identity-art-empty" aria-hidden>
+                    {name.split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("")}
                   </div>}
-              <div className="detail-meta">
-                <h3 className="detail-name">{card.data.name || detail.meta.name}</h3>
-                {tagline && <div className="detail-text tagline">{tagline}</div>}
-                {card.data.creator ? <div className="detail-byline">by {card.data.creator}</div> : null}
-                {tags.length > 0 && (
-                  <div className="chips">{tags.map((t) => <span className="chip" key={t}>{t}</span>)}</div>
+
+              <h3 className="identity-name">{name}</h3>
+              {card.data.creator ? <div className="detail-byline">by {card.data.creator}</div> : null}
+              {tagline && (
+                <div className="identity-tagline">
+                  <p>{tagline}</p>
+                  {/* Named the way the dossier column names its sources: these
+                      are files you can go and read, not prose the app made up. */}
+                  <span className="dossier-source">tagline.md</span>
+                </div>
+              )}
+
+              <div className="column-section">
+                <div className="column-section-head">
+                  <span className="section-label">Versions</span>
+                  <span className="column-count">{detail.versions.length}</span>
+                </div>
+                <div className="version-list">
+                  {detail.versions.map((v) => (
+                    <div key={v.id} className={"version-row" + (v.id === vid ? " active" : "")}>
+                      {/* The badges are siblings of the button, not children:
+                          inside it they would join its accessible name, and a
+                          version is picked by its name. */}
+                      <button className="version-pick" aria-pressed={v.id === vid}
+                              onClick={() => loadVersion(detail, v.id)}>
+                        {v.name}
+                      </button>
+                      {v.id === locked
+                        ? <span className="version-flag locked">Locked in {campaignLabel}</span>
+                        : v.id === detail.meta.default_version
+                          ? <span className="version-flag">default</span>
+                          : null}
+                    </div>
+                  ))}
+                </div>
+
+                {!worldScope && (
+                  locked ? (
+                    <div className="version-lock-controls">
+                      <select aria-label="Import version" value={importVid}
+                              onChange={(e) => setImportVid(e.target.value)}>
+                        <option value="">— world version —</option>
+                        {worldVersions.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+                      </select>
+                      <button className="subtle" disabled={!importVid} onClick={runImport}>Import from world</button>
+                    </div>
+                  ) : detail.versions.length > 1 ? (
+                    <div className="version-lock-controls">
+                      <span className="field-hint">Picking locks the viewed version and removes the others from this campaign. </span>
+                      <button className="subtle" onClick={runPick}>Pick this version</button>
+                    </div>
+                  ) : (
+                    <span className="field-hint">Single version; it locks when first used in a scene.</span>
+                  )
                 )}
               </div>
-              <div className="detail-actions">
-                {detail.versions.length > 1 && (
-                  <div>
-                    <span className="segmented-caption">Version</span>
-                    <div className="segmented" role="group" aria-label="Version">
-                      {detail.versions.map((v) => (
-                        <button key={v.id} aria-pressed={v.id === vid}
-                                className={v.id === vid ? "active" : ""}
-                                onClick={() => loadVersion(detail, v.id)}>
-                          {v.name}
+            </div>
+
+            {/* Pinned, and the argument the whole layout is making. Which way
+                it points depends on the scope, and the two are opposites: a
+                world record is shared by every campaign built on this world,
+                while a campaign's copy is a fork that leaves the world's
+                original alone. Getting this backwards is exactly the mistake
+                the split exists to prevent. */}
+            <p className={"reach-warning" + (worldScope ? " shared" : "")}>
+              {worldScope
+                ? "Edits here reach every campaign using this world."
+                : "This campaign's own copy. Edits here leave the world record untouched."}
+            </p>
+          </aside>
+
+          <section className="card-pane" aria-label="Character card">
+            <div className="pane-stamp">
+              <span className="eyebrow">
+                {worldScope ? "World record · shared" : "Campaign copy of the card"}
+              </span>
+              <span className="eyebrow">Sent to the model</span>
+            </div>
+
+            <div className="card-tabs" role="tablist" aria-label="Card">
+              {([["card", "Card", null],
+                 ...(onOpenLore ? [["lore", "Lore", loreCount] as const] : []),
+                 ["greetings", "Greetings", greetingCount],
+                 ["art", "Art", artCount]] as [CardTab, string, number | null][])
+                .map(([key, label, count]) => (
+                  <button key={key} role="tab" aria-selected={tab === key}
+                          className={"tab" + (tab === key ? " active" : "")}
+                          onClick={() => setTab(key)}>
+                    {label}{count === null ? "" : ` ${count}`}
+                  </button>
+                ))}
+            </div>
+
+            <div className="card-pane-body" role="tabpanel">
+              {importMsg && <span className="field-hint">{importMsg}</span>}
+
+              {tab === "card" && <>
+                <div className="card-field">
+                  <span className="data-label">Name</span>
+                  <div className="card-field-body"><div className="detail-text">{name}</div></div>
+                </div>
+
+                {description.trim() && (
+                  <div className="card-field">
+                    <span className="data-label">Description</span>
+                    {/* The cost of this one field, where it is being read. It
+                        is the largest thing on the card and it goes out every
+                        single turn she is on stage — which is the fact the
+                        stamp exists to make legible before it is paid. */}
+                    <span className="card-field-cost">
+                      ≈ {estimateTokens(description).toLocaleString()} tokens · sent every turn she is in scene
+                    </span>
+                    <div className="card-field-body"><div className="detail-text">{description}</div></div>
+                  </div>
+                )}
+
+                <div className="card-field-pair">
+                  {filled(["personality", "scenario"]).map(cardField)}
+                </div>
+                {filled(["mes_example", "system_prompt", "post_history_instructions", "creator_notes"])
+                  .map(cardField)}
+
+                {tags.length > 0 && (
+                  <div className="card-field">
+                    <span className="data-label">Tags</span>
+                    <div className="chip-row">
+                      {tags.map((t) => <span className="chip on" key={t}>{t}</span>)}
+                    </div>
+                  </div>
+                )}
+
+                {(card.data.extensions?.sd_prompt) && (
+                  <div className="card-field">
+                    <span className="data-label">Image prompt</span>
+                    <div className="field-hint">{card.data.extensions.sd_prompt}</div>
+                  </div>
+                )}
+
+                {/* Not on the Greetings tab, and not counted by it: these are
+                    separate world records that happen to feature her, the same
+                    category as her tags — where this record sits in the world,
+                    rather than anything the card carries. The ★ marks the ones
+                    she is the primary of. Chips that navigate, per the
+                    list/detail rule for metadata referencing other records. */}
+                {featuring.length > 0 && (
+                  <div className="card-field">
+                    <span className="data-label">World greetings</span>
+                    <div className="chip-row">
+                      {featuring.map((g) => (
+                        <button key={g.id} className="chip on" onClick={() => onOpenGreeting?.(g.id)}>
+                          {g.character === detail.meta.id ? `★ ${g.name}` : g.name}
                         </button>
                       ))}
                     </div>
                   </div>
                 )}
-                <button className="primary" onClick={() => setMode("edit")}>Edit</button>
-                {worldScope && <ExportMenu wid={wid} cid={detail.meta.id} vid={vid} />}
-                {worldScope && <button className="subtle" onClick={() => deleteCharacter(detail.meta.id, detail.meta.name)}>Delete</button>}
-              </div>
-            </div>
 
-            {!worldScope && (
-              <div className="side-section">
-                <h4>Version</h4>
-                {locked ? (
-                  <>
-                    <span className="field-hint">Locked to <b>{detail.versions.find((v) => v.id === locked)?.name ?? locked}</b> for this campaign. </span>
-                    <select aria-label="Import version" value={importVid}
-                            onChange={(e) => setImportVid(e.target.value)}>
-                      <option value="">— world version —</option>
-                      {worldVersions.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-                    </select>
-                    <button className="subtle" disabled={!importVid} onClick={runImport}>Import from world</button>
-                  </>
-                ) : detail.versions.length > 1 ? (
-                  <>
-                    <span className="field-hint">Picking locks the viewed version and removes the others from this campaign. </span>
-                    <button className="subtle" onClick={runPick}>Pick this version</button>
-                  </>
-                ) : (
-                  <span className="field-hint">Single version; it locks when first used in a scene.</span>
-                )}
-              </div>
-            )}
-
-            {module && detail && (
-              <SheetPanel scope={scope} module={module} kind="characters" eid={detail.meta.id} />
-              /* onOpenRef intentionally unset here: no cross-editor navigation target exists
-                 yet from a character/PC sheet's ref chips (entity-form refs only; module-content
-                 ref chips still preview correctly without it) */
-            )}
-
-            {worldScope && <div className="chub-source-block">
-              {chubSource ? (
-                <>
-                  <a className="field-hint"
-                     href={chubSource.startsWith("http") ? chubSource : `https://chub.ai/characters/${chubSource}`}
-                     target="_blank" rel="noreferrer">
-                    {chubSource}
-                  </a>
-                  <button className="subtle" type="button" onClick={redownloadFromChub}>Re-download</button>
-                  <button className="subtle" type="button" onClick={unlinkChub}>Unlink</button>
-                  {isChub && (
+                {worldScope && <div className="chub-source-block">
+                  {chubSource ? (
                     <>
-                      <button className="subtle" type="button" disabled={!!galleryProg} onClick={downloadChubGallery}>
-                        {galleryProg ? "Downloading…" : "Download gallery"}
-                      </button>
-                      <button className="subtle" type="button" onClick={downloadChubLorebooks}>Download linked lorebooks</button>
-                      {galleryProg && (
-                        <div className="localize-progress">
-                          <progress value={galleryProg.done} max={galleryProg.total || 1} />
-                          <span className="field-hint">{galleryProg.done}/{galleryProg.total}</span>
-                        </div>
+                      <a className="field-hint"
+                         href={chubSource.startsWith("http") ? chubSource : `https://chub.ai/characters/${chubSource}`}
+                         target="_blank" rel="noreferrer">
+                        {chubSource}
+                      </a>
+                      <button className="subtle" type="button" onClick={redownloadFromChub}>Re-download</button>
+                      <button className="subtle" type="button" onClick={unlinkChub}>Unlink</button>
+                      {isChub && (
+                        <>
+                          <button className="subtle" type="button" disabled={!!galleryProg} onClick={downloadChubGallery}>
+                            {galleryProg ? "Downloading…" : "Download gallery"}
+                          </button>
+                          <button className="subtle" type="button" onClick={downloadChubLorebooks}>Download linked lorebooks</button>
+                          {galleryProg && (
+                            <div className="localize-progress">
+                              <progress value={galleryProg.done} max={galleryProg.total || 1} />
+                              <span className="field-hint">{galleryProg.done}/{galleryProg.total}</span>
+                            </div>
+                          )}
+                        </>
                       )}
                     </>
+                  ) : (
+                    <button className="subtle" type="button" onClick={linkChub}>Link to URL</button>
                   )}
-                </>
-              ) : (
-                <button className="subtle" type="button" onClick={linkChub}>Link to URL</button>
-              )}
-            </div>}
+                </div>}
 
-            {(card.data.extensions?.sd_prompt) && (
-              <div className="side-section">
-                <h4>Image prompt</h4>
-                <div className="field-hint">{card.data.extensions.sd_prompt}</div>
-              </div>
-            )}
-
-            <div className="detail-field">
-              <div className="section-label">Images</div>
-              <div className="images-shelf">
-                {hasAvatar ? (
-                  <figure className="shelf-tile avatar-tile">
-                    <a href={avatarSrc(detail.meta.id, vid, true)} target="_blank" rel="noreferrer">
-                      <img alt="avatar image" src={avatarSrc(detail.meta.id, vid, true)} />
-                    </a>
-                    <figcaption>avatar</figcaption>
-                  </figure>
-                ) : (
-                  <div className="shelf-tile shelf-empty">no avatar</div>
+                {module && detail && (
+                  <SheetPanel scope={scope} module={module} kind="characters" eid={detail.meta.id} />
+                  /* onOpenRef intentionally unset here: no cross-editor navigation target exists
+                     yet from a character/PC sheet's ref chips (entity-form refs only; module-content
+                     ref chips still preview correctly without it) */
                 )}
-                {galleryImages.map((name) => {
-                  const src = `${api.actorImageUrl(scope, detail.meta.id, vid, name)}?v=${avatarBust}`;
-                  return (
-                    <div className="shelf-tile" key={name}>
-                      <a href={src} target="_blank" rel="noreferrer"><img alt={name} src={src} /></a>
-                      <button className="shelf-promote" onClick={() => promote(name)}>Set as avatar</button>
-                    </div>
-                  );
-                })}
-                <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>
-                <input ref={shelfFileRef} type="file" accept="image/*" hidden
-                       aria-label="Add image" onChange={onShelfAdd} />
-              </div>
-            </div>
+              </>}
 
-            {imageAppearances.length > 0 && (
-              <div className="detail-field">
-                <div className="section-label">Appears in</div>
-                <div className="images-shelf">
-                  {imageAppearances.map((a) => (
-                    <div className="shelf-tile" key={`${a.gid}/${a.name}`}>
-                      <a href={a.url} target="_blank" rel="noreferrer">
-                        <img alt={`${a.greeting_name} art`} src={a.thumb ?? a.url} />
-                      </a>
-                      <button className="shelf-promote" onClick={() => copyFromGreeting(a, "avatar")}>Set as avatar</button>
-                      <button className="shelf-promote" onClick={() => copyFromGreeting(a, "gallery")}>Add to gallery</button>
-                      {onOpenGreeting && (
-                        <button className="shelf-promote" onClick={() => onOpenGreeting(a.gid)}>{a.greeting_name}</button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+              {tab === "lore" && onOpenLore && (
+                <OwnedLorePanel
+                  scope={scope}
+                  ownerRef={`characters:${detail.meta.id}`}
+                  onOpenEntry={(id) => onOpenLore({ focusEntry: id })}
+                  onNewEntry={() => onOpenLore({ newOwner: `characters:${detail.meta.id}` })}
+                />
+              )}
 
-            {worldScope && localizeControls(false)}
-
-            {onOpenLore && (
-              <OwnedLorePanel
-                scope={scope}
-                ownerRef={`characters:${detail.meta.id}`}
-                onOpenEntry={(id) => onOpenLore({ focusEntry: id })}
-                onNewEntry={() => onOpenLore({ newOwner: `characters:${detail.meta.id}` })}
-              />
-            )}
-
-            {TEXT_FIELDS.map((f) => {
-              const val = (card.data[f.key] as string) ?? "";
-              if (!val.trim()) return null;
-              return (
-                <div className="detail-field" key={f.key}>
-                  <div className="section-label">{f.label}</div>
-                  {f.key === "first_mes"
-                    ? <GreetingMarkdown>{val}</GreetingMarkdown>
-                    : f.key === "creator_notes"
-                      ? <HtmlNote html={val} title="Creator notes" />
-                      : <div className="detail-text">{val}</div>}
-                </div>
-              );
-            })}
-
-            {greetings.length > 0 && (
-              <div className="detail-field">
-                <div className="section-label">Alternate greetings</div>
-                {greetings.map((g, i) => (
-                  <blockquote className="greeting-quote" key={i}>
-                    <GreetingMarkdown>{g}</GreetingMarkdown>
-                  </blockquote>
-                ))}
-              </div>
-            )}
-
-            {(() => {
-              // world greetings featuring this character — links, not card content
-              const mine = worldGreetings.filter((g) => (g.present ?? []).includes(detail.meta.id));
-              if (mine.length === 0) return null;
-              return (
-                <div className="detail-field">
-                  <div className="section-label">World greetings</div>
-                  <div className="chips">
-                    {mine.map((g) => (
-                      <button key={g.id} className="chip on" onClick={() => onOpenGreeting?.(g.id)}>
-                        {g.character === detail.meta.id ? `★ ${g.name}` : g.name}
-                      </button>
+              {tab === "greetings" && <>
+                {firstMes.trim() && (
+                  <div className="card-field">
+                    <span className="data-label">First message</span>
+                    <div className="card-field-body"><GreetingMarkdown>{firstMes}</GreetingMarkdown></div>
+                  </div>
+                )}
+                {greetings.length > 0 && (
+                  <div className="card-field">
+                    <span className="data-label">Alternate greetings</span>
+                    {greetings.map((g, i) => (
+                      <blockquote className="greeting-quote" key={i}>
+                        <GreetingMarkdown>{g}</GreetingMarkdown>
+                      </blockquote>
                     ))}
                   </div>
+                )}
+                {greetingCount === 0 && (
+                  <p className="empty-state">
+                    No greetings on this card. A greeting is the <span className="empty-what">opening
+                    a scene can start from</span> — add one from Edit, or import a card that carries
+                    some. World greetings that merely feature {name} are listed on the card tab.
+                  </p>
+                )}
+              </>}
+
+              {tab === "art" && <>
+                <div className="card-field">
+                  <span className="data-label">Images</span>
+                  <div className="images-shelf">
+                    {hasAvatar ? (
+                      <figure className="shelf-tile avatar-tile">
+                        <a href={avatarSrc(detail.meta.id, vid, true)} target="_blank" rel="noreferrer">
+                          <img alt="avatar image" src={avatarSrc(detail.meta.id, vid, true)} />
+                        </a>
+                        <figcaption>avatar</figcaption>
+                      </figure>
+                    ) : (
+                      <div className="shelf-tile shelf-empty">no avatar</div>
+                    )}
+                    {galleryImages.map((imgName) => {
+                      const src = `${api.actorImageUrl(scope, detail.meta.id, vid, imgName)}?v=${avatarBust}`;
+                      return (
+                        <div className="shelf-tile" key={imgName}>
+                          <a href={src} target="_blank" rel="noreferrer"><img alt={imgName} src={src} /></a>
+                          <button className="shelf-promote" onClick={() => promote(imgName)}>Set as avatar</button>
+                        </div>
+                      );
+                    })}
+                    <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>
+                    <input ref={shelfFileRef} type="file" accept="image/*" hidden
+                           aria-label="Add image" onChange={onShelfAdd} />
+                  </div>
                 </div>
-              );
-            })()}
-          </div>
+
+                {imageAppearances.length > 0 && (
+                  <div className="card-field">
+                    <span className="data-label">Appears in</span>
+                    <div className="images-shelf">
+                      {imageAppearances.map((a) => (
+                        <div className="shelf-tile" key={`${a.gid}/${a.name}`}>
+                          <a href={a.url} target="_blank" rel="noreferrer">
+                            <img alt={`${a.greeting_name} art`} src={a.thumb ?? a.url} />
+                          </a>
+                          <button className="shelf-promote" onClick={() => copyFromGreeting(a, "avatar")}>Set as avatar</button>
+                          <button className="shelf-promote" onClick={() => copyFromGreeting(a, "gallery")}>Add to gallery</button>
+                          {onOpenGreeting && (
+                            <button className="shelf-promote" onClick={() => onOpenGreeting(a.gid)}>{a.greeting_name}</button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {worldScope && localizeControls(false)}
+              </>}
+            </div>
+
+            <div className="card-pane-actions">
+              <button className="primary" onClick={() => setMode("edit")}>Edit</button>
+              {worldScope && <ExportMenu wid={wid} cid={detail.meta.id} vid={vid} />}
+              {worldScope && <button className="subtle" onClick={() => deleteCharacter(detail.meta.id, detail.meta.name)}>Delete</button>}
+            </div>
+          </section>
+
+          <CampaignPane worldScope={worldScope} label={campaignLabel} name={name} state={campaignState} />
         </div>
       </div>
     );

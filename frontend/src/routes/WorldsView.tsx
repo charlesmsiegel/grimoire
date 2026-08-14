@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, type WorldMeta } from "../api/client";
+import LibraryPage from "../components/LibraryPage";
 
 function footerLabel(counts: Record<string, number> | undefined): string {
   const c = counts ?? {};
@@ -81,56 +82,58 @@ export default function WorldsView() {
   }
 
   return (
-    <div className="page view-anim">
-      <div className="page-head">
-        <h1 className="page-h1">Worlds</h1>
-        <div className="joined">
-          <input
-            placeholder="World name…" aria-label="World name"
-            value={name} onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") create(); }}
-          />
-          <button className="btn-accent" onClick={create} disabled={!name.trim()}>Create</button>
-          <button className="subtle" disabled={importing} onClick={() => fileRef.current?.click()}>
-            {importing ? "Importing…" : "Import"}
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".zip"
-            aria-label="Import world bundle"
-            style={{ display: "none" }}
-            onChange={onImportFile}
-          />
+    <LibraryPage>
+      <div className="page view-anim">
+        <div className="page-head">
+          <h1 className="page-h1">Worlds</h1>
+          <div className="joined">
+            <input
+              placeholder="World name…" aria-label="World name"
+              value={name} onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") create(); }}
+            />
+            <button className="btn-accent" onClick={create} disabled={!name.trim()}>Create</button>
+            <button className="subtle" disabled={importing} onClick={() => fileRef.current?.click()}>
+              {importing ? "Importing…" : "Import"}
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".zip"
+              aria-label="Import world bundle"
+              style={{ display: "none" }}
+              onChange={onImportFile}
+            />
+          </div>
+        </div>
+        {error && <div className="error" role="alert">{error}</div>}
+        <div className="count-label">{worlds.length} {worlds.length === 1 ? "world" : "worlds"}</div>
+        <div className="world-grid">
+          {worlds.map((w) => (
+            <div className="world-card" key={w.id}>
+              {renaming?.id === w.id ? (
+                <input
+                  className="row-rename" aria-label="Rename world" autoFocus
+                  value={renaming.name}
+                  onChange={(e) => setRenaming({ id: w.id, name: e.target.value })}
+                  onKeyDown={(e) => { if (e.key === "Enter") rename(); if (e.key === "Escape") setRenaming(null); }}
+                />
+              ) : (
+                <button className="world-card-main" onClick={() => navigate(`/worlds/${w.id}`)}>
+                  <h3>{w.name}</h3>
+                  <footer>{footerLabel(w.counts)}</footer>
+                </button>
+              )}
+              <div className="row-actions">
+                <a aria-label={`Export ${w.name}`} title="Export as a bundle"
+                   href={api.exportWorldUrl(w.id)} download>⭳</a>
+                <button aria-label={`Rename ${w.name}`} onClick={() => setRenaming({ id: w.id, name: w.name })}>✎</button>
+                <button aria-label={`Delete ${w.name}`} onClick={() => remove(w)}>✕</button>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
-      {error && <div className="error" role="alert">{error}</div>}
-      <div className="count-label">{worlds.length} {worlds.length === 1 ? "world" : "worlds"}</div>
-      <div className="world-grid">
-        {worlds.map((w) => (
-          <div className="world-card" key={w.id}>
-            {renaming?.id === w.id ? (
-              <input
-                className="row-rename" aria-label="Rename world" autoFocus
-                value={renaming.name}
-                onChange={(e) => setRenaming({ id: w.id, name: e.target.value })}
-                onKeyDown={(e) => { if (e.key === "Enter") rename(); if (e.key === "Escape") setRenaming(null); }}
-              />
-            ) : (
-              <button className="world-card-main" onClick={() => navigate(`/worlds/${w.id}`)}>
-                <h3>{w.name}</h3>
-                <footer>{footerLabel(w.counts)}</footer>
-              </button>
-            )}
-            <div className="row-actions">
-              <a aria-label={`Export ${w.name}`} title="Export as a bundle"
-                 href={api.exportWorldUrl(w.id)} download>⭳</a>
-              <button aria-label={`Rename ${w.name}`} onClick={() => setRenaming({ id: w.id, name: w.name })}>✎</button>
-              <button aria-label={`Delete ${w.name}`} onClick={() => remove(w)}>✕</button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
+    </LibraryPage>
   );
 }

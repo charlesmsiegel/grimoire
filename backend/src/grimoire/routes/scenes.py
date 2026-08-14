@@ -2309,6 +2309,36 @@ def get_scene_prompt(cid: str, sid: str, eid: str):
     return entry
 
 
+@router.get("/campaigns/{cid}/scenes/{sid}/cast/{kind}/{id}/casefile")
+def get_cast_casefile(cid: str, sid: str, kind: str, id: str):
+    """Everything the campaign has decided about one actor: standing state,
+    what she knows and suspects, her dossier paragraph, how she feels about the
+    rest of the room, and the standing facts that name her.
+
+    The play view's context column swaps to this in place of the cast grid.
+    Every field is a record the absorb pass already writes; none of it costs a
+    token, and until now most of it was visible only on a staged review row,
+    for the few seconds before that row was approved and disappeared.
+
+    Declared ahead of `GET /scenes/{sid}/cast/{kind}/{id}` for the reason every
+    specific scene route here is: the generic path would otherwise swallow it.
+    The cast membership check is `store.casefile`'s access control as much as
+    its correctness condition -- without it this reads any character's campaign
+    state from a guessed id.
+
+    Thin on purpose: the joins, the tolerance and the lock all live in
+    `store.casefile`, whose docstring carries the argument for each.
+    """
+    _require_scene(cid, sid)
+    if kind not in store.appearances.ACTOR_KINDS:
+        raise HTTPException(status_code=404, detail="unknown actor kind")
+    try:
+        return store.casefile.build(cid, sid, kind, id)
+    except (store.appearances.AppearError, store.characters.CharacterNotFound,
+            store.characters.VersionNotFound, store.pcs.PCNotFound, store.pcs.PCVersionNotFound):
+        raise HTTPException(status_code=404, detail="actor not found")
+
+
 @router.get("/campaigns/{cid}/scenes/{sid}/cast/{kind}/{id}")
 def get_cast_detail(cid: str, sid: str, kind: str, id: str):
     _require_scene(cid, sid)

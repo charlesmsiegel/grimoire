@@ -11,12 +11,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@fontsource-variable/newsreader": "^5.2.10",
-    "@fontsource/big-shoulders-display": "^5.2.5",
     "@fontsource/cinzel": "^5.2.8",
-    "@fontsource/cormorant-garamond": "^5.2.11",
-    "@fontsource/eb-garamond": "^5.2.7",
-    "@fontsource/jetbrains-mono": "^5.2.8",
     "@fontsource/space-mono": "^5.2.9",
     "@fontsource/spectral": "^5.2.8",
     "react": "^18.3.1",
