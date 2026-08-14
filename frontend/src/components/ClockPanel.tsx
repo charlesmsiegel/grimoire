@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type AdvanceDigest, type CampaignClock } from "../api/client";
+import { api, type AdvanceDigest, type CalendarConfig, type CampaignClock } from "../api/client";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 
 /** The campaign clock (#100): where the story's present is, and the one control
@@ -22,6 +22,9 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   onAdvanced?: () => void;
 }) {
   const [clock, setClock] = useState<CampaignClock | null>(null);
+  // Only to answer "has a calendar been chosen yet"; the picker itself belongs to
+  // the When section, which is where a reader is sent to use it.
+  const [cfg, setCfg] = useState<CalendarConfig | null>(null);
   const [mode, setMode] = useState<"days" | "date">("days");
   const [days, setDays] = useState("1");
   const [target, setTarget] = useState("");
@@ -40,6 +43,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     () => api.getCampaignClock(cid).then(setClock).catch(() => setClock(null)),
     [cid]);
   useEffect(() => { reload(); }, [reload, refreshKey]);
+  useEffect(() => { api.getCalendarConfig(cid).then(setCfg).catch(() => setCfg(null)); }, [cid]);
 
   // A digest belongs to the request that produced it. Changing the target (or
   // the campaign) invalidates it, and showing a stale one next to new inputs is
@@ -82,6 +86,23 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     } finally {
       setBusy(false);
     }
+  }
+
+  // An unconfirmed calendar means the reader has not chosen how this campaign
+  // reckons dates yet. The same nudge the When section gives, and for the same
+  // reason: a moment recorded in the default calendar's notation becomes
+  // unreadable the moment they pick a different one, and the clock is the worst
+  // place to leave one -- the whole campaign inherits it. Deliberately not the
+  // stricter rule of refusing the *request*: `PUT .../datetime` allows it too,
+  // so this stays a nudge in the UI rather than a policy only one route knows.
+  if (cfg && !cfg.confirmed) {
+    return (
+      <div className="clock-panel">
+        <div className="field-hint">
+          Select a calendar in the When section to track campaign time.
+        </div>
+      </div>
+    );
   }
 
   return (

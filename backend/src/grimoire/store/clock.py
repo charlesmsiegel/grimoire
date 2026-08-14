@@ -95,7 +95,13 @@ def _blank() -> dict:
 
 
 def read(cid: str) -> dict:
-    """The stored clock, or a blank one. Never raises.
+    """The stored clock, or a blank one.
+
+    Never raises *over the file*. An id that cannot name a campaign at all
+    (`../escape`) still raises `CampaignNotFound` out of `campaign_root`, which is
+    where that check belongs and is why nothing here re-validates the path; an id
+    that is merely unknown reads as a blank clock, like every other
+    campaign-scoped read of a file that is not there.
 
     clock.json is hand-editable and its readers are pre-fills and digests, so a
     garbled or wrongly-shaped file degrades to "no clock" the way

@@ -10,6 +10,8 @@ vi.mock("../api/client", async () => {
     advanceTime: vi.fn(),
     // CalendarDatePicker (the "skip to a date" control) fetches months.
     getCalendarMonths: vi.fn(),
+    // Read only to know whether a calendar has been chosen for this campaign.
+    getCalendarConfig: vi.fn(),
   } };
 });
 
@@ -35,6 +37,9 @@ beforeEach(() => {
   vi.mocked(api.advanceTime).mockResolvedValue(
     { ok: true, moved: true, now: "2026-12-27", friendly: "27 December 2026", digest: DIGEST } as never);
   vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: [] } as never);
+  vi.mocked(api.getCalendarConfig).mockResolvedValue({
+    primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
+    secondary: null, confirmed: true } as never);
 });
 
 test("shows where the campaign's present is", async () => {
@@ -46,6 +51,19 @@ test("says so when no campaign date exists yet", async () => {
   vi.mocked(api.getCampaignClock).mockResolvedValue({ now: "", friendly: "", log: [] } as never);
   render(<ClockPanel cid="c" />);
   expect(await screen.findByText(/No campaign date yet/)).toBeInTheDocument();
+});
+
+test("refuses to move time until the campaign has a calendar", async () => {
+  // The same nudge the neighbouring When section gives. Recording a moment in the
+  // default calendar's notation before the reader picks a different one leaves the
+  // whole campaign holding a date its own calendar cannot read.
+  vi.mocked(api.getCalendarConfig).mockResolvedValue({
+    primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
+    secondary: null, confirmed: false } as never);
+  render(<ClockPanel cid="c" />);
+  expect(await screen.findByText(/Select a calendar in the When section/)).toBeInTheDocument();
+  expect(screen.queryByText("Advance time")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Days")).not.toBeInTheDocument();
 });
 
 test("previews the digest without advancing", async () => {
