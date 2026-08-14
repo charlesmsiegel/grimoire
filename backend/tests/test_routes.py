@@ -458,12 +458,11 @@ def test_image_upload_stores_the_extension_the_bytes_are(client):
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                 json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
     jpeg = _jpeg_bytes()
-    lying = {"file": ("avatar.png", io.BytesIO(jpeg), "image/png")}
 
     for base in (f"/api/worlds/{wid}/characters/{chid}/versions/default/images",
                  f"/api/worlds/{wid}/locations/{eid}/images",
                  f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"):
-        lying["file"][1].seek(0)
+        lying = {"file": ("avatar.png", io.BytesIO(jpeg), "image/png")}  # a fresh stream each time
         r = client.put(f"{base}/avatar", files=lying)
         assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "jpg"}, base
         got = client.get(f"{base}/avatar")
@@ -481,13 +480,22 @@ def test_image_upload_of_bytes_that_are_no_image_is_rejected(client):
     """The extension allowlist only ever saw the filename, so an AVIF (or an
     HTML error page) uploaded as `.png` passed it. Refusing beats storing it
     under a name that lies about it."""
-    wid = _world(client)
-    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
-    base = f"/api/worlds/{wid}/characters/{cid}/versions/default/images"
-    r = client.put(f"{base}/avatar",
-                   files={"file": ("a.png", io.BytesIO(b"<html>nope</html>"), "image/png")})
-    assert r.status_code == 400 and r.json()["detail"] == "unsupported image type"
-    assert client.get(base).json() == []
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    eid = client.post(f"/api/worlds/{wid}/locations", json={"name": "Docks"}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S1"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
+    char_base = f"/api/worlds/{wid}/characters/{chid}/versions/default/images"
+
+    for base in (char_base,
+                 f"/api/worlds/{wid}/locations/{eid}/images",
+                 f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"):
+        r = client.put(f"{base}/avatar",
+                       files={"file": ("a.png", io.BytesIO(b"<html>nope</html>"), "image/png")})
+        assert r.status_code == 400, base
+        assert r.json()["detail"] == "unsupported image type", base
+    assert client.get(char_base).json() == []  # and nothing was stored
 
 
 def test_serving_a_misnamed_image_declares_what_it_is(client):
