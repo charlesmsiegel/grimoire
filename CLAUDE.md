@@ -182,7 +182,7 @@ first if you think one should be skipped.
 - **Needing more than one campaign lock at a time?** There is exactly one way:
   `locks.hold_all(cids)`, which sorts, and `test_lock_order_guard.py` fails any
   other function whose shape can hold two (an acquisition on an `ExitStack`, one
-  carried around a loop, two nested for different campaigns). Two holders once
+  carried around a loop, two open at once for different campaigns). Two holders once
   acquired every campaign lock in *different* orders — one by recency, one by id
   — and two concurrent requests wedged permanently (#267).
 - **Imports in `backend/src/grimoire/` are all at module scope and the module
