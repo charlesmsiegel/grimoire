@@ -25,8 +25,10 @@ beforeEach(() => {
 test("shows where the archives live and lists them newest first", async () => {
   render(<BackupsPanel dir="" />);
 
-  expect(await screen.findByLabelText(/current backup folder/i))
-    .toHaveValue("/home/u/.grimoire/backups");
+  expect(await screen.findByText("/home/u/.grimoire/backups")).toBeInTheDocument();
+  // Prose, not a control: a read-only text box is announced as an editable
+  // textbox and takes focus for something nobody can type into.
+  expect(document.querySelector("input")).toBeNull();
   const names = [...document.querySelectorAll(".backup-name")].map((n) => n.textContent);
   expect(names).toEqual(["grimoire-20260815T210000Z.zip", "grimoire-20260814T210000Z.zip"]);
   expect(screen.getByText(/5\.0 MB/)).toBeInTheDocument();
@@ -53,6 +55,7 @@ test("Back up now adopts the response as the new listing", async () => {
     dir: "/home/u/.grimoire/backups",
     created: "grimoire-20260816T090000Z.zip",
     swept: [],
+    retention_error: null,
     backups: [{ name: "grimoire-20260816T090000Z.zip", size: 5_300_000,
                 created: "2026-08-16T09:00:00Z" }],
   });
@@ -70,6 +73,7 @@ test("retention is reported, because nobody sees a file get deleted", async () =
     dir: "/home/u/.grimoire/backups",
     created: "grimoire-20260816T090000Z.zip",
     swept: ["grimoire-20260814T210000Z.zip", "grimoire-20260815T210000Z.zip"],
+    retention_error: null,
     backups: [{ name: "grimoire-20260816T090000Z.zip", size: 5_300_000,
                 created: "2026-08-16T09:00:00Z" }],
   });
@@ -97,7 +101,8 @@ test("the button is held while a backup is in flight", async () => {
 
   expect(await screen.findByRole("button", { name: /backing up/i })).toBeDisabled();
 
-  release({ ...listing, created: "grimoire-20260816T090000Z.zip", swept: [] });
+  release({ ...listing, created: "grimoire-20260816T090000Z.zip", swept: [],
+            retention_error: null });
   await waitFor(() => expect(api.createBackup).toHaveBeenCalledTimes(1));
 });
 
@@ -108,6 +113,26 @@ test("a newly saved backup folder re-reads the listing", async () => {
   rerender(<BackupsPanel dir="/mnt/usb" />);
 
   await waitFor(() => expect(api.listBackups).toHaveBeenCalledTimes(2));
+});
+
+test("a backup that landed but could not be pruned is not called a failure", async () => {
+  (api.createBackup as any).mockResolvedValue({
+    dir: "/home/u/.grimoire/backups",
+    created: "grimoire-20260816T090000Z.zip",
+    swept: [],
+    retention_error: "backup written, but old archives could not be removed: denied",
+    backups: [{ name: "grimoire-20260816T090000Z.zip", size: 5_300_000,
+                created: "2026-08-16T09:00:00Z" }],
+  });
+  render(<BackupsPanel dir="" />);
+  fireEvent.click(await screen.findByRole("button", { name: /back up now/i }));
+
+  // Both halves: the archive landed AND retention did not run. Reporting only
+  // one of them is how a folder grows forever without anyone being told.
+  const said = await screen.findByRole("alert");
+  expect(said).toHaveTextContent(/Backed up to grimoire-20260816T090000Z\.zip/);
+  expect(said).toHaveTextContent(/old archives could not be removed/);
+  expect(screen.getByText("grimoire-20260816T090000Z.zip")).toBeInTheDocument();
 });
 
 test("sizes read the way a file manager shows them", () => {

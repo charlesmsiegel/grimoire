@@ -200,13 +200,26 @@ def get_backups():
 @router.post("/backups")
 def post_backup():
     """Back up now, then apply retention. Returns the refreshed listing, so the
-    caller needs no second request to show what it just made."""
+    caller needs no second request to show what it just made.
+
+    The two steps report separately on purpose. Under one `try` a failed sweep
+    surfaced as "could not write a backup" — telling the user the opposite of
+    what happened, about the half of the operation they care about, and
+    throwing away the listing that would have shown them the archive sitting
+    there. A backup that landed is a success with a retention problem attached.
+    """
     try:
         made = store.backups.create_backup()
-        swept = store.backups.sweep()
-        return {**_backups_body(), "created": made.name, "swept": swept}
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"could not write a backup: {exc}")
+    swept: list[str] = []
+    retention_error = None
+    try:
+        swept = store.backups.sweep()
+    except OSError as exc:
+        retention_error = f"backup written, but old archives could not be removed: {exc}"
+    return {**_backups_body(), "created": made.name, "swept": swept,
+            "retention_error": retention_error}
 
 
 # ---- llm connections ----

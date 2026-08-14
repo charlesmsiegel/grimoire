@@ -606,7 +606,8 @@ test("the archives are listed, and Back up now writes one", async () => {
                 created: "2026-08-14T21:00:00Z" }],
   });
   (api.createBackup as any).mockResolvedValue({
-    dir: "/home/u/.grimoire/backups", created: "grimoire-20260815T090000Z.zip", swept: [],
+    dir: "/home/u/.grimoire/backups", created: "grimoire-20260815T090000Z.zip",
+    swept: [], retention_error: null,
     backups: [{ name: "grimoire-20260815T090000Z.zip", size: 2_097_152,
                 created: "2026-08-15T09:00:00Z" }],
   });

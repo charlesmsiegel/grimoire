@@ -70,6 +70,28 @@ def test_a_backup_that_cannot_be_written_is_a_reported_failure(client, monkeypat
     assert "could not write a backup" in r.json()["detail"]
 
 
+def test_a_failed_sweep_is_not_reported_as_a_failed_backup(client, monkeypatch):
+    """Under one try/except this answered "could not write a backup" for an
+    archive that was written and is sitting right there — the opposite of what
+    happened, about the half of the operation the user cares about."""
+    def boom():
+        raise PermissionError("read-only volume")
+
+    monkeypatch.setattr(backups, "sweep", boom)
+    r = client.post("/api/backups")
+    body = r.json()
+
+    assert r.status_code == 200
+    assert body["created"].startswith("grimoire-")
+    assert "old archives could not be removed" in body["retention_error"]
+    # ...and the listing still comes back, so the caller can show the archive.
+    assert [b["name"] for b in body["backups"]] == [body["created"]]
+
+
+def test_a_clean_run_reports_no_retention_problem(client):
+    assert client.post("/api/backups").json()["retention_error"] is None
+
+
 def test_a_listing_that_cannot_be_read_is_not_reported_as_empty(client, monkeypatch):
     """"No restore points" and "could not look" send a reader in opposite
     directions, and this is read exactly when someone is deciding whether they

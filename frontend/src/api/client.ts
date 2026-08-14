@@ -213,8 +213,15 @@ export type BackupEntry = {
 /** The archives, and the directory they live in — which is a setting, so the
  *  answer to "why is this list empty" is often "you moved it". */
 export type BackupList = { dir: string; backups: BackupEntry[] };
-/** A `POST /api/backups`: the refreshed listing, plus what that call did. */
-export type BackupRun = BackupList & { created: string; swept: string[] };
+/** A `POST /api/backups`: the refreshed listing, plus what that call did.
+ *  `retention_error` is set when the archive was written but the sweep that
+ *  follows it could not run — a success with a problem attached, which is a
+ *  third outcome the two-state ok/failed shape could not say. */
+export type BackupRun = BackupList & {
+  created: string;
+  swept: string[];
+  retention_error: string | null;
+};
 export type DataDirInfo = {
   data_dir: string;
   default: string;
