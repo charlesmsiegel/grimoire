@@ -66,7 +66,7 @@ def check_messages(label: str, expected: list[dict], actual: list[dict]) -> None
 # ---------------------------------------------------------------- pure checks
 
 from grimoire.store import (absorb, chronicle, context, dossiers, relationships,  # noqa: E402
-                            rolling_summary, suggest, taglines, voice_anchors,
+                            rolling_summary, scenario, suggest, taglines, voice_anchors,
                             voice_drift)
 
 card = {"name": "Seraphine Vale", "description": "Tall, sharp-eyed smuggler.",
@@ -77,6 +77,36 @@ check("tagline user", exp[1]["content"], render("tagline/user.j2", card=card))
 sparse = {"name": "Bob", "description": "", "scenario": "A bar."}  # missing keys too
 exp = taglines.build_prompt(sparse)
 check("tagline user (sparse)", exp[1]["content"], render("tagline/user.j2", card=sparse))
+
+# Scenario-card extraction (#217). Both cards on purpose: the full one renders
+# every heading, and the bare one proves an absent field contributes none —
+# `user.j2` branches per field, and a comparison that only ever took the
+# populated branch would not see the other one move.
+SCENARIO_CARD = {"data": {
+    "name": "Saltmarch",
+    "description": "A drowned town where Mara keeps the tide-gate.",
+    "personality": "Wary, tidal.",
+    "scenario": "The gate has not opened in nine days.",
+    "creator_notes": "Play it slow.",
+    "mes_example": "<START>\n**Mara:** The gate stays shut.",
+    "first_mes": "Mara is waiting at the tide-gate.",
+    "alternate_greetings": ["The square is empty.",
+                            "![](data:image/png;base64,AAAA)\n\nWinifred counts the stalls."],
+    "character_book": {"entries": [
+        {"keys": ["gate"], "name": "The Tide-Gate", "content": "Iron and barnacle.",
+         "enabled": True}]},
+}}
+for label, scard in (("full", SCENARIO_CARD), ("bare", {"data": {"name": "Saltmarch"}})):
+    exp = scenario.build_prompt(scard)
+    check(f"scenario system ({label})", exp[0]["content"], render("scenario/system.j2"))
+    check(f"scenario user ({label})", exp[1]["content"],
+          render("scenario/user.j2", card=scard["data"], fields=scenario.PROMPT_FIELDS,
+                 entries=scenario.lorebook_entries(scard),
+                 greetings=scenario.prompt_greetings(scard)))
+assert "Existing entries:" in scenario.build_prompt(SCENARIO_CARD)[1]["content"], \
+    "scenario user no longer lists the card's own world-info -- the model cannot re-file it"
+assert "base64" not in scenario.build_prompt(SCENARIO_CARD)[1]["content"], \
+    "scenario user is carrying an opener's embedded image into the prompt"
 
 transcript = "**You:** Where is it?\n\n**Seraphine Vale:** Gone."
 for prior in ("", "She ran the dock and owed the Guild."):

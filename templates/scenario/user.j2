@@ -1,0 +1,29 @@
+{#- The scenario card, as the extraction reads it. Vars: card (the card's
+    `data` dict), fields (list of (label, key) pairs — scenario.PROMPT_FIELDS),
+    entries (the card's own world-info, [{"name","keys","body"}]), greetings
+    (its scene openers, [{"name","body"}], with image references already
+    stripped by scenario.strip_images). -#}
+Scenario: {{ card.get("name", "") or "(untitled)" }}
+{%- for label, key in fields %}
+{%- if card.get(key, "") %}
+
+{{ label }}:
+{{ card[key] }}
+{%- endif %}
+{%- endfor %}
+{%- if entries %}
+
+Existing entries:
+{%- for e in entries %}
+- {{ e["name"] }}{% if e["keys"] %} [{{ e["keys"] | join(", ") }}]{% endif %}: {{ e["body"] }}
+{%- endfor %}
+{%- endif %}
+{%- if greetings %}
+
+Scene openers:
+{%- for g in greetings %}
+
+{{ g["name"] }}:
+{{ g["body"] }}
+{%- endfor %}
+{%- endif %}

@@ -34,6 +34,27 @@ skipped — `context._substitute`) applied by code, never by templates.
 Mirrors `store/taglines.py:build_prompt`. Messages: system, user.
 `user.j2` vars: `card` (the resolved card's `data` dict).
 
+### `scenario/` — POST /worlds/{wid}/scenario/parse (and /parse-url)
+Mirrors `store/scenario.py:build_prompt`. Messages: system, user. One call per
+card: it reads a *scenario* card (a whole setting in one card) and proposes the
+cast to split out of it, plus a category for each of the card's world-info
+entries.
+`user.j2` vars:
+- `card` — the card's `data` dict
+- `fields` — `(label, key)` pairs, `scenario.PROMPT_FIELDS`; a key the card
+  does not carry renders no heading at all
+- `entries` — the card's own world-info, `scenario.lorebook_entries()`
+  (`{"name","keys","body"}` rows). They are listed so the model can *re-file*
+  one by name without retyping its body
+- `greetings` — its scene openers, `scenario.prompt_greetings()`
+  (`{"name","body"}`), with image references already removed by
+  `scenario.strip_images` — an embedded `data:` image is megabytes of base64
+  that says nothing about the cast
+The reply is one JSON object, `{"characters": [...], "entries": [...]}`, parsed
+by `scenario.parse_output` through `absorb.extract_object`. Nothing is written
+from it: it becomes a *proposal* the user reviews and edits, and only
+`POST …/scenario/import` writes.
+
 ### `dossier/` — the per-NPC dossier refresh inside POST …/absorb
 Mirrors `store/dossiers.py:build_prompt` (one call per present NPC).
 `user.j2` vars: `name`, `prior` (existing dossier, may be ""),
