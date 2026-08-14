@@ -588,6 +588,10 @@ export type ContextSection = {
   label: string; text: string; tokens: number;
   tier: "lock-in" | "spotlight" | "background" | "archive" | "recalled" | "history";
   dropped: boolean; trimmed: number;
+  /** The section carries content the reader pinned, so the packer left it alone
+   *  whatever its tier (#129). Optional: snapshots frozen before pins existed
+   *  have no such field, and they are rendered by this same component. */
+  pinned?: boolean;
 };
 /** One row of the prompt layout editor. `label` is what the INSPECTOR calls the
  *  section — never what the model reads, which each template emits itself.
@@ -602,6 +606,16 @@ export type PromptLayout = { enabled: boolean; sections: PromptLayoutSection[] }
 export type SceneContext = {
   model: string; total_tokens: number; dropped_tokens: number;
   budget_tokens: number; sections: ContextSection[];
+};
+/** One user pin or exclude (#129) as the panel sees it: the rule, the target it
+ *  names resolved to something displayable, and how many posts it has left.
+ *  `remaining` is null for a standing rule; `missing` marks a rule whose target
+ *  the campaign no longer has — inert, but shown rather than hidden so it can
+ *  be cleared. */
+export type PinRule = {
+  ref: string; kind: string; id: string; name: string; missing: boolean;
+  mode: "pin" | "exclude"; scope: "scene" | "campaign"; sid: string;
+  ttl_posts: number; remaining: number | null; created: string;
 };
 /** One past turn's frozen prompt, as listed. The section text is not here —
  *  it lives in the entry itself, which is large enough that shipping every
@@ -1789,6 +1803,20 @@ export const api = {
 
   getSceneContext: (cid: string, sid: string) =>
     request<SceneContext>("GET", `/api/campaigns/${cid}/scenes/${sid}/context`),
+  // Pins are campaign-scoped with the scene as a parameter: one read returns
+  // this scene's rules and the campaign-wide ones they override. `fresh`,
+  // because a pin is read straight after being set and a cached list would show
+  // the state before the write that prompted the reload.
+  getPins: (cid: string, sid: string) =>
+    request<{ pins: PinRule[] }>("GET",
+      `/api/campaigns/${cid}/pins?sid=${encodeURIComponent(sid)}`, undefined, { fresh: true }),
+  setPin: (cid: string, body: { ref: string; mode: "pin" | "exclude";
+                                scope?: "scene" | "campaign"; sid?: string; ttl_posts?: number }) =>
+    request<{ ok: boolean; pin: PinRule }>("POST", `/api/campaigns/${cid}/pins`, body),
+  removePin: (cid: string, ref: string, scope: "scene" | "campaign", sid: string) =>
+    request<{ ok: boolean }>("DELETE",
+      `/api/campaigns/${cid}/pins?ref=${encodeURIComponent(ref)}`
+      + `&scope=${scope}&sid=${encodeURIComponent(sid)}`),
   // `fresh`, like `campaignLedger`: a briefing is a continuity view, and the
   // one moment it is read is right after the previous scene's save — exactly
   // when a cached copy would still be showing the commitment that save resolved.

@@ -20,7 +20,7 @@ from typing import NamedTuple
 
 from ... import prompts
 from .. import (characters, commitments, config, entities, length_drift, lengths,
-                locks, overlay, pcs, plot, response_presets, styles, tokens,
+                locks, overlay, pcs, pins, plot, response_presets, styles, tokens,
                 turnstate)
 from ..appearances import (cast as appearances_cast, paths as appearances_paths,
                            versions as appearances_versions)
@@ -94,7 +94,19 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     history = [dict(m) for m in scene["messages"]]
     croot = campaigns_paths.campaign_root(cid)          # campaign-local: dossiers, calendar, group state
     aroot = appearances_paths.locked_actor_root(cid)    # cast/roster actors are locked, so campaign-side
-    cast = appearances_cast.scene_cast(cid, sid)
+    # The reader's own pins and excludes (#129), resolved once for this scene at
+    # this transcript length -- a TTL is counted in posts, so the same rule set
+    # answers differently as the scene grows.
+    rules = pins.active(cid, sid, len(history))
+    pinned_refs, excluded_refs = rules["pinned"], rules["excluded"]
+    # An excluded actor is removed HERE, before anything reads the cast, so
+    # every consequence of being on stage goes with them: their card, their
+    # state, their voice notes, their sheet -- and their ref in `present`, which
+    # is what keeps an excluded character's owned lore from standing in a prompt
+    # they are no longer in. The appearance record is untouched: an exclude is a
+    # context rule, not a departure, and lifting it puts them straight back.
+    cast = [a for a in appearances_cast.scene_cast(cid, sid)
+            if f"{a['kind']}:{a['id']}" not in excluded_refs]
 
     npc_cards: list[dict] = []
     for a in cast:
@@ -145,10 +157,16 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
 
     history_ids = scenes_read.get_location_history(cid, sid)
     current_loc = history_ids[-1] if history_ids else None
+    # An excluded location is still where the scene IS -- the transcript says so
+    # and moving is the reader's other lever -- but it stops being described:
+    # neither the setting block nor world info renders it, and it unlocks
+    # nothing it owns. That is the only reading of "keep this out of the prompt"
+    # that the prompt can actually honour.
+    loc_excluded = bool(current_loc) and f"locations:{current_loc}" in excluded_refs
     current_setting = ""
     current_setting_secret = False
     exclude: frozenset = frozenset()
-    if current_loc:
+    if current_loc and not loc_excluded:
         try:
             loc = overlay.read_entity(cid, "locations", current_loc)
             exclude = frozenset({current_loc})
@@ -167,7 +185,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         except entities.EntityNotFound:
             pass  # referenced location was deleted — omit the setting block
     present = {f"{a['kind']}:{a['id']}" for a in cast}
-    if current_loc:
+    if current_loc and not loc_excluded:
         present |= {f"locations:{current_loc}"}
 
     cfg = config.read_config()
@@ -187,7 +205,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         resolved_style = None
     offscene_active, offscene_known = cast_data._cast_directory_data(croot, cid, sid)
     activated_wi, recalled_wi = world_state._world_info(cid, recent_text, exclude,
-                                                       frozenset(present))
+                                                       frozenset(present),
+                                                       pinned_refs, excluded_refs)
     wi_public, wi_secret = world_state.secrecy_split(activated_wi)
     recalled_public, recalled_secret = world_state.secrecy_split(recalled_wi)
     mech = mechanics._mechanics(cid, sid, cast, recent_text)
@@ -275,7 +294,58 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     sub_history = [{"role": m["role"], "content": macros.expand_macros(m["content"], subs, cid, sid)}
                    for m in story._project_history(history)]
     return {"data": data, "subs": subs, "history": sub_history,
-            "post_history": post_history, "npc_names": npc_names}
+            "post_history": post_history, "npc_names": npc_names,
+            "pinned_sections": _pinned_sections(pinned_refs, cast, activated_wi,
+                                                current_loc if not loc_excluded else None)}
+
+
+#: Which sections a pinned cast member holds up, BY `Section.id`. Not by label:
+#: from #29 the label is the reader's to edit and two sections may share one, so
+#: a protection keyed on the label could hold up the wrong section or, after a
+#: rename, none at all — silently, since a pin that protects nothing looks
+#: exactly like a pin whose content did not activate.
+#:
+#: Everything else a pinned character feeds is already `lock-in` (their card,
+#: their persona), so naming those here would say nothing; these two are the
+#: droppable claims about that character, and a pin on someone is a request to
+#: keep the model told who they currently are.
+_CAST_SECTIONS = ("character_state", "transient_state")
+
+#: What a pinned world-info entry holds up: the section its body renders into,
+#: plus — for a group — the campaign state that activation pulls in beside it.
+_WORLD_INFO_SECTION = "world_info"
+_GROUP_STATE_SECTION = "group_state"
+#: A pinned location that IS the current setting renders there, not in World
+#: info (see `world_state._world_info`), so that is the section it protects.
+_SETTING_SECTION = "current_setting"
+
+
+def _pinned_sections(pinned_refs: frozenset, cast: list[dict], activated_wi: list[dict],
+                     current_loc: str | None) -> frozenset:
+    """The section ids a pin is holding up, for this assembly (#129).
+
+    A pin is a promise about CONTENT, and the packer drops SECTIONS — so the
+    promise has to be translated into the sections the pinned content actually
+    landed in, once, here, where both are in hand. Two consequences worth
+    stating: a pin protects the whole section it lands in, neighbours included
+    (sections are dropped whole, so there is no finer unit to protect), and a
+    pin on something that selected nothing this turn protects nothing, which is
+    right — there is no content of the reader's in the prompt to defend.
+    """
+    if not pinned_refs:
+        return frozenset()
+    out = set()
+    if any(f"{a['kind']}:{a['id']}" in pinned_refs for a in cast):
+        out.update(_CAST_SECTIONS)
+    for e in activated_wi:
+        if f"{e['kind']}:{e['id']}" not in pinned_refs:
+            continue
+        out.add(_WORLD_INFO_SECTION)
+        if e["kind"] == "groups":
+            out.add(_GROUP_STATE_SECTION)
+    if current_loc and f"locations:{current_loc}" in pinned_refs:
+        out.add(_SETTING_SECTION)
+    return frozenset(out)
 
 
 class Section(NamedTuple):
@@ -425,8 +495,18 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False) -> list[
     the catalog is walked here at all: this is the one render, so a section the
     layout dropped is dropped from the inspector too, and the two cannot
     disagree about what went out.
+
+    `pinned` rides on the section rather than changing its `tier`: the tier says
+    what KIND of content it is, which a reader's pin does not alter, and the
+    inspector shows both. It is matched on the section's `id`, never its label,
+    for the reason `Section.id` exists at all — from #29 the label is the
+    reader's to edit and two sections may legitimately share one, so a pin
+    keyed on the label could hold up the wrong section or, after a rename,
+    none. `.get` on the key so a hand-built `a` (several tests) is still
+    renderable.
     """
     data = {**a["data"], "opener": opener}
+    pinned = a.get("pinned_sections") or frozenset()
     out = []
     for section in layout.apply(SECTIONS):
         if section.pcless_only and not data["pcless"]:
@@ -439,7 +519,8 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False) -> list[
                                     a["subs"], cid, sid).strip()
         if text:
             out.append({"id": section.id, "label": section.label,
-                        "text": text, "tier": section.tier})
+                        "text": text, "tier": section.tier,
+                        "pinned": section.id in pinned})
     return out
 
 
@@ -613,7 +694,7 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None) -> 
     """
     extra = extra or []
     rows = [{"id": s["id"], "label": s["label"], "text": s["text"], "tier": s["tier"],
-             "dropped": s["dropped"], "trimmed": 0,
+             "dropped": s["dropped"], "trimmed": 0, "pinned": bool(s.get("pinned")),
              "tokens": tokens.count_tokens(s["text"])}
             for s in p["sections"]]
 
@@ -623,11 +704,11 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None) -> 
         # Displayed joined (one readable block), accounted per message with the
         # same per-message framing allowance the packer charges.
         rows.append({"id": "history", "label": "Conversation history", "text": hist,
-                     "tier": pack.HISTORY, "dropped": False,
+                     "tier": pack.HISTORY, "dropped": False, "pinned": False,
                      "trimmed": p["history_trimmed"], "tokens": hist_tokens})
     if a["post_history"]:
         rows.append({"id": "post_history", "label": "Post-history instructions",
-                     "text": a["post_history"],
+                     "text": a["post_history"], "pinned": False,
                      "tier": pack.LOCK_IN, "dropped": False, "trimmed": 0,
                      "tokens": tokens.count_tokens(a["post_history"])})
     # `lock-in`, and not merely as a label: `_packed` reserved these, so the
@@ -638,7 +719,7 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None) -> 
     #: every time), and the inspector keys its rows on `id`.
     extra_tokens = [tokens.count_tokens(text) for _label, text in extra]
     rows += [{"id": f"appended_{n}", "label": label, "text": text, "tier": pack.LOCK_IN,
-              "dropped": False, "trimmed": 0, "tokens": count}
+              "dropped": False, "trimmed": 0, "pinned": False, "tokens": count}
              for n, ((label, text), count) in enumerate(zip(extra, extra_tokens))]
 
     kept = [s["text"] for s in p["sections"] if not s["dropped"]]

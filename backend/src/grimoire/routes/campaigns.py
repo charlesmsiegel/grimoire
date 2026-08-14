@@ -1,7 +1,8 @@
 """Campaign-scoped routes: the campaign record, exports, the world->campaign
 sync inbox, calendar and climate settings, group state, the campaign's own
 copies of characters and PCs, change review (the rolling per-record delta, the
-append-only journal behind it, and undo), and the continuity ledger.
+append-only journal behind it, and undo), the continuity ledger, and the
+reader's context pins and excludes.
 
 Scenes, weather, mechanics and greetings have their own modules; the generic
 ``/campaigns/{cid}/{kind}`` entity surface lives in ``entities``.
@@ -21,7 +22,7 @@ from .common import (computes_only, _bounded_call, _campaign_root_or_404, _conte
                      _serve_image, _serve_image_file, _upload_image_ext, _write_response)
 from .models import (AdvanceTime, AvatarFocus, CalendarConfig, CampaignClimate, CopyFromGreeting,
                      DefaultVersion, GroupStateSave, NameBody, NewCampaign, PCCreate,
-                     PCUpdate, PersonaVersionCreate, PersonaVersionUpdate, PickBody,
+                     PCUpdate, PersonaVersionCreate, PersonaVersionUpdate, PickBody, PinRule,
                      RefList, ResponseSettings, VersionCreate, VersionUpdate,
                      VoiceAnchorSave)
 
@@ -886,6 +887,95 @@ def get_timeline(cid: str):
     """
     _campaign_root_or_404(cid)
     return store.timeline.build(cid)
+
+
+# ---- user pins & excludes (#129) ----
+#
+# Campaign-scoped, with the scene as a query parameter rather than a path
+# segment, because one rule set holds both scopes: a scene-scoped rule and the
+# campaign-wide default it overrides are read, listed and removed together, and
+# hanging the scene ones off /scenes/{sid} would split that in two.
+def _pin_name(cid: str, ref: str) -> str | None:
+    """Display name for a pinned target, or None when the campaign no longer has
+    it. Rules outlive what they name -- a pinned character can be deleted -- and
+    a dangling rule is inert rather than an error (see store/pins.py), so this
+    reports the absence instead of hiding the row."""
+    kind, _sep, eid = ref.partition(":")
+    if kind == "pcs":
+        # Off the campaign's PC list rather than a direct read: a PC the campaign
+        # has not materialized is still inherited from the world and still
+        # castable, and reading the campaign copy of one would report it as
+        # deleted. `_record_name`'s `read_character` resolves the same way for
+        # the other actor kind.
+        return next((p["name"] for p in store.overlay.list_pcs(cid) if p["id"] == eid), None)
+    return _record_name(cid, kind, eid)
+
+
+def _pin_rows(cid: str, sid: str, posts: int) -> list[dict]:
+    rows = []
+    for r in store.pins.records(cid, sid, posts):
+        kind, _sep, eid = r["ref"].partition(":")
+        name = _pin_name(cid, r["ref"])
+        rows.append({**r, "kind": kind, "id": eid, "name": name or eid, "missing": name is None})
+    return rows
+
+
+def _pin_posts(cid: str, sid: str) -> int:
+    """The transcript length a TTL counts against, or 0 with no scene named.
+
+    404s on a scene this campaign does not have: a rule filed against a
+    mistyped id would never apply to anything and never be visible anywhere.
+    """
+    if not sid:
+        return 0
+    try:
+        return len(store.scenes.read_scene(cid, sid)["messages"])
+    except store.SceneNotFound:
+        raise HTTPException(status_code=404, detail="scene not found")
+
+
+@router.get("/campaigns/{cid}/pins")
+def get_pins(cid: str, sid: str = ""):
+    """Every rule in force for `sid` — that scene's, then the campaign's own.
+
+    Spent rules are already gone from this list (`pins.records`), so `remaining`
+    is always a live countdown or None for a standing rule.
+    """
+    _campaign_root_or_404(cid)
+    return {"pins": _pin_rows(cid, sid, _pin_posts(cid, sid))}
+
+
+@router.post("/campaigns/{cid}/pins")
+def post_pin(cid: str, body: PinRule):
+    """Pin or exclude one target, replacing whatever rule this scope held for it.
+
+    The post count the TTL is measured from is read HERE rather than sent by the
+    client: it is the length of the transcript this rule is about, and a client
+    that guessed it wrong would set a window that expires at the wrong turn.
+    """
+    _campaign_root_or_404(cid)
+    posts = _pin_posts(cid, body.sid)
+    try:
+        rec = store.pins.set_rule(cid, body.ref, body.mode, scope=body.scope, sid=body.sid,
+                                  ttl_posts=body.ttl_posts, posts=posts)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "pin": rec}
+
+
+@router.delete("/campaigns/{cid}/pins")
+def delete_pin(cid: str, ref: str, scope: str = "scene", sid: str = ""):
+    """Lift one rule. 404 when this scope had none for that ref — removing a
+    rule that is not there is a client working from a stale list, and reporting
+    it as done would leave the panel showing a row nothing will clear."""
+    _campaign_root_or_404(cid)
+    try:
+        removed = store.pins.remove(cid, ref, scope=scope, sid=sid)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not removed:
+        raise HTTPException(status_code=404, detail="pin not found")
+    return {"ok": True}
 
 
 # ---- campaign cast & suggestions ----

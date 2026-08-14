@@ -40,6 +40,10 @@ export function ContextBreakdown({ ctx, models }: { ctx: SceneContext; models: M
             <span className={"ctx-dot" + (s.label.toLowerCase().includes("transcript") ? " hot" : "")} />
             <span className="ctx-label">{s.label}</span>
             {s.dropped && <span className="ctx-drop">dropped</span>}
+            {/* Why this one survived a squeeze its neighbours did not (#129).
+                Shown whatever the budget: a reader who pinned something should
+                see the pin took, not have to squeeze the prompt to find out. */}
+            {s.pinned && <span className="ctx-pin">pinned</span>}
             {s.trimmed > 0 && <span className="ctx-drop">{s.trimmed} trimmed</span>}
             <span className="ctx-meta">{s.tokens.toLocaleString()}{pct(s.tokens)}</span>
           </summary>

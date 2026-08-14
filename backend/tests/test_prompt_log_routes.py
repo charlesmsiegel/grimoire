@@ -62,7 +62,11 @@ def test_the_detail_endpoint_matches_the_live_context_shape(client):
 
     assert set(live) <= set(frozen)
     for row in frozen["sections"]:
-        assert set(row) == {"id", "label", "text", "tier", "dropped", "trimmed", "tokens"}
+        # `pinned` rides along with the rest (#129): a frozen turn has to say
+        # why a section survived pressure that dropped its neighbours, and the
+        # inspector renders both views with the one component.
+        assert set(row) == {"id", "label", "text", "tier", "dropped", "trimmed",
+                            "tokens", "pinned"}
 
 
 def test_the_snapshot_holds_while_the_live_view_moves(client):

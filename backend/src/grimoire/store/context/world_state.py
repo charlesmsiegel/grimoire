@@ -30,8 +30,21 @@ def keyword_hit(keys, text: str) -> bool:
     return any(re.search(rf"\b{re.escape(k)}\b", text, re.IGNORECASE) for k in keys)
 
 
+def _ref(e: dict) -> str:
+    """An entry's pin ref (`"<kind>:<id>"`), as `store/pins.py` spells it.
+
+    `.get` on both halves: `activate` is a pure function over whatever dicts it
+    is handed, and a caller that supplies neither (several tests, and any future
+    strategy assembling entries of its own) gets a ref that matches no rule
+    rather than a KeyError.
+    """
+    return f"{e.get('kind')}:{e.get('id')}"
+
+
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset(),
-             recall: Callable[[list[dict], str], list[dict]] | None = None) -> list[dict]:
+             recall: Callable[[list[dict], str], list[dict]] | None = None,
+             pinned_refs: frozenset = frozenset(),
+             excluded_refs: frozenset = frozenset()) -> list[dict]:
     """Select world-info entries. Owned entries (owners non-empty) are silent unless one
     owner ref is in `present`; then keyless = always-on, keyed = any key whole-word (ci) in
     recent_text. Unowned entries behave as before.
@@ -43,6 +56,25 @@ def activate(entries: list[dict], recent_text: str, present: frozenset = frozens
     path at once, rather than of whichever one someone remembered. `secret`
     entries are selected exactly like public ones — the difference is entirely
     in how they render (see `secrecy_split`).
+
+    `pinned_refs` / `excluded_refs` are the reader's own overrides (#129,
+    resolved by `pins.active`), checked next — ahead of the owner gate, the
+    keyword rule and `recall` alike. That ordering is the feature: those are
+    guesses about what the scene needs, and a pin is the reader saying they
+    already know. It does NOT extend to `gm-only` above; see the final
+    paragraph.
+
+    A pin beats the OWNER GATE, which is the one override that costs something:
+    an entry owned by a character who is not in the scene stays out of the
+    prompt precisely so absent people's lore cannot leak into it. A pin names
+    that entry explicitly, by a reader looking at their own campaign, so it goes
+    in — but nothing else opens that gate, and an owned entry the reader has not
+    named is as silent as it ever was.
+
+    An excluded entry is dropped outright rather than merely failing the keyword
+    rule: `recall` only ever sees what the keyword rule REJECTED, so leaving it
+    in `missed` would let the second stage put back exactly what the reader
+    asked to remove.
 
     `recall` is the second-stage retrieval strategy — `semantic.recall` in
     production, wired in by `_world_info`; anything with its signature in a
@@ -57,7 +89,13 @@ def activate(entries: list[dict], recent_text: str, present: frozenset = frozens
     missed: list[dict] = []
     for e in entries:
         if entities.normalize_secrecy(e.get("secrecy")) == entities.GM_ONLY:
-            continue  # GM-only -> never enters the prompt, by any path
+            continue  # GM-only -> never enters the prompt, by any path, pin included
+        ref = _ref(e)
+        if ref in excluded_refs:
+            continue  # the reader said no: not here, not through recall either
+        if ref in pinned_refs:
+            out.append(e)
+            continue  # the reader said yes: no key and no owner has to agree
         owners = e.get("owners") or []
         if owners and not any(o in present for o in owners):
             continue  # owned but no owner in scene -> never leak
@@ -90,24 +128,42 @@ def secrecy_split(entries: list[dict]) -> tuple[list[str], list[str]]:
 
 
 def _world_info(cid: str, recent_text: str, exclude: frozenset = frozenset(),
-                present: frozenset = frozenset()) -> tuple[list[dict], list[dict]]:
+                present: frozenset = frozenset(), pinned_refs: frozenset = frozenset(),
+                excluded_refs: frozenset = frozenset()) -> tuple[list[dict], list[dict]]:
     """Activated lore/location/item/group/creature entries as
     {"body", "kind", "id"} dicts — _assemble renders the bodies and uses the
     refs (e.g. activated groups pull their campaign state into context).
 
     Returns ``(keyword, recalled)``: what the keyword rule selected, and what
     semantic recall added on top. They render as separate sections in separate
-    packer tiers — see the comment at the return statement."""
+    packer tiers — see the comment at the return statement.
+
+    Two different exclusions meet here, deliberately spelled apart. `exclude` is
+    the CURRENT LOCATION, held back because the Current setting section already
+    renders it; `excluded_refs` is the reader's own rule (#129), which applies to
+    every kind. `pinned_refs` is its opposite, and both are enforced in
+    `activate` — the skips below are only there to save reading a file whose
+    body is about to be thrown away."""
     entries = []
     for kind in ("lore", "locations", "items", "groups", "creatures"):
         for meta in overlay.list_entities(cid, kind):
+            ref = f"{kind}:{meta['id']}"
+            if ref in excluded_refs:
+                continue
             if kind == "locations" and meta["id"] in exclude:
+                # Held back even when pinned: `exclude` is the CURRENT location,
+                # which the Current setting section is already rendering, so
+                # honouring the pin here would print its body twice. What the
+                # pin buys it is protection from the packer, in `_assemble`.
                 continue
             e = overlay.read_entity(cid, kind, meta["id"])
             keys = [k.strip() for k in e["meta"].get("keys", "").split(",") if k.strip()]
             owners = [o.strip() for o in e["meta"].get("owners", "").split(",") if o.strip()]
-            if kind == "locations" and not keys:
-                continue  # a keyless location surfaces only as the current setting, never always-on
+            if kind == "locations" and not keys and ref not in pinned_refs:
+                # A keyless location surfaces only as the current setting, never
+                # always-on -- unless the reader pinned it, which is a request
+                # for this location in the prompt whatever the scene is doing.
+                continue
             entries.append({"body": e["body"].strip(), "keys": keys, "owners": owners,
                             "secrecy": entities.normalize_secrecy(e["meta"].get("secrecy")),
                             "kind": kind, "id": meta["id"],
@@ -130,7 +186,8 @@ def _world_info(cid: str, recent_text: str, exclude: frozenset = frozenset(),
         recalled.extend(hits)
         return hits
 
-    activated = activate(entries, recent_text, present, recall=recall)
+    activated = activate(entries, recent_text, present, recall=recall,
+                         pinned_refs=pinned_refs, excluded_refs=excluded_refs)
     by_recall = {id(e) for e in recalled}
     return [e for e in activated if id(e) not in by_recall], recalled
 
