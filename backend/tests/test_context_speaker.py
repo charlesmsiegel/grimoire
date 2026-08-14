@@ -207,3 +207,23 @@ def test_history_is_not_mutated():
     before = [dict(m) for m in hist]
     speaker.nominate(NPCS, hist)
     assert hist == before
+
+
+def test_before_the_first_block_the_reason_is_opening_not_silence():
+    """Every candidate is equally silent there and the tie falls to cast order,
+    so "they have not spoken yet" would be true of all of them and would read
+    as a reason this one was picked."""
+    out = speaker.nominate(NPCS, [])
+    assert out["reason"] == "opening" and out["spoken"] is False
+    out = speaker.nominate(NPCS, [_player("What now?")])
+    assert out["reason"] == "opening"
+
+
+def test_naming_still_wins_before_the_first_block():
+    out = speaker.nominate(NPCS, [], pending="Winifred is already waiting.")
+    assert out["lead"] == "Winifred Ash" and out["reason"] == "named"
+
+
+def test_the_first_block_switches_the_reason_to_rotation():
+    out = speaker.nominate(NPCS, [_npc("Seraphine Vale")])
+    assert out["reason"] == "rotation" and out["spoken"] is False

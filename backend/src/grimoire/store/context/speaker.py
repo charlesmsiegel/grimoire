@@ -36,13 +36,13 @@ def _first_token(name: str) -> str:
     return parts[0] if parts else ""
 
 
-def _address_labels(names: list[str]) -> dict[str, str]:
+def _name_labels(names: list[str]) -> dict[str, str]:
     """label -> the one present NPC it can mean.
 
-    A label two present actors answer to is absent from the result, so it
-    addresses nobody. Full names and first names share one namespace, which is
-    what makes a first name that is also another actor's whole name ambiguous
-    rather than a match.
+    A label two present actors answer to is absent from the result, so it names
+    nobody. Full names and first names share one namespace, which is what makes
+    a first name that is also another actor's whole name ambiguous rather than
+    a match.
 
     The same rule `_voice_notes` applies, for the same reason: an instruction
     pointed at the wrong character is worse than no instruction at all.
@@ -68,7 +68,7 @@ def _named(text: str, names: list[str]) -> str | None:
     nudge about who speaks, not a routing decision, and the section it feeds
     words it as such.
     """
-    hits = {who for label, who in _address_labels(names).items()
+    hits = {who for label, who in _name_labels(names).items()
             if re.search(rf"(?<!\w){re.escape(label)}(?!\w)", text, re.IGNORECASE)}
     return hits.pop() if len(hits) == 1 else None
 
@@ -87,11 +87,20 @@ def nominate(npc_names: list[str], history: list[dict],
     Returns ``{"lead", "reason", "spoken", "silent_for", "quiet"}``:
 
     - ``lead`` — the NPC to carry the turn.
-    - ``reason`` — ``"named"`` (the latest input names them) or
-      ``"rotation"`` (they are the most overdue).
+    - ``reason`` — ``"named"`` (the latest input names them), ``"rotation"``
+      (they are the most overdue), or ``"opening"`` (nobody has spoken yet, so
+      the pick is arbitrary and the section must not dress it up as a reason).
     - ``spoken`` / ``silent_for`` — whether the lead has spoken in this scene at
       all, and how many model blocks ago, so the section can say *why*.
     - ``quiet`` — everyone else present, most-overdue first.
+
+    ``"opening"`` exists because the honest wording differs. On an opener, or
+    any scene before its first model block, every candidate is equally silent
+    and the tie falls to cast order — which is alphabetical by actor id. Saying
+    "they have not spoken yet in this scene" would be true of all of them and
+    would read as a reason this one was chosen. Nominating anyway is still
+    worth it: an arbitrary lead is the point when the alternative is four
+    characters answering at once.
 
     None below two present NPCs. Turn-taking is a group problem, and naming a
     lead in a two-hander is tokens spent telling the model what the cast list
@@ -133,7 +142,8 @@ def nominate(npc_names: list[str], history: list[dict],
     # Longest silence first, then whoever has said least, then cast order --
     # so a given transcript always nominates the same way.
     ranked = sorted(names, key=lambda n: (-silence(n), said.get(n, 0), names.index(n)))
-    lead, reason = ranked[0], "rotation"
+    lead = ranked[0]
+    reason = "rotation" if last else "opening"
 
     # Being named outranks having been quiet: the input singled someone out,
     # and answering somebody else is the more visible failure.
