@@ -16,7 +16,7 @@ import type { DraftCast, SceneDraft } from "./sceneDraft";
  *  #91's adapted greeting becomes the fourth member of this union. */
 type FirstPost = "none" | "greeting" | "premise";
 
-export function SceneConfirmForm({ cid, draft, notice, ready = true, onBack, onCancel, onCreated,
+export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, onCreated,
                                     onWriting, onSalvaged }: {
   cid: string;
   draft: SceneDraft;
@@ -24,10 +24,15 @@ export function SceneConfirmForm({ cid, draft, notice, ready = true, onBack, onC
    *  itself -- `POST .../opener` needs a scene -- but it is now the pane that
    *  OFFERS to, so it has to say when there is nothing to generate with, the
    *  same way `SceneIdeaPicker` and `CastPanel` do. Reachable without one: the
-   *  typed path builds a premise-carrying draft whether or not an LLM is set
-   *  up. Defaults to true so the many tests that predate this prop keep
-   *  asserting the connected case they were written for. */
-  ready?: boolean;
+   *  typed path builds a premise-carrying draft whether or not an LLM is set up.
+   *
+   *  REQUIRED, unlike the optional callbacks below, and deliberately so: a
+   *  default would have to be `true` to preserve what the existing tests
+   *  assert, which is the unsafe direction -- dropping `ready={ready}` at the
+   *  one call site would leave this pane claiming it can generate, and every
+   *  test here would stay green. Required makes that omission a `tsc -b`
+   *  error, which CI runs, instead of a behavior nothing checks. */
+  ready: boolean;
   /** a warning raised while the draft was built, e.g. a failed extraction */
   notice?: string | null;
   onBack: () => void;
@@ -117,7 +122,12 @@ export function SceneConfirmForm({ cid, draft, notice, ready = true, onBack, onC
   const sources: { value: FirstPost; label: string }[] = [
     ...(draft.source === "greeting"
       ? [{ value: "greeting" as const, label: "The greeting, verbatim" }] : []),
-    { value: "premise", label: "Generate an opening post from a premise" },
+    // "in the scene", not just "generate": pressing Create generates nothing.
+    // The premise is carried to CastPanel's opener box, where the reader still
+    // has to generate and accept a post. A label promising the post itself
+    // would be untrue on the commonest path of all -- every generated
+    // suggestion arrives with a premise and so defaults to this option.
+    { value: "premise", label: "Generate one in the scene, from a premise" },
     { value: "none", label: "Nothing — you write the first post" },
   ];
 

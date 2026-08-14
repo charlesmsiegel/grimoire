@@ -27,9 +27,17 @@ type DraftBase = {
   pcless: boolean;
 };
 
-/** Greeting drafts carry no premise and no cast BY CONSTRUCTION: the greeting
- *  body is the first post, and start_from_greeting seats the greeting's cast
- *  under locked-version rules a form must not re-implement. */
+/** Greeting drafts carry no premise and no cast BY CONSTRUCTION, because a
+ *  greeting has neither to offer: its body is the post it would supply, and
+ *  start_from_greeting seats its cast under locked-version rules a form must
+ *  not re-implement.
+ *
+ *  That is a statement about the DRAFT, not about the scene. Since #90 the
+ *  reader can decline the greeting in the confirm form and write a premise or
+ *  cast the scene by hand instead; those live in that form's state, and when
+ *  the greeting is declined nothing seats a cast on the reader's behalf. So
+ *  do not read this as "a greeting scene has no premise and no cast" -- it
+ *  means only that neither can be resolved this early. */
 export type SceneDraft =
   | (DraftBase & { source: "greeting"; gid: string })
   | (DraftBase & { source: "generated" | "custom"; premise: string; cast: DraftCast[] });

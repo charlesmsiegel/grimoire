@@ -57,15 +57,18 @@ test("Back returns to the picker without writing", async () => {
   expect(api.createScene).not.toHaveBeenCalled();
 });
 
-// The confirm pane defaults `ready` to true for the tests that predate the
-// prop, so a dropped `ready={ready}` here would leave every SceneConfirmForm
-// test green while the pane quietly claimed it could generate. This is the
-// only test that can catch that, so it asserts the thread, not the hint.
+// `ready` is a required prop, so `tsc` already catches DROPPING it here. What
+// it cannot catch is threading the wrong value -- a hardcoded `ready` or
+// `ready={true}` typechecks perfectly and leaves the pane claiming it can
+// generate in a campaign with no connection. Every test in
+// SceneConfirmForm.test.tsx passes the prop directly and so proves nothing
+// about this wire; this is the only test that follows the real value across
+// the seam.
 test("the confirm pane is told whether an LLM is connected", async () => {
   render(<NewSceneChooser cid="c" afterSid="s1" ready={false} onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("With your PC"));
   fireEvent.click(await screen.findByText("Reckoning"));
-  fireEvent.click(await screen.findByRole("radio", { name: /opening post/i }));
+  fireEvent.click(await screen.findByRole("radio", { name: /generate one/i }));
   expect(screen.getByText(/set up an llm connection/i)).toBeInTheDocument();
 });
 
