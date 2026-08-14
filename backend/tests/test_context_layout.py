@@ -75,11 +75,25 @@ def test_two_new_sections_keep_catalog_order_between_themselves():
     assert [s.id for s in layout.merge(catalog, stored)] == ["a", "x", "y", "b"]
 
 
-def test_a_new_section_after_a_disabled_one_falls_back_further_up():
-    """"c" is new and its catalog neighbour "b" is switched off, so it cannot
-    anchor to it -- it anchors to the nearest one that SURVIVED."""
-    stored = [{"id": "a"}, {"id": "b", "enabled": False}, {"id": "d"}]
-    assert [s.id for s in layout.merge(CATALOG, stored)] == ["a", "c", "d"]
+def test_a_new_section_anchors_to_a_disabled_neighbour_too():
+    """"c" is new and its catalog neighbour "b" is switched off. It still
+    anchors to "b" -- `_ordered` keeps the disabled rows precisely so it can,
+    which is what makes the next test true."""
+    stored = [{"id": "b", "enabled": False}, {"id": "a"}, {"id": "d"}]
+    assert [r["id"] for r in layout.describe(CATALOG, stored)] == ["b", "c", "a", "d"]
+    assert [s.id for s in layout.merge(CATALOG, stored)] == ["c", "a", "d"]
+
+
+def test_switching_a_section_off_does_not_move_a_different_one():
+    """The property that matters, and the reason a newcomer anchors to
+    disabled rows: a toggle is a statement about one section. Anchoring to
+    survivors only would drag "c" up the message every time the reader
+    switched off something above it."""
+    on = [{"id": "a"}, {"id": "b"}, {"id": "d"}]
+    off = [{"id": "a"}, {"id": "b", "enabled": False}, {"id": "d"}]
+    assert ([r["id"] for r in layout.describe(CATALOG, on)]
+            == [r["id"] for r in layout.describe(CATALOG, off)]
+            == ["a", "b", "c", "d"])
 
 
 def test_an_explicit_off_is_not_undone_by_the_insert_pass():
