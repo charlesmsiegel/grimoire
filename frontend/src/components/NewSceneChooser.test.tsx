@@ -9,6 +9,7 @@ vi.mock("../api/client", () => ({
     setSceneLocation: vi.fn(), setSceneDatetime: vi.fn(), renameScene: vi.fn(),
     deleteScene: vi.fn(), listEntities: vi.fn(), listCharacters: vi.fn(),
     listCampaignPCs: vi.fn(), listAppearances: vi.fn(),
+    listSceneIdeas: vi.fn(), saveSceneIdea: vi.fn(), setSceneIdeaStatus: vi.fn(),
   },
 }));
 vi.mock("./CalendarDatePicker", () => ({
@@ -32,6 +33,8 @@ beforeEach(() => {
   (api.listEntities as any).mockResolvedValue([]);
   (api.listCharacters as any).mockResolvedValue([]);
   (api.listCampaignPCs as any).mockResolvedValue([]);
+  (api.listSceneIdeas as any).mockResolvedValue([]);
+  (api.setSceneIdeaStatus as any).mockResolvedValue({ ok: true });
 });
 
 test("mode is chosen first and nothing is fetched before it", () => {

@@ -6572,6 +6572,160 @@ def test_scene_intent_forwards_offscreen_to_the_parser(client):
     assert r.json()["cast"] == []
 
 
+# ---- the scene ledger (#88) ----
+def _ledger_campaign(client):
+    """A campaign with one character, one location and one greeting -- enough
+    for an idea to reference something and for the composed half to be
+    non-empty."""
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/locations", json={"name": "Saltmarch"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    client.post(f"/api/worlds/{wid}/greetings",
+                json={"name": "Reckoning", "character": "mara", "version": "default",
+                      "body": "It begins."})
+    return wid, client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+
+
+def test_scene_ideas_start_with_only_the_composed_greetings(client):
+    """Nothing is stored until something is saved, and the greeting half is
+    composed from played.json rather than seeded into the file."""
+    _wid, cid = _ledger_campaign(client)
+    rows = client.get(f"/api/campaigns/{cid}/scene-ideas").json()
+    assert rows == [{"id": "greeting:reckoning", "title": "Reckoning", "premise": "",
+                     "cast": [], "location": None, "date": "", "pcless": False,
+                     "source": "greeting", "status": "active", "created": "",
+                     "used_scene": ""}]
+    assert not (store.campaigns.campaign_root(cid) / "scene_ideas.json").exists()
+
+
+def test_saving_an_idea_resolves_its_references_on_the_way_back(client):
+    """The card shape the picker already renders a suggestion in: cast with
+    names, location as {id, name}."""
+    _wid, cid = _ledger_campaign(client)
+    r = client.post(f"/api/campaigns/{cid}/scene-ideas", json={
+        "title": "The creditor", "premise": "A debt-collector arrives.",
+        "cast": ["characters:mara"], "location": "saltmarch", "source": "llm"})
+    assert r.status_code == 200
+    lid = r.json()["id"]
+
+    saved = [i for i in client.get(f"/api/campaigns/{cid}/scene-ideas").json()
+             if i["source"] != "greeting"]
+    assert saved == [{"id": lid, "title": "The creditor",
+                      "premise": "A debt-collector arrives.",
+                      "cast": [{"kind": "characters", "id": "mara", "name": "Mara"}],
+                      "location": {"id": "saltmarch", "name": "Saltmarch"},
+                      "date": "", "pcless": False, "source": "llm", "status": "active",
+                      "created": saved[0]["created"], "used_scene": ""}]
+
+
+def test_an_idea_needs_something_to_go_on(client):
+    _wid, cid = _ledger_campaign(client)
+    r = client.post(f"/api/campaigns/{cid}/scene-ideas",
+                    json={"title": "  ", "premise": "  "})
+    assert r.status_code == 400
+
+
+def test_a_saved_idea_cannot_smuggle_in_ids_the_campaign_lacks(client):
+    _wid, cid = _ledger_campaign(client)
+    lid = client.post(f"/api/campaigns/{cid}/scene-ideas", json={
+        "title": "Ghosts", "premise": "Someone who isn't there.",
+        "cast": ["characters:nobody"], "location": "elsewhere"}).json()["id"]
+    assert store.scene_ideas.get(cid, lid)["cast"] == []
+    assert store.scene_ideas.get(cid, lid)["location"] == ""
+
+
+def test_a_reference_lost_after_the_save_drops_on_read(client):
+    """An idea is durable and a campaign is not: the picker must never be handed
+    a location id that would 404 the moment it was used."""
+    _wid, cid = _ledger_campaign(client)
+    client.post(f"/api/campaigns/{cid}/scene-ideas", json={
+        "title": "The creditor", "premise": "P", "location": "saltmarch"})
+
+    def saved_location():
+        return next(i["location"] for i in client.get(f"/api/campaigns/{cid}/scene-ideas").json()
+                    if i["source"] != "greeting")
+
+    assert saved_location() == {"id": "saltmarch", "name": "Saltmarch"}
+    assert client.delete(f"/api/campaigns/{cid}/locations/saltmarch").status_code == 200
+    assert saved_location() is None
+    # the record itself keeps what it was given -- a dangling id is data, not an
+    # error, and the campaign could get that location back
+    assert store.scene_ideas.get(cid, "the-creditor")["location"] == "saltmarch"
+
+
+def test_dismiss_and_restore_a_saved_idea(client):
+    _wid, cid = _ledger_campaign(client)
+    lid = client.post(f"/api/campaigns/{cid}/scene-ideas",
+                      json={"title": "The creditor", "premise": "P"}).json()["id"]
+
+    def status_of(idea_id):
+        return next(i["status"] for i in client.get(f"/api/campaigns/{cid}/scene-ideas").json()
+                    if i["id"] == idea_id)
+
+    assert client.put(f"/api/campaigns/{cid}/scene-ideas/{lid}",
+                      json={"status": "dismissed"}).status_code == 200
+    assert status_of(lid) == "dismissed"
+    client.put(f"/api/campaigns/{cid}/scene-ideas/{lid}", json={"status": "active"})
+    assert status_of(lid) == "active"
+
+
+def test_marking_an_idea_used_records_the_scene_it_became(client):
+    _wid, cid = _ledger_campaign(client)
+    lid = client.post(f"/api/campaigns/{cid}/scene-ideas",
+                      json={"title": "The creditor", "premise": "P"}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.put(f"/api/campaigns/{cid}/scene-ideas/{lid}",
+               json={"status": "used", "scene": sid})
+    row = next(i for i in client.get(f"/api/campaigns/{cid}/scene-ideas").json()
+               if i["id"] == lid)
+    assert row["status"] == "used" and row["used_scene"] == sid
+    # and a rename of that scene is followed, through scene_refs' fan-out
+    new_sid = client.put(f"/api/campaigns/{cid}/scenes/{sid}",
+                         json={"title": "The creditor"}).json()["id"]
+    assert new_sid != sid
+    assert store.scene_ideas.get(cid, lid)["used_scene"] == new_sid
+
+
+def test_dismissing_a_greeting_entry_delegates_to_its_own_marks(client):
+    """A greeting's lifecycle is played.json's. The ledger route moves it there
+    rather than keeping a second copy that could disagree."""
+    _wid, cid = _ledger_campaign(client)
+    assert client.put(f"/api/campaigns/{cid}/scene-ideas/greeting:reckoning",
+                      json={"status": "dismissed"}).status_code == 200
+    assert store.playing.read_marks(cid)["skipped"] == {"reckoning"}
+    assert [i["status"] for i in client.get(f"/api/campaigns/{cid}/scene-ideas").json()
+            if i["id"] == "greeting:reckoning"] == ["dismissed"]
+
+    client.put(f"/api/campaigns/{cid}/scene-ideas/greeting:reckoning", json={"status": "active"})
+    assert store.playing.read_marks(cid)["skipped"] == set()
+
+    # percent-encoded, the way the frontend client sends it: the colon has to
+    # survive the round trip or every greeting row is a 404
+    client.put(f"/api/campaigns/{cid}/scene-ideas/greeting%3Areckoning", json={"status": "used"})
+    assert store.playing.read_marks(cid)["completed"] == {"reckoning"}
+
+
+def test_a_greeting_played_in_a_scene_refuses_to_move(client):
+    """The same 409 POST /greetings/{gid}/mark already returns -- a played
+    greeting's mark is the scene's, not the ledger's."""
+    _wid, cid = _ledger_campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
+                json={"greeting": "reckoning"})
+    r = client.put(f"/api/campaigns/{cid}/scene-ideas/greeting:reckoning",
+                   json={"status": "dismissed"})
+    assert r.status_code == 409
+
+
+def test_unknown_ideas_and_greetings_are_404s(client):
+    _wid, cid = _ledger_campaign(client)
+    assert client.put(f"/api/campaigns/{cid}/scene-ideas/nope",
+                      json={"status": "dismissed"}).status_code == 404
+    assert client.put(f"/api/campaigns/{cid}/scene-ideas/greeting:nope",
+                      json={"status": "dismissed"}).status_code == 404
+    assert client.get("/api/campaigns/ghost/scene-ideas").status_code == 404
+
+
 def test_put_chronicle_applies_approved_edits(client):
     _, cid = _campaign(client)
     croot = store.campaigns.campaign_root(cid)

@@ -283,6 +283,18 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
       } catch (err: any) { soft.push(errMsg(err)); }
       if (!live.current) return;
     }
+    // 6. the ledger, last: an idea becomes "used" only once the scene it
+    //    became actually exists, and nothing before this point depends on it.
+    //    A failure is soft rather than fatal for the same reason the location
+    //    and date writes are -- the scene is real and usable -- but it is
+    //    still reported: silently leaving the idea active means it comes back
+    //    in the picker as though it had never been played, and the reader
+    //    would have no way to tell that from a deliberate keep.
+    if (draft.source === "saved" && draft.lid) {
+      try { await api.setSceneIdeaStatus(cid, draft.lid, "used", sid); }
+      catch (err: any) { soft.push(`${errMsg(err)} — the saved idea is still on the list`); }
+      if (!live.current) return;
+    }
     setWriting(false);
     if (soft.length) { setSalvaged(sid); onSalvaged?.(sid); setError(soft.join(" · ")); return; }
     onCreated(sid, prompt);

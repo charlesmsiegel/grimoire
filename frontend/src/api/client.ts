@@ -701,6 +701,26 @@ export type SceneSuggestion = {
   cast: { kind: string; id: string; name: string }[];
   location: { id: string; name: string } | null;
 };
+/** A row of the scene ledger (#88) — a saved idea, or a greeting composed into
+ *  the same shape. Deliberately a superset of `SceneSuggestion`, so one card
+ *  renderer covers both: `cast` and `location` come back resolved.
+ *
+ *  `source` is `"greeting"` for the composed entries, whose ids are
+ *  `greeting:<gid>` and whose status writes delegate to the greeting's own
+ *  marks server-side. */
+export type SceneIdea = {
+  id: string; title: string; premise: string; date: string;
+  cast: { kind: string; id: string; name: string }[];
+  location: { id: string; name: string } | null;
+  pcless: boolean;
+  source: "llm" | "user" | "greeting";
+  status: "active" | "used" | "dismissed";
+  created: string; used_scene: string;
+};
+export type SceneIdeaDraft = {
+  title?: string; premise?: string; cast?: string[]; location?: string;
+  date?: string; pcless?: boolean; source?: "llm" | "user";
+};
 export type SceneIntentResult = {
   title: string; date: string;
   location: { id: string; name: string } | null;
@@ -1564,6 +1584,18 @@ export const api = {
   sceneIntent: (cid: string, text: string, offscreen: boolean) =>
     request<SceneIntentResult>("POST", `/api/campaigns/${cid}/scene-intent`,
       { text, offscreen }),
+  // The scene ledger (#88). `fresh`, like the continuity ledger: the picker
+  // re-reads this precisely when it has just written to it (a save, a dismiss,
+  // a restore), and a shared or cached response would answer that with the
+  // list from before the write.
+  listSceneIdeas: (cid: string) =>
+    request<SceneIdea[]>("GET", `/api/campaigns/${cid}/scene-ideas`, undefined, { fresh: true }),
+  saveSceneIdea: (cid: string, idea: SceneIdeaDraft) =>
+    request<{ id: string }>("POST", `/api/campaigns/${cid}/scene-ideas`, idea),
+  setSceneIdeaStatus: (cid: string, lid: string,
+                       status: "active" | "used" | "dismissed", scene?: string) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scene-ideas/${encodeURIComponent(lid)}`,
+                             { status, ...(scene ? { scene } : {}) }),
   getCastDetail: (cid: string, sid: string, kind: string, id: string) =>
     request<CastDetail>("GET", `/api/campaigns/${cid}/scenes/${sid}/cast/${kind}/${id}`),
   // `fresh`, like the ledger and the briefing: this is a continuity view, and

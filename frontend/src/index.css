@@ -1556,6 +1556,12 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .chooser-card:disabled { opacity: 0.6; cursor: default; }
 .chooser-card-title { font-weight: 600; }
 .chooser-card-premise { opacity: 0.85; }
+/* A card with an action beside it (Save on a generated idea, × on a saved one).
+   The action cannot live INSIDE the card: the card is itself a <button>, and a
+   nested button is invalid HTML the browser reparents out of it. */
+.chooser-row { display: flex; align-items: stretch; gap: 6px; }
+.chooser-row .chooser-card { flex: 1; min-width: 0; }
+.chooser-row .grow { flex: 1; align-self: center; }
 .chooser .picker input.grow { flex: 1; }
 .chooser textarea { width: 100%; background: transparent; border: 1px solid var(--muted); color: inherit; padding: 8px; font: inherit; }
 .chooser select { width: 100%; }

@@ -412,6 +412,23 @@ test("greeting marks and version picks POST to their campaign routes", async () 
     expect.objectContaining({ method: "POST", body: JSON.stringify({ version: "veteran" }) }));
 });
 
+test("the scene ledger routes carry the idea and its status", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.saveSceneIdea("run", { title: "The tide-book", premise: "P", source: "llm" });
+  expect(fetchMock).toHaveBeenLastCalledWith("/api/campaigns/run/scene-ideas",
+    expect.objectContaining({ method: "POST",
+      body: JSON.stringify({ title: "The tide-book", premise: "P", source: "llm" }) }));
+  await api.setSceneIdeaStatus("run", "the-tide-book", "used", "001--s");
+  expect(fetchMock).toHaveBeenLastCalledWith("/api/campaigns/run/scene-ideas/the-tide-book",
+    expect.objectContaining({ method: "PUT",
+      body: JSON.stringify({ status: "used", scene: "001--s" }) }));
+  // a greeting entry's id carries a colon, which has to survive the path
+  await api.setSceneIdeaStatus("run", "greeting:reckoning", "dismissed");
+  expect(fetchMock).toHaveBeenLastCalledWith("/api/campaigns/run/scene-ideas/greeting%3Areckoning",
+    expect.objectContaining({ method: "PUT", body: JSON.stringify({ status: "dismissed" }) }));
+});
+
 // ---- request coalescing ----
 const CFG = {
   theme: "t", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",

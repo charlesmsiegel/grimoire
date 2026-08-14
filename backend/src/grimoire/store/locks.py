@@ -191,6 +191,13 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # files a reply's tracker block and the append that lands the reply are one
     # critical section rather than two.
     "store.turnstate",
+    # scene_ideas.json is rewritten whole by `add`, `set_status` and
+    # `repoint_scenes`, exactly like facts.json -- and `add` allocates the
+    # idea's id from the keys it just read, so two unlocked saves can pick the
+    # same slug and one of the two ideas is simply gone. New module (#88), so
+    # it starts inside the exclusion rather than joining the `UNREVIEWED`
+    # backlog -- the same call `store.commitments` and `store.facts` made.
+    "store.scene_ideas",
     "store.sheets.tally",
     "store.sheets.writer",
     "store.audit.baselines",
