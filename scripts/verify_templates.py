@@ -678,7 +678,7 @@ def rendered_system(data: dict, opener: bool = False) -> str:
     """Mirror of context.assemble._render_sections + scene/system.j2: render
     each section, drop the empty ones, join with blank lines.
 
-    The order is spelled out here rather than read off `context._SECTIONS`,
+    The order is spelled out here rather than read off `context.SECTIONS`,
     which is the point — the prompt's section order is now a single list in
     code, and this is the independent copy that makes reordering it a
     deliberate two-sided change instead of a silent one.

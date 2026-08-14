@@ -62,7 +62,7 @@ def test_the_detail_endpoint_matches_the_live_context_shape(client):
 
     assert set(live) <= set(frozen)
     for row in frozen["sections"]:
-        assert set(row) == {"label", "text", "tier", "dropped", "trimmed", "tokens"}
+        assert set(row) == {"id", "label", "text", "tier", "dropped", "trimmed", "tokens"}
 
 
 def test_the_snapshot_holds_while_the_live_view_moves(client):

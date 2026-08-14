@@ -7,7 +7,7 @@ the recap window by the same keyword rule.
 
 This package gathers DATA; the prompt text lives in templates/scene/ (see
 templates/README.md for the variable contract). The section ORDER lives here,
-in `assemble._SECTIONS`: `_render_sections` renders it, `pack.pack` decides
+in `assemble.SECTIONS`: `_render_sections` renders it, `pack.pack` decides
 what fits, and templates/scene/system.j2 joins what survives. One list, one
 render — so `context_sections` (the inspector's breakdown) and `build_messages`
 (the prompt) cannot disagree about what was sent.
@@ -55,7 +55,7 @@ from .story import (  # noqa: F401
     _project_history, _recap_depth, _recap_ids, _relationship_lines, _story_entries,
 )
 from .assemble import (  # noqa: F401
-    OPENER_RECAP_DEPTH, _SECTIONS, _assemble, _breakdown, _compose_system, _packed,
+    OPENER_RECAP_DEPTH, SECTIONS, _assemble, _breakdown, _compose_system, _packed,
     _render_sections, _section_template, _system_text, Appended, Section,
     build_director_messages, build_messages, build_opener_messages,
     compose_director_turn, compose_opener, compose_turn,
