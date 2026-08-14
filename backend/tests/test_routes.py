@@ -11071,7 +11071,14 @@ def test_a_corrupt_scene_stamp_cannot_pin_a_campaign_atop_recent(client, monkeyp
 
     row = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]
     assert row["activity"] != "zzzz", "a corrupt scene stamp must not rank the campaign"
-    assert row["activity"] == row["updated"] != ""
+    # A REAL stamp won, and it is at least as new as campaign.md's. Not equality:
+    # creating the scene stamps the activity file a moment after the campaign
+    # write, so the two agree only when both land inside the same wall-clock
+    # second. That held locally and failed on a slower runner (PR #327).
+    # The shape check is what keeps `>=` strict -- "zzzz" outranks every real
+    # stamp lexically, so ordering alone would accept the value under test.
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", row["activity"])
+    assert row["activity"] >= row["updated"] != ""
 
     # and a later write still moves it, rather than being outranked forever
     monkeypatch.setattr("grimoire.store.campaigns.read.now_iso", lambda: _soon(60))
