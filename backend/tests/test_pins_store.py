@@ -166,6 +166,16 @@ def test_a_scene_rule_needs_a_scene(monkeypatch, tmp_path):
         pins.set_rule(cid, "lore:tide-oath", pins.PIN, sid="")
 
 
+def test_a_ref_is_stored_in_the_form_the_assembler_compares_against(monkeypatch, tmp_path):
+    """`split_ref` tolerates the whitespace a pasted ref arrives with, so storing
+    the ref as typed filed a rule that validated, listed, and matched nothing."""
+    cid = _campaign(monkeypatch, tmp_path)
+    rec = pins.set_rule(cid, "lore:  tide-oath  ", pins.PIN, sid="0001")
+    assert rec["ref"] == "lore:tide-oath"
+    assert pins.active(cid, "0001", 0)["pinned"] == frozenset({"lore:tide-oath"})
+    assert pins.remove(cid, "lore:tide-oath", sid="0001") is True
+
+
 def test_an_unpinnable_kind_is_refused(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     with pytest.raises(ValueError):

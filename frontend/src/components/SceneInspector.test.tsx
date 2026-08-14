@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { SceneInspector } from "./SceneInspector";
 
 vi.mock("../api/client", async () => {
@@ -1321,4 +1321,40 @@ test("a campaign-wide rule shows on the row but is not toggled from it", async (
   fireEvent.click(pin);
   expect(api.setPin).not.toHaveBeenCalled();
   expect(api.removePin).not.toHaveBeenCalled();
+});
+
+test("switching scenes does not leave the previous scene's rules driving the toggles", async () => {
+  // The component survives a scene switch, so an unscoped rule list left the
+  // new scene's row showing the old scene's pin — and a click on it would have
+  // asked the server to lift a rule that scene never had.
+  (api.getPins as any).mockResolvedValue({ pins: [pinRow()] });
+  const { rerender } = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await waitFor(() => expect(
+    screen.getByRole("button", { name: "Pin Seraphine in the prompt" }).getAttribute("aria-pressed"),
+  ).toBe("true"));
+
+  // The next scene's read is still in flight when it repaints.
+  (api.getPins as any).mockReturnValue(new Promise(() => {}));
+  rerender(<SceneInspector cid="c" sid="s2" refreshKey={0} onSceneChanged={() => {}} />);
+  expect(
+    screen.getByRole("button", { name: "Pin Seraphine in the prompt" }).getAttribute("aria-pressed"),
+  ).toBe("false");
+});
+
+test("the picker's options do not survive a campaign switch", async () => {
+  // Same reason, one cache over: offering another campaign's lore here would
+  // file a rule naming an entry this campaign has never had.
+  (api.listEntities as any).mockResolvedValue([{ id: "tide-oath", name: "Tide oath" }]);
+  const { rerender } = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  fireEvent.change(await screen.findByLabelText("What to pin or exclude"), { target: { value: "lore" } });
+  // Scoped to the picker: `listEntities` also feeds the location list, so a
+  // bare option query would find the Move-to select's copy of the same name.
+  const picker = () => within(screen.getByLabelText("Record to pin or exclude") as HTMLElement);
+  await waitFor(() => expect(picker().queryByRole("option", { name: "Tide oath" })).not.toBeNull());
+
+  (api.listEntities as any).mockReturnValue(new Promise(() => {}));
+  rerender(<SceneInspector cid="c2" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await waitFor(() => expect(picker().queryByRole("option", { name: "Tide oath" })).toBeNull());
 });

@@ -64,6 +64,16 @@ def test_a_rule_round_trips_with_the_name_the_panel_shows(client):
     assert rows[0]["remaining"] == 3
 
 
+def test_the_post_answers_in_the_same_shape_the_list_does(client):
+    """The client renders what it just wrote; two shapes for one record is how
+    that ends up disagreeing with the read that follows it."""
+    cid, sid = _scene(client)
+    lid = _lore(client, cid)
+    written = _pin(client, cid, ref=f"lore:{lid}", mode="pin", sid=sid).json()["pin"]
+    listed = client.get(f"/api/campaigns/{cid}/pins", params={"sid": sid}).json()["pins"][0]
+    assert written == listed
+
+
 def test_the_ttl_is_anchored_to_the_transcript_the_server_reads(client):
     """The client never sends the post count -- it would be guessing at the
     length of a transcript the server already has."""
@@ -163,6 +173,17 @@ def test_an_unknown_campaign_or_scene_is_a_404(client):
     assert client.get("/api/campaigns/nope/pins").status_code == 404
     assert client.get(f"/api/campaigns/{cid}/pins", params={"sid": "9999"}).status_code == 404
     assert _pin(client, cid, ref="lore:x", mode="pin", sid="9999").status_code == 404
+
+
+def test_a_campaign_rule_is_not_refused_over_a_scene_it_does_not_use(client):
+    """Our own client keeps the scene id in the same field for both scopes, so
+    validating it for a rule that neither measures against a scene nor stores
+    one would block a campaign-wide pin from a scene renamed underneath it."""
+    cid, sid = _scene(client)
+    lid = _lore(client, cid)
+    r = _pin(client, cid, ref=f"lore:{lid}", mode="exclude", scope="campaign", sid="9999")
+    assert r.status_code == 200
+    assert r.json()["pin"]["sid"] == ""
 
 
 def test_deleting_a_scene_takes_its_rules_with_it(client):

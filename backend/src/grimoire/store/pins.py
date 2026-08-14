@@ -43,6 +43,16 @@ Campaign scope means standing until removed.
 decision and the one the reader can see in front of them. So "never in this
 campaign, except in this scene" is expressible, and so is its opposite.
 
+**What an exclude does not reach.** It governs SELECTION -- which records the
+context builder pulls into the prompt -- not the text already written down. An
+excluded character's name still appears in the transcript they spoke in, in the
+recap of a scene they were in, and in an archived scene recalled by keyword;
+"keep this out of the prompt" cannot rewrite history the reader played. Nor does
+it reach the prompts other features build for their own purposes (absorb, the
+rolling summary, dossiers): those summarize what happened, and a summary that
+silently dropped a character would be wrong about the scene rather than tactful
+about it.
+
 **This module stores; it does not validate targets.** A ref names a `kind` this
 codebase can pin (`KINDS`) and an id, and checking that the id still exists
 means reading the campaign's overlay and roster -- which is the caller's, the
@@ -74,8 +84,14 @@ SCOPES = (SCENE, CAMPAIGN)
 #: so are the half `activate()` never sees.
 KINDS = ("characters", "pcs", "lore", "locations", "items", "groups", "creatures")
 
-#: Stands in for a scene id in a campaign-scoped key. A scene id is digits
-#: (`scenes.paths.safe_id`), so this cannot collide with one.
+#: Stands in for a scene id in a campaign-scoped key, which is `<sid>:<ref>`.
+#:
+#: Two things make that key unambiguous, and both are checked rather than
+#: assumed: `paths.safe_id` REFUSES a colon in a scene id (it names an NTFS
+#: alternate data stream and a Windows drive-relative path), and entity ids come
+#: from `paths.slugify`, which emits neither a colon nor a `*`. So the first
+#: colon always separates the scene from the ref, and no real scene id can be
+#: mistaken for this marker.
 _ANY_SCENE = "*"
 
 
@@ -162,11 +178,20 @@ def _int(value, fallback: int = 0) -> int:
 
 
 def _remaining(rec: dict, posts: int) -> int | None:
-    """Posts this rule has left, or None when it never decays. <= 0 is spent."""
+    """Posts this rule has left, or None when it never decays. <= 0 is spent.
+
+    Capped at the window itself, because the transcript SHRINKS: a retry pops
+    the last reply, an undo takes back a turn, and a trimmed scene loses several
+    at once. The elapsed count is then negative and the raw arithmetic hands
+    back more posts than the rule was ever given — a 3-post pin reporting "5
+    posts left" after a reroll. Counting down again from the full window is the
+    honest reading of a transcript that went backwards: those posts really did
+    stop having happened.
+    """
     ttl = _int(rec.get("ttl_posts"))
     if ttl <= 0:
         return None
-    return ttl - (posts - _int(rec.get("created_posts")))
+    return min(ttl, ttl - (posts - _int(rec.get("created_posts"))))
 
 
 def _live(rec: dict, sid: str, posts: int) -> bool:
@@ -250,8 +275,16 @@ def set_rule(cid: str, ref: str, mode: str, scope: str = SCENE, sid: str = "",
         raise ValueError(f"unknown pin mode: {mode}")
     if scope not in SCOPES:
         raise ValueError(f"unknown pin scope: {scope}")
-    if split_ref(ref) is None:
+    parts = split_ref(ref)
+    if parts is None:
         raise ValueError(f"not a pinnable reference: {ref}")
+    # Stored in the form the assembler will compare against -- `f"{kind}:{id}"`
+    # -- rather than as typed. `split_ref` already tolerates the surrounding
+    # whitespace a hand-written or copy-pasted ref arrives with, so accepting
+    # `"lore: tide-oath "` and then storing it verbatim filed a rule that
+    # validated, listed and matched NOTHING: inert, and indistinguishable in the
+    # panel from one that works.
+    ref = f"{parts[0]}:{parts[1]}"
     sid = sid.strip()
     if scope == SCENE and not sid:
         raise ValueError("a scene-scoped rule needs a scene")
