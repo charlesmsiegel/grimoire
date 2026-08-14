@@ -273,7 +273,17 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [addRole, setAddRole] = useState<"player" | "npc">("npc");
 
   // --- pins & excludes (#129) ---
-  const [pins, setPins] = useState<PinRule[]>([]);
+  // Held with the campaign AND scene it was read for, like `brief` and `turns`
+  // above and for a sharper version of their reason: this component survives
+  // both switches, and these rules do not merely LABEL the panel, they decide
+  // what the row toggles do. A bare array left the previous scene's rules
+  // driving the new scene's buttons -- a toggle reading "pinned" from a scene
+  // the reader is no longer in, whose click then asks the server to lift a rule
+  // that was never there. Comparing during render makes that impossible rather
+  // than short.
+  const [pinState, setPinState] =
+    useState<{ cid: string; sid: string; rows: PinRule[] } | null>(null);
+  const pins = pinState && pinState.cid === cid && pinState.sid === sid ? pinState.rows : [];
   // Starts unset, and the options for a kind are fetched only once one is
   // chosen: the section is open by default and most readers never touch it, so
   // a kind selected up front would mean a list request per campaign for a
@@ -286,7 +296,12 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // Lazily, one kind at a time: the picker offers seven kinds and a reader opens
   // it rarely, so loading all seven with the panel would be seven requests per
   // campaign for a section that is usually empty and shut.
-  const [pinOptions, setPinOptions] = useState<Record<string, { id: string; name: string }[]>>({});
+  // Keyed by campaign as well as kind, for the same reason: the cache outlives
+  // a campaign switch, so a bare `{lore: [...]}` offered one campaign's lore in
+  // another campaign's picker -- and pinning from it would file a rule naming
+  // an entry this campaign has never had.
+  const [pinOptions, setPinOptions] =
+    useState<Record<string, { id: string; name: string }[]>>({});
 
   useEffect(() => {
     api.listCharacters({ kind: "campaign", id: cid }).then(setChars).catch(() => setChars([]));
@@ -339,7 +354,9 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     () => api.getCast(cid, sid).then(setCast).catch(() => setCast([])),
     [cid, sid]);
   const reloadPins = useCallback(
-    () => api.getPins(cid, sid).then((r) => setPins(r.pins)).catch(() => setPins([])),
+    () => api.getPins(cid, sid)
+      .then((r) => setPinState({ cid, sid, rows: r.pins }))
+      .catch(() => setPinState({ cid, sid, rows: [] })),
     [cid, sid]);
 
   /** Toggle one scene-scoped rule for `ref`.
@@ -447,22 +464,23 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
 
   // The picker's options for the kind currently selected, fetched once per kind
   // per campaign. Actors come from lists the panel already holds.
+  const pinOptionKey = `${cid}/${pinKind}`;
   useEffect(() => {
-    if (!pinKind || pinKind === "characters" || pinKind === "pcs" || pinOptions[pinKind]) return;
+    if (!pinKind || pinKind === "characters" || pinKind === "pcs" || pinOptions[pinOptionKey]) return;
     let live = true;
     api.listEntities({ kind: "campaign", id: cid }, pinKind)
       .then((rows) => {
         if (live) setPinOptions((prev) => ({ ...prev,
-          [pinKind]: rows.map((r) => ({ id: r.id, name: r.name })) }));
+          [pinOptionKey]: rows.map((r) => ({ id: r.id, name: r.name })) }));
       })
-      .catch(() => { if (live) setPinOptions((prev) => ({ ...prev, [pinKind]: [] })); });
+      .catch(() => { if (live) setPinOptions((prev) => ({ ...prev, [pinOptionKey]: [] })); });
     return () => { live = false; };
-  }, [cid, pinKind, pinOptions]);
+  }, [cid, pinKind, pinOptionKey, pinOptions]);
 
   const pinChoices: { id: string; name: string }[] =
     pinKind === "characters" ? chars
     : pinKind === "pcs" ? pcs
-    : pinKind ? pinOptions[pinKind] ?? []
+    : pinKind ? pinOptions[pinOptionKey] ?? []
     : [];
 
   // Its own effect rather than a line in the load above, because it is the one

@@ -1431,6 +1431,11 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 }
 .inspector-row-pin:hover { opacity: 0.8; }
 .inspector-row-pin.on { opacity: 1; filter: none; }
+/* Held by a campaign-wide rule: it still reports the state, it just is not the
+   place to change it (see `standingRule`), so it must not invite the click. */
+.inspector-row-pin:disabled { cursor: default; }
+.inspector-row-pin:disabled:hover { opacity: 0.35; }
+.inspector-row-pin.on:disabled:hover { opacity: 1; }
 .inspector .pin-row { flex: 1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--rule-soft); }
 .inspector .pin-row .inspector-name { flex: 1 0 auto; font-size: 14px; }
 .inspector .pin-meta { flex: 1 1 100%; margin: 0; }

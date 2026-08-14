@@ -895,29 +895,53 @@ def get_timeline(cid: str):
 # segment, because one rule set holds both scopes: a scene-scoped rule and the
 # campaign-wide default it overrides are read, listed and removed together, and
 # hanging the scene ones off /scenes/{sid} would split that in two.
-def _pin_name(cid: str, ref: str) -> str | None:
+def _pin_name(cid: str, kind: str, eid: str, pc_names) -> str | None:
     """Display name for a pinned target, or None when the campaign no longer has
     it. Rules outlive what they name -- a pinned character can be deleted -- and
     a dangling rule is inert rather than an error (see store/pins.py), so this
-    reports the absence instead of hiding the row."""
-    kind, _sep, eid = ref.partition(":")
+    reports the absence instead of hiding the row.
+
+    `pc_names` is the campaign's PC list, resolved once by the caller and only
+    when a row needs it: PCs are read as a LIST rather than one at a time
+    because a PC the campaign has not materialized is still inherited from the
+    world and still castable, and reading the campaign copy of one would report
+    it as deleted. `_record_name`'s `read_character` resolves the same way for
+    the other actor kind, one id at a time, so only this half needs hoisting.
+    """
     if kind == "pcs":
-        # Off the campaign's PC list rather than a direct read: a PC the campaign
-        # has not materialized is still inherited from the world and still
-        # castable, and reading the campaign copy of one would report it as
-        # deleted. `_record_name`'s `read_character` resolves the same way for
-        # the other actor kind.
-        return next((p["name"] for p in store.overlay.list_pcs(cid) if p["id"] == eid), None)
+        return pc_names().get(eid)
     return _record_name(cid, kind, eid)
 
 
+def _pin_row(cid: str, rule: dict, pc_names) -> dict:
+    """One stored rule, plus what a panel needs to draw it. The ONE projection:
+    a POST answers with the same shape its GET will hand back, so the client can
+    render what it just wrote without a second read disagreeing with it."""
+    kind, _sep, eid = rule["ref"].partition(":")
+    name = _pin_name(cid, kind, eid, pc_names)
+    return {**rule, "kind": kind, "id": eid, "name": name or eid, "missing": name is None}
+
+
+def _pc_name_reader(cid: str):
+    """A memoized `{pid: name}` reader. Memoized rather than eager because most
+    rule sets name no PC at all, and the list costs a directory walk over the
+    campaign's PCs and the world's."""
+    cache: dict[str, str] = {}
+    loaded = False
+
+    def pc_names() -> dict[str, str]:
+        nonlocal loaded
+        if not loaded:
+            cache.update({p["id"]: p["name"] for p in store.overlay.list_pcs(cid)})
+            loaded = True
+        return cache
+
+    return pc_names
+
+
 def _pin_rows(cid: str, sid: str, posts: int) -> list[dict]:
-    rows = []
-    for r in store.pins.records(cid, sid, posts):
-        kind, _sep, eid = r["ref"].partition(":")
-        name = _pin_name(cid, r["ref"])
-        rows.append({**r, "kind": kind, "id": eid, "name": name or eid, "missing": name is None})
-    return rows
+    pc_names = _pc_name_reader(cid)
+    return [_pin_row(cid, r, pc_names) for r in store.pins.records(cid, sid, posts)]
 
 
 def _pin_posts(cid: str, sid: str) -> int:
@@ -954,13 +978,18 @@ def post_pin(cid: str, body: PinRule):
     that guessed it wrong would set a window that expires at the wrong turn.
     """
     _campaign_root_or_404(cid)
-    posts = _pin_posts(cid, body.sid)
+    # Only a scene rule is measured against a scene, so only a scene rule is
+    # refused for naming one that is gone. A client that keeps its scene id in
+    # the same field for both scopes (ours does) would otherwise be unable to
+    # file a CAMPAIGN rule from a scene that has just been renamed underneath
+    # it -- over an id the campaign rule does not use and does not store.
+    posts = _pin_posts(cid, body.sid) if body.scope == "scene" else 0
     try:
         rec = store.pins.set_rule(cid, body.ref, body.mode, scope=body.scope, sid=body.sid,
                                   ttl_posts=body.ttl_posts, posts=posts)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, "pin": rec}
+    return {"ok": True, "pin": _pin_row(cid, rec, _pc_name_reader(cid))}
 
 
 @router.delete("/campaigns/{cid}/pins")

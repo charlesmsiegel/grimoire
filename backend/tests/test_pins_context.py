@@ -8,7 +8,8 @@ sees — the keyword rule, the owner gate, the cast loop, and the budget packer.
 import pytest
 
 from grimoire.store import (appearances as ap, campaigns, characters, config, context,
-                            entities, pcs, pins, playstate, scenes, worlds)
+                            dossiers, entities, groupstate, pcs, pins, playstate, scenes,
+                            worlds)
 from grimoire.store.context import pack as context_pack
 
 
@@ -295,3 +296,82 @@ def test_a_rule_naming_something_the_campaign_lost_is_inert(monkeypatch, tmp_pat
     scenes.append_message(cid, sid, "user", "hello")
     pins.set_rule(cid, "lore:never-existed", mode, sid=sid)
     assert context.build_messages(cid, sid)          # composes, selects nothing
+
+
+# --- the seams a later refactor could quietly break -------------------------
+
+def test_every_protected_label_is_a_section_that_exists():
+    """`_pinned_sections` names sections by their inspector label, and a pin
+    protects nothing at all if that label stops matching. Two of the three
+    mappings (Transient state, Group state) are cheap to break and expensive to
+    notice, since a pin that protects nothing looks exactly like a pin whose
+    content did not activate."""
+    from grimoire.store.context import assemble
+    labels = {s.label for s in assemble._SECTIONS}
+    protected = {*assemble._CAST_SECTIONS, assemble._WORLD_INFO_SECTION,
+                 assemble._GROUP_STATE_SECTION, assemble._SETTING_SECTION}
+    assert protected <= labels
+
+
+def test_a_pinned_group_holds_up_its_state_block_too(monkeypatch, tmp_path):
+    """Activating a group pulls its campaign state into a section of its own, so
+    a pin that saved the group's body and lost its state would have kept half
+    of what the reader asked for."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    gid = entities.create_entity(croot, "groups", "Salt Circle", "A quiet cabal. " * 40)
+    groupstate.write_state(croot, gid, groupstate.compose_body(
+        {"goals": "Hold the gate. " * 40, "resources": "", "focus": "",
+         "public_perception": "", "secrets": ""}))
+    _crowded(cid, sid)
+
+    sent = _system(cid, sid)
+    config.write_config(context_budget=str(context.count_tokens(sent) // 2))
+    assert {s["label"]: s["dropped"] for s in context.context_sections(cid, sid)}["Group state"]
+
+    pins.set_rule(cid, f"groups:{gid}", pins.PIN, sid=sid)
+    secs = {s["label"]: s for s in context.context_sections(cid, sid)}
+    assert secs["World info"]["dropped"] is False
+    assert secs["Group state"]["dropped"] is False
+
+
+def test_an_excluded_character_does_not_come_back_as_off_scene_cast(monkeypatch, tmp_path):
+    """The Off-scene cast section renders the roster MINUS whoever is in the
+    scene, and it reads the cast record itself rather than the filtered list --
+    so an excluded actor is absent from both halves. That holds by construction
+    today and would invert the moment someone passes `_assemble`'s filtered cast
+    into `_cast_directory_data`: exclude a character and their dossier would
+    reappear one section down, which is the exact opposite of what was asked."""
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    characters.create_character(worlds.world_root(wid), "Seraphine", "default",
+                                _npc_card("Seraphine", description="A keeper."))
+    dossiers.write(croot, "seraphine", "She has been counting the tide-tolls.")
+    scenes.append_message(cid, sid, "user", "hello")
+
+    # First prove the section renders her at all -- cast elsewhere, so she is in
+    # the campaign roster and off THIS scene. Without this half the assertion
+    # below passes whether or not the exclusion works, since a character nobody
+    # has ever cast is absent from the prompt either way.
+    elsewhere = scenes.create_scene(cid, "Another")
+    ap.appear(cid, elsewhere, "characters", "seraphine", "default", "npc")
+    assert "counting the tide-tolls" in _system(cid, sid)
+
+    # Now bring her on stage here and exclude her: she must leave by the front
+    # door, not reappear through the off-scene one.
+    ap.appear(cid, sid, "characters", "seraphine", "default", "npc")
+    pins.set_rule(cid, "characters:seraphine", pins.EXCLUDE, sid=sid)
+    text = _system(cid, sid)
+    assert "A keeper." not in text
+    assert "counting the tide-tolls" not in text
+
+
+def test_a_shrinking_transcript_never_hands_back_more_posts_than_the_window(monkeypatch, tmp_path):
+    """A retry pops the last reply, so the post count goes DOWN. The countdown
+    restarts from the full window rather than exceeding it."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    for n in range(4):
+        scenes.append_message(cid, sid, "user", f"post {n}")
+    pins.set_rule(cid, "lore:tide-oath", pins.PIN, sid=sid, ttl_posts=2, posts=4)
+    assert pins.records(cid, sid, 4)[0]["remaining"] == 2
+    assert pins.records(cid, sid, 1)[0]["remaining"] == 2      # not 5
