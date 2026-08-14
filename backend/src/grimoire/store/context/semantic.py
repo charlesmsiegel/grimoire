@@ -74,11 +74,10 @@ serving, and one worth doing only if this proves its worth first.
 from __future__ import annotations
 
 import time
-import zlib
 
 from ... import embeddings
 from ...llm_errors import LLMError
-from .. import config, llm_connections, vectors
+from .. import config, embed_space, vectors
 
 #: UTF-8 *bytes* of an entry's text that get embedded — not characters.
 #: Characters are the wrong unit for a token window: an entry written in CJK
@@ -124,60 +123,20 @@ _CLIENT = embeddings.EmbeddingsClient()
 
 
 def _clip(text: str, max_bytes: int, tail: bool = False) -> str:
-    """`text` cut to `max_bytes` UTF-8 bytes, from the end when `tail`.
-
-    Cutting bytes can split a multi-byte character; the partial one is dropped
-    rather than replaced, so the result is always text the provider will accept
-    and always shorter than the bound rather than one byte over it.
-    """
-    raw = text.encode("utf-8")
-    if len(raw) <= max_bytes:
-        return text
-    cut = raw[-max_bytes:] if tail else raw[:max_bytes]
-    return cut.decode("utf-8", "ignore")
+    """`embed_space.clip`, under this module's own name — see there."""
+    return embed_space.clip(text, max_bytes, tail)
 
 
 def _warm_window(uncached: list[str], query_text: str) -> list[str]:
-    """The `WARM_LIMIT` texts to embed this turn, starting at a rotating offset.
+    """The `WARM_LIMIT` texts to embed this turn, rotated by the scan window.
 
-    This is the whole answer to a class of failure that took several attempts
-    to see as one thing. A *fixed* prefix means whatever sits at the head and
-    fails to cache sits there again next turn, and forever: a document the
-    provider refuses, a document it answers with a zero vector, a document
-    caught by a transient outage. Each of those was found and patched
-    separately — with an isolation pass, then a bound on that pass, then a
-    tombstone for refused inputs — and the tombstone then had its own failure
-    mode, permanently rejecting a valid document over a transient 502. The
-    mechanism grew more dangerous than what it was guarding against.
-
-    Rotating the window makes all of it transient instead. Nothing can occupy
-    the head, because there is no head: a stuck document costs its own slot in
-    the windows that happen to include it, and every other document is reached
-    within a few turns regardless. A permanently unembeddable entry settles
-    into costing one failed request on the turns it appears in, and nothing
-    else. No failure classification, no persistent state, no second code path.
-
-    The offset comes from the query, so it varies every turn (the scan window
-    is different every turn) while staying deterministic for a given one —
-    which keeps `recall` a pure function of its inputs and the cache, so the
-    same store and the same scene always warm the same entries.
-
-    Convergence is probabilistic rather than ordered, so it is worth having
-    measured. With one permanently unembeddable document among N, everything
-    else warms within: 32 turns at N=64, 5 at N=67, 13 at N=83, 16 at N=263,
-    142 at N=1063 — the tail is slowest because the last few entries need a
-    window that happens to exclude the stuck one. Without a stuck document
-    nothing fails and warming is a full window per turn as before.
+    `embed_space.warm_window` with this layer's bound — the rotation and why it
+    has to be a proper subset are documented there. The offset comes from the
+    scan window, which differs every turn, so warming moves on by itself while
+    staying deterministic for any one turn: the same store and the same scene
+    always warm the same entries.
     """
-    if len(uncached) < 2:
-        return list(uncached)
-    # A PROPER subset, always. Taking the whole list once it fits inside
-    # WARM_LIMIT looks harmless and undoes the rotation entirely: the window
-    # stops varying, so a stuck document is in every window again and the last
-    # WARM_LIMIT entries never warm. Measured -- the tail never converged.
-    size = min(WARM_LIMIT, len(uncached) - 1)
-    start = zlib.crc32(query_text.encode("utf-8")) % len(uncached)
-    return [uncached[(start + n) % len(uncached)] for n in range(size)]
+    return embed_space.warm_window(uncached, query_text, WARM_LIMIT)
 
 
 def _int(value: object, default: int) -> int:
@@ -201,51 +160,29 @@ def _float(value: object, default: float) -> float:
 def settings() -> dict | None:
     """The resolved recall configuration, or None when the layer is off.
 
-    None is the answer for every kind of "not set up": depth 0, no model, no
-    connection id, an id naming a connection that was deleted, a connection of
-    a kind that serves no ``/embeddings`` route, or one with no base URL. The
-    caller treats all of them the same way, so distinguishing them here would
-    buy nothing — and a store this reads may be hand-edited or half-synced, so
-    it must not raise for any of them either.
+    The endpoint half is `embed_space.resolve`, shared with the search surface
+    so both read and write one cache under one namespace. What this adds is the
+    part that is recall's alone: `depth`, which is also recall's on/off switch,
+    and `threshold`.
+
+    None is the answer for every kind of "not set up" — depth 0, or anything
+    that makes `resolve` return None. The caller treats all of them the same
+    way, so distinguishing them here would buy nothing; and a store this reads
+    may be hand-edited or half-synced, so it must not raise for any of them
+    either.
     """
     try:
         cfg = config.read_config()
         depth = max(_int(cfg.get("semantic_recall_depth"), 0), 0)
-        model = str(cfg.get("embeddings_model") or "").strip()
-        conn_id = str(cfg.get("embeddings_connection_id") or "").strip()
-        if depth <= 0 or not model or not conn_id:
+        if depth <= 0:
             return None
-        conn = llm_connections.read_connection_raw(conn_id)
-        if conn["kind"] != "openai_compatible" or not conn["base_url"]:
+        space = embed_space.resolve()
+        if space is None:
             return None
         threshold = _float(cfg.get("semantic_recall_threshold"),
                            float(config.DEFAULT_SEMANTIC_RECALL_THRESHOLD))
-        return {"depth": depth, "threshold": threshold, "model": model,
-                "base_url": conn["base_url"], "key": conn["api_key"],
-                # The cache namespace. Two endpoints can both serve a model
-                # called "embedding" and mean different weights, and vectors
-                # from different spaces are incomparable even at matching
-                # dimensionality -- so keying on the model name alone would
-                # reuse one provider's vectors against another's queries and
-                # rank silently wrongly.
-                #
-                # The connection's `rev` is in here for the case the URL does
-                # not cover: a gateway where the *credential* selects the
-                # tenant or deployment. Two connections to one URL with
-                # different keys are different spaces, and replacing a key can
-                # move an existing one. `rev` is restamped on every write, so
-                # it captures both. It over-invalidates -- renaming a
-                # connection costs a full re-embed -- and that is the right
-                # direction: re-embedding costs money and latency, while a
-                # stale namespace costs silently wrong rankings with nothing
-                # to notice them by. `llm_connections.cached_models` gates its
-                # own sidecar on `rev` for exactly this reason.
-                #
-                # `model` stays explicit because it lives in config.md, not on
-                # the connection, so changing it does not move `rev`.
-                "space": f"{conn['id']}\0{conn['rev']}\0{model}"}
-    except (llm_connections.ConnectionNotFound, OSError, UnicodeDecodeError,
-            KeyError, TypeError, ValueError):
+        return {"depth": depth, "threshold": threshold, **space}
+    except (OSError, UnicodeDecodeError, KeyError, TypeError, ValueError):
         return None
 
 
