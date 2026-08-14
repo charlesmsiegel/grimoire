@@ -15,6 +15,7 @@ vi.mock("../api/client", async () => {
       getCastDetail: vi.fn(), readEntity: vi.fn(), getChronicle: vi.fn(),
       getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
+      getCampaignClock: vi.fn(), previewAdvance: vi.fn(), advanceTime: vi.fn(),
       listAppearances: vi.fn(), listEntityImages: vi.fn(),
       listEntities: vi.fn(), setSceneLocation: vi.fn(), sceneBriefing: vi.fn(),
       getRollingSummary: vi.fn(), refreshRollingSummary: vi.fn(),
@@ -81,6 +82,8 @@ beforeEach(() => {
   (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [], suggested: null });
   (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: false, friendly: "", id: "s" });
   (api.getCalendarMonths as any).mockResolvedValue({ months: GREG_MONTHS });
+  (api.getCampaignClock as any).mockResolvedValue(
+    { now: "2026-05-01", friendly: "1 May 2026", log: [] });
   (api.listAppearances as any).mockResolvedValue([]);
   (api.listEntityImages as any).mockResolvedValue([]);
   (api.listEntities as any).mockResolvedValue([]);
@@ -326,6 +329,18 @@ test("section collapse state persists across a remount", async () => {
   render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   await screen.findByText("Active characters"); // sanity: the inspector rendered
   expect(screen.queryByText("They first met.")).not.toBeInTheDocument(); // stayed collapsed
+});
+
+test("the Campaign clock section is shut until asked for, then mounts the panel", async () => {
+  // The one campaign-scoped section on a scene-scoped rail (#100): collapsed by
+  // default so it does not push the scene's own state down, and — because it is
+  // collapsed — the panel must not fetch the clock until a reader opens it.
+  renderInspector();
+  await screen.findByText("Active characters");
+  expect(api.getCampaignClock).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: /campaign clock/i }));
+  expect(await screen.findByText(/Now: 1 May 2026/)).toBeInTheDocument();
+  expect(api.getCampaignClock).toHaveBeenCalledWith("c");
 });
 
 test("the Context section header still shows the percentage badge and collapses as a whole", async () => {

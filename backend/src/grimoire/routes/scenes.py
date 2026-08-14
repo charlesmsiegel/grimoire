@@ -2359,15 +2359,20 @@ def put_scene_datetime(cid: str, sid: str, body: SceneDatetime):
         result = store.scenes.set_datetime(cid, sid, body.datetime)
     except store.calendars.CalendarError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    # Names the transitions for the advance digest. Generation is pure, so the
-    # changes happen either way; without this they are simply never reported.
-    weather_changes = store.weather.sweep(cid, result.get("id", sid), previous, body.datetime)
     # Reconcile the campaign clock (#100) with the moment this scene just took:
     # forward only, so a flashback cannot drag the campaign's present backwards.
     # Called from the route rather than from `set_datetime`, which keeps `scenes`
     # free of any import of `clock` — `clock` reads the chronicle and the
     # chronicle reads `scenes`, so the other direction would be a cycle.
+    #
+    # Before the weather sweep, not after: the scene's date is already written by
+    # here, and the sweep resolves a climate and a provider per visited location.
+    # Leaving the clock behind because the *weather* failed would be the worst of
+    # the three outcomes.
     clock = store.clock.observe(cid, body.datetime, f"scene {result.get('id', sid)}")
+    # Names the transitions for the advance digest. Generation is pure, so the
+    # changes happen either way; without this they are simply never reported.
+    weather_changes = store.weather.sweep(cid, result.get("id", sid), previous, body.datetime)
     return {"ok": True, **result, "weather_changes": weather_changes, "clock": clock}
 
 

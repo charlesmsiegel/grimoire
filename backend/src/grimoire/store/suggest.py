@@ -50,9 +50,11 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
     # agree until somebody advances time between scenes, which is exactly the
     # case this snapshot used to get wrong -- a suggestion prompt proposing next
     # week from a "now" a month behind the campaign's actual present.
-    # `clock.now` falls back to that same chronicle date, so an unclocked
-    # campaign is unchanged.
-    now = clock.now(cid)
+    #
+    # The fallback is handed in rather than left to `clock.now` to re-derive:
+    # unclocked, it would read and parse the same chronicle.json this function
+    # just read three records out of.
+    now = clock.now(cid, fallback=recent[-1].get("date", "") if recent else "")
     story_so_far = [{"one_line": r.get("one_line", ""), "location": r.get("location", ""),
                      "date": r.get("date", "")} for r in reversed(recent)]
 
@@ -196,10 +198,8 @@ def valid_ids(cid: str):
 
 def date_normalizer(cid: str):
     """Canonical native date or "" — a suggested date is only a hint, so never raise."""
-    try:
-        provider = calendars.get_provider(
-            calendars.read_calendar(campaigns_paths.campaign_root(cid))["primary"])
-    except (calendars.CalendarError, KeyError):
+    provider = calendars.primary_provider(campaigns_paths.campaign_root(cid))
+    if provider is None:
         return lambda _s: ""
 
     def norm(s: str) -> str:

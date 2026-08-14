@@ -27,10 +27,12 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   const [target, setTarget] = useState("");
   const [reason, setReason] = useState("");
   const [digest, setDigest] = useState<AdvanceDigest | null>(null);
-  /** True once the shown digest describes a move that actually happened, so the
-   *  same block can serve as "here is what would happen" and "here is what did"
-   *  without the reader having to guess which they are looking at. */
-  const [landed, setLanded] = useState(false);
+  /** What the shown digest *is*, so one block can serve all three states without
+   *  the reader having to guess which they are looking at: a preview, a move that
+   *  landed, or a confirmed advance the server treated as a no-op because the
+   *  clock was already at that moment (`moved: false`). Calling that last one
+   *  "Advanced" would claim a write that did not happen. */
+  const [outcome, setOutcome] = useState<"preview" | "moved" | "unchanged">("preview");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -42,7 +44,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   // A digest belongs to the request that produced it. Changing the target (or
   // the campaign) invalidates it, and showing a stale one next to new inputs is
   // how a reader confirms a skip they never previewed.
-  useEffect(() => { setDigest(null); setLanded(false); }, [cid, mode, days, target]);
+  useEffect(() => { setDigest(null); setOutcome("preview"); }, [cid, mode, days, target]);
 
   const request = () => (mode === "days" ? { days: parseInt(days, 10) } : { to: target });
   const ready = mode === "days" ? !isNaN(parseInt(days, 10)) : !!target;
@@ -53,7 +55,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     try {
       const r = await api.previewAdvance(cid, request());
       setDigest(r.digest);
-      setLanded(false);
+      setOutcome("preview");
     } catch (err: any) {
       setError(err.detail ?? String(err));
     } finally {
@@ -67,7 +69,11 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     try {
       const r = await api.advanceTime(cid, { ...request(), reason });
       setDigest(r.digest);
-      setLanded(true);
+      setOutcome(r.moved ? "moved" : "unchanged");
+      // Clearing the reason is load-bearing, not just tidy: the duration is left
+      // as typed (a reader who skips a week often skips another), so without this
+      // the Advance button would stay live and a second click would skip a second
+      // week. An empty reason disables it until the next advance is described.
       setReason("");
       await reload();
       onAdvanced?.();
@@ -116,16 +122,23 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
       {digest && (
         <div className="clock-digest">
           <div className="field-hint">
-            {landed ? "Advanced" : "Would advance"}{" "}
+            {{ preview: "Would advance", moved: "Advanced",
+               unchanged: "Already at" }[outcome]}{" "}
             {digest.from_friendly ? `${digest.from_friendly} → ` : ""}{digest.to_friendly}
             {" · "}
             {digest.backward
               ? `${Math.abs(digest.elapsed_days)} days back`
               : `${digest.elapsed_days} day${digest.elapsed_days === 1 ? "" : "s"}`}
           </div>
+          {/* Two ways `truncated` gets set and they need different sentences: the
+              span was past what the digest scans (nothing listed) or a list hit
+              its row cap (some of it listed). Saying "too long to itemize" above
+              sixty itemized rows would be a plain lie. */}
           {digest.truncated && (
             <div className="field-hint">
-              Too long a span to itemize — holidays and birthdays are not listed.
+              {digest.holidays.length || digest.birthdays.length
+                ? "More was crossed than is listed here."
+                : "Too long a span to itemize — holidays and birthdays are not listed."}
             </div>
           )}
           {digest.holidays.length > 0 && (
@@ -141,8 +154,13 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
           {digest.birthdays.length > 0 && (
             <div className="side-section-body">
               <h4>Birthdays crossed</h4>
-              {digest.birthdays.map((b) => (
-                <div className="field-hint" key={`${b.name}-${b.native}`}>
+              {/* Index-keyed: two actors can share a name and a birthday
+                  (twins, or one character cast at two versions), and a
+                  duplicate key silently drops a row from a list whose whole
+                  job is to be complete. The list is regenerated whole on
+                  every digest, never reordered in place. */}
+              {digest.birthdays.map((b, i) => (
+                <div className="field-hint" key={i}>
                   {b.name} turns {b.age} — {b.friendly}
                 </div>
               ))}
@@ -164,8 +182,8 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
       {clock && clock.log.length > 0 && (
         <div className="clock-log">
           <h4>Recent advances</h4>
-          {clock.log.slice(-5).reverse().map((e) => (
-            <div className="field-hint" key={`${e.at}-${e.to}`}>
+          {clock.log.slice(-5).reverse().map((e, i) => (
+            <div className="field-hint" key={i}>
               {e.from ? `${e.from} → ` : ""}{e.to}{e.reason ? ` — ${e.reason}` : ""}
             </div>
           ))}

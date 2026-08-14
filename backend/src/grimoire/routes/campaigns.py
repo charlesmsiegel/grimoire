@@ -159,13 +159,12 @@ def _clock_friendly(cid: str, native: str) -> str:
     load is worth an empty label, never a 500 on the page that would let the
     reader fix it.
     """
-    if not native:
+    provider = store.calendars.primary_provider(store.campaigns.campaign_root(cid))
+    if not native or provider is None:
         return ""
     try:
-        provider = store.calendars.get_provider(
-            store.calendars.read_calendar(store.campaigns.campaign_root(cid))["primary"])
         return store.calendars.friendly(provider, native)
-    except (store.calendars.CalendarError, KeyError):
+    except store.calendars.CalendarError:
         return ""
 
 
@@ -177,9 +176,9 @@ def get_campaign_clock(cid: str):
     when there is not, so this answers for a campaign that has never advanced.
     """
     _campaign_root_or_404(cid)
-    native = store.clock.now(cid)
-    return {"now": native, "friendly": _clock_friendly(cid, native),
-            "log": store.clock.read(cid)["log"]}
+    clock = store.clock.state(cid)   # one read for the moment and the log both
+    return {"now": clock["now"], "friendly": _clock_friendly(cid, clock["now"]),
+            "log": clock["log"]}
 
 
 @router.post("/campaigns/{cid}/advance/preview")
@@ -210,8 +209,11 @@ def post_advance(cid: str, body: AdvanceTime):
         result = store.clock.advance(cid, to=body.to, days=body.days, reason=body.reason)
     except (store.clock.ClockError, store.calendars.CalendarError) as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"ok": True, **result,
-            "friendly": _clock_friendly(cid, result["now"])}
+    # Taken off the digest rather than resolved again: the digest's target IS the
+    # new `now` (both branches — a no-op advance returns the moment it was already
+    # at), and resolving the provider a second time re-imports and re-runs a
+    # user-authored calendar plugin for a string we are already holding.
+    return {"ok": True, **result, "friendly": result["digest"]["to_friendly"]}
 
 
 @router.get("/campaigns/{cid}/calendar/months")

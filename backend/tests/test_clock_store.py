@@ -64,6 +64,16 @@ def test_a_written_clock_wins_over_the_chronicle(monkeypatch, tmp_path):
     assert clock.now(cid) == "2026-03-10"
 
 
+def test_a_handed_in_fallback_replaces_the_chronicle_read_but_not_the_clock(monkeypatch, tmp_path):
+    """The precedence stays `clock.now`'s; only the datum comes from the caller."""
+    cid = _campaign(monkeypatch, tmp_path)
+    chronicle.absorb(cid, {"id": "001--a", "one_line": "x", "summary": "y", "keywords": [],
+                           "cast": [], "location": "", "date": "2026-03-01"})
+    assert clock.now(cid, fallback="2026-09-09") == "2026-09-09"   # chronicle not consulted
+    clock.advance(cid, to="2026-05-10", reason="the clock still wins")
+    assert clock.now(cid, fallback="2026-09-09") == "2026-05-10"
+
+
 def test_now_survives_a_garbled_chronicle(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     (campaigns.campaign_root(cid) / "chronicle.json").write_text("{oops", encoding="utf-8")
@@ -123,10 +133,48 @@ def test_advance_rejects_an_unreachable_duration(monkeypatch, tmp_path):
     assert clock.now(cid) == "2026-01-01"
 
 
+def test_a_garbled_stored_moment_refuses_a_duration_but_a_skip_repairs_it(monkeypatch, tmp_path):
+    """A hand-edited `now` this calendar cannot read has no fixed day, so there is
+    nothing to add days to — and saying so beats inventing an anchor. Skipping to
+    a date needs no anchor, which is the way back out."""
+    cid = _campaign(monkeypatch, tmp_path)
+    clock._path(cid).write_text(json.dumps({"now": "banana", "log": []}), encoding="utf-8")
+    with pytest.raises(clock.ClockError):
+        clock.advance(cid, days=3, reason="from nowhere")
+    out = clock.advance(cid, to="2026-05-01", reason="repairing the clock")
+    assert out["moved"] is True and clock.now(cid) == "2026-05-01"
+    assert out["digest"]["elapsed_days"] == 0        # no span from an unreadable moment
+    assert out["digest"]["from"] == "banana"         # ...but it is still what we left
+
+
 def test_advance_rejects_a_bad_date(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     with pytest.raises(calendars.CalendarError):
         clock.advance(cid, to="2026-13-40", reason="no such day")
+
+
+def test_advance_to_the_current_moment_is_a_no_op_however_it_was_spelled(monkeypatch, tmp_path):
+    """The moment being left is canonicalized before it is compared.
+
+    A seeded `now` comes from the chronicle, whose dates are whatever the absorb
+    wrote — and a calendar that canonicalizes its notation (Hebrew capitalizes
+    the month) then makes a re-advance to the *same day* look like a move, logging
+    a row whose `from` and `to` are one date spelled two ways.
+    """
+    cid = _campaign(monkeypatch, tmp_path, calendar="hebrew")
+    chronicle.absorb(cid, {"id": "001--a", "one_line": "x", "summary": "y", "keywords": [],
+                           "cast": [], "location": "", "date": "5786-kislev-25"})
+    out = clock.advance(cid, to="5786-KISLEV-25", reason="the same day, shouted")
+    assert out["moved"] is False
+    assert clock.read(cid)["log"] == []
+
+
+def test_advance_logs_the_canonical_form_of_the_moment_it_left(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path, calendar="hebrew")
+    chronicle.absorb(cid, {"id": "001--a", "one_line": "x", "summary": "y", "keywords": [],
+                           "cast": [], "location": "", "date": "5786-kislev-25"})
+    clock.advance(cid, days=1, reason="one day on")
+    assert clock.read(cid)["log"][0]["from"] == "5786-Kislev-25"
 
 
 def test_advance_to_the_current_moment_is_a_no_op(monkeypatch, tmp_path):
@@ -150,6 +198,19 @@ def test_advance_truncates_an_overlong_reason(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     clock.advance(cid, to="2026-05-01", reason="x" * (clock.REASON_LIMIT + 50))
     assert clock.read(cid)["log"][0]["reason"] == "x" * clock.REASON_LIMIT
+
+
+def test_the_log_keeps_the_newest_entries_when_it_reaches_its_cap(monkeypatch, tmp_path):
+    """The cap drops the *oldest* rows, and what it drops is gone — a dropped
+    row's reason is recorded nowhere else. Pinned because it is data loss, and a
+    cap that silently kept the wrong end would be worse than no cap."""
+    cid = _campaign(monkeypatch, tmp_path)
+    monkeypatch.setattr(clock, "LOG_LIMIT", 3)
+    for day in range(1, 6):
+        clock.advance(cid, to=f"2026-05-{day:02d}", reason=f"day {day}")
+    log = clock.read(cid)["log"]
+    assert [e["reason"] for e in log] == ["day 3", "day 4", "day 5"]
+    assert clock.now(cid) == "2026-05-05"   # the moment itself is never trimmed
 
 
 def test_preview_computes_the_digest_without_writing(monkeypatch, tmp_path):
@@ -195,6 +256,25 @@ def test_digest_names_the_birthdays_the_skip_crossed(monkeypatch, tmp_path):
                                    "native": "2026-06-29", "friendly": "29 June 2026"}]
 
 
+def test_digest_survives_a_provider_that_answers_a_range_with_rubbish(monkeypatch, tmp_path):
+    """A calendar provider can be user-authored plugin code, so its `holidays`
+    rows are validated rather than trusted: a non-integer `fixed` would reach
+    `describe` as a TypeError, and a non-string `name` would reach React, which
+    blanks the panel it was about to be rendered into."""
+    cid = _campaign(monkeypatch, tmp_path)
+    clock.advance(cid, to="2026-05-01", reason="start")
+    provider = calendars.primary_provider(campaigns.campaign_root(cid))
+    good = calendars.fixed_of(provider, "2026-05-03")
+    monkeypatch.setattr(type(provider), "holidays", lambda self, lo, hi: [
+        {"name": "Bad Fixed", "fixed": "2026-05-02"},   # a string where a day belongs
+        {"name": {"oops": 1}, "fixed": good},           # a name React cannot render
+        {"fixed": good + 1},                            # no name at all
+    ])
+    digest = clock.advance(cid, days=5, reason="on")["digest"]
+    assert [(h["name"], h["native"]) for h in digest["holidays"]] == [
+        ("", "2026-05-03"), ("", "2026-05-04")]   # the unusable row dropped, names blanked
+
+
 def test_digest_lists_the_open_threads_the_skip_left_untouched(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     plot.set_movement(cid, "debt", "The moneylender's debt", "open", "Interest accrues.", "001--a")
@@ -220,6 +300,27 @@ def test_digest_of_an_overlong_skip_is_truncated_not_itemized(monkeypatch, tmp_p
     assert digest["holidays"] == [] and digest["birthdays"] == []
 
 
+def test_a_skip_of_exactly_the_scan_limit_is_still_itemized(monkeypatch, tmp_path):
+    """The boundary, so `> SCAN_LIMIT_DAYS` cannot quietly become `>=`."""
+    cid = _campaign(monkeypatch, tmp_path)
+    clock.advance(cid, to="2026-01-01", reason="start")
+    digest = clock.advance(cid, days=clock.SCAN_LIMIT_DAYS, reason="a long year")["digest"]
+    assert digest["truncated"] is False
+    assert "Christmas Day" in [h["name"] for h in digest["holidays"]]
+
+
+def test_a_capped_crossing_list_reports_itself_as_truncated(monkeypatch, tmp_path):
+    """The row cap sets the same flag the span limit does — a trimmed list must
+    never read as a complete one. Forced through the constant rather than by
+    inventing sixty holidays, which is the cap's behaviour, not its threshold."""
+    cid = _campaign(monkeypatch, tmp_path)
+    monkeypatch.setattr(clock, "MAX_ROWS", 1)
+    clock.advance(cid, to="2026-12-20", reason="start")
+    digest = clock.advance(cid, days=40, reason="through the new year")["digest"]
+    assert digest["truncated"] is True
+    assert len(digest["holidays"]) == 1   # trimmed, not emptied
+
+
 def test_digest_carries_both_ends_in_friendly_form(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     clock.advance(cid, to="2026-05-01", reason="start")
@@ -243,9 +344,9 @@ def test_observe_moves_the_clock_forward(monkeypatch, tmp_path):
     clock.advance(cid, to="2026-05-01", reason="start")
     out = clock.observe(cid, "2026-05-09", "scene 002")
     assert out == {"moved": True, "now": "2026-05-09"}
-    assert clock.read(cid)["log"][-1] == {"from": "2026-05-01", "to": "2026-05-09",
-                                          "reason": "scene 002",
-                                          "at": clock.read(cid)["log"][-1]["at"]}
+    row = clock.read(cid)["log"][-1]
+    assert (row["from"], row["to"], row["reason"]) == ("2026-05-01", "2026-05-09", "scene 002")
+    assert row["at"]   # stamped, not merely present — an unstamped row cannot be ordered
 
 
 def test_observe_never_moves_the_clock_backward(monkeypatch, tmp_path):

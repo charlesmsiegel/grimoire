@@ -26,24 +26,19 @@ from .appearances import paths as appearances_paths
 from .campaigns import paths as campaigns_paths
 
 
-def provider_for(cid: str):
-    """The campaign's primary calendar provider, or None when it is unusable.
-
-    Public because `clock` needs the same provider for the rest of its digest
-    and resolving it twice would run a user-authored plugin's import twice.
-    """
-    try:
-        cfg = calendars.read_calendar(campaigns_paths.campaign_root(cid))
-        return calendars.get_provider(cfg["primary"])
-    except (calendars.CalendarError, KeyError):
-        return None
-
-
 def gather(cid: str, roster: list[dict]) -> list[dict]:
     """`[{name, birth}]` for every roster actor that declares a birthdate.
 
     One card read per actor, and the name comes out of the same read as the
     birthdate — the version this replaced read each character twice.
+
+    No type-coercion helper here, deliberately, and this is the reason rather
+    than an oversight: both fields come out of `parse_frontmatter`, whose values
+    are string scalars by construction (`dict[str, str]`) however the file was
+    hand-edited. `plot._field` exists because plot.json is *JSON* and a
+    hand-written mapping there reaches React intact; a card cannot do that. The
+    one place in this feature where the lesson does apply is `clock._row`, over
+    the JSON the clock itself writes.
     """
     aroot = appearances_paths.locked_actor_root(cid)   # roster actors are locked, so campaign-side
     out: list[dict] = []
@@ -67,7 +62,7 @@ def upcoming(cid: str, now: str, roster: list[dict]) -> list[dict]:
     `{name, age, when}` where `when` is "today" or "in N days"."""
     if not now:
         return []
-    provider = provider_for(cid)
+    provider = calendars.primary_provider(campaigns_paths.campaign_root(cid))
     if provider is None:
         return []
     try:
@@ -106,31 +101,40 @@ def crossed(provider, lo_fixed: int, hi_fixed: int, rows: list[dict]) -> list[di
     """
     if hi_fixed <= lo_fixed or not rows:
         return []
+    # TypeError alongside KeyError in both reads below: `describe` is a provider
+    # method and a provider may be a user-authored plugin, so a return value that
+    # is not a mapping is a plugin bug to skip past, not a 500 for the campaign.
     born: list[tuple[dict, tuple[int, int]]] = []
     for row in rows:
         try:
             d = provider.describe(calendars.fixed_of(provider, row["birth"]))
             born.append((row, (d["month"], d["day"])))
-        except (calendars.CalendarError, KeyError):
+        except (calendars.CalendarError, KeyError, TypeError):
             continue   # a birthdate this calendar cannot read is simply not tracked
     out: list[dict] = []
     for f in range(lo_fixed + 1, hi_fixed + 1):
         try:
             day = provider.describe(f)
-        except (calendars.CalendarError, KeyError):
+            today = (day["month"], day["day"])
+        except (calendars.CalendarError, KeyError, TypeError):
             continue
         for row, md in born:
             # The same (month, day) comparison `provider.is_anniversary` makes,
             # hoisted out of the per-actor loop: a calendar whose leap month
             # shifts a date (Hebrew Adar) answers identically, because both
             # sides of the comparison come from that provider's own `describe`.
-            if (day["month"], day["day"]) != md:
+            if today != md:
                 continue
-            native = provider.format(f)
+            # All three reads inside the try, and only on a match: `format` and
+            # the `friendly` key are provider output exactly as `describe` is, and
+            # labelling every day of the span to name the one or two that match
+            # would be four hundred provider calls for two rows.
             try:
-                age = calendars.age(provider, row["birth"], native)
-            except calendars.CalendarError:
+                native = provider.format(f)
+                found = {"name": row["name"], "native": native,
+                         "friendly": day["friendly"],
+                         "age": calendars.age(provider, row["birth"], native)}
+            except (calendars.CalendarError, KeyError, TypeError):
                 continue
-            out.append({"name": row["name"], "age": age,
-                        "native": native, "friendly": day["friendly"]})
+            out.append(found)
     return out
