@@ -72,7 +72,7 @@ test("images the import could not take are reported, not passed over in silence"
   });
   await readCard();
   fireEvent.click(screen.getByRole("button", { name: /import 5 records/i }));
-  await screen.findByText(/4 images left as remote links \(per-opener download limit reached\)/i);
+  await screen.findByText(/4 references left as remote links \(per-opener download limit reached\)/i);
 });
 
 test("a row the reviewer unchecks is left out of the import", async () => {

@@ -7,7 +7,7 @@ character, which is the wrong shape — the cast, the places and the openers all
 end up inside a single record's text.
 
 This module turns one of those cards into the records a world is made of, in
-two halves that meet at a review gate:
+three stages that meet at a review gate:
 
 - `build_prompt` / `parse_output` — the extraction. One deterministic-primed
   LLM call proposes the cast (and re-files the card's world-info under better
@@ -21,21 +21,34 @@ two halves that meet at a review gate:
 - `apply` — the write, of a proposal the user has already edited. Nothing here
   writes until `apply` runs; `proposal` and everything above it are pure.
 
-Two deliberate choices worth stating:
+Three deliberate choices worth stating:
 
 **Names, not ids, inside a proposal.** A greeting's `character`/`present` name
 cast members that do not exist yet, so the review payload cannot carry ids.
-`apply` resolves names to ids once the characters are written, which is also
-what lets a reviewer retype a name and have the opener follow it.
+`apply` resolves names to ids once the characters are written. The cost is that
+a name is a JOIN KEY across the two halves of a proposal: they have to be
+spelled one way (`proposal` normalizes and de-duplicates them, so a cast row and
+an opener can never disagree), and an edit to one has to reach the other — a
+rename that stopped at the cast table would leave every opener that named them
+pointing at somebody who is never created, which `apply` resolves to nobody.
+The review UI carries the rename across for exactly this reason.
+
+**What the prompt sees is bounded; what the import writes is not.** The cards
+this exists for are large — a whole setting, dozens of world-info entries, a
+dozen long openers — so entry and opener bodies are clipped on the way into the
+prompt (`_clip`), and image references are stripped out of the openers
+(`strip_images`). Neither is needed whole there: an entry is re-filed by NAME
+and never retyped, and an opener is read for who appears in it. `proposal` and
+`apply` carry every body entire, and `merge_entries` refuses a body for an
+entry the card already has, so nothing the prompt abridged can come back as a
+paraphrase of itself.
 
 **Greeting bodies ride through the proposal verbatim.** They are what the user
 edits, and `apply` localizes their art (`localize.localize_greeting`) after the
 greeting exists — there is no greeting to store an image against before that.
 The cost is that a card whose openers embed `data:` images sends those bytes to
-the browser and back; the extraction prompt strips them (`strip_images`), so
-only the review payload pays it. A card with URL-referenced art — the common
-shape, since embedding a dozen images makes a card unusable elsewhere — pays
-nothing.
+the browser and back. A card with URL-referenced art — the common shape, since
+embedding a dozen images makes a card unusable elsewhere — pays nothing.
 """
 
 from __future__ import annotations
@@ -317,11 +330,12 @@ def proposal(card: dict, extracted: dict, existing: list[str] | tuple[str, ...] 
     their best answer first and hedge on the repeat.
     """
     known = {_norm(n) for n in existing}
-    chars, names = [], []
+    chars, names, seen = [], [], set()
     for row in extracted.get("characters", []):
         name = _text(row.get("name"))
-        if not name or _norm(name) in {_norm(n) for n in names}:
+        if not name or _norm(name) in seen:
             continue
+        seen.add(_norm(name))
         chars.append({**dict(row), "name": name, "exists": _norm(name) in known})
         names.append(name)
     entries = merge_entries(lorebook_entries(card), extracted.get("entries", []))

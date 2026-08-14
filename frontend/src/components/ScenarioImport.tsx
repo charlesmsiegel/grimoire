@@ -32,13 +32,14 @@ function describe(result: ScenarioImportResult): string {
   if (reused) parts.push(`${reused} existing character${reused === 1 ? "" : "s"} reused`);
   if (result.art.localized) parts.push(`${result.art.localized} image${result.art.localized === 1 ? "" : "s"} localized`);
   if (result.art.failed) parts.push(`${result.art.failed} image${result.art.failed === 1 ? "" : "s"} failed`);
-  // A bounded download that says nothing reads as a complete one. `skipped`
-  // covers a reference that was not an image or whose host was refused;
-  // `capped` is the per-opener download limit, and it is the one a user can act
-  // on — the images are still in the body as remote URLs.
+  // A bounded download that says nothing reads as a complete one. "Reference",
+  // not "image": what the localizer counts is every URL it found in an opener,
+  // and one it passed over may have been an ordinary link rather than a picture
+  // it failed to take. `capped` is the per-opener download limit and is the
+  // half a user can act on — those really are images, still remote.
   const left = result.art.total - result.art.localized - result.art.failed;
   if (left > 0) {
-    parts.push(`${left} image${left === 1 ? "" : "s"} left as remote links`
+    parts.push(`${left} reference${left === 1 ? "" : "s"} left as remote links`
       + (result.art.capped ? " (per-opener download limit reached)" : ""));
   }
   return `Imported ${parts.join(", ")}.`;

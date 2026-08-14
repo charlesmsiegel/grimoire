@@ -344,6 +344,20 @@ def test_apply_resolves_the_cast_a_reviewer_retyped(world):
     assert greetings.read_greeting(root, out["greetings"][0]["id"])["meta"]["character"] == winifred
 
 
+def test_a_blank_lead_is_nobody_even_in_a_world_holding_a_blank_named_character(world):
+    """`POST /worlds/{wid}/characters` does not require a name, so a world can
+    genuinely hold one called "" — and every cast-less opener would resolve to
+    them if a blank lead were looked up like any other."""
+    wid, root = world
+    characters.create_character(root, "", "default", characters.blank_card(""))
+    out = scenario.apply(root, wid, {"characters": [], "entries": [], "greetings": [
+        {"name": "Opener", "body": "Nobody in particular.", "character": "", "present": []}]},
+        art=False)
+    meta = greetings.read_greeting(root, out["greetings"][0]["id"])["meta"]
+    assert meta["character"] == ""
+    assert meta["present"] == []
+
+
 def test_a_named_cast_member_that_was_never_created_is_dropped_from_present(world):
     wid, root = world
     out = scenario.apply(root, wid, {"characters": [], "entries": [], "greetings": [
@@ -377,6 +391,94 @@ def test_art_off_leaves_the_opener_pointing_at_the_remote_url(world):
     assert out["art"] == {"total": 0, "localized": 0, "skipped": 0, "failed": 0, "capped": False}
     assert "https://example.com/a.png" in greetings.read_greeting(
         root, out["greetings"][0]["id"])["body"]
+
+
+# --------------------------------------------------------------- the sweeps
+# Two invariants that every individual test above tests one instance of. They
+# are swept rather than exampled because both are properties of the WHOLE
+# pipeline: each round of review found another way to reach a dangling name or
+# a raise, and an example test only ever pins the way that was found.
+def test_no_opener_apply_writes_ever_names_a_character_that_does_not_exist(world):
+    """`present`/`character` hold ids once written, so a name that resolved to
+    nothing must leave the field empty rather than dangling — and a lead must
+    always be in its own scene."""
+    wid, _root = world
+    bodies = ["Mara waits.", "", "   ", "![](x)", "{{char}} waits.", "Mara and Winifred."]
+    casts = [[], [{"name": "Mara", "description": "d", "personality": "p"}],
+             [{"name": "Mara"}, {"name": "Winifred"}]]
+    # The proposals `proposal()` builds are internally consistent by
+    # construction, so a sweep over only those never reaches the resolver's
+    # failure branch at all — it takes a proposal whose openers name somebody
+    # the cast list does not, which is what a reviewer produces every time they
+    # untick a character an opener opens on. Both shapes are swept.
+    drops = [None, "drop the cast", "name a stranger"]
+    checked, unresolvable = 0, 0
+    for i, body in enumerate(bodies):
+        for j, cast in enumerate(casts):
+            for k, drop in enumerate(drops):
+                sub = worlds.world_root(worlds.create_world(f"Sweep {i}-{j}-{k}"))
+                prop = scenario.proposal({"data": {"name": "S", "first_mes": body}},
+                                         {"characters": cast, "entries": []})
+                if drop == "drop the cast":
+                    prop["characters"] = []
+                elif drop == "name a stranger":
+                    for g in prop["greetings"]:
+                        g["character"] = g["character"] or "Nobody At All"
+                        g["present"] = [*g["present"], "Nobody At All"]
+                names = {c["name"] for c in prop["characters"]}
+                unresolvable += sum(1 for g in prop["greetings"] if g["body"].strip()
+                                    and not {g["character"], *g["present"]} <= {"", *names})
+                out = scenario.apply(sub, wid, prop, art=False)
+                ids = {c["id"] for c in characters.list_characters(sub)}
+                for made in out["greetings"]:
+                    meta = greetings.read_greeting(sub, made["id"])["meta"]
+                    assert not meta["character"] or meta["character"] in ids
+                    assert all(p in ids for p in meta["present"])
+                    assert not meta["character"] or meta["character"] in meta["present"]
+                    checked += 1
+    assert checked, "the sweep wrote no greetings -- it is proving nothing"
+    # ...and it really did drive the branch that drops an unresolvable name,
+    # rather than sweeping only proposals that could not have one.
+    assert unresolvable, "the sweep never offered a name no character answers to"
+
+
+def test_no_reply_a_model_can_send_produces_a_malformed_proposal():
+    """`parse_output` is the only thing between a provider and the reviewer, and
+    a raise here is a 500 after the tokens were already spent."""
+    card = {"data": {"name": "S", "first_mes": "Mara waits.", "character_book": {"entries": [
+        {"keys": ["k"], "name": "E", "content": "b", "enabled": True}]}}}
+    replies = [
+        "", "{}", "null", "[]", "not json at all", '{"characters": "Mara"}',
+        '{"characters": [null, 1, true, [], {}]}',
+        '{"entries": [{"name": 5}, {"name": "A", "keys": {"x": 1}}, {"name": "E", "category": 7}]}',
+        '{"characters": [{"name": "A", "description": {"nested": 1}}]}',
+        '{"characters": [{"name": "E"}], "entries": [{"name": "E", "body": "x"}]}',
+        '{"characters": [{"name": "' + "z" * 5000 + '"}]}',
+        '{"entries": [' + ",".join('{"name": "n%d", "body": "b"}' % i for i in range(500)) + "]}",
+    ]
+    # Each reply twice: once through `parse_output` (the route's path), and once
+    # straight into `proposal` (every other caller's). The second is not
+    # redundant — `parse_output` trims and drops, so a sweep that only ever went
+    # through it would leave `proposal`'s own normalization untested, and that
+    # normalization is the only thing keeping the cast list and the openers
+    # spelling a name the same way.
+    dirty = [{"characters": [{"name": "  Mara  "}, {"name": "mara"}, {"name": "   "},
+                             {"name": "Winifred"}],
+              "entries": [{"name": " E ", "keys": [], "body": "", "category": "locations"}]}]
+    for extracted in [scenario.parse_output(r) for r in replies] + dirty:
+        prop = scenario.proposal(card, extracted, existing=["E"])
+        assert set(prop) == {"characters", "entries", "greetings"}
+        cast = {c["name"] for c in prop["characters"]}
+        for c in prop["characters"]:
+            assert c["name"] and c["name"].strip() == c["name"]
+        for e in prop["entries"]:
+            assert isinstance(e["body"], str) and isinstance(e["keys"], list)
+            assert e["category"] in entities.ENTITY_KINDS
+        for g in prop["greetings"]:
+            # The join key holds in both directions: an opener can only name
+            # somebody the cast list also offers.
+            assert g["character"] in {"", *cast}
+            assert set(g["present"]) <= cast
 
 
 def test_a_failed_download_costs_the_opener_its_image_not_its_text(world):
