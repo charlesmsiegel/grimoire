@@ -9438,23 +9438,29 @@ def test_concurrent_resolved_retries_persist_once(client, monkeypatch):
 
     Two things here are about the test rather than the behaviour, and #322 is
     why. It reported this failing intermittently only under whole-file or
-    whole-suite load, never in isolation -- the shape a test takes when what
-    load changes is *which interleaving it happens to get*.
+    whole-suite load, never in isolation. Neither change fixes a race -- #322's
+    root cause is not established, and 5 whole-file/whole-suite runs plus 80
+    forced-overlap iterations on py3.11 and py3.13 did not reproduce it.
 
-    So the threads now meet at a barrier before either POSTs. Without one they
-    are merely started in order, and the first can finish the whole
-    project-stream-commit sequence before the second begins: a green run was
-    then no evidence the concurrent path is safe, because it may never have
-    been walked. The barrier is bounded so a thread that dies before reaching
-    it fails the other with `BrokenBarrierError` instead of hanging the suite.
+    The one that IS a demonstrated defect: each thread records its own outcome
+    -- status plus body, or the traceback -- into its own slot. `threading`
+    routes a racer's exception to `excepthook`, so a thread that raised simply
+    never appended, and the failure surfaced as `assert [200] == [200, 200]`:
+    it named neither which thread died nor why. That is the specific way this
+    test taught people to re-run rather than look.
 
-    And each thread records its own outcome -- status plus body, or the
-    traceback -- into its own slot. `threading` swallows a racer's exception
-    into `excepthook`, so a thread that raised simply never appended, and the
-    failure surfaced as `assert [200] == [200, 200]`: it named neither which
-    thread died nor why. That is the specific way this test taught people to
-    re-run rather than look. It does not fix a race; it makes the next
-    occurrence say what happened.
+    The barrier is the weaker of the two, and deliberately not sold as more
+    than it is. It makes the two POSTs start together instead of merely being
+    started in order. It was NOT what made the concurrent path reachable:
+    instrumenting `_continuation_messages` to count how many of the two
+    requests get past the `narrated` short-circuit gives 2 of 2 on every one of
+    60 runs, barrier or not, idle or under eight CPU burners. So it closes no
+    measured gap -- it removes a start-order skew that could in principle widen
+    on a runner unlike this one, and it matches
+    `test_concurrent_accept_vs_manual_check_distinct_entries` below, which
+    already drives its two threads through exactly this barrier. Bounded, so a
+    thread that dies before reaching it fails the other with
+    `BrokenBarrierError` rather than hanging the suite.
     """
     import threading
     import traceback
@@ -9475,8 +9481,17 @@ def test_concurrent_resolved_retries_persist_once(client, monkeypatch):
             ready.wait()
             resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal",
                                json=_accept_body(rec))
-            outcomes[slot] = (resp.status_code if resp.status_code == 200
-                              else (resp.status_code, resp.text))
+            # 200 is not a synonym for success on this route, so the status
+            # alone is not what to record. A check failure answers 200 with an
+            # `error` frame in the SSE body (mechanics.py), and a `StoreBusy`
+            # raised INSIDE the stream becomes a 200 carrying `kind: "busy"`
+            # (streaming.py) -- lock contention, which is one of the things
+            # #322 suspects, and precisely the evidence the old assertion threw
+            # away: it read [200, 200], passed, and left the downstream count
+            # to fail with no idea why.
+            errors = [f["error"] for f in _frames(resp) if "error" in f]
+            outcomes[slot] = (resp.status_code if resp.status_code == 200 and not errors
+                              else (resp.status_code, errors or resp.text))
         except BaseException:  # noqa: BLE001 — the point is to report it, not to handle it
             outcomes[slot] = traceback.format_exc()
     threads = [threading.Thread(target=racer, args=(i,)) for i in range(2)]
