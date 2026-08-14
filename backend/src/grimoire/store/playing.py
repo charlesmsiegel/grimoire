@@ -156,6 +156,13 @@ def greeting_ideas(cid: str) -> list[dict]:
     rules nothing here may re-implement. `used_scene` is blank too rather than
     resolved -- `stamping_scene` is a per-greeting sweep of every scene's
     frontmatter, which is affordable on an explicit unmark and not in a list.
+
+    This is not cheap: `available_greetings` parses the frontmatter of every
+    greeting in the campaign, and the skipped ones need a second pass because
+    `availability` drops them. The second pass is taken only when something
+    actually is skipped, and the route that calls this lets a caller decline
+    the whole composition (`GET /scene-ideas?greetings=false`) -- the picker
+    does, since it renders greetings from its own ranked read.
     """
     marks = read_marks(cid)
     used = marks["played"] | marks["completed"]
@@ -168,8 +175,9 @@ def greeting_ideas(cid: str) -> list[dict]:
 
     out = [entry(g, scene_ideas.USED if g["id"] in used else scene_ideas.ACTIVE)
            for g in available_greetings(cid) if g["id"] in used or g["available"]]
-    out += [entry(g, scene_ideas.DISMISSED)
-            for g in overlay.list_greetings(cid) if g["id"] in marks["skipped"]]
+    if marks["skipped"]:
+        out += [entry(g, scene_ideas.DISMISSED)
+                for g in overlay.list_greetings(cid) if g["id"] in marks["skipped"]]
     return out
 
 

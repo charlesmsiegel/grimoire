@@ -252,13 +252,50 @@ const SAVED: SceneIdea = {
   source: "llm", status: "active", created: "2026-03-01T00:00:00Z", used_scene: "",
 };
 
+test("the picker asks for the saved half alone", async () => {
+  // composing the greeting half parses every greeting's frontmatter, and this
+  // pane renders greetings from its own ranked read and drops every composed
+  // row -- so asking for them is a second full sweep to render nothing
+  renderPicker();
+  await waitFor(() => expect(api.listSceneIdeas).toHaveBeenCalledWith("c", false));
+});
+
+test("a save in flight cannot be fired twice", async () => {
+  let release: (v: any) => void = () => {};
+  (api.saveSceneIdea as any).mockReturnValue(new Promise((r) => { release = r; }));
+  renderPicker();
+  const b = await screen.findByRole("button", { name: "Save The creditor" });
+  fireEvent.click(b);
+  fireEvent.click(b);          // impatient reader, request still open
+  expect(api.saveSceneIdea).toHaveBeenCalledTimes(1);
+  await act(async () => { release({ id: "x" }); });
+});
+
 test("a saved idea is pickable and emits a draft carrying its ledger id", async () => {
   (api.listSceneIdeas as any).mockResolvedValue([SAVED]);
   const { onPicked } = renderPicker();
   fireEvent.click(await screen.findByText("The tide-book"));
   expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({
     source: "saved", lid: "the-tide-book", location: "saltmarch",
-    date: "2026-03-04", premise: "A ledger nobody signed." }));
+    premise: "A ledger nobody signed." }));
+});
+
+test("a saved idea's fossil date does not beat this minute's estimate", async () => {
+  // SAVED carries 2026-03-04, saved whenever it was saved; the campaign has
+  // been played since. set_datetime accepts a date before the campaign's
+  // current moment without complaint, so pre-filling the confirm form with the
+  // stored one would date the new scene behind the one it follows.
+  (api.listSceneIdeas as any).mockResolvedValue([SAVED]);
+  const { onPicked } = renderPicker({ nextDate: "2026-09-09" });
+  fireEvent.click(await screen.findByText("The tide-book"));
+  expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({ date: "2026-09-09" }));
+});
+
+test("...but the stored date is still the fallback when nothing was estimated", async () => {
+  (api.listSceneIdeas as any).mockResolvedValue([SAVED]);
+  const { onPicked } = renderPicker({ nextDate: "" });
+  fireEvent.click(await screen.findByText("The tide-book"));
+  expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({ date: "2026-03-04" }));
 });
 
 test("saved ideas for the other mode, and ones already used, are not offered", async () => {
@@ -339,8 +376,20 @@ test("dismissing a saved idea moves it behind the toggle, and Restore brings it 
   // dismissed ideas are out of the way but not gone -- restore is the only
   // route back, and there is no management surface yet
   fireEvent.click(toggle);
-  fireEvent.click(screen.getByRole("button", { name: /restore/i }));
+  fireEvent.click(screen.getByRole("button", { name: "Restore The tide-book" }));
   expect(api.setSceneIdeaStatus).toHaveBeenCalledWith("c", "the-tide-book", "active");
+});
+
+test("each Restore names the idea it restores", async () => {
+  // several stack, and "Restore, Restore, Restore" is what a screen reader
+  // would otherwise read out
+  (api.listSceneIdeas as any).mockResolvedValue([
+    { ...SAVED, id: "a", title: "Idea A", status: "dismissed" },
+    { ...SAVED, id: "b", title: "Idea B", status: "dismissed" }]);
+  renderPicker();
+  fireEvent.click(await screen.findByRole("button", { name: /show dismissed \(2\)/i }));
+  fireEvent.click(screen.getByRole("button", { name: "Restore Idea B" }));
+  expect(api.setSceneIdeaStatus).toHaveBeenCalledWith("c", "b", "active");
 });
 
 test("the saved group has a slot budget, with everything behind a toggle", async () => {

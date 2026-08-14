@@ -63,12 +63,20 @@ export function suggestionDraft(s: SceneSuggestion, nextDate: string,
 
 /** A saved ledger idea. Shaped like `suggestionDraft` — the server hands both
  *  back with cast and location resolved — plus the `lid` that lets the confirm
- *  form report which idea became the scene. `nextDate` is the fallback for the
- *  same reason it is there: the date saved with an idea is the one the model
- *  estimated the day it was saved, and it can be blank. */
+ *  form report which idea became the scene.
+ *
+ *  The date precedence is INVERTED from `suggestionDraft`, deliberately:
+ *  `nextDate` wins here and the idea's own date is only the fallback. A
+ *  generated suggestion's date came out of this minute's snapshot; a saved
+ *  idea's is a fossil of whenever it was saved, and the campaign has been
+ *  played since. `set_datetime` accepts a date earlier than the campaign's
+ *  current moment without complaint (it reports `advanced: false` and moves
+ *  on), so preferring the stored one would quietly pre-fill the confirm form
+ *  with a date before the scene it follows — and the reader has to notice, in
+ *  a field they did not fill in, to avoid it. */
 export function savedDraft(idea: SceneIdea, nextDate: string, pcless: boolean): SceneDraft {
   return { source: "saved", lid: idea.id, title: idea.title, defaultTitle: idea.title,
-           date: idea.date || nextDate, location: idea.location?.id ?? "",
+           date: nextDate || idea.date, location: idea.location?.id ?? "",
            pcless, premise: idea.premise, cast: narrowCast(idea.cast) };
 }
 

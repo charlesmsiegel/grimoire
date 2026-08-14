@@ -150,6 +150,33 @@ def _title_from(title: str, premise: str) -> str:
     return head or "Untitled idea"
 
 
+def _standing_match(data: dict, title: str, premise: str, pcless: bool) -> str:
+    """The id of a live idea that already says this, or "".
+
+    An idea's identity, for dedupe purposes, is its title and premise in the
+    mode it was saved for -- everything else (cast, location, date) is metadata
+    the reader can change on the way into the scene.
+
+    Only ACTIVE records match, and that is the whole difference from
+    `facts.find`, which deliberately ignores status. A `used` idea is one that
+    already became a scene, and saving the same premise again after playing it
+    is a genuine second use; a `dismissed` one was explicitly pushed off the
+    list, and reviving it silently through an unrelated Save would undo that
+    decision without saying so.
+
+    Case-insensitively, like `facts.restates` and `materializer.
+    _new_commitment_id` compare: two renderings of one sentence differing only
+    in capitalisation are one sentence.
+    """
+    want = (title.casefold(), premise.casefold(), bool(pcless))
+    return next((k for k, rec in data.items()
+                 if isinstance(rec, dict)
+                 and _field(rec.get("status"), ACTIVE).lower() == ACTIVE
+                 and (_field(rec.get("title")).casefold(),
+                      _field(rec.get("premise")).casefold(),
+                      bool(rec.get("pcless"))) == want), "")
+
+
 def add(cid: str, title: str, premise: str, cast: list[str] | None = None,
         location: str = "", date: str = "", pcless: bool = False,
         source: str = USER) -> str:
@@ -160,10 +187,21 @@ def add(cid: str, title: str, premise: str, cast: list[str] | None = None,
     greeting entries are composed from `playing`'s marks, never stored (see the
     module docstring).
 
+    **Idempotent while an identical idea is still standing**: re-saving the
+    same title and premise for the same mode returns the id already holding it
+    rather than opening a second entry. Saving twice is an ordinary thing to
+    do, not an error -- an impatient double-click on Save, a retry after a
+    dropped response, the same suggestion coming back from a Regenerate -- and
+    without this each one filed a duplicate under `<slug>-2` that the reader
+    then had to dismiss twice. `facts.record` is idempotent per scene for the
+    same reason.
+
     References are stored as given; the caller validates them (again, see the
     module docstring). `pcless` is stored rather than checked here for the same
     reason -- it is what tells the *reader* which player tokens are legal, an
-    offscreen idea that casts the PC not being an offscreen idea.
+    offscreen idea that casts the PC not being an offscreen idea. It is part of
+    the dedupe key rather than metadata around it: the two modes cast
+    different people, so the same sentence saved for each is two ideas.
     """
     if source not in SOURCES:
         raise ValueError(f"unknown idea source: {source}")
@@ -171,6 +209,9 @@ def add(cid: str, title: str, premise: str, cast: list[str] | None = None,
     title = _title_from(title, premise)
     with locks.campaign_lock(cid):
         data = _read_ledger(cid)
+        standing = _standing_match(data, title, premise, pcless)
+        if standing:
+            return standing
         lid = paths.uniquify(paths.slugify(title), lambda c: c in data)
         data[lid] = {"title": title, "premise": premise, "cast": _tokens(cast),
                      "location": _field(location), "date": _field(date),

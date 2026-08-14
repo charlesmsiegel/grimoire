@@ -1588,8 +1588,14 @@ export const api = {
   // re-reads this precisely when it has just written to it (a save, a dismiss,
   // a restore), and a shared or cached response would answer that with the
   // list from before the write.
-  listSceneIdeas: (cid: string) =>
-    request<SceneIdea[]>("GET", `/api/campaigns/${cid}/scene-ideas`, undefined, { fresh: true }),
+  // `greetings=false` declines the composed greeting half. Composing it parses
+  // the frontmatter of every greeting in the campaign, and the picker -- the
+  // only caller -- renders greetings from its own ranked `availableGreetings`
+  // read and drops those rows. A management surface wants them and omits this.
+  listSceneIdeas: (cid: string, greetings = true) =>
+    request<SceneIdea[]>("GET",
+      `/api/campaigns/${cid}/scene-ideas${greetings ? "" : "?greetings=false"}`,
+      undefined, { fresh: true }),
   saveSceneIdea: (cid: string, idea: SceneIdeaDraft) =>
     request<{ id: string }>("POST", `/api/campaigns/${cid}/scene-ideas`, idea),
   setSceneIdeaStatus: (cid: string, lid: string,

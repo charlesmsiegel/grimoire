@@ -61,6 +61,36 @@ disagree. Status writes against a `greeting:<gid>` id delegate to
 `playing.mark_greeting`, so the marks stay the single source of truth in both
 directions.
 
+### Saving is idempotent while an idea is standing
+
+Re-saving the same title and premise for the same mode returns the id already
+holding it. Saving twice is ordinary rather than erroneous — an impatient
+double-click, a retry after a dropped response, the same suggestion coming back
+from a Regenerate — and each one otherwise filed a duplicate under `<slug>-2`
+that the reader had to dismiss twice. `facts.record` is idempotent per scene for
+the same reason. Only `active` records match: a `used` idea already became a
+scene, so saying it again is a genuine second use, and a `dismissed` one was
+explicitly pushed off the list, which an unrelated Save must not silently undo.
+
+### The greeting half is optional, because it is expensive
+
+Composing it means `available_greetings`, which parses the frontmatter of every
+greeting in the campaign. The picker renders greetings from its own
+`/greetings/available` call — ranked, and chipped with `unlocked` — and drops
+every composed row, so it asks for the saved half alone
+(`GET /scene-ideas?greetings=false`). Skipped greetings need a second pass,
+since `availability` drops them; that pass is taken only when something is
+actually skipped. Opening the chooser costs one greeting sweep, as it did
+before this feature existed.
+
+### Each half fails on its own
+
+`scene_ideas.json` is hand-editable and read by a bare `json.loads`, so a
+garbled one must cost its own section rather than the whole view — the failure
+policy `get_ledger` already states for the continuity ledger. Without it, one
+bad byte took the greeting half down too, and with it the reader's ability to
+start a scene at all.
+
 ### References are validated twice
 
 An idea is durable and a campaign is not: the character it casts can be deleted
@@ -101,7 +131,13 @@ list.
 A **Saved** group above the greeting and generated ones, showing active entries
 for the current mode, newest first, with the same 4-slot budget the other
 groups share and a "show all" toggle past it. Picking one emits a draft
-carrying its ledger id; `SceneConfirmForm` marks it used as the last step of
+carrying its ledger id — and taking the *fresh* next-date estimate over the
+date stored with the idea, which is the inverse of what a generated suggestion
+does. A generated date came out of this minute's snapshot; a saved one is a
+fossil of whenever it was saved, and `set_datetime` accepts a date before the
+campaign's current moment without complaint, so preferring the stored one would
+quietly date a new scene behind the one it follows. The stored date remains the
+fallback when nothing was estimated. Then `SceneConfirmForm` marks it used as the last step of
 its create sequence, against the scene's *final* id (the date stamp renames).
 A failed mark is soft — the scene is real — but reported, because an idea
 silently left active is indistinguishable from one deliberately kept.
