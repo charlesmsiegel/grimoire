@@ -101,23 +101,25 @@ def crossed(provider, lo_fixed: int, hi_fixed: int, rows: list[dict]) -> list[di
     """
     if hi_fixed <= lo_fixed or not rows:
         return []
-    # TypeError alongside KeyError in both reads below: `describe` is a provider
-    # method and a provider may be a user-authored plugin, so a return value that
-    # is not a mapping is a plugin bug to skip past, not a 500 for the campaign.
+    # `CalendarError` only, in both reads below. That is the failure of the *data*
+    # -- a birthdate string this calendar cannot parse -- and skipping the actor
+    # is the right answer to it. A `describe` that returns something other than a
+    # mapping with month/day in it is a broken provider, not a bad row, and it
+    # fails here for the same reason it already fails in `calendars.today_facts`:
+    # see `clock._holidays`, which draws the same line and says why.
     born: list[tuple[dict, tuple[int, int]]] = []
     for row in rows:
         try:
             d = provider.describe(calendars.fixed_of(provider, row["birth"]))
-            born.append((row, (d["month"], d["day"])))
-        except (calendars.CalendarError, KeyError, TypeError):
+        except calendars.CalendarError:
             continue   # a birthdate this calendar cannot read is simply not tracked
+        born.append((row, (d["month"], d["day"])))
+    if not born:
+        return []      # nothing to match: skip the whole per-day walk
     out: list[dict] = []
     for f in range(lo_fixed + 1, hi_fixed + 1):
-        try:
-            day = provider.describe(f)
-            today = (day["month"], day["day"])
-        except (calendars.CalendarError, KeyError, TypeError):
-            continue
+        day = provider.describe(f)
+        today = (day["month"], day["day"])
         for row, md in born:
             # The same (month, day) comparison `provider.is_anniversary` makes,
             # hoisted out of the per-actor loop: a calendar whose leap month
@@ -125,16 +127,16 @@ def crossed(provider, lo_fixed: int, hi_fixed: int, rows: list[dict]) -> list[di
             # sides of the comparison come from that provider's own `describe`.
             if today != md:
                 continue
-            # All three reads inside the try, and only on a match: `format` and
-            # the `friendly` key are provider output exactly as `describe` is, and
-            # labelling every day of the span to name the one or two that match
-            # would be four hundred provider calls for two rows.
+            # Labelled only on a match: formatting every day of the span to name
+            # the one or two that match would be four hundred provider calls for
+            # two rows. `age` re-parses the birthdate, which `born` already proved
+            # parseable, so the guard is belt-and-braces rather than load-bearing.
             try:
                 native = provider.format(f)
                 found = {"name": row["name"], "native": native,
                          "friendly": day["friendly"],
                          "age": calendars.age(provider, row["birth"], native)}
-            except (calendars.CalendarError, KeyError, TypeError):
+            except calendars.CalendarError:
                 continue
             out.append(found)
     return out
