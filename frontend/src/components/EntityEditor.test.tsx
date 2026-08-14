@@ -2,6 +2,8 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { EntityEditor } from "./EntityEditor";
 
 vi.mock("../api/client", () => ({
+  SECRECY_LEVELS: ["public", "secret", "gm-only"],
+  SECRECY_LABELS: { public: "Public", secret: "Secret", "gm-only": "GM-only" },
   ENTITY_FIELDS: {
     locations: [], lore: [],
     items: [{ key: "item_type", label: "Type" }, { key: "rarity", label: "Rarity" }],
@@ -57,7 +59,7 @@ test("lists entities and creates one with keys", async () => {
   fireEvent.click(screen.getByRole("button", { name: /create lore entry/i }));
   await waitFor(() =>
     expect(api.createEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore", {
-      name: "Salt Pact", body: "binds", keys: "pact,salt", owners: "",
+      name: "Salt Pact", body: "binds", keys: "pact,salt", owners: "", secrecy: "public",
     }),
   );
 });
@@ -308,7 +310,7 @@ test("typed fields render in the form and are sent on create", async () => {
   fireEvent.click(screen.getByRole("button", { name: /create item/i }));
   await waitFor(() =>
     expect(api.createEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "items", {
-      name: "Salt Knife", body: "", keys: "", owners: "",
+      name: "Salt Knife", body: "", keys: "", owners: "", secrecy: "public",
       fields: { item_type: "weapon", rarity: "rare" },
     }),
   );
@@ -470,4 +472,93 @@ it("hides the wizard trigger when the module has no sheet type for this kind", a
   render(<EntityEditor wid="w1" kind="items" module={module} />);
   await screen.findByText("+ New item");
   expect(screen.queryByText("+ New item with sheet…")).not.toBeInTheDocument();
+});
+
+// ---- secrecy (#49) ---------------------------------------------------------
+
+test("creates an entry with a chosen secrecy level", async () => {
+  render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "The Twist" } });
+  fireEvent.click(screen.getByRole("radio", { name: "Secret" }));
+  fireEvent.click(screen.getByRole("button", { name: /create lore entry/i }));
+  await waitFor(() =>
+    expect(api.createEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore",
+      expect.objectContaining({ name: "The Twist", secrecy: "secret" })),
+  );
+});
+
+test("the secrecy picker offers all three levels and starts on public", async () => {
+  render(<EntityEditor wid="w" kind="lore" />);
+  await screen.findByLabelText("Name");
+  const group = screen.getByRole("radiogroup", { name: "Secrecy" });
+  expect(within(group).getAllByRole("radio").map((b) => b.textContent))
+    .toEqual(["Public", "Secret", "GM-only"]);
+  expect(within(group).getByRole("radio", { name: "Public" })).toHaveAttribute("aria-checked", "true");
+});
+
+test("the detail sidebar badges a secret entry and the form opens on its level", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "twist", name: "Twist", secrecy: "secret" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "twist", name: "Twist", secrecy: "secret" }, body: "the harbourmaster did it" });
+  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByText("Twist"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).getByText("Secrecy")).toBeInTheDocument();
+  expect(within(side).getByText("Secret")).toBeInTheDocument();
+  // Edit opens the form already on the stored level, so a save can't downgrade it
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  expect(screen.getByRole("radio", { name: "Secret" })).toHaveAttribute("aria-checked", "true");
+});
+
+test("an unmarked entry reads as public in the sidebar", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  (api.readEntity as any).mockResolvedValue({ meta: { id: "salt", name: "Salt" }, body: "x" });
+  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).getByText("Public")).toBeInTheDocument();
+});
+
+test("the rail badges non-public rows only", async () => {
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(kind === "locations" ? [] : [
+      { id: "a", name: "Open" },
+      { id: "b", name: "Twist", secrecy: "secret" },
+      { id: "c", name: "Note", secrecy: "gm-only" },
+    ]));
+  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  await screen.findByText("Twist");
+  const rail = container.querySelector(".editor-list") as HTMLElement;
+  expect(within(rail).getByText("Secret")).toBeInTheDocument();
+  expect(within(rail).getByText("GM-only")).toBeInTheDocument();
+  expect(within(rail).queryByText("Public")).toBeNull();
+});
+
+test("switching a viewed entry back to public sends 'public', clearing the level", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "twist", name: "Twist", secrecy: "gm-only" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "twist", name: "Twist", secrecy: "gm-only" }, body: "x" });
+  render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByText("Twist"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  fireEvent.click(screen.getByRole("radio", { name: "Public" }));
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() =>
+    expect(api.updateEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore", "twist",
+      expect.objectContaining({ secrecy: "public" })),
+  );
+});
+
+test("'+ New' after viewing a secret entry does not inherit its level", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "twist", name: "Twist", secrecy: "secret" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "twist", name: "Twist", secrecy: "secret" }, body: "x" });
+  render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByText("Twist"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /\+ new lore entry/i }));
+  expect(screen.getByRole("radio", { name: "Public" })).toHaveAttribute("aria-checked", "true");
 });

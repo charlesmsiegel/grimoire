@@ -273,10 +273,21 @@ export const ENTITY_FIELDS: Record<EntityKind, { key: string; label: string }[]>
   creatures: [{ key: "creature_type", label: "Type" }, { key: "threat", label: "Threat" }],
 };
 
+// Mirrors store.entities.SECRECY_LEVELS. `owners` says what puts an entry in
+// the prompt; `secrecy` says how the prompt may use it once there — "secret"
+// renders under a "don't let uninvolved characters reveal this" heading,
+// "gm-only" never reaches the model at all. Absent == "public".
+export const SECRECY_LEVELS = ["public", "secret", "gm-only"] as const;
+export type Secrecy = (typeof SECRECY_LEVELS)[number];
+export const SECRECY_LABELS: Record<Secrecy, string> = {
+  public: "Public", secret: "Secret", "gm-only": "GM-only",
+};
+
 export type EntitySummary = { id: string; name: string; keys?: string; owners?: string;
-  has_image?: boolean; image_v?: string | null } & Record<string, unknown>;
+  secrecy?: string; has_image?: boolean; image_v?: string | null } & Record<string, unknown>;
 export type EntityDetail = {
-  meta: { id: string; name: string; keys?: string; owners?: string; sd_prompt?: string } & Record<string, unknown>;
+  meta: { id: string; name: string; keys?: string; owners?: string; secrecy?: string;
+    sd_prompt?: string } & Record<string, unknown>;
   body: string;
 };
 
@@ -1260,12 +1271,14 @@ export const api = {
   listEntities: (scope: EntityScope, kind: EntityKind) =>
     request<EntitySummary[]>("GET", `${entityBase(scope)}/${kind}`),
   createEntity: (scope: EntityScope, kind: EntityKind,
-                 body: { name: string; body?: string; keys?: string; owners?: string; fields?: Record<string, string> }) =>
+                 body: { name: string; body?: string; keys?: string; owners?: string;
+                         secrecy?: string; fields?: Record<string, string> }) =>
     request<{ id: string }>("POST", `${entityBase(scope)}/${kind}`, body),
   readEntity: (scope: EntityScope, kind: EntityKind, id: string) =>
     request<EntityDetail>("GET", `${entityBase(scope)}/${kind}/${id}`),
   updateEntity: (scope: EntityScope, kind: EntityKind, id: string,
-                 patch: { name?: string; body?: string; keys?: string; owners?: string; fields?: Record<string, string> }) =>
+                 patch: { name?: string; body?: string; keys?: string; owners?: string;
+                          secrecy?: string; fields?: Record<string, string> }) =>
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/${kind}/${id}`, patch),
   deleteEntity: (scope: EntityScope, kind: EntityKind, id: string) =>
     request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/${kind}/${id}`),

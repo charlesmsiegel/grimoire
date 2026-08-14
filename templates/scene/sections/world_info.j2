@@ -1,4 +1,12 @@
 {#- Activated lore/location entries, blank-line separated. Selection
-    (key matching, owner gating) happens in code — context.activate(); this
-    template receives the selected bodies. Vars: world_info_bodies ([str]). -#}
-{{ world_info_bodies | select | join("\n\n") }}
+    (key matching, owner gating, gm-only exclusion) happens in code —
+    context.activate(); this template receives the selected bodies, already
+    split by secrecy (context.secrecy_split). The secret ones ride in the SAME
+    section as the public ones so the packer keeps or drops one turn's world
+    info as a unit. With no secrets the render is exactly the public join, so
+    an unmarked library's prompt is byte-for-byte what it always was.
+    Vars: world_info_bodies ([str]), secret_world_info_bodies ([str]). -#}
+{%- from "scene/_secrecy.j2" import secret_block -%}
+{%- set public = world_info_bodies | select | list -%}
+{%- set secret = secret_world_info_bodies | select | list -%}
+{{ [public | join("\n\n"), secret_block(secret) if secret else ""] | select | join("\n\n") }}

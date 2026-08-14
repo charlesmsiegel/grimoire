@@ -10,8 +10,8 @@ from __future__ import annotations
 import re
 from typing import Callable
 
-from .. import (calendars, characters, groupstate, overlay, pcs, playstate,
-                turnstate, weather)
+from .. import (calendars, characters, entities, groupstate, overlay, pcs,
+                playstate, turnstate, weather)
 from ..appearances import versions as appearances_versions
 from ..scenes import read as scenes_read
 # Aliased to match `assemble.py` and `macros.py`, and because `_character_states`
@@ -36,6 +36,14 @@ def activate(entries: list[dict], recent_text: str, present: frozenset = frozens
     owner ref is in `present`; then keyless = always-on, keyed = any key whole-word (ci) in
     recent_text. Unowned entries behave as before.
 
+    `secrecy: gm-only` (#49) is dropped here, before any other rule and before
+    `recall` ever sees the entry: this function is THE gate every world-info
+    entry passes through, so dropping it here is what makes "never enters the
+    prompt" true of the keyword path, the always-on path and the similarity
+    path at once, rather than of whichever one someone remembered. `secret`
+    entries are selected exactly like public ones — the difference is entirely
+    in how they render (see `secrecy_split`).
+
     `recall` is the second-stage retrieval strategy — `semantic.recall` in
     production, wired in by `_world_info`; anything with its signature in a
     test. It is handed the entries the keyword rule *rejected*, and only after
@@ -48,6 +56,8 @@ def activate(entries: list[dict], recent_text: str, present: frozenset = frozens
     out: list[dict] = []
     missed: list[dict] = []
     for e in entries:
+        if entities.normalize_secrecy(e.get("secrecy")) == entities.GM_ONLY:
+            continue  # GM-only -> never enters the prompt, by any path
         owners = e.get("owners") or []
         if owners and not any(o in present for o in owners):
             continue  # owned but no owner in scene -> never leak
@@ -59,6 +69,22 @@ def activate(entries: list[dict], recent_text: str, present: frozenset = frozens
     if recall is not None and missed:
         out.extend(recall(missed, recent_text))
     return out
+
+
+def secrecy_split(entries: list[dict]) -> tuple[list[str], list[str]]:
+    """`(public bodies, secret bodies)` for a list of activated entries.
+
+    The two lists render as two blocks of one section rather than two sections:
+    a secret is exactly as relevant to the turn as the public entry beside it,
+    so it must live or die with that entry when the packer trims — a separate
+    section could drop the secrets alone and leave the model narrating the
+    scene they were the twist in.
+    """
+    public = [e["body"] for e in entries
+              if entities.normalize_secrecy(e.get("secrecy")) != entities.SECRET]
+    secret = [e["body"] for e in entries
+              if entities.normalize_secrecy(e.get("secrecy")) == entities.SECRET]
+    return public, secret
 
 
 def _world_info(cid: str, recent_text: str, exclude: frozenset = frozenset(),
@@ -81,6 +107,7 @@ def _world_info(cid: str, recent_text: str, exclude: frozenset = frozenset(),
             if kind == "locations" and not keys:
                 continue  # a keyless location surfaces only as the current setting, never always-on
             entries.append({"body": e["body"].strip(), "keys": keys, "owners": owners,
+                            "secrecy": entities.normalize_secrecy(e["meta"].get("secrecy")),
                             "kind": kind, "id": meta["id"],
                             "name": e["meta"].get("name", meta["id"])})
     # The only production caller that supplies a second stage, so the strategy

@@ -5,5 +5,10 @@
     would have grown the World info section and could have dropped every
     keyword hit with them -- the opposite of what a layer that only adds is
     supposed to do. Here they sit in the archive tier, first to go.
-    Vars: recalled_lore_bodies ([str]). -#}
-{{ recalled_lore_bodies | select | join("\n\n") }}
+    Secret entries (#49) carry the same heading they get one section up —
+    recall is a way of REACHING an entry, not a licence to publish it.
+    Vars: recalled_lore_bodies ([str]), secret_recalled_lore_bodies ([str]). -#}
+{%- from "scene/_secrecy.j2" import secret_block -%}
+{%- set public = recalled_lore_bodies | select | list -%}
+{%- set secret = secret_recalled_lore_bodies | select | list -%}
+{{ [public | join("\n\n"), secret_block(secret) if secret else ""] | select | join("\n\n") }}

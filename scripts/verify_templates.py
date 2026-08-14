@@ -298,6 +298,13 @@ entities.create_entity(croot, "lore", "The Ledger", "The ledger lists a decade o
                        keys="ledger")
 entities.create_entity(croot, "lore", "Sera secret", "She was exiled from the Guild.",
                        owners=f"characters:{sera}")
+# Secrecy (#49): a `secret` entry so the World info section renders its labelled
+# block here, and a `gm-only` one that must never appear in any render at all.
+entities.create_entity(croot, "lore", "The Ledger's true owner",
+                       "The Guildmaster keeps the ledger himself.",
+                       keys="ledger", secrecy="secret")
+entities.create_entity(croot, "lore", "Referee note", "The warehouse burns on day nine.",
+                       secrecy="gm-only")
 circle = entities.create_entity(croot, "groups", "Salt Circle",
                                 "A quiet cabal moving contraband.")  # keyless -> always-on
 groupstate.write_state(croot, circle, "## Goals\nCorner the ledger before the Guild does.")
@@ -444,13 +451,18 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             owners = [o.strip() for o in e["meta"].get("owners", "").split(",") if o.strip()]
             if kind == "locations" and not keys:
                 continue
+            secrecy = (e["meta"].get("secrecy") or "public").strip().lower()
+            if secrecy not in ("public", "secret", "gm-only"):
+                secrecy = "public"
             entries.append({"body": e["body"].strip(), "keys": keys, "owners": owners,
-                            "kind": kind, "id": meta["id"],
+                            "secrecy": secrecy, "kind": kind, "id": meta["id"],
                             "name": e["meta"].get("name", meta["id"])})
     present = set(tokens) | ({f"locations:{current_loc}"} if current_loc else set())
     activated = context.activate(entries, recent_text, frozenset(present))
-    world_info_bodies = [e["body"] for e in activated]
+    world_info_bodies = [e["body"] for e in activated if e["secrecy"] != "secret"]
+    secret_world_info_bodies = [e["body"] for e in activated if e["secrecy"] == "secret"]
     recalled_lore_bodies = []   # recall is off in this harness, as by default
+    secret_recalled_lore_bodies = []
     group_states = []
     for e in activated:
         if e["kind"] != "groups":
@@ -584,7 +596,9 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             "commitment_lines": commitments.render_open(cid, with_id=False), "today": today,
             "weather": weather_now,
             "current_setting": current_setting, "world_info_bodies": world_info_bodies,
+            "secret_world_info_bodies": secret_world_info_bodies,
             "recalled_lore_bodies": recalled_lore_bodies,
+            "secret_recalled_lore_bodies": secret_recalled_lore_bodies,
             "group_states": group_states,
             "offscene_active": offscene_active, "offscene_known": offscene_known,
             "player_names": player_names, "pcless": pcless,

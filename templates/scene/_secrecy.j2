@@ -1,0 +1,10 @@
+{#- The heading that turns a `secrecy: secret` entry (#49) from a fact the
+    model may put in anyone's mouth into one it has to handle carefully.
+    Shared by the "World info" and "Recalled lore" sections so the instruction
+    is worded once and drifts in one place. Takes the already-selected secret
+    bodies; the caller renders nothing at all when there are none. -#}
+{%- macro secret_block(bodies) -%}
+Secret knowledge — true, but NOT common knowledge in the scene. Only characters who plausibly already know a fact below may act on it; everyone else speaks and behaves as though unaware, and must not reveal it, confirm it, or hint at it. Narrate what the ignorant characters actually perceive, not what you know:
+
+{{ bodies | join("\n\n") }}
+{%- endmacro -%}
