@@ -1960,7 +1960,7 @@ def test_a_scene_renamed_mid_turn_still_gets_its_error_frame(client):
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
 
     class RenamesThenFails:
-        async def stream(self, messages, cfg):
+        async def stream(self, messages, cfg, usage=None):
             store.scenes.rename_scene(cid, sid, "Saltmarch")   # the file moves
             raise LLMError("network", "connection reset")
             yield  # pragma: no cover - never reached, keeps this a generator
@@ -2194,7 +2194,7 @@ def test_a_reroll_that_completes_empty_puts_the_reply_back(client):
     before = store.scenes.get_turn_sizes(cid, sid)
 
     class EmptyThenDone:
-        async def stream(self, messages, cfg):
+        async def stream(self, messages, cfg, usage=None):
             return
             yield  # pragma: no cover - never reached, makes this a generator
 
@@ -2218,7 +2218,7 @@ def test_a_chat_that_completes_empty_keeps_the_players_post(client):
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
 
     class EmptyThenDone:
-        async def stream(self, messages, cfg):
+        async def stream(self, messages, cfg, usage=None):
             return
             yield  # pragma: no cover - never reached, makes this a generator
 
@@ -4729,7 +4729,7 @@ def test_a_failing_voice_check_does_not_fail_absorb(client):
     cid, sid = _voice_scene(client)
 
     class Failing(FakeOpenRouterComplete):
-        async def complete(self, messages, cfg):
+        async def complete(self, messages, cfg, usage=None):
             if self.calls >= 2:                  # the voice call, after extraction + dossier
                 self.calls += 1
                 raise LLMError("upstream", "the model exploded")
@@ -5242,10 +5242,10 @@ def test_a_dossier_written_mid_call_is_not_overwritten(client):
     class WritesMidCall:
         """Simulates another review committing while this dossier call runs."""
 
-        async def stream(self, m, cfg):
+        async def stream(self, m, cfg, usage=None):
             yield "{}"
 
-        async def complete(self, msgs, cfg):
+        async def complete(self, msgs, cfg, usage=None):
             if "Character: Aese" in msgs[1]["content"]:
                 store.dossiers.write(croot, "aese", "Aese joined the guard.")
                 return "Aese is still a stranger, per the old context."
@@ -5300,10 +5300,10 @@ class _DossierFake:
     def __init__(self, *boom: str):
         self.boom, self.calls = boom, 0
 
-    async def stream(self, m, cfg):
+    async def stream(self, m, cfg, usage=None):
         yield "{}"
 
-    async def complete(self, m, cfg):
+    async def complete(self, m, cfg, usage=None):
         self.calls += 1
         if self.calls == 1:
             return '{"one_line": "ok", "summary": "s", "keywords": [], "timeline_events": []}'
@@ -5518,7 +5518,7 @@ def test_absorb_upstream_error_returns_502(client):
     from grimoire.openrouter import OpenRouterError
 
     class FakeRaises:
-        async def complete(self, messages, cfg):
+        async def complete(self, messages, cfg, usage=None):
             raise OpenRouterError("bad_response", "boom")
 
     _, cid = _campaign(client)
@@ -5825,10 +5825,10 @@ def test_a_zero_call_budget_disables_the_ceiling(client):
     client.put("/api/config", json={"llm_call_budget": "0"})
 
     class Slow:
-        async def stream(self, m, cfg):
+        async def stream(self, m, cfg, usage=None):
             yield "{}"
 
-        async def complete(self, m, cfg):
+        async def complete(self, m, cfg, usage=None):
             await asyncio.sleep(0.08)  # far past any ceiling a test would set
             return "no suggestions"
 
@@ -5846,10 +5846,10 @@ def test_a_timeout_from_inside_the_call_is_not_blamed_on_the_ceiling(client):
     client.put("/api/config", json={"llm_call_budget": "300"})
 
     class Upstream:
-        async def stream(self, m, cfg):
+        async def stream(self, m, cfg, usage=None):
             yield "{}"
 
-        async def complete(self, m, cfg):
+        async def complete(self, m, cfg, usage=None):
             raise TimeoutError("the upstream gave up")
 
     client.app.dependency_overrides[routes.get_llm] = lambda: Upstream()
@@ -5874,10 +5874,10 @@ def test_the_one_shot_ceiling_does_not_bound_absorb(client, npc_module_scene):
             self.replies = [ABSORB_JSON, "Aese is steady.", VOICE_OK, AUDIT_OK]
             self.calls = 0
 
-        async def stream(self, m, cfg):
+        async def stream(self, m, cfg, usage=None):
             yield "{}"
 
-        async def complete(self, m, cfg):
+        async def complete(self, m, cfg, usage=None):
             await asyncio.sleep(0.05)  # every call overruns the one-shot ceiling
             reply = self.replies[min(self.calls, len(self.replies) - 1)]
             self.calls += 1
@@ -5922,10 +5922,10 @@ class ClockEatingFake:
     def __init__(self, clock, cost, replies):
         self.clock, self.cost, self.replies, self.calls = clock, cost, replies, 0
 
-    async def stream(self, m, cfg):
+    async def stream(self, m, cfg, usage=None):
         yield "{}"
 
-    async def complete(self, m, cfg):
+    async def complete(self, m, cfg, usage=None):
         reply = self.replies[min(self.calls, len(self.replies) - 1)]
         self.calls += 1
         self.clock[0] += self.cost
@@ -6029,10 +6029,10 @@ def test_absorb_extraction_overrunning_the_budget_is_502(client, npc_module_scen
     client.put("/api/config", json={"absorb_budget": "0.05"})
 
     class Wedged:
-        async def stream(self, m, cfg):
+        async def stream(self, m, cfg, usage=None):
             yield "{}"
 
-        async def complete(self, m, cfg):
+        async def complete(self, m, cfg, usage=None):
             # Cancelled by the budget after ~0.05s; kept short so a regression
             # that drops the budget fails the suite in seconds, not minutes.
             await asyncio.sleep(5)
@@ -6112,11 +6112,11 @@ def test_a_dossier_retry_stops_when_the_reviewer_walks_away(client, monkeypatch)
     calls = []
 
     class Counting:
-        async def stream(self, m, cfg):
+        async def stream(self, m, cfg, usage=None):
             calls.append(m)
             yield "Steady."
 
-        async def complete(self, m, cfg):
+        async def complete(self, m, cfg, usage=None):
             return "".join([d async for d in self.stream(m, cfg)])
 
     client.app.dependency_overrides[routes.get_llm] = lambda: Counting()
@@ -6350,10 +6350,10 @@ def test_dossier_retry_reports_a_failure_rather_than_500ing(client, npc_module_s
     cid, sid = npc_module_scene
 
     class Boom:
-        async def stream(self, m, cfg):
+        async def stream(self, m, cfg, usage=None):
             yield "{}"
 
-        async def complete(self, m, cfg):
+        async def complete(self, m, cfg, usage=None):
             raise RuntimeError("dossier boom")
 
     client.app.dependency_overrides[routes.get_llm] = lambda: Boom()
@@ -6494,10 +6494,10 @@ def test_a_dossier_call_cancelled_mid_flight_counts_as_attempted(
         def __init__(self):
             self.calls = 0
 
-        async def stream(self, m, cfg):
+        async def stream(self, m, cfg, usage=None):
             yield "{}"
 
-        async def complete(self, m, cfg):
+        async def complete(self, m, cfg, usage=None):
             self.calls += 1
             if self.calls == 1:
                 return ABSORB_JSON
@@ -6615,7 +6615,7 @@ def test_an_upstream_timeout_is_not_mistaken_for_the_budget(
     monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
 
     class StallsOnAudit(ClockEatingFake):
-        async def complete(self, m, cfg):
+        async def complete(self, m, cfg, usage=None):
             # call 3 is the audit: extraction, dossier, voice, audit (#59 added
             # the third — the fixture's NPC is anchored). Budget untouched.
             if self.calls == 3:
@@ -9410,7 +9410,7 @@ class _SupersedingStream:
     def __init__(self, cid, sid):
         self.cid, self.sid = cid, sid
 
-    async def stream(self, messages, cfg):
+    async def stream(self, messages, cfg, usage=None):
         yield "stale continuation "
         yield "text"
         store.proposals.supersede(self.cid, self.sid)
@@ -10632,7 +10632,7 @@ def test_a_save_during_an_absorb_supersedes_the_review_it_was_preparing(client):
             super().__init__(reply)
             self.fired = False
 
-        async def complete(self, messages, cfg):
+        async def complete(self, messages, cfg, usage=None):
             if not self.fired:
                 self.fired = True
                 store.commits.reserve(cid, "rival", "fp", sid, {})
@@ -11260,7 +11260,7 @@ def test_absorb_primes_the_extraction_with_the_campaigns_standing_facts(client):
     seen: list = []
 
     class _Recording(FakeOpenRouterComplete):
-        async def complete(self, messages, cfg):
+        async def complete(self, messages, cfg, usage=None):
             seen.append(messages)
             return await super().complete(messages, cfg)
 
@@ -11305,7 +11305,7 @@ async def test_a_failure_mid_tracker_block_shows_what_it_persists(monkeypatch, t
     cid, sid, _at = _scene_with_a_pending_post(tmp_path, monkeypatch)
 
     class BlockThenNarrationThenFails:
-        async def stream(self, messages, cfg):
+        async def stream(self, messages, cfg, usage=None):
             yield 'She waits.\n\n```state\n{"W": {"mood": "wry"}}\n```\n\nShe turns back.'
             raise LLMError("network", "connection reset")
 
@@ -11330,7 +11330,7 @@ async def test_a_tracker_only_regenerate_puts_the_old_reply_back(monkeypatch, tm
     token = store.scenes.remove_trailing_assistant_run(cid, sid)   # reroll deletes it
 
     class TrackerOnly:
-        async def stream(self, messages, cfg):
+        async def stream(self, messages, cfg, usage=None):
             yield '```state\n{"W": {"mood": "wry"}}\n```'
 
     resp = routes.streaming._chat_stream(
@@ -11357,7 +11357,7 @@ async def test_a_tracker_only_continuation_stays_retryable(monkeypatch, tmp_path
                                {"outcome": "success"})
 
     class TrackerOnly:
-        async def stream(self, messages, cfg):
+        async def stream(self, messages, cfg, usage=None):
             yield '```state\n{"W": {"mood": "wry"}}\n```'
 
     resp = routes.streaming._continuation_stream(
@@ -11380,7 +11380,7 @@ async def test_a_bare_speaker_marker_regenerate_puts_the_old_reply_back(
     token = store.scenes.remove_trailing_assistant_run(cid, sid)
 
     class BareMarker:
-        async def stream(self, messages, cfg):
+        async def stream(self, messages, cfg, usage=None):
             yield "**Mara:**"
 
     resp = routes.streaming._chat_stream(

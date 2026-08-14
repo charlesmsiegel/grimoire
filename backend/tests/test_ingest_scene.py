@@ -142,7 +142,7 @@ class FakeClient:
         self.text = text
         self.calls = []
 
-    async def complete(self, messages, conn):
+    async def complete(self, messages, conn, usage=None):
         self.calls.append((messages, conn))
         return self.text
 

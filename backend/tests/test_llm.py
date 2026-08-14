@@ -37,7 +37,7 @@ async def test_dispatches_to_openrouter():
     conn = _conn("openrouter", model="or-model", api_key="sk-or-x")
     chunks = [c async for c in client.stream([], conn)]
     assert chunks == ["or"]
-    assert op.calls == [(("or-model", "sk-or-x"), {})]
+    assert op.calls == [(("or-model", "sk-or-x"), {"usage": None})]
     assert cl.calls == [] and oc.calls == []
 
 
@@ -47,7 +47,7 @@ async def test_dispatches_to_claude():
     conn = _conn("claude", model="opus")
     chunks = [c async for c in client.stream([], conn)]
     assert chunks == ["cl"]
-    assert cl.calls == [(("opus",), {})]
+    assert cl.calls == [(("opus",), {"usage": None})]
     assert op.calls == [] and oc.calls == []
 
 
@@ -56,7 +56,7 @@ async def test_claude_missing_model_defaults_to_opus():
     client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
     conn = _conn("claude", model="")
     [c async for c in client.stream([], conn)]
-    assert cl.calls == [(("opus",), {})]
+    assert cl.calls == [(("opus",), {"usage": None})]
 
 
 async def test_dispatches_to_openai_compatible_with_strict_flag():
@@ -66,7 +66,8 @@ async def test_dispatches_to_openai_compatible_with_strict_flag():
                  base_url="https://api.z.ai/v4", post_process="strict")
     chunks = [c async for c in client.stream([], conn)]
     assert chunks == ["oc"]
-    assert oc.calls == [(("glm-4.6", "sk-z", "https://api.z.ai/v4"), {"strict": True})]
+    assert oc.calls == [(("glm-4.6", "sk-z", "https://api.z.ai/v4"),
+                        {"strict": True, "usage": None})]
 
 
 async def test_openai_compatible_none_post_process_is_not_strict():
@@ -74,7 +75,7 @@ async def test_openai_compatible_none_post_process_is_not_strict():
     client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
     conn = _conn("openai_compatible", post_process="none")
     [c async for c in client.stream([], conn)]
-    assert oc.calls[0][1] == {"strict": False}
+    assert oc.calls[0][1] == {"strict": False, "usage": None}
 
 
 async def test_missing_kind_defaults_to_openrouter():
@@ -964,3 +965,119 @@ def test_llm_imports_its_providers_at_module_scope():
     body_imports = {node.module for node in tree.body
                     if isinstance(node, ast.ImportFrom) and node.level == 1}
     assert set(PROVIDERS) <= body_imports
+
+
+# --- usage accounting (#152) ---
+class UsageProvider:
+    """A provider that reports accounting the way a real one does: into the
+    holder the facade threads down, on the frame after the last delta."""
+
+    def __init__(self, block=None, fail=None):
+        self.block = block if block is not None else {"prompt_tokens": 7,
+                                                       "completion_tokens": 2}
+        self.fail = fail
+        self.seen: list[dict | None] = []
+
+    async def stream(self, messages, *args, usage=None, **kwargs):
+        self.seen.append(usage)
+        yield "hi"
+        if self.fail is not None:
+            raise self.fail
+        if usage is not None:
+            usage.update(self.block)
+
+
+async def test_the_facade_threads_the_usage_holder_down_to_the_provider():
+    provider = UsageProvider()
+    client = _retry_client(provider, retries=0)
+    usage = {}
+    assert [c async for c in client.stream([], _conn("openrouter"), usage=usage)] == ["hi"]
+    assert usage["prompt_tokens"] == 7
+    assert usage["completion_tokens"] == 2
+
+
+async def test_complete_carries_the_usage_holder_too():
+    provider = UsageProvider()
+    client = _retry_client(provider, retries=0)
+    usage = {}
+    assert await client.complete([], _conn("openrouter"), usage=usage) == "hi"
+    assert usage["completion_tokens"] == 2
+
+
+async def test_the_facade_stamps_the_connection_that_actually_answered():
+    provider = RouteRecorder(failing={"primary"})
+    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
+    usage = {}
+    assert [c async for c in client.stream([], _route("a", "primary"), usage=usage)] == [
+        "from backup"]
+    assert usage["model"] == "backup", "the ledger must name the route that served"
+    assert usage["connection"] == "conn-b"
+    assert usage["provider"] == "openrouter"
+
+
+async def test_a_claude_route_is_stamped_with_the_model_it_will_really_run():
+    provider = UsageProvider()
+    client = _retry_client(provider, retries=0)
+    usage = {}
+    [c async for c in client.stream([], _conn("claude", model=""), usage=usage)]
+    assert usage["model"] == llm.CLAUDE_DEFAULT_MODEL
+
+
+async def test_a_provider_reported_model_wins_over_the_configured_one():
+    provider = UsageProvider(block={"model": "realm/opus-2026-08"})
+    client = _retry_client(provider, retries=0)
+    usage = {}
+    [c async for c in client.stream([], _conn("openrouter", model="realm/opus"), usage=usage)]
+    assert usage["model"] == "realm/opus-2026-08"
+
+
+async def test_the_row_counts_how_many_attempts_it_took():
+    provider = FlakyProvider(failures=2)
+    client = _retry_client(provider, retries=2)
+    usage = {}
+    assert [c async for c in client.stream([], _conn("openrouter"), usage=usage)] == ["ok"]
+    assert usage["attempts"] == 3
+
+
+async def test_an_abandoned_attempts_numbers_do_not_leak_into_the_next():
+    """Each attempt starts the holder fresh, so the row describes the call that
+    answered rather than a merge of it with one that died."""
+    class Once:
+        def __init__(self):
+            self.n = 0
+
+        async def stream(self, messages, *args, usage=None, **kwargs):
+            self.n += 1
+            if self.n == 1:
+                if usage is not None:
+                    usage.update({"prompt_tokens": 900, "cost_usd": 9.0,
+                                  "cost_basis": "billed"})
+                raise LLMError("network", "dropped after the usage frame")
+            yield "ok"
+            if usage is not None:
+                usage.update({"prompt_tokens": 5})
+
+    client = _retry_client(Once(), retries=1)
+    usage = {}
+    assert [c async for c in client.stream([], _conn("openrouter"), usage=usage)] == ["ok"]
+    assert usage["prompt_tokens"] == 5
+    assert "cost_usd" not in usage
+
+
+async def test_a_call_that_never_succeeds_still_names_its_route():
+    provider = RouteRecorder(failing={"primary"})
+    client = _retry_client(provider, retries=0)
+    usage = {}
+    with pytest.raises(LLMError):
+        [c async for c in client.stream([], _route("a", "primary"), usage=usage)]
+    assert usage["model"] == "primary"
+    assert usage["attempts"] == 1
+
+
+async def test_a_client_asked_for_no_accounting_passes_none_down():
+    """The overwhelmingly common shape outside routes; a holder allocated per
+    call for nobody would be pure overhead."""
+    provider = UsageProvider()
+    client = _retry_client(provider, retries=0)
+    [c async for c in client.stream([], _conn("openrouter"))]
+    assert provider.seen == [None]

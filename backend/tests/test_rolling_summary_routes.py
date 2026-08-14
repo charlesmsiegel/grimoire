@@ -285,7 +285,7 @@ def test_a_post_edited_during_the_call_does_not_get_the_summary_that_raced_it(cl
         """Side effect first, then the shared implementation — chaining rather
         than replacing keeps `calls`/`requests` true."""
 
-        async def complete(self, messages, conn):
+        async def complete(self, messages, conn, usage=None):
             store.scenes.edit_message(cid, sid, 0, "Post 0, rewritten mid-call.")
             return await super().complete(messages, conn)
 
@@ -311,7 +311,7 @@ def test_a_recycled_scene_id_does_not_inherit_the_old_scene_s_summary(client):
     recycled: list[str] = []
 
     class DeletesMidCall(FakeLLM):
-        async def complete(self, messages, conn):
+        async def complete(self, messages, conn, usage=None):
             store.scenes.delete_scene(cid, sid)
             recycled.append(store.scenes.create_scene(cid, "Saltmarch"))
             return await super().complete(messages, conn)
@@ -332,7 +332,7 @@ def test_posts_landing_during_the_call_do_not_block_the_write(client):
     cid, sid = _scene(client, posts=10)
 
     class AppendsMidCall(FakeLLM):
-        async def complete(self, messages, conn):
+        async def complete(self, messages, conn, usage=None):
             store.scenes.append_message(cid, sid, "user", "A turn that landed mid-call.")
             return await super().complete(messages, conn)
 
@@ -355,7 +355,7 @@ def test_an_older_refresh_does_not_overwrite_a_newer_one(client):
     cid, sid = _scene(client, posts=10)
 
     class NewerLandsFirst(FakeLLM):
-        async def complete(self, messages, conn):
+        async def complete(self, messages, conn, usage=None):
             for n in range(10, 12):
                 store.scenes.append_message(cid, sid, "user", f"Post {n}.")
             msgs = store.scenes.read_scene(cid, sid)["messages"]
@@ -386,7 +386,7 @@ def test_an_empty_completion_still_reports_the_staleness_it_can_see(client):
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
 
     class EditsThenSaysNothing(FakeLLM):
-        async def complete(self, messages, conn):
+        async def complete(self, messages, conn, usage=None):
             store.scenes.edit_message(cid, sid, 0, "Post 0, rewritten mid-call.")
             return await super().complete(messages, conn)
 
@@ -466,7 +466,7 @@ def test_a_location_assigned_mid_call_does_not_get_the_fold_that_missed_it(clien
     cid, sid = _scene(client, posts=10)
 
     class SetsTheLocationMidCall(FakeLLM):
-        async def complete(self, messages, conn):
+        async def complete(self, messages, conn, usage=None):
             store.scenes.set_location(cid, sid, _location(cid, "The Night Dock"))
             return await super().complete(messages, conn)
 
@@ -615,7 +615,7 @@ def test_a_scene_renamed_mid_refresh_is_not_a_500(client):
     renamed: list[str] = []
 
     class RenamesMidCall(FakeLLM):
-        async def complete(self, messages, conn):
+        async def complete(self, messages, conn, usage=None):
             renamed.append(store.scenes.rename_scene(cid, sid, "Somewhere else"))
             return await super().complete(messages, conn)
 
@@ -679,7 +679,7 @@ async def test_a_second_turn_does_not_start_a_second_provider_call(monkeypatch, 
         the second request would never return to release the first. Chains
         through the shared implementation so `calls` counts what it should."""
 
-        async def complete(self, messages, conn):
+        async def complete(self, messages, conn, usage=None):
             text = await super().complete(messages, conn)
             if self.calls == 1:
                 started.set()
@@ -812,7 +812,7 @@ async def test_a_forced_refresh_waits_out_the_fold_already_in_flight(monkeypatch
         """Blocks the FIRST call only — the forced request must be able to
         return in order to release it."""
 
-        async def complete(self, messages, conn):
+        async def complete(self, messages, conn, usage=None):
             text = await super().complete(messages, conn)
             if self.calls == 1:
                 started.set()
@@ -865,7 +865,7 @@ async def test_a_forced_refresh_that_waits_too_long_says_so(monkeypatch, tmp_pat
     release = asyncio.Event()
 
     class SlowLLM(FakeLLM):
-        async def complete(self, messages, conn):
+        async def complete(self, messages, conn, usage=None):
             text = await super().complete(messages, conn)
             if self.calls == 1:
                 started.set()

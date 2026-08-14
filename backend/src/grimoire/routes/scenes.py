@@ -91,7 +91,8 @@ async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: 
     messages = store.suggest.build_prompt(store.suggest.build_snapshot(cid, offscreen=offscreen),
                                           candidates, offscreen=offscreen, direction=direction)
     try:
-        text = await _bounded_call(client.complete(messages, conn))
+        with store.usage.meter("suggestions", campaign=cid) as m:
+            text = await _bounded_call(client.complete(messages, conn, m.usage))
     except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     loc_names = {e["id"]: e.get("name", e["id"]) for e in store.overlay.list_entities(cid, "locations")}
@@ -121,7 +122,8 @@ async def post_scene_intent(cid: str, body: SceneIntent,
     conn = _require_connection()
     messages = store.suggest.build_intent_prompt(cid, body.text, offscreen=body.offscreen)
     try:
-        text = await _bounded_call(client.complete(messages, conn))
+        with store.usage.meter("intent", campaign=cid) as m:
+            text = await _bounded_call(client.complete(messages, conn, m.usage))
     except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     got = store.suggest.parse_intent(text, cid, offscreen=body.offscreen)
@@ -329,7 +331,7 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
         # Recording first would leave Turn history showing a request the model
         # never saw. The generator body has not run at this point; only the
         # claim has.
-        stream = _chat_stream(cid, sid, messages, conn, client)
+        stream = _chat_stream(cid, sid, messages, conn, client, task="director")
         _record_prompt(cid, sid, "director", breakdown)
         return stream
     names = store.appearances.player_names(cid, sid)
@@ -353,7 +355,8 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
     # time the undo runs the tail may belong to a different turn entirely.
     stream = _chat_stream(cid, sid, messages, conn, client,   # claims the turn; see above
                           undo_user_post=lambda: store.scenes.remove_trailing_user_post(
-                              cid, sid, posted_at, content))
+                              cid, sid, posted_at, content),
+                          task="chat")
     _record_prompt(cid, sid, "chat", breakdown)
     return stream
 
@@ -374,7 +377,8 @@ def post_retry(cid: str, sid: str, body: RetryBody | None = None,
         store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(body), describe=store.prompt_log.capturing())
-    stream = _chat_stream(cid, sid, messages, conn, client)   # claims the turn; see above
+    stream = _chat_stream(cid, sid, messages, conn, client,   # claims the turn; see above
+                          task="retry")
     _record_prompt(cid, sid, "retry", breakdown)
     return stream
 
@@ -599,7 +603,8 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     # stop deleting ahead of the replacement at all — remove the old run inside
     # `finalize`, under the same lock that writes the new reply — which is
     # tracked with the other transcript-identity work rather than bolted on.
-    stream = _chat_stream(cid, sid, messages, conn, client, restore_removed=restore)
+    stream = _chat_stream(cid, sid, messages, conn, client, restore_removed=restore,
+                          task="regenerate")
     # Last of all: after `supersede` (which can refuse and unwind the reroll) AND
     # after the turn claim inside `_chat_stream` (which can raise StoreBusy on a
     # contended campaign). Both would leave Turn history showing a regeneration
@@ -1014,9 +1019,10 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
         # `mech` is the accumulator every failure return below spreads, so the
         # callback reaches all of them -- and it fires only if the request goes
         # out, which is a fact only `run` holds.
-        text = await _watched(
-            budget.run(client.complete(messages, conn),
-                       lambda: mech.__setitem__("attempted", True)), abandoned)
+        with store.usage.meter("audit", campaign=cid, scene=sid) as m:
+            text = await _watched(
+                budget.run(client.complete(messages, conn, m.usage),
+                           lambda: mech.__setitem__("attempted", True)), abandoned)
         parsed = store.audit.parse_output(text)
         edits, dropped = store.audit.materialize(cid, sid, parsed)
     except Abandoned:
@@ -1122,9 +1128,10 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
             # The loop's own check is stale by now -- the two reads and the
             # prompt build above are not free -- so the attempt is recorded by
             # `run`, which alone can decide it atomically with the deadline.
-            d_text = await _watched(
-                budget.run(client.complete(msgs, conn),
-                           lambda: out.__setitem__("attempted", True)), abandoned)
+            with store.usage.meter("dossier", campaign=cid, scene=sid) as m:
+                d_text = await _watched(
+                    budget.run(client.complete(msgs, conn, m.usage),
+                               lambda: out.__setitem__("attempted", True)), abandoned)
             parsed_dossier = store.dossiers.parse_output(d_text)
             # stage_edit returns None for an unchanged paragraph AND for a blank
             # reply; only the first is a success. Left conflated, a model that
@@ -1310,8 +1317,9 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
             msgs = store.voice_drift.build_prompt(name, record["text"], transcript)
             # The loop's own check is stale by now, so the attempt is recorded
             # by `run`, which alone can decide it atomically with the deadline.
-            text = await budget.run(client.complete(msgs, conn),
-                                    lambda: out.__setitem__("attempted", True))
+            with store.usage.meter("voice-drift", campaign=cid, scene=sid) as m:
+                text = await budget.run(client.complete(msgs, conn, m.usage),
+                                        lambda: out.__setitem__("attempted", True))
             finding = store.voice_drift.parse_output(text)
             # An unreadable verdict is a FAILED call, not a quiet pass. Left
             # conflated with "in voice" it would stage a default-approved clear
@@ -1468,7 +1476,8 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
         store.absorb.commitment_snapshot(cid), store.absorb.fact_snapshot(cid, sid))
     budget = _Budget(store.config.absorb_budget())
     try:
-        text = await budget.run(client.complete(messages, conn))
+        with store.usage.meter("absorb", campaign=cid, scene=sid) as m:
+            text = await budget.run(client.complete(messages, conn, m.usage))
     except LLMError as exc:
         # Including a budget overrun on this first call: nothing has been
         # produced yet, so there is nothing to degrade to.
@@ -1920,7 +1929,8 @@ async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: i
     prompt = store.rolling_summary.build_prompt(
         view["prior"], store.chronicle.transcript_text(messages[base:]), facts)
     try:
-        text = await client.complete(prompt, conn)
+        with store.usage.meter("rolling-summary", campaign=cid, scene=sid) as m:
+            text = await client.complete(prompt, conn, m.usage)
     except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     summary = store.rolling_summary.parse_output(text)

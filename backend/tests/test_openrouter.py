@@ -160,3 +160,80 @@ async def test_an_unreadable_retry_after_is_the_same_as_none(value):
     with pytest.raises(OpenRouterError) as exc:
         [c async for c in client.stream([], "m", "sk-or-x")]
     assert exc.value.retry_after is None
+
+
+# ---- usage capture (#152) ----
+USAGE_BODY = (
+    'data: {"model":"realm/opus","choices":[{"delta":{"content":"Hi"}}]}\n\n'
+    'data: {"model":"realm/opus","choices":[{"delta":{}}],'
+    '"usage":{"prompt_tokens":120,"completion_tokens":8,"cost":0.00042}}\n\n'
+    "data: [DONE]\n\n"
+)
+
+
+async def test_stream_asks_for_the_usage_block():
+    seen = {}
+
+    def handler(request):
+        seen.update(__import__("json").loads(request.content))
+        return httpx.Response(200, text=SSE_BODY)
+
+    client = make_client(handler)
+    [c async for c in client.stream([], "m", "sk-or-x")]
+    assert seen["usage"] == {"include": True}
+
+
+async def test_stream_fills_the_usage_holder_from_the_final_chunk():
+    def handler(request):
+        return httpx.Response(200, text=USAGE_BODY)
+
+    usage = {}
+    client = make_client(handler)
+    chunks = [c async for c in client.stream([], "m", "sk-or-x", usage=usage)]
+
+    assert "".join(chunks) == "Hi"
+    assert usage["prompt_tokens"] == 120
+    assert usage["completion_tokens"] == 8
+    assert usage["cost_usd"] == 0.00042
+    assert usage["cost_basis"] == "billed"
+    assert usage["model"] == "realm/opus"
+
+
+async def test_a_reply_with_no_usage_block_leaves_the_holder_unpriced():
+    def handler(request):
+        return httpx.Response(200, text=SSE_BODY)
+
+    usage = {}
+    client = make_client(handler)
+    [c async for c in client.stream([], "m", "sk-or-x", usage=usage)]
+    assert "cost_usd" not in usage
+    assert "prompt_tokens" not in usage
+
+
+async def test_usage_without_a_cost_records_tokens_and_no_price():
+    body = ('data: {"choices":[{"delta":{"content":"x"}}],'
+            '"usage":{"prompt_tokens":5,"completion_tokens":1}}\n\n'
+            "data: [DONE]\n\n")
+
+    def handler(request):
+        return httpx.Response(200, text=body)
+
+    usage = {}
+    client = make_client(handler)
+    [c async for c in client.stream([], "m", "sk-or-x", usage=usage)]
+    assert usage["prompt_tokens"] == 5
+    assert "cost_usd" not in usage
+
+
+async def test_a_malformed_usage_block_is_dropped_not_fatal():
+    body = ('data: {"choices":[{"delta":{"content":"x"}}],"usage":"lots"}\n\n'
+            "data: [DONE]\n\n")
+
+    def handler(request):
+        return httpx.Response(200, text=body)
+
+    usage = {}
+    client = make_client(handler)
+    chunks = [c async for c in client.stream([], "m", "sk-or-x", usage=usage)]
+    assert "".join(chunks) == "x"
+    assert usage == {}

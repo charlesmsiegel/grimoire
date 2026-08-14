@@ -295,7 +295,7 @@ def post_opener(cid: str, sid: str, body: Opener, client: LLMClient = Depends(ge
     messages, breakdown = store.context.compose_opener(
         cid, sid, body.prompt, describe=store.prompt_log.capturing())
     _record_prompt(cid, sid, "opener", breakdown)
-    return _ephemeral_stream(messages, conn, client)
+    return _ephemeral_stream(messages, conn, client, task="opener", cid=cid, sid=sid)
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/first-post")

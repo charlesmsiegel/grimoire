@@ -274,7 +274,8 @@ def _sse_response(frames: list[str]):
 
 
 def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
-                  client: LLMClient, finalize, on_error=None, on_abort=None):
+                  client: LLMClient, finalize, on_error=None, on_abort=None,
+                  task: str = "chat"):
     """Stream one persisted turn while watching for a ```roll fence.
 
     Deltas are routed through a FenceWatcher, so an opener (even split across
@@ -284,6 +285,11 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
     (proposal / done). `on_error(watcher)` decides what to persist on an
     upstream LLM failure. Fence watching runs on persisted turns only;
     `_ephemeral_stream` is deliberately untouched.
+
+    `task` is the label this turn's ledger row carries (#152) -- the meter is
+    opened here rather than at each caller because this is the one place that
+    sees every way a stream can end, and all three have to be recorded: a
+    completed turn, a provider failure, and a client that walked away.
 
     `on_abort(watcher)` is the same decision for a *disconnect* — the client
     cancelled, or the connection died — which arrives as cancellation rather
@@ -297,6 +303,9 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
     """
     async def event_stream():
         watcher = store.fence.FenceWatcher()
+        # Opened before the request goes out, so `duration_ms` measures what the
+        # user waited rather than what was left after the last delta.
+        meter = store.usage.meter(task, campaign=cid, scene=sid)
         # Display only, and deliberately downstream of the watcher rather than
         # inside it: the tracker block is stripped from the transcript by
         # `_persist_reply`, but by then the deltas carrying it have already been
@@ -304,7 +313,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
         # decided in exactly one place either way (#120).
         redactor = store.turnstate.StreamRedactor()
         try:
-            async for delta in client.stream(messages, conn):
+            async for delta in client.stream(messages, conn, meter.usage):
                 if not delta:
                     yield _HEARTBEAT  # the facade is still waiting on the model
                     continue
@@ -316,6 +325,14 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             tail = redactor.feed(watcher.finish()) + redactor.finish()
             if tail:
                 yield _sse({"delta": tail})
+            # Before `finalize`, and deliberately: the accounting is complete the
+            # moment the provider stops, and the persist below can raise
+            # StoreBusy and return early. A stop-after-fence `break` above skips
+            # the provider's trailing usage frame, so those rows carry the
+            # timing and the route and no token counts -- which is the honest
+            # answer, and why the ledger records an absent price rather than a
+            # zero one.
+            meter.done()
         except LLMError as exc:
             # Flush the redactor too, and emit what it lets go BEFORE the error
             # frame. `on_error` persists `watcher.narration` whole, and
@@ -326,6 +343,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             flushed = redactor.feed(watcher.finish()) + redactor.finish()
             if flushed:
                 yield _sse({"delta": flushed})
+            meter.done("error", exc.kind)
             note: dict = {}
             if on_error is not None:
                 try:
@@ -364,6 +382,11 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             # the teardown continue: swallowing it here would tell Starlette the
             # response ended normally.
             watcher.finish()
+            # `aborted`, not `error`: the player pressed Cancel or navigated
+            # away, which is not a failure of anything and must not inflate an
+            # error rate. It is still a row -- the provider generated, and on a
+            # metered connection it was billed.
+            meter.done("aborted")
             await _flush_on_abort(on_abort, watcher)
             raise
         try:
@@ -405,7 +428,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
 
 
 def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: LLMClient,
-                 undo_user_post=None, restore_removed=None):
+                 undo_user_post=None, restore_removed=None, task: str = "chat"):
     """A normal persisted turn. A ```roll fence cuts the stream: the pending
     proposal record is written *before* the pre-fence narration persists, so a
     transcript that ends at a mechanical decision point always has a
@@ -596,7 +619,8 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
                 return []
             return finalize(watcher)
 
-    return _fence_stream(cid, sid, messages, conn, client, finalize, on_error, on_abort)
+    return _fence_stream(cid, sid, messages, conn, client, finalize, on_error, on_abort,
+                         task=task)
 
 
 def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
@@ -642,21 +666,33 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
     # cleanly. Persisting here would be worse than losing the text — narration
     # committed outside `commit_narration` is narration a supersede can no
     # longer displace.
-    return _fence_stream(cid, sid, messages, conn, client, finalize)
+    return _fence_stream(cid, sid, messages, conn, client, finalize, task="continuation")
 
 
-def _ephemeral_stream(messages: list[dict], conn: dict, client: LLMClient):
-    """Stream a generation without persisting it to any scene (used by the opener)."""
+def _ephemeral_stream(messages: list[dict], conn: dict, client: LLMClient,
+                      task: str = "opener", cid: str = "", sid: str = ""):
+    """Stream a generation without persisting it to any scene (used by the opener).
+
+    Nothing about the turn is stored, but the call still cost tokens and money,
+    so it is still metered (#152) -- `cid`/`sid` only label the row."""
     async def event_stream():
+        meter = store.usage.meter(task, campaign=cid, scene=sid)
         try:
-            async for delta in client.stream(messages, conn):
+            async for delta in client.stream(messages, conn, meter.usage):
                 if not delta:
                     yield _HEARTBEAT  # still waiting on the model (#95)
                     continue
                 yield f"data: {json.dumps({'delta': delta})}\n\n"
+            meter.done()
             yield f"data: {json.dumps({'done': True})}\n\n"
         except LLMError as exc:
+            meter.done("error", exc.kind)
             yield f"data: {json.dumps({'error': {'detail': exc.detail, 'kind': exc.kind}})}\n\n"
+        except BaseException:
+            # The disconnect path. No frame can be emitted into a generator that
+            # is being closed, so filing the row is the only thing left to do.
+            meter.done("aborted")
+            raise
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

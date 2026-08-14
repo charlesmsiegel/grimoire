@@ -14,6 +14,7 @@ from typing import AsyncIterator
 import certifi
 import httpx
 
+from . import llm_usage
 from .llm_errors import LLMError, retry_after_seconds
 
 
@@ -105,7 +106,21 @@ class OpenAICompatibleClient:
         return headers
 
     async def stream(self, messages, model: str, key: str, base_url: str,
-                      strict: bool = False) -> AsyncIterator[str]:
+                      strict: bool = False, usage: dict | None = None) -> AsyncIterator[str]:
+        """`usage` is filled in place when the endpoint volunteers an accounting
+        block — see `llm_usage`.
+
+        Nothing is *asked* for, and that asymmetry with `openrouter` is
+        deliberate (#152). The OpenAI spec's way to request one is
+        `stream_options: {"include_usage": true}`, and `base_url` here points at
+        whatever the user configured: llama.cpp, vLLM, LM Studio, a vendor's
+        own gateway. A strict endpoint rejects a request field it does not know
+        with a 400 — this module already carries `_strict_messages` because one
+        such endpoint refused a message ordering — and trading "generation
+        works" for "generation is counted" is the wrong way round. Endpoints
+        that report usage unprompted (many do) are recorded; the rest land in
+        the ledger as unpriced calls, which `store.usage` counts rather than
+        hides."""
         if not base_url:
             raise OpenAICompatibleError("missing_key", "No base URL configured")
         payload_messages = _strict_messages(messages) if strict else messages
@@ -141,8 +156,14 @@ class OpenAICompatibleClient:
                         return
                     try:
                         obj = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    # Ahead of the delta lookup: a usage block rides a chunk
+                    # with no choices, so reading it after would skip it.
+                    llm_usage.from_openai_chunk(obj, usage)
+                    try:
                         delta = obj["choices"][0]["delta"].get("content")
-                    except (json.JSONDecodeError, KeyError, IndexError):
+                    except (KeyError, IndexError, TypeError, AttributeError):
                         continue
                     if delta:
                         yield delta
@@ -153,8 +174,10 @@ class OpenAICompatibleClient:
         except Exception as exc:  # client/TLS setup and other unexpected failures
             raise OpenAICompatibleError("network", str(exc)) from exc
 
-    async def complete(self, messages, model: str, key: str, base_url: str, strict: bool = False) -> str:
-        return "".join([chunk async for chunk in self.stream(messages, model, key, base_url, strict)])
+    async def complete(self, messages, model: str, key: str, base_url: str,
+                       strict: bool = False, usage: dict | None = None) -> str:
+        return "".join([chunk async for chunk
+                        in self.stream(messages, model, key, base_url, strict, usage)])
 
     async def list_models(self, base_url: str, key: str) -> list[dict]:
         if not base_url:

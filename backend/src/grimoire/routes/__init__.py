@@ -16,6 +16,7 @@ One ``APIRouter`` per domain, composed here into the single ``router`` that
   ``scenes``      /campaigns/{cid}/scenes
   ``weather``     /campaigns/{cid}/weather
   ``mechanics``   rolls, roll proposals, checks, campaign module and sheets
+  ``usage``       /usage/summary and /campaigns/{cid}/usage cost rollups
   ``search``      /search, the keyword sweep over content and facts
   ``entities``    the generic /{kind} entity surface for both scopes
 
@@ -51,7 +52,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from . import (campaigns, characters, common, config, entities, greetings, mechanics,
-               models, modules, scenes, search, streaming, weather, worlds)
+               models, modules, scenes, search, streaming, usage, weather, worlds)
 from .common import get_llm, get_openai_compatible_client
 
 __all__ = ["router", "get_llm", "get_openai_compatible_client"]
@@ -59,7 +60,7 @@ __all__ = ["router", "get_llm", "get_openai_compatible_client"]
 router = APIRouter()
 
 for _domain in (config, modules, worlds, characters, greetings,
-                scenes, weather, mechanics, campaigns, search):
+                scenes, weather, mechanics, usage, campaigns, search):
     router.include_router(_domain.router)
 
 router.include_router(entities.router)  # keep last: generic /{kind} catch-alls

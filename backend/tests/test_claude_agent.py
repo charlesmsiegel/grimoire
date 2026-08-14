@@ -139,3 +139,44 @@ async def test_non_text_messages_are_reported_as_liveness(monkeypatch):
     chunks = [c async for c in ClaudeAgentClient().stream([], "opus")]
     assert "".join(chunks) == "Hello"
     assert chunks.count("") >= 1
+
+
+# ---- usage capture (#152) ----
+async def test_the_result_message_fills_the_usage_holder(monkeypatch):
+    result = types.SimpleNamespace(
+        usage={"input_tokens": 900, "output_tokens": 45,
+               "cache_read_input_tokens": 100, "cache_creation_input_tokens": 20},
+        total_cost_usd=0.031)
+    install_fake_sdk(monkeypatch, replies=[_AssistantMessage([_TextBlock("Hi")]), result])
+
+    usage = {}
+    client = ClaudeAgentClient()
+    chunks = [c async for c in client.stream([], "opus", usage=usage)]
+
+    assert "".join(chunks) == "Hi"
+    # Cache reads and cache writes are prompt tokens the account was charged
+    # for; leaving them out would under-report a cached campaign by most of it.
+    assert usage["prompt_tokens"] == 1020
+    assert usage["completion_tokens"] == 45
+    assert usage["cost_usd"] == 0.031
+
+
+async def test_claude_dollars_are_marked_as_not_spent(monkeypatch):
+    result = types.SimpleNamespace(usage={"input_tokens": 1, "output_tokens": 1},
+                                   total_cost_usd=0.5)
+    install_fake_sdk(monkeypatch, replies=[result])
+
+    usage = {}
+    client = ClaudeAgentClient()
+    [c async for c in client.stream([], "opus", usage=usage)]
+    assert usage["cost_basis"] == "equivalent", (
+        "this path bills against a Claude subscription, so its dollars must "
+        "not be summed into a spend total")
+
+
+async def test_a_run_that_reports_no_usage_leaves_the_holder_empty(monkeypatch):
+    install_fake_sdk(monkeypatch, replies=[_AssistantMessage([_TextBlock("Hi")])])
+    usage = {}
+    client = ClaudeAgentClient()
+    [c async for c in client.stream([], "opus", usage=usage)]
+    assert usage == {}

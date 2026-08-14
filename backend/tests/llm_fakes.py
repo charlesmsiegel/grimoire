@@ -4,8 +4,16 @@
 is how every test that must not reach a provider swaps one of these in, and
 these fakes implement exactly the surface `llm.LLMClient` exposes to routes:
 
-    async def stream(messages, conn) -> AsyncIterator[str]
-    async def complete(messages, conn) -> str
+    async def stream(messages, conn, usage=None) -> AsyncIterator[str]
+    async def complete(messages, conn, usage=None) -> str
+
+`usage` is the accounting holder the real facade fills in place (#152). Every
+call stamps the route it ran on, exactly as `llm._stamp` does -- not a courtesy,
+but the half of the contract `store.usage.Meter` reads to tell "the request went
+out and reported nothing" from "the request was never made". A fake built with
+`usage=` then adds what a *provider* would report on top, so a test can drive a
+route and assert on the ledger row it filed; the default adds nothing, which is
+what an endpoint that reports no usage does.
 
 Before this module, seven near-identical fakes lived inline in `test_routes.py`
 and each new call site grew another one. There is now one implementation,
@@ -142,7 +150,8 @@ class FakeLLM:
 
     def __init__(self, turns: list[list[str]] | None = None, *,
                  cassette: Cassette | None = None,
-                 error: LLMError | None = None, stall: bool = False):
+                 error: LLMError | None = None, stall: bool = False,
+                 usage: dict | None = None):
         if (turns is None) == (cassette is None):
             raise ValueError("FakeLLM takes exactly one of `turns` or `cassette`")
         if turns is not None and not turns:
@@ -154,19 +163,33 @@ class FakeLLM:
         self.cassette = cassette
         self.error = error
         self.stall = stall
+        self.usage = usage
         self.requests: list[dict] = []
         self.calls = 0
 
     # ---- the LLMClient surface ----
-    async def stream(self, messages, conn):
+    async def stream(self, messages, conn, usage=None):
+        # Stamped BEFORE anything can fail, like `llm._stamp`: the route is
+        # known the moment the attempt starts, and an error frame still has to
+        # say which connection produced it.
+        if usage is not None:
+            usage.update({"model": conn.get("model", ""),
+                          "connection": conn.get("name") or conn.get("id")
+                          or conn.get("kind") or "?",
+                          "provider": conn.get("kind", "openrouter"), "attempts": 1})
         for delta in self._next(messages, conn):
             yield delta
         if self.error is not None:
             raise self.error
+        # After the deltas and after the error, like the real thing: a provider
+        # reports what a call cost on its final frame, so a stream that dies
+        # part-way reports nothing and the row records the failure alone.
+        if usage is not None and self.usage is not None:
+            usage.update(self.usage)
         if self.stall:
             await asyncio.sleep(STALL_SECONDS)
 
-    async def complete(self, messages, conn) -> str:
+    async def complete(self, messages, conn, usage=None) -> str:
         # Consumes `stream`, exactly as the real `LLMClient.complete` does,
         # rather than reaching for the next turn itself. That is not a style
         # choice: a fake whose two methods are written separately drifts, and it
@@ -174,7 +197,7 @@ class FakeLLM:
         # honoured would let a completing route (absorb, dossier, tagline,
         # suggestions) sail past the very condition the test set up. One call is
         # still recorded, because `stream` records exactly once.
-        return "".join([delta async for delta in self.stream(messages, conn)])
+        return "".join([delta async for delta in self.stream(messages, conn, usage)])
 
     # ---- inspection ----
     @property
@@ -202,8 +225,8 @@ class FakeOpenRouter(FakeLLM):
     """One turn, streamed as the given deltas — the default every route test
     gets from `test_routes.py`'s `client` fixture."""
 
-    def __init__(self, deltas):
-        super().__init__([list(deltas)])
+    def __init__(self, deltas, usage: dict | None = None):
+        super().__init__([list(deltas)], usage=usage)
 
 
 class FakeOpenRouterComplete(FakeLLM):
@@ -211,8 +234,9 @@ class FakeOpenRouterComplete(FakeLLM):
     consumed one-per-call, in order — absorb's extraction `complete()` followed
     by the audit's, say. The last reply repeats after the list runs out."""
 
-    def __init__(self, text):
-        super().__init__([[t] for t in (text if isinstance(text, list) else [text])])
+    def __init__(self, text, usage: dict | None = None):
+        super().__init__([[t] for t in (text if isinstance(text, list) else [text])],
+                         usage=usage)
 
 
 class CapturingOpenRouter(FakeLLM):

@@ -10,6 +10,7 @@ from typing import AsyncIterator
 import certifi
 import httpx
 
+from . import llm_usage
 from .llm_errors import LLMError, retry_after_seconds
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -60,12 +61,23 @@ class OpenRouterClient:
         return self._http
 
     def _payload(self, messages, model, stream):
-        return {"model": model, "messages": messages, "stream": stream}
+        # `usage.include` is what makes OpenRouter attach token counts and the
+        # call's cost in credits to the final SSE chunk (#152). Free, and
+        # accepted by every model on the platform -- unlike the equivalent
+        # option on an arbitrary endpoint, which `openai_compatible` therefore
+        # does not send.
+        return {"model": model, "messages": messages, "stream": stream,
+                "usage": {"include": True}}
 
     def _headers(self, key: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
-    async def stream(self, messages, model: str, key: str) -> AsyncIterator[str]:
+    async def stream(self, messages, model: str, key: str,
+                     usage: dict | None = None) -> AsyncIterator[str]:
+        """`usage`, when given, is filled in place with what the provider
+        reported about this call — see `llm_usage`. It arrives on the last
+        chunk, long after the caller has consumed the deltas it wanted, which
+        is why it comes back through a holder rather than a return value."""
         if not key:
             raise OpenRouterError("missing_key", "OpenRouter API key is not set")
         try:
@@ -100,8 +112,16 @@ class OpenRouterClient:
                         return
                     try:
                         obj = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    # Before the delta lookup, not after it: the chunk carrying
+                    # the usage block has an empty `choices` (or none at all),
+                    # so reading it inside the same try as the delta would skip
+                    # accounting on exactly the frame that carries it.
+                    llm_usage.from_openai_chunk(obj, usage)
+                    try:
                         delta = obj["choices"][0]["delta"].get("content")
-                    except (json.JSONDecodeError, KeyError, IndexError):
+                    except (KeyError, IndexError, TypeError, AttributeError):
                         continue
                     if delta:
                         yield delta
@@ -112,8 +132,9 @@ class OpenRouterClient:
         except Exception as exc:  # client/TLS setup and other unexpected failures
             raise OpenRouterError("network", str(exc)) from exc
 
-    async def complete(self, messages, model: str, key: str) -> str:
-        return "".join([chunk async for chunk in self.stream(messages, model, key)])
+    async def complete(self, messages, model: str, key: str,
+                       usage: dict | None = None) -> str:
+        return "".join([chunk async for chunk in self.stream(messages, model, key, usage)])
 
     async def aclose(self) -> None:
         if self._owns and self._http is not None:

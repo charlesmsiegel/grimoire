@@ -225,3 +225,35 @@ async def test_list_models_keeps_its_own_read_bound():
 
     await make_client(handler).list_models("https://x/v1", "")
     assert seen["read"] is not None
+
+
+# ---- usage capture (#152) ----
+async def test_usage_is_read_when_the_endpoint_volunteers_it():
+    body = ('data: {"model":"local/glm","choices":[{"delta":{"content":"x"}}],'
+            '"usage":{"prompt_tokens":9,"completion_tokens":2}}\n\n'
+            "data: [DONE]\n\n")
+
+    def handler(request):
+        return httpx.Response(200, text=body)
+
+    usage = {}
+    client = make_client(handler)
+    [c async for c in client.stream([], "m", "", "https://api.example/v1", usage=usage)]
+    assert usage["prompt_tokens"] == 9
+    assert usage["completion_tokens"] == 2
+    assert usage["model"] == "local/glm"
+
+
+async def test_no_usage_option_is_sent_to_an_arbitrary_endpoint():
+    """A strict endpoint 400s on a request field it does not know, and losing
+    generation outright is a far worse trade than losing a token count."""
+    seen = {}
+
+    def handler(request):
+        seen.update(__import__("json").loads(request.content))
+        return httpx.Response(200, text="data: [DONE]\n\n")
+
+    client = make_client(handler)
+    [c async for c in client.stream([], "m", "", "https://api.example/v1")]
+    assert "stream_options" not in seen
+    assert "usage" not in seen

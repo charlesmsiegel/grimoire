@@ -1042,8 +1042,10 @@ async def post_campaign_voice_anchor_generate(cid: str, char: str,
         # See the world-side route: `{}` and `{"data": ["speech"]}` are both
         # supported card state, and the template renders "(none)" per field.
         data = card.get("data")
-        text = await _bounded_call(client.complete(
-            store.voice_anchors.build_prompt(data if isinstance(data, dict) else {}), conn))
+        with store.usage.meter("voice-anchor", campaign=cid) as m:
+            text = await _bounded_call(client.complete(
+                store.voice_anchors.build_prompt(data if isinstance(data, dict) else {}),
+                conn, m.usage))
     except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     return {"voice_anchor": store.voice_anchors.parse_output(text)}
