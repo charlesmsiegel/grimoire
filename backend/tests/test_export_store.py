@@ -211,9 +211,14 @@ def test_an_image_whose_bytes_name_no_format_is_dropped_from_the_export(monkeypa
     assert assets.image_path(croot, docks, "default", "pier", base="locations") is not None
 
 
-def test_an_unreadable_image_is_dropped_rather_than_failing_the_export(monkeypatch, tmp_path):
+def test_an_image_we_cannot_open_is_dropped_rather_than_failing_the_export(monkeypatch, tmp_path):
     """It used to register at collect and raise at zip time, taking the whole
-    export with it. A book missing one image beats no book."""
+    export with it. A book missing one image beats no book.
+
+    A directory standing where the file was is the reachable version of this:
+    `image_path` resolves by glob and does not check what it found, so the
+    export is handed a path it cannot open. A permission-denied file is the
+    same branch and cannot be set up as root."""
     wid, cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     docks = entities.create_entity(croot, "locations", "The Docks", body="piers")
