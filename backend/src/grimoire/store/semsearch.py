@@ -30,11 +30,13 @@ transcripts already use) and merges neighbours up to `PASSAGE_BYTES`. A record
 is then ranked by its *closest* passage, and its snippet is that passage. Text
 with no posts in it is cut on word boundaries at the same bound.
 
-`MAX_PASSAGES` caps how many pieces one record contributes. That bounds both
-the cost of a query and the share of the cache any one record can take, at the
-price of leaving the tail of a very long transcript unsearchable *semantically*
-— the keyword sweep still reads all of it, which is the honest division of
-labour between an index-free exact match and a bounded approximate one.
+There is deliberately **no cap on how many passages one record contributes**.
+An earlier draft capped it, which was wrong twice over: `passages` cuts the
+whole text either way, so the cap discarded work already done rather than
+avoiding it, and `corpus` then counted what survived the cap — so the page
+could report "indexed 40 of 40" while the tail of every long scene had never
+entered the corpus at all. A silent truncation dressed as complete coverage.
+What bounds the cost is `WARM_LIMIT`, per query, where the reader can see it.
 
 ## What it promises
 
@@ -76,10 +78,6 @@ MODE = "semantic"
 #: short lore entry is one passage and a long one is a handful, and so a full
 #: warm run stays well inside the provider's per-request byte ceiling.
 PASSAGE_BYTES = 1500
-
-#: Passages one record may contribute. See the module docstring: this bounds
-#: the query's cost and any single record's share of the cache.
-MAX_PASSAGES = 8
 
 #: UTF-8 bytes of the query that get embedded. A search box query is short;
 #: this is a bound on a paste, not on typing.
@@ -129,7 +127,12 @@ def passages(text: str) -> list[str]:
     Post markers first, byte bound second: a transcript comes apart at its
     speakers and a run of short posts is merged back into one passage, so the
     unit is a scene beat rather than a line. Prose with no markers is cut on
-    word boundaries. Nothing is dropped and nothing is cut mid-word.
+    word boundaries, and nothing is cut mid-word.
+
+    One thing *is* dropped, and only one: the tail of a single "word" longer
+    than `PASSAGE_BYTES` — see `_split_long`. That is a pasted blob or a
+    corrupt file rather than prose, and the alternative is a request the
+    provider refuses.
     """
     text = " ".join((text or "").split())
     if not text:
@@ -214,7 +217,7 @@ def _records(scope: str, root: str) -> Iterator[dict]:
         # record was found by in keyword mode (`keys`, `owners`, `tags`), and a
         # query about what an entry is *for* should reach those too. A record
         # with no text at all is embedded as its own name.
-        chunks = passages(doc["text"] or doc["name"])[:MAX_PASSAGES]
+        chunks = passages(doc["text"] or doc["name"])
         if not chunks:
             continue
         yield {"scope": scope_name, "root": rid, "root_name": root_name,
@@ -290,8 +293,18 @@ def search_semantic(q: str, *, scope: str = "", root: str = "",
     # design otherwise calls small — and this package runs on Android. Pass one
     # reads the cache to find out what is missing and drops every vector as it
     # goes; pass two reads it again and never holds more than one record's
-    # worth. The cost is reading the cache twice, which `vectors.py` measured
-    # at ~58ms per 500 vectors.
+    # worth.
+    #
+    # The cost, stated at the scale it actually bites rather than a flattering
+    # one: `vectors.py` measured 58ms per 500 vectors, so a warm store of 5000
+    # passages spends about 1.2s per query reading its cache twice. That is a
+    # deliberate, debounce-free action by a reader who is also waiting on an
+    # HTTP round trip, so it is affordable — but it is the reason this is
+    # bounded by what a person searches for rather than by what a turn costs.
+    # The cheaper shape (probe for existence in pass one, read only in pass
+    # two) was rejected: a file that exists and fails its checksum has to count
+    # as missing, or it is never re-embedded and its record is unscorable for
+    # good — the exact permanent-stuck failure `warm_window` exists to avoid.
     uncached = _uncached(space, _records(scope, root))
     query_text = embed_space.clip(query, QUERY_BYTES)
     missing = embed_space.warm_window(uncached, query_text, WARM_LIMIT)

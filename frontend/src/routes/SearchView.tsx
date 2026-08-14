@@ -182,11 +182,19 @@ export default function SearchView() {
     }, { replace });
   }, [setParams]);
 
+  // Keyword search runs on settled typing; meaning search waits to be asked.
+  //
+  // The difference is money, not latency. A keyword sweep is local disk, so a
+  // wasted one costs nothing anybody pays for. Every semantic query embeds the
+  // query against a metered endpoint and warms up to `WARM_LIMIT` passages
+  // behind it — so search-as-you-type bills the reader for four answers they
+  // never see on the way to spelling a five-letter word, and the responses to
+  // three of them are dropped on arrival by design.
   useEffect(() => {
-    if (draft === q) return;
+    if (mode === "semantic" || draft === q) return;
     const timer = window.setTimeout(() => setQuery({ q: draft }, true), SETTLE_MS);
     return () => window.clearTimeout(timer);
-  }, [draft, q, setQuery]);
+  }, [draft, q, mode, setQuery]);
 
   useEffect(() => {
     if (!q.trim()) { setResult(null); setFailed(false); return; }
@@ -287,8 +295,11 @@ export default function SearchView() {
   const answered = result?.mode ?? "keyword";
   const fellBack = result !== null && result.requested_mode === "semantic"
     && answered !== "semantic";
-  const partial = answered === "semantic" && result?.corpus
-    && (result.indexed ?? 0) < result.corpus;
+  // Coerced, not left as `corpus && …`: that expression is a NUMBER, and React
+  // renders a 0 where it skips a false. An empty library printed a bare zero
+  // into the page.
+  const partial = !!(answered === "semantic" && result?.corpus
+    && (result.indexed ?? 0) < result.corpus);
 
   return (
     <PageShell column={column} footer={footer} columnLabel="Search filters">
@@ -360,7 +371,9 @@ export default function SearchView() {
                         onClick={() => setQuery({ scope: "", kind: "" }, false)}>
                   Search everywhere instead →
                 </button>
-              : "Every term has to appear; a quoted phrase has to appear whole."}
+              : mode === "semantic"
+                ? "Nothing in the library reads as close enough to that."
+                : "Every term has to appear; a quoted phrase has to appear whole."}
           </p>
         )}
 

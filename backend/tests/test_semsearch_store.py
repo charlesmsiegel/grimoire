@@ -307,3 +307,25 @@ def test_a_vector_that_could_not_be_saved_is_not_counted_as_indexed(world, provi
     monkeypatch.setattr(semsearch.vectors, "save", lambda *a, **kw: None)
     out = semsearch.search_semantic("brine")
     assert out["corpus"] > 0 and out["indexed"] == 0 and out["hits"] == []
+
+
+def test_the_tail_of_a_long_transcript_is_searchable_not_silently_dropped(world, provider,
+                                                                          monkeypatch):
+    """A per-record passage cap was a coverage lie: `corpus` counted what
+    survived it, so a page could say "indexed 40 of 40" while half of every
+    long scene had never been in the corpus at all. And it saved nothing —
+    `passages` cuts the whole text either way, so the cap only ever discarded
+    work already done."""
+    _, root = world
+    wid, _ = world
+    configure()
+    cid = campaigns.create_campaign("The Long Run", wid)
+    sid = scenes.create_scene(cid, "A very long night")
+    for _ in range(40):
+        scenes.append_message(cid, sid, "user", "gravel " * 250)
+    scenes.append_message(cid, sid, "assistant", "brine at the very end")
+    provider.rules = [("brine", NEAR)]
+    monkeypatch.setattr(semsearch, "WARM_LIMIT", 10_000)
+    out = run("brine", rounds=2, scope="campaign")
+    assert [h["kind"] for h in out["hits"] if h["kind"] == "scenes"] == ["scenes"]
+    assert out["indexed"] == out["corpus"]

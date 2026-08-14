@@ -259,3 +259,42 @@ test("a fully indexed semantic answer does not nag about indexing", async () => 
   await screen.findByRole("button", { name: /the salt pact/i });
   expect(screen.queryByText(/of 100 passages/i)).not.toBeInTheDocument();
 });
+
+test("an empty library in semantic mode does not print a stray zero", async () => {
+  // `result.corpus && …` is a number, and React renders a 0 rather than
+  // skipping it. A library with nothing in it yet would have printed one.
+  (api.search as any).mockResolvedValue(result([], {
+    mode: "semantic", requested_mode: "semantic", note: "", terms: [],
+    indexed: 0, corpus: 0,
+  }));
+  const { container } = show("/search?q=salt&mode=semantic");
+  await screen.findByText(/nothing matches/i);
+  // The stray renders as a bare text node among the page's blocks, which is
+  // what this looks for — "0 results" is a legitimate string inside one.
+  const stray = [...(container.querySelector(".page-wide")?.childNodes ?? [])]
+    .filter((n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim());
+  expect(stray.map((n) => n.textContent)).toEqual([]);
+});
+
+test("an empty semantic result does not explain the keyword rules", async () => {
+  (api.search as any).mockResolvedValue(result([], {
+    mode: "semantic", requested_mode: "semantic", note: "", terms: [],
+    indexed: 10, corpus: 10,
+  }));
+  show("/search?q=salt&mode=semantic");
+  await screen.findByText(/nothing matches/i);
+  expect(screen.queryByText(/every term has to appear/i)).not.toBeInTheDocument();
+});
+
+test("meaning mode waits to be asked rather than searching as you type", async () => {
+  // Every semantic query is a paid call to an embeddings endpoint. Firing one
+  // per settled keystroke bills the reader for four answers they never see.
+  show("/search?mode=semantic");
+  const box = screen.getByRole("searchbox", { name: /search the library/i });
+  fireEvent.change(box, { target: { value: "salt" } });
+  await new Promise((r) => setTimeout(r, 400));
+  expect(api.search).not.toHaveBeenCalled();
+  fireEvent.submit(box.closest("form")!);
+  await waitFor(() => expect(api.search).toHaveBeenCalledWith(
+    "salt", { scope: "", kinds: [], mode: "semantic" }));
+});
