@@ -88,13 +88,15 @@ def test_download_bytes_swallows_errors(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_ambient_proxy(monkeypatch):
-    """Pinning stands down behind a proxy, so no test may inherit one.
+    """No test may inherit an ambient proxy.
 
-    Patched at urllib rather than at `fetch._proxied` so these tests still run
-    the real decision, and so a dev box with a system-wide proxy configured
-    tests the same thing CI does.
+    httpx reads the environment (`trust_env`), and a dev box or CI runner that
+    exports `HTTPS_PROXY` would otherwise send the real-socket tests below to
+    the proxy instead of to the loopback server they stand up.
     """
-    monkeypatch.setattr(fetch.urllib.request, "getproxies", dict)
+    for var in ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY",
+                "HTTPS_PROXY", "ALL_PROXY"):
+        monkeypatch.delenv(var, raising=False)
 
 
 def test_resolve_allowed_returns_the_validated_addresses(monkeypatch):
@@ -114,7 +116,7 @@ def test_resolve_allowed_blocks_private_and_unresolvable(monkeypatch):
     assert fetch.resolve_allowed("nope.example.test") is None
 
 
-def _split_resolution(monkeypatch, hostname, rebound="127.0.0.1"):
+def _split_resolution(monkeypatch, hostname):
     """Answer the first lookup of `hostname` publicly and every later one privately.
 
     That is the rebinding attacker: the guard's resolution says one thing, the
@@ -126,7 +128,7 @@ def _split_resolution(monkeypatch, hostname, rebound="127.0.0.1"):
         seen.append(host)
         if host == hostname:
             first = seen.count(hostname) == 1
-            return _addrinfo(PUBLIC_IP if first else rebound, port)
+            return _addrinfo(PUBLIC_IP if first else "127.0.0.1", port)
         return _addrinfo(host, port)  # a literal resolves to itself
 
     monkeypatch.setattr(fetch.socket, "getaddrinfo", fake)
@@ -185,6 +187,34 @@ def test_ipv6_literal_host_is_bracketed(monkeypatch):
     assert req.headers["Host"] == "img.example.test"
 
 
+def test_an_idn_host_is_resolved_verified_and_sent_as_one_name(monkeypatch):
+    """The name checked must be the name fetched, down to the encoding.
+
+    `faß.example` is the case where the encodings disagree: IDNA 2008 (httpx,
+    and therefore the `Host` header) says `xn--fa-hia.example`, the stdlib's
+    IDNA 2003 codec says `fass.example` — a different host, with a different
+    owner and a different certificate.
+    """
+    asked: list[str] = []
+
+    def fake(host, port=None, *a, **kw):
+        asked.append(host)
+        return _addrinfo(PUBLIC_IP, port)
+
+    monkeypatch.setattr(fetch.socket, "getaddrinfo", fake)
+    transport, seen = _recording_transport(
+        lambda req: httpx.Response(200, content=PNG, headers={"content-type": "image/png"}))
+
+    fetch._http_get_bytes("https://faß.example/a.png", transport=transport)
+
+    a_label = "xn--fa-hia.example"
+    req, = seen
+    assert asked == [a_label]
+    assert req.headers["Host"] == a_label
+    assert req.extensions["sni_hostname"] == a_label
+    assert req.url.host == PUBLIC_IP
+
+
 def test_each_redirect_hop_is_pinned_to_its_own_validated_ip(monkeypatch):
     hops = {"one.example.test": PUBLIC_IP, "two.example.test": "151.101.1.140"}
     monkeypatch.setattr(fetch.socket, "getaddrinfo",
@@ -223,6 +253,24 @@ def test_relative_redirect_keeps_the_hostname_rather_than_the_pinned_ip(monkeypa
     assert seen[1].headers["Host"] == "img.example.test"
     assert seen[1].url.host == PUBLIC_IP
     assert seen[1].extensions["sni_hostname"] == "img.example.test"
+
+
+@pytest.mark.parametrize("host", [
+    "127.0.0.1", "localhost", "2130706433", "0x7f.0.0.1", "127.1", "[::1]",
+    "0.0.0.0", "169.254.169.254", "10.0.0.5",
+])
+def test_a_blocked_first_hop_is_never_sent(host):
+    """The primary case, and the one every other test only covers in passing.
+
+    The obfuscated spellings are here because the guard resolves rather than
+    parses: `2130706433` and `0x7f.0.0.1` are `127.0.0.1` to `getaddrinfo`,
+    and a check that pattern-matched the URL text would wave them through.
+    """
+    transport, seen = _recording_transport(lambda req: httpx.Response(200, content=PNG))
+
+    with pytest.raises(ValueError, match="blocked host"):
+        fetch._http_get_bytes(f"http://{host}/a.png", transport=transport)
+    assert seen == []
 
 
 def test_redirect_to_a_blocked_host_is_rejected_before_connecting(monkeypatch):
@@ -276,47 +324,6 @@ def test_falls_back_to_the_next_validated_address_when_one_refuses(monkeypatch):
     assert [r.url.host for r in seen] == [PUBLIC_IP, "151.101.1.140"]
 
 
-def test_proxied_reads_the_environment_httpx_reads(monkeypatch):
-    monkeypatch.setattr(fetch.urllib.request, "getproxies",
-                        lambda: {"https": "http://proxy.example.test:3128"})
-    monkeypatch.setattr(fetch.urllib.request, "proxy_bypass", lambda host: False)
-    assert fetch._proxied("https", "img.example.test") is True
-    assert fetch._proxied("http", "img.example.test") is False  # https_proxy only
-
-    monkeypatch.setattr(fetch.urllib.request, "proxy_bypass", lambda host: True)
-    assert fetch._proxied("https", "img.example.test") is False  # in no_proxy
-
-
-def test_no_proxy_configured_means_no_proxy(monkeypatch):
-    monkeypatch.setattr(fetch.urllib.request, "getproxies", dict)
-    assert fetch._proxied("https", "img.example.test") is False
-
-
-def test_a_proxied_request_keeps_the_hostname_and_still_checks_the_host(monkeypatch):
-    """The proxy resolves the name and connects, so pinning would only break it.
-
-    Rewriting the URL to an IP makes a hostname-allowlisting proxy refuse the
-    CONNECT outright, and buys nothing: the lookup we would be pinning is not
-    the one that decides where the bytes come from.
-    """
-    monkeypatch.setattr(fetch, "_proxied", lambda scheme, host: True)
-    _split_resolution(monkeypatch, "img.example.test")
-    transport, seen = _recording_transport(
-        lambda req: httpx.Response(200, content=PNG, headers={"content-type": "image/png"}))
-
-    content, _ = fetch._http_get_bytes("https://img.example.test/a.png", transport=transport)
-
-    assert content == PNG
-    req, = seen
-    assert req.url.host == "img.example.test"
-
-    # ...and the guard still runs: a host that resolves private is still refused.
-    monkeypatch.setattr(fetch.socket, "getaddrinfo",
-                        lambda host, port=None, *a, **kw: _addrinfo("169.254.169.254", port))
-    with pytest.raises(ValueError, match="blocked host"):
-        fetch._http_get_bytes("https://metadata.example.test/latest", transport=transport)
-
-
 class _PngHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
 
@@ -358,15 +365,24 @@ def test_pinned_request_reaches_a_real_server_addressed_to_the_hostname(monkeypa
 
 
 def _self_signed(tmp_path, name):
-    """A cert/key pair for `name`, or None where openssl isn't installed."""
+    """A cert/key pair for `name`, or None where openssl can't make one.
+
+    None rather than a raise for a failed run too, not just a missing binary:
+    `-addext` is OpenSSL 1.1.1+, and a box whose `openssl` is an older LibreSSL
+    would otherwise turn "this environment can't host the TLS case" into a red
+    suite for a contributor who changed nothing.
+    """
     if not shutil.which("openssl"):
         return None
     cert, key = tmp_path / f"{name}.pem", tmp_path / f"{name}.key"
-    subprocess.run(
-        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-         "-keyout", str(key), "-out", str(cert), "-days", "1",
-         "-subj", f"/CN={name}", "-addext", f"subjectAltName=DNS:{name}"],
-        check=True, capture_output=True)
+    try:
+        subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+             "-keyout", str(key), "-out", str(cert), "-days", "1",
+             "-subj", f"/CN={name}", "-addext", f"subjectAltName=DNS:{name}"],
+            check=True, capture_output=True)
+    except (subprocess.CalledProcessError, OSError):
+        return None
     return cert, key
 
 
@@ -378,7 +394,7 @@ def tls_server(tmp_path):
     def start(name):
         pair = _self_signed(tmp_path, name)
         if pair is None:
-            pytest.skip("openssl not installed")
+            pytest.skip("no openssl able to issue a test certificate")
         cert, key = pair
         server = ThreadingHTTPServer(("127.0.0.1", 0), _PngHandler)
         server.seen_hosts = []
@@ -408,13 +424,17 @@ def test_tls_verifies_the_hostname_even_though_it_connected_to_an_ip(monkeypatch
     assert content == PNG and ctype == "image/png"
 
 
-def test_tls_rejects_a_certificate_issued_to_another_name(monkeypatch, tls_server):
+def test_tls_rejects_a_certificate_issued_to_another_name(monkeypatch, tls_server, tmp_path):
     """The counterpart: verification is really happening, not merely configured."""
-    port, _ = tls_server("other.example.test")
-    _, ours = tls_server("img.example.test")
+    port, _ = tls_server("other.example.test")  # skips here if openssl is absent
+    ours, _key = _self_signed(tmp_path, "img.example.test")  # trusted, but unserved
     monkeypatch.setattr(fetch, "_SSL_CTX", ssl.create_default_context(cafile=str(ours)))
     monkeypatch.setattr(fetch, "resolve_allowed", lambda host: ["127.0.0.1"])
 
+    # The reason matters: `download_url` returns None for a refused connection
+    # too, so asserting None alone would pass on a server that never started.
+    with pytest.raises(httpx.ConnectError, match="(?i)certificate"):
+        fetch._http_get_bytes(f"https://img.example.test:{port}/a.png")
     assert fetch.download_url(f"https://img.example.test:{port}/a.png") is None
 
 
