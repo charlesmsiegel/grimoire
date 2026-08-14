@@ -81,6 +81,13 @@ def _beats(threads, known: frozenset[str]) -> tuple[dict[str, list[dict]], list[
     """
     by_scene: dict[str, list[dict]] = {}
     roster: dict[str, dict] = {}
+    # Sorted so a card's beats are grouped by thread in a fixed order. For a
+    # file this app wrote that is already true — `plot._write` dumps with
+    # `sort_keys=True` — so this is what holds for a hand-edited one, whose keys
+    # arrive in whatever order they were typed. The alternative, ordering a
+    # scene's beats by when they were recorded, is not available: plot.json
+    # keeps beats per thread and no cross-thread sequence exists to read.
+    #
     # Filtered before sorting, not by a sort key: `sorted` on the raw items
     # compares a non-string id against a string and raises, which would cost
     # every beat in the campaign for one hand-edited key.
@@ -115,6 +122,16 @@ def build(cid: str) -> dict:
     a broken chronicle.json costs the summaries, and the scenes survive both.
     That is the contract ``plot.render_open`` set and ``get_ledger`` and
     ``briefing.build`` kept.
+
+    **Every** scene, uncapped, unlike the ledger's chronicle section (which
+    keeps the last ``LEDGER_RECENT``). The two are answering different
+    questions: that section is a recent-facts panel, where the tail is the whole
+    value, and this is a play history, where a silent truncation would present a
+    campaign's first fifty scenes as if they were all of it. The cost is bounded
+    by what the shelf already pays — ``GET /campaigns`` runs ``list_scenes``
+    over every campaign on it — and no transcript is opened here either. If this
+    ever does need a window, it needs to be one the client can see and page,
+    not a cap that looks like completeness.
     """
     def _tolerant(read, empty):
         try:
@@ -149,8 +166,14 @@ def build(cid: str) -> dict:
             # uses (`context.story._story_entries`, `get_ledger`): a save may
             # leave `one_line` empty, and a card with only its title is a blank
             # line rather than a scene.
+            #
+            # The full `summary` is deliberately NOT shipped beside it. Nothing
+            # renders it — a card is one line — and it is the largest field in
+            # the record, so sending it would put the whole campaign's absorbed
+            # prose on the wire for every load of a view that shows none of it.
+            # The fallback above is what keeps its content reachable in the one
+            # case it matters, a save that left `one_line` empty.
             "one_line": _text(rec.get("one_line")) or _text(rec.get("summary")),
-            "summary": _text(rec.get("summary")),
             # The scene's OWN opening moment first (`time_history[0]`, which
             # `list_scenes` already projects as `date`). It is stamped when the
             # scene gets a datetime, absorbed or not, and it is when the scene

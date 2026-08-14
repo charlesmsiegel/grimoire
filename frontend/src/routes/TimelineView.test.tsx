@@ -12,7 +12,7 @@ import { api } from "../api/client";
 const EMPTY = { scenes: [], threads: [] };
 
 const scene = (over: Partial<Record<string, unknown>> & { id: string; title: string }) => ({
-  one_line: "", summary: "", date: "", location: "",
+  one_line: "", date: "", location: "",
   done: false, pcless: false, beats: [], ...over,
 });
 
@@ -26,7 +26,7 @@ const PLAYED = {
   ],
   scenes: [
     scene({ id: "001--first-light", title: "First Light", one_line: "They met at the pier.",
-            summary: "They met at the pier. At length.", date: "28 Sowing",
+            date: "28 Sowing",
             location: "The Pier", done: true,
             beats: [{ thread: "sea-wall", title: "The sea wall", status: "closed",
                       text: "Winifred named the debt." }] }),
@@ -65,10 +65,23 @@ function renderTimeline(entry = "/campaigns/run/timeline") {
 function Hotkey() { usePaletteHotkey(); return null; }
 
 const column = () => within(screen.getByRole("complementary"));
-const cards = () => screen.getAllByRole("listitem").filter((li) => li.classList.contains("timeline-card"));
+const cards = () =>
+  screen.queryAllByRole("listitem").filter((li) => li.classList.contains("timeline-card"));
 const titles = () => cards().map((c) => within(c).getByRole("heading").textContent);
-const cardFor = (text: RegExp) =>
-  cards().find((c) => text.test(c.textContent ?? "")) as HTMLElement;
+/** The card matching `text`, or a throw.
+ *
+ *  The throw is load-bearing, not defensive: these are read through `waitFor`,
+ *  which retries only while its callback throws. A `find` that returns
+ *  `undefined` resolves the wait on the first tick, so the assertion after it
+ *  runs against a page that has not rendered yet — and reports whatever
+ *  confusing thing a property access on `undefined` produces instead of "the
+ *  card never appeared". `cards()` used to throw on an empty page and covered
+ *  for this by accident, until a test needed to assert that the page IS empty. */
+const cardFor = (text: RegExp): HTMLElement => {
+  const hit = cards().find((c) => text.test(c.textContent ?? ""));
+  if (!hit) throw new Error(`no timeline card matching ${text}`);
+  return hit;
+};
 
 // ---- the cards -------------------------------------------------------------
 
@@ -94,6 +107,18 @@ test("a scene that was never absorbed still gets a card, and says so", async () 
   const open = await waitFor(() => cardFor(/Verdigris/));
   expect(open).toHaveTextContent(/Not absorbed yet/);
   expect(within(open).getByText("IN PLAY")).toBeInTheDocument();
+});
+
+test("an offscreen scene is marked as one", async () => {
+  // A director-driven scene seats no PC, and on a play history that is a fact
+  // about the scene rather than a gap in it.
+  (api.campaignTimeline as any).mockResolvedValue({
+    threads: [],
+    scenes: [scene({ id: "001", title: "The Reeve Alone", pcless: true })],
+  });
+  renderTimeline();
+  const card = await waitFor(() => cardFor(/The Reeve Alone/));
+  expect(within(card).getByText("OFFSCREEN")).toBeInTheDocument();
 });
 
 test("a card is the way back into its scene", async () => {
@@ -146,6 +171,25 @@ test("threads are multi-select, and OR — two chips widen rather than narrow", 
     expect(titles()).toEqual(["First Light", "The Long Tide", "The Turning"]));
 });
 
+test("a thread's count follows the other filters rather than contradicting the page",
+  async () => {
+    // The column must not read "2" beside a chip that produces nothing when
+    // clicked. Counting over the whole campaign did exactly that the moment a
+    // second filter was on — the same lesson SHOW RETIRED taught the ledger.
+    (api.campaignTimeline as any).mockResolvedValue(PLAYED);
+    renderTimeline();
+    await waitFor(() => expect(cards()).toHaveLength(3));
+    const seaWall = () => column().getByRole("button", { name: /the sea wall/i });
+    expect(seaWall()).toHaveTextContent("2");
+
+    // The sea wall moved only in absorbed scenes, so under NOT ABSORBED it
+    // touches none of what is on screen.
+    fireEvent.click(column().getByRole("button", { name: /^not absorbed$/i }));
+    await waitFor(() => expect(seaWall()).toHaveTextContent("0"));
+    fireEvent.click(seaWall());
+    await waitFor(() => expect(cards()).toHaveLength(0));
+  });
+
 test("the thread chip on a beat is a filter, not a label", async () => {
   (api.campaignTimeline as any).mockResolvedValue(PLAYED);
   renderTimeline();
@@ -179,9 +223,10 @@ test("the span bounds the timeline by the campaign's own moments", async () => {
   expect(within(from).getAllByRole("option").map((o) => o.textContent))
     .toEqual(["The beginning", "28 Sowing", "3 Reaping", "4 Reaping"]);
 
-  fireEvent.change(from, { target: { value: "1" } });        // 3 Reaping
+  fireEvent.change(from, { target: { value: "3 Reaping" } });
   await waitFor(() => expect(titles()).toEqual(["The Long Tide", "Verdigris & Ash"]));
-  fireEvent.change(column().getByRole("combobox", { name: /to/i }), { target: { value: "1" } });
+  fireEvent.change(column().getByRole("combobox", { name: /to/i }),
+                 { target: { value: "3 Reaping" } });
   await waitFor(() => expect(titles()).toEqual(["The Long Tide"]));
 });
 
@@ -203,14 +248,16 @@ test("an undated scene keeps the place the dated scene before it gave it", async
 
   // "up to 28 Sowing" keeps the undated scene that FOLLOWS it — it happened
   // after that date and before the next — along with everything earlier.
-  fireEvent.change(column().getByRole("combobox", { name: /to/i }), { target: { value: "0" } });
+  fireEvent.change(column().getByRole("combobox", { name: /to/i }),
+                   { target: { value: "28 Sowing" } });
   await waitFor(() =>
     expect(titles()).toEqual(["Before Time", "First Light", "The Small Hours"]));
 
   // And the other bound is where the scene before every dated one drops out:
   // it genuinely precedes the first known moment, so it is in no span that
   // starts at one.
-  fireEvent.change(column().getByRole("combobox", { name: /from/i }), { target: { value: "0" } });
+  fireEvent.change(column().getByRole("combobox", { name: /from/i }),
+                   { target: { value: "28 Sowing" } });
   await waitFor(() => expect(titles()).toEqual(["First Light", "The Small Hours"]));
 });
 
