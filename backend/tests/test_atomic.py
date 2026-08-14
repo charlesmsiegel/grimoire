@@ -371,11 +371,40 @@ def test_no_api_hands_out_the_temp_pathname(tmp_path):
     public = sorted(
         n for n, v in vars(atomic).items()
         if not n.startswith("_") and callable(v) and getattr(v, "__module__", "") == atomic.__name__)
-    # `append_line` writes THROUGH a caller-named path (#152's ledger), never
-    # via a temp whose name it hands back, so it adds no swap window -- the pin
-    # is on the shape of the API, and this entry is the reviewed addition.
-    assert public == ["append_line", "write_bytes", "write_text"], \
+    # Two reviewed additions, neither of which hands back a temp's name.
+    # `append_line` writes THROUGH a caller-named path (#152's ledger), so it
+    # opens no swap window at all; `streaming_write` uses a temp but yields the
+    # file OBJECT, which the test below pins directly. The list is the shape of
+    # the API, and every entry on it is here because someone argued for it.
+    assert public == ["append_line", "streaming_write", "write_bytes", "write_text"], \
         f"unexpected public API: {public}"
+
+
+def test_the_streaming_writer_yields_a_handle_and_never_a_path(tmp_path):
+    """`streaming_write` exists for a payload too large to hold in memory (a
+    store backup), which is exactly the shape of the API that opened the
+    symlink-swap window. It yields the temp's file OBJECT, so the pathname is
+    still never something another process can substitute -- pinned here beside
+    the rule it could otherwise be read as an exception to."""
+    p = tmp_path / "big.zip"
+    with atomic.streaming_write(p) as fh:
+        assert not isinstance(fh, (str, os.PathLike)), "a pathname was yielded"
+        fh.write(b"payload")
+        assert not p.exists(), "published before the writer finished"
+    assert p.read_bytes() == b"payload"
+
+
+def test_a_failed_streaming_write_publishes_nothing_and_leaves_no_litter(tmp_path):
+    p = tmp_path / "big.zip"
+    _write_prior(p)
+
+    with pytest.raises(RuntimeError):
+        with atomic.streaming_write(p) as fh:
+            fh.write(b"half of an archive")
+            raise RuntimeError("interrupted")
+
+    assert p.read_text(encoding="utf-8") == PRIOR
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["big.zip"]
 
 
 def test_group_ownership_and_xattrs_are_carried_over(tmp_path, monkeypatch):

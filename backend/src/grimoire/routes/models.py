@@ -38,6 +38,10 @@ class ConfigUpdate(BaseModel):
     semantic_recall_threshold: str | None = None
     prompt_layout_enabled: str | None = None
     speaker_turn_taking: str | None = None
+    backup_enabled: str | None = None
+    backup_interval_hours: str | None = None
+    backup_keep: str | None = None
+    backup_dir: str | None = None
 
 
 class PromptLayoutSection(BaseModel):

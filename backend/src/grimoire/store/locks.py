@@ -329,6 +329,11 @@ class CampaignBusy(StoreBusy):
         super().__init__(cid, "campaign")
 
 
+class BackupBusy(StoreBusy):
+    def __init__(self, name: str = "backups"):
+        super().__init__(name, "store backup")
+
+
 class ModuleEditBusy(StoreBusy):
     def __init__(self, name: str = "module-edit"):
         super().__init__(name, "module library")
@@ -558,6 +563,30 @@ def config_lock() -> _ProcessScopedLock:
     the ordering rules above and cannot participate in a cycle.
     """
     return _config
+
+
+_backups = _ProcessScopedLock("domain", "backups", BackupBusy)
+
+
+def backup_lock() -> _ProcessScopedLock:
+    """The store-wide backup lock (#32).
+
+    One archive of one store at a time. Two backups running together would zip
+    the same library twice for nothing, and -- worse -- a retention sweep that
+    listed the directory while another run was publishing into it can delete
+    by a count it took before the newest archive existed. Cross-process for the
+    same reason the others are: the schedule belongs to the store, and a second
+    grimoire on the same synced folder is exactly the case this exists for.
+
+    A leaf, like `config_lock`: nothing under it takes another lock, so it has
+    no place in the ordering rules above and cannot participate in a cycle. It
+    deliberately does **not** take the campaign locks -- an archive of a
+    hundred campaigns cannot hold a hundred locks for the length of a zip
+    without stalling play, so a backup taken mid-write can catch one campaign's
+    two files a moment apart. That is the accepted trade, and it is why the
+    archive is a coarse restore point rather than a transactional snapshot.
+    """
+    return _backups
 
 
 _module_edit = _ProcessScopedLock("domain", "module-edit", ModuleEditBusy)

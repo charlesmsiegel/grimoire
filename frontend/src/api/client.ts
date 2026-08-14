@@ -176,6 +176,15 @@ export type Config = {
   prompt_layout_enabled: string;
   /** "on" renders the active-speaker section in group scenes; "off" default. */
   speaker_turn_taking: string;
+  /** "on" once automatic backups are enabled (#32); "off" on every install
+   *  until someone turns them on. */
+  backup_enabled: string;
+  /** Hours between automatic backups. */
+  backup_interval_hours: string;
+  /** Archives kept by the retention sweep; "0" keeps every one. */
+  backup_keep: string;
+  /** Where archives are written; "" means `<data dir>/backups`. */
+  backup_dir: string;
 };
 /**
  * The subset of Config the Configuration page writes — the mirror of the
@@ -191,7 +200,21 @@ export type ConfigUpdate = Partial<Pick<Config,
   "turnstate_depth" | "promote_streak" | "rolling_summary_every" |
   "embeddings_connection_id" | "embeddings_model" |
   "semantic_recall_depth" | "semantic_recall_threshold" |
-  "prompt_layout_enabled" | "speaker_turn_taking">>;
+  "prompt_layout_enabled" | "speaker_turn_taking" |
+  "backup_enabled" | "backup_interval_hours" | "backup_keep" | "backup_dir">>;
+/** One archive written by `store/backups.py`. */
+export type BackupEntry = {
+  name: string;
+  /** Bytes on disk. */
+  size: number;
+  /** When it was taken, read from its own filename. */
+  created: string;
+};
+/** The archives, and the directory they live in — which is a setting, so the
+ *  answer to "why is this list empty" is often "you moved it". */
+export type BackupList = { dir: string; backups: BackupEntry[] };
+/** A `POST /api/backups`: the refreshed listing, plus what that call did. */
+export type BackupRun = BackupList & { created: string; swept: string[] };
 export type DataDirInfo = {
   data_dir: string;
   default: string;
@@ -1134,6 +1157,11 @@ export const api = {
    *  neighbours, so sending a subset would barely reorder anything. */
   putPromptLayout: (sections: { id: string; label: string; enabled: boolean }[]) =>
     request<PromptLayout>("PUT", "/api/prompt-layout", { sections }),
+  listBackups: () => request<BackupList>("GET", "/api/backups"),
+  /** Back up now. The response is the refreshed listing, so nothing has to
+   *  re-read it — and it names what retention removed, which is the half of
+   *  the operation nobody sees happen. */
+  createBackup: () => request<BackupRun>("POST", "/api/backups"),
   getDataDir: () => request<DataDirInfo>("GET", "/api/config/data-dir"),
   putDataDir: (data_dir: string | null) =>
     request<DataDirInfo>("PUT", "/api/config/data-dir", { data_dir })
