@@ -259,6 +259,63 @@ def test_config_llm_call_budget_roundtrip(client):
     assert client.get("/api/config").json()["llm_call_budget"] == "45"
 
 
+def test_config_retry_and_fallback_roundtrip(client):
+    """#144's two settings are user-visible like the durations beside them, so
+    they have to survive the same GET/PUT round trip -- a key missing from
+    _CONFIG_KEYS is dropped silently, with no error to notice."""
+    body = client.get("/api/config").json()
+    assert body["llm_retries"] == "2"
+    assert body["fallback_connection_id"] == ""
+    r = client.put("/api/config", json={"llm_retries": "0", "fallback_connection_id": "claude"})
+    assert r.status_code == 200
+    body = client.get("/api/config").json()
+    assert (body["llm_retries"], body["fallback_connection_id"]) == ("0", "claude")
+
+
+def test_the_fallback_resolver_reads_the_configured_connection(client):
+    """The seam #144 hangs on: `llm.py` may not import the store, so routes
+    resolves the fallback *record* and hands it over per generation."""
+    from grimoire.routes import common
+    assert common._fallback_connection() is None      # nothing configured
+    cid = client.post("/api/llm-connections", json={
+        "kind": "openrouter", "name": "Backup", "model": "vendor/backup",
+        "api_key": "sk-backup"}).json()["id"]
+    client.put("/api/config", json={"fallback_connection_id": cid})
+    conn = common._fallback_connection()
+    assert conn["id"] == cid and conn["model"] == "vendor/backup"
+
+
+def test_a_fallback_that_cannot_send_is_no_fallback(client):
+    """Surfacing a misconfigured fallback would replace the primary's real
+    error with a confusing second one about a connection the user was not
+    using -- on exactly the request where they need the first message."""
+    from grimoire.routes import common
+    cid = client.post("/api/llm-connections", json={
+        "kind": "openrouter", "name": "Keyless"}).json()["id"]
+    client.put("/api/config", json={"fallback_connection_id": cid})
+    assert common._fallback_connection() is None
+
+
+def test_a_fallback_pointing_at_a_deleted_connection_is_no_fallback(client):
+    from grimoire.routes import common
+    cid = client.post("/api/llm-connections", json={
+        "kind": "openrouter", "name": "Doomed", "api_key": "sk-x"}).json()["id"]
+    client.put("/api/config", json={"fallback_connection_id": cid})
+    # Deleting clears the reference, so this is belt and braces -- but a
+    # config.md hand-edited to name a connection that never existed reaches the
+    # same place, and must not fail a generation the primary would have served.
+    client.put("/api/config", json={"fallback_connection_id": "never-existed"})
+    assert common._fallback_connection() is None
+
+
+def test_deleting_a_connection_clears_it_as_the_fallback(client):
+    cid = client.post("/api/llm-connections", json={
+        "kind": "openrouter", "name": "Backup", "api_key": "sk-x"}).json()["id"]
+    client.put("/api/config", json={"fallback_connection_id": cid})
+    assert client.delete(f"/api/llm-connections/{cid}").status_code == 200
+    assert client.get("/api/config").json()["fallback_connection_id"] == ""
+
+
 def test_config_active_connection_id_roundtrip(client):
     r = client.put("/api/config", json={"active_connection_id": "claude"})
     assert r.status_code == 200
@@ -1757,6 +1814,132 @@ def test_a_turn_that_fails_with_nothing_takes_its_user_post_back(client):
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == []
     # and it says so, because the client has to give the player their words back
     assert '"post_returned": true' in resp.text
+
+
+# ---- retry with backoff, and the fallback route (#144) ----
+class TransientProvider:
+    """Fails `failures` times with a transient error, then answers. Records the
+    model of every attempt, so a fallback shows up in the record."""
+
+    def __init__(self, failures=1, kind="rate_limit", reply="Recovered."):
+        self.failures = failures
+        self.kind = kind
+        self.reply = reply
+        self.models = []
+
+    async def stream(self, messages, model="", *args, **kwargs):
+        self.models.append(model)
+        if len(self.models) <= self.failures:
+            raise LLMError(self.kind, "upstream is busy")
+        yield self.reply
+
+
+def _real_facade(client, provider, **kw):
+    """The real facade over a fake provider — real, so the retry and the
+    fallback under test are the shipped code and not a fake's idea of them.
+    `common._llm`'s own resolvers are re-created here so the test controls
+    them."""
+    client.app.dependency_overrides[routes.get_llm] = lambda: LLMClient(
+        openrouter=provider, claude=provider, openai_compatible=provider,
+        timeout=120, retries=store.config.llm_retries,
+        fallback=routes.common._fallback_connection, **kw)
+
+
+@pytest.fixture(autouse=True)
+def _instant_backoff(monkeypatch):
+    """Keep the schedule's shape (test_llm.py pins that) but do not sleep
+    through it in a route test."""
+    monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
+
+
+def test_a_streamed_turn_retries_before_a_delta_has_been_sent(client):
+    """The pre-first-token window is where the transient failures live, and it
+    is the only window where a retry is safe."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    client.put("/api/llm-connections/openrouter", json={"model": "primary"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    provider = TransientProvider(failures=2)
+    _real_facade(client, provider)
+
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "and then?"})
+
+    assert resp.status_code == 200
+    assert "Recovered." in resp.text and '"error"' not in resp.text
+    assert provider.models == ["primary"] * 3
+    # and the turn persisted normally, retries and all
+    posts = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert posts[-1]["content"] == "Recovered."
+
+
+def test_retries_stop_at_the_configured_count(client):
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    client.put("/api/config", json={"llm_retries": "1"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    provider = TransientProvider(failures=99)
+    _real_facade(client, provider)
+
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "and then?"})
+
+    assert '"kind": "rate_limit"' in resp.text
+    assert len(provider.models) == 2   # the first attempt plus the one retry
+
+
+def test_a_blocking_generation_retries_too(client):
+    """The five `complete()` call sites #144 names are the naturally-retryable
+    ones: nothing is visible to the reader until the call returns."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    provider = TransientProvider(failures=1, reply="- A storm breaks over Saltmarch")
+    _real_facade(client, provider)
+
+    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+
+    assert r.status_code == 200
+    assert len(provider.models) == 2
+
+
+def test_the_fallback_connection_answers_once_the_primary_is_exhausted(client):
+    client.put("/api/llm-connections/openrouter",
+               json={"api_key": "sk-or-secret", "model": "primary"})
+    backup = client.post("/api/llm-connections", json={
+        "kind": "openrouter", "name": "Backup", "model": "backup",
+        "api_key": "sk-backup"}).json()["id"]
+    client.put("/api/config", json={"llm_retries": "1", "fallback_connection_id": backup})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    provider = TransientProvider(failures=2)
+    _real_facade(client, provider)
+
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "and then?"})
+
+    assert "Recovered." in resp.text
+    assert provider.models == ["primary", "primary", "backup"]
+
+
+def test_with_no_fallback_configured_an_exhausted_connection_is_just_an_error(client):
+    client.put("/api/llm-connections/openrouter",
+               json={"api_key": "sk-or-secret", "model": "primary"})
+    client.put("/api/config", json={"llm_retries": "0"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    provider = TransientProvider(failures=99)
+    _real_facade(client, provider)
+
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "and then?"})
+
+    assert '"kind": "rate_limit"' in resp.text
+    assert provider.models == ["primary"]
+
+
+def test_the_shipped_client_carries_the_retry_and_fallback_resolvers():
+    """The settings are read through resolvers so a Configuration-page change
+    lands without a restart — and so `llm.py` never imports the store. A client
+    built with the numbers baked in would satisfy every test above and still
+    ignore the user."""
+    assert routes.common._llm._retries is store.config.llm_retries
+    assert routes.common._llm._fallback is routes.common._fallback_connection
 
 
 async def test_a_failed_turn_does_not_roll_back_once_a_newer_turn_claimed(monkeypatch, tmp_path):

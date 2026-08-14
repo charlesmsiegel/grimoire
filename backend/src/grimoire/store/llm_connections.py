@@ -139,13 +139,14 @@ def delete_connection(id: str) -> None:
     if not p.exists():
         raise ConnectionNotFound(id)
     # Every config key that names a connection, not just the active one:
-    # `embeddings_connection_id` (semantic recall) points here too, and a
-    # dangling one leaves the layer silently off while the Configuration page
-    # still shows it configured. A list rather than two branches, so the next
-    # key that references a connection is one entry rather than a third copy
-    # of this reasoning.
+    # `embeddings_connection_id` (semantic recall) points here too, as does
+    # `fallback_connection_id` (#144), and a dangling one leaves the layer
+    # silently off while the Configuration page still shows it configured. A
+    # list rather than two branches, so the next key that references a
+    # connection is one entry rather than a third copy of this reasoning.
     cfg = config.read_config()
-    dangling = {key: "" for key in ("active_connection_id", "embeddings_connection_id")
+    dangling = {key: "" for key in ("active_connection_id", "embeddings_connection_id",
+                                    "fallback_connection_id")
                 if cfg.get(key) == id}
     if dangling:
         # Clear these BEFORE unlinking the file, not after — otherwise a

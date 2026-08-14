@@ -139,6 +139,12 @@ export type Config = {
   absorb_budget: string;
   /** Seconds one non-streaming LLM call may take in total; "0" disables. */
   llm_call_budget: string;
+  /** Re-attempts a transiently-failed generation gets before its connection is
+   *  given up on (#144); "0" is the old one-attempt behaviour. */
+  llm_retries: string;
+  /** Connection a generation falls back to once the active one is exhausted,
+   *  tried once; "" = no fallback. */
+  fallback_connection_id: string;
   context_budget: string;
   archive_depth: string;
   /** "on" once the setup wizard has been finished or dismissed (#194). */
@@ -175,6 +181,7 @@ export type Config = {
 export type ConfigUpdate = Partial<Pick<Config,
   "theme" | "system_prompt" | "quote_color" | "user_label" | "assistant_label" |
   "active_connection_id" | "llm_timeout" | "absorb_budget" | "llm_call_budget" |
+  "llm_retries" | "fallback_connection_id" |
   "context_budget" | "archive_depth" | "setup_done" | "prompt_log_depth" |
   "turnstate_depth" | "promote_streak" | "rolling_summary_every" |
   "embeddings_connection_id" | "embeddings_model" |

@@ -196,6 +196,17 @@ def test_deleting_the_connection_clears_the_reference_to_it(store):
     assert config.read_config()["embeddings_connection_id"] == ""
 
 
+def test_deleting_the_connection_clears_a_fallback_reference_too(store):
+    """`fallback_connection_id` names a connection just like the two beside it
+    (#144), and a dangling one is worse than the others: the slug is reusable,
+    so a later connection created under the same name silently inherits the
+    role of "where generation goes when the primary fails"."""
+    cid = llm_connections.create_connection("openrouter", "Backup", api_key="k")
+    config.write_config(fallback_connection_id=cid)
+    llm_connections.delete_connection(cid)
+    assert config.read_config()["fallback_connection_id"] == ""
+
+
 def test_deleting_another_connection_leaves_the_reference_alone(store):
     cid = configure()
     other = llm_connections.create_connection("openai_compatible", "Unrelated",

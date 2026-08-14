@@ -6,6 +6,8 @@ The shared error type lives in `llm_errors.py`, not here — see its docstring.
 from __future__ import annotations
 
 import asyncio
+import logging
+import random
 import time
 from typing import AsyncIterator
 
@@ -13,6 +15,8 @@ from .claude_agent import ClaudeAgentClient
 from .llm_errors import LLMError
 from .openai_compatible import OpenAICompatibleClient
 from .openrouter import OpenRouterClient
+
+log = logging.getLogger(__name__)
 
 # Fallback for a client constructed with no timeout of its own. The real value
 # comes from config.md via the resolver routes injects (#243); this only covers
@@ -35,6 +39,74 @@ _CLOSE_TIMEOUT = 5.0
 # unlike the other two kinds, whose empty model reaches the provider as an
 # empty model.
 CLAUDE_DEFAULT_MODEL = "opus"
+
+# --- retry with backoff, and the fallback route (#144) ---
+#: Failure kinds a second attempt could plausibly fix. `rate_limit` and
+#: `network` are transient by definition, and both fail *fast* -- a refused
+#: connection, a TLS error, a 429 -- which is what makes re-attempting them
+#: nearly free.
+#:
+#: Everything else is deliberately absent, for three different reasons.
+#: `auth`/`missing_key`/`missing_dependency` are configuration: retrying is a
+#: slower way to show the same error. `bad_response` conflates a 500 from an
+#: overloaded provider (worth retrying) with a well-formed 200 whose body the
+#: parser could not use (never worth retrying), and the taxonomy cannot yet
+#: tell them apart -- retrying the pair would hammer a provider over a reply
+#: that will never parse, so it waits for #213 to split the kind.
+#:
+#: `timeout` is the deliberate one. It is transient, and it is still excluded:
+#: unlike the others it costs the *whole* `llm_timeout` to detect, so retrying
+#: it would silently multiply the one bound the user set explicitly -- a 120s
+#: no-reply timeout becoming a six-minute stare at an empty scene, with the
+#: setting still reading 120. "Giving up after N seconds" has to keep meaning
+#: N seconds. A dead upstream is reported once, promptly; if a fallback route
+#: is configured it still gets its turn.
+RETRYABLE_KINDS = frozenset({"rate_limit", "network"})
+#: Retries *after* the first attempt, for a client constructed with no resolver
+#: of its own. The real value comes from config.md via routes, same as the
+#: timeout. Two is enough to ride out a blip and few enough that a genuinely
+#: down provider still reports quickly.
+DEFAULT_RETRIES = 2
+#: Backoff schedule, in seconds: attempt *n* waits somewhere in the upper half
+#: of `min(RETRY_CAP, RETRY_BASE * 2**n)`. Module constants rather than
+#: defaults baked into a signature, because they are the knob tests turn --
+#: setting `RETRY_BASE` to 0 makes a retry test instant.
+RETRY_BASE = 0.5
+RETRY_CAP = 8.0
+
+
+def _backoff_delay(attempt: int) -> float:
+    """Seconds to wait before retry `attempt` (0-based).
+
+    Exponential, capped, and jittered. The jitter is not decoration: a rate
+    limit is usually hit by several calls at once (an absorb fires extraction
+    and one dossier per present NPC), and an unjittered schedule has every one
+    of them retry at the same instant, re-creating the burst that got them
+    rejected. Half the delay is fixed and half is random ("equal jitter"), so
+    the spread is real without ever collapsing the wait to nearly nothing.
+    """
+    ceiling = min(RETRY_CAP, RETRY_BASE * (2 ** attempt))
+    return ceiling / 2 + random.uniform(0, ceiling / 2)
+
+
+def _label(conn: dict) -> str:
+    """How a connection is named in a log line: what the user called it, or
+    whatever identifies it at all for a connection dict that has no name."""
+    return conn.get("name") or conn.get("id") or conn.get("kind") or "?"
+
+
+def _same_route(a: dict, b: dict) -> bool:
+    """Whether two connections would send the same request to the same place.
+
+    Falling back to the connection that just failed is not a fallback: it is a
+    third attempt wearing a different name, and it doubles the time a user
+    waits to be told the provider is down. Identity first, then the store id --
+    two connection dicts read from disk are never the same object.
+    """
+    if a is b:
+        return True
+    aid, bid = a.get("id", ""), b.get("id", "")
+    return bool(aid) and aid == bid
 
 
 def effective_model(conn: dict) -> str:
@@ -199,10 +271,105 @@ async def _guard(agen, timeout: float, tick: float | None = None) -> AsyncIterat
             await _aclose(it)
 
 
+async def _resilient(open_stream, routes, timeout: float,
+                     tick: float | None = None) -> AsyncIterator[str]:
+    """Run `routes` in order, retrying each for as many attempts as it carries.
+
+    `routes` is a list of `(conn, retries)` -- the active connection first,
+    then the configured fallback (if any) with a single attempt of its own, per
+    #144's "tried once after the primary's retries are exhausted".
+
+    **Retrying and falling back are two different questions and are gated
+    separately.** A retry re-runs the request that just failed, so it is only
+    worth doing for the failures a repeat could plausibly fix and detect
+    cheaply (`RETRYABLE_KINDS`). Moving to the *next route* is a different
+    request to a different place, so it is worth doing for any failure at all
+    -- a bad key, an uninstalled SDK, a timeout, a 500 -- because "the primary
+    could not serve this" is the entire condition the user configured a
+    fallback for. So a non-retryable failure stops attempting *this* route
+    immediately and hands the generation to the next one, rather than ending
+    the whole call.
+
+    **Nothing is ever retried once text has reached the caller.** That is the
+    whole reason this wraps `stream` rather than only `complete`: a retry is
+    only safe while the caller has seen nothing, and the facade is the one
+    place that knows. For the blocking routes that is the entire call (nothing
+    is visible until `complete` returns); for the streamed ones it is the
+    pre-first-token window -- connect, auth, rate-limit rejection, and
+    time-to-first-token -- which is where the transient failures actually live.
+    A provider that dies mid-prose still surfaces as an error, because the
+    bytes are already on the wire to the browser and there is no way to retract
+    them. Fixing *that* needs buffered re-streaming or a client-side reconnect
+    protocol; neither exists here, and pretending otherwise would duplicate
+    already-shown text. Option B of #144 says so out loud; this is the code
+    that means it.
+
+    An empty chunk does not count as text. It is either a provider keep-alive
+    or the facade's own heartbeat (`_guard`), and the callers turn it into an
+    SSE comment -- framing, carrying no content, so a fresh attempt after one
+    duplicates nothing.
+
+    Retries are bounded but not free: they run *inside* whatever ceiling the
+    caller already imposes (`routes.common._bounded_call` for the one-shots,
+    the absorb budget for absorb), so a retry sequence can be cut short by
+    those but can never overrun them.
+    """
+    sent = False
+    last: LLMError | None = None
+    for index, (conn, retries) in enumerate(routes):
+        retryable = True
+        for attempt in range(max(0, retries) + 1):
+            if attempt:
+                # Sliced at the heartbeat interval, and yielding the same
+                # content-free chunk `_guard` does. Between attempts there is no
+                # provider stream for `_guard` to time, so an unsliced sleep is a
+                # window where nothing crosses the caller's SSE connection at
+                # all -- survivable at the default two retries (under two
+                # seconds in total), not at the ten the setting allows, where
+                # the backoffs add up to well past the interval a proxy will
+                # hold a silent connection for.
+                delay = _backoff_delay(attempt - 1)
+                while delay > 0:
+                    step = delay if HEARTBEAT_INTERVAL <= 0 else min(delay, HEARTBEAT_INTERVAL)
+                    await asyncio.sleep(step)
+                    delay -= step
+                    if delay > 0:
+                        yield ""  # still here, waiting the provider out
+            agen = _guard(open_stream(conn), timeout, tick)
+            try:
+                async for chunk in agen:
+                    sent = sent or bool(chunk)
+                    yield chunk
+                return
+            except LLMError as exc:
+                if sent:
+                    raise
+                last = exc
+                retryable = exc.kind in RETRYABLE_KINDS
+            finally:
+                # A no-op for the exhausted and the raised cases, and the whole
+                # point in the third one: when the *caller* closes us mid-yield
+                # (an SSE client disconnecting), GeneratorExit unwinds through
+                # here and this is what still propagates the close down to
+                # `_guard`, and from there to httpx. Without it the provider
+                # connection would wait for the garbage collector.
+                await agen.aclose()
+            if not retryable:
+                break  # a repeat cannot fix this one; the next route might
+        if index + 1 < len(routes):
+            nxt = routes[index + 1][0]
+            log.warning("LLM connection %r gave up (%s: %s); falling back to %r",
+                        _label(conn), last.kind, last.detail, _label(nxt))
+    # Only reachable with every attempt swallowed above, which is the only way
+    # out of the loops without a return or a raise -- so `last` is always set.
+    raise last
+
+
 class LLMClient:
     """Dispatches each call to the resolved connection's kind."""
 
-    def __init__(self, openrouter=None, claude=None, openai_compatible=None, timeout=None):
+    def __init__(self, openrouter=None, claude=None, openai_compatible=None, timeout=None,
+                 retries=None, fallback=None):
         self._openrouter = openrouter if openrouter is not None else OpenRouterClient()
         self._claude = claude if claude is not None else ClaudeAgentClient()
         self._openai_compatible = (openai_compatible if openai_compatible is not None
@@ -213,11 +380,49 @@ class LLMClient:
         # (#239) — and resolving per call is also what lets a Configuration-page
         # change land without a restart.
         self._timeout = timeout
+        # Same contract, for the same two reasons: the retry count is a
+        # config.md setting, and `fallback` is a callable that resolves the
+        # *connection record* to fall back to (#144). A store lookup behind a
+        # callable is what keeps this module free of the store — and it is
+        # re-resolved per generation, so repointing the fallback on the
+        # Configuration page takes effect on the next send.
+        self._retries = retries
+        self._fallback = fallback
 
     def _timeout_seconds(self) -> float:
         if self._timeout is None:
             return DEFAULT_TIMEOUT
         return float(self._timeout() if callable(self._timeout) else self._timeout)
+
+    def _retry_count(self) -> int:
+        """Retries after the first attempt. Never negative, and never an
+        exception: a malformed setting must not take generation down with it,
+        which is the same posture `store.config` takes on every other knob."""
+        if self._retries is None:
+            return DEFAULT_RETRIES
+        try:
+            return max(0, int(self._retries() if callable(self._retries) else self._retries))
+        except (TypeError, ValueError):
+            return DEFAULT_RETRIES
+
+    def _routes(self, conn: dict) -> list[tuple[dict, int]]:
+        """The connections one generation may be attempted on, in order.
+
+        The active connection with its retry budget, then the configured
+        fallback with a single attempt. The fallback is dropped when it
+        resolves to the connection that is already primary — see `_same_route`
+        — and a resolver that raises is treated as "no fallback": a broken
+        fallback must not be able to fail a generation the primary would have
+        served.
+        """
+        routes = [(conn, self._retry_count())]
+        try:
+            fallback = self._fallback() if callable(self._fallback) else self._fallback
+        except Exception:  # noqa: BLE001 - see the docstring; resolution is best-effort
+            fallback = None
+        if fallback and not _same_route(conn, fallback):
+            routes.append((fallback, 0))
+        return routes
 
     def _dispatch(self, messages: list[dict], conn: dict):
         kind = conn.get("kind", "openrouter")
@@ -232,8 +437,16 @@ class LLMClient:
     def stream(self, messages: list[dict], conn: dict):
         """Every provider stream leaves the facade idle-bounded — the one place
         the bound is provider-independent (the Claude SDK has no httpx client
-        to configure at all)."""
-        return _guard(self._dispatch(messages, conn), self._timeout_seconds())
+        to configure at all) — and retried-then-fallen-back, which for the same
+        reason can only be decided here: `_resilient` is what knows whether a
+        delta has already reached the caller (#144).
+
+        The dispatch is deliberately deferred into a lambda rather than built
+        once: each attempt needs its *own* provider stream, aimed at whichever
+        route it is running.
+        """
+        return _resilient(lambda route: self._dispatch(messages, route),
+                          self._routes(conn), self._timeout_seconds())
 
     async def complete(self, messages: list[dict], conn: dict) -> str:
         return "".join([chunk async for chunk in self.stream(messages, conn)])

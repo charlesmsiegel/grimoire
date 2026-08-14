@@ -50,6 +50,27 @@ DEFAULT_LLM_TIMEOUT = "120"
 # Wall-clock ceiling on one absorb, whose LLM calls (extraction, one dossier
 # per present NPC, audit) run sequentially inside a single request.
 DEFAULT_ABSORB_BUDGET = "600"
+# --- retry + fallback (#144) ---
+# How many times a failed generation is re-attempted before the connection is
+# given up on. Only transient failures are retried at all (`llm.RETRYABLE_KINDS`)
+# and only while nothing has reached the reader yet, so this is not a knob that
+# can duplicate visible prose -- it is how long the app is willing to sit out a
+# rate limit or a dropped connection. "0" turns retrying off, restoring the
+# one-attempt behaviour every version before this had.
+DEFAULT_LLM_RETRIES = "2"
+# Retries are cheap individually and expensive in a row: each one waits, and a
+# streamed turn has no total-duration ceiling above it (only the idle bound,
+# which each attempt restarts). A hand-typed 500 would leave a scene apparently
+# hung for an hour, so the setting is clamped rather than trusted. Ten attempts
+# at the capped 8s backoff is already well over a minute of waiting.
+MAX_LLM_RETRIES = 10
+# The connection a generation falls back to once the active one's retries are
+# exhausted, tried exactly once. "" -- the default -- means there is no
+# fallback and an exhausted connection is simply an error, which is what every
+# version before this did. A *connection*, not a second model name, so the
+# fallback may be a different provider entirely (#141): the pre-connections
+# design could only have meant "another model on the same account".
+DEFAULT_FALLBACK_CONNECTION_ID = ""
 # Whether the first-run setup wizard has been finished or dismissed. "off" on
 # every store that has never recorded an answer -- including one written before
 # this key existed, which is why the route backfills it rather than trusting
@@ -95,6 +116,7 @@ _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "user_label", "assistant_label",
                 "default_style_id", "active_connection_id",
                 "llm_timeout", "absorb_budget", "setup_done",
+                "llm_retries", "fallback_connection_id",
                 "prompt_log_depth",
                 "turnstate_depth", "promote_streak",
                 "rolling_summary_every", "llm_call_budget",
@@ -118,6 +140,8 @@ def read_config() -> dict[str, str]:
                 "default_style_id": "", "active_connection_id": "",
                 "llm_timeout": DEFAULT_LLM_TIMEOUT, "absorb_budget": DEFAULT_ABSORB_BUDGET,
                 "setup_done": DEFAULT_SETUP_DONE,
+                "llm_retries": DEFAULT_LLM_RETRIES,
+                "fallback_connection_id": DEFAULT_FALLBACK_CONNECTION_ID,
                 "prompt_log_depth": DEFAULT_PROMPT_LOG_DEPTH,
                 "turnstate_depth": DEFAULT_TURNSTATE_DEPTH,
                 "promote_streak": DEFAULT_PROMOTE_STREAK,
@@ -245,6 +269,13 @@ def rolling_summary_every() -> int:
 def llm_call_budget() -> float:
     """Wall-clock seconds one non-streaming LLM call may take in total."""
     return _seconds("llm_call_budget", DEFAULT_LLM_CALL_BUDGET)
+
+
+def llm_retries() -> int:
+    """Re-attempts a transiently-failed generation gets before its connection
+    is given up on (#144). 0 disables retrying; see `MAX_LLM_RETRIES` for why
+    the upper end is clamped rather than taken at face value."""
+    return min(_count("llm_retries", DEFAULT_LLM_RETRIES), MAX_LLM_RETRIES)
 
 
 def write_config(**fields: str) -> dict[str, str]:

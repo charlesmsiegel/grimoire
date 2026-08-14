@@ -400,6 +400,330 @@ async def test_a_client_given_no_timeout_uses_the_module_default():
     assert client._timeout_seconds() == llm_mod.DEFAULT_TIMEOUT
 
 
+# ---- retry with backoff, and the fallback route (#144) ----
+
+
+class FlakyProvider:
+    """Fails the first `failures` attempts with `kind`, then streams `reply`."""
+
+    def __init__(self, failures: int, kind: str = "rate_limit", reply=("ok",)):
+        self.failures = failures
+        self.kind = kind
+        self.reply = list(reply)
+        self.attempts = 0
+        self.models: list[str] = []
+
+    async def stream(self, messages, model="", *args, **kwargs):
+        self.attempts += 1
+        self.models.append(model)
+        if self.attempts <= self.failures:
+            raise LLMError(self.kind, f"attempt {self.attempts}")
+        for chunk in self.reply:
+            yield chunk
+
+
+class HalfwayProvider:
+    """Yields `before`, then fails — the case a retry must NOT paper over."""
+
+    def __init__(self, before=("half a sentence",), kind="network"):
+        self.before = list(before)
+        self.kind = kind
+        self.attempts = 0
+
+    async def stream(self, messages, *args, **kwargs):
+        self.attempts += 1
+        for chunk in self.before:
+            yield chunk
+        raise LLMError(self.kind, "died mid-stream")
+
+
+def _retry_client(provider, retries=2, fallback=None, timeout=0):
+    return LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
+                     timeout=timeout, retries=retries, fallback=fallback)
+
+
+@pytest.fixture(autouse=True)
+def _instant_backoff(monkeypatch):
+    """Keep the schedule's shape (it is asserted on its own below) but stop the
+    behavioural tests from actually sleeping through it."""
+    from grimoire import llm as llm_mod
+    monkeypatch.setattr(llm_mod, "RETRY_BASE", 0.0)
+
+
+async def test_a_transient_failure_is_retried_and_then_succeeds():
+    provider = FlakyProvider(failures=2)
+    client = _retry_client(provider)
+    assert [c async for c in client.stream([], _conn("openrouter"))] == ["ok"]
+    assert provider.attempts == 3
+
+
+async def test_retries_are_bounded():
+    provider = FlakyProvider(failures=99)
+    client = _retry_client(provider, retries=2)
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream([], _conn("openrouter"))]
+    assert provider.attempts == 3          # the first attempt plus two retries
+    assert exc.value.kind == "rate_limit"  # the provider's own error, not a new one
+
+
+async def test_zero_retries_is_the_old_one_attempt_behaviour():
+    provider = FlakyProvider(failures=99)
+    client = _retry_client(provider, retries=0)
+    with pytest.raises(LLMError):
+        [c async for c in client.stream([], _conn("openrouter"))]
+    assert provider.attempts == 1
+
+
+@pytest.mark.parametrize("kind", ["auth", "missing_key", "bad_response",
+                                  "missing_dependency", "timeout"])
+async def test_non_transient_failures_are_not_retried(kind):
+    """Retrying configuration errors is a slower way to show the same message,
+    and retrying a timeout would multiply the one bound the user set."""
+    provider = FlakyProvider(failures=99, kind=kind)
+    client = _retry_client(provider, retries=3)
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream([], _conn("openrouter"))]
+    assert provider.attempts == 1
+    assert exc.value.kind == kind
+
+
+async def test_a_failure_after_text_has_been_sent_is_never_retried():
+    """The bytes are already on the wire; a fresh attempt would duplicate what
+    the reader has seen. #144's explicitly-out-of-scope case."""
+    provider = HalfwayProvider()
+    client = _retry_client(provider, retries=3)
+    seen = []
+    with pytest.raises(LLMError):
+        async for chunk in client.stream([], _conn("openrouter")):
+            seen.append(chunk)
+    assert seen == ["half a sentence"]
+    assert provider.attempts == 1
+
+
+async def test_a_heartbeat_already_sent_does_not_count_as_text(monkeypatch):
+    """The facade's liveness signal reaches the caller as an empty chunk, which
+    the routes turn into an SSE comment — framing, carrying no content. A fresh
+    attempt after one duplicates nothing, so it must not disable the retry."""
+    from grimoire import llm as llm_mod
+    monkeypatch.setattr(llm_mod, "HEARTBEAT_INTERVAL", 0.01)
+    provider = SlowFailingProvider(failures=1, stall=0.05)
+    client = _retry_client(provider, retries=1)
+    seen = [c async for c in client.stream([], _conn("openrouter"))]
+    assert "" in seen, "no heartbeat fired: the test proves nothing"
+    assert [c for c in seen if c] == ["ok"]
+    assert provider.opened == 2
+
+
+async def test_complete_gets_the_retries_too():
+    provider = FlakyProvider(failures=1, reply=("some ", "prose"))
+    client = _retry_client(provider)
+    assert await client.complete([], _conn("openrouter")) == "some prose"
+    assert provider.attempts == 2
+
+
+async def test_a_malformed_retry_setting_falls_back_to_the_default():
+    from grimoire import llm as llm_mod
+    client = _retry_client(FlakyProvider(0), retries=lambda: "not a number")
+    assert client._retry_count() == llm_mod.DEFAULT_RETRIES
+    assert _retry_client(FlakyProvider(0), retries=lambda: -5)._retry_count() == 0
+
+
+async def test_a_client_given_no_retry_resolver_uses_the_module_default():
+    from grimoire import llm as llm_mod
+    assert LLMClient(openrouter=FakeProvider("or"))._retry_count() == llm_mod.DEFAULT_RETRIES
+
+
+async def test_the_retry_count_is_resolved_per_call():
+    setting = [0]
+    provider = FlakyProvider(failures=1)
+    client = _retry_client(provider, retries=lambda: setting[0])
+    with pytest.raises(LLMError):
+        [c async for c in client.stream([], _conn("openrouter"))]
+    assert provider.attempts == 1
+    setting[0] = 2  # the user turns retries on mid-session
+    assert [c async for c in client.stream([], _conn("openrouter"))] == ["ok"]
+
+
+async def test_a_long_backoff_keeps_reporting_liveness(monkeypatch):
+    """Between attempts there is no provider stream for `_guard` to time, so an
+    unsliced sleep is a window where nothing crosses the caller's connection at
+    all — and a proxy drops a silent SSE stream."""
+    from grimoire import llm as llm_mod
+    monkeypatch.setattr(llm_mod, "RETRY_BASE", 0.2)
+    monkeypatch.setattr(llm_mod, "HEARTBEAT_INTERVAL", 0.02)
+    provider = FlakyProvider(failures=1)
+    client = _retry_client(provider, retries=1)
+    seen = [c async for c in client.stream([], _conn("openrouter"))]
+    assert seen.count("") >= 3          # sliced, not one long silence
+    assert [c for c in seen if c] == ["ok"]
+
+
+def test_backoff_grows_exponentially_capped_and_jittered(monkeypatch):
+    from grimoire import llm as llm_mod
+    monkeypatch.setattr(llm_mod, "RETRY_BASE", 0.5)  # undo the module's instant-backoff fixture
+    for attempt in range(8):
+        ceiling = min(llm_mod.RETRY_CAP, llm_mod.RETRY_BASE * (2 ** attempt))
+        draws = {llm_mod._backoff_delay(attempt) for _ in range(50)}
+        assert all(ceiling / 2 <= d <= ceiling for d in draws)
+        assert len(draws) > 1, "unjittered: every caller would retry in lockstep"
+    assert llm_mod._backoff_delay(0) < llm_mod._backoff_delay(6)
+    assert llm_mod._backoff_delay(30) <= llm_mod.RETRY_CAP
+
+
+# --- the fallback route ---
+
+
+class RouteRecorder:
+    """One provider standing in for several connections, remembering which
+    model each attempt asked for so a fallback is visible in the record."""
+
+    def __init__(self, failing: set[str], kind="rate_limit"):
+        self.failing = failing
+        self.kind = kind
+        self.models: list[str] = []
+
+    async def stream(self, messages, model="", *args, **kwargs):
+        self.models.append(model)
+        if model in self.failing:
+            raise LLMError(self.kind, f"{model} is unavailable")
+        yield f"from {model}"
+
+
+def _route(id, model):
+    return {"id": id, "name": f"conn-{id}", "kind": "openrouter", "model": model, "api_key": "k"}
+
+
+async def test_the_fallback_answers_once_the_primary_is_exhausted():
+    provider = RouteRecorder(failing={"primary"})
+    client = _retry_client(provider, retries=1, fallback=lambda: _route("b", "backup"))
+    chunks = [c async for c in client.stream([], _route("a", "primary"))]
+    assert chunks == ["from backup"]
+    # Two attempts on the primary (first + one retry), then exactly one on the
+    # fallback -- #144's "tried once after the primary's retries are exhausted".
+    assert provider.models == ["primary", "primary", "backup"]
+
+
+async def test_the_fallback_is_tried_for_non_retryable_failures_too():
+    """A repeat cannot fix a bad key, but a different connection can — that is
+    the whole condition someone configures a fallback for."""
+    provider = RouteRecorder(failing={"primary"}, kind="auth")
+    client = _retry_client(provider, retries=3, fallback=lambda: _route("b", "backup"))
+    assert [c async for c in client.stream([], _route("a", "primary"))] == ["from backup"]
+    assert provider.models == ["primary", "backup"]  # no wasted retries
+
+
+async def test_the_primary_error_survives_a_failing_fallback():
+    provider = RouteRecorder(failing={"primary", "backup"})
+    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream([], _route("a", "primary"))]
+    assert exc.value.detail == "backup is unavailable"
+    assert provider.models == ["primary", "backup"]
+
+
+async def test_no_fallback_configured_leaves_one_route():
+    provider = RouteRecorder(failing={"primary"})
+    client = _retry_client(provider, retries=0, fallback=lambda: None)
+    with pytest.raises(LLMError):
+        [c async for c in client.stream([], _route("a", "primary"))]
+    assert provider.models == ["primary"]
+
+
+async def test_a_fallback_pointing_at_the_active_connection_is_dropped():
+    """Otherwise it is a third attempt wearing a different name, and it doubles
+    how long the user waits to hear that the provider is down."""
+    provider = RouteRecorder(failing={"primary"})
+    client = _retry_client(provider, retries=0, fallback=lambda: _route("a", "primary"))
+    with pytest.raises(LLMError):
+        [c async for c in client.stream([], _route("a", "primary"))]
+    assert provider.models == ["primary"]
+
+
+async def test_a_resolver_that_raises_means_no_fallback():
+    """A broken fallback must not be able to fail a generation the primary
+    would have served."""
+    def boom():
+        raise OSError("store unreadable")
+
+    provider = RouteRecorder(failing=set())
+    client = _retry_client(provider, retries=0, fallback=boom)
+    assert [c async for c in client.stream([], _route("a", "primary"))] == ["from primary"]
+
+
+async def test_the_fallback_is_never_reached_when_the_primary_answers():
+    provider = RouteRecorder(failing=set())
+    client = _retry_client(provider, retries=2, fallback=lambda: _route("b", "backup"))
+    assert [c async for c in client.stream([], _route("a", "primary"))] == ["from primary"]
+    assert provider.models == ["primary"]
+
+
+async def test_a_fallback_is_not_taken_after_text_has_been_sent():
+    provider = HalfwayProvider()
+    client = _retry_client(provider, retries=2, fallback=lambda: _route("b", "backup"))
+    seen = []
+    with pytest.raises(LLMError):
+        async for chunk in client.stream([], _route("a", "primary")):
+            seen.append(chunk)
+    assert seen == ["half a sentence"] and provider.attempts == 1
+
+
+async def test_falling_back_is_logged(caplog):
+    """The user is not told which route answered — a stream has no room for it
+    — so the operator record is the log line. Deliberately the honest, cheap
+    surface; per-response reporting is not solved here."""
+    import logging
+    provider = RouteRecorder(failing={"primary"})
+    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
+    with caplog.at_level(logging.WARNING, logger="grimoire.llm"):
+        [c async for c in client.stream([], _route("a", "primary"))]
+    assert "falling back" in caplog.text
+    assert "conn-b" in caplog.text and "rate_limit" in caplog.text
+
+
+class SlowFailingProvider:
+    """Stalls, then fails `failures` times, then answers. The stall is what lets
+    a heartbeat fire and a close be told from a leak."""
+
+    def __init__(self, failures=0, stall=0.0, tail=0.0):
+        self.failures = failures
+        self.stall = stall
+        self.tail = tail
+        self.opened = 0
+        self.closed = 0
+
+    async def stream(self, messages, *args, **kwargs):
+        self.opened += 1
+        try:
+            if self.stall:
+                await asyncio.sleep(self.stall)
+            if self.opened <= self.failures:
+                raise LLMError("network", f"attempt {self.opened}")
+            yield "ok"
+            if self.tail:
+                await asyncio.sleep(self.tail)
+        finally:
+            self.closed += 1
+
+
+async def test_each_attempt_opens_its_own_provider_stream_and_closes_it():
+    provider = SlowFailingProvider(failures=2)
+    client = _retry_client(provider, retries=2)
+    assert [c async for c in client.stream([], _conn("openrouter"))] == ["ok"]
+    assert provider.opened == 3 and provider.closed == 3
+
+
+async def test_closing_the_retried_stream_closes_the_provider():
+    """The retry wrapper now sits between the caller and `_guard`, so it is what
+    has to propagate a caller-side close — an SSE client disconnecting — down to
+    httpx. Skip it and every cancelled turn strands a connection."""
+    provider = SlowFailingProvider(tail=STALL)
+    client = _retry_client(provider, retries=2, timeout=0)
+    agen = client.stream([], _conn("openrouter"))
+    assert await agen.__anext__() == "ok"   # suspended mid-generation
+    await agen.aclose()                     # the caller goes away
+    assert provider.opened == 1 and provider.closed == 1
+
+
 import ast  # noqa: E402 - deliberate late import; see the lines above
 from pathlib import Path  # noqa: E402 - deliberate late import; see the lines above
 

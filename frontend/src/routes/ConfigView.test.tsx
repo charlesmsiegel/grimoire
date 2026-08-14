@@ -26,6 +26,7 @@ const cfg = {
   active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true,
   data_dir: "/home/u/.grimoire",
   llm_timeout: "120", absorb_budget: "600", llm_call_budget: "300",
+  llm_retries: "2", fallback_connection_id: "",
   context_budget: "0", archive_depth: "3",
   prompt_log_depth: "50",
   turnstate_depth: "0", promote_streak: "3", rolling_summary_every: "10",
@@ -204,6 +205,41 @@ test("switching the active connection waits for Save like everything else", asyn
   save();
   await waitFor(() =>
     expect(api.putConfig).toHaveBeenCalledWith({ active_connection_id: "claude" }));
+});
+
+test("picks a fallback connection, excluding the active one", async () => {
+  renderView();
+  await open(/^Connection/);
+  const select = screen.getByLabelText("Fallback connection");
+  // "None" plus every connection that is not already the active one — offering
+  // the active one would look like a working setting and is not one.
+  expect(Array.from(select.querySelectorAll("option")).map((o) => (o as HTMLOptionElement).value))
+    .toEqual(["", "claude", "local"]);
+  expect((select as HTMLSelectElement).value).toBe("");
+
+  fireEvent.change(select, { target: { value: "claude" } });
+  save();
+  await waitFor(() =>
+    expect(api.putConfig).toHaveBeenCalledWith({ fallback_connection_id: "claude" }));
+});
+
+test("says when there is no fallback and when there is one", async () => {
+  renderView();
+  await open(/^Connection/);
+  expect(screen.getByText(/no fallback/i)).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Fallback connection"), { target: { value: "local" } });
+  expect(screen.getByText(/tried once when the connection above is exhausted/i))
+    .toBeInTheDocument();
+});
+
+test("saves the retry count", async () => {
+  renderView();
+  await open(/^Connection/);
+  const retries = screen.getByLabelText(/^retries$/i);
+  expect((retries as HTMLInputElement).value).toBe("2");
+  fireEvent.change(retries, { target: { value: "0" } });
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ llm_retries: "0" }));
 });
 
 test("links to the Connections page to manage keys/endpoints", async () => {
