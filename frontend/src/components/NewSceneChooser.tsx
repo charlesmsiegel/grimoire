@@ -163,7 +163,7 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
                            }}
                            onCancel={dismiss} />
         ) : (
-          <SceneConfirmForm key={draftGen} cid={cid} draft={draft} notice={notice}
+          <SceneConfirmForm key={draftGen} cid={cid} draft={draft} notice={notice} ready={ready}
                             onBack={() => setDraft(null)} onCancel={dismiss} onCreated={onCreated}
                             onWriting={setWriting} onSalvaged={setSalvagedSid} />
         )}
