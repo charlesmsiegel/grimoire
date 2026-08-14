@@ -15,10 +15,14 @@ export const KIND_LABELS: Record<EntityKind, string> = {
 };
 
 // What each secrecy level does to the prompt, in the words the picker shows.
+// "scene prompt", not "the model": a gm-only group is also kept out of the
+// absorb prompt, but a location's NAME still reaches the scene-suggestion
+// picker (it has to, or you could not pick it), so the broader claim would be
+// a promise the app does not keep.
 const SECRECY_HINTS: Record<Secrecy, string> = {
   public: "activates normally; any character may know it",
   secret: "activates normally, but uninvolved characters must not reveal it",
-  "gm-only": "never sent to the model — visible only here",
+  "gm-only": "never enters the scene prompt — visible only here",
 };
 
 // Anything unrecognised (a hand-edited file) reads as public, exactly as
@@ -450,14 +454,18 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
             <Field label="Keys" hint="comma-separated activation triggers; blank = always-on">
               <input type="text" value={keys} onChange={(e) => setKeys(e.target.value)} />
             </Field>
+            {/* Real radio inputs, like the Owners checkboxes above: a native
+                group gets arrow-key navigation and roving focus for free,
+                which a row of buttons wearing role="radio" does not. */}
             <Field label="Secrecy" hint={SECRECY_HINTS[secrecy]}>
-              <div className="chips" role="radiogroup" aria-label="Secrecy">
+              <div className="secrecy-picker" role="radiogroup" aria-label="Secrecy">
                 {SECRECY_LEVELS.map((level) => (
-                  <button key={level} type="button" role="radio" aria-checked={secrecy === level}
-                          className={"chip secrecy-tag " + level + (secrecy === level ? " on" : "")}
-                          onClick={() => setSecrecy(level)}>
+                  <label key={level} className="secrecy-option">
+                    <input type="radio" name="secrecy" value={level}
+                           checked={secrecy === level}
+                           onChange={() => setSecrecy(level)} />
                     {SECRECY_LABELS[level]}
-                  </button>
+                  </label>
                 ))}
               </div>
             </Field>

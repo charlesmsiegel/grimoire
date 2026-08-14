@@ -350,6 +350,15 @@ def grade_absorb(ctx: dict, output: str) -> list[Check]:
 SECRET = "struck from the Guild rolls"
 SECRET_BODY = f"Seraphine was quietly {SECRET} after the Saltmarch run went bad."
 
+# The secrecy levels (#49) ride along on this case: same containment question,
+# a different mechanism. Both are keyless and unowned, so they are always-on
+# for every scene in the fixture -- the gm-only one is therefore absent from
+# the prompt because the LEVEL excluded it, not because it failed to activate.
+GM_ONLY = "the warehouse fire is set for the ninth"
+GM_ONLY_BODY = f"Referee note: {GM_ONLY}."
+HELD = "the harbourmaster took the Guild's coin"
+HELD_BODY = f"Unspoken on the docks: {HELD}."
+
 
 def build_owned_lore() -> dict:
     """Two scenes in one campaign: Seraphine on stage in one, absent from the
@@ -362,6 +371,8 @@ def build_owned_lore() -> dict:
     mara, _ = characters.create_character(wroot, "Mara", "default", mcard)
     entities.create_entity(wroot, "lore", "Seraphine's exile", SECRET_BODY,
                            owners=f"characters:{sera}")
+    entities.create_entity(wroot, "lore", "Referee note", GM_ONLY_BODY, secrecy="gm-only")
+    entities.create_entity(wroot, "lore", "The harbourmaster", HELD_BODY, secrecy="secret")
     pier = entities.create_entity(wroot, "locations", "Saltmarch Pier",
                                   "Fog-slick planks stacked with unlogged crates.",
                                   keys="pier, dock")
@@ -402,7 +413,19 @@ def grade_owned_lore(ctx: dict, output: str) -> list[Check]:
               "the fixture, not the model, is broken"),
         Check("containment.prompt", SECRET not in absent,
               "assembled prompt leaked owned lore into a scene with no owner"),
-    ] + graders.grade_containment(output, SECRET)
+        # gm-only: excluded by the LEVEL. The entry is keyless and unowned, so
+        # it would otherwise be always-on — its absence cannot be a fixture that
+        # simply never fired.
+        Check("secrecy.gm_only", GM_ONLY not in absent,
+              "assembled prompt carried a gm-only entry"),
+        # Rendering the section itself, so a reworded or deleted heading fails
+        # here rather than silently everywhere: with no public bodies the
+        # template emits exactly the secret block the real prompt embeds.
+    ] + graders.grade_prompt_section(ctx["messages"], "secrecy_block",
+                                     "scene/sections/world_info.j2",
+                                     world_info_bodies=[],
+                                     secret_world_info_bodies=[HELD_BODY]) \
+      + graders.grade_containment(output, SECRET)
 
 
 # ------------------------------------------------------------------- the suite
@@ -464,7 +487,9 @@ CASES: tuple[Case, ...] = (
                                      "absorb.weather_edits"), "json"))),
     Case(id="owned-lore",
          hypothesis="lore owned by an absent character stays out of both the "
-                    "assembled prompt and the reply",
+                    "assembled prompt and the reply; a gm-only entry stays out "
+                    "of the prompt whoever is on stage, and a secret one "
+                    "arrives under its heading",
          build=build_owned_lore, prompt=_scene_prompt, grade=grade_owned_lore,
          recordings=(
              Recording(BASELINE),

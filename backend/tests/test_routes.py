@@ -1436,6 +1436,20 @@ def test_entity_secrecy_rejects_an_unknown_level(client):
     assert client.get(f"/api/worlds/{wid}/lore/{eid}").json()["meta"]["secrecy"] == "secret"
 
 
+def test_campaign_can_mark_an_inherited_world_entity_secret(client):
+    """Setting secrecy on a world entity from campaign scope goes through
+    `overlay.materialize_entity` first — the one path where a copy could drop
+    the field. The world's own copy must stay public."""
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/lore", json={"name": "The Twist", "body": "p"})
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    client.put(f"/api/campaigns/{cid}/lore/the-twist", json={"secrecy": "secret"})
+    got = client.get(f"/api/campaigns/{cid}/lore/the-twist").json()
+    assert got["meta"]["secrecy"] == "secret"
+    assert got["body"].strip() == "p"          # materialize kept the inherited body
+    assert "secrecy" not in client.get(f"/api/worlds/{wid}/lore/the-twist").json()["meta"]
+
+
 def test_campaign_entity_secrecy_via_routes(client):
     wid = _world(client)
     cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]

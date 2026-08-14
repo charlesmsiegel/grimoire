@@ -80,10 +80,12 @@ def secrecy_split(entries: list[dict]) -> tuple[list[str], list[str]]:
     section could drop the secrets alone and leave the model narrating the
     scene they were the twist in.
     """
-    public = [e["body"] for e in entries
-              if entities.normalize_secrecy(e.get("secrecy")) != entities.SECRET]
-    secret = [e["body"] for e in entries
-              if entities.normalize_secrecy(e.get("secrecy")) == entities.SECRET]
+    public: list[str] = []
+    secret: list[str] = []
+    for e in entries:
+        target = (secret if entities.normalize_secrecy(e.get("secrecy")) == entities.SECRET
+                  else public)
+        target.append(e["body"])
     return public, secret
 
 
@@ -1144,13 +1146,24 @@ def _transient_states(cast, live: dict) -> list[dict]:
         return []
 
 
-def _group_states(cid: str, croot, activated: list[dict]) -> list[dict]:
-    """State for each activated group that has a state.md — same failure policy
-    as _character_states: a garbled file omits the block, never crashes."""
+def _group_states(cid: str, croot, activated: list[dict],
+                  secrecy: str = entities.PUBLIC) -> list[dict]:
+    """State for each activated group at `secrecy` that has a state.md — same
+    failure policy as _character_states: a garbled file omits the block, never
+    crashes.
+
+    Filtered by level rather than returning everything, because a group's state
+    is the half of it worth hiding: `groupstate.FIELDS` ends in `secrets`. A
+    secret group whose state rendered in the plain block would have its
+    description labelled and its secrets published — the feature inverted. The
+    caller asks twice and the section renders the two answers as two blocks
+    (see `sections/group_state.j2`); `gm-only` groups are not in `activated` at
+    all, so their state is already gone with them.
+    """
     try:
         out = []
         for e in activated:
-            if e["kind"] != "groups":
+            if e["kind"] != "groups" or entities.normalize_secrecy(e.get("secrecy")) != secrecy:
                 continue
             st = groupstate.read_state(croot, e["id"])
             if st and any(st[k] for k in groupstate.FIELDS):

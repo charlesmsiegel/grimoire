@@ -1108,6 +1108,22 @@ def test_group_snapshot_lists_ids_and_state(monkeypatch, tmp_path):
     assert "Goals: Expand." in snap
 
 
+def test_group_snapshot_omits_gm_only_groups(monkeypatch, tmp_path):
+    """This is a second prompt, built outside the scene context, so the gate in
+    `context.activate` does not reach it — and it carries `groupstate`'s
+    `secrets` field verbatim (#49)."""
+    from grimoire.store import entities, groupstate
+    cid, sid, croot = _campaign_with_group(monkeypatch, tmp_path)
+    groupstate.write_state(croot, "salt-circle", "## Goals\nExpand.")
+    gid = entities.create_entity(croot, "groups", "Referee Cabal", "x", secrecy="gm-only")
+    groupstate.write_state(croot, gid, "## Secrets\nThey burn the warehouse on day nine.")
+
+    snap = absorb.group_snapshot(cid)
+    assert "groups/salt-circle" in snap        # the public one still lists
+    assert "burn the warehouse" not in snap
+    assert "Referee Cabal" not in snap
+
+
 # ---- "sheet" edit kind (Task 8) ----
 
 

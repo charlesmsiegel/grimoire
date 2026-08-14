@@ -1,9 +1,16 @@
 {#- Campaign group state for groups activated into world-info: "Name:" then
     indented "Label: value" lines per non-empty section (multi-line values
-    re-indented). Vars: group_states ([{name, goals, resources, focus,
+    re-indented). A `secrecy: secret` group's state renders in the same section
+    under the world-info secrecy heading rather than beside the public ones
+    (#49) — `groupstate.FIELDS` ends in `secrets`, so this block is the half of
+    a group most worth gating, and it must not depend on the World info section
+    (a different section, dropped independently) happening to carry the heading.
+    Vars: group_states, secret_group_states ([{name, goals, resources, focus,
     public_perception, secrets}]). -#}
+{%- from "scene/_secrecy.j2" import secret_block -%}
+{%- macro block(states) -%}
 {%- set lines = [] -%}
-{%- for st in group_states -%}
+{%- for st in states -%}
 {%- set parts = [] -%}
 {%- for label, value in [("Goals", st.goals), ("Resources", st.resources), ("Focus", st.focus), ("Public perception", st.public_perception), ("Secrets", st.secrets)] -%}
 {%- if value.strip() -%}{%- set _ = parts.append("  " ~ label ~ ": " ~ value.strip().replace("\n", "\n    ")) -%}{%- endif -%}
@@ -13,5 +20,10 @@
 {%- for p in parts -%}{%- set _ = lines.append(p) -%}{%- endfor -%}
 {%- endif -%}
 {%- endfor -%}
-{%- if lines %}# Group state
-{{ lines | join("\n") }}{% endif -%}
+{{ lines | join("\n") }}
+{%- endmacro -%}
+{%- set public = block(group_states) -%}
+{%- set secret = block(secret_group_states) -%}
+{%- set chunks = [public, secret_block([secret]) if secret else ""] | select | list -%}
+{%- if chunks %}# Group state
+{{ chunks | join("\n\n") }}{% endif -%}

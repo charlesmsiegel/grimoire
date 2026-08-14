@@ -110,6 +110,7 @@ def test_secrecy_split_separates_secret_bodies():
 from grimoire.store import appearances as ap  # noqa: E402
 from grimoire.store import campaigns, characters, chronicle, entities, plot, pcs, scenes, worlds  # noqa: E402
 from grimoire.store.context import cast as context_cast  # noqa: E402
+from grimoire.store import groupstate  # noqa: E402
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -206,6 +207,94 @@ def test_gm_only_lore_never_reaches_the_prompt(monkeypatch, tmp_path):
     assert "warehouse burns" not in sys
     assert "Guild folds" not in sys
     assert "Secret knowledge" not in sys      # no heading for entries that never render
+
+
+def test_gm_only_current_location_is_not_the_setting_block(monkeypatch, tmp_path):
+    """The current location is EXCLUDED from world info so it can render as the
+    setting instead, which routes it around `activate` — the gate every other
+    entry passes through. Without a second gate in `_assemble`, marking the
+    room the scene is standing in gm-only published it in full."""
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    loc = entities.create_entity(croot, "locations", "Hidden Lab",
+                                 "The reactor hums behind the false wall.", secrecy="gm-only")
+    scenes.set_location(cid, sid, loc)
+    scenes.append_message(cid, sid, "user", "look around")
+
+    sys = context.build_messages(cid, sid)[0]["content"]
+    assert "reactor hums" not in sys
+    assert "# Current setting" not in sys
+
+
+def test_secret_current_location_renders_under_the_heading(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    loc = entities.create_entity(croot, "locations", "The Vault",
+                                 "A ledger sits open on the desk.", secrecy="secret")
+    scenes.set_location(cid, sid, loc)
+    scenes.append_message(cid, sid, "user", "look around")
+
+    section = next(s for s in context.context_sections(cid, sid)
+                   if s["label"] == "Current setting")
+    assert "Secret knowledge" in section["text"]
+    assert section["text"].index("Secret knowledge") < section["text"].index("ledger sits open")
+
+
+def test_public_current_location_is_unchanged(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    loc = entities.create_entity(croot, "locations", "The Pier", "Fog-slick planks.")
+    scenes.set_location(cid, sid, loc)
+    scenes.append_message(cid, sid, "user", "look around")
+
+    section = next(s for s in context.context_sections(cid, sid)
+                   if s["label"] == "Current setting")
+    assert section["text"] == "# Current setting\nFog-slick planks."
+
+
+def test_secret_group_state_does_not_render_beside_the_public_ones(monkeypatch, tmp_path):
+    """`groupstate.FIELDS` ends in `secrets`, and Group state is its own
+    section at its own drop tier — so a secret group's state must carry the
+    heading itself rather than borrowing World info's."""
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    # empty body: nothing of this group reaches the secret world-info block, so
+    # if the state block borrowed that heading there would be none to borrow
+    quiet = entities.create_entity(croot, "groups", "Quiet Office", "", secrecy="secret")
+    groupstate.write_state(croot, quiet, "## Secrets\nThey hold the harbourmaster's debt.")
+    open_ = entities.create_entity(croot, "groups", "Dock Union", "A public trade body.")
+    groupstate.write_state(croot, open_, "## Goals\nRaise the pier tariff.")
+    scenes.append_message(cid, sid, "user", "hello")
+
+    section = next(s for s in context.context_sections(cid, sid) if s["label"] == "Group state")
+    assert "Raise the pier tariff." in section["text"]
+    assert "harbourmaster's debt" in section["text"]
+    heading = section["text"].index("Secret knowledge")
+    assert section["text"].index("Raise the pier tariff.") < heading
+    assert heading < section["text"].index("harbourmaster's debt")
+
+
+def test_gm_only_group_takes_its_state_with_it(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    gid = entities.create_entity(croot, "groups", "Referee Cabal", "x", secrecy="gm-only")
+    groupstate.write_state(croot, gid, "## Secrets\nThey burn the warehouse on day nine.")
+    scenes.append_message(cid, sid, "user", "hello")
+
+    sys = context.build_messages(cid, sid)[0]["content"]
+    assert "burn the warehouse" not in sys
+    assert "# Group state" not in sys
+
+
+def test_public_group_state_section_is_unchanged(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    gid = entities.create_entity(croot, "groups", "Dock Union", "A public trade body.")
+    groupstate.write_state(croot, gid, "## Goals\nRaise the pier tariff.")
+    scenes.append_message(cid, sid, "user", "hello")
+
+    section = next(s for s in context.context_sections(cid, sid) if s["label"] == "Group state")
+    assert section["text"] == "# Group state\nDock Union:\n  Goals: Raise the pier tariff."
 
 
 def test_no_secret_lore_leaves_the_world_info_section_as_it_was(monkeypatch, tmp_path):
@@ -830,9 +919,6 @@ def test_prose_style_resolves_scene_then_campaign_then_global(monkeypatch, tmp_p
     scenes.set_response(cid, sid, {"style_id": "does-not-exist"})
     text = context.build_messages(cid, sid)[0]["content"]
     assert "Prose style: Noir Detective" in text
-
-
-from grimoire.store import groupstate  # noqa: E402
 
 
 def test_group_state_rides_group_activation(monkeypatch, tmp_path):
