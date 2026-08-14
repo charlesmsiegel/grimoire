@@ -402,6 +402,81 @@ def trim_continuation(cid: str, sid: str, from_index: int) -> None:
         pass
 
 
+@locking._serialized
+def delete_from(cid: str, sid: str, index: int) -> int:
+    """Cut the transcript at `index`: that post and everything after it go (#75).
+
+    Returns how many were removed. `IndexError` for an index outside
+    `0 <= index < len(messages)` — a cut that removes nothing is a caller bug,
+    not a no-op, and the route turns it into a 400.
+
+    This is the arbitrary cut point `remove_trailing_assistant_run` is not. That
+    one takes exactly the last recorded generation and is the reroll primitive;
+    this one is the player deciding the scene went wrong three posts ago.
+
+    Nothing below the cut is preserved, and the two exceptions the other
+    truncators make are deliberately absent:
+
+    - **Trailing scene-transition lines are NOT stepped over.** Reroll steps over
+      them because it is replacing the generation beneath them and the player's
+      join/leave/move still happened. A cut at `index` is a claim about the
+      transcript from `index` on, and a transition sitting inside that span is
+      part of what is being discarded.
+    - **Manual dice-roll lines go too**, where `edit_message` refuses to touch
+      one and `trim_continuation` re-parks them. Both of those are protecting a
+      line whose content must stay in lockstep with an immutable `rolls.json`
+      entry — during a reroll, or during crash recovery, neither of which the
+      player asked for. Here they did. The ledger entry survives (`rolls` is
+      append-only by design and never drops one), so what is lost is the
+      transcript line, not the record that the roll happened; the route says so
+      in the confirmation the player sees.
+
+    `turn_sizes` is clamped exactly as `trim_continuation` clamps it, and against
+    TRACKED blocks for the same reason: on a scene with an untracked legacy
+    prefix a total-based comparison keeps a stale boundary and segmentation then
+    reads legacy messages as a turn. Body and boundaries go out in ONE write —
+    see `turns._set_turn_sizes`.
+    """
+    p = paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        raise paths.SceneNotFound(sid)
+    messages = read.read_scene(cid, sid)["messages"]
+    if index < 0 or index >= len(messages):
+        raise IndexError(index)
+    kept = messages[:index]
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    sizes = turns._parse_turn_sizes(meta.get("turn_sizes", ""))
+    prefix = max(len(turns._model_blocks(messages)) - sum(sizes), 0)  # untracked legacy blocks
+    tracked_after = max(len(turns._model_blocks(kept)) - prefix, 0)
+    while sizes and sum(sizes) > tracked_after:
+        sizes.pop()
+    meta["updated"] = now_iso()
+    turns._set_turn_sizes(meta, sizes)
+    atomic.write_text(p, dump_frontmatter(meta, serialize._serialize_messages(kept)))
+    return len(messages) - index
+
+
+@locking._serialized
+def unmark_absorbed(cid: str, sid: str) -> None:
+    """Undo `mark_absorbed`: the scene is unfinished again and may be re-absorbed.
+
+    The keys are REMOVED rather than blanked. `list_scenes` and
+    `routes.scenes._already_absorbed` both read `done` out of a hand-editable
+    file and compare case-insensitively against `"true"`, so an empty value would
+    read as unfinished either way — but `one_line` and `summary` are rendered
+    wherever they are non-empty, and a scene carrying the summary of a transcript
+    that has been cut in half is worse than one carrying none.
+    """
+    p = paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        raise paths.SceneNotFound(sid)
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    for key in ("done", "one_line", "summary"):
+        meta.pop(key, None)
+    meta["updated"] = now_iso()
+    atomic.write_text(p, dump_frontmatter(meta, body))
+
+
 class RollMessageImmutable(Exception):
     """Raised when editing a manual dice-roll transcript line is attempted —
     its content must stay in lockstep with the immutable rolls.json entry."""

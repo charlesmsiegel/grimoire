@@ -385,6 +385,26 @@ def _clear(cid: str, sid: str) -> None:
     _path(cid, sid).unlink(missing_ok=True)
 
 
+def drop_scene(cid: str, sid: str) -> None:
+    """Discard a LIVE scene's parked variants (#75).
+
+    `clear_destinations`' sibling for the case that one rules out: that call
+    clears sidecars on ids no scene holds, ahead of a rename claiming them. This
+    one is called on a scene that is still there, by a cascade delete that moved
+    the anchor out from under the set — the variants describe a generation the
+    player has erased, and leaving the file lets a scene played forward to the
+    same message count adopt them.
+
+    `scenes.delete_scene` unlinks this path itself rather than calling here, and
+    deliberately: it runs the unlink before the transcript's, with its own
+    handling for a sidecar that will not go, because a scene id is recycled and
+    an orphan left behind is adopted by the next scene to take the id. Nothing
+    here is recycling an id.
+    """
+    with locks.campaign_lock(cid):
+        _clear(cid, sid)
+
+
 def state(cid: str, sid: str) -> dict:
     """``{"active": int|None, "runs": [...]}`` for this scene's trailing
     generation. ``active`` is the variant currently in the transcript, and None

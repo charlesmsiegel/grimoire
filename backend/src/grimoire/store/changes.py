@@ -69,6 +69,25 @@ def record(cid: str, sid: str, changes: dict[str, list[dict]]) -> None:
     atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
+def forget_scene(cid: str, sid: str) -> int:
+    """Drop every delta this scene left. Returns how many went (#75).
+
+    The panel's row says "this is what the last write-back did to this record".
+    Once the scene that wrote it has been cut and its value put back, the row is
+    describing a change the record no longer holds — and because this log is
+    rolling, there is no earlier row to fall back to. No row at all is the honest
+    state, and it is what a record that has never been absorbed already shows.
+    """
+    data = read(cid)
+    doomed = [ref for ref, rec in data.items()
+              if isinstance(rec, dict) and rec.get("scene") == sid]
+    for ref in doomed:
+        del data[ref]
+    if doomed:
+        atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+    return len(doomed)
+
+
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     """Follow renamed scene ids in each record's scene field."""
     data = read(cid)
