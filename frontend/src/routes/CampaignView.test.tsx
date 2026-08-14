@@ -539,7 +539,12 @@ test("a complete scene replaces the composer with a notice", async () => {
   renderCampaign();
   await screen.findByText("a reply");
 
-  expect(screen.getByText(/scene complete/i)).toBeInTheDocument();
+  // Waited for, not asserted flat: the notice renders off `activeDone`, which
+  // the scene LIST supplies, while the reply above comes from the transcript
+  // read. Two chains are two commits, so a poll that lands between them sees
+  // the reply without the notice — and the five absence assertions below would
+  // then be measuring a composer that had simply not been re-rendered yet.
+  await screen.findByText(/scene complete/i);
   // the whole composer, not a disabled entry box: a greyed-out one still says
   // "you could type here"
   expect(screen.queryByRole("textbox")).toBeNull();
@@ -5852,6 +5857,12 @@ test("no Reroll on an all-assistant transcript, however much history is above", 
     offset: 12, total: 13, has_older: true, has_user_message: false });
   renderCampaign();
   await screen.findByText("narration");
+  // The mirror of the races above, and the more dangerous half: this asserts an
+  // ABSENCE, so the scheduling that hid Reroll from its siblings would make this
+  // pass while proving nothing. `Edit message` hangs off `transcriptIsActive`
+  // alone, so waiting for it establishes that the gutter has rendered at all —
+  // and only then is "no Reroll" a statement about the all-assistant transcript.
+  await screen.findByTitle("Edit message");
   expect(screen.queryByTitle("Reroll")).toBeNull();
 });
 
