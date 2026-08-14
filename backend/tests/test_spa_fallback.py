@@ -102,3 +102,29 @@ def test_a_client_route_still_falls_back_with_windows_separators(client, monkeyp
     r = client.get("/campaigns/realm-watch/scenes/003--council-of-mara", headers=PAGE)
     assert r.status_code == 200
     assert "grimoire" in r.text
+
+
+@pytest.mark.parametrize("path, under", [
+    # The two spellings of the same request. The second is the one from the
+    # bug report verbatim, asserted against the predicate directly: every other
+    # test here reaches it through `_windows_get_path`, which is this repo's
+    # *belief* about how Windows resolves a URL. If that belief is wrong, those
+    # tests go green while Windows stays broken -- this one cannot.
+    ("api/not-a-real-endpoint", True),
+    ("api\\not-a-real-endpoint", True),
+    ("api", True),
+    ("api\\campaigns\\realm-watch\\scenes", True),
+    # Near misses. A first segment that merely *starts with* "api" is a client
+    # route, and `startswith("api")` would have taken its fallback away.
+    ("apiary", False),
+    ("api-docs", False),
+    ("apidocs", False),
+    # `get_path` resolves `..` before this sees it, so `/api/../worlds` arrives
+    # as a client route and `/x/../api/gone` arrives under the API.
+    ("worlds", False),
+    ("campaigns\\realm-watch", False),
+    # The root URL: `os.path.normpath("")` is ".", not "".
+    (".", False),
+])
+def test_the_api_guard_reads_either_separator(path, under):
+    assert SPAStaticFiles._under_api(path) is under
