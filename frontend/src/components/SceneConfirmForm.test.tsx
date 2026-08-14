@@ -43,7 +43,7 @@ beforeEach(() => {
 });
 
 function renderForm(draft: SceneDraft, onCreated = vi.fn()) {
-  render(<SceneConfirmForm cid="c" draft={draft} onBack={() => {}} onCreated={onCreated} />);
+  render(<SceneConfirmForm cid="c" draft={draft} ready onBack={() => {}} onCreated={onCreated} />);
   return onCreated;
 }
 
@@ -55,7 +55,7 @@ test("nothing is written until Create", async () => {
 
 test("Back writes nothing", async () => {
   const onBack = vi.fn();
-  render(<SceneConfirmForm cid="c" draft={GEN} onBack={onBack} onCreated={vi.fn()} />);
+  render(<SceneConfirmForm cid="c" draft={GEN} ready onBack={onBack} onCreated={vi.fn()} />);
   fireEvent.click(await screen.findByRole("button", { name: /back/i }));
   expect(onBack).toHaveBeenCalled();
   expect(api.createScene).not.toHaveBeenCalled();
@@ -213,7 +213,7 @@ test("an onscreen draft DOES offer a player seated as a character", async () => 
 });
 
 test("a warning raised while the draft was built is shown here", async () => {
-  render(<SceneConfirmForm cid="c" draft={GEN} notice="no key -- continuing without inferred details."
+  render(<SceneConfirmForm cid="c" draft={GEN} ready notice="no key -- continuing without inferred details."
                            onBack={() => {}} onCreated={vi.fn()} />);
   expect(await screen.findByText(/continuing without inferred details/)).toBeInTheDocument();
 });
@@ -239,7 +239,7 @@ test("the form reports writing so the modal can refuse to close", async () => {
   let release: (v: any) => void = () => {};
   (api.createScene as any).mockReturnValue(new Promise((r) => { release = r; }));
   const onWriting = vi.fn();
-  render(<SceneConfirmForm cid="c" draft={GEN} onBack={() => {}} onCreated={vi.fn()}
+  render(<SceneConfirmForm cid="c" draft={GEN} ready onBack={() => {}} onCreated={vi.fn()}
                            onWriting={onWriting} />);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   expect(onWriting).toHaveBeenLastCalledWith(true);
@@ -250,7 +250,7 @@ test("the form reports writing so the modal can refuse to close", async () => {
 test("a cast failure still releases onWriting, not just the busy button", async () => {
   (api.addCastBatch as any).mockRejectedValue({ detail: "boom" });
   const onWriting = vi.fn();
-  render(<SceneConfirmForm cid="c" draft={GEN} onBack={() => {}} onCreated={vi.fn()}
+  render(<SceneConfirmForm cid="c" draft={GEN} ready onBack={() => {}} onCreated={vi.fn()}
                            onWriting={onWriting} />);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await waitFor(() => expect(api.deleteScene).toHaveBeenCalled());
@@ -260,7 +260,7 @@ test("a cast failure still releases onWriting, not just the busy button", async 
 test("a startFromGreeting failure still releases onWriting", async () => {
   (api.startFromGreeting as any).mockRejectedValue({ detail: "not available" });
   const onWriting = vi.fn();
-  render(<SceneConfirmForm cid="c" draft={GRT} onBack={() => {}} onCreated={vi.fn()}
+  render(<SceneConfirmForm cid="c" draft={GRT} ready onBack={() => {}} onCreated={vi.fn()}
                            onWriting={onWriting} />);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await waitFor(() => expect(api.deleteScene).toHaveBeenCalled());
@@ -283,7 +283,7 @@ test("a cast member the backend skips is reported rather than silently dropped",
 
 test("Cancel closes the whole chooser without writing", async () => {
   const onCancel = vi.fn();
-  render(<SceneConfirmForm cid="c" draft={GEN} onBack={() => {}} onCancel={onCancel} onCreated={vi.fn()} />);
+  render(<SceneConfirmForm cid="c" draft={GEN} ready onBack={() => {}} onCancel={onCancel} onCreated={vi.fn()} />);
   fireEvent.click(await screen.findByRole("button", { name: /^cancel$/i }));
   expect(onCancel).toHaveBeenCalledTimes(1);
   expect(api.createScene).not.toHaveBeenCalled();
@@ -292,7 +292,7 @@ test("Cancel closes the whole chooser without writing", async () => {
 test("Cancel is disabled while the create sequence is writing, like Back", async () => {
   let release: (v: any) => void = () => {};
   (api.createScene as any).mockReturnValue(new Promise((r) => { release = r; }));
-  render(<SceneConfirmForm cid="c" draft={GEN} onBack={() => {}} onCancel={() => {}} onCreated={vi.fn()} />);
+  render(<SceneConfirmForm cid="c" draft={GEN} ready onBack={() => {}} onCancel={() => {}} onCreated={vi.fn()} />);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   expect(screen.getByRole("button", { name: /^cancel$/i })).toBeDisabled();
   await act(async () => { release({ id: "s9" }); });
@@ -394,7 +394,7 @@ test("a greeting draft defaults to using the greeting verbatim", async () => {
 
 test("a generated draft with a premise defaults to generating an opening post", async () => {
   renderForm(GEN);
-  expect(await screen.findByRole("radio", { name: /opening post/i })).toBeChecked();
+  expect(await screen.findByRole("radio", { name: /generate one/i })).toBeChecked();
   expect(screen.queryByRole("radio", { name: /verbatim/i })).toBeNull();
 });
 
@@ -430,7 +430,7 @@ test("a greeting draft that is not using its greeting casts the scene itself", a
 
 test("a greeting draft can take a premise instead of the greeting body", async () => {
   const onCreated = renderForm(GRT);
-  fireEvent.click(await screen.findByRole("radio", { name: /opening post/i }));
+  fireEvent.click(await screen.findByRole("radio", { name: /generate one/i }));
   fireEvent.change(screen.getByLabelText("Premise"), { target: { value: "The tide comes in." } });
   fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9-dated", "The tide comes in."));
@@ -461,7 +461,7 @@ test("the generate option admits it when no LLM is connected", async () => {
   // quiet about there being nothing to generate with. Reachable without an LLM:
   // the typed path builds a draft with a premise whether or not one is set up.
   render(<SceneConfirmForm cid="c" draft={GEN} ready={false} onBack={() => {}} onCreated={vi.fn()} />);
-  fireEvent.click(await screen.findByRole("radio", { name: /opening post/i }));
+  fireEvent.click(await screen.findByRole("radio", { name: /generate one/i }));
   expect(screen.getByText(/set up an llm connection/i)).toBeInTheDocument();
 });
 
