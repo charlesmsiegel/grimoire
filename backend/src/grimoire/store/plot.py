@@ -50,6 +50,27 @@ def set_movement(cid: str, pid: str, title: str, status: str, beat_text: str, sc
     _write(cid, data)
 
 
+def restore(cid: str, pid: str, thread: dict | None) -> None:
+    """Put one thread back to a recorded state, or remove it when there was none.
+
+    The exact inverse of `set_movement` and the only shape that can be one:
+    `set_movement` APPENDS a beat and may set a title and a status in the same
+    call, so there is no argument list that undoes it. `store/undo.py` snapshots
+    the whole record before the write and hands it back here (#31).
+
+    Scoped to the one id, never a whole-file rewrite from a snapshot: threads the
+    reversal has no business touching may have moved since, and putting the
+    whole file back would take them with it.
+    """
+    data = read(cid)
+    if thread is None:
+        if data.pop(pid, None) is None:
+            return
+    else:
+        data[pid] = thread
+    _write(cid, data)
+
+
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     """Follow renamed scene ids in beats and last_scene markers."""
     data = read(cid)

@@ -1058,6 +1058,15 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
   padding: 12px 22px; font-size: 14px; line-height: 1.7; flex: none;
   max-height: 40vh; overflow-y: auto;
 }
+/* Records / History (#31). The page-level .tabs rhythm (22px above, 24px below)
+   is built for a full view; this panel is a 40vh strip under the transcript, and
+   at that spacing the tab row alone would eat a quarter of it. */
+.changes-panel .tabs { margin: 0 0 10px; }
+/* The rail is sticky and budgets for the app header; inside this panel it
+   scrolls against the panel's own 40vh port instead, so it must not reserve
+   chrome that is not above it. */
+.changes-panel .editor-list { position: static; max-height: none; }
+.changes-panel .form-actions { margin-bottom: 6px; }
 /* continuity ledger (#117) — same slot and scroll behaviour as .changes-panel,
    but sectioned rather than two-pane: it is read-only, so there is nothing to
    select into a detail view. */

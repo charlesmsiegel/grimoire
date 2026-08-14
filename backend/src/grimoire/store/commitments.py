@@ -115,6 +115,26 @@ def set_movement(cid: str, mid: str, title: str, kind: str, status: str,
         _write(cid, data)
 
 
+def restore(cid: str, mid: str, record: dict | None) -> None:
+    """Put one commitment back to a recorded state, or remove it when there was
+    none. `plot.restore`'s sibling, and there for the same reason: `set_movement`
+    appends a beat and may move kind, status, deadline and title in the same
+    call, so no argument list undoes it and `store/undo.py` snapshots the record
+    instead (#31).
+
+    Scoped to the one id rather than restoring the whole file, so commitments the
+    reversal has no business touching keep whatever they have since become.
+    """
+    with locks.campaign_lock(cid):
+        data = read(cid)
+        if record is None:
+            if data.pop(mid, None) is None:
+                return
+        else:
+            data[mid] = record
+        _write(cid, data)
+
+
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     """Follow renamed scene ids in beats and last_scene markers.
 

@@ -4608,7 +4608,14 @@ def test_a_commit_that_died_before_recording_finishes_on_the_retry(client):
     retry = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
     assert retry.status_code == 200
     assert retry.json()["applied"] == ["plot:the-tea"]   # from the journal, not re-applied
-    assert retry.json()["failures"] == []
+    # One row, and it is a LOG rather than an edit. The crash landed after the
+    # change logs were published, and the intent flag cannot say whether they
+    # ran -- so the resume reports them instead of replaying a rolling upsert
+    # that may now be stale, or duplicating an append-only history row (#31 put
+    # `journal.json` behind that same flag, which is why a plot beat now reaches
+    # it: it produces no `changes.json` delta of its own).
+    assert [(f["id"], f["kind"]) for f in retry.json()["failures"]] == [("changes", "error")]
+    assert retry.json()["failures"][0]["reason"] == store.absorb.UNCONFIRMED
     assert len(store.plot.read(cid)["the-tea"]["beats"]) == 1      # not appended twice
     timeline = (store.campaigns.campaign_root(cid) / "timeline.md").read_text(encoding="utf-8")
     assert timeline.count("The tea was poured.") == 1

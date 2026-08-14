@@ -62,6 +62,38 @@ def set_bond(cid: str, a: str, b: str, type: str, since_scene: str = "") -> None
     _write(cid, data)
 
 
+def restore_feeling(cid: str, a: str, b: str, record: dict | None) -> None:
+    """Put one directed feeling back to a recorded state, or remove it when there
+    was none. `set_feeling` has no inverse of its own -- there is no way to spell
+    "there was nothing here" in trust/affection/tension -- so `store/undo.py`
+    snapshots the record and hands it back (#31).
+
+    One key, never a whole-file restore: other pairs may have moved since.
+    """
+    data = read(cid)
+    key = feeling_key(a, b)
+    if record is None:
+        if data["feelings"].pop(key, None) is None:
+            return
+    else:
+        data["feelings"][key] = record
+    _write(cid, data)
+
+
+def restore_bond(cid: str, a: str, b: str, record: dict | None) -> None:
+    """`restore_feeling` for bonds. `set_bond` cannot express removal either, and
+    it preserves `since_scene` across a type change, so putting a bond back means
+    putting the whole record back."""
+    data = read(cid)
+    key = bond_key(a, b)
+    if record is None:
+        if data["bonds"].pop(key, None) is None:
+            return
+    else:
+        data["bonds"][key] = record
+    _write(cid, data)
+
+
 def actor_name(cid: str, token: str) -> str:
     """Overlay-aware: a thin campaign's cast is mostly inherited (never
     materialized campaign-side), so the name must resolve across the union,

@@ -711,6 +711,24 @@ export type RecordChange = {
   fields: FieldDiff[];
 };
 
+/** One row of the append-only change journal (#31). `RecordChange` is the
+ *  rolling view — the latest delta per record — and this is the history behind
+ *  it, newest first, with the reversal the server is willing to perform.
+ *
+ *  `undoable` is the SERVER's answer and is never re-derived here: whether a
+ *  change can be put back depends on what it wrote and whether the record has
+ *  moved since, and a second copy of that rule in the client would be the kind
+ *  of drift that ends with a button offering what the store refuses. `why`
+ *  carries the reason when it is false. */
+export type JournalEntry = {
+  id: string; ts: string; source: string; kind: string;
+  ref: { kind: string; id: string }; name: string; label: string; field: string;
+  scene: { id: string; title: string; date: string };
+  diff: DiffLine[];
+  undoable: boolean; why: string;
+  undone: { ts: string; by: string } | null;
+};
+
 // continuity ledger (#117). `kind` is promise | threat | foreshadowing and
 // `status` open | fulfilled | broken | expired — a commitment resolves, where a
 // plot thread only advances. Contradictions are the fourth section this view is
@@ -1024,8 +1042,20 @@ export const api = {
     request<{ id: string; name: string }>("PUT", `/api/campaigns/${cid}`, { name }).then(notifyCampaigns),
   deleteCampaign: (cid: string) =>
     request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}`).then(notifyCampaigns),
-  campaignChanges: (cid: string) =>
-    request<RecordChange[]>("GET", `/api/campaigns/${cid}/changes`),
+  // `fresh` for the caller re-reading *because* an undo just repointed one of
+  // these deltas: handed a promise started before that write, it would conclude
+  // the reversal never happened.
+  campaignChanges: (cid: string, fresh = false) =>
+    request<RecordChange[]>("GET", `/api/campaigns/${cid}/changes`, undefined, { fresh }),
+  // `fresh`, for the reason the ledger below opts out of sharing: the history
+  // is re-read precisely when it has just grown — an absorb save, or an undo
+  // this same panel performed — and a shared in-flight promise would answer
+  // that with the list as it was before the row appeared.
+  campaignJournal: (cid: string) =>
+    request<JournalEntry[]>("GET", `/api/campaigns/${cid}/journal`, undefined, { fresh: true }),
+  undoJournalEntry: (cid: string, jid: string) =>
+    request<{ ok: boolean; entry: JournalEntry }>(
+      "POST", `/api/campaigns/${cid}/journal/${jid}/undo`),
   // Never shared with an in-flight read of the same path: the ledger is re-read
   // precisely when the records behind it have moved (an absorb save, a scene
   // rename), and the dedupe would answer that with the pre-change response.

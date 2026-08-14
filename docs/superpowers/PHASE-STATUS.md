@@ -122,9 +122,28 @@ worktree — the editable `backend/.venv` is pinned to this checkout). Progress 
   (no per-field/structured editing). Residual parse edge: a `current_state` whose *first*
   non-empty line is literally a recognized header (`## Knows` etc.) would be misread as
   structured — vanishingly unlikely for standing-condition prose; not guarded.
-- Phase-6 changes shows only the **last** write-back delta per record (rolling). Not modeled:
-  a cumulative fork-point diff, full per-scene history/timeline stepping, or a campaign-vs-
-  current-world compare (all deliberately out of scope). ChangesPanel is read-only.
+- Phase-6 changes still shows only the **last** write-back delta per record (rolling) on its
+  **Records** tab. The history behind it is no longer missing — see the change journal below
+  — but the two remaining gaps are unchanged: a cumulative fork-point diff and a campaign-vs-
+  current-world compare are both deliberately out of scope.
+- **Change journal + undo (#31).** `store/journal.py` is an append-only per-campaign history
+  at `journal.json` (`{seq, entries}`; ids `j<n>`, never reused, newest `RETENTION` kept),
+  and `store/undo.py` is what makes an entry reversible. `absorb.apply_edits` appends one row
+  per applied edit of **every** kind — plot, commitment, fact and the relationship pair
+  included, which `changes.json` never covered — carrying the reversal snapshotted just
+  before the write. Manual coverage is the two campaign routes whose write is one text body:
+  `PUT /campaigns/{cid}/{kind}/{eid}` and `PUT /campaigns/{cid}/groups/{gid}/state`.
+  `GET /campaigns/{cid}/journal` + `POST /campaigns/{cid}/journal/{jid}/undo`, behind a
+  **History** tab in `ChangesPanel`; undoing appends its own entry, so undoing that is redo.
+  Undo is a compare-and-swap on what the write produced — a record that moved since is a 409,
+  never a silent overwrite.
+  - **Not reversible, by decision and with the reason in the entry**: `fact` (the ledger
+    models supersession and must not lose a row), `weather` and `sheet` (each owns its own
+    conflict contract), and the `new_*` creations (undo there is a cascading delete — #75).
+    A `commitment` whose id the write reallocated is journalled without a reversal too.
+  - **Not covered**: manual edits through `PUT /campaigns/{cid}/characters/{char}/versions/
+    {vid}` (whole-card replace, so a field-precise row would describe only part of it) and
+    the world-scope routes (the journal is per campaign).
 
 ## Commands
 

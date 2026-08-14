@@ -15,7 +15,11 @@ from collections.abc import Callable
 
 from .. import (cards, changes, characters, commitments, dossiers, entities, facts,
                 groupstate, overlay, playstate, plot, provenance, relationships,
-                voice_drift)
+                undo as undo_store, voice_drift)
+# Aliased because `apply_edits` binds `journal` to the commit progress dict --
+# the crash-resume ledger, which is a different thing from the change journal
+# and predates it. Two `journal`s in one function would read as one.
+from .. import journal as change_journal
 from ..appearances import (paths as appearances_paths,
                            transitions as appearances_transitions,
                            versions as appearances_versions)
@@ -25,8 +29,20 @@ from ..scenes import moment as scenes_moment, read as scenes_read
 from ..sheets import paths as sheets_paths
 from . import conflicts, materializer, weather
 
-_BROWSABLE_KINDS = ("character_state", "dossier", "lore", "authored", "new_character",
-                    "new_location", "new_lore")
+#: Kept as a name here because `absorb` re-exports it, but the list itself now
+#: lives with the log it describes (`changes.BROWSABLE_KINDS`) -- `store.undo`
+#: needs the same answer, and two literals would drift.
+_BROWSABLE_KINDS = changes.BROWSABLE_KINDS
+
+
+def _display(value) -> str:
+    """A before/after side as text the panel can diff. Everything reaching here
+    has already been written, so a non-string (a weather axis is a number) is
+    rendered rather than dropped -- the journal is the record of what happened,
+    and "" would claim the field was empty."""
+    if isinstance(value, str):
+        return value
+    return "" if value is None else str(value)
 
 
 def _outside_drift(cid: str, e: dict, reading, landed: set[tuple]) -> dict | None:
@@ -71,8 +87,10 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
     The outcome is the unit the commit journals and the reviewer is shown, so it
     is a value rather than three side effects:
 
-    - ``{"state": "applied", "id", "recorded": {ref: [rows]}}`` -- it landed;
-      `recorded` is its write-back delta when the kind is browsable.
+    - ``{"state": "applied", "id", "recorded": {ref: [rows]}, "journalled": row}``
+      -- it landed; `recorded` is its write-back delta when the kind is
+      browsable, and `journalled` is its change-journal row, which every kind
+      gets and which carries the reversal when the kind has one (#31).
     - ``{"state": "skipped"}`` -- nothing was written and nothing was lost: a
       re-guard rejecting a forged row, a blank reply that must not erase a good
       record, a weather span with no usable date.
@@ -108,7 +126,20 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             return {"state": "failed", "id": eid, "kind": "conflict", "reason": str(exc)}
         except sheets_paths.SheetError as exc:
             return {"state": "failed", "id": eid, "kind": "error", "reason": str(exc)}
-        return {"state": "applied", "id": eid, "recorded": {}}
+        # Journalled without a reversal, like every kind that carries none: the
+        # history is "every change this campaign made", and a sheet edit leaving
+        # no row would be the same silence `changes.json` kept about plot beats.
+        # Its own baseline (`audit/baselines.py`) is what reverses it.
+        target = e.get("target")
+        target = target if isinstance(target, dict) else {}
+        return {"state": "applied", "id": eid, "recorded": {},
+                "journalled": {
+                    "kind": "sheet",
+                    "ref": {"kind": _display(target.get("kind")),
+                            "id": _display(target.get("id"))},
+                    "field": _display(e.get("field")), "label": _display(e.get("label")),
+                    "before": _display(e.get("before")), "after": _display(e.get("after")),
+                    "undo": None, "why": undo_store.why("sheet")}}
     # Shape first, and a bad one is a SKIP rather than a failure. #271 made every
     # write that fails report, but a row this garbled was never a coherent edit
     # to begin with -- it cannot come from the review panel, only from a forged
@@ -118,6 +149,10 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
     if (not isinstance(e.get("kind"), str) or not isinstance(e.get("target"), dict)
             or (e.get("payload") is not None and not isinstance(e.get("payload"), dict))):
         return {"state": "skipped"}
+    # BEFORE the write, because this is the last moment the value it replaces
+    # still exists (#31). Never raises: an unreadable target costs the entry its
+    # Undo button, and must not cost the reviewer their approved edit.
+    reversal, prior = undo_store.snapshot(cid, e)
     try:
         kind, target, after = e["kind"], e["target"], e.get("after", "")
         extra_fields: list[dict] = []
@@ -350,6 +385,15 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             if not str(e.get("before", "")).strip():
                 mid = materializer._new_commitment_id(
                     commitments.read(cid), {}, mid, p.get("title", ""))
+                if mid != target["id"]:
+                    # The write moved off the record the reversal was snapshotted
+                    # from, so that snapshot describes a commitment this edit
+                    # never touched. Dropped rather than re-taken: the new id is
+                    # unheld by construction, so there is nothing to put back,
+                    # and a reversal here would be a deletion -- the same thing
+                    # the `new_*` kinds are declined for.
+                    reversal = None
+                    target = {**target, "id": mid}
             cur = commitments.get(cid, mid)
             stored_title = cur.get("title") if isinstance(cur, dict) else None
             title = "" if isinstance(stored_title, str) and stored_title.strip() \
@@ -512,6 +556,19 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             recorded[ref] = [{"field": e.get("field", ""), "label": e.get("label", ""),
                               "before": conflicts.replaced_value(e), "after": after},
                              *extra_fields]
+        # The journal row for this edit, whatever its kind: the gap `changes`
+        # left is that it covers only the browsable kinds, and a plot beat or a
+        # feeling is exactly the continuity line somebody wants back (#31). The
+        # reversal is completed here, by reading the record once more now the
+        # write has landed -- that reading is what a later undo is held to.
+        journalled = {
+            "kind": kind, "ref": {"kind": _display(target.get("kind")),
+                                  "id": _display(target.get("id"))},
+            "field": e.get("field", "") if isinstance(e.get("field"), str) else "",
+            "label": e.get("label", "") if isinstance(e.get("label"), str) else "",
+            "before": _display(conflicts.replaced_value(e)), "after": _display(after),
+            "undo": undo_store.seal(cid, reversal, prior) if reversal is not None else None}
+        journalled["why"] = "" if journalled["undo"] else undo_store.why(kind)
     except entities.EntityNotFound:
         # Named apart from the generic handler because its message would
         # otherwise be the bare ref: this is the commonest way an approved edit
@@ -525,7 +582,7 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
         # so an approved change vanished with nothing on screen to say so.
         return {"state": "failed", "id": eid, "kind": "error",
                 "reason": f"could not apply this change: {exc}"}
-    return {"state": "applied", "id": eid, "recorded": recorded}
+    return {"state": "applied", "id": eid, "recorded": recorded, "journalled": journalled}
 
 
 #: What a resumed commit says about a step it journalled and never confirmed.
@@ -551,6 +608,12 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
     changes.json (the latest write-back delta per record); sheet edits are never
     browsable and never land there -- the sheet itself is the record.
 
+    Every applied edit of every kind also appends one row to the append-only
+    change journal (`store/journal.py`), carrying the reversal `store/undo.py`
+    snapshotted before the write. That is the history changes.json cannot keep:
+    it is a rolling upsert, so the second scene to touch a record erases the
+    first scene's delta and any chance of putting it back (#31).
+
     `progress` is the commit journal (#271). Each edit's outcome is written into it
     by position -- positions, not ids, because the commit token's fingerprint has
     already refused any retry whose body differs, and ids are client-supplied and
@@ -569,6 +632,11 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
     # published in the same guarded block below, because it is the same kind of
     # rolling upsert with the same replay hazard.
     cited: dict = journal.setdefault("cited", {})
+    # The append-only change journal's rows (#31), carried here for the same
+    # reason `recorded` is: they are published in one append once the whole list
+    # is through, so a commit that died mid-list must not lose the history of
+    # what it had already written.
+    journalled: list = journal.setdefault("journalled", [])
     applied: list[str] = []
     failures: list[dict] = []
     # One pass over the whole batch before the first write (#111): applying one
@@ -612,6 +680,9 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
             prior = outcomes[slot] = _apply_one(cid, croot, e, sid, verdict)
             for ref, rows in prior.pop("recorded", {}).items():
                 recorded.setdefault(ref, []).extend(rows)
+            row = prior.pop("journalled", None)
+            if row:
+                journalled.append({"scene": sid or "", "source": "absorb", **row})
             if prior.get("state") == "applied":
                 # Journalled with the outcome: what the target reads now this
                 # edit has landed is how a LATER slot, resuming after a crash,
@@ -648,12 +719,19 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
     # write -- the checkpoint below was already due for the last edit's outcome
     # -- and errs the safe way: a resume that cannot tell reports a possibly
     # stale panel instead of rewriting it.
+    #
+    # The journal append rides in the same guarded block rather than in one of
+    # its own. It is append-only, so replaying it would DUPLICATE history rather
+    # than staling it -- the opposite failure with the same fix, and one flag
+    # settles both. A resume that cannot tell whether the block ran reports it
+    # and writes neither.
     prior_changes = journal.get("changes")
-    if sid and (recorded or cited) and prior_changes is None:
+    logs = bool(recorded or cited or journalled)
+    if logs and prior_changes is None:
         journal["changes"] = "pending"
     if checkpoint:
         checkpoint()      # the last edit's outcome, so a crash before `record` resumes clean
-    if sid and (recorded or cited):
+    if logs:
         if isinstance(prior_changes, dict):
             # An earlier attempt tried and got a definite answer. changes.record
             # publishes by atomic rename, so its exception PROVED nothing landed
@@ -671,6 +749,10 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
                 # upserts, and a failure of either is the same class of loss —
                 # the record is right and the panel explaining it is stale.
                 provenance.record(cid, cited)
+                # Last of the three, and the only one that is append-only: it
+                # goes after the two upserts so a failure here cannot leave the
+                # panel showing a delta the history has no row for.
+                change_journal.append(cid, journalled)
             except Exception as exc:  # noqa: BLE001 — the edits landed; the delta log did not
                 reason = f"the changes panel could not be updated: {exc}"
                 # Settled, not left pending: if this commit also fails to record

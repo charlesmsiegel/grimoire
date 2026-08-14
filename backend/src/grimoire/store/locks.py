@@ -168,6 +168,12 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # `delete_cover` take the lock around the publish-then-clean sequence, and
     # `delete_cover` verifies the removal under it.
     "store.covers",
+    # `journal.json` is rewritten whole by every append, and an append that
+    # loses the race loses the only record of a write that already landed --
+    # which is worse than a stale panel, because the reversal it carries is the
+    # only way back. New module (#31), so it starts inside the exclusion rather
+    # than joining the frozen `UNREVIEWED` backlog `changes` sits in.
+    "store.journal",
     # `facts.json` the same (#114), and with one reason of its own on top of
     # the whole-file rewrite: `record` retires the superseded fact and writes
     # its replacement in one read-modify-write, so an unlocked pair can also
