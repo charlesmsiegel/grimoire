@@ -195,8 +195,9 @@ def test_manifest_falls_back_to_the_stored_name_for_unrecognizable_bytes(monkeyp
     still packs, declaring the store's own guess rather than octet-stream."""
     _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
-    assets.put_image(croot, "the-docks", "default", "pier", b"BM not really", "png",
-                     base="locations")
+    docks = "the-docks"  # the fixture's one image-bearing location
+    assert assets.image_path(croot, docks, "default", "pier", base="locations") is not None
+    assets.put_image(croot, docks, "default", "pier", b"BM not really", "png", base="locations")
 
     z = _open(epub.build_epub(cid)[0])
     opf = ET.fromstring(z.read("package.opf"))

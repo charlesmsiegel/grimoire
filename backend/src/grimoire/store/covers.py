@@ -65,8 +65,10 @@ TOO_LARGE = "cover image is too large (max 25 MB)"
 #: them. Those use magic bytes rather than a decode -- the packer cannot refuse
 #: a file, so it needs a detector that always answers -- which is why this stays
 #: PIL-based: only the decode bounds `MAX_PIXELS`, and only a cover is
-#: thumbnailed. The two admit the same four formats, so they cannot disagree
-#: about what an accepted image is called.
+#: thumbnailed. The two map the same four formats to the same four extensions,
+#: so an image both accept is named identically by either; where they part is
+#: only whether to accept at all (a signature satisfies one, a structural
+#: verify the other), which is each caller's own policy.
 _FORMAT_EXT = {"PNG": "png", "JPEG": "jpg", "GIF": "gif", "WEBP": "webp"}
 
 
