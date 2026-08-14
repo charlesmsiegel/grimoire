@@ -4,6 +4,7 @@ import {
   api, type Config, type ConfigUpdate, type LLMConnection, type PromptLayoutSection,
   type SceneContext,
 } from "../api/client";
+import { BackupsPanel } from "../components/BackupsPanel";
 import { ContextBudgetBar } from "../components/ContextBudgetBar";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { PromptLayoutEditor } from "../components/PromptLayoutEditor";
@@ -28,6 +29,7 @@ const DRAFT_FIELDS = [
   "system_prompt",
   "quote_color", "user_label", "assistant_label",
   "rolling_summary_every",
+  "backup_enabled", "backup_interval_hours", "backup_keep", "backup_dir",
   "theme",
 ] as const;
 type DraftField = (typeof DRAFT_FIELDS)[number];
@@ -50,17 +52,19 @@ function draftOf(c: Config): Draft {
 }
 
 type SectionId =
-  | "storage" | "connection" | "timeouts"
+  | "storage" | "backups" | "connection" | "timeouts"
   | "context" | "layout" | "transient" | "semantic" | "system-prompt" | "response"
   | "transcript" | "playing" | "appearance";
 
-/** The column, as data: three groups, eleven sections, and which draft fields
+/** The column, as data: three groups, twelve sections, and which draft fields
  *  each one owns — the last part is what lets a section carry an unsaved dot,
  *  so the footer's count is always findable rather than being a number about
  *  somewhere else. */
 type SectionDef = { id: SectionId; group: string; label: string; fields: DraftField[] };
 const SECTIONS: SectionDef[] = [
   { id: "storage", group: "The install", label: "Storage", fields: [] },
+  { id: "backups", group: "The install", label: "Backups",
+    fields: ["backup_enabled", "backup_interval_hours", "backup_keep", "backup_dir"] },
   { id: "connection", group: "The install", label: "Connection",
     fields: ["active_connection_id", "fallback_connection_id", "llm_retries"] },
   { id: "timeouts", group: "The install", label: "Timeouts",
@@ -341,6 +345,8 @@ export default function ConfigView() {
                   </>
                 )}
                 {s.id === "semantic" && recallOff && <span className="column-row-off"> off</span>}
+                {s.id === "backups" && draft?.backup_enabled !== "on" &&
+                  <span className="column-row-off"> off</span>}
               </span>
               {dirtyIn(s) && (
                 <>
@@ -383,6 +389,60 @@ export default function ConfigView() {
               it would land in whichever store the pointer named by the time you
               pressed Save.
             </p>
+          </>
+        )}
+
+        {draft && section === "backups" && (
+          <>
+            <p className="config-copy">
+              A backup is the whole library zipped into one file — worlds, campaigns,
+              scenes, settings. Everything grimoire knows is plain files under the
+              storage location, so an archive is a complete restore point and nothing
+              else has to be running to use it. The rebuildable thumbnail cache and the
+              backups folder itself are left out.
+            </p>
+            <p className="config-copy">
+              Automatic backups happen while the app is running and nowhere else: it
+              checks hourly whether the newest archive is older than the interval. They
+              are <strong>off</strong> until you turn them on, because each archive is a
+              second copy of your library and the count below multiplies it — and if your
+              storage location is a synced folder, every archive is uploaded whole. Point
+              the folder somewhere outside the library to avoid that.
+            </p>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                aria-label="Back up automatically"
+                checked={draft.backup_enabled === "on"}
+                onChange={(e) => edit("backup_enabled", e.target.checked ? "on" : "off")}
+              />
+              Back up automatically
+            </label>
+            <div className="config-fields">
+              <NumField id="cfg-backup-interval" label="Every" unit="hours"
+                        placeholder="24" caption="checked against the newest archive"
+                        value={draft.backup_interval_hours}
+                        onChange={(v) => edit("backup_interval_hours", v)} />
+              <NumField id="cfg-backup-keep" label="Keep" unit="archives"
+                        placeholder="7" caption="0 = keep every one"
+                        value={draft.backup_keep}
+                        onChange={(v) => edit("backup_keep", v)} />
+              <div className="config-field">
+                <label htmlFor="cfg-backup-dir">Backup folder</label>
+                <div className="config-input">
+                  <input id="cfg-backup-dir" type="text" className="mono-input"
+                         value={draft.backup_dir}
+                         placeholder={`${config?.data_dir ?? ""}/backups`}
+                         onChange={(e) => edit("backup_dir", e.target.value)} />
+                </div>
+                <p className="config-caption">blank = inside the library</p>
+              </div>
+            </div>
+            {/* The saved value, not the draft: the list below is the folder the
+                server is actually writing to, and re-reading it against a field
+                nobody has saved yet would show an empty directory as if it were
+                the state of your backups. */}
+            <BackupsPanel dir={config?.backup_dir ?? ""} />
           </>
         )}
 

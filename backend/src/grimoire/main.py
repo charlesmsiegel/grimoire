@@ -17,7 +17,7 @@ from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .routes import router
-from .store import campaigns, locks, migrations, module_edit
+from .store import backups, campaigns, locks, migrations, module_edit
 
 DEFAULT_DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"  # paths-ok: DEFAULT_DIST only; GRIMOIRE_DIST overrides it on Android
 
@@ -92,6 +92,41 @@ class SPAStaticFiles(StaticFiles):
             return await super().get_response("index.html", scope)
 
 
+#: How often the backup schedule is *checked*. Not how often a backup happens —
+#: that is `backup_interval_hours`, which this tick compares against the newest
+#: archive's own timestamp. An hour is the resolution the interval is expressed
+#: in, so checking more often would only find the same answer sooner.
+BACKUP_TICK_SECONDS = 3600.0
+
+
+async def _backup_ticker() -> None:
+    """The whole of the backup schedule (#32): check at startup, then hourly.
+
+    There is no cron and no daemon — this app is a local server someone runs
+    while they are using it, and the store is only mutated while it runs, so
+    "for however long the server is up" covers everything that can change.
+    A machine that never opens grimoire has nothing new to back up.
+
+    Off the event loop: zipping a library is minutes of blocking I/O, and a
+    live scene stream shares this worker. The thread is not abandoned on
+    cancellation (anyio's default), so a shutdown that lands mid-archive waits
+    for it — a pause on quit, in exchange for never leaving a thread writing
+    into a store the next process is about to open. Every failure is caught and logged
+    rather than allowed to end the loop — a full disk tonight must not mean no
+    backups after it is cleared, and `BaseException` is deliberately not caught
+    so cancellation at shutdown still stops the task.
+    """
+    log = logging.getLogger(__name__)
+    while True:
+        try:
+            made = await anyio.to_thread.run_sync(backups.run_scheduled)
+            if made is not None:
+                log.info("wrote scheduled backup %s", made.name)
+        except Exception as exc:  # noqa: BLE001 — see the docstring
+            log.warning("scheduled backup skipped -- %s", exc)
+        await anyio.sleep(BACKUP_TICK_SECONDS)
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     # Every step here can now hit a cross-process lock (#234) --
@@ -114,7 +149,14 @@ async def _lifespan(app: FastAPI):
         except locks.StoreBusy as exc:
             log.warning("startup step %s skipped -- %s; it will be retried",
                         step.__name__, exc)
-    yield
+    # The ticker outlives startup and is cancelled on the way out, so a server
+    # stopping mid-zip does not leave a thread writing into a store the next
+    # process is about to open. `atomic.streaming_write` is what makes that
+    # safe: an interrupted archive was never published.
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(_backup_ticker)
+        yield
+        tg.cancel_scope.cancel()
 
 
 class _CampaignActivityStamp:

@@ -6,6 +6,7 @@ vi.mock("../api/client", () => ({
   ApiError: class ApiError extends Error {},
   api: {
     getConfig: vi.fn(), putConfig: vi.fn(), getDataDir: vi.fn(), putDataDir: vi.fn(),
+    listBackups: vi.fn(), createBackup: vi.fn(),
     listStyles: vi.fn(), listConnections: vi.fn(),
     listCampaigns: vi.fn(), listScenes: vi.fn(),
     listScenePrompts: vi.fn(), getScenePrompt: vi.fn(),
@@ -34,6 +35,7 @@ const cfg = {
   embeddings_connection_id: "", embeddings_model: "", semantic_recall_depth: "0",
   semantic_recall_threshold: "0.4",
   prompt_layout_enabled: "off", speaker_turn_taking: "off",
+  backup_enabled: "off", backup_interval_hours: "24", backup_keep: "7", backup_dir: "",
 };
 const dataDir = {
   data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
@@ -55,6 +57,7 @@ beforeEach(() => {
     { id: "noir-detective", name: "Noir Detective", description: "", tags: [], built_in: true },
   ]);
   (api.listConnections as any).mockResolvedValue(connections);
+  (api.listBackups as any).mockResolvedValue({ dir: "/home/u/.grimoire/backups", backups: [] });
   // The context bar's source: no campaigns unless a test says otherwise, which
   // is also the "nothing to draw" case.
   (api.listCampaigns as any).mockResolvedValue([]);
@@ -91,7 +94,7 @@ test("the column indexes every section in three groups", async () => {
   expect(groups.map((g) => g.textContent))
     .toEqual(["The install", "What the model sees", "What you see"]);
   for (const label of [
-    /^Storage/, /^Connection/, /^Timeouts/, /^Context/, /^Prompt layout/,
+    /^Storage/, /^Backups/, /^Connection/, /^Timeouts/, /^Context/, /^Prompt layout/,
     /^Transient state/,
     /^Semantic recall/, /^System prompt/, /^Response preset/, /^Transcript/,
     /^While playing/, /^Appearance/,
@@ -563,4 +566,71 @@ test("a failed layout write reports itself and leaves the settings unwritten", a
   // ...and the reorder is still on screen to retry, not silently discarded
   expect(screen.getAllByTestId("layout-row").map((r) => r.getAttribute("data-id")))
     .toEqual(["weather", "world_info"]);
+// ---- backups (#32) ---------------------------------------------------------
+
+test("the backups row says off until the setting is on", async () => {
+  renderView();
+  expect(await screen.findByRole("button", { name: /^Backups off$/ })).toBeInTheDocument();
+
+  await open(/^Backups/);
+  await screen.findByText("No backups yet.");     // let the panel's read settle
+  fireEvent.click(screen.getByLabelText(/back up automatically/i));
+
+  // The row follows the DRAFT, so the label agrees with the checkbox you are
+  // looking at rather than with the file it has not been written to yet.
+  expect(screen.getByRole("button", { name: /^Backups unsaved$/ })).toBeInTheDocument();
+});
+
+test("the backup settings save as one patch of only what changed", async () => {
+  renderView();
+  await open(/^Backups/);
+  await screen.findByText("No backups yet.");
+  fireEvent.click(screen.getByLabelText(/back up automatically/i));
+  fireEvent.change(screen.getByLabelText(/^every$/i), { target: { value: "6" } });
+  fireEvent.change(screen.getByLabelText(/^keep$/i), { target: { value: "3" } });
+  fireEvent.change(screen.getByLabelText(/^backup folder$/i), { target: { value: "/mnt/usb" } });
+
+  expect(screen.getByText("4 unsaved changes")).toBeInTheDocument();
+  save();
+
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({
+    backup_enabled: "on", backup_interval_hours: "6",
+    backup_keep: "3", backup_dir: "/mnt/usb",
+  }));
+});
+
+test("the archives are listed, and Back up now writes one", async () => {
+  (api.listBackups as any).mockResolvedValue({
+    dir: "/home/u/.grimoire/backups",
+    backups: [{ name: "grimoire-20260814T210000Z.zip", size: 2_097_152,
+                created: "2026-08-14T21:00:00Z" }],
+  });
+  (api.createBackup as any).mockResolvedValue({
+    dir: "/home/u/.grimoire/backups", created: "grimoire-20260815T090000Z.zip", swept: [],
+    backups: [{ name: "grimoire-20260815T090000Z.zip", size: 2_097_152,
+                created: "2026-08-15T09:00:00Z" }],
+  });
+  renderView();
+  await open(/^Backups/);
+
+  expect(await screen.findByText("grimoire-20260814T210000Z.zip")).toBeInTheDocument();
+  expect(screen.getByText(/2\.0 MB/)).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: /back up now/i }));
+
+  expect(await screen.findByText(/Backed up to grimoire-20260815T090000Z\.zip/))
+    .toBeInTheDocument();
+  // The response IS the refreshed listing: no second read, and the row it
+  // replaced is gone from the panel.
+  expect(screen.getByText("grimoire-20260815T090000Z.zip")).toBeInTheDocument();
+  expect(screen.queryByText("grimoire-20260814T210000Z.zip")).toBeNull();
+  expect(api.listBackups).toHaveBeenCalledTimes(1);
+});
+
+test("the backups list is only read by the section that shows it", async () => {
+  renderView();
+  await screen.findByLabelText(/storage location/i);
+  expect(api.listBackups).not.toHaveBeenCalled();
+  await open(/^Backups/);
+  await waitFor(() => expect(api.listBackups).toHaveBeenCalled());
 });

@@ -43,6 +43,7 @@ import os
 import stat
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 # Transient Windows sharing failures -- a concurrent reader, an antivirus
@@ -247,4 +248,46 @@ def append_line(path: Path, line: str) -> None:
             view = view[os.write(fd, view):]
     finally:
         os.close(fd)
+
+
+@contextmanager
+def streaming_write(path: Path):
+    """``write_bytes`` for a payload that must not be assembled in memory.
+
+    Both writers above take the finished bytes; a store backup (``store/
+    backups.py``) is the size of the whole library, so it is built *into* the
+    temp and published only once it is complete. Same ordering, same
+    guarantee: a reader sees the whole previous version or the whole new one,
+    and an interrupted build leaves the target untouched rather than a
+    truncated file a listing would offer as a restore point.
+
+    What is yielded is the temp's **file object**, never its pathname -- the
+    property the module docstring above describes, and the reason the old
+    path-yielding context manager was removed rather than defended. A caller
+    that needs a real path (a library that only takes one) is out of scope here
+    on purpose.
+    """
+    path = Path(path)
+    _assert_target_writable(path)
+    fd, tmp_name = _mkstemp_beside(path)
+    closed = False
+    try:
+        # closefd=False so the fd survives the wrapper's close for the fsync,
+        # exactly as in `_write_through_fd`.
+        with os.fdopen(fd, "wb", closefd=False) as f:
+            yield f
+            f.flush()
+        os.fsync(fd)
+        os.close(fd)
+        closed = True
+        _carry_metadata(tmp_name, path)
+        _replace(tmp_name, path)
+    except BaseException:
+        if not closed:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        _discard(tmp_name)
+        raise
 

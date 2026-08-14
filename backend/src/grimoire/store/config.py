@@ -114,6 +114,27 @@ DEFAULT_ROLLING_SUMMARY_EVERY = "10"
 # does not, and neither does absorb, which carries its own sequence budget --
 # see `routes.common.bounded_call` for both exclusions.
 DEFAULT_LLM_CALL_BUDGET = "300"
+# --- automatic backups (#32) ---
+# The whole store zipped into `backups/`, oldest archives swept past a
+# retention count. Deliberately "off" on every install, new and upgraded: an
+# archive is a copy of the entire library, the retention count multiplies it,
+# and the store is explicitly allowed to live in a synced folder (CLAUDE.md) --
+# where turning this on silently would mean re-uploading the whole library
+# every interval. That is not a cost to impose behind someone's back, so the
+# Configuration page asks.
+DEFAULT_BACKUP_ENABLED = "off"
+# Hours between automatic backups. Checked against the newest archive's own
+# timestamp rather than a stored "last run", so the schedule survives restarts
+# and means the same thing on a store shared between machines.
+DEFAULT_BACKUP_INTERVAL_HOURS = "24"
+# Archives kept; the sweep deletes the oldest beyond it. "0" keeps every
+# archive -- retention off, the same "0 = no bound" the durations above use.
+DEFAULT_BACKUP_KEEP = "7"
+# Where archives are written. "" -- the default -- means `home()/backups`.
+# Pointing it outside the store is the answer to a synced library: the archives
+# stop being sync traffic, and stop being included in the very thing they back
+# up. Either way the backup dir is excluded from its own archives.
+DEFAULT_BACKUP_DIR = ""
 # The global scope of the response-preset cascade. These MUST be listed here:
 # read_config() narrows its return to _CONFIG_KEYS, so a key omitted from this
 # tuple is silently dropped and the global scope resolves as if unset — no
@@ -132,7 +153,9 @@ _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "rolling_summary_every", "llm_call_budget",
                 "embeddings_connection_id", "embeddings_model",
                 "semantic_recall_depth", "semantic_recall_threshold",
-                "prompt_layout_enabled", "speaker_turn_taking") + _LENGTH_KEYS
+                "prompt_layout_enabled", "speaker_turn_taking",
+                "backup_enabled", "backup_interval_hours", "backup_keep",
+                "backup_dir") + _LENGTH_KEYS
 
 
 def _config_path():
@@ -164,6 +187,10 @@ def read_config() -> dict[str, str]:
                 "semantic_recall_threshold": DEFAULT_SEMANTIC_RECALL_THRESHOLD,
                 "prompt_layout_enabled": DEFAULT_PROMPT_LAYOUT_ENABLED,
                 "speaker_turn_taking": DEFAULT_SPEAKER_TURN_TAKING,
+                "backup_enabled": DEFAULT_BACKUP_ENABLED,
+                "backup_interval_hours": DEFAULT_BACKUP_INTERVAL_HOURS,
+                "backup_keep": DEFAULT_BACKUP_KEEP,
+                "backup_dir": DEFAULT_BACKUP_DIR,
                 **{k: "" for k in _LENGTH_KEYS}}
     if not path.exists():
         # Materializing the defaults is a write, and two first-ever readers
@@ -299,6 +326,49 @@ def llm_retries() -> int:
     is given up on (#144). 0 disables retrying; see `MAX_LLM_RETRIES` for why
     the upper end is clamped rather than taken at face value."""
     return min(_count("llm_retries", DEFAULT_LLM_RETRIES), MAX_LLM_RETRIES)
+
+
+def backup_enabled() -> bool:
+    """Whether the scheduler may write archives at all (#32). Off unless the
+    file says exactly "on", so a half-set or hand-mangled value never starts
+    zipping a library nobody asked to have zipped."""
+    return str(read_config().get("backup_enabled",
+                                 DEFAULT_BACKUP_ENABLED)).strip().lower() == "on"
+
+
+def backup_interval_hours() -> float:
+    """Hours between automatic backups.
+
+    Same tolerance as `_seconds`, and one deliberate difference: a value of 0
+    or less falls back to the default rather than meaning "no bound". Every
+    other duration here bounds something that would otherwise run forever, so
+    "unbounded" is a coherent answer; here it would mean re-zipping the whole
+    library on every tick, which nobody types 0 to ask for -- and "off" already
+    has its own switch.
+    """
+    try:
+        value = float(str(read_config().get("backup_interval_hours",
+                                            DEFAULT_BACKUP_INTERVAL_HOURS)).strip())
+    except (TypeError, ValueError):
+        return float(DEFAULT_BACKUP_INTERVAL_HOURS)
+    if not math.isfinite(value) or value <= 0:
+        return float(DEFAULT_BACKUP_INTERVAL_HOURS)
+    return value
+
+
+def backup_keep() -> int:
+    """Archives the retention sweep keeps; 0 keeps every one of them."""
+    return _count("backup_keep", DEFAULT_BACKUP_KEEP)
+
+
+def backup_dir() -> str:
+    """The configured archive directory, as typed -- "" means the default.
+
+    A *string*, unexpanded: this is the setting. `store.backups.backup_dir()`
+    is the one that resolves it to the directory archives are written to, and
+    is what every caller outside this module wants.
+    """
+    return str(read_config().get("backup_dir", DEFAULT_BACKUP_DIR) or "").strip()
 
 
 def write_config(**fields: str) -> dict[str, str]:

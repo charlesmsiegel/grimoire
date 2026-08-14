@@ -52,6 +52,11 @@ def _public_config(cfg: dict[str, str]) -> dict:
                                              store.config.DEFAULT_PROMPT_LAYOUT_ENABLED),
             "speaker_turn_taking": cfg.get("speaker_turn_taking",
                                            store.config.DEFAULT_SPEAKER_TURN_TAKING),
+            "backup_enabled": cfg.get("backup_enabled", store.config.DEFAULT_BACKUP_ENABLED),
+            "backup_interval_hours": cfg.get("backup_interval_hours",
+                                             store.config.DEFAULT_BACKUP_INTERVAL_HOURS),
+            "backup_keep": cfg.get("backup_keep", store.config.DEFAULT_BACKUP_KEEP),
+            "backup_dir": cfg.get("backup_dir", store.config.DEFAULT_BACKUP_DIR),
             "active_connection_id": active["id"] if active else "",
             # `model` rides along because the global status bar names the model
             # every scene will use, and that is only ever this connection's --
@@ -170,6 +175,38 @@ def put_data_dir(update: DataDirUpdate):
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail={"detail": str(exc), "kind": "data_dir"})
     return store.data_dir_info()
+
+
+# ---- backups (#32) ----
+def _backups_body() -> dict:
+    """Where the archives live and what is in there, newest first. The
+    directory rides along because it is a *setting* — the answer to "why is
+    this list empty" is often "you moved it"."""
+    return {"dir": str(store.backups.backup_dir()),
+            "backups": store.backups.list_backups()}
+
+
+@router.get("/backups")
+def get_backups():
+    try:
+        return _backups_body()
+    except OSError as exc:
+        # Not an empty list: "no restore points" and "could not look" send a
+        # reader in opposite directions, and this one is read right before
+        # somebody decides whether they are covered.
+        raise HTTPException(status_code=500, detail=f"could not list backups: {exc}")
+
+
+@router.post("/backups")
+def post_backup():
+    """Back up now, then apply retention. Returns the refreshed listing, so the
+    caller needs no second request to show what it just made."""
+    try:
+        made = store.backups.create_backup()
+        swept = store.backups.sweep()
+        return {**_backups_body(), "created": made.name, "swept": swept}
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"could not write a backup: {exc}")
 
 
 # ---- llm connections ----
