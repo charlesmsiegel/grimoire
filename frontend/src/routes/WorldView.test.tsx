@@ -350,3 +350,4 @@ test("?section=characters&v= opens that character's version", async () => {
     expect.objectContaining({ id: "w" }), "mira"));
   expect(indexRow("Characters")).toHaveClass("active");
 });
+

@@ -5,10 +5,22 @@ half of the feature: every query walks the corpus, extracts each file's plain
 text, and matches substrings against it. That is O(corpus) per query and buys
 no ranking a real full-text engine would give, which is a deliberate trade at
 this store's scale (hundreds of files, one user, local disk). What keeps it
-cheap enough is `statcache.memo`: the *extraction* — frontmatter parsing, card
-field selection, whitespace flattening — is memoized per file on its
+cheap enough is `statcache.memo`: every file's *extraction* — frontmatter
+parsing, card field selection, whitespace flattening — is memoized on its
 (path, mtime, size) signature, so a repeat query re-reads only what changed,
-including changes another process made by syncing the folder.
+including changes another process made by syncing the folder. It memoizes into
+this module's own pool (`_POOL`), never the shared one: a sweep of the whole
+store through the shared cache would evict every hash the sync path keeps
+there.
+
+The fact files are the deliberate exception — chronicle.json, timeline.md,
+plot.json, facts.json and relationships.json are re-read and re-parsed per
+query. They are read through the modules that own them, which take a campaign
+id rather than a path, so memoizing on a signature here would mean writing
+those five filenames down a second time — and a rename would then leave the
+whole fact half silently unsearchable rather than failing. They are also the
+small half of the corpus by an order of magnitude: a chronicle entry is a
+one-liner and a summary, where a single scene transcript outweighs all five.
 
 The corpus, by scope:
 
@@ -36,7 +48,7 @@ view of it. Nothing here should be copied into code that resolves a record for
 *reading* — that is what the overlay is for, and `tests/test_overlay_guard.py`
 is what keeps the two apart.
 
-Matching is plain case-insensitive substring, not whole-word: this is the
+Matching is plain case-folded substring, not whole-word: this is the
 Ctrl-F a library page never had, and a reader who types "ledg" means "ledger".
 Terms are ANDed, and a `"quoted phrase"` is one term. Ranking is a small fixed
 formula (`_score`) rather than bm25 — a name hit outweighs a body hit, repeats
@@ -86,6 +98,22 @@ DEFAULT_LIMIT = 50
 #: facet counts describe every hit -- so this caps the payload, not the search.
 MAX_LIMIT = 200
 
+#: This module's own `statcache` pool. A search touches every file in the
+#: store on one request, so sharing the process-wide cache would evict every
+#: entity and card hash in it and hand the next sync sweep a cold cache —
+#: search making its own reads cheap at everyone else's expense. It also keeps
+#: what a sweep holds in memory (whole flattened transcripts) inside a budget
+#: that can be reasoned about on its own.
+#:
+#: That budget is `statcache.MAX_ENTRIES`, and it is a cliff rather than a
+#: gradient: a store holding more files than that evicts in the same order it
+#: walks, so the entry evicted is always the one the next query wants first and
+#: the hit rate collapses to roughly zero. Search still answers correctly —
+#: it degrades to the cost of a first query, which is the O(corpus) this design
+#: already signs up for — but the memo stops helping entirely rather than
+#: helping less. A store that large is the one that wants the FTS5 index.
+_POOL: dict = {}
+
 #: How much text a snippet shows, and how much of it sits before the match.
 SNIPPET_CHARS = 180
 _SNIPPET_LEAD = 60
@@ -121,16 +149,28 @@ class BadKind(Exception):
 
 
 def query_terms(q: str) -> list[str]:
-    """The query's terms, lower-cased and de-duplicated, phrases kept whole.
+    """The query's terms, case-folded and de-duplicated, phrases kept whole.
+
+    `casefold`, not `lower`, matching what `facts.restates`, `facts.find`,
+    `plot.open_threads` and `commitments` already do for case-insensitive text:
+    `"Straße".lower()` is `"straße"`, so a search for "strasse" finds nothing,
+    while `casefold` maps both to `"strasse"` and the record is found.
 
     Returned to the caller as well as used here: the client highlights matches
     itself, and a second implementation of this splitting on that side would
     drift from this one the first time either learned a new operator.
     """
     out: list[str] = []
+    seen: set[str] = set()
     for quoted, bare in _TERM.findall(q or ""):
-        term = " ".join((quoted or bare).split()).lower()
-        if term and term not in out:
+        # `seen` rather than `term not in out`: the list membership test made
+        # this quadratic in the word count, and the word count is not bounded
+        # by anything a UI enforces -- pasting a document into the search box
+        # is an ordinary accident, and a 60k-word paste spent six seconds here
+        # before the sweep even started.
+        term = " ".join((quoted or bare).split()).casefold()
+        if term and term not in seen:
+            seen.add(term)
             out.append(term)
     return out
 
@@ -219,7 +259,7 @@ def _doc(reader, path: Path) -> tuple[str, str, str] | None:
     sig = statcache.signature(path)
     if sig is None:
         return None
-    return statcache.memo(f"search:{reader.__name__}", sig, lambda: reader(path))
+    return statcache.memo(f"search:{reader.__name__}", sig, lambda: reader(path), pool=_POOL)
 
 
 def _s(value, fallback: str = "") -> str:
@@ -478,7 +518,7 @@ def _score(name: str, text: str, terms: list[str]) -> float:
     long transcript cannot outrank the record it is talking about by sheer
     length. Whole-query matches on the name get the top of the list outright.
     """
-    low_name, low_text = name.lower(), text.lower()
+    low_name, low_text = name.casefold(), text.casefold()
     total = 0.0
     for term in terms:
         if term in low_name:
@@ -504,14 +544,38 @@ def _snippet(prose: str, text: str, terms: list[str]) -> str:
     a hit whose snippet is blank reads as an empty record, and the opening of
     the body is what a reader would look at next anyway.
     """
-    if terms and prose and any(term in prose.lower() for term in terms):
+    if terms and prose and any(term in prose.casefold() for term in terms):
         text = prose
     text = text or prose
     if not text:
         return ""
-    low = text.lower()
-    found = [at for at in (low.find(term) for term in terms) if at >= 0]
-    start = max(0, min(found) - _SNIPPET_LEAD) if found else 0
+    # Where to frame. Offsets come from a case-INSENSITIVE regex over the raw
+    # text rather than from `str.find` over a folded copy, because folding can
+    # change the string's length -- `casefold` maps "ß" to "ss" -- and an index
+    # into the folded copy is then not an index into the original. Slicing at
+    # one drifts by the number of such characters before the match, so on a
+    # long passage of German prose the window can land past the term it was
+    # supposed to frame. `re.IGNORECASE` matches character-for-character, so
+    # every offset it reports is an offset into `text`.
+    #
+    # The RAREST matching term, not the earliest: framing the earliest means a
+    # query like "the salt pact" snippets around "the" at character 0 -- the
+    # head of the document, with nothing distinctive in the window and often no
+    # marked term visible at all. The term with the fewest occurrences is the
+    # one that made this record a hit; ties fall to the earliest.
+    hits = []
+    for term in terms:
+        # Counted by walking the iterator rather than materializing it: a term
+        # occurring ten thousand times in a long transcript is ten thousand
+        # match objects held at once, for two numbers.
+        count, first = 0, -1
+        for found in re.finditer(re.escape(term), text, re.IGNORECASE):
+            if first < 0:
+                first = found.start()
+            count += 1
+        if count:
+            hits.append((count, first))
+    start = max(0, min(hits)[1] - _SNIPPET_LEAD) if hits else 0
 
     # Neither end cuts a word in half: step forward to the next space at the
     # start (unless that would swallow the match) and back to the last one at
@@ -536,14 +600,26 @@ def _hit(scope_name: str, rid: str, root_name: str, doc: dict, terms: list[str])
     finds the record whose *name* is one term and whose body holds the other --
     the shape most two-word queries actually have.
     """
-    haystack = f"{doc['name']} {doc['text']}".lower()
+    haystack = f"{doc['name']} {doc['text']}".casefold()
     if not all(term in haystack for term in terms):
         return None
+    # No snippet yet: a one-letter query matches most of the store, and cutting
+    # a window for thousands of rows that the sort is about to drop is the one
+    # per-hit cost in here that is pure waste. `_doc` carries the text through
+    # so `_fill_snippets` can do it for the page that is actually returned.
     return {"scope": scope_name, "root": rid, "root_name": root_name,
             "kind": doc["kind"], "id": doc["id"], "sub": doc["sub"],
-            "name": doc["name"],
-            "snippet": _snippet(doc["prose"], doc["text"] or doc["name"], terms),
-            "score": _score(doc["name"], doc["text"], terms)}
+            "name": doc["name"], "score": _score(doc["name"], doc["text"], terms),
+            "_doc": doc}
+
+
+def _fill_snippets(hits: list[dict], terms: list[str]) -> list[dict]:
+    """Cut each surviving hit's snippet and drop the document behind it."""
+    out = []
+    for hit in hits:
+        doc = hit.pop("_doc")
+        out.append({**hit, "snippet": _snippet(doc["prose"], doc["text"] or doc["name"], terms)})
+    return out
 
 
 def _sort_key(hit: dict) -> tuple:
@@ -609,4 +685,4 @@ def search(q: str, *, scope: str = "", root: str = "",
     capped = max(1, min(limit, MAX_LIMIT))
     return {"q": q, "terms": terms, "total": len(matched), "facets": facets,
             "scopes": scope_counts, "truncated": len(matched) > capped,
-            "hits": matched[:capped]}
+            "hits": _fill_snippets(matched[:capped], terms)}

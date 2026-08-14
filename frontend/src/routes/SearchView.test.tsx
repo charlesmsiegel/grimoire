@@ -173,3 +173,48 @@ test("markTerms prefers the longer of two overlapping terms", () => {
 test("markTerms leaves text alone when there is nothing to mark", () => {
   expect(markTerms("plain", [])).toEqual(["plain"]);
 });
+
+
+test("the kind still filtering stays in the column when its count drops to 0", async () => {
+  // Otherwise: change the query with a kind filter on, the row that applied it
+  // vanishes from the column, and the page reads "Nothing matches" with
+  // nothing on screen saying a filter is still in force.
+  (api.search as any).mockResolvedValue(result([], { total: 0, facets: {}, scopes: {} }));
+  show("/search?q=salt&kind=lore");
+  const column = within(await screen.findByRole("complementary"));
+  await waitFor(() => expect(column.getByRole("button", { name: /^Lore/ })).toHaveClass("active"));
+  fireEvent.click(column.getByRole("button", { name: /^Lore/ }));
+  await waitFor(() =>
+    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "", kinds: [] }));
+});
+
+test("the result count is announced, not just shown", async () => {
+  // It is the one thing on this page that changes without the reader moving
+  // focus -- typing leaves focus in the box and the answer arrives elsewhere.
+  show();
+  await screen.findByRole("button", { name: /the salt pact/i });
+  expect(screen.getByRole("status")).toHaveTextContent(/1 result/i);
+});
+
+
+test("a slow answer for an old query never lands on top of a newer one", async () => {
+  // Type "sal", then "salt". If the sweep for "sal" settles last -- it walks
+  // the whole store, so it easily can -- the page would show its hits under
+  // the newer query's heading, with no way to tell.
+  let releaseStale = (_: unknown) => {};
+  (api.search as any).mockImplementationOnce(
+    () => new Promise((res) => { releaseStale = res; }));
+  (api.search as any).mockResolvedValue(
+    result([hit({ id: "the-tide-table", name: "The Tide Table" })]));
+
+  show("/search?q=sal");
+  await waitFor(() => expect(api.search).toHaveBeenCalledTimes(1));
+  fireEvent.change(screen.getByRole("searchbox", { name: /search the library/i }),
+                   { target: { value: "salt" } });
+  await screen.findByRole("button", { name: /the tide table/i });
+
+  releaseStale(result([hit()]));                       // the stale answer, late
+  await waitFor(() => expect(api.search).toHaveBeenCalledTimes(2));
+  expect(screen.queryByRole("button", { name: /the salt pact/i })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /the tide table/i })).toBeInTheDocument();
+});

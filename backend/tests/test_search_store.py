@@ -9,6 +9,7 @@ weights stays possible without rewriting the suite.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -292,3 +293,76 @@ def test_a_snippet_quotes_the_prose_not_the_frontmatter(world):
     assert search.search("owed")["hits"][0]["snippet"] == "Owed to the sea."
     # A metadata-only match still snippets from where its match actually is.
     assert "brine" in search.search("brine")["hits"][0]["snippet"]
+
+
+def test_the_snippet_frames_the_rarest_term_not_the_first_one(world):
+    """Framing the earliest match means "the salt pact" opens its window at
+    character 0 on the word "the" — the head of the document, with nothing
+    distinctive in it and often no marked term visible at all."""
+    _, root = world
+    entities.create_entity(root, "lore", "The Deep",
+                           body="the " * 80 + "a drowned keeper waits " + "and " * 80)
+    snippet = search.search("the drowned keeper")["hits"][0]["snippet"]
+    assert "drowned keeper" in snippet
+
+
+def test_a_search_does_not_evict_the_shared_stat_cache(world):
+    """A sweep touches every file in the store. Through the process-wide cache
+    that would evict every entity and card hash in it and hand the next sync
+    sweep a cold one — search made cheap at everyone else's expense."""
+    from grimoire.store import statcache
+    _, root = world
+    for n in range(20):
+        entities.create_entity(root, "lore", f"Brine {n}", body="brine")
+    # Past `statcache`'s racy window, or nothing is cached at all: a file whose
+    # mtime is within the last second is deliberately computed and not stored,
+    # so a store written a moment ago memoizes nothing.
+    for path in root.rglob("*"):
+        if path.is_file():
+            os.utime(path, (0, 0))
+    statcache._cache.clear()
+    statcache._cache[("sentinel", ())] = "kept"
+    search.search("brine")
+    assert statcache._cache == {("sentinel", ()): "kept"}
+    assert search._POOL, "the sweep memoized nothing at all"
+
+
+def test_case_folding_is_the_store_s_rule_not_lowercasing(world):
+    """`"Straße".lower()` is `"straße"`, so a lower-cased search for "strasse"
+    misses the record entirely. `casefold` maps both to "strasse" — the rule
+    `facts.restates`, `plot.open_threads` and `commitments` already follow."""
+    _, root = world
+    entities.create_entity(root, "lore", "Straße", body="A road by any spelling.")
+    assert [h["name"] for h in search.search("STRASSE")["hits"]] == ["Straße"]
+    assert search.search("any spelling")["hits"][0]["name"] == "Straße"
+
+
+def test_the_snippet_frames_the_match_even_when_folding_changes_the_length(world):
+    """`casefold` maps "ß" to "ss", so an offset found in a folded copy is not
+    an offset into the original — it drifts by one per such character before
+    the match. Two hundred of them (a passage of German prose) drift the window
+    clean past the term it was supposed to frame."""
+    _, root = world
+    entities.create_entity(root, "lore", "The Road",
+                           body="Straße " * 200 + "and then a pact of salt")
+    assert "pact" in search.search("pact")["hits"][0]["snippet"]
+
+
+def test_the_query_parser_is_linear_in_the_word_count(world):
+    """Pasting a document into the search box is an ordinary accident. Deduping
+    terms against a list made this quadratic — a 60k-word paste spent six
+    seconds here before the sweep even started."""
+    import time
+    q = " ".join(f"w{i}" for i in range(20000))
+    started = time.perf_counter()
+    assert len(search.query_terms(q)) == 20000
+    assert time.perf_counter() - started < 0.5
+
+
+def test_a_store_with_no_worlds_or_campaigns_yet_searches_to_nothing(home):
+    """A first run has neither directory. Enumeration must read that as an
+    empty library, not as an error on every keystroke of the first search
+    anyone tries."""
+    assert not (home / "worlds").exists()
+    out = search.search("anything at all")
+    assert out["hits"] == [] and out["total"] == 0 and out["facets"] == {}
