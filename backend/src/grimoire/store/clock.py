@@ -74,6 +74,15 @@ MAX_ROWS = 60
 #: because `POST /advance` is a public endpoint and nothing else bounds the
 #: file, which `now()` re-parses on every scene date pre-fill and every
 #: suggestion snapshot. 500 rows is far past any campaign's real use.
+#:
+#: `observe` shares this budget, which is the one interaction worth knowing:
+#: every scene whose date moves the clock forward files a row too, so a campaign
+#: with hundreds of dated scenes reaches the cap on those and evicts its oldest
+#: hand-written advance reasons. Kept that way on purpose -- a log that recorded
+#: only *deliberate* advances would be a tidier list of reasons and an incomplete
+#: history of where "now" has been, and the second is what this file is for. The
+#: evicted scene rows are the recoverable half (each scene still carries its own
+#: `time_history`), which is the trade the cap is making.
 LOG_LIMIT = 500
 
 
@@ -284,6 +293,15 @@ def _holidays(cid: str, primary, lo_fixed: int, hi_fixed: int) -> list[dict]:
     backward one is the moment being returned to. Stated because the two are not
     the same thing and the field would otherwise invite the forward reading in
     both cases.
+
+    Where the defensiveness here stops, and why (`birthdays.crossed` draws the
+    same line): a provider's returned **rows** are validated, because `holidays`
+    is a data contract a plugin author reimplements and getting a key wrong is an
+    ordinary mistake whose 500 would land nowhere near its cause. The provider's
+    own **method contract** is not re-checked — `describe` returning something
+    that is not a mapping with `friendly` in it breaks every date in the app, and
+    it fails here exactly where `calendars.friendly` and `today_facts` already let
+    it fail, rather than being swallowed by the one caller that guessed it might.
     """
     seen: set[tuple[str, int]] = set()
     out: list[dict] = []
@@ -297,12 +315,11 @@ def _holidays(cid: str, primary, lo_fixed: int, hi_fixed: int) -> list[dict]:
         except Exception:  # noqa: BLE001 — a provider (or a plugin) that cannot answer a range
             continue
         for h in found:
-            # Both fields are validated rather than trusted, because a provider
-            # may be a user-authored plugin: a non-integer `fixed` would reach
-            # `describe` and raise a TypeError this module has no business
-            # turning into a 500, and a non-string `name` would reach React,
-            # which refuses an object as a child and blanks the panel that was
-            # about to show it (the `plot._field` failure).
+            # Row data, so both fields are validated rather than trusted: a
+            # non-integer `fixed` reaches `describe` as a TypeError far from its
+            # cause, and a non-string `name` reaches React, which refuses an
+            # object as a child and blanks the panel that was about to show it.
+            # This same `int()` also covers a row that is not a mapping at all.
             try:
                 fixed = int(h["fixed"])
             except (KeyError, TypeError, ValueError):
@@ -315,7 +332,12 @@ def _holidays(cid: str, primary, lo_fixed: int, hi_fixed: int) -> list[dict]:
             try:
                 described = primary.describe(fixed)
                 native = primary.format(fixed)
-            except (calendars.CalendarError, KeyError, TypeError, ValueError):
+            except (calendars.CalendarError, ValueError, OverflowError):
+                # Still row data rather than method contract: a plugin can hand
+                # back a `fixed` outside its own calendar's range, and `format`
+                # says so with whatever its arithmetic raises (Gregorian:
+                # ValueError). A `describe` that is simply broken is not caught
+                # here -- see the docstring.
                 continue
             out.append({"name": name, "native": native,
                         "friendly": described["friendly"],
@@ -442,7 +464,10 @@ def observe(cid: str, native: str, reason: str) -> dict:
     """
     provider = calendars.primary_provider(campaigns_paths.campaign_root(cid))
     if provider is None:
-        return {"moved": False, "now": read(cid)["now"]}
+        # `now(cid)`, not `read(cid)["now"]`: every other exit from this function
+        # reports the resolved moment, and a campaign whose calendar will not load
+        # has not thereby lost the date its chronicle records.
+        return {"moved": False, "now": now(cid)}
     current = _current(provider, cid)   # canonical, so the log reads consistently
     try:
         canonical = calendars.normalize(provider, native)
