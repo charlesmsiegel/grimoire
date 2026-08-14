@@ -10,6 +10,7 @@ import { TagEditor } from "../components/TagEditor";
 import { EntityEditor } from "../components/EntityEditor";
 import { GreetingEditor } from "../components/GreetingEditor";
 import { LorebookImport } from "../components/LorebookImport";
+import { ScenarioImport } from "../components/ScenarioImport";
 import { WorldOverview } from "../components/WorldOverview";
 
 type IndexKey =
@@ -74,6 +75,11 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const [counts, setCounts] = useState<Record<string, number | null>>({});
   const [campaignCount, setCampaignCount] = useState<number | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [scenarioOpen, setScenarioOpen] = useState(false);
+  /** Bumped by a scenario import, which is the one action here that creates
+   *  records in half a dozen sections at once — so it has to re-ask for every
+   *  count rather than leave the index reading the world as it was. */
+  const [populated, setPopulated] = useState(0);
   const [charReset, setCharReset] = useState(0);
   const [loreReset, setLoreReset] = useState(0);
   const [focusChar, setFocusChar] = useState<{ cid: string; vid: string } | null>(null);
@@ -164,7 +170,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     // `scope` is rebuilt every render; the values it is made of are the real
     // dependencies.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaign, cid, wid, groups, section]);
+  }, [campaign, cid, wid, groups, section, populated]);
 
   // How many campaigns are played in this world: the one fact about a world
   // that is not a record inside it. Only on the world shape -- a campaign
@@ -340,9 +346,15 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
       The source world <span aria-hidden>→</span>
     </Link>
   ) : (
-    <button className="column-link" onClick={() => { setImportOpen(true); setSection("lore"); }}>
-      Import lorebook <span aria-hidden>→</span>
-    </button>
+    <>
+      <button className="column-link" onClick={() => { setImportOpen(true); setSection("lore"); }}>
+        Import lorebook <span aria-hidden>→</span>
+      </button>
+      <button className="column-link"
+              onClick={() => { setScenarioOpen(true); setSection("overview"); }}>
+        Import scenario card <span aria-hidden>→</span>
+      </button>
+    </>
   );
 
   return (
@@ -365,7 +377,21 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
             so opening a record is a swap inside main: the column is a sibling
             that nothing here re-renders, and it keeps its selection and its
             scroll for free. */}
-        {!campaign && section === "overview" && <WorldOverview wid={wid} onNavigate={(t) => select(t as SectionKey)} worldMid={worldMid} onPickMid={setWorldMid} />}
+        {!campaign && section === "overview" && (
+          <>
+            {/* The one importer that populates a whole world rather than one
+                section, so it lives on the setup screen rather than inside
+                Lore the way the lorebook importer does. Controlled for the
+                same reason: the column's footer row opens it. */}
+            <details className="import-section" open={scenarioOpen}
+                     onToggle={(e) => setScenarioOpen(e.currentTarget.open)}>
+              <summary>Import scenario card</summary>
+              <ScenarioImport wid={wid} onImported={() => setPopulated((n) => n + 1)} />
+            </details>
+            <WorldOverview key={populated} wid={wid} onNavigate={(t) => select(t as SectionKey)}
+                           worldMid={worldMid} onPickMid={setWorldMid} />
+          </>
+        )}
         {section === "characters" && <CharacterEditor scope={scope} wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} onOpenGreeting={openGreeting} module={moduleCtx} />}
         {section === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore} module={moduleCtx} />}
         {!campaign && section === "tags" && <TagEditor wid={wid} />}
