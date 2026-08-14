@@ -7,12 +7,27 @@ directory indexes and looks for a `404.html`; it does not route unknown paths to
 the root document), so the whole point of #87 held only under `vite dev`.
 """
 
+import ntpath
+
 import pytest
 from fastapi.testclient import TestClient
 
 from grimoire.main import SPAStaticFiles
 
 PAGE = {"accept": "text/html,application/xhtml+xml"}
+
+
+def _windows_get_path(self, scope):
+    """`StaticFiles.get_path`, resolved the way Windows resolves it.
+
+    Starlette's own implementation is `os.path.normpath(os.path.join(*path))`,
+    so on Windows it hands `get_response` a path spelled with backslashes --
+    `api\\not-a-real-endpoint`. Ubuntu CI never produces that separator, so a
+    guard that only understands `/` looks correct there and fails on a Windows
+    checkout (#313); substituting `ntpath` for `os.path` reproduces it anywhere.
+    The app under test mounts at `/`, so the route path is the request path.
+    """
+    return ntpath.normpath(ntpath.join(*scope["path"].split("/")))
 
 
 @pytest.fixture()
@@ -66,3 +81,24 @@ def test_an_unknown_api_path_stays_a_404_even_for_a_browser(client):
     r = client.get("/api/not-a-real-endpoint", headers=PAGE)
     assert r.status_code == 404
     assert "grimoire</html>" not in r.text
+
+
+def test_an_unknown_api_path_stays_a_404_with_windows_separators(client, monkeypatch):
+    # The same request as above, on a Windows checkout. `path == "api"` matched
+    # either way, so only *nested* paths slipped through -- which is every real
+    # endpoint. The packaged desktop build and the Android WebView shell both
+    # serve through this class rather than `vite dev`, so Windows is not a
+    # developer-only surface here.
+    monkeypatch.setattr(SPAStaticFiles, "get_path", _windows_get_path)
+    r = client.get("/api/not-a-real-endpoint", headers=PAGE)
+    assert r.status_code == 404
+    assert "grimoire</html>" not in r.text
+
+
+def test_a_client_route_still_falls_back_with_windows_separators(client, monkeypatch):
+    # The other half of the separator fix: normalizing must not make a nested
+    # *client* route look like an API path and cost it its fallback.
+    monkeypatch.setattr(SPAStaticFiles, "get_path", _windows_get_path)
+    r = client.get("/campaigns/realm-watch/scenes/003--council-of-mara", headers=PAGE)
+    assert r.status_code == 200
+    assert "grimoire" in r.text
