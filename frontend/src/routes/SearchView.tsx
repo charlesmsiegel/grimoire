@@ -84,7 +84,13 @@ export function hitTo(hit: SearchHit): string {
  *  different set of words than the one that produced the hit the first time
  *  either learned a new operator. Matching is longest-term-first so an
  *  overlapping pair ("salt", "salt pact") marks the phrase rather than leaving
- *  half of it bare. */
+ *  half of it bare.
+ *
+ *  One case the server can match and this cannot: it compares with Python's
+ *  `casefold`, which maps "ß" to "ss", and JavaScript has no equivalent —
+ *  `toLowerCase` leaves "ß" alone. So a record found by searching "strasse"
+ *  is listed with nothing marked in it. A missing highlight on a hit that is
+ *  correctly there is the right way for that difference to land. */
 export function markTerms(text: string, terms: string[]): ReactNode[] {
   const wanted = [...terms].filter(Boolean).sort((a, b) => b.length - a.length);
   if (!wanted.length) return [text];
@@ -179,14 +185,21 @@ export default function SearchView() {
   const facets = result?.facets ?? {};
   const scopes = result?.scopes ?? {};
 
-  /** Only the kinds this query actually found. A column listing all eighteen
-   *  every time would be a vocabulary lesson; listing the ones with hits makes
-   *  the shape of the answer readable before any of it is read. */
+  /** Only the kinds this query actually found — plus whichever one is
+   *  currently filtering, however few it found.
+   *
+   *  A column listing all eighteen every time would be a vocabulary lesson;
+   *  listing the ones with hits makes the shape of the answer readable before
+   *  any of it is read. But dropping the ACTIVE row when its count reaches zero
+   *  is a trap: change the query with a kind filter still on and the filter
+   *  vanishes from the column while still being applied, so the page reads
+   *  "Nothing matches" with nothing on screen saying why. The active row stays,
+   *  showing its 0, and is the control that clears itself. */
   const groups = useMemo(
     () => GROUPS
-      .map((g) => ({ group: g.group, kinds: g.kinds.filter((k) => facets[k.key]) }))
+      .map((g) => ({ group: g.group, kinds: g.kinds.filter((k) => facets[k.key] || k.key === kind) }))
       .filter((g) => g.kinds.length > 0),
-    [facets],
+    [facets, kind],
   );
 
   const hits = result?.hits ?? [];
@@ -222,7 +235,7 @@ export default function SearchView() {
                     // itself without a second one beside it.
                     onClick={() => setQuery({ kind: kind === k.key ? "" : k.key }, false)}>
               <span className="column-row-label">{k.label}</span>
-              <span className="column-row-count">{facets[k.key]}</span>
+              <span className="column-row-count">{facets[k.key] ?? 0}</span>
             </button>
           ))}
         </ColumnSection>
@@ -241,7 +254,7 @@ export default function SearchView() {
       <div className="page-wide view-anim">
         <div className="shelf-head">
           <div>
-            <div className="eyebrow">
+            <div className="eyebrow" role="status" aria-live="polite">
               {result
                 ? `${shown.total} ${shown.total === 1 ? "result" : "results"}`
                   + (shown.truncated ? ` · showing the first ${hits.length}` : "")

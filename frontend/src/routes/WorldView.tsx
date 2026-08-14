@@ -186,6 +186,12 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     setSection(key);
     if (key === "characters") { setCharReset((n) => n + 1); setFocusChar(null); }
     if (key === "greetings") setFocusGreeting(null);
+    // ...and any entity nav, for the same reason the two above are cleared:
+    // choosing a section from the column means the list, not whoever happened
+    // to be open in it. No path reaching here today leaves one pending -- every
+    // setter sets the section in the same breath, and the editor consumes it on
+    // mount -- so this is the invariant stated rather than a hole plugged.
+    setEntityNav(null);
   }
 
   // a present-character link from the greeting view jumps to that character

@@ -111,3 +111,14 @@ def test_the_literal_route_is_not_shadowed_by_the_entity_catch_alls(client, libr
     `/worlds/{wid}/{kind}`, but the include order is what guarantees that in
     general, so this is the request-level check beside the structural one."""
     assert client.get("/api/search", params={"q": "owed"}).status_code == 200
+
+
+def test_a_hit_carries_no_internal_keys(client, library):
+    """The scorer threads each matched document through to the snippet cutter
+    on the hit itself. If that reference ever survives into the response, every
+    row ships the full text of the record it matched — the whole store, as
+    JSON, on a one-letter query."""
+    body = client.get("/api/search", params={"q": "owed"}).json()
+    assert body["hits"]
+    for hit in body["hits"]:
+        assert not [k for k in hit if k.startswith("_")], hit
