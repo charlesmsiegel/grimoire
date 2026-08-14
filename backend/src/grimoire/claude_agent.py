@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import AsyncIterator
 
+from . import llm_usage
 from .llm_errors import LLMError
 
 # claude-agent-sdk lives in the `claude` extra, which Android does not install
@@ -93,16 +94,19 @@ def _capture_usage(message, usage: dict | None) -> None:
         return
     block = getattr(message, "usage", None)
     if isinstance(block, dict):
-        prompt = sum(v for k in _PROMPT_KEYS
-                     if isinstance(v := block.get(k), int) and not isinstance(v, bool))
-        completion = block.get("output_tokens")
-        if any(k in block for k in _PROMPT_KEYS):
-            usage["prompt_tokens"] = prompt
-        if isinstance(completion, int) and not isinstance(completion, bool):
+        # Only the keys that yielded a real count are summed, and a block whose
+        # every prompt key is garbage records NOTHING rather than a total of
+        # zero -- `llm_usage.tokens` says why that difference matters.
+        counted = [n for n in (llm_usage.tokens(block.get(k)) for k in _PROMPT_KEYS)
+                   if n is not None]
+        if counted:
+            usage["prompt_tokens"] = sum(counted)
+        completion = llm_usage.tokens(block.get("output_tokens"))
+        if completion is not None:
             usage["completion_tokens"] = completion
-    cost = getattr(message, "total_cost_usd", None)
-    if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost == cost:
-        usage["cost_usd"] = float(cost)
+    cost = llm_usage.money(getattr(message, "total_cost_usd", None))
+    if cost is not None:
+        usage["cost_usd"] = cost
         usage["cost_basis"] = COST_BASIS
 
 

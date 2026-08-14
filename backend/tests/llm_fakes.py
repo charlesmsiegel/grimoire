@@ -52,6 +52,7 @@ import asyncio
 import json
 from pathlib import Path
 
+from grimoire.llm import effective_model
 from grimoire.llm_errors import LLMError
 
 FIXTURES = Path(__file__).parent / "fixtures" / "llm"
@@ -173,7 +174,11 @@ class FakeLLM:
         # known the moment the attempt starts, and an error frame still has to
         # say which connection produced it.
         if usage is not None:
-            usage.update({"model": conn.get("model", ""),
+            # `effective_model`, not `conn["model"]`, for the reason `llm._stamp`
+            # uses it: a claude connection with no model still runs one, and a
+            # fake that stamped the empty string would let a test assert a model
+            # the real facade never records.
+            usage.update({"model": effective_model(conn),
                           "connection": conn.get("name") or conn.get("id")
                           or conn.get("kind") or "?",
                           "provider": conn.get("kind", "openrouter"), "attempts": 1})

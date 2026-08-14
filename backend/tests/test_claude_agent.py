@@ -180,3 +180,27 @@ async def test_a_run_that_reports_no_usage_leaves_the_holder_empty(monkeypatch):
     client = ClaudeAgentClient()
     [c async for c in client.stream([], "opus", usage=usage)]
     assert usage == {}
+
+
+async def test_a_garbled_token_count_records_no_count_rather_than_zero(monkeypatch):
+    """The key is present and its value is not a number. Recording 0 would be
+    the ledger claiming the call used no prompt, which nobody said."""
+    result = types.SimpleNamespace(usage={"input_tokens": "lots", "output_tokens": 4})
+    install_fake_sdk(monkeypatch, replies=[result])
+
+    usage = {}
+    client = ClaudeAgentClient()
+    [c async for c in client.stream([], "opus", usage=usage)]
+    assert "prompt_tokens" not in usage
+    assert usage["completion_tokens"] == 4
+
+
+async def test_an_impossible_cost_is_dropped_rather_than_poisoning_a_total(monkeypatch):
+    for cost in (float("inf"), float("nan"), -1.0, "free"):
+        result = types.SimpleNamespace(usage={"input_tokens": 1, "output_tokens": 1},
+                                       total_cost_usd=cost)
+        install_fake_sdk(monkeypatch, replies=[result])
+        usage = {}
+        client = ClaudeAgentClient()
+        [c async for c in client.stream([], "opus", usage=usage)]
+        assert "cost_usd" not in usage, cost
