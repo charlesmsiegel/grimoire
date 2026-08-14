@@ -1,0 +1,217 @@
+"""The scenario-card import routes (#217).
+
+Three routes, and the property worth the most across all three: **parse writes
+nothing**. The review gate is only real if the extraction leaves the world
+exactly as it found it, so every parse test here asserts an untouched world
+rather than trusting the store tests to have covered it.
+"""
+
+import importlib
+import io
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+from PIL import Image
+
+import grimoire.store as store
+from grimoire import routes
+from grimoire.main import create_app
+from tests.llm_fakes import FailingOpenRouter, FakeOpenRouterComplete
+
+CARD = {
+    "spec": "chara_card_v3",
+    "spec_version": "3.0",
+    "data": {
+        "name": "Saltmarch",
+        "description": "A drowned town where Mara keeps the tide-gate.",
+        "first_mes": "Mara is waiting at the tide-gate.",
+        "alternate_greetings": ["The square is empty."],
+        "character_book": {"entries": [
+            {"keys": ["gate"], "name": "The Tide-Gate", "content": "Iron and barnacle.",
+             "enabled": True},
+        ]},
+        "extensions": {},
+    },
+}
+
+REPLY = json.dumps({
+    "characters": [{"name": "Mara", "description": "Tends the gate.", "personality": "Watchful."}],
+    "entries": [{"name": "The Tide-Gate", "keys": [], "body": "", "category": "locations"}],
+})
+
+
+@pytest.fixture
+def client(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    app = create_app()
+    app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(REPLY)
+    return TestClient(app)
+
+
+@pytest.fixture
+def wid(client):
+    """A world with a usable LLM connection — every parse route needs one."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    return client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+
+
+def _upload(client, wid, card=None, fmt="json"):
+    blob = json.dumps(card if card is not None else CARD).encode()
+    return client.post(f"/api/worlds/{wid}/scenario/parse",
+                       files={"file": ("card.json", blob, "application/json")},
+                       data={"format": fmt})
+
+
+def _counts(client, wid) -> dict:
+    return {
+        "characters": len(client.get(f"/api/worlds/{wid}/characters").json()),
+        "lore": len(client.get(f"/api/worlds/{wid}/lore").json()),
+        "locations": len(client.get(f"/api/worlds/{wid}/locations").json()),
+        "greetings": len(client.get(f"/api/worlds/{wid}/greetings").json()),
+    }
+
+
+# ------------------------------------------------------------------- parsing
+def test_parsing_an_uploaded_card_proposes_a_cast_and_writes_nothing(client, wid):
+    r = _upload(client, wid)
+    assert r.status_code == 200
+    body = r.json()
+    assert [c["name"] for c in body["characters"]] == ["Mara"]
+    assert [e["name"] for e in body["entries"]] == ["The Tide-Gate"]
+    assert body["entries"][0]["category"] == "locations"          # re-filed by the model
+    assert [g["name"] for g in body["greetings"]] == ["Saltmarch", "Saltmarch (alt 1)"]
+    assert body["greetings"][0]["character"] == "Mara"
+    assert _counts(client, wid) == {"characters": 0, "lore": 0, "locations": 0, "greetings": 0}
+
+
+def test_parsing_an_unreadable_card_is_a_400(client, wid):
+    r = client.post(f"/api/worlds/{wid}/scenario/parse",
+                    files={"file": ("card.json", b"not a card", "application/json")},
+                    data={"format": "json"})
+    assert r.status_code == 400
+    assert "could not parse card" in r.json()["detail"]
+
+
+def test_parsing_without_a_connection_is_a_409_and_beats_the_cards_own_errors(client):
+    """A setup mistake is reported ahead of anything about the card: telling
+    someone their card is unreadable when the real problem is that no model is
+    configured sends them to fix the wrong thing."""
+    world = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    for r in (_upload(client, world),
+              client.post(f"/api/worlds/{world}/scenario/parse",
+                          files={"file": ("c.json", b"not a card", "application/json")},
+                          data={"format": "json"}),
+              client.post(f"/api/worlds/{world}/scenario/parse-url", json={"url": "not a url"})):
+        assert r.status_code == 409
+        assert r.json()["kind"] == "missing_key"
+
+
+def test_a_provider_failure_surfaces_as_a_502_and_still_writes_nothing(client, wid):
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FailingOpenRouter([], "rate_limit", "slow down")
+    r = _upload(client, wid)
+    assert r.status_code == 502
+    assert r.json()["kind"] == "rate_limit"
+    assert _counts(client, wid) == {"characters": 0, "lore": 0, "locations": 0, "greetings": 0}
+
+
+def test_a_reply_with_no_json_still_proposes_what_the_card_alone_holds(client, wid):
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete("I would rather not.")
+    body = _upload(client, wid).json()
+    assert body["characters"] == []
+    assert [e["name"] for e in body["entries"]] == ["The Tide-Gate"]
+    assert len(body["greetings"]) == 2
+
+
+def test_parsing_a_card_from_a_url(client, wid, monkeypatch):
+    png = store.cards.dumps(CARD, "png")
+    monkeypatch.setattr(store.chub, "fetch_character_node", lambda fp: {
+        "id": 1, "max_res_url": "https://avatars.charhub.io/avatars/creator/saltmarch/c.png"})
+    monkeypatch.setattr(store.fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    r = client.post(f"/api/worlds/{wid}/scenario/parse-url",
+                    json={"url": "https://chub.ai/characters/creator/saltmarch"})
+    assert r.status_code == 200
+    assert [c["name"] for c in r.json()["characters"]] == ["Mara"]
+    assert _counts(client, wid)["characters"] == 0
+
+
+def test_a_url_that_is_not_one_is_a_400_and_an_unreachable_one_a_404(client, wid, monkeypatch):
+    assert client.post(f"/api/worlds/{wid}/scenario/parse-url",
+                       json={"url": "not a url"}).status_code == 400
+    monkeypatch.setattr(store.chub, "fetch_character_node", lambda fp: None)
+    r = client.post(f"/api/worlds/{wid}/scenario/parse-url",
+                    json={"url": "https://chub.ai/characters/creator/missing"})
+    assert r.status_code == 404
+
+
+def test_parsing_an_unknown_world_is_a_404(client):
+    assert _upload(client, "nope").status_code == 404
+
+
+# ------------------------------------------------------------------ importing
+def test_importing_the_reviewed_proposal_creates_the_records(client, wid):
+    prop = _upload(client, wid).json()
+    prop["art"] = False
+    r = client.post(f"/api/worlds/{wid}/scenario/import", json=prop)
+    assert r.status_code == 200
+    out = r.json()
+    assert [c["name"] for c in out["characters"]] == ["Mara"]
+    assert out["entries"] == [{"kind": "locations", "id": "the-tide-gate"}]
+    assert len(out["greetings"]) == 2
+    assert _counts(client, wid) == {"characters": 1, "lore": 0, "locations": 1, "greetings": 2}
+
+    gid = out["greetings"][0]["id"]
+    greeting = client.get(f"/api/worlds/{wid}/greetings/{gid}").json()
+    assert greeting["meta"]["character"] == out["characters"][0]["id"]
+
+
+def test_a_row_the_reviewer_removed_is_never_written(client, wid):
+    prop = _upload(client, wid).json()
+    prop["characters"] = []
+    prop["greetings"] = prop["greetings"][:1]
+    prop["art"] = False
+    client.post(f"/api/worlds/{wid}/scenario/import", json=prop)
+    assert _counts(client, wid) == {"characters": 0, "lore": 0, "locations": 1, "greetings": 1}
+
+
+def test_importing_localizes_the_openers_art_into_the_greeting(client, wid, monkeypatch):
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
+    monkeypatch.setattr(store.fetch, "_http_get_bytes", lambda url: (buf.getvalue(), "image/png"))
+
+    prop = {"characters": [], "entries": [], "greetings": [
+        {"name": "Opener", "body": "![](https://example.com/a.png)", "character": "", "present": []}]}
+    out = client.post(f"/api/worlds/{wid}/scenario/import", json=prop).json()
+    assert out["art"] == {"total": 1, "localized": 1, "skipped": 0, "failed": 0, "capped": False}
+
+    gid = out["greetings"][0]["id"]
+    body = client.get(f"/api/worlds/{wid}/greetings/{gid}").json()["body"]
+    assert f"/api/worlds/{wid}/greetings/{gid}/images/" in body
+    # ...and the image the body now names is actually servable
+    name = body.split("/images/")[1].rstrip(")\n ")
+    assert client.get(f"/api/worlds/{wid}/greetings/{gid}/images/{name}").status_code == 200
+
+
+def test_importing_an_unknown_category_is_a_400(client, wid):
+    r = client.post(f"/api/worlds/{wid}/scenario/import", json={
+        "entries": [{"name": "X", "keys": [], "body": "y", "category": "bogus"}], "art": False})
+    assert r.status_code == 400
+
+
+def test_importing_into_an_unknown_world_is_a_404(client):
+    assert client.post("/api/worlds/nope/scenario/import",
+                       json={"art": False}).status_code == 404
+
+
+def test_importing_needs_no_llm_connection(client):
+    """The write half is pure file IO — a world that cannot reach a model can
+    still import a proposal it saved, or one built from the card alone."""
+    world = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    r = client.post(f"/api/worlds/{world}/scenario/import", json={
+        "greetings": [{"name": "Opener", "body": "text"}], "art": False})
+    assert r.status_code == 200
+    assert len(client.get(f"/api/worlds/{world}/greetings").json()) == 1
