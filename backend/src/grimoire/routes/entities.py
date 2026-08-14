@@ -52,7 +52,10 @@ def _check_secrecy(secrecy: str | None) -> None:
     `secrecy: sercet` to public would save cleanly and publish the secret.
     """
     if not secrecy:
-        return  # "" / None == leave it alone (update) or public (create)
+        # None == "not in this patch, leave the stored level alone"; "" reaches
+        # the store as an explicit clear-to-public, the same as `owners`.
+        # Neither is a level to validate.
+        return
     if str(secrecy).strip().lower() not in store.entities.SECRECY_LEVELS:
         raise HTTPException(
             status_code=400,

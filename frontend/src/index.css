@@ -1023,6 +1023,10 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .secrecy-tag.gm-only { border-color: var(--chrome); color: var(--muted); }
 .secrecy-tag.gm-only.on { background: var(--chrome); color: var(--chrome-text); }
 .row .secrecy-tag { flex: none; pointer-events: none; }
+/* the form's picker mirrors .owner-picker/.owner-option, one row instead of a
+   column: three mutually-exclusive levels are short enough to sit side by side */
+.secrecy-picker { display: flex; gap: 12px; flex-wrap: wrap; }
+.secrecy-option { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; }
 
 /* owners multi-select in the lore form */
 .owner-picker { flex-direction: column; align-items: flex-start; gap: 4px; }

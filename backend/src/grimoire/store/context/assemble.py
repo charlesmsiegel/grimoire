@@ -145,11 +145,24 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     history_ids = scenes_read.get_location_history(cid, sid)
     current_loc = history_ids[-1] if history_ids else None
     current_setting = ""
+    current_setting_secret = False
     exclude: frozenset = frozenset()
     if current_loc:
         try:
-            current_setting = overlay.read_entity(cid, "locations", current_loc)["body"].strip()
+            loc = overlay.read_entity(cid, "locations", current_loc)
             exclude = frozenset({current_loc})
+            # The current location does NOT pass through `activate` -- it is
+            # excluded from world info precisely so it can render as the
+            # setting instead -- so the secrecy gate has to be applied here as
+            # well, or "gm-only never enters the prompt" is false for the one
+            # location the scene is actually standing in. Suppressing the block
+            # leaves the model to invent a setting, which is the right way to
+            # be wrong: the alternative is overriding the level the user set
+            # because we decided they needed the description more.
+            level = entities.normalize_secrecy(loc["meta"].get("secrecy"))
+            if level != entities.GM_ONLY:
+                current_setting = loc["body"].strip()
+                current_setting_secret = level == entities.SECRET
         except entities.EntityNotFound:
             pass  # referenced location was deleted — omit the setting block
     present = {f"{a['kind']}:{a['id']}" for a in cast}
@@ -205,6 +218,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "today": world_state._today_data(cid, sid, croot),
         "weather": world_state._weather_data(cid, sid),
         "current_setting": current_setting,
+        "current_setting_secret": current_setting_secret,
         # Split by secrecy (#49): the secret halves render under a heading that
         # tells the model to keep them out of the mouths of characters who have
         # not learned them. GM-only entries are already gone -- `activate`
@@ -222,6 +236,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # having it at all is smaller, and costs a recalled group its state
         # block rather than costing a keyword-activated one.
         "group_states": world_state._group_states(cid, croot, activated_wi),
+        "secret_group_states": world_state._group_states(cid, croot, activated_wi,
+                                                         secrecy=entities.SECRET),
         "offscene_active": offscene_active, "offscene_known": offscene_known,
         "player_names": player_names,
         "mechanics_rules": mech["mechanics_rules"], "mechanics_sheets": mech["mechanics_sheets"],

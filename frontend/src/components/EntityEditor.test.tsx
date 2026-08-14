@@ -491,9 +491,9 @@ test("the secrecy picker offers all three levels and starts on public", async ()
   render(<EntityEditor wid="w" kind="lore" />);
   await screen.findByLabelText("Name");
   const group = screen.getByRole("radiogroup", { name: "Secrecy" });
-  expect(within(group).getAllByRole("radio").map((b) => b.textContent))
-    .toEqual(["Public", "Secret", "GM-only"]);
-  expect(within(group).getByRole("radio", { name: "Public" })).toHaveAttribute("aria-checked", "true");
+  expect(within(group).getAllByRole("radio").map((r) => r.getAttribute("value")))
+    .toEqual(["public", "secret", "gm-only"]);
+  expect(within(group).getByRole("radio", { name: "Public" })).toBeChecked();
 });
 
 test("the detail sidebar badges a secret entry and the form opens on its level", async () => {
@@ -508,7 +508,7 @@ test("the detail sidebar badges a secret entry and the form opens on its level",
   expect(within(side).getByText("Secret")).toBeInTheDocument();
   // Edit opens the form already on the stored level, so a save can't downgrade it
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
-  expect(screen.getByRole("radio", { name: "Secret" })).toHaveAttribute("aria-checked", "true");
+  expect(screen.getByRole("radio", { name: "Secret" })).toBeChecked();
 });
 
 test("an unmarked entry reads as public in the sidebar", async () => {
@@ -560,5 +560,5 @@ test("'+ New' after viewing a secret entry does not inherit its level", async ()
   fireEvent.click(await screen.findByText("Twist"));
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /\+ new lore entry/i }));
-  expect(screen.getByRole("radio", { name: "Public" })).toHaveAttribute("aria-checked", "true");
+  expect(screen.getByRole("radio", { name: "Public" })).toBeChecked();
 });
