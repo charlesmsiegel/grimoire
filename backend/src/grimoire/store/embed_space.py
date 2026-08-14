@@ -25,7 +25,7 @@ import zlib
 from . import config, llm_connections
 
 
-def resolve() -> dict | None:
+def resolve(cfg: dict | None = None) -> dict | None:
     """`{model, base_url, key, space}` for the configured endpoint, or None.
 
     None is the answer for every kind of "not set up": no model, no connection
@@ -34,9 +34,14 @@ def resolve() -> dict | None:
     of them the same way — the layer is off — so distinguishing them here would
     buy nothing. The store this reads may be hand-edited or half-synced, so it
     must not raise for any of them either.
+
+    `cfg` is a config mapping the caller has already read. `read_config` parses
+    config.md on every call and nothing memoizes it, so a caller that wanted
+    the config for its own settings too — `context/semantic.settings`, on every
+    turn — would otherwise pay for the file twice.
     """
     try:
-        cfg = config.read_config()
+        cfg = config.read_config() if cfg is None else cfg
         model = str(cfg.get("embeddings_model") or "").strip()
         conn_id = str(cfg.get("embeddings_connection_id") or "").strip()
         if not model or not conn_id:
