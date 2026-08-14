@@ -521,6 +521,40 @@ def _roots(scope: str, root_id: str) -> Iterator[tuple[str, str, str, Path, str]
 
 # ---- matching, ranking, snippets ----
 
+def validate(scope: str, kinds: tuple[str, ...]) -> None:
+    """Raise for a scope or a kind the corpus has no such thing as.
+
+    Shared with `store/semsearch.py` so both modes of one route refuse the same
+    vocabulary — a filter that 400s in keyword mode and silently returns
+    nothing in semantic mode would be the same query answered two ways.
+    """
+    if scope and scope not in SCOPES:
+        raise BadScope(scope)
+    unknown = [k for k in kinds if k not in KINDS]
+    if unknown:
+        raise BadKind(", ".join(sorted(unknown)))
+
+
+def walk(scope: str = "", root: str = "") -> Iterator[tuple[str, str, str, dict]]:
+    """(scope, root id, root display name, document) for every searchable
+    document under the covered roots.
+
+    The corpus, once, for both modes: the keyword sweep below matches terms
+    against these documents and `store/semsearch.py` embeds them. Anything a
+    reader can find one way they can find the other, and a record that becomes
+    searchable becomes searchable in both — which is the property that lets the
+    route fall back from semantic to keyword and still be answering the same
+    question.
+    """
+    for scope_name, rid, root_name, root_dir, meta_file in _roots(scope, root):
+        for doc in _record_docs(root_dir, meta_file, scope_name, rid):
+            yield scope_name, rid, root_name, doc
+        if scope_name != CAMPAIGN:
+            continue
+        for doc in _fact_docs(rid, root_dir):
+            yield scope_name, rid, root_name, doc
+
+
 def _score(name: str, text: str, terms: list[str]) -> float:
     """How well one document answers the query.
 
@@ -544,7 +578,7 @@ def _score(name: str, text: str, terms: list[str]) -> float:
     return total
 
 
-def _snippet(prose: str, text: str, terms: list[str]) -> str:
+def snippet(prose: str, text: str, terms: list[str]) -> str:
     """A one-line window around the query's first matching term.
 
     Cut from the record's prose when the match is in it, and from the whole
@@ -630,60 +664,29 @@ def _fill_snippets(hits: list[dict], terms: list[str]) -> list[dict]:
     out = []
     for hit in hits:
         doc = hit.pop("_doc")
-        out.append({**hit, "snippet": _snippet(doc["prose"], doc["text"] or doc["name"], terms)})
+        out.append({**hit, "snippet": snippet(doc["prose"], doc["text"] or doc["name"], terms)})
     return out
 
 
-def _sort_key(hit: dict) -> tuple:
+def sort_key(hit: dict) -> tuple:
     """Rank, then a total order over everything else, so two runs of one query
     return the same page in the same order."""
     return (-hit["score"], _KIND_ORDER.get(hit["kind"], len(KINDS)),
             hit["scope"], hit["root"], natural_key(hit["name"]), hit["id"], hit["sub"])
 
 
-def search(q: str, *, scope: str = "", root: str = "",
-           kinds: tuple[str, ...] = (), limit: int = DEFAULT_LIMIT) -> dict:
-    """Rank every record whose text holds all of the query's terms.
+def summarize(matched: list[dict], kinds: tuple[str, ...], limit: int) -> dict:
+    """Count, filter, rank and cut a list of hits into a response envelope.
 
-    `scope` narrows to worlds or to campaigns; `root` narrows further to one
-    world or one campaign (and means nothing without a scope, which is the
-    caller's to enforce -- a bare id is ambiguous between the two). `kinds`
-    keeps only those kinds.
+    Shared with `store/semsearch.py`: both modes of the route answer in one
+    shape, counted by one rule, so the page a reader is looking at means the
+    same thing whichever mode produced it.
 
-    The returned `facets` count the hits *before* the kind filter, so the UI's
-    kind chips can show what dropping the current filter would find rather than
+    `facets` and `scopes` count the hits *before* the kind filter, so the UI's
+    kind chips can say what dropping the current filter would find rather than
     only ever counting the filter already applied. `total` is the count after
     it, and `hits` is that list cut to `limit`.
-
-    An empty query is an empty result, not an error: a search box is empty far
-    more often than it is wrong, and a 400 on every keystroke before the first
-    letter would be the route shouting at its own UI.
     """
-    if scope and scope not in SCOPES:
-        raise BadScope(scope)
-    unknown = [k for k in kinds if k not in KINDS]
-    if unknown:
-        raise BadKind(", ".join(sorted(unknown)))
-
-    terms = query_terms(q)
-    if not terms:
-        return {"q": q, "terms": [], "total": 0, "facets": {}, "scopes": {},
-                "truncated": False, "hits": []}
-
-    matched: list[dict] = []
-    for scope_name, rid, root_name, root_dir, meta_file in _roots(scope, root):
-        docs = _record_docs(root_dir, meta_file, scope_name, rid)
-        for doc in docs:
-            hit = _hit(scope_name, rid, root_name, doc, terms)
-            if hit is not None:
-                matched.append(hit)
-        if scope_name != CAMPAIGN:
-            continue
-        for doc in _fact_docs(rid, root_dir):
-            hit = _hit(scope_name, rid, root_name, doc, terms)
-            if hit is not None:
-                matched.append(hit)
-
     facets: dict[str, int] = {}
     scope_counts: dict[str, int] = {}
     for hit in matched:
@@ -693,8 +696,38 @@ def search(q: str, *, scope: str = "", root: str = "",
     if kinds:
         wanted = frozenset(kinds)
         matched = [hit for hit in matched if hit["kind"] in wanted]
-    matched.sort(key=_sort_key)
+    matched = sorted(matched, key=sort_key)
     capped = max(1, min(limit, MAX_LIMIT))
-    return {"q": q, "terms": terms, "total": len(matched), "facets": facets,
-            "scopes": scope_counts, "truncated": len(matched) > capped,
-            "hits": _fill_snippets(matched[:capped], terms)}
+    return {"total": len(matched), "facets": facets, "scopes": scope_counts,
+            "truncated": len(matched) > capped, "hits": matched[:capped]}
+
+
+def search(q: str, *, scope: str = "", root: str = "",
+           kinds: tuple[str, ...] = (), limit: int = DEFAULT_LIMIT) -> dict:
+    """Rank every record whose text holds all of the query's terms.
+
+    `scope` narrows to worlds or to campaigns; `root` narrows further to one
+    world or one campaign (and means nothing without a scope, which is the
+    caller's to enforce -- a bare id is ambiguous between the two). `kinds`
+    keeps only those kinds. What the envelope's counts mean is `summarize`'s.
+
+    An empty query is an empty result, not an error: a search box is empty far
+    more often than it is wrong, and a 400 on every keystroke before the first
+    letter would be the route shouting at its own UI.
+    """
+    validate(scope, kinds)
+
+    terms = query_terms(q)
+    if not terms:
+        return {"q": q, "terms": [], "total": 0, "facets": {}, "scopes": {},
+                "truncated": False, "hits": []}
+
+    matched: list[dict] = []
+    for scope_name, rid, root_name, doc in walk(scope, root):
+        hit = _hit(scope_name, rid, root_name, doc, terms)
+        if hit is not None:
+            matched.append(hit)
+
+    out = summarize(matched, kinds, limit)
+    return {"q": q, "terms": terms, **out,
+            "hits": _fill_snippets(out["hits"], terms)}

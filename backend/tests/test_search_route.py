@@ -122,3 +122,61 @@ def test_a_hit_carries_no_internal_keys(client, library):
     assert body["hits"]
     for hit in body["hits"]:
         assert not [k for k in hit if k.startswith("_")], hit
+
+
+# ---- mode: keyword and semantic on one route (#34) -------------------------
+
+def configure_embeddings(client, kind="openai_compatible"):
+    """Point the store at an embeddings endpoint, through the API."""
+    conn = client.post("/api/llm-connections",
+                       json={"kind": kind, "name": "Vectors", "model": "",
+                             "base_url": "https://vectors.example/v1",
+                             "api_key": "sk-x", "post_process": "none"}).json()
+    client.put("/api/config", json={"embeddings_connection_id": conn["id"],
+                                    "embeddings_model": "embed-1"})
+    return conn["id"]
+
+
+def test_the_answer_says_which_mode_produced_it(client, library):
+    body = client.get("/api/search", params={"q": "owed"}).json()
+    assert body["mode"] == "keyword" and body["requested_mode"] == "keyword"
+    assert body["note"] == ""
+
+
+def test_semantic_mode_degrades_to_keyword_when_there_is_no_endpoint(client, library):
+    """#34's fourth item. A reader who asks for meaning and has no embeddings
+    connection gets the keyword answer and is told so — not a 500, and not an
+    empty page that looks like "nothing matches"."""
+    body = client.get("/api/search", params={"q": "owed", "mode": "semantic"}).json()
+    assert body["mode"] == "keyword" and body["requested_mode"] == "semantic"
+    assert body["note"]
+    assert [h["kind"] for h in body["hits"]]
+
+
+def test_semantic_mode_answers_semantically_once_an_endpoint_is_configured(
+        client, library, monkeypatch):
+    configure_embeddings(client)
+
+    class Fake:
+        def embed(self, texts, model, key, base_url, deadline=None):
+            # Everything points the same way, so every passage is a hit: what
+            # this asserts is the wiring, not the ranking.
+            return [[1.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(store.semsearch, "_CLIENT", Fake())
+    body = client.get("/api/search", params={"q": "owed", "mode": "semantic"}).json()
+    assert body["mode"] == "semantic" and body["requested_mode"] == "semantic"
+    assert body["corpus"] > 0 and body["hits"]
+
+
+def test_an_unknown_mode_is_refused(client):
+    res = client.get("/api/search", params={"q": "owed", "mode": "vibes"})
+    assert res.status_code == 400 and "vibes" in res.json()["detail"]
+
+
+def test_a_bad_filter_is_a_400_in_semantic_mode_too(client):
+    """The vocabulary is the route's, not the mode's: a kind that 400s in one
+    mode must not silently return nothing in the other."""
+    res = client.get("/api/search", params={"q": "owed", "mode": "semantic",
+                                            "kinds": "sausages"})
+    assert res.status_code == 400
