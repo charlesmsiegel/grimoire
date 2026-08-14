@@ -487,6 +487,8 @@ test("the first-post choice is locked while the create sequence is writing", asy
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   expect(screen.getByRole("radio", { name: /^nothing/i })).toBeDisabled();
   await act(async () => { release({ id: "s9" }); });
+});
+
 // ---- the scene ledger (#88): a picked idea is marked used once its scene
 // exists, and only then ----
 const SAVED: SceneDraft = { ...(GEN as any), source: "saved", lid: "the-tide-book" };
