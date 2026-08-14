@@ -45,7 +45,7 @@ def test_assemble_omits_weather_without_a_moment(monkeypatch, tmp_path):
 def test_weather_reaches_the_system_prompt(monkeypatch, tmp_path):
     # Registering a section in the breakdown and not in the prompt used to be
     # possible -- they were two render paths -- and this test caught it. Both
-    # now come off `_SECTIONS`, so the assertion moves to the built prompt
+    # now come off `SECTIONS`, so the assertion moves to the built prompt
     # itself, which is what the claim was always really about.
     cid, sid = scene_at(monkeypatch, tmp_path)
     data = context._assemble(cid, sid)["data"]

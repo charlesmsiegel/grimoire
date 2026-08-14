@@ -5,7 +5,7 @@
 run off that one dict; its keys are keyword arguments to the templates, so
 their order is immaterial.
 
-`_SECTIONS` is the prompt's section order — the one list, not a mirror of one.
+`SECTIONS` is the prompt's section catalog — the one list, not a mirror of one.
 It used to be a mirror: templates/scene/system.j2 re-`include`d each section
 itself, so the prompt and the token breakdown were two render paths over the
 same data and only the breakdown was allowed to be approximate. That is fine
@@ -248,9 +248,15 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
 
 
 class Section(NamedTuple):
-    """One system-message section: its inspector label, its template, the tier
-    the packer drops it at, and the three selectors that decide whether it
-    renders at all."""
+    """One system-message section: its stable id, its inspector label, its
+    template, the tier the packer drops it at, and the three selectors that
+    decide whether it renders at all."""
+    #: Stable identity, and the reason it is not the label: from #29 the label
+    #: is the user's to edit, so two rows may legitimately carry the same
+    #: string. Everything that has to name a section across a store write --
+    #: `layout.py`'s entries, `/api/prompt-layout`, the inspector's React keys
+    #: -- names this instead. It never reaches the model.
+    id: str
     label: str
     template: str
     tier: str
@@ -264,51 +270,71 @@ class Section(NamedTuple):
     except_opener: bool = False
 
 
-#: The system message, in order. `_render_sections` renders it and system.j2
-#: joins the result — this list, not the template, is where the order lives.
-_SECTIONS = [
-    Section("Opener instruction", "scene/opener_instruction", pack.LOCK_IN, opener_only=True),
-    Section("Global system prompt", "scene/sections/global_system_prompt.j2", pack.LOCK_IN),
-    Section("Prose style", "scene/sections/prose_style.j2", pack.LOCK_IN),
-    Section("Natural prose", "scene/sections/natural_prose.j2", pack.LOCK_IN),
-    Section("System prompt", "scene/sections/card_system_prompts.j2", pack.LOCK_IN),
-    Section("Character descriptions", "scene/sections/character_descriptions.j2", pack.LOCK_IN),
-    Section("Character state", "scene/sections/character_state.j2", pack.SPOTLIGHT),
+#: The section CATALOG: every section this build knows, with the order and the
+#: labels it ships. `_render_sections` walks `layout.apply(SECTIONS)` -- the
+#: catalog when the user has no layout or has switched theirs off, their merge
+#: of it otherwise -- and system.j2 joins the result. This list, not the
+#: template, is where the default order lives.
+SECTIONS = [
+    Section("opener_instruction", "Opener instruction", "scene/opener_instruction",
+            pack.LOCK_IN, opener_only=True),
+    Section("global_system_prompt", "Global system prompt",
+            "scene/sections/global_system_prompt.j2", pack.LOCK_IN),
+    Section("prose_style", "Prose style", "scene/sections/prose_style.j2", pack.LOCK_IN),
+    Section("natural_prose", "Natural prose", "scene/sections/natural_prose.j2", pack.LOCK_IN),
+    Section("card_system_prompts", "System prompt",
+            "scene/sections/card_system_prompts.j2", pack.LOCK_IN),
+    Section("character_descriptions", "Character descriptions",
+            "scene/sections/character_descriptions.j2", pack.LOCK_IN),
+    Section("character_state", "Character state",
+            "scene/sections/character_state.j2", pack.SPOTLIGHT),
     # Beside the standing state and at the same tier: the same kind of claim
     # about the same characters, with a shorter half-life.
-    Section("Transient state", "scene/sections/transient_state.j2", pack.SPOTLIGHT),
-    Section("Relationships", "scene/sections/relationships.j2", pack.SPOTLIGHT),
-    Section("Player personas", "scene/sections/player_personas.j2", pack.LOCK_IN),
-    Section("Offscreen scene", "scene/sections/offscreen_scene.j2", pack.LOCK_IN, pcless_only=True),
-    Section("Absent player characters", "scene/sections/absent_players.j2", pack.LOCK_IN, pcless_only=True),
-    Section("Message examples", "scene/sections/message_examples.j2", pack.BACKGROUND),
-    Section("Story so far", "scene/sections/story_so_far", pack.BACKGROUND),
-    Section("Earlier scenes", "scene/sections/archive.j2", pack.ARCHIVE),
-    Section("Plot threads", "scene/sections/plot_threads.j2", pack.SPOTLIGHT),
-    Section("Commitments", "scene/sections/commitments.j2", pack.SPOTLIGHT),
-    Section("Today", "scene/sections/today.j2", pack.SPOTLIGHT),
-    Section("Weather", "scene/sections/weather.j2", pack.SPOTLIGHT),
-    Section("Current setting", "scene/sections/current_setting.j2", pack.SPOTLIGHT),
-    Section("World info", "scene/sections/world_info.j2", pack.SPOTLIGHT),
+    Section("transient_state", "Transient state",
+            "scene/sections/transient_state.j2", pack.SPOTLIGHT),
+    Section("relationships", "Relationships", "scene/sections/relationships.j2", pack.SPOTLIGHT),
+    Section("player_personas", "Player personas",
+            "scene/sections/player_personas.j2", pack.LOCK_IN),
+    Section("offscreen_scene", "Offscreen scene", "scene/sections/offscreen_scene.j2",
+            pack.LOCK_IN, pcless_only=True),
+    Section("absent_players", "Absent player characters", "scene/sections/absent_players.j2",
+            pack.LOCK_IN, pcless_only=True),
+    Section("message_examples", "Message examples",
+            "scene/sections/message_examples.j2", pack.BACKGROUND),
+    Section("story_so_far", "Story so far", "scene/sections/story_so_far", pack.BACKGROUND),
+    Section("archive", "Earlier scenes", "scene/sections/archive.j2", pack.ARCHIVE),
+    Section("plot_threads", "Plot threads", "scene/sections/plot_threads.j2", pack.SPOTLIGHT),
+    Section("commitments", "Commitments", "scene/sections/commitments.j2", pack.SPOTLIGHT),
+    Section("today", "Today", "scene/sections/today.j2", pack.SPOTLIGHT),
+    Section("weather", "Weather", "scene/sections/weather.j2", pack.SPOTLIGHT),
+    Section("current_setting", "Current setting",
+            "scene/sections/current_setting.j2", pack.SPOTLIGHT),
+    Section("world_info", "World info", "scene/sections/world_info.j2", pack.SPOTLIGHT),
     # ARCHIVE, not SPOTLIGHT, and not folded into World info above: recalled
     # lore is retrieved *because* the conversation touched on it, exactly like
     # "Earlier scenes", and it is the first thing that should go when the
     # prompt does not fit. Sharing a section with the keyword hits would let a
     # recall drop them too.
-    Section("Recalled lore", "scene/sections/recalled_lore.j2", pack.RECALLED),
-    Section("Group state", "scene/sections/group_state.j2", pack.SPOTLIGHT),
-    Section("Mechanics rules", "scene/sections/mechanics_rules.j2", pack.SPOTLIGHT),
-    Section("Mechanics sheets", "scene/sections/mechanics_sheets.j2", pack.SPOTLIGHT),
-    Section("Off-scene cast", "scene/sections/off_scene_cast.j2", pack.BACKGROUND),
-    Section("Mechanics response format", "scene/sections/mechanics_response_format.j2", pack.LOCK_IN),
-    Section("Response format", "scene/sections/response_format.j2", pack.LOCK_IN),
-    Section("Transient state tracker", "scene/sections/transient_tracker.j2", pack.LOCK_IN,
-            except_opener=True),
-    Section("Response budget", "scene/sections/response_budget.j2", pack.LOCK_IN),
+    Section("recalled_lore", "Recalled lore", "scene/sections/recalled_lore.j2", pack.RECALLED),
+    Section("group_state", "Group state", "scene/sections/group_state.j2", pack.SPOTLIGHT),
+    Section("mechanics_rules", "Mechanics rules",
+            "scene/sections/mechanics_rules.j2", pack.SPOTLIGHT),
+    Section("mechanics_sheets", "Mechanics sheets",
+            "scene/sections/mechanics_sheets.j2", pack.SPOTLIGHT),
+    Section("off_scene_cast", "Off-scene cast",
+            "scene/sections/off_scene_cast.j2", pack.BACKGROUND),
+    Section("mechanics_response_format", "Mechanics response format",
+            "scene/sections/mechanics_response_format.j2", pack.LOCK_IN),
+    Section("response_format", "Response format",
+            "scene/sections/response_format.j2", pack.LOCK_IN),
+    Section("transient_tracker", "Transient state tracker",
+            "scene/sections/transient_tracker.j2", pack.LOCK_IN, except_opener=True),
+    Section("response_budget", "Response budget",
+            "scene/sections/response_budget.j2", pack.LOCK_IN),
 ]
 
 #: The two sections that pick a variant file from the assembled data. Everything
-#: else in `_SECTIONS` names its template outright.
+#: else in `SECTIONS` names its template outright.
 _VARIANTS = {
     "scene/opener_instruction": lambda d: "offscreen" if d["pcless"] else "standard",
     "scene/sections/story_so_far": lambda d: "full" if d["story_full"] else "compact",
@@ -330,7 +356,7 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False) -> list[
     """
     data = {**a["data"], "opener": opener}
     out = []
-    for section in _SECTIONS:
+    for section in SECTIONS:
         if section.pcless_only and not data["pcless"]:
             continue
         if section.opener_only and not opener:
@@ -340,7 +366,8 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False) -> list[
         text = macros.expand_macros(prompts.render(_section_template(section, data), **data),
                                     a["subs"], cid, sid).strip()
         if text:
-            out.append({"label": section.label, "text": text, "tier": section.tier})
+            out.append({"id": section.id, "label": section.label,
+                        "text": text, "tier": section.tier})
     return out
 
 
@@ -403,7 +430,7 @@ def compose_turn(cid: str, sid: str, turn: dict | None = None,
 
     BOTH out of a single `_assemble` + `_packed` pass, which is what lets a
     snapshot of this turn be trusted later (#157). Running the two entry points
-    separately would reintroduce exactly the disagreement `_SECTIONS` was
+    separately would reintroduce exactly the disagreement `SECTIONS` was
     restructured to remove — and worse across time than within a request, since
     `macros.expand_macros` resolves `{{random}}` and `{{roll}}` at render time,
     so a second pass over an *identical* store still produces different text.
@@ -513,7 +540,7 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None) -> 
     request it is describing.
     """
     extra = extra or []
-    rows = [{"label": s["label"], "text": s["text"], "tier": s["tier"],
+    rows = [{"id": s["id"], "label": s["label"], "text": s["text"], "tier": s["tier"],
              "dropped": s["dropped"], "trimmed": 0,
              "tokens": tokens.count_tokens(s["text"])}
             for s in p["sections"]]
@@ -523,20 +550,24 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None) -> 
     if hist:
         # Displayed joined (one readable block), accounted per message with the
         # same per-message framing allowance the packer charges.
-        rows.append({"label": "Conversation history", "text": hist, "tier": pack.HISTORY,
-                     "dropped": False, "trimmed": p["history_trimmed"],
-                     "tokens": hist_tokens})
+        rows.append({"id": "history", "label": "Conversation history", "text": hist,
+                     "tier": pack.HISTORY, "dropped": False,
+                     "trimmed": p["history_trimmed"], "tokens": hist_tokens})
     if a["post_history"]:
-        rows.append({"label": "Post-history instructions", "text": a["post_history"],
+        rows.append({"id": "post_history", "label": "Post-history instructions",
+                     "text": a["post_history"],
                      "tier": pack.LOCK_IN, "dropped": False, "trimmed": 0,
                      "tokens": tokens.count_tokens(a["post_history"])})
     # `lock-in`, and not merely as a label: `_packed` reserved these, so the
     # packer could not drop them even had it wanted to. Reporting them under any
     # droppable tier would describe a choice the packer never had.
+    #: Appended rows are numbered rather than named after their label: two of
+    #: them can carry the same one (an opener sends a prompt and shape rules
+    #: every time), and the inspector keys its rows on `id`.
     extra_tokens = [tokens.count_tokens(text) for _label, text in extra]
-    rows += [{"label": label, "text": text, "tier": pack.LOCK_IN,
-              "dropped": False, "trimmed": 0, "tokens": n}
-             for (label, text), n in zip(extra, extra_tokens)]
+    rows += [{"id": f"appended_{n}", "label": label, "text": text, "tier": pack.LOCK_IN,
+              "dropped": False, "trimmed": 0, "tokens": count}
+             for n, ((label, text), count) in enumerate(zip(extra, extra_tokens))]
 
     kept = [s["text"] for s in p["sections"] if not s["dropped"]]
     total = (tokens.count_tokens(_compose_system(kept)) + hist_tokens

@@ -3441,3 +3441,28 @@ def test_a_name_soft_wrapped_across_a_line_break_is_still_matched(monkeypatch, t
         playstate.write_state(croot, ids["Seraphine Vale"],
                               playstate.compose_body("Wary.", "", body))
         assert "hiding the ledger" not in _state_section(cid, sid), body
+
+
+# ---------------------------------------------------------- section identity
+
+def test_section_ids_are_unique(monkeypatch, tmp_path):
+    """The layout keys off identity, and a label cannot supply one: labels are
+    user-editable from #29 onward, so two rows may legitimately share a string."""
+    from grimoire.store.context import assemble
+    ids = [s.id for s in assemble.SECTIONS]
+    assert len(ids) == len(set(ids))
+    assert all(i and i.replace("_", "").isalnum() for i in ids)
+
+
+def test_every_breakdown_row_carries_an_id(monkeypatch, tmp_path):
+    """Every row, not just the section ones: `ContextBreakdown` keys on `id`, so
+    a row without one collides with the next row that also lacks it."""
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Seraphine", "default",
+                                _npc_card("Seraphine", description="keeper"))
+    ap.appear(cid, sid, "characters", "seraphine", "default", "npc")
+    scenes.append_message(cid, sid, "user", "hello")
+    rows = context.context_sections(cid, sid)
+    ids = [r["id"] for r in rows]
+    assert all(ids) and len(ids) == len(set(ids))
+    assert "character_descriptions" in ids and "history" in ids

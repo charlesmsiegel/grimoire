@@ -90,7 +90,7 @@ def _world_info(cid: str, recent_text: str, exclude: frozenset = frozenset(),
     #
     # The split is reported rather than merged because the two halves are
     # packed differently: keyword hits are `spotlight`, recalled ones are
-    # `archive` (see assemble._SECTIONS). Merging them let a recall grow the
+    # `archive` (see assemble.SECTIONS). Merging them let a recall grow the
     # World info section until the packer dropped the whole thing, keyword
     # hits included -- so enabling recall could REMOVE lore, which is exactly
     # what this layer promises never to do.
