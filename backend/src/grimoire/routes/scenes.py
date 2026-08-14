@@ -2334,14 +2334,15 @@ def get_scene_datetime(cid: str, sid: str):
         except store.calendars.CalendarError:
             current = None  # misconfigured calendar — surface "no date" rather than 500
     else:
-        # dateless: offer a pre-fill — the creation-time hint, else where the story left off
+        # dateless: offer a pre-fill — the creation-time hint, else the campaign
+        # clock (#100). The clock is the stored "now" when there is one and the
+        # latest chronicle date when there is not, so this is a superset of the
+        # chronicle read it replaces: an unclocked campaign pre-fills exactly
+        # what it always did, and one that skipped a month between scenes now
+        # pre-fills the month it is actually in.
         hint = store.scenes.get_suggested_date(cid, sid)
         if not hint:
-            try:
-                recent = store.chronicle.recent(cid, 1)
-                hint = recent[-1].get("date", "") if recent else ""
-            except Exception:  # noqa: BLE001 — garbled chronicle.json
-                hint = ""
+            hint = store.clock.now(cid)
         if hint:
             suggested = store.calendars.split_native(hint)[0]
     return {"current": current, "history": history, "suggested": suggested}
@@ -2361,7 +2362,13 @@ def put_scene_datetime(cid: str, sid: str, body: SceneDatetime):
     # Names the transitions for the advance digest. Generation is pure, so the
     # changes happen either way; without this they are simply never reported.
     weather_changes = store.weather.sweep(cid, result.get("id", sid), previous, body.datetime)
-    return {"ok": True, **result, "weather_changes": weather_changes}
+    # Reconcile the campaign clock (#100) with the moment this scene just took:
+    # forward only, so a flashback cannot drag the campaign's present backwards.
+    # Called from the route rather than from `set_datetime`, which keeps `scenes`
+    # free of any import of `clock` — `clock` reads the chronicle and the
+    # chronicle reads `scenes`, so the other direction would be a cycle.
+    clock = store.clock.observe(cid, body.datetime, f"scene {result.get('id', sid)}")
+    return {"ok": True, **result, "weather_changes": weather_changes, "clock": clock}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/response")

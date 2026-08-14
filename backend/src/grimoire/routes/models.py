@@ -419,6 +419,20 @@ class SceneDatetime(BaseModel):
     datetime: str
 
 
+class AdvanceTime(BaseModel):
+    """A campaign-clock advance (#100): skip to `to`, or move on by `days`.
+
+    Both are optional and the store decides between them — `to` wins when both
+    arrive, and neither is a `ClockError` the store names — so the route does
+    not restate that rule. `reason` defaults to empty rather than being
+    required here: a missing reason earns a 400 that says what is wrong, not a
+    422 about a field name.
+    """
+    to: str | None = None
+    days: int | None = None
+    reason: str = ""
+
+
 class CalendarConfig(BaseModel):
     primary: dict
     secondary: dict | None = None

@@ -19,7 +19,7 @@ from ..llm_errors import LLMError
 from .common import (computes_only, _bounded_call, _campaign_root_or_404, _content_fields,
                      _dump, _require_connection, _response_body, get_llm,
                      _serve_image, _serve_image_file, _upload_image_ext, _write_response)
-from .models import (AvatarFocus, CalendarConfig, CampaignClimate, CopyFromGreeting,
+from .models import (AdvanceTime, AvatarFocus, CalendarConfig, CampaignClimate, CopyFromGreeting,
                      DefaultVersion, GroupStateSave, NameBody, NewCampaign, PCCreate,
                      PCUpdate, PersonaVersionCreate, PersonaVersionUpdate, PickBody,
                      RefList, ResponseSettings, VersionCreate, VersionUpdate,
@@ -143,6 +143,75 @@ def put_calendar_config(cid: str, body: CalendarConfig):
         raise HTTPException(status_code=400, detail=str(e))
     store.calendars.write_calendar(store.campaigns.campaign_root(cid), cfg)
     return {"ok": True}
+
+
+# ---- the campaign clock (#100) ----
+#
+# Declared here, in a module included before ``entities``, so
+# ``/campaigns/{cid}/{kind}`` cannot capture ``advance`` or ``clock``.
+# ``test_route_order.py`` is what actually holds that.
+
+
+def _clock_friendly(cid: str, native: str) -> str:
+    """`native` in the campaign's own reckoning, or "" when it cannot be read.
+
+    The clock is a pre-fill and a header line; a calendar the campaign cannot
+    load is worth an empty label, never a 500 on the page that would let the
+    reader fix it.
+    """
+    if not native:
+        return ""
+    try:
+        provider = store.calendars.get_provider(
+            store.calendars.read_calendar(store.campaigns.campaign_root(cid))["primary"])
+        return store.calendars.friendly(provider, native)
+    except (store.calendars.CalendarError, KeyError):
+        return ""
+
+
+@router.get("/campaigns/{cid}/clock")
+def get_campaign_clock(cid: str):
+    """The campaign's current moment and how it got there, newest entry last.
+
+    `now` is the stored clock when there is one and the latest chronicle date
+    when there is not, so this answers for a campaign that has never advanced.
+    """
+    _campaign_root_or_404(cid)
+    native = store.clock.now(cid)
+    return {"now": native, "friendly": _clock_friendly(cid, native),
+            "log": store.clock.read(cid)["log"]}
+
+
+@router.post("/campaigns/{cid}/advance/preview")
+def post_advance_preview(cid: str, body: AdvanceTime):
+    """The digest the same body would produce, writing nothing — so the reader
+    sees what a skip crosses *before* confirming it. Deterministic, so the
+    preview and the advance that follows agree."""
+    _campaign_root_or_404(cid)
+    try:
+        return {"digest": store.clock.preview(cid, to=body.to, days=body.days)}
+    except (store.clock.ClockError, store.calendars.CalendarError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/campaigns/{cid}/advance")
+def post_advance(cid: str, body: AdvanceTime):
+    """Move the campaign clock, recording why, and report what was crossed.
+
+    A reason is required: the log exists to answer "why is it suddenly March?",
+    and an entry without one cannot. Nothing is written to any transcript —
+    `PUT .../scenes/{sid}/datetime` still owns the one line a time change puts
+    in a scene.
+    """
+    _campaign_root_or_404(cid)
+    if not body.reason.strip():
+        raise HTTPException(status_code=400, detail="an advance needs a reason")
+    try:
+        result = store.clock.advance(cid, to=body.to, days=body.days, reason=body.reason)
+    except (store.clock.ClockError, store.calendars.CalendarError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, **result,
+            "friendly": _clock_friendly(cid, result["now"])}
 
 
 @router.get("/campaigns/{cid}/calendar/months")
