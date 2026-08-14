@@ -11087,6 +11087,37 @@ def test_a_corrupt_scene_stamp_cannot_pin_a_campaign_atop_recent(client, monkeyp
     assert moved["activity"] > row["activity"]
 
 
+def test_the_activity_fold_holds_when_a_write_straddles_a_second(client, monkeypatch):
+    """The test above pins a fold whose two stamps come from two different
+    `now_iso()` readings: campaign.md's `updated`, written when the campaign is
+    written, and the `/activity` file's, written at the request boundary of any
+    campaign-scoped write. They agree only when both land inside one wall-clock
+    second, so the equality that test used to assert was a coin flip on a loaded
+    machine -- it failed two runs in eight locally and reddened CI's py3.14 job
+    while py3.11 passed the same test in the same run (#320, #314). Nothing
+    about the corrupt-stamp behaviour was ever involved.
+
+    This forces the straddle rather than waiting for one: the middleware's clock
+    is pushed a second ahead of the one campaign.md was written with, which is
+    exactly what a boundary produces. What the fold actually owes still holds --
+    a real stamp won, it is a stamp `now_iso()` could have written, and it is
+    not the corrupt value. The first assertion is a guard on the setup, not on
+    the behaviour: without a straddle the rest would pass while exercising
+    nothing.
+    """
+    _, cid = _campaign(client)
+    monkeypatch.setattr("grimoire.store.campaigns.read.now_iso", lambda: _soon(1))
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Saltmarch"}).json()["id"]
+    _set_scene_updated(cid, sid, "zzzz")
+
+    row = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]
+    assert row["activity"] > row["updated"] != "", (
+        "the straddle did not happen -- the activity stamp landed in the same "
+        "second as campaign.md's, so this test proves nothing")
+    assert row["activity"] != "zzzz", "a corrupt scene stamp must not rank the campaign"
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", row["activity"])
+
+
 def test_the_newest_valid_scene_stamp_wins_even_when_a_bad_one_sorts_first(client):
     """`list_scenes` sorts by the very field that may be the bad one, so
     element zero is only the newest if the sort key can be trusted. Dropping
