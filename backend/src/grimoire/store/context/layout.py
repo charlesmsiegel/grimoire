@@ -96,6 +96,11 @@ def _ordered(catalog: list, stored: list) -> list[tuple]:
     # Catalog sections the layout never mentioned, walked in catalog order so
     # two consecutive newcomers keep their relative order: each is findable as
     # the next one's predecessor once inserted.
+    #
+    # The anchor search reads `out`, which holds the DISABLED sections too, so
+    # a newcomer lands beside its catalog neighbour whether that neighbour is
+    # switched on or off. Searching only the enabled ones would make switching
+    # a section off silently move the next one up.
     for sid in [s for s in order if s not in seen]:
         idx = order.index(sid)
         pos = 0
@@ -116,9 +121,12 @@ def merge(catalog: list, stored: list) -> list:
     because the alternative — raising — takes scene generation down over a
     preference.
 
-    A section is anchored by its position among the sections that SURVIVED, not
-    among the ones the layout mentioned: switching a section off must not also
-    move the newcomer that would have sat after it.
+    A newcomer anchors to its catalog neighbour wherever the layout PUT that
+    neighbour, switched on or off — `_ordered` holds the disabled ones, so they
+    can still anchor. That is the property worth having: toggling a section off
+    must not also move a different section, and it does not. Anchoring to
+    survivors only would drag every newcomer up the message each time the
+    reader switched something off above it.
     """
     return [s for s, on in _ordered(catalog, stored) if on]
 
