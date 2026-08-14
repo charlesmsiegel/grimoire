@@ -8,6 +8,7 @@ whose calendar moved must still be pickable, minus the reference that went.
 """
 
 import json
+import threading
 
 import pytest
 
@@ -294,3 +295,58 @@ def test_a_greeting_nobody_can_start_is_not_an_idea(monkeypatch, tmp_path):
     _greeting(cid, "After")
     overlay.set_edges(cid, "reckoning", leads_to=["after"])
     assert [r["id"] for r in playing.greeting_ideas(cid)] == ["greeting:reckoning"]
+
+
+# ---- concurrency: the reason this module is in the lock domain -------------
+def test_two_threads_saving_one_idea_file_it_once(monkeypatch, tmp_path):
+    """`add` allocates its id from the keys it just read, so an unlocked pair
+    can pick the same slug and lose one of the two ideas -- and the dedupe that
+    makes a retried save safe is itself a read-modify-write, so unlocked it
+    would let both callers miss each other and file two copies.
+
+    Two clients is not hypothetical here: the store is meant to be pointed at a
+    synced folder, and a phone and a desktop can have the picker open at once
+    (see `store.locks` on what that lock does and does not cover).
+    """
+    cid = _campaign(monkeypatch, tmp_path)
+    ids: dict[str, str] = {}
+
+    def worker(name: str) -> None:
+        ids[name] = scene_ideas.add(cid, "The creditor", "A debt-collector arrives.")
+
+    threads = [threading.Thread(target=worker, args=(n,)) for n in ("a", "b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert not any(t.is_alive() for t in threads), "a worker thread never finished"
+
+    assert ids["a"] == ids["b"], ids          # both callers were told the same id
+    assert list(scene_ideas.read(cid)) == [ids["a"]]   # and only one record exists
+
+
+def test_a_concurrent_dismiss_cannot_lose_a_save(monkeypatch, tmp_path):
+    """The file is rewritten whole, so a status write and a save that overlap
+    would otherwise publish one over the other -- the loser's record simply
+    absent from the file it was never in."""
+    cid = _campaign(monkeypatch, tmp_path)
+    first = scene_ideas.add(cid, "Standing", "x")
+    done: list[str] = []
+
+    def dismiss() -> None:
+        scene_ideas.set_status(cid, first, scene_ideas.DISMISSED)
+        done.append("dismiss")
+
+    def save() -> None:
+        done.append(scene_ideas.add(cid, "Fresh", "y"))
+
+    threads = [threading.Thread(target=dismiss), threading.Thread(target=save)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert not any(t.is_alive() for t in threads), "a worker thread never finished"
+
+    data = scene_ideas.read(cid)
+    assert sorted(data) == sorted([first, "fresh"])     # neither write was lost
+    assert data[first]["status"] == "dismissed"
