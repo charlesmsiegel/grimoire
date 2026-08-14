@@ -644,10 +644,14 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
     # below stays well under the ceiling so the two agree without it -- asserted
     # rather than assumed, because a fixture that grew past the ceiling would
     # otherwise fail as an unexplained byte mismatch in the section join.
+    # A raised error rather than an `assert`, which -O strips: this is a
+    # precondition of the comparison below, not a check the harness collects.
     limit = int(cfg.get("offscene_known_limit", config.DEFAULT_OFFSCENE_KNOWN_LIMIT) or 0)
-    assert not limit or len(offscene_known) <= limit, (
-        f"verify fixture has {len(offscene_known)} tier-3 characters, over the "
-        f"offscene_known_limit of {limit}; this mirror does not implement the cut")
+    if limit and len(offscene_known) > limit:
+        raise SystemExit(
+            f"verify fixture has {len(offscene_known)} tier-3 characters, over the "
+            f"offscene_known_limit of {limit}; this mirror does not implement the cut, "
+            f"so shrink the fixture or teach gather() the relevance rule")
 
     campaign_meta = campaigns.read_campaign(cid)["meta"]
     # Mirrors context._assemble: one per-field cascade resolves both the prose
