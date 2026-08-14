@@ -7,6 +7,7 @@ vi.mock("../api/client", () => ({
   api: {
     getConfig: vi.fn(), putConfig: vi.fn(), getDataDir: vi.fn(), putDataDir: vi.fn(),
     listBackups: vi.fn(), createBackup: vi.fn(),
+    getStoreConflicts: vi.fn(),
     listStyles: vi.fn(), listConnections: vi.fn(),
     listCampaigns: vi.fn(), listScenes: vi.fn(),
     listScenePrompts: vi.fn(), getScenePrompt: vi.fn(),
@@ -52,6 +53,7 @@ beforeEach(() => {
   (api.putConfig as any).mockResolvedValue(cfg);
   (api.getDataDir as any).mockResolvedValue(dataDir);
   (api.putDataDir as any).mockResolvedValue(dataDir);
+  (api.getStoreConflicts as any).mockResolvedValue({ conflicts: [], truncated: false });
   (api.listStyles as any).mockResolvedValue([
     { id: "gothic-horror", name: "Gothic Horror", description: "", tags: [], built_in: true },
     { id: "noir-detective", name: "Noir Detective", description: "", tags: [], built_in: true },
@@ -638,4 +640,16 @@ test("the backups list is only read by the section that shows it", async () => {
   expect(api.listBackups).not.toHaveBeenCalled();
   await open(/^Backups/);
   await waitFor(() => expect(api.listBackups).toHaveBeenCalled());
+});
+
+test("the Storage section reports sync-conflict files in the library (#35)", async () => {
+  (api.getStoreConflicts as any).mockResolvedValue({
+    conflicts: [{ path: "worlds/realm/lore/pact.sync-conflict-1.md",
+                  name: "pact.sync-conflict-1.md", tool: "syncthing",
+                  kind: "file", size: 40, modified: "2026-01-01T00:00:00Z" }],
+    truncated: false,
+  });
+  renderView();
+  // Storage is the section this page opens on.
+  expect(await screen.findByText("worlds/realm/lore/pact.sync-conflict-1.md")).toBeInTheDocument();
 });

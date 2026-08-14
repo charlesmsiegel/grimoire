@@ -2,6 +2,16 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { EntityEditor } from "./EntityEditor";
 
 vi.mock("../api/client", () => ({
+  // The editor branches on `instanceof ApiError` to tell a stale-record 409
+  // from any other failure, so the mock has to hand back a real class. Defined
+  // inside the factory: `vi.mock` is hoisted above every top-level statement,
+  // so a class declared out here would not exist yet when it runs.
+  ApiError: class extends Error {
+    constructor(public status: number, public detail: string, public kind?: string,
+                public body?: Record<string, unknown>) {
+      super(detail);
+    }
+  },
   SECRECY_LEVELS: ["public", "secret", "gm-only"],
   SECRECY_LABELS: { public: "Public", secret: "Secret", "gm-only": "GM-only" },
   ENTITY_FIELDS: {
@@ -31,7 +41,11 @@ vi.mock("../api/client", () => ({
     instantiateContent: vi.fn(),
   },
 }));
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
+
+const fail = (status: number, detail: string, kind?: string,
+              body?: Record<string, unknown>) =>
+  new (ApiError as any)(status, detail, kind, body);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -39,7 +53,7 @@ beforeEach(() => {
   (api.createEntity as any).mockResolvedValue({ id: "e1" });
   (api.updateEntity as any).mockResolvedValue({ ok: true });
   (api.deleteEntity as any).mockResolvedValue({ ok: true });
-  (api.readEntity as any).mockResolvedValue({ meta: { id: "salt", name: "Salt", keys: "pact" }, body: "x" });
+  (api.readEntity as any).mockResolvedValue({ meta: { id: "salt", name: "Salt", keys: "pact" }, body: "x", rev: "r1" });
   (api.listCharacters as any).mockResolvedValue([{ id: "tanaka", name: "Tanaka" }]);
   (api.listPCs as any).mockResolvedValue([]);
   (api.listEntityImages as any).mockResolvedValue([]);
@@ -716,4 +730,85 @@ test("a public record's count carries no never-charged marking", async () => {
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   expect(container.querySelector(".row-tokens")!.className).not.toContain("never-charged");
   expect(container.querySelector(".token-badge")!.className).not.toContain("never-charged");
+});
+
+// ---- external edits: the save precondition (#35) ----
+
+async function openForEdit() {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", keys: "pact" }]);
+  render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+}
+
+test("a save echoes back the rev the record was read at", async () => {
+  await openForEdit();
+  fireEvent.change(screen.getByLabelText("Body"), { target: { value: "mine" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() =>
+    expect(api.updateEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore", "salt",
+      expect.objectContaining({ body: "mine", rev: "r1" })),
+  );
+});
+
+test("a stale save is refused without discarding what was typed", async () => {
+  (api.updateEntity as any).mockRejectedValue(
+    fail(409, "changed on disk", "stale_record", { rev: "r2" }));
+  await openForEdit();
+  fireEvent.change(screen.getByLabelText("Body"), { target: { value: "mine" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+  await screen.findByRole("alert");
+  expect(screen.getByText(/changed on disk while you had it open/i)).toBeInTheDocument();
+  expect(screen.getByLabelText("Body")).toHaveValue("mine"); // still the user's text
+});
+
+test("overwrite retries against the rev the refusal reported", async () => {
+  (api.updateEntity as any).mockRejectedValueOnce(
+    fail(409, "changed on disk", "stale_record", { rev: "r2" }));
+  await openForEdit();
+  fireEvent.change(screen.getByLabelText("Body"), { target: { value: "mine" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /overwrite with mine/i }));
+
+  await waitFor(() =>
+    expect(api.updateEntity).toHaveBeenLastCalledWith({ kind: "world", id: "w" }, "lore", "salt",
+      expect.objectContaining({ body: "mine", rev: "r2" })),
+  );
+});
+
+test("discard-and-reload throws the edit away and re-reads the record", async () => {
+  (api.updateEntity as any).mockRejectedValue(
+    fail(409, "changed on disk", "stale_record", { rev: "r2" }));
+  await openForEdit();
+  fireEvent.change(screen.getByLabelText("Body"), { target: { value: "mine" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+  (api.readEntity as any).mockResolvedValue(
+    { meta: { id: "salt", name: "Salt", keys: "pact" }, body: "theirs", rev: "r2" });
+  fireEvent.click(await screen.findByRole("button", { name: /discard mine and reload/i }));
+
+  await waitFor(() => expect(screen.getByText("theirs")).toBeInTheDocument());
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("a record deleted underneath offers no overwrite", async () => {
+  (api.updateEntity as any).mockRejectedValue(
+    fail(409, "changed on disk", "stale_record", { rev: null }));
+  await openForEdit();
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+  await screen.findByRole("alert");
+  expect(screen.getByText(/has been deleted/i)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /overwrite with mine/i })).toBeNull();
+});
+
+test("a failure that is not a conflict still reaches the error banner", async () => {
+  (api.updateEntity as any).mockRejectedValue(fail(400, "bad fields", "fields"));
+  await openForEdit();
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+  expect(await screen.findByText("bad fields")).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).toBeNull();
 });

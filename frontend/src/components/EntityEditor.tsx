@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, ENTITY_FIELDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type Secrecy } from "../api/client";
+import { ApiError, api, ENTITY_FIELDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type Secrecy } from "../api/client";
 import { loreOwnerOptions, type LoreOwner } from "../api/loreOwners";
 import CreationWizard from "./CreationWizard";
 import { Field } from "./Field";
@@ -9,6 +9,7 @@ import { GroupStatePanel } from "./GroupStatePanel";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import { Portrait } from "./Portrait";
 import SheetPanel from "./SheetPanel";
+import { StaleRecordBanner } from "./StaleRecordBanner";
 
 export const KIND_LABELS: Record<EntityKind, string> = {
   locations: "location", lore: "lore entry", items: "item", groups: "group", creatures: "creature",
@@ -106,6 +107,11 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   const [tokenCost, setTokenCost] = useState<number | null>(null); // selected record's prompt cost
   const [mode, setMode] = useState<"view" | "edit">("edit"); // existing entries open read-only
   const [error, setError] = useState<string | null>(null);
+  // The rev of the record as loaded, echoed back on save so a write cannot
+  // land on top of an edit made outside the app (#35); `stale` holds the
+  // refusal, with the on-disk rev an overwrite would have to be based on.
+  const [rev, setRev] = useState<string | null>(null);
+  const [stale, setStale] = useState<{ rev: string | null } | null>(null);
   const [images, setImages] = useState<{ name: string; v: string }[]>([]); // selected location's assets
   const [contentPreview, setContentPreview] = useState<ModuleContentEntry | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -160,6 +166,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
 
   function resetForm() {
     setEditing(null);
+    setRev(null);
+    setStale(null);
     setName("");
     setBody("");
     setKeys("");
@@ -176,10 +184,12 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
 
   async function select(id: string) {
     setError(null);
+    setStale(null);
     setContentPreview(null);
     setWizardOpen(false);
     const e = await api.readEntity(scope, kind, id);
     setEditing(id);
+    setRev(e.rev);
     setName(e.meta.name);
     setBody(e.body);
     setKeys(e.meta.keys ?? "");
@@ -214,14 +224,20 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     }
   }
 
-  async function save() {
+  /** `base` is the rev the write claims to be replacing. Normally the one this
+   *  editor loaded; on an explicit overwrite, the one the 409 reported, which
+   *  is how "keep mine anyway" stays a deliberate second click rather than a
+   *  silent retry without the precondition. */
+  async function save(base: string | null = rev) {
     if (!name.trim()) return;
     setError(null);
+    setStale(null);
     const ownerStr = owners.join(", ");
     try {
       if (editing) {
         await api.updateEntity(scope, kind, editing,
-          { name, body, keys, owners: ownerStr, secrecy, ...(fieldSpecs.length ? { fields } : {}) });
+          { name, body, keys, owners: ownerStr, secrecy, ...(fieldSpecs.length ? { fields } : {}),
+            ...(base ? { rev: base } : {}) });
         await reload();
         await select(editing); // back to the read-only view
       } else {
@@ -231,7 +247,23 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
         resetForm();
       }
     } catch (err: any) {
+      if (err instanceof ApiError && err.kind === "stale_record") {
+        // The form keeps the user's text; nothing is discarded without a click.
+        setStale({ rev: (err.body?.rev as string | null) ?? null });
+        return;
+      }
       setError(err.detail ?? String(err));
+    }
+  }
+
+  async function discardAndReload() {
+    setStale(null);
+    if (!editing) return;
+    await reload();
+    try {
+      await select(editing);
+    } catch {
+      resetForm(); // the record is gone from disk entirely
     }
   }
 
@@ -406,6 +438,10 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
 
       <div className="editor-body">
         {error && <div className="banner">{error}</div>}
+        {stale && (
+          <StaleRecordBanner label={label} rev={stale.rev} onReload={discardAndReload}
+                             onOverwrite={() => save(stale.rev)} />
+        )}
         {wizardOpen && module ? (
           <CreationWizard scope={scope} kind={kind} module={module}
                           createRecord={(n) => api.createEntity(scope, kind, { name: n }).then((r) => r.id)}
@@ -603,7 +639,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
             <div className="form-actions">
               {editing && <button className="subtle" onClick={() => remove(items.find((x) => x.id === editing)!)}>Delete</button>}
               {editing && <button className="subtle" onClick={() => select(editing)}>Cancel</button>}
-              <button className="primary" onClick={save} disabled={!name.trim()}>
+              <button className="primary" onClick={() => save()} disabled={!name.trim()}>
                 {editing ? "Save" : `Create ${label}`}
               </button>
             </div>

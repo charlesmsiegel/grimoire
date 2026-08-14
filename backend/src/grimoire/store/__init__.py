@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from . import (
     absorb, alternates, appearances, assets, atomic, audit, backups, birthdays, briefing, campaign_climate, campaigns, cards, cascade, casefile, changes, characters, checks, chronicle, clock, commitments, commits,
-    chub, climates, config, context, covers, dice, dossiers, embed_space, entities, entity_schema, epub, export, facts, fence, fetch, greetings, groupstate,
+    chub, climates, config, context, covers, dice, dossiers, embed_space, entities, entity_schema, epub, export, external, facts, fence, fetch, greetings, groupstate,
     image_subjects, journal, length_drift, lengths, llm_connections, localize, locks, lorebook, migrations, module_edit, modules, overlay, pcs, playing,
     pins, playstate, plot, prompt_log, proposals, provenance, relationships, response_presets, rolling_summary, rolls, scenario, scene_ideas, scene_ids, scene_refs, scenes, search, semsearch, sheets,
     styles, suggest,
@@ -82,6 +82,7 @@ __all__ = [
     "entity_schema",
     "epub",
     "export",
+    "external",
     "EntityNotFound",
     "UnknownKind",
     "worlds",

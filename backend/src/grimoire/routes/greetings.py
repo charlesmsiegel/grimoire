@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from .. import store
 from ..llm import LLMClient
-from .common import (_campaign_root_or_404, _record_prompt, _require_connection,
-                     _require_scene, _world_root_or_404, get_llm)
+from .common import (_campaign_root_or_404, _fresh_or_409, _record_prompt,
+                     _require_connection, _require_scene, _world_root_or_404, get_llm)
 from .models import (CopyFromGreeting, Edges, FirstPost, GreetingCreate, GreetingUpdate,
                      ImportGreetings, MarkBody, Opener, StartFromGreeting, SubjectsBody)
 from .streaming import _ephemeral_stream, _persist_reply
@@ -48,7 +48,7 @@ def post_world_greetings_import(wid: str, body: ImportGreetings):
 def get_world_greeting(wid: str, gid: str):
     root = _world_root_or_404(wid)
     try:
-        g = store.greetings.read_greeting(root, gid)
+        g = store.greetings.read_greeting_rev(root, gid)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     plotmap = store.greetings.read_plotmap(root)
@@ -59,8 +59,13 @@ def get_world_greeting(wid: str, gid: str):
 
 @router.put("/worlds/{wid}/greetings/{gid}")
 def put_world_greeting(wid: str, gid: str, body: GreetingUpdate):
+    root = _world_root_or_404(wid)
+    # Greetings are one of `entities.SYNCED_KINDS`, stored at the same flat
+    # `<root>/<kind>/<id>.md` path, so they hash through the same call sync.py
+    # already uses for them (#35).
+    _fresh_or_409(body.rev, store.entities.entity_hash(root, "greetings", gid))
     try:
-        store.greetings.update_greeting(_world_root_or_404(wid), gid, name=body.name,
+        store.greetings.update_greeting(root, gid, name=body.name,
                                         body=body.body, requires_tags=body.requires_tags,
                                         predecessor_join=body.predecessor_join, present=body.present,
                                         pcless=body.pcless)
@@ -221,7 +226,7 @@ def post_campaign_greeting(cid: str, body: GreetingCreate):
 def get_campaign_greeting(cid: str, gid: str):
     _campaign_root_or_404(cid)
     try:
-        g = store.overlay.read_greeting(cid, gid)
+        g = store.overlay.read_greeting_rev(cid, gid)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     plotmap = store.overlay.read_plotmap(cid)
@@ -233,6 +238,7 @@ def get_campaign_greeting(cid: str, gid: str):
 @router.put("/campaigns/{cid}/greetings/{gid}")
 def put_campaign_greeting(cid: str, gid: str, body: GreetingUpdate):
     _campaign_root_or_404(cid)
+    _fresh_or_409(body.rev, store.overlay.entity_rev(cid, "greetings", gid))
     try:
         store.overlay.update_greeting(cid, gid, name=body.name, body=body.body,
                                      requires_tags=body.requires_tags,

@@ -12,8 +12,8 @@ from __future__ import annotations
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
 from .. import store
-from .common import (_campaign_root_or_404, _serve_image, _upload_image_ext,
-                     _world_root_or_404)
+from .common import (_campaign_root_or_404, _fresh_or_409, _serve_image,
+                     _upload_image_ext, _world_root_or_404)
 from .models import EntityCreate, EntityUpdate
 
 router = APIRouter()
@@ -29,6 +29,11 @@ def _entity_list(root, kind: str):
         it["has_image"] = p is not None
         it["image_v"] = store.assets.image_version(p) if p is not None else None
     return items
+
+
+def _entity_kind_or_404(kind: str) -> None:
+    if kind not in store.entities.ENTITY_KINDS:
+        raise HTTPException(status_code=404, detail="unknown kind")
 
 
 def _check_fields(kind: str, fields: dict | None) -> None:
@@ -75,7 +80,7 @@ def _entity_create(root, kind: str, body: EntityCreate):
 
 def _entity_read(root, kind: str, eid: str):
     try:
-        return store.entities.read_entity(root, kind, eid)
+        return store.entities.read_entity_rev(root, kind, eid)
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
     except store.entities.EntityNotFound:
@@ -85,6 +90,13 @@ def _entity_read(root, kind: str, eid: str):
 def _entity_update(root, kind: str, eid: str, body: EntityUpdate):
     _check_fields(kind, body.fields)
     _check_secrecy(body.secrecy)
+    # Kind first: `entity_hash` answers None for a kind it has never heard of,
+    # exactly as it does for a record that is gone, so leaving the 404 to the
+    # store below would report an unknown kind as a conflict. And both of those
+    # after the body checks above -- a malformed request is a 400 whether or not
+    # the record also moved on disk.
+    _entity_kind_or_404(kind)
+    _fresh_or_409(body.rev, store.entities.entity_hash(root, kind, eid))
     try:
         store.entities.update_entity(root, kind, eid, name=body.name, body=body.body,
                                      keys=body.keys, owners=body.owners, fields=body.fields,
@@ -133,7 +145,7 @@ def _campaign_entity_create(cid: str, kind: str, body: EntityCreate):
 
 def _campaign_entity_read(cid: str, kind: str, eid: str):
     try:
-        return store.overlay.read_entity(cid, kind, eid)
+        return store.overlay.read_entity_rev(cid, kind, eid)
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
     except store.entities.EntityNotFound:
@@ -151,6 +163,10 @@ def _campaign_entity_update(cid: str, kind: str, eid: str, body: EntityUpdate):
     # position as the name: this write can change it, and undo will not put it
     # back, so an undone edit restores the text without re-hiding it.
     label = f"{body.name or eid} — {kind}"
+    # Before the journal opens, so a refused write leaves no undo entry
+    # offering to restore a state it never replaced.
+    _entity_kind_or_404(kind)
+    _fresh_or_409(body.rev, store.overlay.entity_rev(cid, kind, eid))
     try:
         with store.undo.journalled(cid, {"w": "entity", "kind": kind, "id": eid},
                                    kind="lore", ref={"kind": kind, "id": eid},
@@ -206,11 +222,6 @@ def delete_world_entity(wid: str, kind: str, eid: str):
 
 
 # ---- entity images (locations/lore) — assets keyed <kind>/<eid>/assets/default ----
-def _entity_kind_or_404(kind: str) -> None:
-    if kind not in store.entities.ENTITY_KINDS:
-        raise HTTPException(status_code=404, detail="unknown kind")
-
-
 _IMAGE_KINDS = store.entities.ENTITY_KINDS + ("greetings",)
 
 

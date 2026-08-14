@@ -13,7 +13,7 @@ import json
 import re
 from pathlib import Path
 
-from . import atomic, cards, characters, statcache
+from . import atomic, cards, characters, entities, statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import natural_key, safe_id, slugify, uniquify
 
@@ -121,12 +121,31 @@ def create_greeting(root: Path, name: str, character: str, version: str, body: s
     return gid
 
 
-def read_greeting(root: Path, gid: str) -> dict:
+def _read_record(root: Path, gid: str) -> tuple[dict, str]:
     p = _greeting_path(root, gid)
     if not safe_id(gid) or not p.exists():
         raise GreetingNotFound(gid)
-    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
-    return {"meta": _meta_dict(gid, meta), "body": body}
+    text = p.read_text(encoding="utf-8")
+    meta, body = parse_frontmatter(text)
+    return {"meta": _meta_dict(gid, meta), "body": body}, text
+
+
+def read_greeting(root: Path, gid: str) -> dict:
+    return _read_record(root, gid)[0]
+
+
+def read_greeting_rev(root: Path, gid: str) -> dict:
+    """`read_greeting` plus the `rev` of the bytes it parsed (#35).
+
+    `entities.content_hash`, not a local sha256, on purpose: the write side
+    compares against `entities.entity_hash(root, "greetings", gid)` -- the same
+    call `sync.py` already hashes greetings through, greetings being one of
+    `entities.SYNCED_KINDS` and living at the same `<root>/<kind>/<id>.md`
+    path. Two spellings of "hash this record" that had to agree by convention
+    would agree right up until one of them was tuned.
+    """
+    record, text = _read_record(root, gid)
+    return {**record, "rev": entities.content_hash(text)}
 
 
 def list_greetings(root: Path) -> list[dict]:
