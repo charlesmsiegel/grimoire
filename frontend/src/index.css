@@ -1012,6 +1012,18 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .rail-group-head { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
   color: var(--muted); margin: 8px 0 4px; }
 
+/* secrecy (#49): the rail/sidebar badge and the form's three-way picker. Only
+   the two non-public levels are tinted — "public" is the default state and
+   colouring it would put a badge on almost every row in the rail, which is the
+   opposite of what a badge is for. `--alert` is the token for "this leaves the
+   ordinary path": secret is bordered with it, gm-only filled, matching how far
+   each one is from the entry beside it. */
+.secrecy-tag.secret { border-color: var(--alert); color: var(--alert); }
+.secrecy-tag.secret.on { background: var(--alert); color: var(--on-accent); }
+.secrecy-tag.gm-only { border-color: var(--chrome); color: var(--muted); }
+.secrecy-tag.gm-only.on { background: var(--chrome); color: var(--chrome-text); }
+.row .secrecy-tag { flex: none; pointer-events: none; }
+
 /* owners multi-select in the lore form */
 .owner-picker { flex-direction: column; align-items: flex-start; gap: 4px; }
 .owner-option { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; }

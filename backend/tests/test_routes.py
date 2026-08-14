@@ -1406,6 +1406,48 @@ def test_entity_keys_via_routes(client):
     assert client.get(f"/api/worlds/{wid}/lore/{eid}").json()["meta"]["keys"] == "pact, salt"
 
 
+def test_entity_secrecy_via_routes(client):
+    wid = _world(client)
+    eid = client.post(f"/api/worlds/{wid}/lore",
+                      json={"name": "The Twist", "body": "p", "secrecy": "secret"}).json()["id"]
+    assert client.get(f"/api/worlds/{wid}/lore/{eid}").json()["meta"]["secrecy"] == "secret"
+    assert client.get(f"/api/worlds/{wid}/lore").json()[0]["secrecy"] == "secret"
+    client.put(f"/api/worlds/{wid}/lore/{eid}", json={"secrecy": "gm-only"})
+    assert client.get(f"/api/worlds/{wid}/lore/{eid}").json()["meta"]["secrecy"] == "gm-only"
+    client.put(f"/api/worlds/{wid}/lore/{eid}", json={"secrecy": "public"})
+    assert "secrecy" not in client.get(f"/api/worlds/{wid}/lore/{eid}").json()["meta"]
+    # an unmarked entity carries no secrecy at all
+    other = client.post(f"/api/worlds/{wid}/lore", json={"name": "Plain"}).json()["id"]
+    assert "secrecy" not in client.get(f"/api/worlds/{wid}/lore/{other}").json()["meta"]
+
+
+def test_entity_secrecy_rejects_an_unknown_level(client):
+    """A typo must be reported, not silently normalized: normalizing to public
+    is the one direction that publishes what the user meant to hide."""
+    wid = _world(client)
+    r = client.post(f"/api/worlds/{wid}/lore", json={"name": "Twist", "secrecy": "sercet"})
+    assert r.status_code == 400
+    assert "secrecy" in r.json()["detail"]
+    assert client.get(f"/api/worlds/{wid}/lore").json() == []       # nothing was written
+    eid = client.post(f"/api/worlds/{wid}/lore",
+                      json={"name": "Twist", "secrecy": "secret"}).json()["id"]
+    assert client.put(f"/api/worlds/{wid}/lore/{eid}",
+                      json={"secrecy": "hidden"}).status_code == 400
+    assert client.get(f"/api/worlds/{wid}/lore/{eid}").json()["meta"]["secrecy"] == "secret"
+
+
+def test_campaign_entity_secrecy_via_routes(client):
+    wid = _world(client)
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    eid = client.post(f"/api/campaigns/{cid}/lore",
+                      json={"name": "The Twist", "body": "p", "secrecy": "secret"}).json()["id"]
+    assert client.get(f"/api/campaigns/{cid}/lore/{eid}").json()["meta"]["secrecy"] == "secret"
+    assert client.put(f"/api/campaigns/{cid}/lore/{eid}",
+                      json={"secrecy": "nope"}).status_code == 400
+    client.put(f"/api/campaigns/{cid}/lore/{eid}", json={"secrecy": "gm-only"})
+    assert client.get(f"/api/campaigns/{cid}/lore/{eid}").json()["meta"]["secrecy"] == "gm-only"
+
+
 def test_unknown_kind_404(client):
     wid = _world(client)
     assert client.get(f"/api/worlds/{wid}/weapons").status_code == 404

@@ -20,6 +20,30 @@ ENTITY_KINDS: tuple[str, ...] = ("locations", "lore", "items", "groups", "creatu
 # generic entities plus greetings (which keep their own CRUD module).
 SYNCED_KINDS: tuple[str, ...] = ENTITY_KINDS + ("greetings",)
 
+# ---- secrecy (#49): who an activated entry is *for*, orthogonal to `owners` ----
+# `owners` says what puts an entry in the prompt; `secrecy` says how the prompt
+# is allowed to use it once there:
+#   public  — the default, and the way every entry has always behaved
+#   secret  — activates exactly as before, but renders under a heading telling
+#             the model not to let uninvolved characters voice or act on it
+#   gm-only — never enters the prompt at all; the editor is the only reader
+PUBLIC, SECRET, GM_ONLY = "public", "secret", "gm-only"
+SECRECY_LEVELS: tuple[str, ...] = (PUBLIC, SECRET, GM_ONLY)
+
+
+def normalize_secrecy(value: str | None) -> str:
+    """One of `SECRECY_LEVELS` for a stored or incoming value; `PUBLIC` for
+    anything else — a missing key, a blank, a hand-typo in the frontmatter.
+
+    Lenient here and strict at the save boundary, the same split
+    `entity_schema.invalid_values` documents: frontmatter is hand-editable and
+    a typo in it must not take a turn down, but a typo arriving over HTTP is
+    reported (`routes.entities._check_secrecy`) rather than silently downgraded
+    to public — silently downgrading *secrecy* is the one direction that leaks.
+    """
+    v = (value or "").strip().lower()
+    return v if v in SECRECY_LEVELS else PUBLIC
+
 
 class EntityNotFound(Exception):
     pass
@@ -65,7 +89,8 @@ def read_entity(root: Path, kind: str, eid: str) -> dict:
 
 
 def create_entity(root: Path, kind: str, name: str, body: str = "", keys: str = "", owners: str = "",
-                  sd_prompt: str = "", taken=None, fields: dict[str, str] | None = None) -> str:
+                  sd_prompt: str = "", taken=None, fields: dict[str, str] | None = None,
+                  secrecy: str = "") -> str:
     _check_kind(kind)
     d = _kind_dir(root, kind)
     d.mkdir(parents=True, exist_ok=True)
@@ -88,6 +113,13 @@ def create_entity(root: Path, kind: str, name: str, body: str = "", keys: str = 
         meta["keys"] = keys
     if owners:
         meta["owners"] = owners
+    # Public is stored as the ABSENCE of the key, so an unmarked record is
+    # byte-identical to one written before secrecy existed -- which keeps the
+    # world->campaign sync (which hashes whole files) from seeing every entity
+    # as edited the first time anyone saves one.
+    level = normalize_secrecy(secrecy)
+    if level != PUBLIC:
+        meta["secrecy"] = level
     if sd_prompt:
         meta["sd_prompt"] = sd_prompt
     for k, v in (fields or {}).items():
@@ -101,6 +133,7 @@ def update_entity(
     root: Path, kind: str, eid: str, name: str | None = None,
     body: str | None = None, keys: str | None = None, owners: str | None = None,
     sd_prompt: str | None = None, fields: dict[str, str] | None = None,
+    secrecy: str | None = None,
 ) -> None:
     _check_kind(kind)
     p = _entity_path(root, kind, eid)
@@ -113,6 +146,12 @@ def update_entity(
         meta["keys"] = keys
     if owners is not None:
         meta["owners"] = owners
+    if secrecy is not None:
+        level = normalize_secrecy(secrecy)
+        if level == PUBLIC:
+            meta.pop("secrecy", None)   # "back to public" removes the key
+        else:
+            meta["secrecy"] = level
     if sd_prompt is not None:
         meta["sd_prompt"] = sd_prompt
     for k, v in (fields or {}).items():

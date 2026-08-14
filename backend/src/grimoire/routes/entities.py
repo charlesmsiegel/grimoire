@@ -42,11 +42,29 @@ def _check_fields(kind: str, fields: dict | None) -> None:
                             detail=f"invalid values for {kind}: {', '.join(bad_values)}")
 
 
+def _check_secrecy(secrecy: str | None) -> None:
+    """Reject an unknown secrecy level at the save boundary.
+
+    `entities.normalize_secrecy` is deliberately lenient so a hand-edited file
+    cannot break a turn, which makes this the only place a typo can be reported
+    at all — and the direction it fails in matters: silently normalizing
+    `secrecy: sercet` to public would save cleanly and publish the secret.
+    """
+    if not secrecy:
+        return  # "" / None == leave it alone (update) or public (create)
+    if str(secrecy).strip().lower() not in store.entities.SECRECY_LEVELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown secrecy: {secrecy} (expected one of "
+                   f"{', '.join(store.entities.SECRECY_LEVELS)})")
+
+
 def _entity_create(root, kind: str, body: EntityCreate):
     _check_fields(kind, body.fields)
+    _check_secrecy(body.secrecy)
     try:
         return {"id": store.entities.create_entity(root, kind, body.name, body.body, body.keys, body.owners,
-                                                    fields=body.fields)}
+                                                    fields=body.fields, secrecy=body.secrecy)}
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
 
@@ -62,9 +80,11 @@ def _entity_read(root, kind: str, eid: str):
 
 def _entity_update(root, kind: str, eid: str, body: EntityUpdate):
     _check_fields(kind, body.fields)
+    _check_secrecy(body.secrecy)
     try:
         store.entities.update_entity(root, kind, eid, name=body.name, body=body.body,
-                                     keys=body.keys, owners=body.owners, fields=body.fields)
+                                     keys=body.keys, owners=body.owners, fields=body.fields,
+                                     secrecy=body.secrecy)
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
     except store.entities.EntityNotFound:
@@ -99,9 +119,10 @@ def _campaign_entity_list(cid: str, kind: str):
 
 def _campaign_entity_create(cid: str, kind: str, body: EntityCreate):
     _check_fields(kind, body.fields)
+    _check_secrecy(body.secrecy)
     try:
         return {"id": store.overlay.create_entity(cid, kind, body.name, body.body, body.keys, body.owners,
-                                                   fields=body.fields)}
+                                                   fields=body.fields, secrecy=body.secrecy)}
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
 
@@ -117,18 +138,22 @@ def _campaign_entity_read(cid: str, kind: str, eid: str):
 
 def _campaign_entity_update(cid: str, kind: str, eid: str, body: EntityUpdate):
     _check_fields(kind, body.fields)
+    _check_secrecy(body.secrecy)
     # Journalled (#31): a hand edit to a campaign copy is the same kind of write
     # an absorb makes, and until now it was the one that left no trace and could
     # not be taken back. The BODY only -- that is what `undo`'s entity writer
     # restores, and claiming to reverse an edit while leaving a renamed record
-    # renamed would be worse than not offering it.
+    # renamed would be worse than not offering it. Secrecy is in the same
+    # position as the name: this write can change it, and undo will not put it
+    # back, so an undone edit restores the text without re-hiding it.
     label = f"{body.name or eid} — {kind}"
     try:
         with store.undo.journalled(cid, {"w": "entity", "kind": kind, "id": eid},
                                    kind="lore", ref={"kind": kind, "id": eid},
                                    field="body", label=label):
             store.overlay.update_entity(cid, kind, eid, name=body.name, body=body.body,
-                                        keys=body.keys, owners=body.owners, fields=body.fields)
+                                        keys=body.keys, owners=body.owners,
+                                        fields=body.fields, secrecy=body.secrecy)
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
     except store.entities.EntityNotFound:

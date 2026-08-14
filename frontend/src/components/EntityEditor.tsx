@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, ENTITY_FIELDS, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail } from "../api/client";
+import { api, ENTITY_FIELDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type Secrecy } from "../api/client";
 import { loreOwnerOptions, type LoreOwner } from "../api/loreOwners";
 import CreationWizard from "./CreationWizard";
 import { Field } from "./Field";
@@ -13,6 +13,18 @@ import SheetPanel from "./SheetPanel";
 export const KIND_LABELS: Record<EntityKind, string> = {
   locations: "location", lore: "lore entry", items: "item", groups: "group", creatures: "creature",
 };
+
+// What each secrecy level does to the prompt, in the words the picker shows.
+const SECRECY_HINTS: Record<Secrecy, string> = {
+  public: "activates normally; any character may know it",
+  secret: "activates normally, but uninvolved characters must not reveal it",
+  "gm-only": "never sent to the model — visible only here",
+};
+
+// Anything unrecognised (a hand-edited file) reads as public, exactly as
+// store.entities.normalize_secrecy does on the other side.
+const asSecrecy = (v: unknown): Secrecy =>
+  (SECRECY_LEVELS as readonly string[]).includes(String(v ?? "")) ? (v as Secrecy) : "public";
 
 export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, onOpenOwner, onOpenLore, module = null }: {
   wid: string;
@@ -33,6 +45,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   const fieldSpecs = ENTITY_FIELDS[kind];
   const [fields, setFields] = useState<Record<string, string>>({});
   const [owners, setOwners] = useState<string[]>([]);          // selected owner refs (lore only)
+  const [secrecy, setSecrecy] = useState<Secrecy>("public");    // audience gate (#49)
   const [sdPrompt, setSdPrompt] = useState("");                 // suggested SD prompt, absorb-set only
   const [ownerOpts, setOwnerOpts] = useState<LoreOwner[]>([]); // candidates for the picker
   const [mode, setMode] = useState<"view" | "edit">("edit"); // existing entries open read-only
@@ -74,6 +87,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
       setKeys("");
       setFields({});
       setOwners(nav.newOwner ? [nav.newOwner] : []);
+      setSecrecy("public");
       setMode("edit");
       setContentPreview(null);
     }
@@ -95,6 +109,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setKeys("");
     setFields({});
     setOwners([]); // manual "+ New" / post-save: always world-level, never a stale nav owner
+    setSecrecy("public");
     setSdPrompt("");
     setImages([]);
     setContentPreview(null);
@@ -113,6 +128,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setKeys(e.meta.keys ?? "");
     setFields(Object.fromEntries(fieldSpecs.map((f) => [f.key, String((e.meta as any)[f.key] ?? "")])));
     setOwners((e.meta.owners ?? "").split(",").map((o) => o.trim()).filter(Boolean));
+    setSecrecy(asSecrecy(e.meta.secrecy));
     setSdPrompt(e.meta.sd_prompt ?? "");
     setMode("view");
     reloadImages(id);
@@ -147,12 +163,12 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     try {
       if (editing) {
         await api.updateEntity(scope, kind, editing,
-          { name, body, keys, owners: ownerStr, ...(fieldSpecs.length ? { fields } : {}) });
+          { name, body, keys, owners: ownerStr, secrecy, ...(fieldSpecs.length ? { fields } : {}) });
         await reload();
         await select(editing); // back to the read-only view
       } else {
         await api.createEntity(scope, kind,
-          { name, body, keys, owners: ownerStr, ...(fieldSpecs.length ? { fields } : {}) });
+          { name, body, keys, owners: ownerStr, secrecy, ...(fieldSpecs.length ? { fields } : {}) });
         await reload();
         resetForm();
       }
@@ -240,6 +256,11 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
              onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
       )}
       <span className="row-name">{e.name}</span>
+      {asSecrecy(e.secrecy) !== "public" && (
+        <span className={`chip secrecy-tag ${asSecrecy(e.secrecy)}`}>
+          {SECRECY_LABELS[asSecrecy(e.secrecy)]}
+        </span>
+      )}
       {kind === "lore" && (
         <span className="owner-stack">
           {ownersOf(e).map((ref) => {
@@ -359,6 +380,13 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                   ? <div className="chips">{keyList.map((k) => <span key={k} className="chip on">{k}</span>)}</div>
                   : <div className="field-hint">always-on</div>}
               </div>
+              <div className="side-section">
+                <h4>Secrecy</h4>
+                <div className="chips">
+                  <span className={`chip on secrecy-tag ${secrecy}`}>{SECRECY_LABELS[secrecy]}</span>
+                </div>
+                <div className="field-hint">{SECRECY_HINTS[secrecy]}</div>
+              </div>
               {fieldSpecs.some((f) => fields[f.key]) && (
                 <div className="side-section">
                   <h4>Details</h4>
@@ -421,6 +449,17 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
             </Field>
             <Field label="Keys" hint="comma-separated activation triggers; blank = always-on">
               <input type="text" value={keys} onChange={(e) => setKeys(e.target.value)} />
+            </Field>
+            <Field label="Secrecy" hint={SECRECY_HINTS[secrecy]}>
+              <div className="chips" role="radiogroup" aria-label="Secrecy">
+                {SECRECY_LEVELS.map((level) => (
+                  <button key={level} type="button" role="radio" aria-checked={secrecy === level}
+                          className={"chip secrecy-tag " + level + (secrecy === level ? " on" : "")}
+                          onClick={() => setSecrecy(level)}>
+                    {SECRECY_LABELS[level]}
+                  </button>
+                ))}
+              </div>
             </Field>
             {fieldSpecs.map((f) => (
               <Field key={f.key} label={f.label}>

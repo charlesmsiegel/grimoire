@@ -4,6 +4,8 @@ import WorldView from "./WorldView";
 import { ShellStatusProvider, useShellStatus } from "../components/ShellStatus";
 
 vi.mock("../api/client", () => ({
+  SECRECY_LEVELS: ["public", "secret", "gm-only"],
+  SECRECY_LABELS: { public: "Public", secret: "Secret", "gm-only": "GM-only" },
   ENTITY_FIELDS: {
     locations: [], lore: [],
     items: [{ key: "item_type", label: "Type" }, { key: "rarity", label: "Rarity" }],

@@ -225,8 +225,15 @@ substituted by code:
 - `today` — `calendars.today_facts()` fields + `cast`
   (`context.cast_datetime_facts()`), or None when the scene has no date
 - `current_setting` — the current location's body ("" if none)
-- `world_info_bodies` — bodies selected by `context.activate()` (the
-  current location is excluded here and shown as `current_setting` instead)
+- `world_info_bodies` — `secrecy: public` bodies selected by
+  `context.activate()` (the current location is excluded here and shown as
+  `current_setting` instead)
+- `secret_world_info_bodies` — the same selection's `secrecy: secret` bodies,
+  rendered in the same section under `scene/_secrecy.j2`'s heading.
+  `secrecy: gm-only` entries are absent from both lists: `activate` drops
+  them before any selection rule runs, so they never reach a template
+- `recalled_lore_bodies` / `secret_recalled_lore_bodies` — the same split for
+  what `context.semantic.recall` added on top of the keyword rule
 - `group_states` — `[{name, goals, resources, focus, public_perception,
   secrets}]` from `groupstate.read_state()` for activated `groups` entries
   that have a state.md

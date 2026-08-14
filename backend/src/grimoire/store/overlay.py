@@ -371,7 +371,8 @@ def read_entity(cid: str, kind: str, eid: str) -> dict:
 
 
 def create_entity(cid: str, kind: str, name: str, body: str = "", keys: str = "",
-                  owners: str = "", sd_prompt: str = "", fields: dict | None = None) -> str:
+                  owners: str = "", sd_prompt: str = "", fields: dict | None = None,
+                  secrecy: str = "") -> str:
     wroot, gone = wroot_of(cid), deleted(cid)
 
     def taken(eid: str) -> bool:
@@ -382,7 +383,8 @@ def create_entity(cid: str, kind: str, name: str, body: str = "", keys: str = ""
                 or _flat_ref(kind, eid) in gone)
 
     eid = entities.create_entity(croot_of(cid), kind, name, body, keys, owners,
-                                 sd_prompt=sd_prompt, taken=taken, fields=fields)
+                                 sd_prompt=sd_prompt, taken=taken, fields=fields,
+                                 secrecy=secrecy)
     # Campaign-scoped entity work is work on the campaign, but it writes only
     # overlay records -- neither campaign.md nor any scene -- so the derived
     # activity high-water mark would not see an evening of lore or cast
@@ -392,11 +394,13 @@ def create_entity(cid: str, kind: str, name: str, body: str = "", keys: str = ""
 
 def update_entity(cid: str, kind: str, eid: str, *, name: str | None = None,
                   body: str | None = None, keys: str | None = None,
-                  owners: str | None = None, fields: dict | None = None) -> None:
+                  owners: str | None = None, fields: dict | None = None,
+                  secrecy: str | None = None) -> None:
     croot = croot_of(cid)
     if not _flat_path(croot, kind, eid).exists():
         materialize_entity(cid, kind, eid)
-    entities.update_entity(croot, kind, eid, name=name, body=body, keys=keys, owners=owners, fields=fields)
+    entities.update_entity(croot, kind, eid, name=name, body=body, keys=keys, owners=owners,
+                           fields=fields, secrecy=secrecy)
 
 
 def delete_entity(cid: str, kind: str, eid: str) -> None:

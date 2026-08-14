@@ -51,6 +51,61 @@ def test_activate_unowned_unchanged():
     assert [e["name"] for e in context.activate(entries, "x")] == ["World"]
 
 
+# ---- secrecy (#49) ----------------------------------------------------------
+
+def test_activate_secret_selects_like_public():
+    entries = [{"name": "Twist", "body": "t", "keys": ["ledger"], "secrecy": "secret"}]
+    assert [e["name"] for e in context.activate(entries, "the ledger")] == ["Twist"]
+    assert context.activate(entries, "nothing relevant") == []
+
+
+def test_activate_secret_owned_still_needs_its_owner():
+    entries = [{"name": "Twist", "body": "t", "keys": [], "secrecy": "secret",
+                "owners": ["characters:mara"]}]
+    assert context.activate(entries, "x", present=frozenset()) == []
+    assert [e["name"] for e in
+            context.activate(entries, "x", present=frozenset({"characters:mara"}))] == ["Twist"]
+
+
+def test_activate_gm_only_never_selected():
+    entries = [{"name": "Note", "body": "n", "keys": [], "secrecy": "gm-only"},          # always-on
+               {"name": "Keyed", "body": "k", "keys": ["ledger"], "secrecy": "gm-only"}]  # keyword hit
+    assert context.activate(entries, "the ledger") == []
+
+
+def test_activate_gm_only_owned_and_present_still_excluded():
+    entries = [{"name": "Note", "body": "n", "keys": [], "secrecy": "gm-only",
+                "owners": ["characters:mara"]}]
+    assert context.activate(entries, "x", present=frozenset({"characters:mara"})) == []
+
+
+def test_activate_gm_only_never_reaches_recall():
+    """The similarity path is gated by the same rule as the keyword one — a
+    second-stage strategy must never be handed an entry it could score in."""
+    entries = [{"name": "Note", "body": "n", "keys": ["absent"], "secrecy": "gm-only"}]
+    seen: list[dict] = []
+
+    def recall(candidates, text):
+        seen.extend(candidates)
+        return list(candidates)          # a strategy that takes everything offered
+
+    assert context.activate(entries, "unrelated", recall=recall) == []
+    assert seen == []
+
+
+def test_activate_unknown_secrecy_reads_as_public():
+    # frontmatter is hand-editable: a typo must not take a turn down
+    entries = [{"name": "Typo", "body": "t", "keys": [], "secrecy": "sercet"}]
+    assert [e["name"] for e in context.activate(entries, "x")] == ["Typo"]
+
+
+def test_secrecy_split_separates_secret_bodies():
+    entries = [{"body": "public one", "secrecy": "public"},
+               {"body": "no key at all"},
+               {"body": "hidden", "secrecy": "secret"}]
+    assert context.secrecy_split(entries) == (["public one", "no key at all"], ["hidden"])
+
+
 
 from grimoire.store import appearances as ap  # noqa: E402
 from grimoire.store import campaigns, characters, chronicle, entities, plot, pcs, scenes, worlds  # noqa: E402
@@ -119,6 +174,50 @@ def test_pc_owned_lore_activates_when_pc_in_scene(monkeypatch, tmp_path):
     # bring the PC into the scene as a player -> owned lore present
     ap.appear(cid, sid, "pcs", pid, "default", "player")
     assert "hidden key" in context.build_messages(cid, sid)[0]["content"]
+
+
+def test_secret_lore_reaches_the_prompt_under_its_heading(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "Open fact", "The tide comes in at dusk.")
+    entities.create_entity(croot, "lore", "The Twist", "The harbourmaster set the fire.",
+                           secrecy="secret")
+    scenes.append_message(cid, sid, "user", "hello")
+
+    sys = context.build_messages(cid, sid)[0]["content"]
+    assert "The tide comes in at dusk." in sys
+    assert "The harbourmaster set the fire." in sys
+    # the secret body sits after the heading, the public one before it
+    heading = sys.index("Secret knowledge")
+    assert sys.index("The tide comes in at dusk.") < heading < sys.index("harbourmaster")
+
+
+def test_gm_only_lore_never_reaches_the_prompt(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "Referee note", "The warehouse burns on day nine.",
+                           secrecy="gm-only")
+    # keyed AND named in the scene text: the keyword rule would take it
+    entities.create_entity(croot, "lore", "Referee plan", "The Guild folds by winter.",
+                           keys="guild", secrecy="gm-only")
+    scenes.append_message(cid, sid, "user", "what of the guild?")
+
+    sys = context.build_messages(cid, sid)[0]["content"]
+    assert "warehouse burns" not in sys
+    assert "Guild folds" not in sys
+    assert "Secret knowledge" not in sys      # no heading for entries that never render
+
+
+def test_no_secret_lore_leaves_the_world_info_section_as_it_was(monkeypatch, tmp_path):
+    """The unmarked library's prompt is unchanged, heading and all."""
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "One", "First fact.")
+    entities.create_entity(croot, "lore", "Two", "Second fact.")
+    scenes.append_message(cid, sid, "user", "hello")
+
+    section = next(s for s in context.context_sections(cid, sid) if s["label"] == "World info")
+    assert section["text"] == "First fact.\n\nSecond fact."
 
 
 def test_new_kinds_activate_like_lore(monkeypatch, tmp_path):

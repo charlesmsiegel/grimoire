@@ -174,6 +174,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     offscene_active, offscene_known = cast_data._cast_directory_data(croot, cid, sid)
     activated_wi, recalled_wi = world_state._world_info(cid, recent_text, exclude,
                                                        frozenset(present))
+    wi_public, wi_secret = world_state.secrecy_split(activated_wi)
+    recalled_public, recalled_secret = world_state.secrecy_split(recalled_wi)
     mech = mechanics._mechanics(cid, sid, cast, recent_text)
     data = {
         "opener": False, "pcless": pcless, "story_full": bool(full_recap),
@@ -203,8 +205,13 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "today": world_state._today_data(cid, sid, croot),
         "weather": world_state._weather_data(cid, sid),
         "current_setting": current_setting,
-        "world_info_bodies": [e["body"] for e in activated_wi],
-        "recalled_lore_bodies": [e["body"] for e in recalled_wi],
+        # Split by secrecy (#49): the secret halves render under a heading that
+        # tells the model to keep them out of the mouths of characters who have
+        # not learned them. GM-only entries are already gone -- `activate`
+        # dropped them before anything here could see them.
+        "world_info_bodies": wi_public, "secret_world_info_bodies": wi_secret,
+        "recalled_lore_bodies": recalled_public,
+        "secret_recalled_lore_bodies": recalled_secret,
         # Keyword activations only. A recalled group deliberately does NOT pull
         # its campaign state: that state renders into the `Group state` section,
         # which is `spotlight`, so feeding it from recall would grow a section
