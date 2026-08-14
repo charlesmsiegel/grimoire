@@ -887,6 +887,29 @@ export type Briefing = {
 // lorebook import
 export type LoreEntryDraft = { name: string; keys: string[]; body: string; category: EntityKind };
 
+// scenario-card import (#217) — one card describing a whole setting, split into
+// the records a world is made of. A proposal speaks in cast NAMES, not ids: the
+// characters it proposes do not exist while it is being reviewed, and the
+// backend resolves the names once they do.
+export type ScenarioCharacterDraft = { name: string; description: string; personality: string };
+export type ScenarioGreetingDraft = {
+  name: string; body: string; character: string; present: string[];
+};
+export type ScenarioProposal = {
+  characters: ScenarioCharacterDraft[];
+  entries: LoreEntryDraft[];
+  greetings: ScenarioGreetingDraft[];
+};
+export type ScenarioArtSummary = {
+  total: number; localized: number; skipped: number; failed: number; capped: boolean;
+};
+export type ScenarioImportResult = {
+  characters: { name: string; id: string; version: string; created: boolean }[];
+  entries: { kind: string; id: string }[];
+  greetings: { name: string; id: string }[];
+  art: ScenarioArtSummary;
+};
+
 // dice rolls
 export type DieDetail = { value: number; rolls: number[]; kept: boolean };
 export type RollResult = {
@@ -1746,6 +1769,19 @@ export const api = {
   },
   lorebookImport: (wid: string, entries: LoreEntryDraft[]) =>
     request<{ created: { kind: string; id: string }[] }>("POST", `/api/worlds/${wid}/lorebook/import`, { entries }),
+
+  // scenario-card import (#217). The two parse calls write nothing — they hand
+  // back a proposal to review; only scenarioImport touches the world.
+  scenarioParse: (wid: string, file: File, format: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("format", format);
+    return requestForm<ScenarioProposal>(`/api/worlds/${wid}/scenario/parse`, form);
+  },
+  scenarioParseUrl: (wid: string, url: string) =>
+    request<ScenarioProposal>("POST", `/api/worlds/${wid}/scenario/parse-url`, { url }),
+  scenarioImport: (wid: string, proposal: ScenarioProposal, art: boolean) =>
+    request<ScenarioImportResult>("POST", `/api/worlds/${wid}/scenario/import`, { ...proposal, art }),
 
   // campaign group state (#47)
   getGroupState: (cid: string, gid: string) =>

@@ -230,6 +230,17 @@ test("the Lore section hosts the lorebook importer, and the pinned row opens it"
   expect(screen.getByRole("button", { name: /parse/i })).toBeInTheDocument();
 });
 
+test("the Overview hosts the scenario importer, and the pinned row opens it", async () => {
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(screen.getByRole("button", { name: /import scenario card/i }));
+  await screen.findByRole("heading", { name: "Overview" });
+  const summary = screen.getAllByText(/^import scenario card$/i)
+    .find((el) => el.tagName === "SUMMARY");
+  expect(summary!.parentElement).toHaveAttribute("open");
+  expect(screen.getByRole("button", { name: /read card/i })).toBeInTheDocument();
+});
+
 test("openGreeting switches to Greetings and focuses the greeting", async () => {
   (api.listCharacters as any).mockResolvedValue([
     { id: "mira", name: "Mira", default_version: "main", versions: [{ id: "main", name: "main" }] },
