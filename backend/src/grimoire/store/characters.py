@@ -608,19 +608,24 @@ def merge_chub_definition(card: dict, definition: dict) -> bool:
     return changed
 
 
-def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
-                      into_vid: str | None = None) -> dict:
-    """Download a character card from a URL and import/update it. A chub.ai
-    URL or "creator/slug" shorthand gets the full chub.ai treatment (avatar,
-    gallery, linked lorebooks); any other URL is fetched directly and parsed
-    as a PNG or JSON card -- gallery/lorebooks stay empty there, since that
-    metadata only exists on chub.ai."""
+def download_card(url_or_path: str) -> tuple[bytes, str, str, dict | None]:
+    """`(bytes, format, normalized url, chub node)` for the card at a URL.
+
+    Downloads only -- nothing here touches the store, which is what lets the
+    scenario importer (#217) show a card for review before anything is written.
+    A chub.ai URL (or its "creator/slug" shorthand) resolves through chub's API
+    so the node comes back with it; any other URL is fetched directly and
+    sniffed as a PNG or JSON card, and its node is None -- gallery/lorebook
+    metadata only exists on chub.ai.
+
+    Raises `chub.ChubParseError` for something that is not a URL at all, and
+    `chub.ChubFetchError` when the URL yields no card this can read.
+    """
     stored_url = chub.normalize_link(url_or_path)
     if stored_url is None:
         raise chub.ChubParseError(url_or_path)
     chub_path = chub.parse_full_path(stored_url)
 
-    node = None
     if chub_path is not None:
         node = chub.fetch_character_node(chub_path)
         if node is None:
@@ -628,15 +633,24 @@ def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
         png = fetch.download_url(node.get("max_res_url") or "")
         if png is None:
             raise chub.ChubFetchError(chub_path)
-        data, fmt = png[0], "png"
-    else:
-        raw = fetch.download_bytes(stored_url)
-        if raw is None:
-            raise chub.ChubFetchError(stored_url)
-        fmt = _sniff_card_format(raw)
-        if fmt is None:
-            raise chub.ChubFetchError(stored_url)
-        data = raw
+        return png[0], "png", stored_url, node
+    raw = fetch.download_bytes(stored_url)
+    if raw is None:
+        raise chub.ChubFetchError(stored_url)
+    fmt = _sniff_card_format(raw)
+    if fmt is None:
+        raise chub.ChubFetchError(stored_url)
+    return raw, fmt, stored_url, None
+
+
+def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
+                      into_vid: str | None = None) -> dict:
+    """Download a character card from a URL and import/update it. A chub.ai
+    URL or "creator/slug" shorthand gets the full chub.ai treatment (avatar,
+    gallery, linked lorebooks); any other URL is fetched directly and parsed
+    as a PNG or JSON card -- gallery/lorebooks stay empty there, since that
+    metadata only exists on chub.ai."""
+    data, fmt, stored_url, node = download_card(url_or_path)
 
     # Re-downloading into a version already linked to this same URL overwrites
     # that version in place rather than piling up near-duplicates. The match
