@@ -25,7 +25,7 @@ from __future__ import annotations
 # `tokens.py` stands alone: `count_tokens` is what the breakdown route calls on
 # the strings `context_sections` hands back, and it imports nothing from here.
 from . import (cast, macros, semantic, world_state, mechanics, story, archive, pack,  # noqa: F401
-               tokens, assemble)
+               tokens, layout, speaker, assemble)
 from .cast import (  # noqa: F401
     _campaign_player_refs, _cast_directory_data, _char_name, _drift_roster,
     _voice_notes, cast_datetime_facts,

@@ -40,6 +40,16 @@ DEFAULT_SEMANTIC_RECALL_DEPTH = "0"
 # is a starting point to tune against the scene inspector, not a constant with
 # a defensible universal value.
 DEFAULT_SEMANTIC_RECALL_THRESHOLD = "0.4"
+# --- the two #29 layers, both off ---
+# Whether prompt_layout.json is applied (context/layout.py). Off is
+# byte-identical: the catalog renders as it always did. Off is also a BYPASS —
+# the stored layout survives it — so a reader can A/B their ordering against
+# the default without rebuilding it.
+DEFAULT_PROMPT_LAYOUT_ENABLED = "off"
+# Whether the active-speaker section renders (context/speaker.py). Off by
+# default because it adds tokens to every group turn, and a cost may not
+# arrive by upgrade.
+DEFAULT_SPEAKER_TURN_TAKING = "off"
 DEFAULT_USER_LABEL = "You"
 DEFAULT_ASSISTANT_LABEL = "Grimoire"
 DEFAULT_CLAUDE_MODEL = "opus"
@@ -121,7 +131,8 @@ _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "turnstate_depth", "promote_streak",
                 "rolling_summary_every", "llm_call_budget",
                 "embeddings_connection_id", "embeddings_model",
-                "semantic_recall_depth", "semantic_recall_threshold") + _LENGTH_KEYS
+                "semantic_recall_depth", "semantic_recall_threshold",
+                "prompt_layout_enabled", "speaker_turn_taking") + _LENGTH_KEYS
 
 
 def _config_path():
@@ -151,6 +162,8 @@ def read_config() -> dict[str, str]:
                 "embeddings_model": DEFAULT_EMBEDDINGS_MODEL,
                 "semantic_recall_depth": DEFAULT_SEMANTIC_RECALL_DEPTH,
                 "semantic_recall_threshold": DEFAULT_SEMANTIC_RECALL_THRESHOLD,
+                "prompt_layout_enabled": DEFAULT_PROMPT_LAYOUT_ENABLED,
+                "speaker_turn_taking": DEFAULT_SPEAKER_TURN_TAKING,
                 **{k: "" for k in _LENGTH_KEYS}}
     if not path.exists():
         # Materializing the defaults is a write, and two first-ever readers
@@ -232,6 +245,16 @@ def turnstate_depth() -> int:
     """Posts of transcript tail the transient-state ledger is read over. 0 turns
     the whole feature off — no tracker instruction, no injected section."""
     return _count("turnstate_depth", DEFAULT_TURNSTATE_DEPTH)
+
+
+def speaker_turn_taking() -> bool:
+    """Whether the active-speaker section renders (#29, context/speaker.py).
+
+    Off by default: it adds a short section to every group-scene turn, and a
+    cost may not arrive by upgrade. Off is byte-identical — nothing is computed
+    and the section renders empty, so it drops out in `_render_sections`.
+    """
+    return read_config().get("speaker_turn_taking") == "on"
 
 
 def promote_streak() -> int:
