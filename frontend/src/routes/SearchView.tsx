@@ -172,6 +172,13 @@ export default function SearchView() {
   const [draft, setDraft] = useState(q);
   const [result, setResult] = useState<SearchResult | null>(null);
   const [failed, setFailed] = useState(false);
+  // Submitting an unchanged query leaves the URL identical, so nothing in the
+  // fetch effect's deps moves and no request goes out. That is fine for
+  // keywords, where a second identical sweep would return the identical page —
+  // and wrong for meaning, where the coverage line tells the reader that
+  // searching again reads more of the library. This counter is what makes
+  // "ask again" mean something.
+  const [asked, setAsked] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
@@ -223,7 +230,7 @@ export default function SearchView() {
       .then((r) => { if (live) setResult(r); })
       .catch(() => { if (live) { setResult(null); setFailed(true); } });
     return () => { live = false; };
-  }, [q, scope, kind, mode]);
+  }, [q, scope, kind, mode, asked]);
 
   const facets = result?.facets ?? {};
   const scopes = result?.scopes ?? {};
@@ -334,7 +341,11 @@ export default function SearchView() {
         </div>
 
         <form className="search-box" role="search"
-              onSubmit={(e) => { e.preventDefault(); setQuery({ q: draft }, false); }}>
+              onSubmit={(e) => {
+                e.preventDefault();
+                setQuery({ q: draft }, false);
+                setAsked((n) => n + 1);
+              }}>
           <input ref={inputRef} type="search" value={draft} aria-label="Search the library"
                  placeholder="a name, a phrase, &quot;an exact quote&quot;"
                  onChange={(e) => setDraft(e.target.value)} />
