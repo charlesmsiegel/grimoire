@@ -292,10 +292,17 @@ def test_a_garbled_pins_file_does_not_take_the_turn_down(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("mode", [pins.PIN, pins.EXCLUDE])
 def test_a_rule_naming_something_the_campaign_lost_is_inert(monkeypatch, tmp_path, mode):
+    """Byte-identical, not merely non-crashing: a rule for a record that is not
+    there must not perturb the prompt in either direction — no empty section, no
+    section quietly held up by a pin that selected nothing."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    entities.create_entity(campaigns.campaign_root(cid), "lore", "Tide oath",
+                           "The tide keeps its promises.")
     scenes.append_message(cid, sid, "user", "hello")
+    before = context.context_sections(cid, sid)
+
     pins.set_rule(cid, "lore:never-existed", mode, sid=sid)
-    assert context.build_messages(cid, sid)          # composes, selects nothing
+    assert context.context_sections(cid, sid) == before
 
 
 # --- the seams a later refactor could quietly break -------------------------
