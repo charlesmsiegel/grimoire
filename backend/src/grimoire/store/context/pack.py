@@ -40,6 +40,15 @@ Within a tier the largest section goes first: that reaches the ceiling in the
 fewest drops. Ties break toward the later section so a given store always packs
 the same way.
 
+One thing overrides all of it: a section carrying content the reader **pinned**
+(#129, `store/pins.py`) is never dropped, at any tier. A pin is deliberately not
+a fifth tier — the tiers answer "what gives way when this does not fit", and a
+pin answers "not this", which is a different question and outranks the answer to
+the first. The section keeps whatever tier it was declared with, so the
+inspector still reports what kind of content it is; `pinned` rides beside it.
+Excludes never reach here at all: excluded content is gone before a section is
+rendered.
+
 Drops are never silent. `pack` marks a dropped section rather than deleting it,
 and `context_sections` reports the marked list, so the inspector shows what was
 cut instead of quietly disagreeing with what was sent.
@@ -123,7 +132,9 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
     """Fit `sections` + `history` into `budget` tokens.
 
     `sections` are the rendered sections in prompt order, each ``{"label",
-    "text", "tier"}``. `reserved` is every token the caller will send that this
+    "text", "tier"}`` and optionally ``"pinned"`` — a section the reader's pins
+    are holding up, which this will not drop whatever the pressure (#129).
+    `reserved` is every token the caller will send that this
     packer cannot drop — the post-history block, plus any message appended
     after the system one (a director note, regenerate guidance, a roll-result
     block, the opener's prompt and shape rules). Counting them here is what
@@ -142,7 +153,10 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
 
     When even lock-in plus the history floor overruns the budget, that is what
     comes back: the packer will not drop a section it promised never to drop,
-    so the caller ships an over-budget prompt rather than a malformed one.
+    so the caller ships an over-budget prompt rather than a malformed one. A
+    pinned section is the same promise, made by the reader instead of by this
+    module — enough pins can put a prompt over budget, and that is the reader's
+    call to make.
     """
     packed = [{**s, "dropped": False} for s in sections]
     if budget is None:
@@ -180,7 +194,7 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
         if total <= budget:
             break
         for i in sorted((n for n, s in enumerate(packed)
-                         if s["tier"] == tier and not s["dropped"]),
+                         if s["tier"] == tier and not s["dropped"] and not s.get("pinned")),
                         key=lambda n: (costs[n], n), reverse=True):
             if total <= budget:
                 break

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import errno
 
-from .. import (alternates, atomic, calendars, commits, prompt_log, scene_ids,
+from .. import (alternates, atomic, calendars, commits, pins, prompt_log, scene_ids,
                 scene_refs, turnstate)
 from ..audit import baselines
 from ..campaigns import paths as campaigns_paths
@@ -182,6 +182,12 @@ def delete_scene(cid: str, sid: str) -> None:
     # the unlink, so a failure here leaves the scene intact rather than deleted
     # with its ledger still claiming it.
     turnstate.drop_scene(cid, sid)
+    # The reader's pins and excludes for this scene (#129), for exactly the
+    # recycled-id reason above: a rule left behind would be adopted by the next
+    # scene to take this number and force one scene's lore -- or silence -- into
+    # another's prompt. Campaign-scoped rules stay; they were never about this
+    # scene. Before the unlink, same as the two above.
+    pins.drop_scene(cid, sid)
     # The reroll-alternates sidecar goes FIRST. Deleting the transcript is what
     # frees the id for reuse, so a crash between the two unlinks must not be
     # able to leave a sidecar without one: that orphan would be adopted by the

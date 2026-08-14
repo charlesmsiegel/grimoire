@@ -216,6 +216,13 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # it starts inside the exclusion rather than joining the `UNREVIEWED`
     # backlog -- the same call `store.commitments` and `store.facts` made.
     "store.scene_ideas",
+    # pins.json the same, and with a consequence of its own on top of the
+    # whole-file rewrite: the file holds the reader's manual overrides of what
+    # reaches the model, so a lost write is not a stale panel but a pin the
+    # reader set, watched land, and then finds the next turn ignoring. New
+    # module (#129), so it starts inside the exclusion rather than joining the
+    # frozen `UNREVIEWED` backlog.
+    "store.pins",
     "store.sheets.tally",
     "store.sheets.writer",
     "store.audit.baselines",

@@ -591,3 +591,16 @@ class ScenarioUrlBody(BaseModel):
 
 class AppearBatch(BaseModel):
     refs: list[Appear]
+
+
+class PinRule(BaseModel):
+    """One user pin or exclude (#129). `sid` is required for the default
+    scene scope; `ttl_posts` counts posts and only a scene rule may carry one
+    (see store/pins.py). Literal-typed where the value space is closed, so a
+    typo is a 422 rather than a rule that silently matches nothing -- the store
+    refuses the same values again, since it is reachable from other callers."""
+    ref: str
+    mode: Literal["pin", "exclude"]
+    scope: Literal["scene", "campaign"] = "scene"
+    sid: str = ""
+    ttl_posts: int = 0

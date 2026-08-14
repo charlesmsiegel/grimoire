@@ -58,6 +58,7 @@ vi.mock("../api/client", async () => {
       retryDossiers: vi.fn(),
       // consumed by the embedded SceneInspector
       getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
+      getPins: vi.fn(), setPin: vi.fn(), removePin: vi.fn(),
       sceneBriefing: vi.fn(),
       listScenePrompts: vi.fn(), getScenePrompt: vi.fn(),
       // Resolves to "no weather" so the widget renders nothing: these suites
@@ -154,6 +155,9 @@ beforeEach(() => {
   (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });
   (api.getSceneContext as any).mockResolvedValue({ model: "m", total_tokens: 0,
     dropped_tokens: 0, budget_tokens: 0, sections: [] });
+  // No pins (#129), so the inspector's rail here is the one these suites were
+  // written against.
+  (api.getPins as any).mockResolvedValue({ pins: [] });
   // Empty, so the inspector's Briefing section (#118) renders nothing here and
   // these suites keep asserting on the rail they were written against.
   (api.sceneBriefing as any).mockResolvedValue({

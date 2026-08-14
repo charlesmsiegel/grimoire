@@ -4,7 +4,7 @@ import {
   api, type Actor, type SceneContext, type SceneLocation, type ChronicleEntry,
   type CalendarConfig, type RosterEntry, type SceneDatetime,
   type CharacterSummary, type PCSummary, type Briefing, type BriefingRow,
-  type PromptEntry, type PromptSnapshot,
+  type PinRule, type PromptEntry, type PromptSnapshot,
   type RollingSummary,
 } from "../api/client";
 import { getModels, type Model } from "../api/models";
@@ -25,6 +25,12 @@ const SECTIONS_KEY = "grimoire.inspector.sections";
  *  the reader toggles it, `collapsed.briefing` is set and their choice wins in
  *  both directions forever, which auto-collapsing on a timer could not do. */
 const BRIEFING_OPEN_POSTS = 6;
+
+/** What a pin or exclude can name (#129) — the world-info kinds plus the two
+ *  actor kinds, mirroring `store/pins.py`'s KINDS. The order is the picker's. */
+const PIN_KINDS = ["lore", "locations", "items", "groups", "creatures",
+                   "characters", "pcs"] as const;
+type PinKind = typeof PIN_KINDS[number];
 
 const TASK_LABELS: Record<PromptEntry["task"], string> = {
   chat: "Send", director: "Director", retry: "Retry",
@@ -266,6 +272,22 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [addActorId, setAddActorId] = useState("");
   const [addRole, setAddRole] = useState<"player" | "npc">("npc");
 
+  // --- pins & excludes (#129) ---
+  const [pins, setPins] = useState<PinRule[]>([]);
+  // Starts unset, and the options for a kind are fetched only once one is
+  // chosen: the section is open by default and most readers never touch it, so
+  // a kind selected up front would mean a list request per campaign for a
+  // picker nobody opened.
+  const [pinKind, setPinKind] = useState<PinKind | "">("");
+  const [pinTarget, setPinTarget] = useState("");
+  const [pinMode, setPinMode] = useState<"pin" | "exclude">("pin");
+  const [pinTtl, setPinTtl] = useState("");
+  const [pinScope, setPinScope] = useState<"scene" | "campaign">("scene");
+  // Lazily, one kind at a time: the picker offers seven kinds and a reader opens
+  // it rarely, so loading all seven with the panel would be seven requests per
+  // campaign for a section that is usually empty and shut.
+  const [pinOptions, setPinOptions] = useState<Record<string, { id: string; name: string }[]>>({});
+
   useEffect(() => {
     api.listCharacters({ kind: "campaign", id: cid }).then(setChars).catch(() => setChars([]));
     api.listCampaignPCs(cid).then(setPcs).catch(() => setPcs([]));
@@ -316,9 +338,82 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const reloadCast = useCallback(
     () => api.getCast(cid, sid).then(setCast).catch(() => setCast([])),
     [cid, sid]);
+  const reloadPins = useCallback(
+    () => api.getPins(cid, sid).then((r) => setPins(r.pins)).catch(() => setPins([])),
+    [cid, sid]);
+
+  /** Toggle one scene-scoped rule for `ref`.
+   *
+   *  Toggling rather than always setting is what makes one button per mode
+   *  enough: clicking Pin on something already pinned is the reader undoing it,
+   *  and clicking Exclude on something pinned REPLACES the rule (the store keys
+   *  one rule per scope and target), which is the same thing they would mean by
+   *  it. TTL is deliberately absent here — the quick toggle is the standing
+   *  version, and a countdown is set from the section below, where the number
+   *  is visible. */
+  async function toggleRule(ref: string, mode: "pin" | "exclude") {
+    setError(null);
+    const held = pins.find((p) => p.ref === ref && p.scope === "scene" && p.mode === mode);
+    try {
+      if (held) await api.removePin(cid, ref, "scene", sid);
+      else await api.setPin(cid, { ref, mode, scope: "scene", sid });
+      await reloadPins();
+      onSceneChanged();   // the prompt changed, so the context panel has moved
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  async function addRule() {
+    if (!pinKind || !pinTarget) return;
+    setError(null);
+    const ttl = pinScope === "scene" ? Math.max(parseInt(pinTtl, 10) || 0, 0) : 0;
+    try {
+      await api.setPin(cid, { ref: `${pinKind}:${pinTarget}`, mode: pinMode,
+                              scope: pinScope, sid, ttl_posts: ttl });
+      setPinTarget("");
+      setPinTtl("");
+      await reloadPins();
+      onSceneChanged();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  async function dropRule(p: PinRule) {
+    setError(null);
+    try {
+      await api.removePin(cid, p.ref, p.scope, p.sid);
+      await reloadPins();
+      onSceneChanged();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  /** Whether a rule of this mode is in force for `ref`, at either scope — the
+   *  toggle reports what the prompt is actually doing, not just what this scene
+   *  asked for. */
+  function ruleOn(ref: string, mode: "pin" | "exclude"): boolean {
+    return pins.some((p) => p.ref === ref && p.mode === mode);
+  }
+
+  /** A campaign-wide rule naming `ref`, which is what makes the row toggles
+   *  read-only for it.
+   *
+   *  Without this the button showed pressed (the rule IS in force) while the
+   *  click below only ever touched scene scope: pressing it filed a redundant
+   *  scene rule and changed nothing visible, and pressing it again removed that
+   *  rule and still changed nothing. A standing campaign rule is lifted where it
+   *  was set — the list below, which shows it with its own ✕ — and overridden
+   *  for one scene from the picker there. */
+  function standingRule(ref: string): PinRule | undefined {
+    return pins.find((p) => p.ref === ref && p.scope === "campaign");
+  }
 
   useEffect(() => {
     reloadCast();
+    reloadPins();
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
     api.getSceneLocation(cid, sid).then(setSetting).catch(() => setSetting(null));
     api.getSceneContext(cid, sid).then(setCtx).catch(() => setCtx(null));
@@ -348,7 +443,27 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       .catch(() => { if (mine()) setRollingUnread(true); });
     reloadWhen();
     reloadCfg();
-  }, [cid, sid, refreshKey, reloadWhen, reloadCfg, reloadCast]);
+  }, [cid, sid, refreshKey, reloadWhen, reloadCfg, reloadCast, reloadPins]);
+
+  // The picker's options for the kind currently selected, fetched once per kind
+  // per campaign. Actors come from lists the panel already holds.
+  useEffect(() => {
+    if (!pinKind || pinKind === "characters" || pinKind === "pcs" || pinOptions[pinKind]) return;
+    let live = true;
+    api.listEntities({ kind: "campaign", id: cid }, pinKind)
+      .then((rows) => {
+        if (live) setPinOptions((prev) => ({ ...prev,
+          [pinKind]: rows.map((r) => ({ id: r.id, name: r.name })) }));
+      })
+      .catch(() => { if (live) setPinOptions((prev) => ({ ...prev, [pinKind]: [] })); });
+    return () => { live = false; };
+  }, [cid, pinKind, pinOptions]);
+
+  const pinChoices: { id: string; name: string }[] =
+    pinKind === "characters" ? chars
+    : pinKind === "pcs" ? pcs
+    : pinKind ? pinOptions[pinKind] ?? []
+    : [];
 
   // Its own effect rather than a line in the load above, because it is the one
   // request here whose late answer can be *wrong* rather than merely stale: a
@@ -740,6 +855,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             ? roster.find((r) => r.kind === "characters" && r.id === a.id)?.version
             : undefined;
           const pc = a.role === "player";
+          const ref = `${a.kind}:${a.id}`;
           return (
             <div className="inspector-row-item" key={`${a.kind}/${a.id}`}>
               <button className={"inspector-row" + (pc ? " pc" : "")}
@@ -749,6 +865,23 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
                 <span className="inspector-name">{nameOf(a)}</span>
                 <span className="role-chip">{pc ? "player" : "npc"}</span>
               </button>
+              {/* Two toggles rather than one control with a mode, because they
+                  are opposite requests about the same person and both have to
+                  be reachable in one click from the row they are about (#129).
+                  `aria-pressed` carries the state: the glyphs alone would leave
+                  a screen reader with two identically-named buttons. */}
+              <button className={"inspector-row-pin" + (ruleOn(ref, "pin") ? " on" : "")}
+                      aria-pressed={ruleOn(ref, "pin")} disabled={!!standingRule(ref)}
+                      aria-label={`Pin ${nameOf(a)} in the prompt`}
+                      title={standingRule(ref) ? "Set for the whole campaign — change it below"
+                                               : "Keep in the prompt under budget pressure"}
+                      onClick={() => toggleRule(ref, "pin")}>📌</button>
+              <button className={"inspector-row-pin" + (ruleOn(ref, "exclude") ? " on" : "")}
+                      aria-pressed={ruleOn(ref, "exclude")} disabled={!!standingRule(ref)}
+                      aria-label={`Exclude ${nameOf(a)} from the prompt`}
+                      title={standingRule(ref) ? "Set for the whole campaign — change it below"
+                                               : "Keep out of the prompt"}
+                      onClick={() => toggleRule(ref, "exclude")}>🚫</button>
               <button className="inspector-row-remove" aria-label={`Remove ${nameOf(a)} from scene`}
                       onClick={() => removeCastMember(a)}>✕</button>
             </div>
@@ -775,6 +908,73 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             </select>
           )}
           <button className="primary" onClick={addCastMember} disabled={!addActorId}>+ Add</button>
+        </div>
+      </SideSection>
+
+      {/* Pins & excludes (#129). Directly under the cast, because the row
+          toggles above file their rules into this list and a reader needs to
+          see where they went — and above Context, which is where the effect
+          shows up. */}
+      <SideSection id="pins" title="Pins & excludes" collapsed={!!collapsed.pins}
+                   onToggle={toggleSection}
+                   extra={pins.length > 0 ? <span className="chip on">{pins.length}</span> : null}>
+        {pins.length === 0 && (
+          <div className="field-hint">
+            Nothing pinned. A pin keeps something in the prompt even when the
+            budget is tight; an exclude keeps it out.
+          </div>
+        )}
+        {pins.map((p) => (
+          <div className="inspector-row-item" key={`${p.scope}/${p.sid}/${p.ref}`}>
+            <div className="pin-row">
+              <span className={"chip on pin-mode " + p.mode}>
+                {p.mode === "pin" ? "pinned" : "excluded"}
+              </span>
+              <span className="inspector-name">{p.name}</span>
+              <span className="field-hint pin-meta">
+                {p.kind}
+                {p.scope === "campaign" ? " · campaign" : ""}
+                {p.remaining !== null ? ` · ${p.remaining} post${p.remaining === 1 ? "" : "s"} left` : ""}
+                {p.missing ? " · deleted" : ""}
+              </span>
+            </div>
+            <button className="inspector-row-remove" aria-label={`Lift the rule on ${p.name}`}
+                    onClick={() => dropRule(p)}>✕</button>
+          </div>
+        ))}
+        <div className="picker">
+          <select aria-label="What to pin or exclude" value={pinKind}
+                  onChange={(e) => { setPinKind(e.target.value as PinKind); setPinTarget(""); }}>
+            <option value="">— kind —</option>
+            {PIN_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+          </select>
+          <select aria-label="Record to pin or exclude" value={pinTarget}
+                  onChange={(e) => setPinTarget(e.target.value)}>
+            <option value="">— pick —</option>
+            {pinChoices.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </select>
+          <select aria-label="Pin or exclude" value={pinMode}
+                  onChange={(e) => setPinMode(e.target.value as "pin" | "exclude")}>
+            <option value="pin">pin</option>
+            <option value="exclude">exclude</option>
+          </select>
+          <select aria-label="Rule scope" value={pinScope}
+                  onChange={(e) => setPinScope(e.target.value as "scene" | "campaign")}>
+            <option value="scene">this scene</option>
+            <option value="campaign">whole campaign</option>
+          </select>
+          {/* Only a scene rule can carry one: a TTL counts posts, and a
+              campaign-wide rule has no scene to count them in (store/pins.py). */}
+          {pinScope === "scene" && (
+            <input aria-label="Posts to keep the rule for" type="number" min="0"
+                   placeholder="posts (blank = keep)" value={pinTtl}
+                   onChange={(e) => setPinTtl(e.target.value)} />
+          )}
+          {/* "+ Add rule", not "+ Add": the cast picker two sections up has an
+              Add of its own, and one rail with two identically-named buttons is
+              ambiguous to a screen reader before it is ambiguous to a test. */}
+          <button className="primary" onClick={addRule}
+                  disabled={!pinTarget}>+ Add rule</button>
         </div>
       </SideSection>
 
