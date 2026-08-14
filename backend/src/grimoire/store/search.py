@@ -321,9 +321,14 @@ def _actor_docs(root: Path) -> Iterator[dict]:
     """Character cards, one document per version, plus the campaign-local
     sidecars filed beside them.
 
-    `character.md` is not a document of its own, for `_pc_docs`' reason: it
-    holds the name and the default version and nothing a search is looking for,
-    and the cards beside it already carry the name.
+    `character.md` and `tagline.md` are not documents of their own, for
+    `_pc_docs`' reason: a row for either would sit directly above the version
+    rows saying the same thing about the same character. Their text rides along
+    on every version instead -- which is what makes a character findable by the
+    name the app actually displays and by the one-line identity beside it,
+    rather than only by whatever name each card happens to carry (#64). A card
+    is free to be called something else: an era label, an alias, a name an
+    import guessed.
 
     `state.md` and `dossier.md` are facts rather than content -- what play has
     established about someone, rewritten as it changes -- so they are yielded
@@ -336,10 +341,17 @@ def _actor_docs(root: Path) -> Iterator[dict]:
             continue
         meta = _doc(_markdown_doc, meta_path)
         name = meta[0] if meta is not None else cid
+        # The tagline is plain text with no frontmatter, so its *prose* is the
+        # whole file; taking `[2]` rather than `[1]` keeps the parse identical
+        # to every other markdown record's.
+        tag = _doc(_markdown_doc, meta_path.parent / "tagline.md")
+        identity = _flat(" ".join(p for p in ((meta[1] if meta is not None else ""),
+                                              (tag[2] if tag is not None else "")) if p))
         for card_path in sorted(meta_path.parent.glob("*.json")):
             card = _doc(_card_doc, card_path)
             if card is not None:
-                yield _row("characters", cid, card_path.stem, card[0] or name, card[1], card[2])
+                yield _row("characters", cid, card_path.stem, card[0] or name,
+                           _flat(f"{card[1]} {identity}"), card[2])
         for filename, kind in (("state.md", "state"), ("dossier.md", "dossier")):
             side = _doc(_markdown_doc, meta_path.parent / filename)
             if side is not None and side[1]:

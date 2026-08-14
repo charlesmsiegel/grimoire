@@ -14,7 +14,8 @@ import os
 import pytest
 
 from grimoire.store import (campaigns, characters, chronicle, entities, facts, frontmatter,
-                            greetings, pcs, plot, relationships, scenes, search, worlds)
+                            greetings, overlay, pcs, plot, relationships, scenes, search,
+                            taglines, worlds)
 
 
 @pytest.fixture
@@ -70,6 +71,59 @@ def test_a_character_card_is_searchable_per_version(world):
                               {"data": {"name": "Seraphine", "description": "Keeps the tide ledger."}})
     hits = search.search("tide ledger")["hits"]
     assert [(h["kind"], h["id"], h["sub"]) for h in hits] == [("characters", cid, "veiled")]
+
+
+def test_a_character_is_found_by_the_name_the_app_displays(world):
+    """The meta name, not only the card's (#64).
+
+    `character.md`'s name is what every list in the app shows, and a card is
+    free to carry another one -- an era label, an alias, a name the import
+    guessed. Searching the name on screen has to find the character.
+    """
+    _, root = world
+    cid, _ = characters.create_character(root, "Winifred Hale")
+    characters.create_version(root, cid, "masked",
+                              {"data": {"name": "The Masked Debtor", "description": "Owes."}})
+    hits = search.search("Winifred Hale")["hits"]
+    # Both versions, including the one whose card calls her something else --
+    # which is the version that could not be found before.
+    assert {(h["kind"], h["id"], h["sub"]) for h in hits} == {
+        ("characters", cid, "default"), ("characters", cid, "masked")}
+
+
+def test_a_character_tagline_is_searchable(world):
+    """The one-line identity is the shortest description a character has (#64),
+    and until now it was the only part of one that no query could reach."""
+    _, root = world
+    cid, _ = characters.create_character(root, "Seraphine")
+    taglines.write(root, cid, "The harbourmaster who counts in debts.")
+    assert [h["id"] for h in search.search("harbourmaster")["hits"]] == [cid]
+
+
+def test_a_tagline_rides_on_the_card_rows_rather_than_getting_one_of_its_own(world):
+    """The same arrangement `pc.md` has with its versions: a two-version
+    character is two rows, not two plus a third for the sidecar."""
+    _, root = world
+    cid, _ = characters.create_character(root, "Seraphine")
+    characters.create_version(root, cid, "veiled", {"data": {"name": "Seraphine"}})
+    taglines.write(root, cid, "The harbourmaster who counts in debts.")
+    hits = search.search("harbourmaster")["hits"]
+    assert all(h["kind"] == "characters" and h["id"] == cid for h in hits)
+    assert sorted(h["sub"] for h in hits) == ["default", "veiled"]
+
+
+def test_a_campaigns_own_tagline_is_a_campaign_scoped_hit(campaign, world):
+    """A campaign that has made a character its own carries its own sidecar,
+    and search reports the file that holds the bytes -- so the campaign's line
+    is the campaign's hit."""
+    _, wroot = world
+    cid, _ = characters.create_character(wroot, "Seraphine")
+    taglines.write(wroot, cid, "The harbourmaster of the world.")
+    croot = campaigns.campaign_root(campaign)
+    overlay.materialize_actor(campaign, "characters", cid)
+    taglines.write(croot, cid, "The harbourmaster who turned smuggler.")
+    hits = search.search("harbourmaster")["hits"]
+    assert {(h["scope"], h["id"]) for h in hits} == {("world", cid), ("campaign", cid)}
 
 
 def test_a_pc_persona_is_searchable_and_carries_its_tags(world):
