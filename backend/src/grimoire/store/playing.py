@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import atomic, characters, greetings, locks, overlay, pcs
+from . import atomic, characters, greetings, locks, overlay, pcs, scene_ideas
 from .appearances import cast as appearances_cast, transitions as appearances_transitions, versions as appearances_versions
 from .campaigns import paths as campaigns_paths
 from .context import macros as context_macros
@@ -128,6 +128,48 @@ def available_greetings(cid: str, after: str | None = None) -> list[dict]:
     for g in out:
         g["unlocked"] = g["id"] in unlocked
     out.sort(key=lambda g: not g["unlocked"])  # stable: unlocked first, rest keep order
+    return out
+
+
+def greeting_ideas(cid: str) -> list[dict]:
+    """The greeting half of the scene ledger (#88), composed rather than stored.
+
+    Lives here, next to the marks it reads, because status is *derived* from
+    `played.json` and so cannot drift from what the greeting machinery itself
+    believes:
+
+    - played or completed -> `"used"`; the greeting opened a scene, or the
+      reader recorded that it happened off-screen;
+    - skipped -> `"dismissed"`; `greetings.availability` drops these from its
+      output entirely (the plot routes around a greeting marked won't-do),
+      which is why they are collected separately below;
+    - otherwise startable -> `"active"`.
+
+    A greeting that is neither marked nor startable -- gated behind a plot
+    predecessor, excluded by something already played, missing a required
+    player tag -- is omitted. It is not an idea anyone can act on, and its
+    gating is the plot map's business rather than the ledger's.
+
+    Cast, location and date are blank BY CONSTRUCTION, the same reason
+    `sceneDraft.greetingDraft` carries none: the greeting body is the opening
+    post and `start_from_greeting` seats its own cast under locked-version
+    rules nothing here may re-implement. `used_scene` is blank too rather than
+    resolved -- `stamping_scene` is a per-greeting sweep of every scene's
+    frontmatter, which is affordable on an explicit unmark and not in a list.
+    """
+    marks = read_marks(cid)
+    used = marks["played"] | marks["completed"]
+
+    def entry(g: dict, status: str) -> dict:
+        return {"id": f"{scene_ideas.GREETING_PREFIX}{g['id']}", "title": g["name"],
+                "premise": "", "cast": [], "location": "", "date": "",
+                "pcless": bool(g.get("pcless")), "source": scene_ideas.GREETING,
+                "status": status, "created": "", "used_scene": ""}
+
+    out = [entry(g, scene_ideas.USED if g["id"] in used else scene_ideas.ACTIVE)
+           for g in available_greetings(cid) if g["id"] in used or g["available"]]
+    out += [entry(g, scene_ideas.DISMISSED)
+            for g in overlay.list_greetings(cid) if g["id"] in marks["skipped"]]
     return out
 
 

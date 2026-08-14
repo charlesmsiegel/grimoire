@@ -209,14 +209,24 @@ def build_intent_prompt(cid: str, typed: str, offscreen: bool = False) -> list[d
             {"role": "user", "content": prompts.render("scene_intent/user.j2", **vars)}]
 
 
-def _valid_ids(cid: str):
+def valid_ids(cid: str):
+    """The ids a proposed scene may reference: characters, player tokens,
+    locations.
+
+    Public because a *saved* scene idea (#88) has to be held to the same rule
+    as a freshly generated one -- checked on write and again on every read,
+    since a campaign moves under a durable idea -- and doing that through this
+    module is what keeps one definition of "a token this campaign actually
+    has". Reads the campaign's entities and roster, so callers resolve it once
+    for a whole list rather than per row (see `ref_validator`).
+    """
     char_ids = {c["id"] for c in overlay.list_characters(cid)}
     player_tokens = {f"{a['kind']}:{a['id']}" for a in appearances_cast.roster(cid) if a["role"] == "player"}
     loc_ids = {e["id"] for e in overlay.list_entities(cid, "locations")}
     return char_ids, player_tokens, loc_ids
 
 
-def _date_normalizer(cid: str):
+def date_normalizer(cid: str):
     """Canonical native date or "" — a suggested date is only a hint, so never raise."""
     try:
         provider = calendars.get_provider(
@@ -232,6 +242,57 @@ def _date_normalizer(cid: str):
         except calendars.CalendarError:
             return ""
     return norm
+
+
+def ref_validator(cid: str):
+    """A reference checker bound to one campaign:
+    ``(cast, location, date, offscreen) -> {"cast", "location", "date"}``, with
+    unknown cast tokens and an unknown location dropped and the date canonical
+    or blank.
+
+    Returned as a closure because the id sets it checks against cost a read of
+    the campaign's entities and roster (`valid_ids`) and a calendar-provider
+    resolution (`date_normalizer`): a caller with a list of records resolves
+    them once and reuses the checker, rather than paying per row.
+    """
+    char_ids, player_tokens, loc_ids = valid_ids(cid)
+    norm = date_normalizer(cid)
+
+    def check(cast, location, date="", offscreen=False) -> dict:
+        loc = str(location).strip()
+        return {"cast": [t for t in (str(x).strip() for x in cast)
+                         if token_ok(t, char_ids, player_tokens, offscreen)],
+                "location": loc if loc in loc_ids else "",
+                "date": norm(str(date).strip())}
+    return check
+
+
+def valid_refs(cid: str, cast: list[str], location: str, date: str = "",
+               offscreen: bool = False) -> dict:
+    """One record's references, checked. The single-record form of what
+    `parse_output` does across a whole reply, for the caller that has a record
+    rather than a model's text -- `routes.scenes.post_scene_idea`, saving a
+    scene idea (#88)."""
+    return ref_validator(cid)(cast, location, date, offscreen)
+
+
+def validate_ideas(cid: str, ideas: list[dict]) -> list[dict]:
+    """Saved scene ideas (`scene_ideas.records`' shape) with every reference
+    re-checked against the campaign as it stands now.
+
+    The read-side half of the scene ledger's validation (#88). It has to happen
+    on every read, not only on write, because an idea is durable and a campaign
+    is not -- the character it casts can be deleted and the location it names
+    can be renamed between the day it was saved and the day it is picked, and a
+    picker handed a dangling id would send it straight to `addCastBatch`.
+
+    Each idea's own `pcless` decides which player tokens are legal, exactly as
+    `offscreen` does for a fresh suggestion, so one read can hold ideas of both
+    modes.
+    """
+    check = ref_validator(cid)
+    return [{**i, **check(i["cast"], i["location"], i["date"], i["pcless"])}
+            for i in ideas]
 
 
 def _extract_json(text: str):
@@ -251,8 +312,8 @@ def _extract_json(text: str):
     return None
 
 
-def _token_ok(tok: str, char_ids: set[str], player_tokens: set[str], offscreen: bool) -> bool:
-    """A cast token this campaign actually has.
+def token_ok(tok: str, char_ids: set[str], player_tokens: set[str], offscreen: bool) -> bool:
+    """A cast token this campaign actually has. Public for `valid_ids`' reason.
 
     The offscreen clause is FIRST and guarded, both deliberately. A PC seated as
     a `characters` actor (CastPanel's role selector allows exactly that) would
@@ -277,8 +338,8 @@ def parse_output(text: str, cid: str, offscreen: bool = False) -> list[dict]:
         suggestions = []
     if not isinstance(suggestions, list):
         return []
-    char_ids, player_tokens, loc_ids = _valid_ids(cid)
-    norm = _date_normalizer(cid)
+    char_ids, player_tokens, loc_ids = valid_ids(cid)
+    norm = date_normalizer(cid)
 
     out: list[dict] = []
     for e in suggestions:
@@ -289,7 +350,7 @@ def parse_output(text: str, cid: str, offscreen: bool = False) -> list[dict]:
             continue
         raw_cast = e.get("cast", [])
         cast = ([t for t in (str(x).strip() for x in raw_cast)
-                 if _token_ok(t, char_ids, player_tokens, offscreen)]
+                 if token_ok(t, char_ids, player_tokens, offscreen)]
                 if isinstance(raw_cast, list) else [])
         loc = str(e.get("location", "")).strip()
         out.append({"title": title, "premise": premise, "cast": cast,
@@ -315,8 +376,8 @@ def parse_intent(reply: str, cid: str, offscreen: bool = False) -> dict:
 
     Malformed or semantically invalid model output never raises — extraction is
     a convenience, and a miss must leave the user a blank form rather than an
-    error. Store and calendar failures underneath (`_valid_ids` reads entities,
-    `_date_normalizer` imports a user-authored provider) are NOT covered by that
+    error. Store and calendar failures underneath (`valid_ids` reads entities,
+    `date_normalizer` imports a user-authored provider) are NOT covered by that
     and surface as the route's ordinary 500, exactly as they do for
     `parse_output`."""
     empty = {"title": "", "date": "", "location": "", "cast": []}
@@ -325,14 +386,14 @@ def parse_intent(reply: str, cid: str, offscreen: bool = False) -> dict:
         parsed = next((e for e in parsed if isinstance(e, dict)), None)
     if not isinstance(parsed, dict):
         return empty
-    char_ids, player_tokens, loc_ids = _valid_ids(cid)
+    char_ids, player_tokens, loc_ids = valid_ids(cid)
     raw_cast = parsed.get("cast", [])
     cast = ([t for t in (str(x).strip() for x in raw_cast)
-             if _token_ok(t, char_ids, player_tokens, offscreen)]
+             if token_ok(t, char_ids, player_tokens, offscreen)]
             if isinstance(raw_cast, list) else [])
     loc = _str_field(parsed.get("location", ""))
     return {"title": _str_field(parsed.get("title", "")),
-            "date": _date_normalizer(cid)(_str_field(parsed.get("date", ""))),
+            "date": date_normalizer(cid)(_str_field(parsed.get("date", ""))),
             "location": loc if loc in loc_ids else "",
             "cast": cast}
 
@@ -341,7 +402,7 @@ def parse_next_date(text: str, cid: str) -> str:
     """The model's general next-scene date estimate, validated; "" when absent/bad."""
     parsed = _extract_json(text)
     raw = parsed.get("next_date", "") if isinstance(parsed, dict) else ""
-    return _date_normalizer(cid)(str(raw).strip())
+    return date_normalizer(cid)(str(raw).strip())
 
 
 def parse_greeting_picks(text: str, allowed: set[str]) -> list[str]:

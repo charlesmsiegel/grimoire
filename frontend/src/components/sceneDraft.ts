@@ -1,4 +1,4 @@
-import type { Availability, SceneIntentResult, SceneSuggestion } from "../api/client";
+import type { Availability, SceneIdea, SceneIntentResult, SceneSuggestion } from "../api/client";
 
 /** `kind` is closed: an open string would let an invalid actor kind through
  *  the seam and straight into addCastBatch. */
@@ -40,7 +40,12 @@ type DraftBase = {
  *  means only that neither can be resolved this early. */
 export type SceneDraft =
   | (DraftBase & { source: "greeting"; gid: string })
-  | (DraftBase & { source: "generated" | "custom"; premise: string; cast: DraftCast[] });
+  | (DraftBase & {
+      source: "generated" | "custom" | "saved"; premise: string; cast: DraftCast[];
+      /** the ledger id this draft came from, set only for `"saved"` — the
+       *  confirm form marks it used once the scene exists (#88) */
+      lid?: string;
+    });
 
 export const BLANK_TITLE = "New scene";
 
@@ -54,6 +59,17 @@ export function suggestionDraft(s: SceneSuggestion, nextDate: string,
   return { source: "generated", title: s.title, defaultTitle: s.title,
            date: s.date || nextDate, location: s.location?.id ?? "",
            pcless, premise: s.premise, cast: narrowCast(s.cast) };
+}
+
+/** A saved ledger idea. Shaped like `suggestionDraft` — the server hands both
+ *  back with cast and location resolved — plus the `lid` that lets the confirm
+ *  form report which idea became the scene. `nextDate` is the fallback for the
+ *  same reason it is there: the date saved with an idea is the one the model
+ *  estimated the day it was saved, and it can be blank. */
+export function savedDraft(idea: SceneIdea, nextDate: string, pcless: boolean): SceneDraft {
+  return { source: "saved", lid: idea.id, title: idea.title, defaultTitle: idea.title,
+           date: idea.date || nextDate, location: idea.location?.id ?? "",
+           pcless, premise: idea.premise, cast: narrowCast(idea.cast) };
 }
 
 /** `typed` is always the premise. The extraction's job is metadata only — it

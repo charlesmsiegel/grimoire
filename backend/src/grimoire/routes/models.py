@@ -482,6 +482,24 @@ class SceneIntent(BaseModel):
     offscreen: bool = False
 
 
+class SceneIdeaCreate(BaseModel):
+    title: str = ""
+    premise: str = ""
+    cast: list[str] = []
+    location: str = ""
+    date: str = ""
+    pcless: bool = False
+    # "greeting" is deliberately absent: those entries are composed from
+    # played.json, never stored (see store/scene_ideas.py).
+    source: Literal["llm", "user"] = "user"
+
+
+class SceneIdeaStatus(BaseModel):
+    status: Literal["active", "used", "dismissed"]
+    #: only meaningful with status "used" -- the scene the idea became
+    scene: str = ""
+
+
 class FirstPost(BaseModel):
     text: str
 

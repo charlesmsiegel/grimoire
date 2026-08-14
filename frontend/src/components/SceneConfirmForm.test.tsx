@@ -7,7 +7,7 @@ vi.mock("../api/client", () => ({
     createScene: vi.fn(), addCastBatch: vi.fn(), setSceneLocation: vi.fn(),
     setSceneDatetime: vi.fn(), startFromGreeting: vi.fn(), renameScene: vi.fn(),
     deleteScene: vi.fn(), listEntities: vi.fn(), listCharacters: vi.fn(),
-    listCampaignPCs: vi.fn(), listAppearances: vi.fn(),
+    listCampaignPCs: vi.fn(), listAppearances: vi.fn(), setSceneIdeaStatus: vi.fn(),
   },
 }));
 vi.mock("./CalendarDatePicker", () => ({
@@ -38,6 +38,7 @@ beforeEach(() => {
   (api.deleteScene as any).mockResolvedValue({ ok: true });
   (api.listEntities as any).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
   (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
+  (api.setSceneIdeaStatus as any).mockResolvedValue({ ok: true });
   (api.listCampaignPCs as any).mockResolvedValue([]);
   (api.listAppearances as any).mockResolvedValue([]);
 });
@@ -486,4 +487,35 @@ test("the first-post choice is locked while the create sequence is writing", asy
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   expect(screen.getByRole("radio", { name: /^nothing/i })).toBeDisabled();
   await act(async () => { release({ id: "s9" }); });
+// ---- the scene ledger (#88): a picked idea is marked used once its scene
+// exists, and only then ----
+const SAVED: SceneDraft = { ...(GEN as any), source: "saved", lid: "the-tide-book" };
+
+test("a saved draft marks its ledger idea used, against the scene's final id", async () => {
+  const onCreated = renderForm(SAVED);
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9-dated", "A debt-collector arrives."));
+  // "s9-dated", not the id createScene returned: the date stamp renames the
+  // scene, and the ledger must point at the scene that exists
+  expect(api.setSceneIdeaStatus).toHaveBeenCalledWith("c", "the-tide-book", "used", "s9-dated");
+});
+
+test("a draft that is not a saved idea never touches the ledger", async () => {
+  renderForm(GEN);
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(api.setSceneDatetime).toHaveBeenCalled());
+  expect(api.setSceneIdeaStatus).not.toHaveBeenCalled();
+});
+
+test("a failed mark-used keeps the scene and says the idea is still on the list", async () => {
+  // the scene is real and usable, so this is soft -- but silently leaving the
+  // idea active is indistinguishable from a deliberate keep
+  (api.setSceneIdeaStatus as any).mockRejectedValue({ detail: "ledger unreachable" });
+  const onCreated = renderForm(SAVED);
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  await screen.findByText(/ledger unreachable/);
+  expect(api.deleteScene).not.toHaveBeenCalled();
+  expect(onCreated).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: /continue to scene/i }));
+  expect(onCreated).toHaveBeenCalledWith("s9-dated", "A debt-collector arrives.");
 });

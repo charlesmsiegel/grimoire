@@ -1,8 +1,14 @@
-import { useEffect, useRef, useState } from "react";
-import { api, type Availability } from "../api/client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, type Availability, type SceneIdea, type SceneIdeaDraft,
+         type SceneSuggestion } from "../api/client";
 import { errMsg } from "./errMsg";
-import { customDraft, greetingDraft, suggestionDraft, type SceneDraft } from "./sceneDraft";
+import { customDraft, greetingDraft, savedDraft, suggestionDraft,
+         type SceneDraft } from "./sceneDraft";
 import type { SceneSuggestionsState } from "./useSceneSuggestions";
+
+/** How many saved ideas the picker shows before the "show all" toggle — the
+ *  same 4-slot budget the greeting and generated groups share between them. */
+const SAVED_SLOTS = 4;
 
 /** The generated half of the picker (suggestions/picks/nextDate/busy/error/
  *  refresh) and the typed `direction` both live in `NewSceneChooser` now, not
@@ -15,7 +21,9 @@ import type { SceneSuggestionsState } from "./useSceneSuggestions";
  *  user experiences as "go back", and it also discarded whatever direction
  *  they had typed. The greeting fetch below is the one piece that stays
  *  local: a greeting another client played meanwhile disappearing on Back is
- *  wanted, and it is cheap enough not to matter. */
+ *  wanted, and it is cheap enough not to matter. The ledger read beside it
+ *  stays local for the same reason and one more: this pane is what writes to
+ *  it, so it is also what has to re-read it. */
 export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDirectionChange,
                                   suggestions, picks, nextDate, busy, error: genError, refresh,
                                   onPicked, onCancel }: {
@@ -31,6 +39,17 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
   onCancel: () => void;
 } & SceneSuggestionsState) {
   const [greetings, setGreetings] = useState<Availability[]>([]);
+  // The saved half of the ledger (#88). Greeting-sourced rows are dropped
+  // here rather than server-side: they have their own group below, ordered by
+  // the LLM's ranking and carrying an `unlocked` chip this projection has no
+  // room for, so showing them twice would be strictly worse than once.
+  const [saved, setSaved] = useState<SceneIdea[]>([]);
+  const [showDismissed, setShowDismissed] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  // Which generated cards this session has already saved, by index. The saved
+  // copy also appears under Saved on the next read, so without this the same
+  // idea can be filed twice with two ids and no way to tell them apart.
+  const [kept, setKept] = useState<Set<number>>(new Set());
   const [typed, setTyped] = useState("");
   const [inferring, setInferring] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +59,49 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
       .then((all) => setGreetings(all.filter((g) => g.available && !!g.pcless === pcless)))
       .catch((err) => { setGreetings([]); setError(errMsg(err)); });
   }, [cid, afterSid, pcless]);
+
+  // `used` entries are deliberately not shown: they became scenes, and those
+  // are in the rail behind this modal. Mode matters as much as status -- an
+  // idea saved for an offscreen scene casts nobody the player can be, so
+  // offering it in a PC scene would seat the wrong people.
+  const loadSaved = useCallback(() => {
+    api.listSceneIdeas(cid)
+      .then((all) => setSaved(all.filter((i) => i.source !== "greeting"
+                                                && i.pcless === pcless
+                                                && i.status !== "used")))
+      // A ledger that will not load must not cost the reader the rest of the
+      // picker: greetings, generated cards and their own typed idea all still
+      // work without it.
+      .catch((err) => { setSaved([]); setError(errMsg(err)); });
+  }, [cid, pcless]);
+  useEffect(loadSaved, [loadSaved]);
+
+  // Regenerate replaces the cards those indices point at, so a set carried
+  // across would label a brand-new idea "Saved" and refuse to file it. The
+  // hook hands back a new array on every reply, so identity is the signal.
+  useEffect(() => { setKept(new Set()); }, [suggestions]);
+
+  const active = saved.filter((i) => i.status === "active");
+  const dismissed = saved.filter((i) => i.status === "dismissed");
+  // The ledger is unbounded — nothing prunes it, and a long campaign
+  // accumulates — so it gets a slot budget like the other groups rather than
+  // pushing greetings and generated cards off the bottom of the modal. The
+  // server orders newest first, so what shows is what was saved most recently.
+  const shownActive = showAll ? active : active.slice(0, SAVED_SLOTS);
+
+  function save(idea: SceneIdeaDraft, done?: () => void) {
+    setError(null);
+    api.saveSceneIdea(cid, { pcless, ...idea })
+      .then(() => { done?.(); loadSaved(); })
+      .catch((err) => setError(errMsg(err)));
+  }
+
+  function setStatus(lid: string, status: "active" | "dismissed") {
+    setError(null);
+    api.setSceneIdeaStatus(cid, lid, status)
+      .then(loadSaved)
+      .catch((err) => setError(errMsg(err)));
+  }
 
   // 4 slots: 2 greetings + 2 generated; greetings grow to 4 when nothing will generate
   const wantGenerated = ready && (suggestions === null || suggestions.length > 0);
@@ -90,6 +152,15 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
     }
   }
 
+  /** Cast/location/date as the ledger stores them: ids, not the resolved names
+   *  the card was rendered from. The server re-validates them anyway, and will
+   *  again on every read. */
+  function asDraft(s: SceneSuggestion): SceneIdeaDraft {
+    return { title: s.title, premise: s.premise, date: s.date ?? "",
+             cast: s.cast.map((c) => `${c.kind}:${c.id}`),
+             location: s.location?.id ?? "", source: "llm" };
+  }
+
   const shown = error ?? genError;
   return (
     <>
@@ -102,6 +173,43 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
         <button className="subtle" disabled={!ready || busy}
                 onClick={() => { setError(null); refresh(direction); }}>↻ Regenerate</button>
       </div>
+
+      <div className="role">Saved</div>
+      {active.length === 0 && (
+        <div className="field-hint">Nothing saved yet — Save keeps an idea for another day.</div>
+      )}
+      {shownActive.map((i) => (
+        <div className="chooser-row" key={i.id}>
+          <button className="chooser-card" disabled={inferring}
+                  onClick={() => onPicked(savedDraft(i, latestDate.current, pcless))}>
+            <span className="chooser-card-title">{i.title}</span>
+            <span className="chooser-card-premise">{i.premise}</span>
+            <span className="field-hint">
+              {i.cast.map((c) => c.name).join(", ")}{i.location ? ` · ${i.location.name}` : ""}
+            </span>
+          </button>
+          <button className="subtle" aria-label={`Dismiss ${i.title}`}
+                  onClick={() => setStatus(i.id, "dismissed")}>×</button>
+        </div>
+      ))}
+      {active.length > SAVED_SLOTS && (
+        <button className="subtle" onClick={() => setShowAll((v) => !v)}>
+          {showAll ? "Show fewer" : `Show all ${active.length} saved`}
+        </button>
+      )}
+      {dismissed.length > 0 && (
+        <button className="subtle" onClick={() => setShowDismissed((v) => !v)}>
+          {showDismissed ? "Hide dismissed" : `Show dismissed (${dismissed.length})`}
+        </button>
+      )}
+      {showDismissed && dismissed.map((i) => (
+        <div className="chooser-row" key={i.id}>
+          {/* not pickable: a dismissed idea comes back to the list first, so
+              restoring is a deliberate step rather than a side effect of a click */}
+          <span className="field-hint grow">{i.title}</span>
+          <button className="subtle" onClick={() => setStatus(i.id, "active")}>Restore</button>
+        </div>
+      ))}
 
       <div className="role">From a greeting</div>
       {rankPending && <div className="field-hint">Choosing…</div>}
@@ -118,14 +226,26 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
       {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
       {ready && suggestions === null && <div className="field-hint">Generating…</div>}
       {generatedCards.map((s, i) => (
-        <button className="chooser-card" key={i} disabled={inferring}
-                onClick={() => onPicked(suggestionDraft(s, latestDate.current, pcless))}>
-          <span className="chooser-card-title">{s.title}</span>
-          <span className="chooser-card-premise">{s.premise}</span>
-          <span className="field-hint">
-            {s.cast.map((c) => c.name).join(", ")}{s.location ? ` · ${s.location.name}` : ""}
-          </span>
-        </button>
+        <div className="chooser-row" key={i}>
+          <button className="chooser-card" disabled={inferring}
+                  onClick={() => onPicked(suggestionDraft(s, latestDate.current, pcless))}>
+            <span className="chooser-card-title">{s.title}</span>
+            <span className="chooser-card-premise">{s.premise}</span>
+            <span className="field-hint">
+              {s.cast.map((c) => c.name).join(", ")}{s.location ? ` · ${s.location.name}` : ""}
+            </span>
+          </button>
+          {/* The whole point of the ledger: Regenerate used to be the only way
+              past a card, and it threw away everything it replaced. The label
+              carries the title as well as the state — several of these sit on
+              one screen, and an aria-label overrides the text, so a fixed one
+              would leave them indistinguishable. */}
+          <button className="subtle" disabled={kept.has(i)}
+                  aria-label={`${kept.has(i) ? "Saved" : "Save"} ${s.title}`}
+                  onClick={() => save(asDraft(s), () => setKept((k) => new Set(k).add(i)))}>
+            {kept.has(i) ? "Saved" : "Save"}
+          </button>
+        </div>
       ))}
 
       <div className="role">Your own</div>
@@ -135,6 +255,15 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
 
       <div className="form-actions">
         <button className="subtle" onClick={onCancel}>Cancel</button>
+        {/* Saving skips the extraction deliberately: it is an LLM call whose
+            result is only used to pre-fill the confirm form, and this path is
+            not going there. The date and place are read from the text on the
+            day the idea is actually picked. */}
+        <button className="subtle" disabled={!typed.trim() || inferring}
+                onClick={() => save({ premise: typed.trim(), source: "user" },
+                                    () => setTyped(""))}>
+          Save for later
+        </button>
         <button className="primary" disabled={inferring} onClick={useTyped}>
           {inferring ? "…" : typed.trim() ? "Use this →" : "Create blank scene"}
         </button>

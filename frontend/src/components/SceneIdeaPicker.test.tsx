@@ -1,14 +1,17 @@
 import { useState } from "react";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { SceneIdeaPicker } from "./SceneIdeaPicker";
-import type { SceneSuggestion } from "../api/client";
+import type { SceneIdea, SceneSuggestion } from "../api/client";
 
 // `useSceneSuggestions` now lives in NewSceneChooser (issue #319) -- this
 // pane only renders what it's handed, so its own tests supply the generated
 // half (suggestions/picks/nextDate/busy/error/refresh) and `direction`
 // directly as props rather than mocking `api.sceneSuggestions`.
 vi.mock("../api/client", () => ({
-  api: { availableGreetings: vi.fn(), sceneIntent: vi.fn() },
+  api: {
+    availableGreetings: vi.fn(), sceneIntent: vi.fn(),
+    listSceneIdeas: vi.fn(), saveSceneIdea: vi.fn(), setSceneIdeaStatus: vi.fn(),
+  },
 }));
 import { api } from "../api/client";
 
@@ -25,6 +28,9 @@ const SUGGESTION: SceneSuggestion = {
 beforeEach(() => {
   vi.clearAllMocks();
   (api.availableGreetings as any).mockResolvedValue(GREETINGS);
+  (api.listSceneIdeas as any).mockResolvedValue([]);
+  (api.saveSceneIdea as any).mockResolvedValue({ id: "the-creditor" });
+  (api.setSceneIdeaStatus as any).mockResolvedValue({ ok: true });
   (api.sceneIntent as any).mockResolvedValue({
     title: "The morning after", date: "2026-03-04",
     location: { id: "saltmarch", name: "Saltmarch" }, cast: [] });
@@ -234,4 +240,126 @@ test("Regenerate is disabled while busy, even if ready", async () => {
   renderPicker({ busy: true });
   await screen.findByText("Reckoning");
   expect(screen.getByRole("button", { name: /regenerate/i })).toBeDisabled();
+});
+
+// ---- the saved half of the ledger (#88) ----
+// deliberately NOT the generated card's title: the two groups render the same
+// shape, and a shared name would make every query below ambiguous
+const SAVED: SceneIdea = {
+  id: "the-tide-book", title: "The tide-book", premise: "A ledger nobody signed.",
+  date: "2026-03-04", cast: [{ kind: "characters", id: "mara", name: "Mara" }],
+  location: { id: "saltmarch", name: "Saltmarch" }, pcless: false,
+  source: "llm", status: "active", created: "2026-03-01T00:00:00Z", used_scene: "",
+};
+
+test("a saved idea is pickable and emits a draft carrying its ledger id", async () => {
+  (api.listSceneIdeas as any).mockResolvedValue([SAVED]);
+  const { onPicked } = renderPicker();
+  fireEvent.click(await screen.findByText("The tide-book"));
+  expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({
+    source: "saved", lid: "the-tide-book", location: "saltmarch",
+    date: "2026-03-04", premise: "A ledger nobody signed." }));
+});
+
+test("saved ideas for the other mode, and ones already used, are not offered", async () => {
+  // an offscreen idea casts nobody the player can be; a used one is a scene
+  // that already exists in the rail behind this modal
+  (api.listSceneIdeas as any).mockResolvedValue([
+    { ...SAVED, id: "offscreen", title: "While she sleeps", pcless: true },
+    { ...SAVED, id: "spent", title: "Already played", status: "used" },
+    { ...SAVED, id: "greet", title: "Reckoning greeting", source: "greeting" },
+    SAVED,
+  ]);
+  renderPicker();
+  expect(await screen.findByText("The tide-book")).toBeInTheDocument();
+  expect(screen.queryByText("While she sleeps")).toBeNull();
+  expect(screen.queryByText("Already played")).toBeNull();
+  // the greeting rows have their own group, ranked and chipped -- showing them
+  // here as well would be strictly worse than once
+  expect(screen.queryByText("Reckoning greeting")).toBeNull();
+});
+
+test("Save keeps a generated card, sending ids rather than the names it rendered", async () => {
+  renderPicker();
+  fireEvent.click(await screen.findByRole("button", { name: "Save The creditor" }));
+  await waitFor(() => expect(api.saveSceneIdea).toHaveBeenCalledWith("c", {
+    pcless: false, title: "The creditor", premise: "A debt-collector arrives.",
+    date: "2026-03-04", cast: ["characters:mara"], location: "saltmarch", source: "llm" }));
+  // the list is re-read, and the card cannot be filed a second time
+  await waitFor(() => expect(api.listSceneIdeas).toHaveBeenCalledTimes(2));
+  expect(screen.getByRole("button", { name: "Saved The creditor" })).toBeDisabled();
+});
+
+test("Regenerate clears the Saved labels, which point at cards that are gone", async () => {
+  const OTHER: SceneSuggestion = { ...SUGGESTION, title: "The tide turns", premise: "Q" };
+  const { rerender } = render(
+    <SceneIdeaPicker cid="c" afterSid="s1" ready pcless={false}
+                     direction="" onDirectionChange={() => {}}
+                     suggestions={[SUGGESTION]} picks={[]} nextDate="" busy={false} error={null}
+                     refresh={() => {}} onPicked={vi.fn()} onCancel={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Save The creditor" }));
+  await screen.findByRole("button", { name: "Saved The creditor" });
+  // the regenerate lands: index 0 is a different idea now, and must be savable
+  rerender(
+    <SceneIdeaPicker cid="c" afterSid="s1" ready pcless={false}
+                     direction="" onDirectionChange={() => {}}
+                     suggestions={[OTHER]} picks={[]} nextDate="" busy={false} error={null}
+                     refresh={() => {}} onPicked={vi.fn()} onCancel={() => {}} />);
+  expect(screen.getByRole("button", { name: "Save The tide turns" })).toBeEnabled();
+});
+
+test("Save for later files the typed text without an extraction call", async () => {
+  const { onPicked } = renderPicker();
+  await screen.findByText("Reckoning");
+  fireEvent.change(screen.getByLabelText("Your own scene"), { target: { value: "a storm" } });
+  fireEvent.click(screen.getByRole("button", { name: /save for later/i }));
+  await waitFor(() => expect(api.saveSceneIdea).toHaveBeenCalledWith(
+    "c", { pcless: false, premise: "a storm", source: "user" }));
+  expect(api.sceneIntent).not.toHaveBeenCalled();   // nothing is going to the confirm form
+  expect(onPicked).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.getByLabelText("Your own scene")).toHaveValue(""));
+});
+
+test("Save for later is disabled with nothing typed", async () => {
+  renderPicker();
+  await screen.findByText("Reckoning");
+  expect(screen.getByRole("button", { name: /save for later/i })).toBeDisabled();
+});
+
+test("dismissing a saved idea moves it behind the toggle, and Restore brings it back", async () => {
+  (api.listSceneIdeas as any).mockResolvedValue([SAVED]);
+  renderPicker();
+  await screen.findByText("The tide-book");
+
+  (api.listSceneIdeas as any).mockResolvedValue([{ ...SAVED, status: "dismissed" }]);
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss The tide-book" }));
+  expect(api.setSceneIdeaStatus).toHaveBeenCalledWith("c", "the-tide-book", "dismissed");
+
+  const toggle = await screen.findByRole("button", { name: /show dismissed \(1\)/i });
+  // dismissed ideas are out of the way but not gone -- restore is the only
+  // route back, and there is no management surface yet
+  fireEvent.click(toggle);
+  fireEvent.click(screen.getByRole("button", { name: /restore/i }));
+  expect(api.setSceneIdeaStatus).toHaveBeenCalledWith("c", "the-tide-book", "active");
+});
+
+test("the saved group has a slot budget, with everything behind a toggle", async () => {
+  // nothing prunes the ledger, so an unbounded group would push the greeting
+  // and generated cards off the bottom of the modal
+  (api.listSceneIdeas as any).mockResolvedValue(
+    [1, 2, 3, 4, 5].map((n) => ({ ...SAVED, id: `idea-${n}`, title: `Idea ${n}` })));
+  renderPicker();
+  await screen.findByText("Idea 1");
+  expect(screen.queryByText("Idea 5")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /show all 5 saved/i }));
+  expect(screen.getByText("Idea 5")).toBeInTheDocument();
+});
+
+test("a ledger that will not load costs its own group and nothing else", async () => {
+  (api.listSceneIdeas as any).mockRejectedValue({ detail: "ledger unreachable" });
+  const { onPicked } = renderPicker();
+  await screen.findByText(/ledger unreachable/i);
+  // greetings, generated cards and the typed path all still work
+  fireEvent.click(screen.getByText("Reckoning"));
+  expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({ source: "greeting" }));
 });

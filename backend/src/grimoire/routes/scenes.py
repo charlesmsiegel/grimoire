@@ -20,7 +20,8 @@ from .common import (computes_only, _bounded_call, _campaign_root_or_404, _dump,
                      _write_response, get_llm)
 from .models import (Appear, AppearBatch, ChatTurn, ChronicleSave, Dismiss, EditMessage,
                      NewScene, RegenerateBody, RenameScene, ResponseSettings, RetryBody,
-                     SceneDatetime, SceneIntent, SceneLocation)
+                     SceneDatetime, SceneIdeaCreate, SceneIdeaStatus, SceneIntent,
+                     SceneLocation)
 from .streaming import _chat_stream
 
 router = APIRouter()
@@ -115,6 +116,80 @@ async def post_scene_intent(cid: str, body: SceneIntent,
            if got["location"] else None)
     return {"title": got["title"], "date": got["date"], "location": loc,
             "cast": _resolve_cast(cid, got["cast"])}
+
+
+# ---- the scene ledger (#88) ----
+# Literal third segments, so they are registered before `entities`' generic
+# `/campaigns/{cid}/{kind}` (see that module's docstring and
+# tests/test_route_order.py). Named `scene-ideas` rather than `ledger`: that
+# route is the continuity ledger's (`routes.campaigns.get_ledger`).
+def _idea_card(cid: str, idea: dict, loc_names: dict[str, str]) -> dict:
+    """A ledger row in the shape the picker already renders a suggestion in --
+    cast resolved to names, location to an {id, name} or null -- plus the
+    ledger's own fields. `validate_ideas` has already dropped every id the
+    campaign no longer has, so nothing here has to guess at a dangling one."""
+    loc = ({"id": idea["location"], "name": loc_names.get(idea["location"], idea["location"])}
+           if idea["location"] else None)
+    return {**idea, "cast": _resolve_cast(cid, idea["cast"]), "location": loc}
+
+
+@router.get("/campaigns/{cid}/scene-ideas")
+def get_scene_ideas(cid: str):
+    """The whole ledger: saved ideas (re-validated against the campaign as it
+    stands now) followed by the greeting entries `playing` composes.
+
+    Unfiltered on purpose. Status and mode (`pcless`) filtering lives in the
+    reader -- the picker wants the active entries for its own mode, a
+    management surface wants everything -- and a campaign's ledger is small
+    enough that one read serving both beats a query language neither needs.
+    """
+    _campaign_root_or_404(cid)
+    loc_names = {e["id"]: e.get("name", e["id"]) for e in store.overlay.list_entities(cid, "locations")}
+    saved = store.suggest.validate_ideas(cid, store.scene_ideas.records(cid))
+    return [_idea_card(cid, i, loc_names)
+            for i in saved + store.playing.greeting_ideas(cid)]
+
+
+@router.post("/campaigns/{cid}/scene-ideas")
+def post_scene_idea(cid: str, body: SceneIdeaCreate):
+    """Save an idea. References are validated here as well as on every read, so
+    a token this campaign never had cannot enter the file at all."""
+    _campaign_root_or_404(cid)
+    if not body.title.strip() and not body.premise.strip():
+        raise HTTPException(status_code=400, detail="an idea needs a title or a premise")
+    refs = store.suggest.valid_refs(cid, body.cast, body.location, body.date,
+                                    offscreen=body.pcless)
+    return {"id": store.scene_ideas.add(cid, body.title, body.premise, refs["cast"],
+                                        refs["location"], refs["date"], body.pcless,
+                                        body.source)}
+
+
+@router.put("/campaigns/{cid}/scene-ideas/{lid}")
+def put_scene_idea(cid: str, lid: str, body: SceneIdeaStatus):
+    """Dismiss, restore, or record that an idea became a scene.
+
+    A greeting entry is not in scene_ideas.json -- its lifecycle is
+    `played.json`'s -- so those ids delegate to `playing.mark_greeting` rather
+    than being copied here: dismissed is "skipped", used is "completed" (the
+    off-screen mark), active clears the mark. A greeting actually *played* in a
+    scene refuses to move, which surfaces as the same 409 `POST
+    /greetings/{gid}/mark` already returns.
+    """
+    _campaign_root_or_404(cid)
+    if lid.startswith(store.scene_ideas.GREETING_PREFIX):
+        gid = lid[len(store.scene_ideas.GREETING_PREFIX):]
+        mark = {store.scene_ideas.ACTIVE: "none", store.scene_ideas.USED: "completed",
+                store.scene_ideas.DISMISSED: "skipped"}[body.status]
+        try:
+            store.playing.mark_greeting(cid, gid, mark)
+        except store.greetings.GreetingNotFound:
+            raise HTTPException(status_code=404, detail="greeting not found")
+        except store.playing.PlayError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        return {"ok": True}
+    if not store.scene_ideas.set_status(cid, lid, body.status, body.scene):
+        raise HTTPException(status_code=404, detail="idea not found")
+    return {"ok": True}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}")
