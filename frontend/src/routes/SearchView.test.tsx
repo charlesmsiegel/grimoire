@@ -332,3 +332,19 @@ test("switching mode drops the other mode's results rather than showing them und
     expect(screen.queryByRole("button", { name: /the salt pact/i })).not.toBeInTheDocument());
   expect(screen.getByText(/reading the library/i)).toBeInTheDocument();
 });
+
+test("asking again re-runs the search, which is what the coverage line promises", async () => {
+  // The partial-coverage line tells the reader "searching again reads more of
+  // the library". Submitting an unchanged query left the URL untouched, so the
+  // effect never refired and nothing was read — the page instructed an action
+  // that did nothing.
+  (api.search as any).mockResolvedValue(result([hit()], {
+    mode: "semantic", requested_mode: "semantic", note: "", terms: [],
+    indexed: 40, corpus: 100,
+  }));
+  show("/search?q=salt&mode=semantic");
+  await waitFor(() => expect(api.search).toHaveBeenCalledTimes(1));
+  fireEvent.submit(screen.getByRole("searchbox", { name: /search the library/i })
+    .closest("form")!);
+  await waitFor(() => expect(api.search).toHaveBeenCalledTimes(2));
+});
