@@ -355,8 +355,13 @@ test("the scene heading counts the scene and its turns", async () => {
   (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
     { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
   renderCampaign();
+  // `find`, not `get`: the title comes from the scene *list* and the turn count
+  // from the separate `getScene`, so waiting for the heading proves nothing
+  // about the count. On a fast machine the second promise happens to have
+  // settled by now; on a loaded CI runner it has not, and this failed against
+  // "SCENE 1 · 0 TURNS". Wait for the thing being asserted.
   await screen.findByRole("heading", { name: /^Old$/ });
-  expect(screen.getByText(/SCENE 1 · 2 TURNS/i)).toBeInTheDocument();
+  expect(await screen.findByText(/SCENE 1 · 2 TURNS/i)).toBeInTheDocument();
 });
 
 test("⌘K numbers a scene by its id's own number, not by list position", async () => {
