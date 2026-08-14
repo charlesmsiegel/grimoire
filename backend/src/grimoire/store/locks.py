@@ -174,6 +174,15 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # only way back. New module (#31), so it starts inside the exclusion rather
     # than joining the frozen `UNREVIEWED` backlog `changes` sits in.
     "store.journal",
+    # `clock.json` is rewritten whole by every advance -- the moment and the log
+    # row that explains it land in one write, so two unserialized advances can
+    # leave the clock at a moment whose reason was never recorded. New module
+    # (#100), so it starts inside the exclusion rather than joining the frozen
+    # `UNREVIEWED` backlog. Only the write is inside: resolving the campaign's
+    # calendar provider and computing the digest run that provider's
+    # (user-authored) code, which must not run under this lock -- the same cut
+    # `scenes.moment.set_datetime` and `scenes.lifecycle._date_hint` make.
+    "store.clock",
     # `facts.json` the same (#114), and with one reason of its own on top of
     # the whole-file rewrite: `record` retires the superseded fact and writes
     # its replacement in one read-modify-write, so an unlocked pair can also

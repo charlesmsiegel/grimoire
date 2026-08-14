@@ -19,7 +19,7 @@ checked, and recorded, separately.
 from __future__ import annotations
 
 from . import (
-    absorb, alternates, appearances, assets, atomic, audit, briefing, campaign_climate, campaigns, cards, casefile, changes, characters, checks, chronicle, commitments, commits,
+    absorb, alternates, appearances, assets, atomic, audit, birthdays, briefing, campaign_climate, campaigns, cards, casefile, changes, characters, checks, chronicle, clock, commitments, commits,
     chub, climates, config, context, covers, dice, dossiers, entities, entity_schema, epub, export, facts, fence, fetch, greetings, groupstate,
     image_subjects, journal, length_drift, lengths, llm_connections, localize, locks, lorebook, migrations, module_edit, modules, overlay, pcs, playing,
     playstate, plot, prompt_log, proposals, provenance, relationships, response_presets, rolling_summary, rolls, scene_ideas, scene_ids, scene_refs, scenes, sheets,
@@ -92,6 +92,10 @@ __all__ = [
     "CampaignNotFound",
     "changes",
     "chronicle",
+    # The campaign clock and the roster-birthdate reads it shares with
+    # `suggest` (#100) -- a deliberate addition to the facade, not a leak.
+    "clock",
+    "birthdays",
     "commitments",
     "commits",
     "facts",
