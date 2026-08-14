@@ -41,6 +41,8 @@ def _public_config(cfg: dict[str, str]) -> dict:
             "promote_streak": cfg.get("promote_streak", store.config.DEFAULT_PROMOTE_STREAK),
             "rolling_summary_every": cfg.get("rolling_summary_every",
                                              store.config.DEFAULT_ROLLING_SUMMARY_EVERY),
+            "offscene_known_limit": cfg.get("offscene_known_limit",
+                                            store.config.DEFAULT_OFFSCENE_KNOWN_LIMIT),
             "embeddings_connection_id": cfg.get("embeddings_connection_id",
                                                 store.config.DEFAULT_EMBEDDINGS_CONNECTION_ID),
             "embeddings_model": cfg.get("embeddings_model", store.config.DEFAULT_EMBEDDINGS_MODEL),

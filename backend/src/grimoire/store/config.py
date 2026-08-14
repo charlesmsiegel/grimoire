@@ -23,6 +23,16 @@ DEFAULT_ARCHIVE_DEPTH = "3"
 # "0" = unbounded, which is what every install gets until the user sets one:
 # the backend cannot see the model's window size, only the frontend can.
 DEFAULT_CONTEXT_BUDGET = "0"
+# How many characters tier 3 of the off-scene cast directory may name — the
+# "Known to exist" one-liners for characters the campaign can see but has never
+# cast (context/cast.py). It listed EVERY briefed character, unbounded, which
+# on a large world is a section that grows without limit and silently crowds
+# out everything the packer is allowed to drop under it. Over the ceiling the
+# characters the in-scene cast actually mentions are kept first and the tail is
+# logged rather than silently dropped. "0" restores the old unbounded listing.
+# 40 is chosen to be well clear of any world small enough for the question not
+# to arise, so nothing is cut on an install that never had the problem.
+DEFAULT_OFFSCENE_KNOWN_LIMIT = "40"
 # --- semantic recall (context/semantic.py) ---
 # The llm_connection whose OpenAI-compatible endpoint serves /embeddings, and
 # the embedding model to ask it for. Credentials deliberately do NOT live here:
@@ -130,6 +140,7 @@ _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "prompt_log_depth",
                 "turnstate_depth", "promote_streak",
                 "rolling_summary_every", "llm_call_budget",
+                "offscene_known_limit",
                 "embeddings_connection_id", "embeddings_model",
                 "semantic_recall_depth", "semantic_recall_threshold",
                 "prompt_layout_enabled", "speaker_turn_taking") + _LENGTH_KEYS
@@ -158,6 +169,7 @@ def read_config() -> dict[str, str]:
                 "promote_streak": DEFAULT_PROMOTE_STREAK,
                 "rolling_summary_every": DEFAULT_ROLLING_SUMMARY_EVERY,
                 "llm_call_budget": DEFAULT_LLM_CALL_BUDGET,
+                "offscene_known_limit": DEFAULT_OFFSCENE_KNOWN_LIMIT,
                 "embeddings_connection_id": DEFAULT_EMBEDDINGS_CONNECTION_ID,
                 "embeddings_model": DEFAULT_EMBEDDINGS_MODEL,
                 "semantic_recall_depth": DEFAULT_SEMANTIC_RECALL_DEPTH,

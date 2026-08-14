@@ -29,7 +29,7 @@ const cfg = {
   llm_timeout: "120", absorb_budget: "600", llm_call_budget: "300",
   llm_retries: "2", fallback_connection_id: "",
   context_budget: "0", archive_depth: "3",
-  prompt_log_depth: "50",
+  prompt_log_depth: "50", offscene_known_limit: "40",
   turnstate_depth: "0", promote_streak: "3", rolling_summary_every: "10",
   embeddings_connection_id: "", embeddings_model: "", semantic_recall_depth: "0",
   semantic_recall_threshold: "0.4",
@@ -308,11 +308,13 @@ test("edits the context budget, recalled-scene cap and kept turn prompts", async
   expect(screen.getByLabelText(/context budget/i)).toHaveValue("0");   // unbounded by default
   expect(screen.getByLabelText(/recalled scenes/i)).toHaveValue("3");
   expect(screen.getByLabelText(/kept turn prompts/i)).toHaveValue("50");
+  expect(screen.getByLabelText(/named offstage characters/i)).toHaveValue("40");
   fireEvent.change(screen.getByLabelText(/recalled scenes/i), { target: { value: "5" } });
   fireEvent.change(screen.getByLabelText(/kept turn prompts/i), { target: { value: "0" } });
+  fireEvent.change(screen.getByLabelText(/named offstage characters/i), { target: { value: "12" } });
   save();
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
-    { archive_depth: "5", prompt_log_depth: "0" }));
+    { archive_depth: "5", prompt_log_depth: "0", offscene_known_limit: "12" }));
 });
 
 test("saves the transient-state settings", async () => {

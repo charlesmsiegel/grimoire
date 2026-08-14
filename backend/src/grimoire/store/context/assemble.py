@@ -356,8 +356,23 @@ SECTIONS = [
             "scene/sections/mechanics_rules.j2", pack.SPOTLIGHT),
     Section("mechanics_sheets", "Mechanics sheets",
             "scene/sections/mechanics_sheets.j2", pack.SPOTLIGHT),
-    Section("off_scene_cast", "Off-scene cast",
-            "scene/sections/off_scene_cast.j2", pack.BACKGROUND),
+    # The off-scene cast directory is TWO sections, not one, so the token
+    # breakdown can price its tiers apart (#2): tier 3 is the unbounded one and
+    # folding it in with tier 2 hid exactly the number that decides whether it
+    # needs bounding. Adjacent and in this order, because the shared heading
+    # rides on whichever renders first and system.j2 joins them back into the
+    # single block they were split out of — see off_scene_cast_active.j2.
+    #
+    # Same tier, so under budget pressure the packer may drop one and keep the
+    # other. Dropping tier 3 is the good case and the usual one (it is normally
+    # the larger, and largest goes first); dropping tier 2 leaves tier 3's list
+    # under its own "## Known to exist" heading without the directory's opening
+    # instruction. Accepted: the alternative is a section-dependency notion the
+    # packer does not have, for a case that costs one line of framing.
+    Section("off_scene_cast_active", "Off-scene cast · active elsewhere",
+            "scene/sections/off_scene_cast_active.j2", pack.BACKGROUND),
+    Section("off_scene_cast_known", "Off-scene cast · known to exist",
+            "scene/sections/off_scene_cast_known.j2", pack.BACKGROUND),
     Section("mechanics_response_format", "Mechanics response format",
             "scene/sections/mechanics_response_format.j2", pack.LOCK_IN),
     Section("response_format", "Response format",

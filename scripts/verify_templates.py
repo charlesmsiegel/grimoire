@@ -636,8 +636,18 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
         if not tag:
             continue
         ch = characters.read_character(croot, char_id)
-        offscene_known.append({"name": ch["meta"]["name"], "tagline": tag,
+        offscene_known.append({"id": char_id, "name": ch["meta"]["name"], "tagline": tag,
                                "versions": [v["id"] for v in ch["versions"]]})
+    # context.cast._scope_known cuts this tier to `offscene_known_limit` and
+    # ranks the survivors by relevance, which is a judgement about a scene and
+    # not a data read this mirror can honestly reproduce. The fixture store
+    # below stays well under the ceiling so the two agree without it -- asserted
+    # rather than assumed, because a fixture that grew past the ceiling would
+    # otherwise fail as an unexplained byte mismatch in the section join.
+    limit = int(cfg.get("offscene_known_limit", config.DEFAULT_OFFSCENE_KNOWN_LIMIT) or 0)
+    assert not limit or len(offscene_known) <= limit, (
+        f"verify fixture has {len(offscene_known)} tier-3 characters, over the "
+        f"offscene_known_limit of {limit}; this mirror does not implement the cut")
 
     campaign_meta = campaigns.read_campaign(cid)["meta"]
     # Mirrors context._assemble: one per-field cascade resolves both the prose
@@ -720,7 +730,8 @@ def rendered_system(data: dict, opener: bool = False) -> str:
               "scene/sections/group_state.j2",
               "scene/sections/mechanics_rules.j2",
               "scene/sections/mechanics_sheets.j2",
-              "scene/sections/off_scene_cast.j2",
+              "scene/sections/off_scene_cast_active.j2",
+              "scene/sections/off_scene_cast_known.j2",
               "scene/sections/mechanics_response_format.j2",
               "scene/sections/response_format.j2"]
     # The tracker instruction is the one section deliberately absent from an

@@ -10,11 +10,20 @@ appearance record of its own.
 
 from __future__ import annotations
 
-from .. import calendars, characters, dossiers, overlay, pcs, voice_drift
+import logging
+
+from .. import calendars, characters, config, dossiers, overlay, pcs, voice_drift
 from ..appearances import (cast as appearances_cast, paths as appearances_paths,
+                           transitions as appearances_transitions,
                            versions as appearances_versions)
 from ..campaigns import paths as campaigns_paths
 from ..scenes import serialize as scenes_serialize
+
+log = logging.getLogger(__name__)
+
+#: Omitted tier-3 names spelled out in the cap's log line before it summarises
+#: the rest as a count. See `_scope_known`.
+_LOGGED_DROPS = 12
 
 
 def _campaign_player_refs(cid: str, aroot) -> tuple[list[dict], list[str]]:
@@ -51,10 +60,83 @@ def _char_name(root, cid: str) -> str:
         return cid
 
 
+def _known_limit() -> int:
+    """Characters tier 3 may name; 0 = no ceiling. A hand-edited config.md
+    holding nonsense falls back to the DEFAULT rather than to unbounded, unlike
+    `pack.budget_tokens`: there, falling back to "no ceiling" restores the
+    behaviour every install had before budgets existed, while here it restores
+    the unbounded listing this setting exists to bound."""
+    try:
+        return max(int(config.read_config().get("offscene_known_limit",
+                                                config.DEFAULT_OFFSCENE_KNOWN_LIMIT)), 0)
+    except (TypeError, ValueError):
+        return int(config.DEFAULT_OFFSCENE_KNOWN_LIMIT)
+
+
+def _scope_known(cid: str, sid: str, known: list[dict], limit: int) -> list[dict]:
+    """Tier 3, cut to `limit` entries — relevance decides who survives, the
+    directory's own order decides how they read.
+
+    Tier 3 is every character the campaign can see that has a tagline and has
+    never been cast, so it grows with the WORLD rather than with the campaign
+    and had no bound at all (#3). A flat alphabetical cut would be the cheapest
+    bound and the wrong one: it drops the character this scene is about because
+    their id sorts late.
+
+    So the ceiling is spent on relevance first. `appearances.suggestions` is
+    the signal already in the codebase for "the in-scene cast's cards name this
+    character", which is the same question asked one panel over — reused rather
+    than re-derived so the directory and the suggestion rail cannot disagree
+    about who is relevant to a scene.
+
+    Two things this deliberately does NOT do:
+
+    - reorder the survivors. Selection is by relevance; rendering stays in the
+      directory's natural (id) order, so a store under the ceiling renders
+      byte-identically to before this existed and only a store OVER it sees any
+      change at all.
+    - drop anyone quietly. The omitted names go to the log, because a directory
+      that is silently partial is indistinguishable to the reader from a world
+      that is smaller than it is.
+    """
+    try:
+        mentioned = {s["character"] for s in appearances_transitions.suggestions(cid, sid)}
+    except Exception:
+        # Blind on purpose, and carrying no `noqa`: BLE001 exempts a handler
+        # that logs with `exc_info`, which is exactly the bargain here -- the
+        # failure is swallowed for the caller and kept in full for whoever
+        # reads the log.
+        #
+        # The relevance signal reads one card per in-scene actor, and this runs
+        # on the generation hot path. An unreadable card must cost the ceiling
+        # its ordering, not cost the turn its prompt: fall back to the natural
+        # order, still capped. The bound is the feature; the ranking is the
+        # refinement.
+        log.warning("off-scene cast: relevance scan failed for %s/%s; "
+                    "capping tier 3 in directory order", cid, sid, exc_info=True)
+        mentioned = set()
+    # Stable by construction: `sorted` is stable and the tiebreak is the index,
+    # so within each of the two groups the directory's own order survives.
+    keep = set(sorted(range(len(known)),
+                      key=lambda i: (known[i]["id"] not in mentioned, i))[:limit])
+    dropped = [k["name"] for i, k in enumerate(known) if i not in keep]
+    # Named, but not all of them: this runs on every generated turn, and the
+    # worlds that trip the ceiling are exactly the ones with hundreds to name.
+    # The count is the number that matters and is always exact; the names are a
+    # readable sample, built small rather than joined in full and then thrown at
+    # a handler that may not even be enabled.
+    shown = ", ".join(dropped[:_LOGGED_DROPS])
+    if len(dropped) > _LOGGED_DROPS:
+        shown += f", … and {len(dropped) - _LOGGED_DROPS} more"
+    log.info("off-scene cast: %s/%s tier 3 capped to %d of %d; omitted %s",
+             cid, sid, limit, len(known), shown)
+    return [k for i, k in enumerate(known) if i in keep]
+
+
 def _cast_directory_data(croot, cid: str, sid: str) -> tuple[list[dict], list[dict]]:
     """Off-scene cast data for the two-tier directory (the template renders the text):
     campaign-active characters (dossier paragraph) and every other world character
-    (tagline + available versions)."""
+    (tagline + available versions), the latter bounded by `_known_limit`."""
     present = {a["id"] for a in appearances_cast.scene_cast(cid, sid) if a["kind"] == "characters"}
     roster = appearances_cast.roster(cid)
     roster_ids = {a["id"] for a in roster if a["kind"] == "characters"}
@@ -75,8 +157,14 @@ def _cast_directory_data(croot, cid: str, sid: str) -> tuple[list[dict], list[di
         if not tag:
             continue
         versions = [v["id"] for v in characters.read_character(overlay.char_root(cid, char_id), char_id)["versions"]]
-        known.append({"name": _char_name(overlay.char_root(cid, char_id), char_id),
-                     "tagline": tag, "versions": versions})
+        known.append({"id": char_id,
+                      "name": _char_name(overlay.char_root(cid, char_id), char_id),
+                      "tagline": tag, "versions": versions})
+    # Asked only when it can bite: `_scope_known` reads a card per in-scene
+    # actor to rank the tail, and a campaign inside the ceiling has no tail.
+    limit = _known_limit()
+    if limit and len(known) > limit:
+        known = _scope_known(cid, sid, known, limit)
     return active, known
 
 
