@@ -9433,7 +9433,31 @@ def test_continuation_vs_supersede_race(client):
 
 
 def test_concurrent_resolved_retries_persist_once(client, monkeypatch):
+    """Two accepts of the same resolved record, genuinely in flight together:
+    the roll, its 🎲 line and the continuation each land exactly once.
+
+    Two things here are about the test rather than the behaviour, and #322 is
+    why. It reported this failing intermittently only under whole-file or
+    whole-suite load, never in isolation -- the shape a test takes when what
+    load changes is *which interleaving it happens to get*.
+
+    So the threads now meet at a barrier before either POSTs. Without one they
+    are merely started in order, and the first can finish the whole
+    project-stream-commit sequence before the second begins: a green run was
+    then no evidence the concurrent path is safe, because it may never have
+    been walked. The barrier is bounded so a thread that dies before reaching
+    it fails the other with `BrokenBarrierError` instead of hanging the suite.
+
+    And each thread records its own outcome -- status plus body, or the
+    traceback -- into its own slot. `threading` swallows a racer's exception
+    into `excepthook`, so a thread that raised simply never appended, and the
+    failure surfaced as `assert [200] == [200, 200]`: it named neither which
+    thread died nor why. That is the specific way this test taught people to
+    re-run rather than look. It does not fix a race; it makes the next
+    occurrence say what happened.
+    """
     import threading
+    import traceback
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
     real_cont = routes.mechanics._continuation_messages
@@ -9444,21 +9468,30 @@ def test_concurrent_resolved_retries_persist_once(client, monkeypatch):
     monkeypatch.setattr(routes.mechanics, "_continuation_messages", real_cont)  # not undo()
 
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["cont"])
-    codes = []
-    def racer():
-        codes.append(client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal",
-                                 json=_accept_body(rec)).status_code)
-    threads = [threading.Thread(target=racer) for _ in range(2)]
+    ready = threading.Barrier(2, timeout=30)
+    outcomes: list = [None, None]
+    def racer(slot):
+        try:
+            ready.wait()
+            resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal",
+                               json=_accept_body(rec))
+            outcomes[slot] = (resp.status_code if resp.status_code == 200
+                              else (resp.status_code, resp.text))
+        except BaseException:  # noqa: BLE001 — the point is to report it, not to handle it
+            outcomes[slot] = traceback.format_exc()
+    threads = [threading.Thread(target=racer, args=(i,)) for i in range(2)]
     [t.start() for t in threads]
     [t.join() for t in threads]
-    assert codes == [200, 200]
+    assert outcomes == [200, 200], f"both accepts must answer 200; got {outcomes}"
 
     tagged = [e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
               if e.get("proposal") == rec["id"]]
-    assert len(tagged) == 1
-    assert len(_roll_lines(client, cid, sid)) == 1
+    assert len(tagged) == 1, f"one roll per proposal; logged {tagged}"
+    lines = _roll_lines(client, cid, sid)
+    assert len(lines) == 1, f"one 🎲 line per roll; transcript has {[m['content'] for m in lines]}"
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
-    assert [m["content"] for m in msgs].count("cont") == 1
+    contents = [m["content"] for m in msgs]
+    assert contents.count("cont") == 1, f"one continuation; transcript is {contents}"
     rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
     assert rec2["status"] == "narrated"
 
