@@ -1784,7 +1784,7 @@ test("Reroll on the last assistant post replaces it with a fresh reply", async (
   });
   renderCampaign();
   await screen.findByText("old reply");
-  fireEvent.click(screen.getByTitle("Reroll"));
+  fireEvent.click(await screen.findByTitle("Reroll"));
   // clicking Reroll opens the popover instead of firing immediately
   expect(api.regenerate).not.toHaveBeenCalled();
   expect(screen.getByTitle("Reroll")).toBeInTheDocument(); // hovertext present
@@ -1801,7 +1801,7 @@ test("typed guidance is passed to regenerate", async () => {
     { role: "user", content: "hi" }, { role: "assistant", content: "old reply" }] });
   renderCampaign();
   await screen.findByText("old reply");
-  fireEvent.click(screen.getByTitle("Reroll"));
+  fireEvent.click(await screen.findByTitle("Reroll"));
   const input = screen.getByPlaceholderText(/guide the reroll/i);
   fireEvent.change(input, { target: { value: "make her angrier" } });
   fireEvent.keyDown(input, { key: "Enter" });
@@ -1815,7 +1815,7 @@ test("Escape closes the reroll popover without firing", async () => {
     { role: "user", content: "hi" }, { role: "assistant", content: "old reply" }] });
   renderCampaign();
   await screen.findByText("old reply");
-  fireEvent.click(screen.getByTitle("Reroll"));
+  fireEvent.click(await screen.findByTitle("Reroll"));
   fireEvent.keyDown(screen.getByPlaceholderText(/guide the reroll/i), { key: "Escape" });
   expect(screen.queryByPlaceholderText(/guide the reroll/i)).toBeNull();
   expect(api.regenerate).not.toHaveBeenCalled();
@@ -1832,7 +1832,7 @@ test("regenerate carries a pending override", async () => {
   await screen.findByText("old reply");
   const picker = await screen.findByLabelText("Response length");
   fireEvent.change(picker, { target: { value: "terse" } });
-  fireEvent.click(screen.getByTitle("Reroll"));
+  fireEvent.click(await screen.findByTitle("Reroll"));
   fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i })); // empty guidance = plain reroll
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
     "run", "s1", expect.any(Function), undefined, { response_preset: "terse" }, expect.any(AbortSignal)));
@@ -2632,7 +2632,7 @@ test("picking an alternate stops Retry from repeating the failed reroll", async 
   });
   renderCampaign();
   await screen.findByText("2/2");
-  fireEvent.click(screen.getByTitle("Reroll"));
+  fireEvent.click(await screen.findByTitle("Reroll"));
   fireEvent.click(await screen.findByRole("button", { name: /reroll ▸/i }));
   await screen.findByText("upstream is down");
 
@@ -5525,7 +5525,7 @@ test("Reroll is offered past a trailing scene transition and keeps it", async ()
     { role: "assistant", content: "*Time passes. It is now dusk.*", speaker: "⁣Scene" }] });
   renderCampaign();
   await screen.findByText(/Time passes/);
-  fireEvent.click(screen.getByTitle("Reroll"));
+  fireEvent.click(await screen.findByTitle("Reroll"));
   fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
   // the optimistic trim drops the reply but leaves the transition standing
   expect(screen.queryByText("a reply")).toBeNull();
@@ -5840,7 +5840,7 @@ test("Reroll survives the opening user post being off-window", async () => {
     offset: 12, total: 13, has_older: true, has_user_message: true });
   renderCampaign();
   await screen.findByText("a reply");
-  expect(screen.getByTitle("Reroll")).toBeInTheDocument();
+  await screen.findByTitle("Reroll");
 });
 
 test("no Reroll on an all-assistant transcript, however much history is above", async () => {
