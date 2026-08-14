@@ -611,7 +611,13 @@ test("the response length picker shows the scene's preset and reverts after a su
   (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   renderCampaign();
   const picker = await screen.findByLabelText("Response length");
-  expect(picker).toHaveValue("cinematic");
+  // Waited for, not asserted flat. The <select> renders as soon as `listScenes`
+  // names the active scene; its VALUE arrives on the separate `getScene` chain,
+  // so `findBy` returning the element says nothing about the preset being in it
+  // yet. `findBy` polls on a timer, so under load a poll lands between the two
+  // commits and the flat assert reads "" -- which is the whole of this file's
+  // flakiness, one arbitrary victim per full-suite run.
+  await waitFor(() => expect(picker).toHaveValue("cinematic"));
   fireEvent.change(picker, { target: { value: "terse" } });
   expect(picker).toHaveValue("terse");
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
@@ -5479,7 +5485,10 @@ test("a pending one-shot pick is badged and can be cancelled without sending", a
   renderCampaign();
   const picker = await screen.findByLabelText("Response length");
   // an inherited/scene setting carries no badge...
-  expect(picker).toHaveValue("cinematic");
+  // Waited for, for the reason the picker test above spells out: the <select>
+  // exists before its value does, and a flat assert here reads "" whenever a
+  // findBy poll lands between the two commits.
+  await waitFor(() => expect(picker).toHaveValue("cinematic"));
   expect(screen.queryByText(/next reply only/i)).toBeNull();
   expect(screen.queryByLabelText(/cancel the one-shot/i)).toBeNull();
   // ...a one-shot pick does, and is distinguishable from it
