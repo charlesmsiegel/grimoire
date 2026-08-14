@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from grimoire.store import backups, config, locks
+from grimoire.store import backups, campaigns, config, entities, locks, worlds
 
 
 def home(monkeypatch, tmp_path):
@@ -249,6 +249,37 @@ def test_the_archive_never_contains_the_temp_it_is_being_built_into(
 
     assert not any(n.endswith(".tmp") for n in names_in(archive))
     assert "worlds/realm/world.md" in names_in(archive)
+
+
+def test_an_unzipped_archive_is_a_library_the_app_can_read(monkeypatch, tmp_path):
+    """The claim the whole feature rests on, exercised rather than asserted.
+
+    Every other test here checks *membership* — which names are in the zip —
+    and membership is not the promise. The promise is that unzipping one into
+    an empty folder and pointing the storage location at it gives you back the
+    library, so this builds a real store through the store API, backs it up,
+    extracts it somewhere else, and reads it back through the same API.
+    """
+    home(monkeypatch, tmp_path / "live")
+    wid = worlds.create_world("Realm")
+    entities.create_entity(worlds.world_root(wid), "lore", "Salt Pact", "the pact")
+    campaigns.create_campaign("Saltmarch", wid)
+
+    def snapshot():
+        return (sorted(w["id"] for w in worlds.list_worlds()),
+                sorted(c["id"] for c in campaigns.list_campaigns()),
+                [entities.read_entity(worlds.world_root(wid), "lore", e["id"])
+                 for e in entities.list_entities(worlds.world_root(wid), "lore")])
+
+    before = snapshot()
+    archive = backups.create_backup(when=AT)
+
+    restored = tmp_path / "restored"
+    with zipfile.ZipFile(archive) as z:
+        z.extractall(restored)
+    monkeypatch.setenv("GRIMOIRE_HOME", str(restored))
+
+    assert snapshot() == before
 
 
 # ---- listing ---------------------------------------------------------------
