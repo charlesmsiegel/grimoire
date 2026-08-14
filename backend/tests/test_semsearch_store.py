@@ -291,3 +291,19 @@ def test_character_cards_and_taglines_are_in_the_semantic_corpus(world, provider
     provider.rules = [("brine", NEAR)]
     out = run("brine", rounds=3)
     assert any(h["kind"] == "characters" and h["id"] == cid for h in out["hits"])
+
+
+def test_a_vector_that_could_not_be_saved_is_not_counted_as_indexed(world, provider,
+                                                                    monkeypatch):
+    """Scoring reads the cache back off disk rather than keeping what it just
+    embedded — a 1536-float vector costs forty times the passage it stands for,
+    so a query must not hold the whole corpus's worth. The visible consequence:
+    a store that cannot be written to reports no coverage rather than one
+    query's worth of it."""
+    _, root = world
+    configure()
+    entities.create_entity(root, "lore", "The Salt Pact", body="Debts written in brine.")
+    provider.rules = [("brine", NEAR)]
+    monkeypatch.setattr(semsearch.vectors, "save", lambda *a, **kw: None)
+    out = semsearch.search_semantic("brine")
+    assert out["corpus"] > 0 and out["indexed"] == 0 and out["hits"] == []
