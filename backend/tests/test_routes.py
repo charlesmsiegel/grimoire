@@ -1579,6 +1579,29 @@ def test_campaign_entity_secrecy_via_routes(client):
     assert client.get(f"/api/campaigns/{cid}/lore/{eid}").json()["meta"]["secrecy"] == "gm-only"
 
 
+def test_entity_token_cost_via_routes(client):
+    """The badge's data (#51): every entity payload carries what its body costs,
+    in both scopes, and the campaign's own edit is what the campaign reports."""
+    wid = _world(client)
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    body = "The tide reads the ledger aloud at every turning of the year."
+    eid = client.post(f"/api/worlds/{wid}/lore",
+                      json={"name": "Saltmarch Rite", "body": body}).json()["id"]
+    cost = store.context.count_tokens(body)
+    assert cost > 0
+
+    listed = client.get(f"/api/worlds/{wid}/lore").json()
+    assert [e["tokens"] for e in listed] == [cost]
+    assert client.get(f"/api/worlds/{wid}/lore/{eid}").json()["tokens"] == cost
+
+    # the campaign reads through the overlay, so an uncopied record costs the same
+    assert [e["tokens"] for e in client.get(f"/api/campaigns/{cid}/lore").json()] == [cost]
+    # ...and a campaign-side edit is measured on the campaign's copy, not the world's
+    client.put(f"/api/campaigns/{cid}/lore/{eid}", json={"body": "Short."})
+    assert client.get(f"/api/campaigns/{cid}/lore/{eid}").json()["tokens"] < cost
+    assert client.get(f"/api/worlds/{wid}/lore/{eid}").json()["tokens"] == cost
+
+
 def test_unknown_kind_404(client):
     wid = _world(client)
     assert client.get(f"/api/worlds/{wid}/weapons").status_code == 404

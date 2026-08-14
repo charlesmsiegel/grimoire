@@ -24,7 +24,7 @@ from . import (
     image_subjects, journal, length_drift, lengths, llm_connections, localize, locks, lorebook, migrations, module_edit, modules, overlay, pcs, playing,
     playstate, plot, prompt_log, proposals, provenance, relationships, response_presets, rolling_summary, rolls, scenario, scene_ideas, scene_ids, scene_refs, scenes, search, semsearch, sheets,
     styles, suggest,
-    sync, tags, taglines, thumbs, timeline, turnstate, undo, usage, voice_anchors, voice_drift, world_bundle, worlds,
+    sync, tags, taglines, thumbs, timeline, tokens, turnstate, undo, usage, voice_anchors, voice_drift, world_bundle, worlds,
     ziputil,
 )
 # `module_display` was never exported here: it was bound as an attribute of

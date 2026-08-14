@@ -1224,8 +1224,29 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .chip.owner-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 3px; }
 .owner-chip .portrait, .owner-chip .portrait-initials { width: 22px; height: 22px; font-size: 10px; }
 
+/* Per-record prompt cost (#51). Deliberately quiet — it is a measurement
+   sitting beside the record's name, not a label the eye should land on first. */
+.row-tokens {
+  flex: none; margin-left: auto;
+  font-family: var(--fm); font-size: 10px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+/* The owner stack already claims the free space in a lore row, so the count
+   sits next to it rather than fighting it for the same `auto` margin. */
+.owner-stack + .row-tokens { margin-left: 6px; }
+.token-badge {
+  margin-left: 10px; vertical-align: middle;
+  font-family: var(--fm); font-size: 10px; letter-spacing: 0.08em;
+  text-transform: uppercase; font-weight: 400; color: var(--muted);
+  border: 1px solid var(--rule-soft); padding: 3px 8px;
+  white-space: nowrap;
+}
+
 /* location rail cards + detail header image */
 .row.loc-row { flex-direction: column; align-items: stretch; gap: 6px; padding: 0 0 8px; }
+/* A location row is a column-stacked card, so `margin-left: auto` buys the
+   count nothing: it needs the card's own horizontal padding and its own line. */
+.row.loc-row .row-tokens { margin-left: 0; padding: 0 10px; text-align: right; }
 .loc-row-img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; display: block; }
 .row.loc-row .row-name { font-family: var(--fd); font-weight: 700; font-size: 24px; padding: 6px 10px 0; }
 .loc-head { display: flex; gap: 18px; align-items: flex-start; margin-bottom: 12px; }

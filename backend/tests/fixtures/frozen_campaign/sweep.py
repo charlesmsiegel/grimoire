@@ -24,11 +24,13 @@ What deliberately stays out of the sweep:
 
 - **Anything that calls an LLM.** The sweep must run offline and free; the
   fakes in `tests/llm_fakes.py` (#204) cover the generating paths.
-- **Token counts.** `context.tokens.count_tokens` falls back to a
-  characters/4 heuristic when tiktoken is missing, and tiktoken is a `desktop`
-  extra — so `make check-pydantic1`, which installs the Android dependency set,
-  would disagree with `make check-py` on every count. Section *composition* is
-  snapshotted; the numbers are not.
+- **Token counts.** `tokens.count_tokens` falls back to a characters/4
+  heuristic when tiktoken is missing, and tiktoken is a `desktop` extra — so
+  `make check-pydantic1`, which installs the Android dependency set, would
+  disagree with `make check-py` on every count. Section *composition* is
+  snapshotted; the numbers are not. Since #51 that applies to entity payloads
+  too: `list_entities` and `read_entity` now carry a per-record `tokens`, and
+  it is stripped here for exactly the same reason (`_untokened`).
 - **Weather.** A drawn forecast belongs to a campaign that has one; this
   fixture deliberately has none, and `test_weather_draw.py`'s vector file
   already freezes the generator itself.
@@ -86,6 +88,15 @@ def normalize(value, home: Path):
     return repr(value)
 
 
+def _untokened(value):
+    """An entity payload without its `tokens` measurement — see the module
+    docstring on why no count is snapshotted. Applied to the dict and to lists
+    of them, so one call covers both `read_entity` and `list_entities`."""
+    if isinstance(value, list):
+        return [_untokened(v) for v in value]
+    return {k: v for k, v in value.items() if k != "tokens"}
+
+
 def _sections(breakdown: dict) -> list[dict]:
     """The context inspector's rows without their token counts — see the module
     docstring on why the numbers are not snapshotted."""
@@ -110,10 +121,10 @@ def sweep(home: Path) -> dict:
                     store.characters.read_card(wroot, c["id"], v["id"])
         for kind in ("locations", "lore"):
             listed = store.entities.list_entities(wroot, kind)
-            out[f"entities.list_entities[{wid}/{kind}]"] = listed
+            out[f"entities.list_entities[{wid}/{kind}]"] = _untokened(listed)
             for e in listed:
                 out[f"entities.read_entity[{wid}/{kind}/{e['id']}]"] = \
-                    store.entities.read_entity(wroot, kind, e["id"])
+                    _untokened(store.entities.read_entity(wroot, kind, e["id"]))
         out[f"greetings.list_greetings[{wid}]"] = store.greetings.list_greetings(wroot)
         out[f"greetings.read_plotmap[{wid}]"] = store.greetings.read_plotmap(wroot)
         for g in out[f"greetings.list_greetings[{wid}]"]:
@@ -137,10 +148,10 @@ def _campaign(out: dict, cid: str) -> None:
     out[f"overlay.list_pcs[{cid}]"] = store.overlay.list_pcs(cid)
     for kind in ("locations", "lore"):
         listed = store.overlay.list_entities(cid, kind)
-        out[f"overlay.list_entities[{cid}/{kind}]"] = listed
+        out[f"overlay.list_entities[{cid}/{kind}]"] = _untokened(listed)
         for e in listed:
             out[f"overlay.read_entity[{cid}/{kind}/{e['id']}]"] = \
-                store.overlay.read_entity(cid, kind, e["id"])
+                _untokened(store.overlay.read_entity(cid, kind, e["id"]))
     out[f"overlay.list_greetings[{cid}]"] = store.overlay.list_greetings(cid)
     # The scene ledger's composed half (#88). It is a NEW reader over OLD data
     # -- played.json (which has a legacy bare-list form), the greeting files,

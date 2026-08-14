@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from . import atomic, statcache
+from . import atomic, statcache, tokens
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import safe_id, slugify, uniquify
 
@@ -83,8 +83,20 @@ def list_entities(root: Path, kind: str) -> list[dict]:
         for p in sorted(d.glob("*.md")):
             if not safe_id(p.stem):   # enumeration agrees with the resolvers
                 continue
-            meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
-            out.append({"id": p.stem, "name": meta.get("name", p.stem), **meta})
+            meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+            # `tokens` LAST, after **meta: it is a measurement of the record,
+            # not a field of it, so a file that happens to carry a `tokens:`
+            # line in its frontmatter does not get to report its own cost.
+            #
+            # Unconditional rather than opt-in, and that is what makes the
+            # memo load-bearing: this listing is on the turn loop's path too
+            # (`context.world_state._world_info` sweeps all five kinds through
+            # the overlay before deciding what activates), so an encode per
+            # record per turn is the cost being avoided. Keyed on the same
+            # signature `read_entity` uses, so the pair costs one encode
+            # between them, not two.
+            out.append({"id": p.stem, "name": meta.get("name", p.stem), **meta,
+                        "tokens": tokens.record_tokens(p, body)})
     return out
 
 
@@ -94,7 +106,10 @@ def read_entity(root: Path, kind: str, eid: str) -> dict:
     if not safe_id(eid) or not p.exists():
         raise EntityNotFound(f"{kind}/{eid}")
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
-    return {"meta": {"id": eid, **meta}, "body": body}
+    # Beside `meta`, not inside it: `meta` is the frontmatter this record would
+    # be written back with, and every writer here round-trips it.
+    return {"meta": {"id": eid, **meta}, "body": body,
+            "tokens": tokens.record_tokens(p, body)}
 
 
 def create_entity(root: Path, kind: str, name: str, body: str = "", keys: str = "", owners: str = "",

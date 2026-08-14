@@ -53,8 +53,7 @@ carries each model's window size.
 
 from __future__ import annotations
 
-from .. import config
-from . import tokens
+from .. import config, tokens
 
 LOCK_IN = "lock-in"
 SPOTLIGHT = "spotlight"
