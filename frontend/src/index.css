@@ -2600,6 +2600,10 @@ a.column-back { text-decoration: none; }
   font-family: var(--fd); font-weight: 600; font-size: 21px; line-height: 1.15;
   letter-spacing: 0.04em; margin: 4px 0 0; color: var(--ink);
 }
+/* The mode hint sits under the two mode rows, indented to their label so it
+   reads as a caption on the choice rather than as a third row. */
+.search-mode-hint { margin: 6px 16px 2px; }
+
 .search-box { margin: 0 0 8px; }
 .search-box input {
   width: 100%; min-height: 52px; padding: 0 16px;
