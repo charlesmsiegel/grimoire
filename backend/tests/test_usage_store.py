@@ -320,3 +320,24 @@ def test_a_month_file_is_never_slurped_whole(home, monkeypatch):
 
     monkeypatch.setattr(usage.Path, "read_text", refuse)
     assert usage.summary(days=30)["totals"]["calls"] == 1
+
+
+def test_a_call_the_provider_did_not_count_records_no_tokens_at_all(home):
+    """The same rule the price gets, for the same reason: a row saying zero
+    tokens is a row saying the call used none, and an endpoint that reports
+    nothing has not said that."""
+    usage.record(task="chat", model="local/glm", ts="2026-08-14T10:00:00Z")
+
+    row, = _rows(home)
+    assert "prompt_tokens" not in row
+    assert "completion_tokens" not in row
+
+
+def test_a_provider_that_counted_exactly_zero_is_recorded_as_zero(home):
+    """`0` and "not reported" are different answers and must stay different --
+    an empty reply really does complete zero tokens."""
+    usage.record(task="chat", model="realm/opus", prompt_tokens=12,
+                 completion_tokens=0, ts="2026-08-14T10:00:00Z")
+
+    row, = _rows(home)
+    assert row["completion_tokens"] == 0

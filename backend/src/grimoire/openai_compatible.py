@@ -163,7 +163,7 @@ class OpenAICompatibleClient:
                     llm_usage.from_openai_chunk(obj, usage)
                     try:
                         delta = obj["choices"][0]["delta"].get("content")
-                    except (KeyError, IndexError, TypeError, AttributeError):
+                    except (KeyError, IndexError):
                         continue
                     if delta:
                         yield delta
