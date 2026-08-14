@@ -277,6 +277,26 @@ def test_the_listing_ignores_files_this_module_did_not_write(monkeypatch, tmp_pa
     assert [r["name"] for r in backups.list_backups()] == ["grimoire-20260814T210000Z.zip"]
 
 
+@pytest.mark.parametrize("name", ["grimoire-20269999T999999Z.zip",   # not a date
+                                  "grimoire-20260101T235960Z.zip",   # leap second
+                                  "grimoire-20260230T120000Z.zip"])  # no such day
+def test_a_name_that_cannot_be_a_time_is_not_one_of_ours(monkeypatch, tmp_path, name):
+    """The pattern accepts digit runs that are not dates. With the match and the
+    parse as two steps, such a file made the listing raise `ValueError` — an
+    uncaught 500 — and stopped the schedule for as long as it sat there, since
+    `due` reads the same listing."""
+    root = home(monkeypatch, tmp_path)
+    small_store(root)
+    config.write_config(backup_enabled="on")
+    backups.create_backup(when=AT)
+    (root / "backups" / name).write_bytes(b"PK\x05\x06" + b"\0" * 18)
+
+    assert [r["name"] for r in backups.list_backups()] == ["grimoire-20260814T210000Z.zip"]
+    assert backups.due(now=AT + timedelta(days=2))
+    assert backups.sweep(keep=1) == []
+    assert (root / "backups" / name).exists()   # not ours, so never deleted
+
+
 def test_listing_a_store_that_has_never_been_backed_up_is_empty(monkeypatch, tmp_path):
     home(monkeypatch, tmp_path)
     assert backups.list_backups() == []

@@ -227,6 +227,10 @@ def _allocate(directory: Path, when: datetime) -> Path:
     Configuration page's *Back up now* — and the second must not silently
     replace the first, so the name gains a `-2`, `-3`, … Called under the
     backup lock, which is what makes the check-then-create meaningful.
+
+    The loop terminates because every iteration names a distinct file that has
+    to already exist for it to continue, so it is bounded by the directory's
+    own contents rather than by a counter.
     """
     stamp = when.strftime(_STAMP)
     n = 1
@@ -261,20 +265,29 @@ def create_backup(when: datetime | None = None) -> Path:
         return target
 
 
-def _order(name: str) -> tuple[str, int]:
-    """Sort key for an archive name: its stamp, then its same-second ordinal.
+def _parsed(name: str) -> tuple[datetime, int] | None:
+    """`(taken_at, same-second ordinal)` if `name` is one of our archives.
 
-    The ordinal has to be parsed rather than left to string order — `-2` sorts
+    Parsing IS the recognition, deliberately. The pattern alone accepts digit
+    runs that are not dates — `grimoire-20269999T999999Z.zip`, or a
+    leap-second `...235960Z` — and with the match and the parse as two separate
+    steps such a file made the listing raise `ValueError`: an uncaught 500 for
+    the route, and, because `due` reads that same listing, automatic backups
+    that stopped and stayed stopped for as long as the file sat in the folder.
+    One notion of "ours", and a name that cannot be a time is simply not one.
+
+    The ordinal is parsed rather than left to string order — `-2` sorts
     *before* `.zip` bytewise, so plain name sorting inverts every pair of
     archives taken in the same second.
     """
     m = _NAME_RE.match(name)
-    assert m is not None                      # callers filter on the same regex
-    return m.group(1), int(m.group(2) or 1)
-
-
-def _created_iso(stamp: str) -> str:
-    return datetime.strptime(stamp, _STAMP).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if not m:
+        return None
+    try:
+        taken = datetime.strptime(m.group(1), _STAMP).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return taken, int(m.group(2) or 1)
 
 
 def list_backups() -> list[dict]:
@@ -283,7 +296,7 @@ def list_backups() -> list[dict]:
     A missing backup directory is an empty list, not an error: a store that has
     never been backed up has nothing to report, and asking must not create the
     directory. Anything that is not one of our archives is ignored — see
-    `_NAME_RE`.
+    `_parsed`, which is what "one of ours" means.
     """
     return _list_in(backup_dir())
 
@@ -295,19 +308,22 @@ def _list_in(directory: Path) -> list[dict]:
         entries = list(directory.iterdir())
     except FileNotFoundError:
         return []
-    rows = []
+    # Sorted on the parse rather than by re-parsing each name a second time
+    # inside the key function -- and it keeps the sort off an Optional, which
+    # is only safe here because of the filter three lines above it.
+    found = []
     for path in entries:
-        m = _NAME_RE.match(path.name)
-        if not m:
+        parsed = _parsed(path.name)
+        if parsed is None:
             continue
         try:
             size = path.stat().st_size
         except OSError:
             continue                          # vanished, or unreadable: not a restore point
-        rows.append({"name": path.name, "size": size,
-                     "created": _created_iso(m.group(1))})
-    rows.sort(key=lambda r: _order(r["name"]), reverse=True)
-    return rows
+        found.append((parsed, {"name": path.name, "size": size,
+                               "created": parsed[0].strftime("%Y-%m-%dT%H:%M:%SZ")}))
+    found.sort(key=lambda pair: pair[0], reverse=True)
+    return [row for _parsed_key, row in found]
 
 
 def sweep(keep: int | None = None) -> list[str]:
@@ -337,7 +353,11 @@ def sweep(keep: int | None = None) -> list[str]:
 
 
 def _taken_at(name: str) -> datetime:
-    return datetime.strptime(_order(name)[0], _STAMP).replace(tzinfo=timezone.utc)
+    """When the archive `name` was taken. Only ever called on names a listing
+    returned, which `_parsed` has already vouched for."""
+    parsed = _parsed(name)
+    assert parsed is not None
+    return parsed[0]
 
 
 def due(now: datetime | None = None) -> bool:
