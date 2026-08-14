@@ -1551,6 +1551,9 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .chooser textarea { width: 100%; background: transparent; border: 1px solid var(--muted); color: inherit; padding: 8px; font: inherit; }
 .chooser select { width: 100%; }
 .chooser label.role { display: block; }
+.radio-group { display: flex; flex-direction: column; gap: 4px; }
+.radio-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.radio-row input[type="radio"] { flex: none; width: auto; margin: 0; accent-color: var(--accent); }
 
 .avatar-crop-btn { padding: 0; border: none; background: transparent; cursor: pointer; flex: none; display: block; }
 .focus-modal { width: min(420px, 92vw); }

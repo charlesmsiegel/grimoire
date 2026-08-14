@@ -5,6 +5,17 @@ import { CalendarDatePicker } from "./CalendarDatePicker";
 import { errMsg } from "./errMsg";
 import type { DraftCast, SceneDraft } from "./sceneDraft";
 
+/** Where the scene's opening post comes from (issue #90).
+ *  - `greeting` — the greeting body, verbatim, seeded by `start_from_greeting`
+ *    (which also seats the greeting's cast). Offered by greeting drafts only.
+ *  - `premise`  — nothing is posted here; the premise is handed to `CastPanel`,
+ *    whose generate → preview → adopt loop streams against a scene that exists.
+ *    Generation genuinely cannot happen before creation, so this stays a
+ *    handoff rather than a fourth write in `create()`.
+ *  - `none`     — an empty scene the reader writes into themselves.
+ *  #91's adapted greeting becomes the fourth member of this union. */
+type FirstPost = "none" | "greeting" | "premise";
+
 export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreated, onWriting,
                                     onSalvaged }: {
   cid: string;
@@ -31,6 +42,12 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
   const [location, setLocation] = useState(draft.location);
   const [cast, setCast] = useState<DraftCast[]>(draft.source === "greeting" ? [] : draft.cast);
   const [premise, setPremise] = useState(draft.source === "greeting" ? "" : draft.premise);
+  // A greeting was picked *for* its body, so it starts as the first post. Every
+  // other draft starts on whatever it actually carries: a premise if the
+  // suggestion or the reader supplied one, otherwise nothing -- "Create blank
+  // scene" must not land on a generate option with an empty box.
+  const [firstPost, setFirstPost] = useState<FirstPost>(
+    draft.source === "greeting" ? "greeting" : draft.premise.trim() ? "premise" : "none");
   const [locations, setLocations] = useState<EntitySummary[]>([]);
   // Tracks the locations read specifically (not chars/pcs/roster): the
   // controlled <select> can only ever offer what has loaded, so a location
@@ -85,6 +102,16 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
   // by kind, not just the ones the roster already knows are players.
   ].filter((o) => !(draft.pcless && (o.kind === "pcs" || playerTokens.has(`${o.kind}/${o.id}`))))
    .filter((o) => !cast.some((c) => c.kind === o.kind && c.id === o.id));
+
+  // Ordered by how much each source supplies, so the pre-selected one is at or
+  // near the top. `greeting` is offered only where a greeting exists to seed
+  // from; #91's adapted greeting joins it there.
+  const sources: { value: FirstPost; label: string }[] = [
+    ...(draft.source === "greeting"
+      ? [{ value: "greeting" as const, label: "The greeting, verbatim" }] : []),
+    { value: "premise", label: "Generate an opening post from a premise" },
+    { value: "none", label: "Nothing — you write the first post" },
+  ];
 
   // Once Create has read the fields (create() closes over that render's
   // values) or the scene already exists with a soft failure (Continue can't
@@ -148,10 +175,18 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
     return () => { live.current = false; };
   }, []);
 
+  /** What `CastPanel`'s opener box is seeded with. Only the premise source
+   *  hands anything over: declining the first post has to leave that box empty,
+   *  or "nothing" would still arrive as a suggestion to generate from. */
+  function handoff(): string | undefined {
+    return firstPost === "premise" && premise.trim() ? premise : undefined;
+  }
+
   async function create() {
     setWriting(true);
     setError(null);
     const finalTitle = title.trim() || draft.defaultTitle;
+    const prompt = handoff();
     let sid: string;
     try {
       // 1. the date also goes in as suggested_date, so a later failure still
@@ -164,7 +199,10 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
     if (!live.current) return;    // switched campaigns while createScene was in flight -- stop here
     // 2. cast — the last step for which deleting the scene is still clean
     const soft: string[] = [];
-    if (draft.source !== "greeting" && cast.length) {
+    // Gated on the first-post SOURCE, not on the draft's kind: a greeting draft
+    // that is no longer using its greeting gets no backend-seated cast either,
+    // so the chips the form collected are the only cast it will ever have.
+    if (firstPost !== "greeting" && cast.length) {
       try {
         // A `characters`-kind actor can be the player themselves (CastPanel's
         // role selector allows it, and the roster's roles are how this pane
@@ -209,7 +247,7 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
     }
     // 5. seed. A failure here has written nothing outside the scene, so the
     //    scene goes; anything after has, so nothing does.
-    if (draft.source === "greeting") {
+    if (draft.source === "greeting" && firstPost === "greeting") {
       try {
         const r = await api.startFromGreeting(cid, sid, draft.gid);
         sid = r.id;
@@ -228,7 +266,6 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
       if (!live.current) return;
     }
     setWriting(false);
-    const prompt = draft.source === "greeting" ? undefined : (premise || undefined);
     if (soft.length) { setSalvaged(sid); onSalvaged?.(sid); setError(soft.join(" · ")); return; }
     onCreated(sid, prompt);
   }
@@ -252,7 +289,18 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
         {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
       </select>
 
-      {draft.source === "greeting" ? (
+      <div className="role" id="confirm-first-post">First post</div>
+      <div className="radio-group" role="radiogroup" aria-labelledby="confirm-first-post">
+        {sources.map((s) => (
+          <label className="radio-row" key={s.value}>
+            <input type="radio" name="first-post" value={s.value} disabled={locked}
+                   checked={firstPost === s.value} onChange={() => setFirstPost(s.value)} />
+            {s.label}
+          </label>
+        ))}
+      </div>
+
+      {firstPost === "greeting" ? (
         <div className="field-hint">
           The greeting supplies the opening post and seats its own cast.
         </div>
@@ -282,17 +330,20 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
             }}>Add</button>
           </div>
 
-          <label className="role" htmlFor="confirm-premise">Premise</label>
-          <textarea id="confirm-premise" aria-label="Premise" rows={3} value={premise} disabled={locked}
-                    onChange={(e) => setPremise(e.target.value)} />
-          <div className="field-hint">Seeds the opener box once the scene exists.</div>
+          {firstPost === "premise" && (
+            <>
+              <label className="role" htmlFor="confirm-premise">Premise</label>
+              <textarea id="confirm-premise" aria-label="Premise" rows={3} value={premise} disabled={locked}
+                        onChange={(e) => setPremise(e.target.value)} />
+              <div className="field-hint">Seeds the opener box once the scene exists.</div>
+            </>
+          )}
         </>
       )}
 
       <div className="form-actions">
         {salvaged ? (
-          <button className="primary" onClick={() =>
-            onCreated(salvaged, draft.source === "greeting" ? undefined : (premise || undefined))}>
+          <button className="primary" onClick={() => onCreated(salvaged, handoff())}>
             Continue to scene
           </button>
         ) : (

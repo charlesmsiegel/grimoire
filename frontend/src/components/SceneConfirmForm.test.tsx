@@ -380,3 +380,86 @@ test("a character-kind player is seated with role player, not left to the backen
   await waitFor(() => expect(api.addCastBatch).toHaveBeenCalledWith(
     "c", "s9", [{ kind: "characters", id: "mara", role: "player" }]));
 });
+
+// ---- issue #90: the first-post source selector ----
+const BLANK: SceneDraft = {
+  source: "custom", title: "New scene", defaultTitle: "New scene",
+  date: "2026-03-04", location: "", pcless: false, premise: "", cast: [],
+};
+
+test("a greeting draft defaults to using the greeting verbatim", async () => {
+  renderForm(GRT);
+  expect(await screen.findByRole("radio", { name: /verbatim/i })).toBeChecked();
+});
+
+test("a generated draft with a premise defaults to generating an opening post", async () => {
+  renderForm(GEN);
+  expect(await screen.findByRole("radio", { name: /opening post/i })).toBeChecked();
+  expect(screen.queryByRole("radio", { name: /verbatim/i })).toBeNull();
+});
+
+test("a draft with nothing typed defaults to no first post", async () => {
+  renderForm(BLANK);
+  expect(await screen.findByRole("radio", { name: /^nothing/i })).toBeChecked();
+  expect(screen.queryByLabelText("Premise")).toBeNull();
+});
+
+test("declining the first post on a greeting draft never seeds the greeting", async () => {
+  const onCreated = renderForm(GRT);
+  fireEvent.click(await screen.findByRole("radio", { name: /^nothing/i }));
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9-dated", undefined));
+  expect(api.startFromGreeting).not.toHaveBeenCalled();
+  // the rename exists only to undo start_from_greeting's own retitle; the date
+  // stamp re-slugs the filename but keeps the title, so nothing overwrote it
+  expect(api.renameScene).not.toHaveBeenCalled();
+});
+
+test("a greeting draft that is not using its greeting casts the scene itself", async () => {
+  (api.listCharacters as any).mockResolvedValue([{ id: "winifred", name: "Winifred" }]);
+  renderForm(GRT);
+  // the backend only seats a greeting's cast when the greeting is the first post
+  expect(screen.queryByLabelText("Add to cast")).toBeNull();
+  fireEvent.click(await screen.findByRole("radio", { name: /^nothing/i }));
+  fireEvent.change(await screen.findByLabelText("Add to cast"), { target: { value: "characters/winifred" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(api.addCastBatch).toHaveBeenCalledWith(
+    "c", "s9", [{ kind: "characters", id: "winifred" }]));
+});
+
+test("a greeting draft can take a premise instead of the greeting body", async () => {
+  const onCreated = renderForm(GRT);
+  fireEvent.click(await screen.findByRole("radio", { name: /opening post/i }));
+  fireEvent.change(screen.getByLabelText("Premise"), { target: { value: "The tide comes in." } });
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9-dated", "The tide comes in."));
+  expect(api.startFromGreeting).not.toHaveBeenCalled();
+});
+
+test("declining the first post keeps the premise out of the opener box", async () => {
+  const onCreated = renderForm(GEN);
+  fireEvent.click(await screen.findByRole("radio", { name: /^nothing/i }));
+  expect(screen.queryByLabelText("Premise")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9-dated", undefined));
+});
+
+test("Continue after a soft failure honours the declined first post", async () => {
+  (api.setSceneLocation as any).mockRejectedValue({ detail: "gone" });
+  const onCreated = renderForm(GEN);
+  fireEvent.click(await screen.findByRole("radio", { name: /^nothing/i }));
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await screen.findByText(/gone/);
+  fireEvent.click(screen.getByRole("button", { name: /continue to scene/i }));
+  expect(onCreated).toHaveBeenCalledWith("s9-dated", undefined);
+});
+
+test("the first-post choice is locked while the create sequence is writing", async () => {
+  let release: (v: any) => void = () => {};
+  (api.createScene as any).mockReturnValue(new Promise((r) => { release = r; }));
+  renderForm(GEN);
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  expect(screen.getByRole("radio", { name: /^nothing/i })).toBeDisabled();
+  await act(async () => { release({ id: "s9" }); });
+});
