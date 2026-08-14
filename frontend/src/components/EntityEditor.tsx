@@ -39,17 +39,29 @@ const asSecrecy = (v: unknown): Secrecy => {
 };
 
 // What a record's body costs when it reaches a prompt (#51). Counted on the
-// server with the tokenizer the context inspector uses, so the badge and the
-// inspector never disagree; the frontend only formats it.
+// server with the same tokenizer the context inspector uses; the frontend only
+// formats it.
+//
+// The same TOKENIZER, not the same total: the World info section is the
+// activated bodies joined with blank lines, and BPE is not additive, so these
+// badges summed come out a token or so per join UNDER the inspector's row for
+// that section. Near enough to reason with, and not a figure to reconcile
+// arithmetically — the inspector remains the authority on what a prompt cost.
 //
 // The cost is per ACTIVATION, not per turn, and the tooltip says so: a keyed
 // entry pays it on the turns its keys hit and nothing on the rest, so a big
 // number here is only a big prompt if the entry is always-on. Reading it as a
 // standing cost is the obvious wrong conclusion to draw from a bare number.
+//
+// It is also a CEILING for a body that uses macros, which the tooltip says
+// because the rail has no room for a second line: the prompt gets the expanded
+// text, so `{{random:a,b,c}}` collapses to one option and the stored form can
+// measure double what is sent. Exact for the ordinary body that uses none.
 const TOKEN_HINT =
-  "Tokens this body costs each time it enters the prompt — keyed entries pay it only when they activate";
+  "Tokens this body costs each time it enters the prompt — keyed entries pay it only when they "
+  + "activate, and macros are counted unexpanded";
 
-export function tokenLabel(n: number): string {
+function tokenLabel(n: number): string {
   return `${n.toLocaleString()} ${n === 1 ? "token" : "tokens"}`;
 }
 
@@ -329,8 +341,14 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
           })}
         </span>
       )}
+      {/* The unit is dropped for width -- the rail is a fixed 220px -- so the
+          accessible name carries it instead. The row is a button named from
+          its contents, so without this a screen reader reads "Salt 1,240" and
+          the number could be anything; `title` alone is not announced. */}
       {typeof e.tokens === "number" && (
-        <span className="row-tokens" title={TOKEN_HINT}>{e.tokens.toLocaleString()}</span>
+        <span className="row-tokens" title={TOKEN_HINT} aria-label={tokenLabel(e.tokens)}>
+          {e.tokens.toLocaleString()}
+        </span>
       )}
     </button>
   );

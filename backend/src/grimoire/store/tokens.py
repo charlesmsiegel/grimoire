@@ -66,12 +66,41 @@ def record_tokens(path: Path, body: str) -> int:
     *per-activation* cost — a keyed entry pays it on the turns its keys hit,
     not on every turn.
 
-    `body` is the text the caller has already read, so a list sweep costs one
-    encode per changed file rather than a second read of every file. Passing it
-    in rather than re-reading is safe in both interleavings: a write between
-    the caller's read and this stat moves mtime to ~now, and `statcache.memo`
-    refuses to cache anything inside its racy window, so a stale body can never
-    be stored under the signature that replaced it.
+    What it is NOT is a term in the section total the context inspector
+    reports. That section is the activated bodies joined with blank lines, and
+    BPE is not additive: these counts summed land about a token per join below
+    the inspector's row. Same tokenizer, different string -- the two are
+    comparable in scale, and reconciling them arithmetically is a mistake the
+    numbers invite (`test_a_record_count_is_not_a_term_in_the_section_total`
+    pins it so nobody re-derives the equality).
+
+    It counts the STORED text, macros unexpanded, and that is a real ceiling
+    rather than a rounding error. `_render_sections` runs every section through
+    `macros.expand_macros`, so `{{user}}` becomes a name and
+    `{{random:a,b,c,d,e}}` collapses to ONE option -- a macro-heavy body can
+    cost half what it measures. Nothing here can do better: the expansion is
+    per scene and per turn, so no single number is the answer, and a ceiling is
+    the right direction for a figure someone is using to decide what to trim.
+
+    `body` must be the body parsed from `path` -- the memo persists, so a
+    caller that pairs one file's path with another's text poisons that
+    signature for every later reader, not just for itself. Given that, passing
+    the text in is what keeps an unchanged file from being re-encoded without
+    making any caller read it twice, and it is safe in both interleavings: a
+    write between the caller's read and this stat moves mtime to ~now, and
+    `statcache.memo` refuses to cache anything inside its racy window, so a
+    stale body can never be stored under the signature that replaced it.
+
+    The memo kind names the MEASURE, not the caller: a future counter over a
+    different slice of the same file (a card's description+personality, say)
+    must pick its own kind, or it would read this one's answer back.
+
+    One capacity note, since `statcache` is shared and capped at MAX_ENTRIES:
+    an entity file now occupies two slots, this and `entities.entity_hash`, so
+    a world large enough to fill the cache starts evicting sooner than before.
+    Both derivations are cheap to recompute, so the failure mode is a slower
+    sweep rather than a wrong answer, and the cap is left alone deliberately --
+    raising it is a judgement about the cache, not about this measure.
     """
-    return statcache.memo("record_tokens", statcache.signature(path),
+    return statcache.memo("body_tokens", statcache.signature(path),
                           lambda: count_tokens(body.strip()))

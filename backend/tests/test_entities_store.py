@@ -259,3 +259,34 @@ def test_an_unchanged_file_is_not_re_encoded(tmp_path: Path, monkeypatch):
     _age(p)
     assert entities.list_entities(tmp_path, "lore")[0]["tokens"] > first
     assert calls[-1] == "salt, rope and a longer tail"  # new bytes, new encode
+
+
+def test_a_record_count_is_not_a_term_in_the_section_total(tmp_path: Path):
+    """The badge counts one body; the World info section counts the activated
+    bodies JOINED. BPE is not additive, so the badges summed sit at or below the
+    section's own count -- close enough to reason with, and not a figure to
+    reconcile. Asserting equality here is the tempting wrong move, so the real
+    relationship is pinned instead.
+    """
+    bodies = ["salt", "rope", "brine"]
+    for i, b in enumerate(bodies):
+        entities.create_entity(tmp_path, "lore", f"Entry {i}", b)
+    badges = [e["tokens"] for e in entities.list_entities(tmp_path, "lore")]
+    # exactly how `templates/scene/sections/world_info.j2` renders them
+    section = tokens.count_tokens("\n\n".join(bodies))
+    assert sum(badges) <= section
+    assert section - sum(badges) <= len(bodies) - 1   # at most one per join
+
+
+def test_the_count_is_of_the_stored_text_macros_unexpanded(tmp_path: Path):
+    """A ceiling, deliberately. `_render_sections` expands macros before the
+    model sees a body, so `{{random:...}}` collapses to one option and the
+    stored form can measure well over what is actually sent. There is no single
+    right number -- the expansion is per scene -- and over-reporting is the safe
+    direction for a figure someone trims against.
+    """
+    stored = "{{user}} owes the tide. The wind is {{random:screaming,silent,rising}}."
+    eid = entities.create_entity(tmp_path, "lore", "Debt", stored)
+    badge = entities.read_entity(tmp_path, "lore", eid)["tokens"]
+    assert badge == tokens.count_tokens(stored)
+    assert badge > tokens.count_tokens("Seraphine owes the tide. The wind is rising.")
