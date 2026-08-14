@@ -250,14 +250,30 @@ class Meter:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
+        """Record what happened, then let the exception through untouched
+        (returning False re-raises).
+
+        A cancellation is not a failure, and telling them apart matters: an
+        `asyncio.CancelledError` unwinds this block at every `.complete()` site
+        the moment a client disconnects, and counting that as a provider error
+        would make a user who closes a tab mid-suggestion look like a provider
+        failing them. `_fence_stream` already takes that care on the streamed
+        path; this is the same rule for the one-shot ones.
+
+        The test is "is it an `Exception`?" rather than a list of cancellation
+        types, because the things that are *not* -- `CancelledError`,
+        `GeneratorExit`, `KeyboardInterrupt` -- are precisely the ones that mean
+        the caller or the process went away rather than the call going wrong.
+        """
         if exc is None:
             self.done()
-        else:
+        elif isinstance(exc, Exception):
             # `kind` is the LLMError taxonomy the frontend already branches on;
             # anything else is recorded by its type name, which is the only
-            # label a non-LLM failure has. Neither is allowed to suppress the
-            # exception -- returning False re-raises.
+            # label a non-LLM failure has.
             self.done("error", getattr(exc, "kind", None) or type(exc).__name__)
+        else:
+            self.done("aborted")
         return False
 
     def done(self, status: str = "ok", error: str = "") -> dict | None:
