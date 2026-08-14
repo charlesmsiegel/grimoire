@@ -1,7 +1,8 @@
 """User pins and excludes (#129): the two overrides the context builder is not
 allowed to argue with. Stored at <campaign>/pins.json.
 
-    {"<sid>:<kind>:<id>": {"ref": "<kind>:<id>",
+    {"<sid>:<kind>:<id>": {...},   # a scene rule, keyed by the scene it is for
+     "*:<kind>:<id>":     {"ref": "<kind>:<id>",   # a campaign-wide one
                            "mode": "pin" | "exclude",
                            "scope": "scene" | "campaign",
                            "sid": "<sid>" | "",
