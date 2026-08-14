@@ -869,6 +869,21 @@
       "owners": "pcs:winifred"
     }
   },
+  "playing.greeting_ideas[the-drowned-ledger]": [
+    {
+      "cast": [],
+      "created": "",
+      "date": "",
+      "id": "greeting:at-the-ledger",
+      "location": "",
+      "pcless": false,
+      "premise": "",
+      "source": "greeting",
+      "status": "active",
+      "title": "At the ledger",
+      "used_scene": ""
+    }
+  ],
   "plot.open_threads[the-drowned-ledger]": [
     {
       "id": "the-debt",

@@ -45,18 +45,32 @@ def post_scene(cid: str, body: NewScene):
         raise HTTPException(status_code=404, detail="campaign not found")
 
 
-def _resolve_cast(cid: str, tokens: list[str]) -> list[dict]:
+def _resolve_cast(cid: str, tokens: list[str], memo: dict[str, str] | None = None) -> list[dict]:
+    """Cast tokens with the names to show for them.
+
+    `memo` carries token -> name ACROSS calls, for the caller resolving a list
+    of records rather than one: every miss is a markdown parse, and a campaign's
+    ideas mostly cast the same handful of people over and over. Without it the
+    scene ledger re-read the same character file once per row it appeared in --
+    60 saved ideas casting three characters cost 180 file parses to render four
+    cards. The suggestion and intent routes pass nothing and are unaffected:
+    they resolve one record's cast, once.
+    """
     out = []
     for tok in tokens:
         kind, _, aid = tok.partition(":")
-        try:
-            if kind == "pcs":
-                name = store.pcs.read_pc(store.overlay.pc_root(cid, aid), aid)["meta"].get("name", aid)
-            else:
-                name = store.characters.read_character(
-                    store.overlay.char_root(cid, aid), aid)["meta"].get("name", aid)
-        except (store.characters.CharacterNotFound, store.pcs.PCNotFound):
-            name = aid
+        name = memo.get(tok) if memo is not None else None
+        if name is None:
+            try:
+                if kind == "pcs":
+                    name = store.pcs.read_pc(store.overlay.pc_root(cid, aid), aid)["meta"].get("name", aid)
+                else:
+                    name = store.characters.read_character(
+                        store.overlay.char_root(cid, aid), aid)["meta"].get("name", aid)
+            except (store.characters.CharacterNotFound, store.pcs.PCNotFound):
+                name = aid
+            if memo is not None:
+                memo[tok] = name
         out.append({"kind": kind, "id": aid, "name": name})
     return out
 
@@ -123,14 +137,19 @@ async def post_scene_intent(cid: str, body: SceneIntent,
 # `/campaigns/{cid}/{kind}` (see that module's docstring and
 # tests/test_route_order.py). Named `scene-ideas` rather than `ledger`: that
 # route is the continuity ledger's (`routes.campaigns.get_ledger`).
-def _idea_card(cid: str, idea: dict, loc_names: dict[str, str]) -> dict:
+def _idea_card(cid: str, idea: dict, loc_names: dict[str, str],
+               cast_names: dict[str, str]) -> dict:
     """A ledger row in the shape the picker already renders a suggestion in --
     cast resolved to names, location to an {id, name} or null -- plus the
     ledger's own fields. `validate_ideas` has already dropped every id the
-    campaign no longer has, so nothing here has to guess at a dangling one."""
+    campaign no longer has, so nothing here has to guess at a dangling one.
+
+    Both name maps are resolved once for the whole list and threaded through:
+    locations as a dict the caller builds, actors as the memo `_resolve_cast`
+    fills in as it goes."""
     loc = ({"id": idea["location"], "name": loc_names.get(idea["location"], idea["location"])}
            if idea["location"] else None)
-    return {**idea, "cast": _resolve_cast(cid, idea["cast"]), "location": loc}
+    return {**idea, "cast": _resolve_cast(cid, idea["cast"], cast_names), "location": loc}
 
 
 @router.get("/campaigns/{cid}/scene-ideas")
@@ -166,9 +185,10 @@ def get_scene_ideas(cid: str, greetings: bool = True):
             return []
 
     loc_names = {e["id"]: e.get("name", e["id"]) for e in store.overlay.list_entities(cid, "locations")}
+    cast_names: dict[str, str] = {}
     saved = _tolerant(lambda: store.suggest.validate_ideas(cid, store.scene_ideas.records(cid)))
     composed = _tolerant(lambda: store.playing.greeting_ideas(cid)) if greetings else []
-    return [_idea_card(cid, i, loc_names) for i in saved + composed]
+    return [_idea_card(cid, i, loc_names, cast_names) for i in saved + composed]
 
 
 @router.post("/campaigns/{cid}/scene-ideas")

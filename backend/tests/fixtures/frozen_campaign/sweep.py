@@ -142,6 +142,13 @@ def _campaign(out: dict, cid: str) -> None:
             out[f"overlay.read_entity[{cid}/{kind}/{e['id']}]"] = \
                 store.overlay.read_entity(cid, kind, e["id"])
     out[f"overlay.list_greetings[{cid}]"] = store.overlay.list_greetings(cid)
+    # The scene ledger's composed half (#88). It is a NEW reader over OLD data
+    # -- played.json (which has a legacy bare-list form), the greeting files,
+    # and the plot map whose gates decide which greeting is an idea at all --
+    # which is exactly what this fixture exists to catch. The stored half needs
+    # no entry: there is no old scene_ideas.json to misread, and an absent one
+    # reading as empty is covered directly in test_scene_ideas_store.
+    out[f"playing.greeting_ideas[{cid}]"] = store.playing.greeting_ideas(cid)
     out[f"appearances.roster[{cid}]"] = store.appearances.roster(cid)
     out[f"chronicle.read_chronicle[{cid}]"] = store.chronicle.read_chronicle(cid)
     out[f"chronicle.recent[{cid}]"] = store.chronicle.recent(cid, 10)
