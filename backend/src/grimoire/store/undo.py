@@ -190,6 +190,52 @@ def probe(cid: str, edit: dict) -> dict | None:
     return None
 
 
+#: Writers whose record is a SIDECAR filed under another record's id, and whose
+#: store function creates its parent directory. Restoring one for an owner that
+#: is gone does not fail -- it conjures the directory.
+_SIDECAR_OWNER: dict[str, str] = {
+    "state": "characters", "dossier": "characters", "voice_drift": "characters",
+    "group_state": "groups",
+}
+
+
+def _require_owner(cid: str, target: dict) -> None:
+    """Refuse a sidecar whose owning record no longer exists.
+
+    `state.md`, `dossier.md` and `voice_drift.md` live at
+    ``characters/<id>/...`` and their writers `mkdir(parents=True)`. Nothing
+    below that path checks the character is still there, so putting a sidecar
+    back after the character was deleted writes a directory holding a flag and
+    no `character.md` -- the "flag-only phantom" `absorb.apply`'s own
+    voice_drift branch is written to prevent. This is that guard, on the way
+    back out.
+
+    It is not cosmetic. `overlay.forget_world_record` exists because an id
+    outlives the record it named: deleting a character frees its slug, so the
+    next create hands the same id back and inherits whatever is filed under it.
+    A resurrected drift flag is a corrective note about somebody else injected
+    into every one of that character's turns.
+
+    Reachable without any hand-editing. A voice-drift *clear* is an ordinary
+    absorb outcome and leaves ``{"note": "", "anchor": ""}`` -- exactly what a
+    missing file reads as -- so the compare-and-swap passes for a character that
+    has since been deleted. `character_state` has no blank guard at all, and a
+    blank dossier reaches the same place one redo later.
+    """
+    kind = _SIDECAR_OWNER.get(target.get("w"))
+    if kind is None:
+        return
+    rid = target.get("id")
+    try:
+        if kind == "characters":
+            characters.read_character(overlay.char_root(cid, rid), rid)
+        else:
+            overlay.read_entity(cid, kind, rid)
+    except Exception as exc:  # a missing or unreadable owner is a refusal
+        raise UndoConflict(
+            "the record this belonged to no longer exists in this campaign") from exc
+
+
 def read_value(cid: str, target: dict):
     """What the named record holds right now, as a JSON-comparable value.
 
@@ -197,8 +243,13 @@ def read_value(cid: str, target: dict):
     treats that as "no reversal", and a caller performing one treats it as a
     refusal. Both are better than a None that compares equal to a genuinely
     absent record.
+
+    A sidecar whose OWNER is gone raises here rather than reading as empty, so
+    the compare-and-swap is judging the record's existence and not just its
+    text -- see `_require_owner`.
     """
     croot = campaigns_paths.campaign_root(cid)
+    _require_owner(cid, target)
     w = target.get("w")
     if w == "state":
         st = playstate.read_state(croot, target["id"])
@@ -232,8 +283,14 @@ def read_value(cid: str, target: dict):
 
 
 def write_value(cid: str, target: dict, value) -> None:
-    """Put `value` back, through the module that owns the record."""
+    """Put `value` back, through the module that owns the record.
+
+    Re-checks the owner rather than trusting `undo`'s earlier `read_value` to
+    have done it: this is the edge where the directory would be created, and it
+    is public API — the guard belongs where the damage happens.
+    """
     croot = campaigns_paths.campaign_root(cid)
+    _require_owner(cid, target)
     w = target.get("w")
     if w == "state":
         playstate.write_state(croot, target["id"], value or "")
@@ -362,6 +419,11 @@ def undo(cid: str, jid: str) -> dict:
             raise NotUndoable(entry.get("why") or why(entry.get("kind")))
         try:
             stored = read_value(cid, target)
+        except UndoError:
+            # Already a refusal, and one that says something more specific than
+            # the catch-all below -- a deleted owner names itself. Flattening it
+            # would trade a message the reader can act on for a generic one.
+            raise
         except Exception as exc:  # a vanished record is a refusal, not a 500
             raise UndoConflict(UNREADABLE) from exc
         if stored != plan.get("expect"):
