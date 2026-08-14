@@ -8,6 +8,7 @@ the root document), so the whole point of #87 held only under `vite dev`.
 """
 
 import ntpath
+import os.path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,17 +18,21 @@ from grimoire.main import SPAStaticFiles
 PAGE = {"accept": "text/html,application/xhtml+xml"}
 
 
-def _windows_get_path(self, scope):
-    """`StaticFiles.get_path`, resolved the way Windows resolves it.
+def _resolve_with(mod, scope):
+    """Starlette's `StaticFiles.get_path`, with its `os.path` swapped for `mod`.
 
-    Starlette's own implementation is `os.path.normpath(os.path.join(*path))`,
-    so on Windows it hands `get_response` a path spelled with backslashes --
-    `api\\not-a-real-endpoint`. Ubuntu CI never produces that separator, so a
-    guard that only understands `/` looks correct there and fails on a Windows
-    checkout (#313); substituting `ntpath` for `os.path` reproduces it anywhere.
-    The app under test mounts at `/`, so the route path is the request path.
+    `os.path.normpath(os.path.join(*route_path.split("/")))` is the real thing;
+    substituting `ntpath` resolves a URL the way Windows resolves it, which is
+    how a checkout on Ubuntu CI can produce the `api\\not-a-real-endpoint` from
+    #313 at all. The app under test mounts at `/`, so the route path is the
+    request path.
     """
-    return ntpath.normpath(ntpath.join(*scope["path"].split("/")))
+    return mod.normpath(mod.join(*scope["path"].split("/")))
+
+
+def _windows_get_path(self, scope):
+    """`get_path` as a Windows checkout would answer it."""
+    return _resolve_with(ntpath, scope)
 
 
 @pytest.fixture()
@@ -128,3 +133,20 @@ def test_a_client_route_still_falls_back_with_windows_separators(client, monkeyp
 ])
 def test_the_api_guard_reads_either_separator(path, under):
     assert SPAStaticFiles._under_api(path) is under
+
+
+@pytest.mark.parametrize("url", ["/api", "/api/", "/api/x/y", "/", "/worlds",
+                                 "/api/../worlds", "//api/x"])
+def test_the_windows_simulation_still_tracks_starlette(tmp_path, url):
+    """`_resolve_with` is a *copy* of Starlette's `get_path`, and a copy drifts.
+
+    If `get_path` grows a step this does not model -- stripping `root_path`,
+    joining differently -- the two tests above keep passing while simulating
+    something Starlette no longer does, and the Windows regression they exist to
+    catch walks straight back in. So the copy is checked against the real method
+    on whatever platform is running: on Ubuntu that pins the posix spelling, on
+    Windows it pins the very ntpath one `_windows_get_path` fakes elsewhere.
+    """
+    files = SPAStaticFiles(directory=str(tmp_path), html=True)
+    scope = {"type": "http", "path": url, "root_path": "", "headers": []}
+    assert files.get_path(scope) == _resolve_with(os.path, scope)
