@@ -15,8 +15,6 @@ import base64
 import ipaddress
 import socket
 import ssl
-import urllib.request
-from urllib.parse import urlparse
 
 import certifi
 import httpx
@@ -96,47 +94,39 @@ def host_is_blocked(host: str) -> bool:
     return resolve_allowed(host) is None
 
 
-def _pinned_request(client: httpx.Client, url: str, addr: str) -> httpx.Request:
+def _pinned_request(client: httpx.Client, u: httpx.URL, addr: str) -> httpx.Request:
     """A GET aimed at `addr` but still addressed to the URL's own hostname.
 
     The literal address goes in the URL, so nothing re-resolves the name;
     `Host` and the TLS SNI/certificate hostname stay the real one, so
     certificate verification still means what it says. httpx brackets an IPv6
     literal itself when it rewrites the host.
+
+    The A-label (`raw_host`), never `u.host`: ssl re-encodes a unicode
+    server_hostname with the stdlib's IDNA-2003 codec, which disagrees with the
+    IDNA-2008 label httpx already put in `Host` and we already resolved — for
+    `faß.example` that is `fass.example` against `xn--fa-hia.example`, i.e.
+    verifying the certificate of a different site than the one we asked for.
+
+    This holds through a proxy too — the literal is what gets CONNECTed, so the
+    proxy doesn't re-resolve either. A proxy that allowlists hostnames refuses
+    an IP CONNECT; that fails closed (the caller sees the usual None), which is
+    the right way round for a guard.
     """
-    u = httpx.URL(url)
     return client.build_request(
         "GET",
         u.copy_with(host=addr),
         headers={"Host": u.netloc.decode("ascii")},
-        extensions={"sni_hostname": u.host},
+        extensions={"sni_hostname": u.raw_host.decode("ascii")},
     )
 
 
-def _proxied(scheme: str, host: str) -> bool:
-    """True when the environment routes this request through a proxy.
-
-    Pinning is skipped in that case, because the proxy — not this process —
-    resolves the name and opens the connection: an IP-literal CONNECT buys no
-    guarantee we don't already have, and a proxy that allowlists hostnames
-    refuses it outright. httpx reads the same environment (`trust_env`), so
-    this asks urllib the same question it would.
-    """
-    try:
-        proxies = urllib.request.getproxies()
-        if not (proxies.get(scheme) or proxies.get("all")):
-            return False
-        return not urllib.request.proxy_bypass(host)
-    except Exception:  # noqa: BLE001 — a proxy_bypass that can't answer isn't one
-        return False
-
-
-def _send_pinned(client: httpx.Client, url: str, addrs: list[str]) -> httpx.Response:
+def _send_pinned(client: httpx.Client, u: httpx.URL, addrs: list[str]) -> httpx.Response:
     """Send to the first validated address that accepts a connection."""
     last: Exception | None = None
     for addr in addrs:
         try:
-            return client.send(_pinned_request(client, url, addr), stream=True)
+            return client.send(_pinned_request(client, u, addr), stream=True)
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             last = exc  # a host with several records: try the next validated one
     raise last or ValueError("no usable address")
@@ -147,6 +137,10 @@ def _http_get_bytes(url: str, *, transport: httpx.BaseTransport | None = None) -
 
     Every hop resolves its host exactly once and connects to an address that
     resolution validated — see `resolve_allowed`. `transport` is a test seam.
+
+    One parser decides what the host is. Asking `urlparse` what to validate and
+    then letting httpx decide what to request is its own bypass: the two
+    disagree about IDN hosts, so the name checked would not be the name fetched.
     """
     headers = {"User-Agent": _UA, "Accept": "image/*,*/*"}
     # No keep-alive: the pool keys connections by origin, which is now the
@@ -156,16 +150,13 @@ def _http_get_bytes(url: str, *, transport: httpx.BaseTransport | None = None) -
     with httpx.Client(timeout=10.0, follow_redirects=False, verify=_SSL_CTX,
                       headers=headers, limits=limits, transport=transport) as client:
         for _ in range(_MAX_REDIRECTS + 1):
-            parsed = urlparse(url)
-            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            u = httpx.URL(url)
+            if u.scheme not in ("http", "https") or not u.raw_host:
                 raise ValueError("bad url")
-            addrs = resolve_allowed(parsed.hostname)
+            addrs = resolve_allowed(u.raw_host.decode("ascii"))
             if addrs is None:
                 raise ValueError("blocked host")
-            if _proxied(parsed.scheme, parsed.hostname):
-                r = client.send(client.build_request("GET", url), stream=True)
-            else:
-                r = _send_pinned(client, url, addrs)
+            r = _send_pinned(client, u, addrs)
             try:
                 if r.is_redirect:
                     loc = r.headers.get("location")
@@ -173,7 +164,7 @@ def _http_get_bytes(url: str, *, transport: httpx.BaseTransport | None = None) -
                         raise ValueError("redirect without location")
                     # Joined against the hostname URL, not the pinned one, so a
                     # relative Location keeps the hostname instead of the IP.
-                    url = str(httpx.URL(url).join(loc))
+                    url = str(u.join(loc))
                     continue
                 r.raise_for_status()
                 cl = r.headers.get("content-length")
