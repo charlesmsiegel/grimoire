@@ -208,8 +208,7 @@ substituted by code:
   adopts by hand, and there is no reply after it to strip the block from
 - `speaker` — `None`, or `{lead, quiet, reason, spoken, silent_for}`: who
   carries this turn in a group scene (#29), for `sections/active_speaker.j2`.
-  `reason` is `"addressed"` (the last player post named exactly one present
-  NPC) or `"rotation"` (longest silence, then fewest blocks, then cast order);
+  `reason` is `"named"` (the turn's input named exactly one present NPC) or `"rotation"` (longest silence, then fewest blocks, then cast order);
   `spoken`/`silent_for` are why. `None` — and so no section — when
   `speaker_turn_taking` is off, which is the shipped default, and whenever
   fewer than two NPCs are present, since naming a lead in a two-hander only

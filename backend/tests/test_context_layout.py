@@ -136,7 +136,25 @@ def test_describe_keeps_disabled_sections_visible_and_in_place():
 def test_describe_shows_the_edited_label_and_the_default_beside_it():
     rows = {r["id"]: r for r in layout.describe(CATALOG, [{"id": "a", "label": "Mine"}])}
     assert rows["a"]["label"] == "Mine" and rows["a"]["default_label"] == "L"
-    assert rows["b"]["label"] == "L"
+
+
+def test_describe_reports_an_unset_label_as_blank_not_as_the_default():
+    """The editor binds its input to `label` and placeholders it with
+    `default_label`. Reporting the effective label would refill every blank
+    input, and the next save would pin all thirty sections to labels the reader
+    never typed -- surviving a release that renames one."""
+    rows = {r["id"]: r for r in layout.describe(CATALOG, [{"id": "a", "label": "Mine"}])}
+    assert rows["b"]["label"] == "" and rows["b"]["default_label"] == "L"
+    assert all(r["label"] == "" for r in layout.describe(CATALOG, []))
+
+
+def test_describe_survives_a_round_trip_without_pinning_labels():
+    """save -> reload -> save must not turn blanks into explicit labels."""
+    first = layout.describe(CATALOG, [])
+    stored = layout.sanitize([{"id": r["id"], "label": r["label"], "enabled": r["enabled"]}
+                              for r in first])
+    assert all(e["label"] == "" for e in stored)
+    assert layout.describe(CATALOG, stored) == first
 
 
 def test_describe_lists_every_catalog_section_exactly_once():

@@ -31,35 +31,58 @@ def test_a_duplicate_name_is_not_a_second_actor():
     assert speaker.nominate(["Seraphine Vale", "Seraphine Vale"], []) is None
 
 
-# ---------------------------------------------------------- direct address
+# ------------------------------------------------------------ being named
 
-def test_direct_address_by_full_name_wins():
+def test_naming_an_npc_by_full_name_wins():
     hist = [_npc("Seraphine Vale"), _npc("Mara Quist"),
             _player("Winifred Ash, what did you see?")]
     out = speaker.nominate(NPCS, hist)
-    assert out["lead"] == "Winifred Ash" and out["reason"] == "addressed"
+    assert out["lead"] == "Winifred Ash" and out["reason"] == "named"
 
 
-def test_direct_address_by_unique_first_name_wins():
+def test_naming_an_npc_by_unique_first_name_wins():
     hist = [_npc("Winifred Ash"), _player("Mara, hold the door.")]
     out = speaker.nominate(NPCS, hist)
-    assert out["lead"] == "Mara Quist" and out["reason"] == "addressed"
+    assert out["lead"] == "Mara Quist" and out["reason"] == "named"
 
 
-def test_direct_address_beats_the_rotation():
-    """Winifred has never spoken, so rotation would pick her; the post is
-    addressed to Mara, and being spoken to outranks having been quiet."""
+def test_naming_an_npc_beats_the_rotation():
+    """Winifred has never spoken, so rotation would pick her; the post names
+    Mara, and being singled out outranks having been quiet."""
     hist = [_npc("Seraphine Vale"), _player("Mara, hold the door.")]
     out = speaker.nominate(NPCS, hist)
-    assert out["lead"] == "Mara Quist" and out["reason"] == "addressed"
+    assert out["lead"] == "Mara Quist" and out["reason"] == "named"
 
 
-def test_two_npcs_named_in_one_post_is_not_a_direct_address():
+def test_a_pending_input_outranks_the_last_stored_post():
+    """A director note and an opener prompt are the turn's actual text and are
+    never persisted -- which is why `_assemble` already feeds them to world-info
+    activation. Ignoring them here would be the same bug one seam over."""
+    hist = [_npc("Seraphine Vale"), _player("Mara, hold the door.")]
+    out = speaker.nominate(NPCS, hist, pending="Winifred steps out of the dark.")
+    assert out["lead"] == "Winifred Ash" and out["reason"] == "named"
+
+
+def test_a_blank_pending_input_falls_back_to_the_last_post():
+    hist = [_npc("Seraphine Vale"), _player("Mara, hold the door.")]
+    assert speaker.nominate(NPCS, hist, pending="   ")["lead"] == "Mara Quist"
+
+
+def test_a_pending_input_naming_nobody_does_not_resurrect_the_last_post():
+    """The note is newer, so it REPLACES the post as the text being read --
+    it does not fall back to it and nominate whoever the player named a turn
+    ago."""
+    hist = [_npc("Seraphine Vale"), _player("Mara, hold the door.")]
+    out = speaker.nominate(NPCS, hist, pending="The storm reaches the pier.")
+    assert out["reason"] == "rotation"
+
+
+def test_two_npcs_named_in_one_post_singles_out_neither():
     hist = [_npc("Winifred Ash"), _player("Mara and Seraphine, both of you.")]
     assert speaker.nominate(NPCS, hist)["reason"] == "rotation"
 
 
-def test_an_ambiguous_first_name_addresses_nobody():
+def test_an_ambiguous_first_name_names_nobody():
     """The guard `_voice_notes` applies, for the same reason: an instruction
     pointed at the wrong character is worse than no instruction."""
     npcs = ["Winifred Ash", "Winifred Vale", "Mara Quist"]
@@ -67,13 +90,13 @@ def test_an_ambiguous_first_name_addresses_nobody():
     assert speaker.nominate(npcs, hist)["reason"] == "rotation"
 
 
-def test_a_first_name_that_is_another_actors_whole_name_addresses_nobody():
+def test_a_first_name_that_is_another_actors_whole_name_names_nobody():
     npcs = ["Mara Quist", "Mara", "Winifred Ash"]
     hist = [_npc("Winifred Ash"), _player("Mara, wait.")]
     assert speaker.nominate(npcs, hist)["reason"] == "rotation"
 
 
-def test_only_the_last_player_post_is_read_for_address():
+def test_only_the_last_player_post_is_read_for_names():
     hist = [_player("Winifred Ash, wait."), _npc("Winifred Ash"),
             _player("What now?")]
     assert speaker.nominate(NPCS, hist)["reason"] == "rotation"
@@ -84,7 +107,7 @@ def test_a_name_inside_a_longer_word_is_not_a_mention():
     assert speaker.nominate(NPCS, hist)["reason"] == "rotation"
 
 
-def test_address_matching_ignores_case():
+def test_name_matching_ignores_case():
     hist = [_npc("Winifred Ash"), _player("mara, hold the door.")]
     assert speaker.nominate(NPCS, hist)["lead"] == "Mara Quist"
 

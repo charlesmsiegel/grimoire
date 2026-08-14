@@ -192,7 +192,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # (the toggle off, or fewer than two NPCs) renders no section at all.
         # `history`, not `sub_history`: the raw messages still carry the
         # `speaker` stamp that `_project_history` folds into the text.
-        "speaker": (speaker.nominate(npc_names, history)
+        "speaker": (speaker.nominate(npc_names, history, pending=wi_seed)
                     if config.speaker_turn_taking() else None),
         "transient_tracker": config.turnstate_depth() > 0,
         "transient_fields": list(turnstate.FIELDS),
