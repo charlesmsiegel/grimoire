@@ -43,13 +43,19 @@ entries.
 - `card` — the card's `data` dict
 - `fields` — `(label, key)` pairs, `scenario.PROMPT_FIELDS`; a key the card
   does not carry renders no heading at all
-- `entries` — the card's own world-info, `scenario.lorebook_entries()`
+- `entries` — the card's own world-info, `scenario.prompt_entries()`
   (`{"name","keys","body"}` rows). They are listed so the model can *re-file*
-  one by name without retyping its body
+  one by name; a body it sends for a listed entry is discarded
 - `greetings` — its scene openers, `scenario.prompt_greetings()`
   (`{"name","body"}`), with image references already removed by
   `scenario.strip_images` — an embedded `data:` image is megabytes of base64
   that says nothing about the cast
+
+Both lists carry **clipped** bodies (`ENTRY_PROMPT_CHARS` /
+`GREETING_PROMPT_CHARS`), since the cards this exists for are large and neither
+body is needed whole. The clip is the prompt's alone — `proposal`/`apply` carry
+every body entire — and it ends in `…`, which `system.j2` explains so the model
+does not read an abridged entry as an incomplete one.
 The reply is one JSON object, `{"characters": [...], "entries": [...]}`, parsed
 by `scenario.parse_output` through `absorb.extract_object`. Nothing is written
 from it: it becomes a *proposal* the user reviews and edits, and only

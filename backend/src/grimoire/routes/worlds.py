@@ -437,7 +437,7 @@ def post_lorebook_import(wid: str, body: LorebookCommit):
 # proposal from it, and — after the user has edited that proposal — write it.
 # Only the third writes anything, which is what makes the review gate real
 # rather than a confirmation dialog over work already done.
-async def _scenario_proposal(card: dict, client: LLMClient, conn: dict) -> dict:
+async def _scenario_proposal(card: dict, client: LLMClient, conn: dict, root) -> dict:
     """Extract a proposal from `card`.
 
     One bounded completion, exactly like the tagline and voice-anchor previews.
@@ -450,13 +450,16 @@ async def _scenario_proposal(card: dict, client: LLMClient, conn: dict) -> dict:
         text = await _bounded_call(client.complete(store.scenario.build_prompt(card), conn))
     except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
-    return store.scenario.proposal(card, store.scenario.parse_output(text))
+    # The world's roster comes along so each proposed row can say whether the
+    # import would REUSE a character of that name rather than create one.
+    existing = [c["name"] for c in store.characters.list_characters(root)]
+    return store.scenario.proposal(card, store.scenario.parse_output(text), existing)
 
 
 @router.post("/worlds/{wid}/scenario/parse")
 async def post_scenario_parse(wid: str, file: UploadFile = File(...), format: str = Form(...),
                               client: LLMClient = Depends(get_llm)):
-    _world_root_or_404(wid)
+    root = _world_root_or_404(wid)
     # Before the upload is read, and before the download in the sibling route:
     # "you have no model configured" is a setup mistake, and reporting it only
     # after the user has fixed a card (or waited on a slow host) tells them the
@@ -467,13 +470,13 @@ async def post_scenario_parse(wid: str, file: UploadFile = File(...), format: st
         card = store.cards.loads(data, format)
     except store.cards.CardParseError as exc:
         raise HTTPException(status_code=400, detail=f"could not parse card: {exc}")
-    return await _scenario_proposal(card, client, conn)
+    return await _scenario_proposal(card, client, conn, root)
 
 
 @router.post("/worlds/{wid}/scenario/parse-url")
 async def post_scenario_parse_url(wid: str, body: ScenarioUrlBody,
                                   client: LLMClient = Depends(get_llm)):
-    _world_root_or_404(wid)
+    root = _world_root_or_404(wid)
     conn = _require_connection()
     try:
         # The download is blocking and this route is async, so it goes to the
@@ -487,7 +490,7 @@ async def post_scenario_parse_url(wid: str, body: ScenarioUrlBody,
         raise HTTPException(status_code=404, detail="could not fetch a card from that URL")
     except store.cards.CardParseError as exc:
         raise HTTPException(status_code=400, detail=f"could not parse card: {exc}")
-    return await _scenario_proposal(card, client, conn)
+    return await _scenario_proposal(card, client, conn, root)
 
 
 @router.post("/worlds/{wid}/scenario/import")

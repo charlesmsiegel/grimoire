@@ -86,6 +86,12 @@ def test_parsing_an_uploaded_card_proposes_a_cast_and_writes_nothing(client, wid
     assert _counts(client, wid) == {"characters": 0, "lore": 0, "locations": 0, "greetings": 0}
 
 
+def test_a_parse_says_which_of_the_cast_the_world_already_has(client, wid):
+    assert _upload(client, wid).json()["characters"][0]["exists"] is False
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    assert _upload(client, wid).json()["characters"][0]["exists"] is True
+
+
 def test_parsing_an_unreadable_card_is_a_400(client, wid):
     r = client.post(f"/api/worlds/{wid}/scenario/parse",
                     files={"file": ("card.json", b"not a card", "application/json")},

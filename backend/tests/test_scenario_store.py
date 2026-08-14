@@ -126,6 +126,18 @@ def test_a_proposal_never_offers_a_cast_name_its_openers_cannot_match():
         assert g["character"] in {"", *[c["name"] for c in prop["characters"]]}
 
 
+def test_a_cast_member_proposed_twice_appears_once():
+    """A proposal wired on names cannot represent two people who share one:
+    `apply` would resolve both rows to a single character and report the second
+    as one it found already there."""
+    prop = scenario.proposal(CARD, {"characters": [
+        {"name": "Mara", "description": "Tends the tide-gate.", "personality": "Watchful."},
+        {"name": " mara ", "description": "A second guess.", "personality": ""},
+    ], "entries": []})
+    assert [c["name"] for c in prop["characters"]] == ["Mara"]
+    assert prop["characters"][0]["description"] == "Tends the tide-gate."   # the fuller one
+
+
 def test_strip_images_drops_every_reference_shape_localize_knows():
     body = ('![a](https://example.com/one.png) prose '
             '<img src="https://example.com/two.png"> more '
@@ -189,6 +201,21 @@ def test_a_proposed_entry_refiles_a_card_entry_without_retyping_its_body():
     assert by_name["The Drowned Guild"]["category"] == "groups"         # genuinely new
 
 
+def test_a_card_entrys_own_text_is_never_replaced_by_the_models():
+    """The prompt shows entry bodies CLIPPED, so a model can read one as
+    truncated and offer to complete it. Letting that land would swap the card's
+    exact text for a guess — and re-filing an entry was never supposed to cost
+    its body in the first place. A match takes the category and nothing else."""
+    prop = scenario.proposal(CARD, {"characters": [], "entries": [
+        {"name": "The Tide-Gate", "keys": ["invented"], "category": "locations",
+         "body": "Iron and barnacle, three men wide, and beyond it the drowned nave …"},
+    ]})
+    gate = next(e for e in prop["entries"] if e["name"] == "The Tide-Gate")
+    assert gate["category"] == "locations"                               # re-filed
+    assert gate["body"] == "Iron and barnacle, three men wide."          # the card's, whole
+    assert gate["keys"] == ["gate", "tide-gate"]                         # the card's keys
+
+
 def test_a_proposed_entry_with_no_body_and_no_match_is_dropped():
     prop = scenario.proposal(CARD, {"characters": [], "entries": [
         {"name": "Nowhere", "keys": [], "body": "", "category": "locations"}]})
@@ -243,6 +270,19 @@ def test_apply_creates_the_cast_the_entries_and_the_openers(world):
     assert opener["body"].strip() == "Mara is waiting at the tide-gate when you arrive."
     second = greetings.read_greeting(root, out["greetings"][1]["id"])
     assert second["meta"]["present"] == [made["Winifred"]["id"], made["Mara"]["id"]]
+
+
+def test_a_proposal_says_which_of_its_cast_the_world_already_has():
+    """Reuse-by-name is the right write and the wrong surprise: a world with its
+    own Mara silently absorbs this card's openers into her. The reviewer is told
+    before they commit, so renaming the row is still an option."""
+    prop = scenario.proposal(CARD, EXTRACTED, existing=["  MARA  "])
+    by_name = {c["name"]: c for c in prop["characters"]}
+    assert by_name["Mara"]["exists"] is True        # matched the way `apply` matches
+    assert by_name["Winifred"]["exists"] is False
+    # Absent `existing`, nothing is claimed either way rather than claimed false
+    # on no evidence — a caller that cannot look is not a world with no cast.
+    assert all(c["exists"] is False for c in scenario.proposal(CARD, EXTRACTED)["characters"])
 
 
 def test_apply_reuses_a_character_the_world_already_has(world):

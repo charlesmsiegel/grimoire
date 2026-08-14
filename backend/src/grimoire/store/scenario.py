@@ -228,14 +228,18 @@ def merge_entries(book: list[dict], proposed: list[dict]) -> list[dict]:
     """The card's world-info, re-filed and extended by the model's entries.
 
     A proposed entry whose name matches one of the card's own takes over that
-    entry's `category` — re-filing "The Drowned Chapel" from lore to locations
-    is the single most useful thing the extraction does with a lorebook, and it
-    costs no body. A proposed entry with a body and no match is appended as a
-    new entry; one with neither is dropped, since there is nothing to write.
+    entry's `category` and **nothing else** — re-filing "The Drowned Chapel"
+    from lore to locations is the single most useful thing the extraction does
+    with a lorebook, and it costs no body. A proposed entry with a body and no
+    match is appended as a new entry; one with neither is dropped, since there
+    is nothing to write.
 
-    The card's entries keep their own body and keys unless the model sent a
-    body for them, which is what makes re-filing lossless: the model is not
-    asked to retype text that is already exact.
+    A match taking only the category is a rule, not a shortcut. The card's text
+    is exact and the model's is a paraphrase of what it was shown — and what it
+    was shown is CLIPPED (`ENTRY_PROMPT_CHARS`), so a body it offers for a
+    listed entry is at best a retype and at worst a completion of a sentence
+    the prompt cut off. Either way it can only lose detail the card already
+    had, so it is never taken. Keys are the card's for the same reason.
     """
     out = [dict(e) for e in book]
     index = {_norm(e.get("name", "")): i for i, e in enumerate(out)}
@@ -247,10 +251,6 @@ def merge_entries(book: list[dict], proposed: list[dict]) -> list[dict]:
                 index[_norm(e["name"])] = len(out) - 1
             continue
         out[i]["category"] = e["category"]
-        if e["body"]:
-            out[i]["body"] = e["body"]
-            if e["keys"]:
-                out[i]["keys"] = e["keys"]
     return out
 
 
@@ -287,22 +287,43 @@ def resolve_cast(body: str, names: list[str]) -> tuple[str, list[str]]:
     return primary, greetings.present_in(body, primary, {n: n for n in names})
 
 
-def proposal(card: dict, extracted: dict) -> dict:
+def proposal(card: dict, extracted: dict, existing: list[str] | tuple[str, ...] = ()) -> dict:
     """The review payload: what an import would create, before it creates it.
 
     Pure. `extracted` is `parse_output`'s result — pass `{"characters": [],
     "entries": []}` to see what the card alone yields, which is what a world
     with no LLM connection can still import.
 
+    `existing` is the world's current character names, and each proposed row
+    comes back with `exists`: whether `apply` will REUSE a character rather than
+    create one. Advisory only — `apply` re-resolves against the world as it
+    stands, since anything can happen between a review and an import — but
+    without it, a world that already has a Mara absorbs this card's openers into
+    her with nothing said, and renaming the row (the reviewer's way out) is a
+    choice they never got offered. Matched with `_norm`, the same rule `apply`
+    uses, rather than a second spelling of "the same name".
+
     Cast names are normalized here rather than trusted, even though
     `parse_output` already trims them: the two halves of a proposal reference
     each other BY NAME, so a cast row reading " Mara " beside an opener reading
     "Mara" is a review screen whose picker has no option for its own value, and
     an `apply` that resolves neither. One spelling, decided in one place.
+
+    For the same reason a name may appear only once. A model asked for one
+    entry per cast member does sometimes list one twice, and a proposal wired on
+    names cannot represent two people who share one: `apply` would resolve both
+    rows to a single character and report the second as a pre-existing one it
+    reused. The first row wins, which keeps the fuller description — models put
+    their best answer first and hedge on the repeat.
     """
-    chars = [{**dict(c), "name": _text(c.get("name"))} for c in extracted.get("characters", [])]
-    chars = [c for c in chars if c["name"]]
-    names = [c["name"] for c in chars]
+    known = {_norm(n) for n in existing}
+    chars, names = [], []
+    for row in extracted.get("characters", []):
+        name = _text(row.get("name"))
+        if not name or _norm(name) in {_norm(n) for n in names}:
+            continue
+        chars.append({**dict(row), "name": name, "exists": _norm(name) in known})
+        names.append(name)
     entries = merge_entries(lorebook_entries(card), extracted.get("entries", []))
     openers = []
     for g in card_greetings(card):
@@ -372,7 +393,10 @@ def apply(root: Path, wid: str, prop: dict, *, art: bool = True, fetch=None) -> 
         body = row.get("body", "")
         if not isinstance(body, str) or not body.strip():
             continue
-        primary = roster.get(_norm(_text(row.get("character"))))
+        # `or None`: a blank name is "this opener leads on nobody", which must
+        # not be looked up — a world holding a character whose name is itself
+        # blank would otherwise answer for every cast-less opener there is.
+        primary = roster.get(_norm(_text(row.get("character")))) if row.get("character") else None
         # A name the world has no character for is dropped rather than written:
         # `present` holds ids, and a name that resolved to nothing would put a
         # dangling one in the greeting's frontmatter.
