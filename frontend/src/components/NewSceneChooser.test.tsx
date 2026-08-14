@@ -57,6 +57,18 @@ test("Back returns to the picker without writing", async () => {
   expect(api.createScene).not.toHaveBeenCalled();
 });
 
+// The confirm pane defaults `ready` to true for the tests that predate the
+// prop, so a dropped `ready={ready}` here would leave every SceneConfirmForm
+// test green while the pane quietly claimed it could generate. This is the
+// only test that can catch that, so it asserts the thread, not the hint.
+test("the confirm pane is told whether an LLM is connected", async () => {
+  render(<NewSceneChooser cid="c" afterSid="s1" ready={false} onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByText("Reckoning"));
+  fireEvent.click(await screen.findByRole("radio", { name: /opening post/i }));
+  expect(screen.getByText(/set up an llm connection/i)).toBeInTheDocument();
+});
+
 // Issue #319: useSceneSuggestions used to live inside SceneIdeaPicker, which
 // unmounts on every Back (its draft is cleared, remounting the picker).
 // Remounting re-ran the hook's mount effect at rank=true -- a fresh,

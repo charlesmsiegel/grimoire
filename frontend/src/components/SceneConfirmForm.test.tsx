@@ -455,6 +455,30 @@ test("Continue after a soft failure honours the declined first post", async () =
   expect(onCreated).toHaveBeenCalledWith("s9-dated", undefined);
 });
 
+test("the generate option admits it when no LLM is connected", async () => {
+  // SceneIdeaPicker and CastPanel both say this; this pane is the one now
+  // offering to "generate an opening post", so it cannot be the one that stays
+  // quiet about there being nothing to generate with. Reachable without an LLM:
+  // the typed path builds a draft with a premise whether or not one is set up.
+  render(<SceneConfirmForm cid="c" draft={GEN} ready={false} onBack={() => {}} onCreated={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("radio", { name: /opening post/i }));
+  expect(screen.getByText(/set up an llm connection/i)).toBeInTheDocument();
+});
+
+test("the generate option stays quiet when an LLM is connected", async () => {
+  renderForm(GEN);
+  await screen.findByLabelText("Premise");
+  expect(screen.queryByText(/set up an llm connection/i)).toBeNull();
+});
+
+test("the first-post choice stays locked after a soft failure, like every other field", async () => {
+  (api.setSceneLocation as any).mockRejectedValue({ detail: "gone" });
+  renderForm(GEN);
+  fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
+  await screen.findByText(/gone/);
+  expect(screen.getByRole("radio", { name: /^nothing/i })).toBeDisabled();
+});
+
 test("the first-post choice is locked while the create sequence is writing", async () => {
   let release: (v: any) => void = () => {};
   (api.createScene as any).mockReturnValue(new Promise((r) => { release = r; }));

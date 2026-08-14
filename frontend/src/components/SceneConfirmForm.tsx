@@ -16,10 +16,18 @@ import type { DraftCast, SceneDraft } from "./sceneDraft";
  *  #91's adapted greeting becomes the fourth member of this union. */
 type FirstPost = "none" | "greeting" | "premise";
 
-export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreated, onWriting,
-                                    onSalvaged }: {
+export function SceneConfirmForm({ cid, draft, notice, ready = true, onBack, onCancel, onCreated,
+                                    onWriting, onSalvaged }: {
   cid: string;
   draft: SceneDraft;
+  /** whether an LLM connection exists. This pane cannot generate anything
+   *  itself -- `POST .../opener` needs a scene -- but it is now the pane that
+   *  OFFERS to, so it has to say when there is nothing to generate with, the
+   *  same way `SceneIdeaPicker` and `CastPanel` do. Reachable without one: the
+   *  typed path builds a premise-carrying draft whether or not an LLM is set
+   *  up. Defaults to true so the many tests that predate this prop keep
+   *  asserting the connected case they were written for. */
+  ready?: boolean;
   /** a warning raised while the draft was built, e.g. a failed extraction */
   notice?: string | null;
   onBack: () => void;
@@ -336,6 +344,11 @@ export function SceneConfirmForm({ cid, draft, notice, onBack, onCancel, onCreat
               <textarea id="confirm-premise" aria-label="Premise" rows={3} value={premise} disabled={locked}
                         onChange={(e) => setPremise(e.target.value)} />
               <div className="field-hint">Seeds the opener box once the scene exists.</div>
+              {/* Not disabled, and the default is left alone: the box is still
+                  worth filling for a reader who sets a connection up after
+                  creating the scene, and CastPanel takes the same line --
+                  prompt input enabled, hint shown, only Generate disabled. */}
+              {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
             </>
           )}
         </>
