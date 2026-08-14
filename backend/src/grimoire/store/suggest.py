@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 
 from .. import prompts
-from . import (calendars, characters, chronicle,
+from . import (birthdays, calendars, characters, chronicle, clock,
                greetings, overlay, pcs, playing, plot)
 from .appearances import cast as appearances_cast, paths as appearances_paths
 from .campaigns import paths as campaigns_paths
@@ -25,44 +25,6 @@ def _char_name(aroot, aid: str) -> str:
         return characters.read_character(aroot, aid)["meta"].get("name", aid)
     except characters.CharacterNotFound:
         return aid
-
-
-def _birthdays(cid: str, now: str, roster: list[dict]) -> list[dict]:
-    if not now:
-        return []
-    croot = campaigns_paths.campaign_root(cid)    # calendar.json is campaign-local
-    aroot = appearances_paths.locked_actor_root(cid)    # roster actors are locked, so campaign-side
-    try:
-        cfg = calendars.read_calendar(croot)
-        provider = calendars.get_provider(cfg["primary"])
-        now_fixed = calendars.fixed_of(provider, now)
-    except (calendars.CalendarError, KeyError):
-        return []
-    out: list[dict] = []
-    for a in roster:
-        try:
-            if a["kind"] == "pcs":
-                birth = pcs.read_persona(aroot, a["id"], a["version"]).get("birthdate", "")
-                name = pcs.read_pc(aroot, a["id"])["meta"].get("name", a["id"])
-            else:
-                birth = characters.read_character(aroot, a["id"])["meta"].get("birthdate", "")
-                name = _char_name(aroot, a["id"])
-        except (characters.CharacterNotFound, pcs.PCNotFound, pcs.PCVersionNotFound):
-            continue
-        if not birth:
-            continue
-        try:
-            when = None
-            for d in range(0, calendars.UPCOMING_WINDOW_DAYS + 1):
-                if calendars.is_anniversary(provider, birth, provider.format(now_fixed + d)):
-                    when = "today" if d == 0 else f"in {d} days"
-                    break
-            if when is None:
-                continue
-            out.append({"name": name, "age": calendars.age(provider, birth, now), "when": when})
-        except calendars.CalendarError:
-            continue
-    return out
 
 
 def _tok(ref: str) -> str:
@@ -84,7 +46,13 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
         recent = chronicle.recent(cid, 3)
     except Exception:  # noqa: BLE001 — garbled chronicle.json
         recent = []
-    now = recent[-1].get("date", "") if recent else ""
+    # The campaign clock, not the last absorbed scene's date (#100). The two
+    # agree until somebody advances time between scenes, which is exactly the
+    # case this snapshot used to get wrong -- a suggestion prompt proposing next
+    # week from a "now" a month behind the campaign's actual present.
+    # `clock.now` falls back to that same chronicle date, so an unclocked
+    # campaign is unchanged.
+    now = clock.now(cid)
     story_so_far = [{"one_line": r.get("one_line", ""), "location": r.get("location", ""),
                      "date": r.get("date", "")} for r in reversed(recent)]
 
@@ -150,7 +118,7 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
                            for e in overlay.list_entities(cid, "locations")]
 
     return {"now": now, "friendly": friendly, "holidays_today": holidays_today,
-            "upcoming": upcoming, "birthdays": _birthdays(cid, now, roster),
+            "upcoming": upcoming, "birthdays": birthdays.upcoming(cid, now, roster),
             "story_so_far": story_so_far, "open_threads": open_threads,
             "cast": cast, "available_locations": available_locations}
 
