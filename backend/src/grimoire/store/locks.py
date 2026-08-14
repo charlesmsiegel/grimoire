@@ -78,9 +78,10 @@ Ordering rules (deadlock avoidance):
   ``test_locks_store.py`` spies on the registry and asserts the order each of
   the two actually asks for. Then structurally:
   ``test_lock_order_guard.py`` walks this package's ASTs and fails on the
-  *shapes* that hold two campaign locks at once -- an acquisition registered on
-  an ``ExitStack``, one carried around a loop, two nested for different
-  campaigns -- anywhere but ``hold_all``. A third holder written tomorrow fails
+  *shapes* that hold two campaign locks at once (an acquisition registered on
+  an ``ExitStack``, one carried around a loop, two open at the same time for
+  different campaigns) anywhere but ``hold_all``. A third holder written
+  tomorrow fails
   on arrival rather than deadlocking in production, which is the gap #267 was
   filed about. Add one anyway and you route it through ``hold_all`` and add its
   behavioural test beside those two; what the guard cannot see is a lock
