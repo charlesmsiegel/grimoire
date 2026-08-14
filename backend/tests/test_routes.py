@@ -3960,7 +3960,11 @@ def test_datetime_get_put_roundtrip(client):
                         "id": "001--2026-12-25--s",
                         # The advance sweep rides this payload; a scene with no
                         # location has no weather to report a transition for.
-                        "weather_changes": []}
+                        "weather_changes": [],
+                        # ...and so does the campaign clock's reconciliation
+                        # (#100): the first dated scene in a campaign with no
+                        # clock yet moves it forward to that date.
+                        "clock": {"moved": True, "now": "2026-12-25"}}
     sid = r.json()["id"]  # first date set renames the scene
     got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()
     assert got["current"]["native"] == "2026-12-25"
