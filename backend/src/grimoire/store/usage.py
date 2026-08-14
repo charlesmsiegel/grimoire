@@ -281,22 +281,35 @@ def _read_rows(since: str, until: str):
     """
     for path in _window_files(since, until):
         try:
-            text = path.read_text(encoding="utf-8")
+            # A line at a time, not `read_text().splitlines()`. A year of heavy
+            # play is a few tens of megabytes, and slurping a month file holds
+            # the whole of it plus a list of every line in memory at once -- for
+            # a report that never needs two rows at the same time.
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    row = _row(line, since, until)
+                    if row is not None:
+                        yield row
         except (OSError, ValueError):    # ValueError covers invalid UTF-8
+            # Mid-file as well as on open: a decode error surfaces on the read
+            # that hits the bad bytes, and a report drawn short beats no report.
             continue
-        for line in text.splitlines():
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(row, dict):
-                continue
-            ts = row.get("ts")
-            if not isinstance(ts, str) or not since <= ts[:10] <= until:
-                continue
-            yield row
+
+
+def _row(line: str, since: str, until: str) -> dict | None:
+    """One ledger line as a row inside the window, or None to skip it."""
+    if not line.strip():
+        return None
+    try:
+        row = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(row, dict):
+        return None
+    ts = row.get("ts")
+    if not isinstance(ts, str) or not since <= ts[:10] <= until:
+        return None
+    return row
 
 
 def _window_files(since: str, until: str) -> list[Path]:
@@ -347,7 +360,14 @@ def _add(bucket: dict, row: dict) -> None:
 
 
 def _int(value: object) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+    """A non-negative count, or 0. Negatives are floored rather than summed: a
+    row is a line in a file a human can edit, and one hand-typed `-999999` that
+    subtracts from a month's total is a rollup nobody can reconcile against a
+    provider's invoice. `bool` is excluded because it is an `int` subclass and
+    `True` would otherwise count as one token."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(0, value)
 
 
 def _float(value: object) -> float | None:
@@ -384,6 +404,15 @@ def summary(days: int = 30, campaign: str = "") -> dict:
     campaign (taglines, connection tests) drop out entirely, which is what makes
     the per-campaign endpoint's total a campaign's own spend rather than the
     library's.
+
+    ``session`` is the intersection of this process's lifetime and the window,
+    not the lifetime alone, and the difference is real rather than theoretical:
+    a backend left running for a month and asked for ``days=1`` reports a
+    "session" that is really just today. Stated rather than fixed, because the
+    fix is worse than the limit -- widening the scan to the process's whole
+    lifetime would make a cheap query's cost depend on server uptime, for a
+    number whose entire purpose is "what have I spent since I opened this". At
+    the default 30 days it takes a month of continuous uptime to differ at all.
     """
     days = max(1, min(int(days), MAX_DAYS))
     until = _today()
