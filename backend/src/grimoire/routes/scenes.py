@@ -134,20 +134,41 @@ def _idea_card(cid: str, idea: dict, loc_names: dict[str, str]) -> dict:
 
 
 @router.get("/campaigns/{cid}/scene-ideas")
-def get_scene_ideas(cid: str):
+def get_scene_ideas(cid: str, greetings: bool = True):
     """The whole ledger: saved ideas (re-validated against the campaign as it
     stands now) followed by the greeting entries `playing` composes.
 
-    Unfiltered on purpose. Status and mode (`pcless`) filtering lives in the
-    reader -- the picker wants the active entries for its own mode, a
-    management surface wants everything -- and a campaign's ledger is small
-    enough that one read serving both beats a query language neither needs.
+    Status and mode (`pcless`) filtering is deliberately absent -- the picker
+    wants the active entries for its own mode, a management surface wants
+    everything, and a campaign's ledger is small enough that one read serving
+    both beats a query language neither needs.
+
+    `greetings=false` is the exception, and it is about cost rather than taste.
+    Composing the greeting half means `available_greetings`, which parses the
+    frontmatter of every greeting in the campaign; the picker renders greetings
+    from its own `/greetings/available` call (ranked, and chipped with
+    `unlocked`) and drops every greeting row this route composes. Asking for
+    the saved half alone is what keeps opening the chooser from paying for that
+    sweep twice and using neither copy.
+
+    Each half is read tolerantly, the failure policy `get_ledger` states for
+    the continuity ledger: scene_ideas.json is hand-editable and read by a bare
+    `json.loads`, so a garbled one must cost its own section rather than the
+    whole view -- taking the greeting half, and the reader's ability to start a
+    scene at all, down with it.
     """
     _campaign_root_or_404(cid)
+
+    def _tolerant(read):
+        try:
+            return read()
+        except Exception:  # noqa: BLE001 — a garbled file empties its half, not the view
+            return []
+
     loc_names = {e["id"]: e.get("name", e["id"]) for e in store.overlay.list_entities(cid, "locations")}
-    saved = store.suggest.validate_ideas(cid, store.scene_ideas.records(cid))
-    return [_idea_card(cid, i, loc_names)
-            for i in saved + store.playing.greeting_ideas(cid)]
+    saved = _tolerant(lambda: store.suggest.validate_ideas(cid, store.scene_ideas.records(cid)))
+    composed = _tolerant(lambda: store.playing.greeting_ideas(cid)) if greetings else []
+    return [_idea_card(cid, i, loc_names) for i in saved + composed]
 
 
 @router.post("/campaigns/{cid}/scene-ideas")

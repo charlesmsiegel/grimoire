@@ -6534,6 +6534,41 @@ def test_a_greeting_played_in_a_scene_refuses_to_move(client):
     assert r.status_code == 409
 
 
+def test_a_garbled_ledger_costs_its_own_half_not_the_route(client):
+    """`get_ledger`'s failure policy, which this route has to share:
+    scene_ideas.json is hand-editable and read by a bare `json.loads`, and a
+    500 here would take the greeting half -- and the reader's ability to start
+    a scene at all -- down with one bad byte."""
+    _wid, cid = _ledger_campaign(client)
+    (store.campaigns.campaign_root(cid) / "scene_ideas.json").write_text("{not json",
+                                                                        encoding="utf-8")
+    r = client.get(f"/api/campaigns/{cid}/scene-ideas")
+    assert r.status_code == 200
+    assert [i["id"] for i in r.json()] == ["greeting:reckoning"]
+
+
+def test_the_greeting_half_can_be_declined(client):
+    """Composing it parses every greeting's frontmatter, and the picker renders
+    greetings from its own ranked read -- so it asks for the saved half alone
+    rather than paying for that sweep twice and using neither copy."""
+    _wid, cid = _ledger_campaign(client)
+    client.post(f"/api/campaigns/{cid}/scene-ideas", json={"title": "The tide-book", "premise": "P"})
+    rows = client.get(f"/api/campaigns/{cid}/scene-ideas?greetings=false").json()
+    assert [i["id"] for i in rows] == ["the-tide-book"]
+    assert len(client.get(f"/api/campaigns/{cid}/scene-ideas").json()) == 2
+
+
+def test_saving_the_same_idea_twice_files_it_once(client):
+    """A double-click on Save, or a retry after a dropped response, must not
+    leave the reader two identical rows to dismiss."""
+    _wid, cid = _ledger_campaign(client)
+    body = {"title": "The tide-book", "premise": "A ledger nobody signed."}
+    first = client.post(f"/api/campaigns/{cid}/scene-ideas", json=body).json()["id"]
+    again = client.post(f"/api/campaigns/{cid}/scene-ideas", json=body).json()["id"]
+    assert again == first
+    assert len(store.scene_ideas.read(cid)) == 1
+
+
 def test_unknown_ideas_and_greetings_are_404s(client):
     _wid, cid = _ledger_campaign(client)
     assert client.put(f"/api/campaigns/{cid}/scene-ideas/nope",

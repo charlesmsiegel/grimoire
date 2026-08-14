@@ -63,12 +63,51 @@ def test_the_write_side_validator_drops_what_the_campaign_lacks(monkeypatch, tmp
 
 
 def test_add_gives_two_ideas_of_one_name_distinct_ids(monkeypatch, tmp_path):
+    """Same title, different premise: two ideas, not a collision."""
     cid = _campaign(monkeypatch, tmp_path)
     first = scene_ideas.add(cid, "The creditor", "One.")
     second = scene_ideas.add(cid, "The creditor", "Two.")
     assert first != second
     assert scene_ideas.get(cid, first)["premise"] == "One."
     assert scene_ideas.get(cid, second)["premise"] == "Two."
+
+
+def test_resaving_a_standing_idea_returns_the_one_already_there(monkeypatch, tmp_path):
+    """Saving twice is ordinary, not an error: an impatient double-click, a
+    retry after a dropped response, the same suggestion coming back from a
+    Regenerate. Each one used to file a duplicate under `<slug>-2` that the
+    reader then had to dismiss twice."""
+    cid = _campaign(monkeypatch, tmp_path)
+    first = scene_ideas.add(cid, "The creditor", "A debt-collector arrives.")
+    again = scene_ideas.add(cid, " the CREDITOR ", " a debt-collector arrives. ")
+    assert again == first
+    assert list(scene_ideas.read(cid)) == [first]
+
+
+def test_the_two_modes_are_two_ideas_even_worded_alike(monkeypatch, tmp_path):
+    """They cast different people -- `pcless` decides which player tokens
+    survive validation -- so one sentence saved for each is not one idea."""
+    cid = _campaign(monkeypatch, tmp_path)
+    onscreen = scene_ideas.add(cid, "The creditor", "P")
+    offscreen = scene_ideas.add(cid, "The creditor", "P", pcless=True)
+    assert onscreen != offscreen
+
+
+def test_dedupe_does_not_revive_a_used_or_dismissed_idea(monkeypatch, tmp_path):
+    """A used idea already became a scene, so saying it again is a genuine
+    second use; a dismissed one was explicitly pushed off the list, and
+    reviving it through an unrelated Save would undo that without saying so."""
+    cid = _campaign(monkeypatch, tmp_path)
+    spent = scene_ideas.add(cid, "The creditor", "P")
+    scene_ideas.mark_used(cid, spent, "001--s")
+    again = scene_ideas.add(cid, "The creditor", "P")
+    assert again != spent
+    assert scene_ideas.get(cid, spent)["status"] == "used"       # left where it was
+
+    scene_ideas.set_status(cid, again, scene_ideas.DISMISSED)
+    third = scene_ideas.add(cid, "The creditor", "P")
+    assert third not in (spent, again)
+    assert scene_ideas.get(cid, again)["status"] == "dismissed"  # still dismissed
 
 
 def test_a_titleless_idea_is_named_from_its_premise(monkeypatch, tmp_path):
@@ -104,8 +143,9 @@ def test_status_transitions_and_restore(monkeypatch, tmp_path):
     assert scene_ideas.get(cid, lid)["status"] == "active"
 
     assert scene_ideas.mark_used(cid, lid, "001--s")
-    assert scene_ideas.get(cid, lid) == {**scene_ideas.get(cid, lid),
-                                         "status": "used", "used_scene": "001--s"}
+    rec = scene_ideas.get(cid, lid)
+    assert (rec["status"], rec["used_scene"]) == ("used", "001--s")
+    assert rec["title"] == "The creditor" and rec["premise"] == "A debt-collector arrives."
 
 
 def test_restoring_a_used_idea_clears_the_scene_it_became(monkeypatch, tmp_path):

@@ -50,6 +50,12 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
   // copy also appears under Saved on the next read, so without this the same
   // idea can be filed twice with two ids and no way to tell them apart.
   const [kept, setKept] = useState<Set<number>>(new Set());
+  // A save in flight. Save is idempotent server-side (an identical standing
+  // idea returns its existing id rather than a second one), so this is about
+  // the reader seeing that their click landed rather than about correctness --
+  // but both halves are wanted: the button must not look inert, and two
+  // sessions racing must not file two copies either.
+  const [saving, setSaving] = useState(false);
   const [typed, setTyped] = useState("");
   const [inferring, setInferring] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +71,13 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
   // idea saved for an offscreen scene casts nobody the player can be, so
   // offering it in a PC scene would seat the wrong people.
   const loadSaved = useCallback(() => {
-    api.listSceneIdeas(cid)
+    // `false`: no greeting rows. This pane renders greetings from the ranked
+    // `availableGreetings` read above and filters every composed one out, so
+    // asking for them costs a second full sweep of the campaign's greeting
+    // frontmatter, on the hottest path in the app, to render nothing.
+    api.listSceneIdeas(cid, false)
+      // `source !== "greeting"` still, belt and braces: the query param is a
+      // request, and a row that arrived anyway must not reach the Saved group.
       .then((all) => setSaved(all.filter((i) => i.source !== "greeting"
                                                 && i.pcless === pcless
                                                 && i.status !== "used")))
@@ -89,11 +101,16 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
   // server orders newest first, so what shows is what was saved most recently.
   const shownActive = showAll ? active : active.slice(0, SAVED_SLOTS);
 
+  // `pcless` LAST, so an `idea` cannot carry a mode that contradicts the one
+  // this picker is running in -- the mode decides which cast tokens the server
+  // will keep, so a wrong one silently empties the cast.
   function save(idea: SceneIdeaDraft, done?: () => void) {
     setError(null);
-    api.saveSceneIdea(cid, { pcless, ...idea })
+    setSaving(true);
+    api.saveSceneIdea(cid, { ...idea, pcless })
       .then(() => { done?.(); loadSaved(); })
-      .catch((err) => setError(errMsg(err)));
+      .catch((err) => setError(errMsg(err)))
+      .finally(() => setSaving(false));
   }
 
   function setStatus(lid: string, status: "active" | "dismissed") {
@@ -207,7 +224,11 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
           {/* not pickable: a dismissed idea comes back to the list first, so
               restoring is a deliberate step rather than a side effect of a click */}
           <span className="field-hint grow">{i.title}</span>
-          <button className="subtle" onClick={() => setStatus(i.id, "active")}>Restore</button>
+          {/* the title is in the label, not just the row beside it: several of
+              these stack, and "Restore, Restore, Restore" is what a screen
+              reader would otherwise read out */}
+          <button className="subtle" aria-label={`Restore ${i.title}`}
+                  onClick={() => setStatus(i.id, "active")}>Restore</button>
         </div>
       ))}
 
@@ -240,7 +261,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
               carries the title as well as the state — several of these sit on
               one screen, and an aria-label overrides the text, so a fixed one
               would leave them indistinguishable. */}
-          <button className="subtle" disabled={kept.has(i)}
+          <button className="subtle" disabled={kept.has(i) || saving}
                   aria-label={`${kept.has(i) ? "Saved" : "Save"} ${s.title}`}
                   onClick={() => save(asDraft(s), () => setKept((k) => new Set(k).add(i)))}>
             {kept.has(i) ? "Saved" : "Save"}
@@ -259,7 +280,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
             result is only used to pre-fill the confirm form, and this path is
             not going there. The date and place are read from the text on the
             day the idea is actually picked. */}
-        <button className="subtle" disabled={!typed.trim() || inferring}
+        <button className="subtle" disabled={!typed.trim() || inferring || saving}
                 onClick={() => save({ premise: typed.trim(), source: "user" },
                                     () => setTyped(""))}>
           Save for later
