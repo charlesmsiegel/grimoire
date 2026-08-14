@@ -37,6 +37,13 @@ def _world(client, name="W"):
     return client.post("/api/worlds", json={"name": name}).json()["id"]
 
 
+def _image_bytes(fmt: str, size=(4, 4), color=(10, 20, 30)) -> bytes:
+    """A real image in `fmt` (a PIL format name)."""
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, fmt)
+    return buf.getvalue()
+
+
 def _png_bytes(size=(4, 4), color=(10, 20, 30)) -> bytes:
     """A real PNG.
 
@@ -45,16 +52,12 @@ def _png_bytes(size=(4, 4), color=(10, 20, 30)) -> bytes:
     and call it a PNG. A test that needs two images it can tell apart varies
     `color` (or `size`) instead of posting two different marker strings.
     """
-    buf = io.BytesIO()
-    Image.new("RGB", size, color).save(buf, "PNG")
-    return buf.getvalue()
+    return _image_bytes("PNG", size, color)
 
 
 def _jpeg_bytes(size=(4, 4)) -> bytes:
     """A real JPEG, for the uploads that lie about which format they are."""
-    buf = io.BytesIO()
-    Image.new("RGB", size, (200, 40, 40)).save(buf, "JPEG")
-    return buf.getvalue()
+    return _image_bytes("JPEG", size, (200, 40, 40))
 
 
 def _soon(seconds: int) -> str:
@@ -474,6 +477,26 @@ def test_image_upload_stores_the_extension_the_bytes_are(client):
                                  (croot, chid, "characters")):
         p = store.assets.image_path(root, rid, "default", "avatar", base=base_kind)
         assert p is not None and p.suffix == ".jpg", (rid, base_kind)
+
+
+def test_image_upload_names_every_format_the_store_accepts(client):
+    """Detecting the format IS this change, so every format `assets` stores is
+    uploaded under a name that lies about it -- one format proves the wiring,
+    four prove the detector. Each upload replaces the last, which also walks
+    `put_in`'s drop-the-stale-extension path across four different suffixes."""
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    base = f"/api/worlds/{wid}/characters/{cid}/versions/default/images"
+
+    for fmt, ext, media in (("PNG", "png", "image/png"), ("JPEG", "jpg", "image/jpeg"),
+                            ("GIF", "gif", "image/gif"), ("WEBP", "webp", "image/webp")):
+        data = _image_bytes(fmt)
+        r = client.put(f"{base}/avatar",
+                       files={"file": ("avatar.jpeg", io.BytesIO(data), "image/jpeg")})
+        assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": ext}, fmt
+        assert [(i["name"], i["ext"]) for i in client.get(base).json()] == [("avatar", ext)], fmt
+        got = client.get(f"{base}/avatar")
+        assert got.content == data and got.headers["content-type"] == media, fmt
 
 
 def test_image_upload_of_bytes_that_are_no_image_is_rejected(client):

@@ -58,6 +58,17 @@ def packed_ext(data: bytes, stored_name: str) -> str:
     The stored suffix answers for bytes that sniff as nothing -- an
     externally-placed BMP, a truncated file. There is no truth to substitute
     there, so the best available guess stays the one the store already made.
+
+    One window this does not close: the header is read while the export is
+    being composed and the bytes are packed later, so a writer that swaps a
+    file's FORMAT in place, under the same name, mid-export still gets one
+    wrongly-declared image. No app path can do that -- an upload of a different
+    format lands on a different suffix and drops the old file, which makes the
+    pack fail loudly instead -- so it takes a sync client or a hand edit
+    landing inside those seconds. Closing it means either holding every image
+    in memory from collect to zip, or deriving the type at zip time and
+    threading it back into a manifest that is already built; neither is worth
+    it for a race that replaces a defect which used to be unconditional.
     """
     return fetch.sniff_ext(data) or Path(stored_name).suffix.lower().lstrip(".")
 
