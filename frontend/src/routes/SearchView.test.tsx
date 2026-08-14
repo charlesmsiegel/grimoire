@@ -319,3 +319,16 @@ test("meaning mode says the box is ahead of the results rather than looking stal
                    { target: { value: "brine" } });
   expect(await screen.findByText(/press enter to search for “brine”/i)).toBeInTheDocument();
 });
+
+test("switching mode drops the other mode's results rather than showing them under it", async () => {
+  // A semantic query can take a round trip and a warm run. Leaving the keyword
+  // page on screen under an active "Meaning" row for that long presents one
+  // ranking as the other's answer.
+  show();
+  await screen.findByRole("button", { name: /the salt pact/i });
+  (api.search as any).mockReturnValue(new Promise(() => {}));   // never resolves
+  fireEvent.click(screen.getByRole("button", { name: /meaning/i }));
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: /the salt pact/i })).not.toBeInTheDocument());
+  expect(screen.getByText(/reading the library/i)).toBeInTheDocument();
+});
