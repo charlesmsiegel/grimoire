@@ -814,15 +814,21 @@ export type ChronicleEntry = {
   cast: string[]; location: string; date: string; absorbed: string;
 };
 /** What a cascade post-delete actually did (#75). Counts rather than a bare
- *  ack, because the reversal reaches records the transcript does not show:
- *  `records` is how many of the scene's write-backs were put back, and
- *  `refused` names the ones whose record had moved since — those keep the value
- *  the deleted scene gave them, and only this reply says so. */
+ *  ack, because the reversal reaches records the transcript does not show.
+ *
+ *  Two different kinds of incomplete, and they must not be conflated:
+ *  `refused` names records that could not be put back (something wrote to them
+ *  after this scene did, or the kind carries no reversal), which keep the value
+ *  the deleted scene gave them; `failed` names cleanup STEPS that could not run
+ *  at all — a garbled `plot.json` and the like. The cut itself always happened
+ *  by the time either is non-empty, which is why they are reported rather than
+ *  raised. A count of zero beside a name in `failed` means "not known", not
+ *  "none". */
 export type CascadeReport = {
   index: number; removed: number; was_absorbed: boolean;
   records: number; refused: { label: string; reason: string }[];
   chronicle: boolean; plot_beats: number; commitment_beats: number;
-  changes: number; citations: number;
+  changes: number; citations: number; failed: string[];
 };
 export type DiffLine = { op: "equal" | "insert" | "delete"; text: string };
 export type FieldDiff = { field: string; label: string; diff: DiffLine[] };

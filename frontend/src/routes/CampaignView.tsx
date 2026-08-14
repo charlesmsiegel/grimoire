@@ -2336,6 +2336,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     ].join("\n\n");
     if (!window.confirm(ask)) return;
     setEditing(null);
+    // The same latch reroll, retry and the two roll paths take, and taken for
+    // the reason it exists: it holds until an unrelated request has settled, and
+    // every one of those rewrites this transcript. Without it a second click
+    // lands a second cut against indices the first is in the middle of moving.
+    // Confirm is modal so it cannot be double-fired, but the await below is not,
+    // and this is the least reversible thing in the app.
+    const release = takeRollLatch(activeId);
     let report;
     try {
       report = await api.deleteMessagesFrom(cid, activeId, index);
@@ -2344,6 +2351,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // reply into the scene the player was trying to cut back.
       fail(err, false);
       return;
+    } finally {
+      // Released before the refreshes rather than after: they are reads, and
+      // holding a latch that greys out the gutter across them buys nothing.
+      release();
     }
     // The rail carries `done`, which an absorbed scene has just lost — without
     // this the composer stays hidden and the row still reads as absorbed.
@@ -2356,22 +2367,31 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // reports that as stale on its own (`at > total`, or a moved digest); this
     // is what turns the flag back into a correct summary.
     askForRollingSummary(activeId, seen);   // #85
+    // What the shortened transcript cannot show. Two distinct outcomes, and
+    // reported as two clauses because conflating them would mislead:
+    //
+    //  - `refused` — records that could not be put back and still hold what the
+    //    deleted scene gave them. Both a record something else wrote to since
+    //    (the reversal declines rather than discarding that later change) and a
+    //    kind with no reversal at all (a character or lore entry the scene
+    //    CREATED, the one a player is most likely to meet) land here.
+    //    Deliberately not claiming which: naming the records is what lets the
+    //    player go and look, and asserting the wrong reason is worse than none.
+    //  - `failed` — cleanup that could not run, typically a store file edited by
+    //    hand into something that will not parse. The cut still happened, so
+    //    saying nothing would leave stale continuity looking authoritative.
+    const notes = [];
     if (report.refused.length) {
-      // The one outcome the transcript afterwards cannot show: these records
-      // still hold what the deleted scene gave them. Two different situations
-      // land here — a record something else wrote to after this scene did (the
-      // reversal refuses rather than discarding that later change), and a kind
-      // that has no reversal at all, a character or lore entry the scene
-      // CREATED being the one a player is most likely to meet. Deliberately not
-      // claiming which: naming the records is what lets the player go and look,
-      // and asserting the wrong reason is worse than asserting none.
-      setError({
-        retryable: false,
-        text: `${report.refused.length} record${report.refused.length === 1 ? "" : "s"} ` +
-              `could not be put back and ${report.refused.length === 1 ? "was" : "were"} ` +
-              "left as it stands: " + report.refused.map((r) => r.label).join(", "),
-      });
+      notes.push(
+        `${report.refused.length} record${report.refused.length === 1 ? "" : "s"} ` +
+        `could not be put back and ${report.refused.length === 1 ? "was" : "were"} ` +
+        "left as it stands: " + report.refused.map((r) => r.label).join(", "));
     }
+    if (report.failed.length) {
+      notes.push("some continuity records could not be cleaned up (" +
+                 report.failed.join(", ") + ") — check them by hand");
+    }
+    if (notes.length) setError({ retryable: false, text: notes.join(". ") });
   }
 
   // What the error banner's Retry re-runs. `/retry` continues from the
