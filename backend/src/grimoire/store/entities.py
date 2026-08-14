@@ -100,16 +100,37 @@ def list_entities(root: Path, kind: str) -> list[dict]:
     return out
 
 
-def read_entity(root: Path, kind: str, eid: str) -> dict:
+def _read_record(root: Path, kind: str, eid: str) -> tuple[dict, str]:
     _check_kind(kind)
     p = _entity_path(root, kind, eid)
     if not safe_id(eid) or not p.exists():
         raise EntityNotFound(f"{kind}/{eid}")
-    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
-    # Beside `meta`, not inside it: `meta` is the frontmatter this record would
-    # be written back with, and every writer here round-trips it.
+    text = p.read_text(encoding="utf-8")
+    meta, body = parse_frontmatter(text)
+    # `tokens` beside `meta`, not inside it: `meta` is the frontmatter this
+    # record would be written back with, and every writer here round-trips it.
+    # The `text` returned alongside is the same read, for callers that need to
+    # hash the record rather than describe it.
     return {"meta": {"id": eid, **meta}, "body": body,
-            "tokens": tokens.record_tokens(p, body)}
+            "tokens": tokens.record_tokens(p, body)}, text
+
+
+def read_entity(root: Path, kind: str, eid: str) -> dict:
+    return _read_record(root, kind, eid)[0]
+
+
+def read_entity_rev(root: Path, kind: str, eid: str) -> dict:
+    """`read_entity` plus the `rev` of the very bytes it parsed (#35).
+
+    The rev is what an editor echoes back on save so a write that would land on
+    top of somebody else's can be refused. Hashing the text this call already
+    read is the whole point: re-hashing the file afterwards would sample it a
+    second time, and an external write landing in that gap hands the caller a
+    rev describing content it was never shown -- which is precisely the write
+    the precondition exists to stop, laundered into an approval.
+    """
+    record, text = _read_record(root, kind, eid)
+    return {**record, "rev": content_hash(text)}
 
 
 def create_entity(root: Path, kind: str, name: str, body: str = "", keys: str = "", owners: str = "",

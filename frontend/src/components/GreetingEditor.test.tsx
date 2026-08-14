@@ -2,6 +2,15 @@
 import { GreetingEditor } from "./GreetingEditor";
 
 vi.mock("../api/client", () => ({
+  // The editor branches on `instanceof ApiError` to tell a stale-record 409
+  // from any other failure; declared in here because `vi.mock` is hoisted
+  // above every top-level statement in the file.
+  ApiError: class extends Error {
+    constructor(public status: number, public detail: string, public kind?: string,
+                public body?: Record<string, unknown>) {
+      super(detail);
+    }
+  },
   api: {
     listGreetings: vi.fn(), listCharacters: vi.fn(), listTags: vi.fn(), readGreeting: vi.fn(),
     createGreeting: vi.fn(), updateGreeting: vi.fn(), deleteGreeting: vi.fn(),
@@ -9,7 +18,11 @@ vi.mock("../api/client", () => ({
     getGreetingSubjects: vi.fn(), setImageSubjects: vi.fn(), listUntaggedImages: vi.fn(), markGreeting: vi.fn(),
   },
 }));
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
+
+const fail = (status: number, detail: string, kind?: string,
+              body?: Record<string, unknown>) =>
+  new (ApiError as any)(status, detail, kind, body);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -26,8 +39,9 @@ beforeEach(() => {
   (api.importGreetings as any).mockResolvedValue({ greetings: ["g1"] });
   (api.readGreeting as any).mockResolvedValue({
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
-    body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [],
+    body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
   });
+  (api.updateGreeting as any).mockResolvedValue({ ok: true });
 });
 
 // --- rail search and mark filters ------------------------------------------
@@ -198,8 +212,9 @@ test("the open greeting stays listed even when the filters would hide it", async
   (api.listCharacters as any).mockResolvedValue(CAST);
   (api.readGreeting as any).mockResolvedValue({
     meta: greeting("word", "A Quiet Word", "mara", []),
-    body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [],
+    body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
   });
+  (api.updateGreeting as any).mockResolvedValue({ ok: true });
   const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
   const rail = await waitFor(() => railOf(container));
   fireEvent.click(await within(rail).findByText("A Quiet Word"));
@@ -316,8 +331,9 @@ test("clicking a present character opens that character at the right version", a
   ]);
   (api.readGreeting as any).mockResolvedValue({
     meta: { id: "open", name: "Open", character: "seraphine", version: "v2", present: ["seraphine", "rowan"], requires_tags: [], predecessor_join: "all" },
-    body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [],
+    body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
   });
+  (api.updateGreeting as any).mockResolvedValue({ ok: true });
   const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" onOpenCharacter={onOpenCharacter} />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
@@ -618,4 +634,52 @@ test("the form's Offscreen toggle is sent on save", async () => {
   fireEvent.click(screen.getByRole("button", { name: /save greeting/i }));
   await waitFor(() => expect(api.updateGreeting).toHaveBeenCalledWith(
     { kind: "world", id: "w" }, "open", expect.objectContaining({ pcless: true })));
+});
+
+// ---- external edits: the save precondition (#35) ----
+
+async function openGreetingForEdit() {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "open", name: "Open", character: "seraphine", version: "default",
+      present: [], requires_tags: [], predecessor_join: "all" },
+  ]);
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Open"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+}
+
+test("a greeting save echoes back the rev it was read at", async () => {
+  await openGreetingForEdit();
+  fireEvent.click(screen.getByRole("button", { name: /^save greeting$/i }));
+  await waitFor(() =>
+    expect(api.updateGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open",
+      expect.objectContaining({ rev: "r1" })),
+  );
+});
+
+test("a stale greeting save is refused, and the plot map is left alone", async () => {
+  (api.updateGreeting as any).mockRejectedValue(
+    fail(409, "changed on disk", "stale_record", { rev: "r2" }));
+  await openGreetingForEdit();
+  fireEvent.click(screen.getByRole("button", { name: /^save greeting$/i }));
+
+  await screen.findByRole("alert");
+  expect(screen.getByText(/changed on disk while you had it open/i)).toBeInTheDocument();
+  // Edges are written only after the body lands, so a refusal touches nothing.
+  expect(api.setEdges).not.toHaveBeenCalled();
+});
+
+test("overwriting a greeting retries against the rev the refusal reported", async () => {
+  (api.updateGreeting as any).mockRejectedValueOnce(
+    fail(409, "changed on disk", "stale_record", { rev: "r2" }));
+  await openGreetingForEdit();
+  fireEvent.click(screen.getByRole("button", { name: /^save greeting$/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /overwrite with mine/i }));
+
+  await waitFor(() =>
+    expect(api.updateGreeting).toHaveBeenLastCalledWith({ kind: "world", id: "w" }, "open",
+      expect.objectContaining({ rev: "r2" })),
+  );
 });

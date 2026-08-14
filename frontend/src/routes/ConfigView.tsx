@@ -10,6 +10,7 @@ import { ColumnSection, PageShell } from "../components/PageShell";
 import { PromptLayoutEditor } from "../components/PromptLayoutEditor";
 import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
 import { StorageLocation } from "../components/StorageLocation";
+import { StoreConflictNotice } from "../components/StoreConflictNotice";
 import { ThemePicker } from "../components/ThemePicker";
 import { normalizeMode } from "../theme/themes";
 import { useTheme } from "../theme/ThemeProvider";
@@ -172,6 +173,10 @@ export default function ConfigView() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [probe, setProbe] = useState<Probe>(null);
+  // Bumped when the store pointer moves, to remount anything describing the
+  // old library rather than leave it showing a report about a folder the app
+  // is no longer using.
+  const [storeEpoch, setStoreEpoch] = useState(0);
   // A ref, not state: as state it would be a dependency of the effect that sets
   // it, so flipping it would re-run the effect and its cleanup would cancel the
   // read it had just started — the bar would never arrive.
@@ -382,13 +387,16 @@ export default function ConfigView() {
 
         {draft && section === "storage" && (
           <>
-            <StorageLocation />
+            <StorageLocation onMoved={() => setStoreEpoch((n) => n + 1)} />
             <p className="field-hint">
               The one setting on this page that does not wait for Save: moving the
               library moves the file this form writes to, so a draft held back for
               it would land in whichever store the pointer named by the time you
               pressed Save.
             </p>
+            {/* Remounted on a move: the notice describes one library, and the
+                pointer now names a different one. */}
+            <StoreConflictNotice key={storeEpoch} />
           </>
         )}
 

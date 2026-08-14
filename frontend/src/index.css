@@ -813,6 +813,17 @@ button.primary { background: var(--accent); color: var(--on-accent); border: 1px
 .banner.error-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .banner .retry { flex: none; background: var(--accent); color: var(--on-accent); border: none; padding: 4px 12px; cursor: pointer; font-family: var(--fm); text-transform: uppercase; }
 .banner .retry:disabled { opacity: 0.5; cursor: default; }
+/* Sync-conflict report (#35) and the stale-save banner: prose and a path list
+   inside a banner, which otherwise only ever holds a single line of text -- so
+   the paragraph margins are reset here rather than on `.banner` itself, where
+   they would reflow every other banner in the app. */
+.store-conflicts, .stale-banner { margin-left: 0; margin-right: 0; }
+.store-conflicts p, .stale-banner p { margin: 0 0 8px; }
+.store-conflicts p:last-child, .stale-banner p:last-child { margin-bottom: 0; }
+.store-conflicts ul { margin: 0 0 8px; padding-left: 18px; }
+.store-conflicts li { margin-bottom: 4px; overflow-wrap: anywhere; }
+.store-conflicts code { font-family: var(--fm); }
+.stale-actions { display: flex; gap: 8px; }
 .config label { display: block; margin: 0 0 4px; color: var(--muted); font-family: var(--fm); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
 .config input[type="text"], .config input[type="password"] { width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--rule); padding: 10px 12px; font-size: 15px; }
 .config textarea { width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--rule); padding: 10px 12px; font-family: var(--fb); font-size: 15px; resize: vertical; }

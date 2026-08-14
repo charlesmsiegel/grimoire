@@ -370,6 +370,33 @@ def read_entity(cid: str, kind: str, eid: str) -> dict:
         return entities.read_entity(wroot_of(cid), kind, eid)
 
 
+def read_entity_rev(cid: str, kind: str, eid: str) -> dict:
+    """`read_entity` carrying the rev of whichever layer answered (#35)."""
+    try:
+        return entities.read_entity_rev(croot_of(cid), kind, eid)
+    except entities.EntityNotFound:
+        if _flat_ref(kind, eid) in deleted(cid):
+            raise
+        return entities.read_entity_rev(wroot_of(cid), kind, eid)
+
+
+def entity_rev(cid: str, kind: str, eid: str) -> str | None:
+    """The rev `read_entity_rev` would return now, without reading the record.
+
+    Resolved through the overlay for the same reason the read is: an inherited
+    record's rev describes the *world* file, and a save against it materializes
+    from that file. So a world-side edit arriving between the campaign editor's
+    read and its save is a stale write like any other -- the copy it would make
+    is not the text the user was shown.
+    """
+    h = entities.entity_hash(croot_of(cid), kind, eid)
+    if h is not None:
+        return h
+    if _flat_ref(kind, eid) in deleted(cid):
+        return None
+    return entities.entity_hash(wroot_of(cid), kind, eid)
+
+
 def create_entity(cid: str, kind: str, name: str, body: str = "", keys: str = "",
                   owners: str = "", sd_prompt: str = "", fields: dict | None = None,
                   secrecy: str = "") -> str:
@@ -438,6 +465,21 @@ def read_greeting(cid: str, gid: str) -> dict:
         if _flat_ref("greetings", gid) in deleted(cid):
             raise
         return greetings.read_greeting(wroot_of(cid), gid)
+
+
+def read_greeting_rev(cid: str, gid: str) -> dict:
+    """`read_greeting` carrying the rev of whichever layer answered (#35).
+
+    Its write-side counterpart is `entity_rev(cid, "greetings", gid)`: greetings
+    are a flat `<root>/greetings/<id>.md` record with the same overlay layering
+    as any entity, so the resolution rule is one rule, not two.
+    """
+    try:
+        return greetings.read_greeting_rev(croot_of(cid), gid)
+    except greetings.GreetingNotFound:
+        if _flat_ref("greetings", gid) in deleted(cid):
+            raise
+        return greetings.read_greeting_rev(wroot_of(cid), gid)
 
 
 def create_greeting(cid: str, name: str, character: str, version: str, body: str = "",

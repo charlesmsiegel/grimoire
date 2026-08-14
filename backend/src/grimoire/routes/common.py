@@ -1,9 +1,10 @@
 """Shared helpers for the route modules.
 
 Dependency-injection providers, the pydantic-version shim, the response-scope
-read/write pair, image serving, and the 404 guards every domain module reuses.
-This module holds no routes and imports no sibling route module, so it is
-always safe to import from one.
+read/write pair, image serving, the 404 guards every domain module reuses, and
+the stale-write precondition every record editor shares (#35). This module
+holds no routes and imports no sibling route module, so it is always safe to
+import from one.
 """
 
 from __future__ import annotations
@@ -22,6 +23,50 @@ from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
+
+
+def _fresh_or_409(expected: str | None, current: str | None) -> None:
+    """Refuse a write whose base is no longer what is on disk (#35).
+
+    The store is a folder of markdown files the user is invited to point at
+    Dropbox or Syncthing, so "somebody else changed this while you had it open"
+    is an ordinary event here rather than an exotic one -- and until now it
+    resolved as last-writer-wins, silently. A save that carries the rev it read
+    turns that into a 409 the editor can act on.
+
+    An empty or absent `expected` means the caller opted out (see
+    `EntityUpdate.rev`); a client that has no rev to offer must not be turned
+    into one that can never write. `current is None` cannot happen for a record
+    that exists, so it only reaches here for one that has been deleted
+    underneath -- also a conflict, and one whose 404-shaped alternative would be
+    a worse answer: the record is exactly as gone as the user's unsaved edit is
+    real.
+
+    Two limits, both narrower than the window this closes and neither of them
+    closed by it:
+
+    - **Check and write are not atomic.** Nothing holds a lock across the two,
+      so a writer landing in that microsecond still wins silently. What the
+      precondition removes is the *human*-scale window -- the minutes a record
+      sits open in an editor -- which is the one a sync client or a second
+      device actually lands in. Two of this app's own tabs saving the same
+      record in the same instant can still both pass. Closing that needs the
+      compare and the write under one lock, and entity writes take no lock
+      today (`store/locks.py`: entities are outside the campaign domain).
+    - **As sharp as `statcache`, and no sharper.** `current` comes from a hash
+      memoized on `(path, mtime_ns, size)`, so an external write landing with
+      the same size inside the filesystem's timestamp granularity is invisible
+      here exactly as it is to every other reader in the app. `statcache`'s
+      one-second racy window narrows that to a case a synced folder is unlikely
+      to produce; closing it outright would mean re-reading every record on
+      every request, which is the cost that cache exists to avoid.
+    """
+    if not expected or expected == current:
+        return
+    raise HTTPException(status_code=409, detail={
+        "kind": "stale_record", "rev": current,
+        "detail": "This record changed on disk since you opened it — "
+                  "reload to see the current version before saving."})
 
 
 def _connection_problem(conn: dict) -> str | None:

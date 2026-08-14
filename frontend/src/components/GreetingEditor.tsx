@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type Appearance, type CharacterSummary, type Edges, type EntityScope, type Greeting, type GreetingMark } from "../api/client";
+import { ApiError, api, type Appearance, type CharacterSummary, type Edges, type EntityScope, type Greeting, type GreetingMark } from "../api/client";
 import { Field } from "./Field";
 import { GreetingMarkdown } from "./GreetingMarkdown";
+import { StaleRecordBanner } from "./StaleRecordBanner";
 import { SubjectsPopover } from "./SubjectsPopover";
 import { TaggingQueue } from "./TaggingQueue";
 
@@ -21,6 +22,10 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
   const [predecessors, setPredecessors] = useState<string[]>([]);
   const [mode, setMode] = useState<"view" | "edit">("edit"); // existing greetings open in view
   const [error, setError] = useState<string | null>(null);
+  // The rev of the greeting as loaded, echoed back on save so a write cannot
+  // land on top of an edit made outside the app (#35).
+  const [rev, setRev] = useState<string | null>(null);
+  const [stale, setStale] = useState<{ rev: string | null } | null>(null);
   const [subjects, setSubjects] = useState<Record<string, string[]>>({});
   const [picking, setPicking] = useState<string | null>(null); // image name being edited
   const [untagged, setUntagged] = useState<Appearance[]>([]);
@@ -73,6 +78,8 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
 
   function resetForm() {
     setGid(null);
+    setRev(null);
+    setStale(null);
     setForm(BLANK);
     setEdges(NO_EDGES);
     setPredecessors([]);
@@ -81,8 +88,10 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
 
   async function select(id: string) {
     setError(null);
+    setStale(null);
     const g = await api.readGreeting(scope, id);
     setGid(id);
+    setRev(g.rev);
     setForm({
       name: g.meta.name, character: g.meta.character, version: g.meta.version,
       body: g.body.trim(), present: g.meta.present ?? [], requires_tags: g.meta.requires_tags,
@@ -97,25 +106,46 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
 
   const versions = chars.find((c) => c.id === form.character)?.versions ?? [];
 
-  async function save() {
+  /** `base` is the rev this save claims to be replacing -- normally the one
+   *  loaded, and on an explicit overwrite the one the 409 reported. */
+  async function save(base: string | null = rev) {
     if (!form.name.trim() || (form.character && !form.version)) return;
     setError(null);
+    setStale(null);
     try {
       let id = gid;
       if (id) {
         await api.updateGreeting(scope, id, {
           name: form.name, body: form.body, present: form.present,
           requires_tags: form.requires_tags, predecessor_join: form.predecessor_join,
-          pcless: form.pcless,
+          pcless: form.pcless, ...(base ? { rev: base } : {}),
         });
       } else {
         id = (await api.createGreeting(scope, { ...form })).id;
       }
+      // Edges live in plotmap.json, not the greeting file, so they are outside
+      // what `rev` describes -- and they are only written once the body has
+      // landed, so a refused save leaves the plot map untouched too.
       await api.setEdges(scope, id, { leads_to: edges.leads_to, excludes: edges.excludes });
       await reload();
       await select(id);
     } catch (err: any) {
+      if (err instanceof ApiError && err.kind === "stale_record") {
+        setStale({ rev: (err.body?.rev as string | null) ?? null });
+        return;
+      }
       setError(err.detail ?? String(err));
+    }
+  }
+
+  async function discardAndReload() {
+    setStale(null);
+    if (!gid) return;
+    await reload();
+    try {
+      await select(gid);
+    } catch {
+      resetForm(); // the greeting is gone from disk entirely
     }
   }
 
@@ -287,6 +317,10 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
 
       <div className="editor-body">
         {error && <div className="banner">{error}</div>}
+        {stale && (
+          <StaleRecordBanner label="greeting" rev={stale.rev} onReload={discardAndReload}
+                             onOverwrite={() => save(stale.rev)} />
+        )}
         {worldScope && queueOpen ? (
           <TaggingQueue wid={wid} chars={chars} greetings={greetings} queue={untagged}
                         onClose={closeQueue} onSaved={queueSaved} />
@@ -458,7 +492,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
           <div className="form-actions">
             {gid && <button className="subtle" onClick={() => remove(greetings.find((g) => g.id === gid)!)}>Delete</button>}
             {gid && <button className="subtle" onClick={() => setMode("view")}>Cancel</button>}
-            <button className="primary" onClick={save}
+            <button className="primary" onClick={() => save()}
                     disabled={!form.name.trim() || (!!form.character && !form.version)}>
               {gid ? "Save greeting" : "Create greeting"}
             </button>

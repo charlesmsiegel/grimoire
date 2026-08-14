@@ -224,6 +224,26 @@ def post_backup():
             "retention_error": retention_error}
 
 
+@router.get("/store/conflicts")
+def get_store_conflicts():
+    """Sync-tool conflict artifacts sitting unread in the store (#35).
+
+    Its own route rather than a field on GET /config: this costs a directory
+    walk of the whole library, and /config is read on nearly every page. The
+    Storage section asks for it when it is shown, which is where the answer is
+    actionable.
+
+    A scan that could not run is a 500, deliberately -- `store.external.scan`
+    already absorbs the per-directory failures a synced volume produces, so
+    anything reaching here failed at the root, and reporting an empty list for
+    that would tell the user their library is clean when nobody looked.
+    """
+    try:
+        return store.external.scan()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"could not scan the store: {exc}")
+
+
 # ---- llm connections ----
 @router.get("/llm-connections")
 def get_connections():

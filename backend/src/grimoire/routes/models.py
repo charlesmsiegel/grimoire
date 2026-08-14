@@ -313,6 +313,12 @@ class EntityUpdate(BaseModel):
     owners: str | None = None
     secrecy: str | None = None
     fields: dict | None = None
+    # The rev the editor was shown, echoed back so a write cannot silently land
+    # on top of an external edit (#35). Optional, and absent means "no
+    # precondition": scripts and the store's own callers write records they did
+    # not first read, and refusing those would break every one of them to
+    # protect a window they never open.
+    rev: str | None = None
 
 
 class CharacterCreate(BaseModel):
@@ -499,6 +505,7 @@ class GreetingUpdate(BaseModel):
     predecessor_join: str | None = None
     present: list[str] | None = None
     pcless: bool | None = None
+    rev: str | None = None      # see EntityUpdate.rev (#35)
 
 
 class Edges(BaseModel):

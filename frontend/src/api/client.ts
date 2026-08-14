@@ -233,6 +233,16 @@ export type DataDirInfo = {
   source: "env" | "custom" | "default";
   exists: boolean;
 };
+/** A file a sync client left behind when two devices wrote the same record
+ *  (#35). `path` is relative to the store root, slash-separated. */
+export type StoreConflict = {
+  path: string; name: string; tool: string;
+  kind: "file" | "directory";
+  /** null for a directory — a conflicted folder is reported, not measured. */
+  size: number | null;
+  modified: string;
+};
+export type StoreConflicts = { conflicts: StoreConflict[]; truncated: boolean };
 export type WorldMeta = {
   id: string;
   name: string;
@@ -336,6 +346,9 @@ export type EntityDetail = {
     sd_prompt?: string } & Record<string, unknown>;
   body: string;
   tokens?: number;
+  /** Content hash of the record as read. Echo it back on save and the write is
+   *  refused with 409 `stale_record` if the file moved underneath (#35). */
+  rev: string;
 };
 
 // characters (V3 cards)
@@ -401,7 +414,9 @@ export type Greeting = {
   mark?: GreetingMark;   // campaign lists carry it
 };
 export type Edges = { leads_to: string[]; excludes: string[] };
-export type GreetingDetail = { meta: Greeting; body: string; edges: Edges; predecessors: string[] };
+export type GreetingDetail = { meta: Greeting; body: string; edges: Edges; predecessors: string[];
+  /** See EntityDetail.rev (#35). */
+  rev: string };
 export type GreetingDraft = {
   name: string;
   character: string;
@@ -1227,6 +1242,12 @@ export const api = {
    *  the operation nobody sees happen. */
   createBackup: () => request<BackupRun>("POST", "/api/backups"),
   getDataDir: () => request<DataDirInfo>("GET", "/api/config/data-dir"),
+  // `fresh`: the whole reason to ask is to see the store as it is *now* --
+  // after a move, or after the user has been out to their file manager to
+  // resolve one of these. A shared in-flight read predating that is exactly
+  // the stale answer this call must not get.
+  getStoreConflicts: () =>
+    request<StoreConflicts>("GET", "/api/store/conflicts", undefined, { fresh: true }),
   putDataDir: (data_dir: string | null) =>
     request<DataDirInfo>("PUT", "/api/config/data-dir", { data_dir })
       .then((info) => {
@@ -1464,7 +1485,7 @@ export const api = {
     request<EntityDetail>("GET", `${entityBase(scope)}/${kind}/${id}`),
   updateEntity: (scope: EntityScope, kind: EntityKind, id: string,
                  patch: { name?: string; body?: string; keys?: string; owners?: string;
-                          secrecy?: string; fields?: Record<string, string> }) =>
+                          secrecy?: string; fields?: Record<string, string>; rev?: string }) =>
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/${kind}/${id}`, patch),
   deleteEntity: (scope: EntityScope, kind: EntityKind, id: string) =>
     request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/${kind}/${id}`),
@@ -1617,7 +1638,8 @@ export const api = {
   readGreeting: (scope: EntityScope, gid: string) =>
     request<GreetingDetail>("GET", `${entityBase(scope)}/greetings/${gid}`),
   updateGreeting: (scope: EntityScope, gid: string,
-                   patch: { name?: string; body?: string; present?: string[]; requires_tags?: string[]; predecessor_join?: string; pcless?: boolean }) =>
+                   patch: { name?: string; body?: string; present?: string[]; requires_tags?: string[];
+                            predecessor_join?: string; pcless?: boolean; rev?: string }) =>
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/greetings/${gid}`, patch),
   deleteGreeting: (scope: EntityScope, gid: string) =>
     request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/greetings/${gid}`),
