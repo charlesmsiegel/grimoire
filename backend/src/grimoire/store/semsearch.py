@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Iterator
 
 from .. import embeddings
 from ..llm_errors import LLMError
@@ -186,12 +187,14 @@ def _passage_text(name: str, passage: str) -> str:
     return f"{name}\n{passage}" if name else passage
 
 
-def _documents(scope: str, root: str) -> list[dict]:
-    """The corpus, as records with their passages worked out.
+def _records(scope: str, root: str) -> Iterator[dict]:
+    """The corpus, one record at a time, with its passages worked out.
 
-    One walk of `search.walk`, so the two modes cover the same library.
+    One walk of `search.walk`, so the two modes cover the same library. A
+    generator rather than a list because a query walks this twice (see
+    `search_semantic`) and a materialized corpus would be every transcript in
+    the store held in memory at once.
     """
-    out = []
     for scope_name, rid, root_name, doc in search.walk(scope, root):
         # The searchable text, not the prose: it carries the frontmatter a
         # record was found by in keyword mode (`keys`, `owners`, `tags`), and a
@@ -200,10 +203,9 @@ def _documents(scope: str, root: str) -> list[dict]:
         chunks = passages(doc["text"] or doc["name"])[:MAX_PASSAGES]
         if not chunks:
             continue
-        out.append({"scope": scope_name, "root": rid, "root_name": root_name,
-                    "doc": doc, "chunks": chunks,
-                    "texts": [_passage_text(doc["name"], c) for c in chunks]})
-    return out
+        yield {"scope": scope_name, "root": rid, "root_name": root_name,
+               "doc": doc, "chunks": chunks,
+               "texts": [_passage_text(doc["name"], c) for c in chunks]}
 
 
 def _embed(cfg: dict, query_text: str, missing: list[str]) -> list[list[float]] | None:
@@ -265,13 +267,21 @@ def search_semantic(q: str, *, scope: str = "", root: str = "",
     query = " ".join((q or "").split())
     if not query:
         return _empty(q)
+    space = cfg["space"]
 
-    records = _documents(scope, root)
-    wanted = list(dict.fromkeys(t for rec in records for t in rec["texts"]))
-    known = vectors.load(cfg["space"], wanted)
+    # Two passes over the corpus, and the reason is memory rather than
+    # tidiness: a 1536-dimension vector costs ~50kB as a python list of floats,
+    # forty times the passage it stands for, so holding the whole cache at once
+    # to score against it is tens or hundreds of megabytes on a store this
+    # design otherwise calls small — and this package runs on Android. Pass one
+    # reads the cache to find out what is missing and drops every vector as it
+    # goes; pass two reads it again and never holds more than one record's
+    # worth. The cost is reading the cache twice, which `vectors.py` measured
+    # at ~58ms per 500 vectors.
+    uncached = _uncached(space, _records(scope, root))
     query_text = embed_space.clip(query, QUERY_BYTES)
-    missing = embed_space.warm_window([t for t in wanted if t not in known],
-                                      query_text, WARM_LIMIT)
+    missing = embed_space.warm_window(uncached, query_text, WARM_LIMIT)
+    del uncached
 
     got = _embed(cfg, query_text, missing)
     if got is None:
@@ -281,20 +291,27 @@ def search_semantic(q: str, *, scope: str = "", root: str = "",
     if query_vector is None:
         raise Unavailable("The embeddings endpoint returned no usable vector "
                           "for that query.")
+    # Saved, not kept: pass two reads them back off disk with everything else,
+    # so a vector that failed to save (read-only store, full disk) is simply
+    # not counted as indexed rather than scored from memory this once and
+    # missing on the next query.
     for text, raw in zip(missing, got[1:]):
-        vectors.save(cfg["space"], text, raw)
-        fresh = vectors.unit(raw)
-        if fresh is not None:
-            known[text] = fresh
+        vectors.save(space, text, raw)
+    del missing, got
 
-    matched = []
-    for rec in records:
-        best = _best_passage(cfg, known, query_vector, rec)
-        if best is None:
+    matched: list[dict] = []
+    counted: set[str] = set()
+    indexed = 0
+    for rec in _records(scope, root):
+        cached = vectors.load(space, rec["texts"])
+        for text in rec["texts"]:
+            if text not in counted:
+                counted.add(text)
+                indexed += text in cached
+        best = _best_passage(space, cached, query_vector, rec)
+        if best is None or best[0] < SCORE_FLOOR:
             continue
         score, index = best
-        if score < SCORE_FLOOR:
-            continue
         doc = rec["doc"]
         matched.append({"scope": rec["scope"], "root": rec["root"],
                         "root_name": rec["root_name"], "kind": doc["kind"],
@@ -307,10 +324,31 @@ def search_semantic(q: str, *, scope: str = "", root: str = "",
                         "snippet": search.snippet(rec["chunks"][index], "", [])})
 
     return {"q": q, "terms": [], **search.summarize(matched, kinds, limit),
-            "indexed": sum(1 for t in wanted if t in known), "corpus": len(wanted)}
+            "indexed": indexed, "corpus": len(counted)}
 
 
-def _best_passage(cfg: dict, known: dict, query_vector: list[float],
+def _uncached(space: str, records: Iterator[dict]) -> list[str]:
+    """The corpus's passages that have no vector yet, in walk order, deduped.
+
+    Reads the cache and keeps none of it — see `search_semantic`. Existence
+    would be cheaper than a read, but a file that exists and fails its checksum
+    has to count as missing, or a corrupted vector would never be offered for
+    re-embedding and its record would be unscorable for good.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for rec in records:
+        cached = vectors.load(space, rec["texts"])
+        for text in rec["texts"]:
+            if text in seen:
+                continue
+            seen.add(text)
+            if text not in cached:
+                out.append(text)
+    return out
+
+
+def _best_passage(space: str, known: dict, query_vector: list[float],
                   rec: dict) -> tuple[float, int] | None:
     """(score, passage index) for the record's closest passage, or None when
     none of them has a usable vector yet.
@@ -328,11 +366,11 @@ def _best_passage(cfg: dict, known: dict, query_vector: list[float],
         if vector is None:
             continue
         if len(vector) != len(query_vector):
-            vectors.forget(cfg["space"], text)
+            vectors.forget(space, text)
             continue
         score = vectors.dot(query_vector, vector)
         if not -1.0 - SCORE_SLACK <= score <= 1.0 + SCORE_SLACK:
-            vectors.forget(cfg["space"], text)
+            vectors.forget(space, text)
             continue
         if best is None or score > best[0]:
             best = (score, index)
