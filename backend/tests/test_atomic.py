@@ -371,7 +371,11 @@ def test_no_api_hands_out_the_temp_pathname(tmp_path):
     public = sorted(
         n for n, v in vars(atomic).items()
         if not n.startswith("_") and callable(v) and getattr(v, "__module__", "") == atomic.__name__)
-    assert public == ["write_bytes", "write_text"], f"unexpected public API: {public}"
+    # `append_line` writes THROUGH a caller-named path (#152's ledger), never
+    # via a temp whose name it hands back, so it adds no swap window -- the pin
+    # is on the shape of the API, and this entry is the reviewed addition.
+    assert public == ["append_line", "write_bytes", "write_text"], \
+        f"unexpected public API: {public}"
 
 
 def test_group_ownership_and_xattrs_are_carried_over(tmp_path, monkeypatch):
@@ -436,3 +440,47 @@ def test_metadata_failures_never_fail_the_write(tmp_path, monkeypatch):
 
     atomic.write_text(p, "landed anyway")
     assert p.read_text(encoding="utf-8") == "landed anyway"
+
+
+# ---- the append-only primitive (#152) ----
+def test_append_line_creates_the_file_and_terminates_the_row(tmp_path):
+    p = tmp_path / "ledger.jsonl"
+    atomic.append_line(p, '{"a": 1}')
+    assert p.read_text(encoding="utf-8") == '{"a": 1}\n'
+
+
+def test_append_line_adds_rather_than_replacing(tmp_path):
+    """The whole reason this exists beside `write_text`: a ledger grows by a
+    row, and a temp-and-replace would rewrite the file to add one."""
+    p = tmp_path / "ledger.jsonl"
+    for n in range(3):
+        atomic.append_line(p, f"row {n}")
+    assert p.read_text(encoding="utf-8").splitlines() == ["row 0", "row 1", "row 2"]
+
+
+def test_append_line_does_not_double_the_terminator(tmp_path):
+    p = tmp_path / "ledger.jsonl"
+    atomic.append_line(p, "already terminated\n")
+    atomic.append_line(p, "next")
+    assert p.read_text(encoding="utf-8") == "already terminated\nnext\n"
+
+
+def test_concurrent_appends_interleave_whole_lines(tmp_path):
+    """O_APPEND resolves the offset and the write as one step, so two writers
+    land whole rows in some order rather than halves of one spliced into
+    another -- the property a jsonl reader depends on."""
+    import threading
+
+    p = tmp_path / "ledger.jsonl"
+    rows = [f"{who}-{n}" for who in "ab" for n in range(50)]
+
+    def run(who):
+        for n in range(50):
+            atomic.append_line(p, f"{who}-{n}")
+
+    threads = [threading.Thread(target=run, args=(who,)) for who in "ab"]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(p.read_text(encoding="utf-8").splitlines()) == sorted(rows)

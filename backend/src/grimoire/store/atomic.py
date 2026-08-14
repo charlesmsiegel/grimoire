@@ -204,3 +204,43 @@ def write_bytes(path: Path, data: bytes) -> None:
     """Atomic replacement for ``path.write_bytes(data)``. See ``write_text``."""
     _write_through_fd(path, "wb", None, data)
 
+
+def append_line(path: Path, line: str) -> None:
+    """Append one complete line to an append-only log, creating it if absent.
+
+    The temp-and-replace pair above is the wrong shape for a *ledger*: it
+    rewrites the whole file to add a row, so an append costs a read plus a full
+    copy, and two writers racing each other lose one of the two rows outright
+    rather than interleaving them. This is the other crash-safe primitive, for
+    the other kind of file — ``store.usage``'s month ledger today.
+
+    **What this guarantees:** the line is published by a single ``write`` on a
+    descriptor opened ``O_APPEND``, so the kernel resolves the offset and the
+    write as one step. Concurrent appenders — a second grimoire process on a
+    synced store, two turns finishing at once — therefore land whole lines in
+    some order, never halves of one row spliced into another.
+
+    **What it does not:** durability across power loss (no fsync — a ledger row
+    is not worth an fsync on the generating path, and the caller's own docstring
+    says a lost row costs a statistic), and atomicity for a line long enough
+    that the kernel returns a short write. The remainder is written in the loop
+    below, and a torn line is the one thing that can produce; readers of these
+    files skip a line they cannot parse for exactly that reason. Rows here are a
+    few hundred bytes, orders of magnitude under any platform's atomic-write
+    floor.
+
+    ``O_APPEND`` is honoured on Windows too — CPython maps it to
+    ``FILE_APPEND_DATA``, which the OS serializes the same way.
+    """
+    data = (line.rstrip("\n") + "\n").encode("utf-8")
+    # The mode matters on first creation only, and mirrors what `_carry_metadata`
+    # gives a replaced record: the process umask applied to 0666, rather than
+    # mkstemp's owner-only 0600.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o666 & ~_UMASK)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+    finally:
+        os.close(fd)
+

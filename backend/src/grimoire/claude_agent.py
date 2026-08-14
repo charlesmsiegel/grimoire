@@ -61,6 +61,51 @@ class ClaudeAgentError(LLMError):
     pass
 
 
+#: What this path's dollars mean. Auth here is the host's Claude Code login, so
+#: a call bills against a subscription and charges nothing per request; the
+#: SDK's `total_cost_usd` is what the same work would have cost at API rates.
+#: Recording it as spend would tell someone they had spent money they had not,
+#: so `store.usage` keeps this basis out of the billed total and reports it
+#: separately.
+COST_BASIS = "equivalent"
+
+#: The `usage` keys that are prompt tokens. Cache reads and cache writes are
+#: billed input (at different rates, which is the provider's arithmetic and not
+#: ours) -- counting only `input_tokens` would under-report a long campaign by
+#: most of its prompt, since that is precisely the part that caches.
+_PROMPT_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def _capture_usage(message, usage: dict | None) -> None:
+    """Fold an SDK `ResultMessage`'s accounting into `usage` (#152).
+
+    Duck-typed rather than an `isinstance(message, ResultMessage)`, and
+    deliberately: `ResultMessage` is not among the names imported at module
+    scope, and adding a seventh to that guarded import would give an SDK that
+    ever renames or drops it a way to break the whole provider — for a
+    statistic. An object carrying `usage` or `total_cost_usd` is the message we
+    mean; nothing else in the stream has either.
+
+    Never raises, for the reason `llm_usage` does not: this is trailing
+    metadata on a reply the caller already has.
+    """
+    if usage is None:
+        return
+    block = getattr(message, "usage", None)
+    if isinstance(block, dict):
+        prompt = sum(v for k in _PROMPT_KEYS
+                     if isinstance(v := block.get(k), int) and not isinstance(v, bool))
+        completion = block.get("output_tokens")
+        if any(k in block for k in _PROMPT_KEYS):
+            usage["prompt_tokens"] = prompt
+        if isinstance(completion, int) and not isinstance(completion, bool):
+            usage["completion_tokens"] = completion
+    cost = getattr(message, "total_cost_usd", None)
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost == cost:
+        usage["cost_usd"] = float(cost)
+        usage["cost_basis"] = COST_BASIS
+
+
 def _split_system(messages: list[dict]) -> tuple[str, list[dict]]:
     system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
     return system, [m for m in messages if m["role"] != "system"]
@@ -75,7 +120,10 @@ def _flatten(turns: list[dict]) -> str:
 
 
 class ClaudeAgentClient:
-    async def stream(self, messages: list[dict], model: str) -> AsyncIterator[str]:
+    async def stream(self, messages: list[dict], model: str,
+                     usage: dict | None = None) -> AsyncIterator[str]:
+        """`usage`, when given, is filled in place from the run's trailing
+        `ResultMessage` — see `_capture_usage`."""
         if query is None:
             if isinstance(_SDK_IMPORT_ERROR, ImportError):
                 raise ClaudeAgentError(
@@ -93,6 +141,7 @@ class ClaudeAgentClient:
                 # messages that carry no text (thinking, tool, result), and a
                 # model can spend minutes on those before its first word (#243).
                 yield ""
+                _capture_usage(message, usage)
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):
@@ -107,5 +156,6 @@ class ClaudeAgentClient:
         except Exception as exc:
             raise ClaudeAgentError("network", str(exc)) from exc
 
-    async def complete(self, messages: list[dict], model: str) -> str:
-        return "".join([chunk async for chunk in self.stream(messages, model)])
+    async def complete(self, messages: list[dict], model: str,
+                       usage: dict | None = None) -> str:
+        return "".join([chunk async for chunk in self.stream(messages, model, usage)])

@@ -290,8 +290,39 @@ async def _guard(agen, timeout: float, tick: float | None = None) -> AsyncIterat
             await _aclose(it)
 
 
+def _stamp(usage: dict | None, conn: dict, attempts: int) -> None:
+    """Start one attempt's accounting: which route is about to run, and how many
+    have been tried (#152).
+
+    **Cleared first**, which is the whole reason this is a function. An attempt
+    that reached the provider's usage frame and then died -- a connection
+    dropped after generation, which is billed work nobody received -- leaves
+    numbers in the holder, and merging those into the attempt that eventually
+    answers would report one call as the sum of two. So each attempt starts
+    from nothing and the row describes the call that served, with `attempts`
+    saying how many it took.
+
+    The limit that follows, stated rather than hidden: a failed attempt's
+    provider-side charge is NOT in the ledger. There is no honest place to put
+    it -- the tokens belong to no delivered reply -- and `attempts > 1` is the
+    marker that some went uncounted. The same trade `_resilient` already
+    documents about retries costing money.
+
+    `model` is what the request will really run on (`effective_model`), not
+    `conn["model"]`, and a provider that reports its own overwrites it: an alias
+    resolves to a dated snapshot, and a ledger that says `opus` where the bill
+    says `opus-2026-08` cannot be reconciled against an invoice.
+    """
+    if usage is None:
+        return
+    usage.clear()
+    usage.update({"model": effective_model(conn), "connection": _label(conn),
+                  "provider": conn.get("kind", "openrouter"), "attempts": attempts})
+
+
 async def _resilient(open_stream, routes, timeout: float,
-                     tick: float | None = None) -> AsyncIterator[str]:
+                     tick: float | None = None,
+                     usage: dict | None = None) -> AsyncIterator[str]:
     """Run `routes` in order, retrying each for as many attempts as it carries.
 
     `routes` is a list of `(conn, retries)` -- the active connection first,
@@ -344,6 +375,7 @@ async def _resilient(open_stream, routes, timeout: float,
     fallback's failure appended: see the tail of this function.
     """
     sent = False
+    tries = 0
     first: LLMError | None = None
     last: LLMError | None = None
     for index, (conn, retries) in enumerate(routes):
@@ -370,7 +402,9 @@ async def _resilient(open_stream, routes, timeout: float,
                     delay -= step
                     if delay > 0:
                         yield ""  # still here, waiting the provider out
-            agen = _guard(open_stream(conn), timeout, tick)
+            tries += 1
+            _stamp(usage, conn, tries)
+            agen = _guard(open_stream(conn, usage), timeout, tick)
             try:
                 async for chunk in agen:
                     sent = sent or bool(chunk)
@@ -477,17 +511,19 @@ class LLMClient:
             routes.append((fallback, 0))
         return routes
 
-    def _dispatch(self, messages: list[dict], conn: dict):
+    def _dispatch(self, messages: list[dict], conn: dict, usage: dict | None = None):
         kind = conn.get("kind", "openrouter")
         if kind == "claude":
-            return self._claude.stream(messages, effective_model(conn))
+            return self._claude.stream(messages, effective_model(conn), usage=usage)
         if kind == "openai_compatible":
             return self._openai_compatible.stream(
                 messages, conn.get("model", ""), conn.get("api_key", ""),
-                conn.get("base_url", ""), strict=conn.get("post_process") == "strict")
-        return self._openrouter.stream(messages, conn["model"], conn.get("api_key", ""))
+                conn.get("base_url", ""), strict=conn.get("post_process") == "strict",
+                usage=usage)
+        return self._openrouter.stream(messages, conn["model"], conn.get("api_key", ""),
+                                       usage=usage)
 
-    def stream(self, messages: list[dict], conn: dict):
+    def stream(self, messages: list[dict], conn: dict, usage: dict | None = None):
         """Every provider stream leaves the facade idle-bounded — the one place
         the bound is provider-independent (the Claude SDK has no httpx client
         to configure at all) — and retried-then-fallen-back, which for the same
@@ -497,12 +533,20 @@ class LLMClient:
         The dispatch is deliberately deferred into a lambda rather than built
         once: each attempt needs its *own* provider stream, aimed at whichever
         route it is running.
-        """
-        return _resilient(lambda route: self._dispatch(messages, route),
-                          self._routes(conn), self._timeout_seconds())
 
-    async def complete(self, messages: list[dict], conn: dict) -> str:
-        return "".join([chunk async for chunk in self.stream(messages, conn)])
+        `usage`, when given, is a plain dict this fills in place with what the
+        call cost (#152) -- tokens, money where the provider names it, and which
+        route answered. A holder rather than a return value because this IS the
+        return value: an async generator has nowhere to put a summary, and the
+        numbers arrive on the provider's last frame anyway, after the caller has
+        consumed every delta. `store.usage.Meter` owns one and files it.
+        """
+        return _resilient(lambda route, holder: self._dispatch(messages, route, holder),
+                          self._routes(conn), self._timeout_seconds(), usage=usage)
+
+    async def complete(self, messages: list[dict], conn: dict,
+                       usage: dict | None = None) -> str:
+        return "".join([chunk async for chunk in self.stream(messages, conn, usage)])
 
     async def aclose(self) -> None:
         await self._openrouter.aclose()

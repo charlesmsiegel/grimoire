@@ -1,0 +1,283 @@
+"""The usage ledger: what one LLM call cost, and what a month of them adds up to."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from grimoire.store import usage
+
+
+@pytest.fixture
+def home(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    return tmp_path
+
+
+def _rows(home):
+    return [json.loads(line)
+            for path in sorted((home / "usage").glob("*.jsonl"))
+            for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+# ---- one row ----
+def test_record_appends_a_json_line_to_the_months_ledger(home):
+    usage.record(task="chat", campaign="saltmarch", scene="001-arrival",
+                 model="realm/opus", prompt_tokens=1200, completion_tokens=340,
+                 cost_usd=0.0125, duration_ms=4210, ts="2026-08-14T10:00:00Z")
+
+    assert (home / "usage" / "2026-08.jsonl").exists()
+    row, = _rows(home)
+    assert row["kind"] == "llm"
+    assert row["task"] == "chat"
+    assert row["campaign"] == "saltmarch"
+    assert row["scene"] == "001-arrival"
+    assert row["model"] == "realm/opus"
+    assert row["prompt_tokens"] == 1200
+    assert row["completion_tokens"] == 340
+    assert row["cost_usd"] == 0.0125
+    assert row["duration_ms"] == 4210
+    assert row["status"] == "ok"
+
+
+def test_a_call_the_provider_did_not_price_records_no_cost_at_all(home):
+    usage.record(task="chat", model="local/glm", prompt_tokens=10,
+                 completion_tokens=2, ts="2026-08-14T10:00:00Z")
+
+    row, = _rows(home)
+    assert "cost_usd" not in row, "an absent price must not be recorded as $0"
+
+
+def test_each_record_is_one_more_line_not_a_rewrite(home):
+    for n in range(3):
+        usage.record(task="chat", model="realm/opus", prompt_tokens=n,
+                     ts="2026-08-14T10:00:00Z")
+
+    lines = (home / "usage" / "2026-08.jsonl").read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["prompt_tokens"] for line in lines] == [0, 1, 2]
+
+
+def test_a_ledger_that_cannot_be_written_costs_the_row_and_nothing_else(home, monkeypatch):
+    monkeypatch.setattr(usage.paths, "home", lambda: home / "nope" / "\0bad")
+    assert usage.record(task="chat", model="realm/opus") is None
+
+
+# ---- rollups ----
+def _seed(day: str, **fields):
+    fields.setdefault("task", "chat")
+    fields.setdefault("model", "realm/opus")
+    usage.record(ts=f"{day}T12:00:00Z", **fields)
+
+
+def test_summary_totals_the_window(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", prompt_tokens=100, completion_tokens=20, cost_usd=0.01)
+    _seed("2026-08-13", prompt_tokens=200, completion_tokens=40, cost_usd=0.02)
+
+    out = usage.summary(days=30)
+    assert out["totals"]["calls"] == 2
+    assert out["totals"]["prompt_tokens"] == 300
+    assert out["totals"]["completion_tokens"] == 60
+    assert out["totals"]["total_tokens"] == 360
+    assert out["totals"]["cost_usd"] == 0.03
+
+
+def test_summary_ignores_rows_older_than_the_window(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", prompt_tokens=100)
+    _seed("2026-07-01", prompt_tokens=999)
+
+    out = usage.summary(days=7)
+    assert out["since"] == "2026-08-08"
+    assert out["totals"]["prompt_tokens"] == 100
+
+
+def test_summary_reads_the_previous_month_when_the_window_reaches_back_into_it(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-02")
+    _seed("2026-08-02", prompt_tokens=1)
+    _seed("2026-07-31", prompt_tokens=10)
+
+    out = usage.summary(days=30)
+    assert out["totals"]["prompt_tokens"] == 11
+    assert {b["key"] for b in out["by_day"]} == {"2026-07-31", "2026-08-02"}
+
+
+def test_summary_buckets_by_day_model_task_and_campaign(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", task="chat", model="realm/opus", campaign="saltmarch",
+          prompt_tokens=100)
+    _seed("2026-08-14", task="absorb", model="realm/haiku", campaign="saltmarch",
+          prompt_tokens=10)
+    _seed("2026-08-13", task="chat", model="realm/opus", campaign="winifred",
+          prompt_tokens=5)
+
+    out = usage.summary(days=30)
+    assert [(b["key"], b["prompt_tokens"]) for b in out["by_day"]] == [
+        ("2026-08-13", 5), ("2026-08-14", 110)]
+    assert {b["key"]: b["calls"] for b in out["by_model"]} == {"realm/opus": 2, "realm/haiku": 1}
+    assert {b["key"]: b["calls"] for b in out["by_task"]} == {"chat": 2, "absorb": 1}
+    assert {b["key"]: b["calls"] for b in out["by_campaign"]} == {"saltmarch": 2, "winifred": 1}
+
+
+def test_summary_can_be_scoped_to_one_campaign(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", prompt_tokens=100)
+    _seed("2026-08-14", campaign="winifred", prompt_tokens=7)
+
+    out = usage.summary(days=30, campaign="saltmarch")
+    assert out["campaign"] == "saltmarch"
+    assert out["totals"]["prompt_tokens"] == 100
+
+
+def test_summary_counts_failures_without_letting_them_look_like_traffic(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", prompt_tokens=100)
+    _seed("2026-08-14", status="error", error="rate_limit")
+
+    out = usage.summary(days=30)
+    assert out["totals"]["calls"] == 2
+    assert out["totals"]["errors"] == 1
+
+
+def test_a_cancelled_turn_is_a_call_but_not_a_failure(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", status="aborted", prompt_tokens=80)
+
+    out = usage.summary(days=30)
+    assert out["totals"]["calls"] == 1
+    assert out["totals"]["errors"] == 0, (
+        "a player pressing Cancel is not the provider failing them")
+    assert out["totals"]["prompt_tokens"] == 80
+
+
+def test_summary_keeps_subscription_billed_dollars_out_of_the_spend_total(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", cost_usd=0.02, cost_basis="billed")
+    _seed("2026-08-14", cost_usd=0.50, cost_basis="equivalent")
+
+    out = usage.summary(days=30)
+    assert out["totals"]["cost_usd"] == 0.02
+    assert out["totals"]["estimated_usd"] == 0.5
+
+
+def test_summary_says_how_much_of_the_window_carries_no_price_at_all(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", cost_usd=0.02, cost_basis="billed")
+    _seed("2026-08-14", prompt_tokens=5)
+
+    out = usage.summary(days=30)
+    assert out["totals"]["priced_calls"] == 1
+    assert out["totals"]["unpriced_calls"] == 1
+
+
+def test_the_session_bucket_holds_only_calls_made_since_this_process_started(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage, "_SESSION_START", "2026-08-14T09:00:00Z")
+    usage.record(task="chat", model="realm/opus", prompt_tokens=3,
+                 ts="2026-08-14T08:59:59Z")
+    usage.record(task="chat", model="realm/opus", prompt_tokens=40,
+                 ts="2026-08-14T09:00:01Z")
+
+    out = usage.summary(days=30)
+    assert out["totals"]["prompt_tokens"] == 43
+    assert out["session"]["prompt_tokens"] == 40
+    assert out["session_started"] == "2026-08-14T09:00:00Z"
+
+
+def test_todays_bucket_is_the_calendar_day_not_the_process(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage, "_SESSION_START", "2026-08-14T09:00:00Z")
+    _seed("2026-08-14", prompt_tokens=40)
+    _seed("2026-08-13", prompt_tokens=5)
+
+    out = usage.summary(days=30)
+    assert out["today"]["prompt_tokens"] == 40
+
+
+def test_an_empty_ledger_summarizes_to_zero_rather_than_failing(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    out = usage.summary(days=30)
+    assert out["totals"] == {"calls": 0, "errors": 0, "prompt_tokens": 0,
+                            "completion_tokens": 0, "total_tokens": 0,
+                            "cost_usd": 0.0, "estimated_usd": 0.0,
+                            "priced_calls": 0, "unpriced_calls": 0, "duration_ms": 0}
+    assert out["by_day"] == []
+
+
+def test_a_torn_or_hand_edited_line_is_skipped_not_fatal(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", prompt_tokens=100)
+    path = home / "usage" / "2026-08.jsonl"
+    path.write_text(path.read_text(encoding="utf-8") + '{"ts": "2026-08-1\n[]\n',
+                    encoding="utf-8")
+
+    out = usage.summary(days=30)
+    assert out["totals"]["calls"] == 1
+
+
+def test_days_is_clamped_so_a_hostile_query_cannot_walk_the_whole_disk(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    assert usage.summary(days=0)["days"] == 1
+    assert usage.summary(days=10_000)["days"] == usage.MAX_DAYS
+
+
+#: What `llm._stamp` puts in the holder before the first provider attempt. A
+#: meter whose holder is still empty describes a request that never went out.
+_SENT = {"model": "realm/opus", "connection": "Main", "provider": "openrouter",
+         "attempts": 1}
+
+
+# ---- the meter ----
+def test_a_call_that_never_went_out_is_not_a_row(home):
+    """The absorb budget refuses a step it has no time left for, and the client
+    is never awaited. A row for it would be a call that cost nothing, took no
+    time and never happened -- pure noise in every rollup."""
+    from grimoire.llm_errors import LLMError
+
+    with pytest.raises(LLMError):
+        with usage.meter("dossier", campaign="saltmarch"):
+            raise LLMError("timeout", "the absorb budget is spent")
+
+    assert _rows(home) == []
+
+
+
+def test_the_meter_records_what_the_facade_filled_in(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    with usage.meter("chat", campaign="saltmarch", scene="001-arrival") as m:
+        m.usage.update({"model": "realm/opus", "connection": "Main",
+                        "prompt_tokens": 12, "completion_tokens": 3,
+                        "cost_usd": 0.004, "cost_basis": "billed"})
+
+    row, = _rows(home)
+    assert row["model"] == "realm/opus"
+    assert row["connection"] == "Main"
+    assert row["completion_tokens"] == 3
+    assert row["cost_usd"] == 0.004
+    assert row["campaign"] == "saltmarch"
+    assert row["status"] == "ok"
+    assert row["duration_ms"] >= 0
+
+
+def test_a_failed_call_is_still_a_row_carrying_the_failure_kind(home):
+    from grimoire.llm_errors import LLMError
+
+    with pytest.raises(LLMError):
+        with usage.meter("chat", campaign="saltmarch") as m:
+            m.usage.update(_SENT)       # the facade stamped the route, then failed
+            raise LLMError("rate_limit", "slow down")
+
+    row, = _rows(home)
+    assert row["status"] == "error"
+    assert row["error"] == "rate_limit"
+
+
+def test_the_meter_records_once_however_many_times_it_is_finished(home):
+    m = usage.meter("chat")
+    m.usage.update(_SENT)
+    m.done()
+    m.done()
+    with m:
+        pass
+    assert len(_rows(home)) == 1

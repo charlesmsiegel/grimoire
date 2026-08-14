@@ -110,7 +110,7 @@ def test_a_busy_finalize_emits_an_error_frame_and_persists_nothing(
                         lambda *a, **k: persisted.append(("persist",) + a))
 
     class _Client:
-        async def stream(self, messages, conn):
+        async def stream(self, messages, conn, usage=None):
             yield "narrated text"
 
     def finalize(watcher):

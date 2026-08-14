@@ -202,7 +202,8 @@ async def post_character_tagline_generate(wid: str, cid: str,
     card = store.characters.read_card(root, cid, ch["meta"]["default_version"])
     messages = store.taglines.build_prompt(card["data"])
     try:
-        text = await _bounded_call(client.complete(messages, conn))
+        with store.usage.meter("tagline") as m:
+            text = await _bounded_call(client.complete(messages, conn, m.usage))
     except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     # Preview only — the caller persists via PUT on Save, so Generate-then-cancel
@@ -255,7 +256,8 @@ async def post_character_voice_anchor_generate(wid: str, cid: str,
     data = card.get("data")
     messages = store.voice_anchors.build_prompt(data if isinstance(data, dict) else {})
     try:
-        text = await _bounded_call(client.complete(messages, conn))
+        with store.usage.meter("voice-anchor") as m:
+            text = await _bounded_call(client.complete(messages, conn, m.usage))
     except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     # Preview only, like tagline/generate — the caller persists via PUT on Save,
