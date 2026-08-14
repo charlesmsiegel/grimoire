@@ -60,6 +60,7 @@ changes which records exist, which is not a ranking control any more.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import time
 from collections.abc import Iterator
@@ -150,6 +151,19 @@ def passages(text: str) -> list[str]:
 
 def _size(text: str) -> int:
     return len(text.encode("utf-8"))
+
+
+def _key(text: str) -> bytes:
+    """A passage's identity, for the two sets that have to span the whole walk.
+
+    A digest rather than the string itself, and for the same reason the walk is
+    a generator: a `set[str]` over every passage in the store retains the whole
+    corpus in memory for the length of the query, defeating the point of
+    yielding one record at a time. 32 bytes per passage instead of its text.
+    The cache already keys on sha256 (`vectors.py`), so this is the collision
+    assumption that is already load-bearing here, not a new one.
+    """
+    return hashlib.sha256(text.encode("utf-8")).digest()
 
 
 def _split_long(text: str) -> list[str]:
@@ -300,13 +314,13 @@ def search_semantic(q: str, *, scope: str = "", root: str = "",
     del missing, got
 
     matched: list[dict] = []
-    counted: set[str] = set()
+    counted: set[bytes] = set()
     indexed = 0
     for rec in _records(scope, root):
         cached = vectors.load(space, rec["texts"])
         for text in rec["texts"]:
-            if text not in counted:
-                counted.add(text)
+            if _key(text) not in counted:
+                counted.add(_key(text))
                 indexed += text in cached
         best = _best_passage(space, cached, query_vector, rec)
         if best is None or best[0] < SCORE_FLOOR:
@@ -335,14 +349,15 @@ def _uncached(space: str, records: Iterator[dict]) -> list[str]:
     has to count as missing, or a corrupted vector would never be offered for
     re-embedding and its record would be unscorable for good.
     """
-    seen: set[str] = set()
+    seen: set[bytes] = set()
     out: list[str] = []
     for rec in records:
         cached = vectors.load(space, rec["texts"])
         for text in rec["texts"]:
-            if text in seen:
+            key = _key(text)
+            if key in seen:
                 continue
-            seen.add(text)
+            seen.add(key)
             if text not in cached:
                 out.append(text)
     return out
