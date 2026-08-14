@@ -17,7 +17,7 @@ from ..llm import LLMClient
 from ..llm_errors import LLMError
 from .common import (computes_only, _bounded_call, _campaign_root_or_404, _content_fields,
                      _dump, _require_connection, _response_body, get_llm,
-                     _serve_image, _serve_image_file, _write_response)
+                     _serve_image, _serve_image_file, _upload_image_ext, _write_response)
 from .models import (AvatarFocus, CalendarConfig, CampaignClimate, CopyFromGreeting,
                      DefaultVersion, GroupStateSave, NameBody, NewCampaign, PCCreate,
                      PCUpdate, PersonaVersionCreate, PersonaVersionUpdate, PickBody,
@@ -720,8 +720,7 @@ def get_campaign_image(cid: str, char: str, vid: str, name: str, request: Reques
 async def put_campaign_image(cid: str, char: str, vid: str, name: str, file: UploadFile = File(...)):
     root = _campaign_root_or_404(cid)
     data = await file.read()
-    fn = file.filename or ""
-    ext = fn.rsplit(".", 1)[-1] if "." in fn else ""
+    ext = _upload_image_ext(data)  # the bytes name the type, not `file.filename` (#321)
     try:
         stored = store.assets.put_image(root, char, vid, name, data, ext)
     except ValueError as exc:

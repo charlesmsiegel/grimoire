@@ -17,6 +17,17 @@ def test_decode_data_uri_returns_bytes_and_ext():
     assert raw[:6] in (b"GIF87a", b"GIF89a")
 
 
+def test_decode_data_uri_believes_the_bytes_over_the_declared_mime():
+    """A data-URI's mime is a claim, like a filename (#321). A GIF announced as
+    `image/png` must be stored as `.gif`, or every consumer that reads the
+    stored suffix -- the EPUB manifest above all -- declares it PNG."""
+    gif = "R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
+    got = fetch.decode_data_uri(f"data:image/png;base64,{gif}")
+    assert got is not None and got[1] == "gif"
+    # a format `sniff_ext` cannot name still falls back to the declared mime
+    assert fetch.decode_data_uri("data:image/png;base64,bm90IGFuIGltYWdl") == (b"not an image", "png")
+
+
 def test_decode_data_uri_rejects_non_data_uri():
     assert fetch.decode_data_uri("https://example.com/a.png") is None
 

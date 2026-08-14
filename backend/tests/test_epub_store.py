@@ -163,6 +163,65 @@ def test_build_epub_packs_images_and_fonts(monkeypatch, tmp_path):
     assert "@font-face" in z.read("css/stylesheet.css").decode()
 
 
+def _jpeg(size=(8, 8)) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", size, (200, 40, 40)).save(buf, "JPEG")
+    return buf.getvalue()
+
+
+def test_manifest_media_type_follows_the_bytes_not_the_stored_name(monkeypatch, tmp_path):
+    """#321: a JPEG stored as `pier.png` was packed as `img-000.png` and declared
+    `media-type="image/png"` -- an epubcheck error, and unrenderable in some
+    readers. Nothing renames the file on disk, so this has to hold for the
+    mislabelled images stores already contain, not just for new uploads."""
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    docks = "the-docks"  # the fixture's one image-bearing location
+    assert assets.image_path(croot, docks, "default", "pier", base="locations") is not None
+    jpeg = _jpeg()
+    assets.put_image(croot, docks, "default", "pier", jpeg, "png", base="locations")
+
+    z = _open(epub.build_epub(cid)[0])
+    assert z.read("images/img-000.jpg") == jpeg          # packed name agrees with the bytes
+    opf = ET.fromstring(z.read("package.opf"))
+    item = next(i for i in opf.findall(".//opf:item", OPF_NS)
+                if i.get("href").startswith("images/"))
+    assert item.get("media-type") == "image/jpeg"
+    assert 'src="../images/img-000.jpg"' in z.read("text/chapter-001.xhtml").decode()
+
+
+def test_manifest_falls_back_to_the_stored_name_for_unrecognizable_bytes(monkeypatch, tmp_path):
+    """Bytes in no format we can name have no truth to substitute; the book
+    still packs, declaring the store's own guess rather than octet-stream."""
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(croot, "the-docks", "default", "pier", b"BM not really", "png",
+                     base="locations")
+
+    z = _open(epub.build_epub(cid)[0])
+    opf = ET.fromstring(z.read("package.opf"))
+    item = next(i for i in opf.findall(".//opf:item", OPF_NS)
+                if i.get("href").startswith("images/"))
+    assert item.get("href") == "images/img-000.png"
+    assert item.get("media-type") == "image/png"
+
+
+def test_cover_is_packed_under_the_extension_its_bytes_are(monkeypatch, tmp_path):
+    """An uploaded cover is validated, so this only answers for one a sync
+    client or a hand-edit dropped into the campaign's assets directory."""
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    jpeg = _jpeg()
+    covers.put_cover(cid, jpeg, "png")  # bypasses `covers.validate`, as a stray file does
+
+    z = _open(epub.build_epub(cid)[0])
+    assert z.read("images/cover.jpg") == jpeg
+    opf = ET.fromstring(z.read("package.opf"))
+    items = {i.get("id"): i for i in opf.findall(".//opf:item", OPF_NS)}
+    assert items["cover-img"].get("href") == "images/cover.jpg"
+    assert items["cover-img"].get("media-type") == "image/jpeg"
+    assert "../images/cover.jpg" in z.read("text/cover.xhtml").decode()
+
+
 def test_build_epub_unknown_campaign(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     import pytest

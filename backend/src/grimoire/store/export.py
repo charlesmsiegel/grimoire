@@ -18,7 +18,8 @@ from pathlib import Path
 import markdown as _md_lib
 from markupsafe import escape
 
-from . import assets, calendars, chronicle, characters, covers, entities, overlay, pcs, worlds
+from . import (assets, calendars, chronicle, characters, covers, entities, fetch, overlay,
+               pcs, worlds)
 from .appearances import cast as appearances_cast, paths as appearances_paths
 from .scenes import read as scenes_read, serialize as scenes_serialize
 from .campaigns import paths as campaigns_paths, read as campaigns_read
@@ -38,15 +39,53 @@ EXT_MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
              "gif": "image/gif", "webp": "image/webp"}
 
 
+def packed_ext(data: bytes, stored_name: str) -> str:
+    """The extension to pack an image under: what its bytes are, else what its
+    name on disk says. "" when neither answers.
+
+    The bytes decide, because every renderer names a media type from the packed
+    suffix and a name that lies produces a book epubcheck rejects (#321).
+    Uploads can no longer be misnamed (`routes.common._upload_image_ext`), but
+    stores already on disk hold files that are, nothing renames them, and this
+    is what makes a book exported from such a store valid anyway.
+
+    Renaming here costs nothing: the packed name is generated (`img-000`), and
+    an app image URL addresses the *logical* name -- `.../images/avatar` -- with
+    the extension living only in the filename `assets.image_path` globs for. So
+    the packed name and the declared type agree, rather than packing
+    `img-000.png` and declaring `image/jpeg` (legal, but it reads as a mistake).
+
+    The stored suffix answers for bytes that sniff as nothing -- an
+    externally-placed BMP, a truncated file. There is no truth to substitute
+    there, so the best available guess stays the one the store already made.
+    """
+    return fetch.sniff_ext(data) or Path(stored_name).suffix.lower().lstrip(".")
+
+
+def _packed_suffix(p: Path) -> str:
+    """`packed_ext` for a file on disk, read from its header alone."""
+    try:
+        with p.open("rb") as f:
+            header = f.read(12)  # every signature `sniff_ext` knows fits in 12 bytes
+    except OSError:
+        header = b""  # unreadable now; the pack-time read will answer for it
+    ext = packed_ext(header, p.name)
+    return f".{ext}" if ext else ""
+
+
 class Images:
-    """Registry of packed images: disk path -> packed images/ name."""
+    """Registry of packed images: disk path -> packed images/ name.
+
+    The packed name's extension comes from the file's bytes, not its name --
+    see `packed_ext`.
+    """
 
     def __init__(self):
         self.by_path: dict[Path, str] = {}
 
     def add(self, p: Path) -> str:
         if p not in self.by_path:
-            self.by_path[p] = f"img-{len(self.by_path):03d}{p.suffix.lower()}"
+            self.by_path[p] = f"img-{len(self.by_path):03d}{_packed_suffix(p)}"
         return self.by_path[p]
 
 
@@ -359,8 +398,10 @@ def build_html(cid: str) -> tuple[bytes, str]:
           f"<body>{''.join(sections)}</body></html>")
 
     for p, name in data["images"].by_path.items():
-        ext = p.suffix.lower().lstrip(".")
-        mime = EXT_MEDIA.get(ext, "application/octet-stream")
+        # From the PACKED name, whose extension is what the bytes are (#321),
+        # not from the file's own suffix, which may lie. A browser survives a
+        # wrong data-URI mime by sniffing; that is not a reason to write one.
+        mime = EXT_MEDIA.get(name.rsplit(".", 1)[-1], "application/octet-stream")
         b64 = base64.b64encode(p.read_bytes()).decode("ascii")
         doc = doc.replace(f'"images/{name}"', f'"data:{mime};base64,{b64}"')
     return doc.encode("utf-8"), f"{cid}.html"

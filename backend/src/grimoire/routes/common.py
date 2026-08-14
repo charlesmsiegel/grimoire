@@ -210,6 +210,37 @@ _IMAGE_MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
                 "gif": "image/gif", "webp": "image/webp"}
 
 
+def _upload_image_ext(data: bytes) -> str:
+    """The extension an uploaded record image is stored under, from its bytes (#321).
+
+    The client's filename is not asked. Every consumer names a media type from
+    the stored suffix -- the EPUB manifest, an export's data URIs, the
+    Content-Type `_serve_image_file` sets -- so a JPEG uploaded as `avatar.png`
+    used to be stored as `.png` and declared `image/png` by all three, which
+    epubcheck reports as an error and some readers refuse to render. The
+    extension allowlist never closed this: it was only ever checked against the
+    filename, which is the thing that lied. `store.covers` settled it for
+    campaign covers; this is the same rule for character avatars and galleries,
+    greeting art, and location and lore images.
+
+    Magic bytes rather than the PIL decode `covers.validate` runs (it also has
+    to bound the raster it is about to thumbnail, which a signature cannot):
+    the exporter has to name a type for files already on disk and cannot refuse
+    one, so it needs a detector that always answers -- and using that same
+    detector at both ends is what makes a stored image's suffix the suffix the
+    packer derives, rather than two rules that merely happen to agree. Both
+    admit exactly the extensions `assets` stores.
+
+    Bytes in no format we can label are refused rather than stored under a name
+    that lies about them: an AVIF uploaded as `avatar.png` renders in a browser
+    today only because browsers sniff, and it has never been packable.
+    """
+    ext = store.fetch.sniff_ext(data)
+    if ext is None:
+        raise HTTPException(status_code=400, detail="unsupported image type")
+    return ext
+
+
 def _serve_image(root, cid: str, vid: str, name: str, base: str = "characters",
                  request: Request | None = None):
     p = store.assets.image_path(root, cid, vid, name, base)
@@ -261,11 +292,16 @@ def _serve_image_file(p: Path, request: Request | None = None) -> Response:
                 thumb = None  # cache entry swept between generation and read
             if thumb is not None:
                 return Response(content=thumb, media_type="image/webp", headers=headers)
-    ext = p.suffix.lstrip(".").lower()
     try:
         content = p.read_bytes()
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
+    # The bytes name the type, the stored suffix only answers for bytes that
+    # sniff as nothing (#321) -- the same rule the exporters pack under. A new
+    # upload can no longer be misnamed, but a store already on disk holds files
+    # that are, and serving one as `image/png` works only because browsers
+    # sniff too.
+    ext = store.fetch.sniff_ext(content) or p.suffix.lstrip(".").lower()
     return Response(content=content,
                     media_type=_IMAGE_MEDIA.get(ext, "application/octet-stream"),
                     headers=headers)

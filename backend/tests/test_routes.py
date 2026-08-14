@@ -37,6 +37,26 @@ def _world(client, name="W"):
     return client.post("/api/worlds", json={"name": name}).json()["id"]
 
 
+def _png_bytes(size=(4, 4), color=(10, 20, 30)) -> bytes:
+    """A real PNG.
+
+    Image uploads are stored under the extension their BYTES are, never the
+    one the filename claims (#321), so a route test cannot post a marker string
+    and call it a PNG. A test that needs two images it can tell apart varies
+    `color` (or `size`) instead of posting two different marker strings.
+    """
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _jpeg_bytes(size=(4, 4)) -> bytes:
+    """A real JPEG, for the uploads that lie about which format they are."""
+    buf = io.BytesIO()
+    Image.new("RGB", size, (200, 40, 40)).save(buf, "JPEG")
+    return buf.getvalue()
+
+
 def _soon(seconds: int) -> str:
     """A canonical stamp `seconds` ahead of now.
 
@@ -409,13 +429,14 @@ def test_character_image_routes(client):
     assert client.get(base).json() == []
     assert client.get(f"{base}/avatar").status_code == 404
     # upload
-    files = {"file": ("a.png", io.BytesIO(b"\x89PNGdata"), "image/png")}
+    png = _png_bytes()
+    files = {"file": ("a.png", io.BytesIO(png), "image/png")}
     r = client.put(f"{base}/avatar", files=files)
     assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
     listed = client.get(base).json()
     assert [(i["name"], i["ext"]) for i in listed] == [("avatar", "png")] and listed[0]["v"]
     got = client.get(f"{base}/avatar")
-    assert got.status_code == 200 and got.content == b"\x89PNGdata"
+    assert got.status_code == 200 and got.content == png
     assert got.headers["content-type"].startswith("image/png")
     # bad type -> 400
     bad = client.put(f"{base}/avatar", files={"file": ("a.svg", io.BytesIO(b"<svg/>"), "image/svg+xml")})
@@ -425,38 +446,96 @@ def test_character_image_routes(client):
     assert client.get(f"{base}/avatar").status_code == 404
 
 
+def test_image_upload_stores_the_extension_the_bytes_are(client):
+    """#321: the stored extension used to come from the client's filename, so a
+    JPEG uploaded as `avatar.png` was stored as `.png` and then declared
+    `image/png` by the EPUB manifest, the HTML export's data URIs and this
+    server -- an epubcheck error, and a book some readers refuse to render."""
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    eid = client.post(f"/api/worlds/{wid}/locations", json={"name": "Docks"}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S1"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
+    jpeg = _jpeg_bytes()
+    lying = {"file": ("avatar.png", io.BytesIO(jpeg), "image/png")}
+
+    for base in (f"/api/worlds/{wid}/characters/{chid}/versions/default/images",
+                 f"/api/worlds/{wid}/locations/{eid}/images",
+                 f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"):
+        lying["file"][1].seek(0)
+        r = client.put(f"{base}/avatar", files=lying)
+        assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "jpg"}, base
+        got = client.get(f"{base}/avatar")
+        assert got.content == jpeg and got.headers["content-type"] == "image/jpeg", base
+
+    # and on disk, which is what the exporters read
+    wroot, croot = store.worlds.world_root(wid), store.campaigns.campaign_root(cid)
+    for root, rid, base_kind in ((wroot, chid, "characters"), (wroot, eid, "locations"),
+                                 (croot, chid, "characters")):
+        p = store.assets.image_path(root, rid, "default", "avatar", base=base_kind)
+        assert p is not None and p.suffix == ".jpg", (rid, base_kind)
+
+
+def test_image_upload_of_bytes_that_are_no_image_is_rejected(client):
+    """The extension allowlist only ever saw the filename, so an AVIF (or an
+    HTML error page) uploaded as `.png` passed it. Refusing beats storing it
+    under a name that lies about it."""
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    base = f"/api/worlds/{wid}/characters/{cid}/versions/default/images"
+    r = client.put(f"{base}/avatar",
+                   files={"file": ("a.png", io.BytesIO(b"<html>nope</html>"), "image/png")})
+    assert r.status_code == 400 and r.json()["detail"] == "unsupported image type"
+    assert client.get(base).json() == []
+
+
+def test_serving_a_misnamed_image_declares_what_it_is(client):
+    """Upload validation cannot reach a file already on disk, so serving one
+    reads the bytes too -- a browser survives the wrong type by sniffing, which
+    is not a reason to send it."""
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    store.assets.put_image(store.worlds.world_root(wid), cid, "default", "avatar",
+                           _jpeg_bytes(), "png")
+    r = client.get(f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+
+
 def test_campaign_image_route_serves_copied_avatar(client):
     wid, cid = _campaign(client)
     chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    png = _png_bytes()
     client.put(f"/api/worlds/{wid}/characters/{chid}/versions/default/images/avatar",
-               files={"file": ("a.png", io.BytesIO(b"PNGBYTES"), "image/png")})
+               files={"file": ("a.png", io.BytesIO(png), "image/png")})
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S1"}).json()["id"]
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                 json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
     got = client.get(f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/avatar")
-    assert got.status_code == 200 and got.content == b"PNGBYTES"
+    assert got.status_code == 200 and got.content == png
 
 
 def test_campaign_character_image_routes_isolated(client):
     wid, cid = _campaign(client)
     chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    world_png, camp_png = _png_bytes(color=(1, 2, 3)), _png_bytes(color=(4, 5, 6))
     world_base = f"/api/worlds/{wid}/characters/{chid}/versions/default/images"
-    client.put(f"{world_base}/avatar", files={"file": ("a.png", io.BytesIO(b"world-bytes"), "image/png")})
+    client.put(f"{world_base}/avatar", files={"file": ("a.png", io.BytesIO(world_png), "image/png")})
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S1"}).json()["id"]
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                 json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
 
     camp_base = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"
-    r = client.put(f"{camp_base}/avatar", files={"file": ("b.png", io.BytesIO(b"campaign-bytes"), "image/png")})
+    r = client.put(f"{camp_base}/avatar", files={"file": ("b.png", io.BytesIO(camp_png), "image/png")})
     assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
 
     # campaign copy changed; world's shared copy untouched
-    assert client.get(f"{camp_base}/avatar").content == b"campaign-bytes"
-    assert client.get(f"{world_base}/avatar").content == b"world-bytes"
+    assert client.get(f"{camp_base}/avatar").content == camp_png
+    assert client.get(f"{world_base}/avatar").content == world_png
 
     assert client.delete(f"{camp_base}/avatar").status_code == 200
     assert client.get(f"{camp_base}/avatar").status_code == 404
-    assert client.get(f"{world_base}/avatar").content == b"world-bytes"
+    assert client.get(f"{world_base}/avatar").content == world_png
 
 
 def test_campaign_character_image_promote_swaps_avatar(client):
@@ -466,12 +545,13 @@ def test_campaign_character_image_promote_swaps_avatar(client):
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                 json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
     base = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"
-    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(b"old"), "image/png")})
-    client.put(f"{base}/gallery_1", files={"file": ("g.png", io.BytesIO(b"new"), "image/png")})
+    old, new = _png_bytes(color=(1, 1, 1)), _png_bytes(color=(2, 2, 2))
+    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(old), "image/png")})
+    client.put(f"{base}/gallery_1", files={"file": ("g.png", io.BytesIO(new), "image/png")})
 
     assert client.post(f"{base}/gallery_1/promote").status_code == 200
-    assert client.get(f"{base}/avatar").content == b"new"
-    assert client.get(f"{base}/gallery_1").content == b"old"
+    assert client.get(f"{base}/avatar").content == new
+    assert client.get(f"{base}/gallery_1").content == old
     assert client.post(f"{base}/gallery_9/promote").status_code == 404
 
 
@@ -484,7 +564,7 @@ def test_campaign_avatar_focus_endpoint_round_trip(client):
     base = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"
 
     assert client.put(f"{base}/avatar/focus", json={"focus": 30}).status_code == 404
-    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(b"img"), "image/png")})
+    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
     assert client.put(f"{base}/avatar/focus", json={"focus": 30}).json() == {"ok": True}
     detail = client.get(f"/api/campaigns/{cid}/characters/{chid}").json()
     assert detail["versions"][0]["avatar_focus"] == 30
@@ -498,7 +578,7 @@ def test_campaign_avatar_focus_on_inherited_world_avatar(client):
     wid, cid = _campaign(client)
     chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
     client.put(f"/api/worlds/{wid}/characters/{chid}/versions/default/images/avatar",
-               files={"file": ("a.png", io.BytesIO(b"world-img"), "image/png")})
+               files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
     croot = store.campaigns.campaign_root(cid)
     assert not (croot / "characters" / chid).exists()   # never materialized
 
@@ -569,16 +649,17 @@ def test_character_image_promote_swaps_avatar(client):
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
     base = f"/api/worlds/{wid}/characters/{cid}/versions/default/images"
-    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(b"old"), "image/png")})
-    client.put(f"{base}/gallery_1", files={"file": ("g.png", io.BytesIO(b"new"), "image/png")})
+    old, new = _png_bytes(color=(1, 1, 1)), _png_bytes(color=(2, 2, 2))
+    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(old), "image/png")})
+    client.put(f"{base}/gallery_1", files={"file": ("g.png", io.BytesIO(new), "image/png")})
 
     r = client.post(f"{base}/gallery_1/promote")
     assert r.status_code == 200
 
     got = client.get(f"{base}/avatar")
-    assert got.content == b"new"
+    assert got.content == new
     assert got.headers["cache-control"] == "no-cache"
-    assert client.get(f"{base}/gallery_1").content == b"old"
+    assert client.get(f"{base}/gallery_1").content == old
 
 
 def test_character_image_promote_missing_404(client):
@@ -610,24 +691,26 @@ def test_campaign_image_promote_routes_swap_campaign_side_only(client):
     swapping, so the world's copies must come through untouched."""
     wid, cid = _campaign(client)
     chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
+    old, new = _png_bytes(color=(1, 1, 1)), _png_bytes(color=(2, 2, 2))
     wbase = f"/api/worlds/{wid}/characters/{chid}/versions/default/images"
-    client.put(f"{wbase}/avatar", files={"file": ("a.png", io.BytesIO(b"old"), "image/png")})
-    client.put(f"{wbase}/gallery_1", files={"file": ("g.png", io.BytesIO(b"new"), "image/png")})
+    client.put(f"{wbase}/avatar", files={"file": ("a.png", io.BytesIO(old), "image/png")})
+    client.put(f"{wbase}/gallery_1", files={"file": ("g.png", io.BytesIO(new), "image/png")})
 
     cbase = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"
     assert client.post(f"{cbase}/gallery_1/promote").status_code == 200
-    assert client.get(f"{cbase}/avatar").content == b"new"
-    assert client.get(f"{cbase}/gallery_1").content == b"old"
-    assert client.get(f"{wbase}/avatar").content == b"old"
-    assert client.get(f"{wbase}/gallery_1").content == b"new"
+    assert client.get(f"{cbase}/avatar").content == new
+    assert client.get(f"{cbase}/gallery_1").content == old
+    assert client.get(f"{wbase}/avatar").content == old
+    assert client.get(f"{wbase}/gallery_1").content == new
 
+    day, night = _png_bytes(color=(3, 3, 3)), _png_bytes(color=(4, 4, 4))
     eid = client.post(f"/api/campaigns/{cid}/locations", json={"name": "Crypt"}).json()["id"]
     ebase = f"/api/campaigns/{cid}/locations/{eid}/images"
-    client.put(f"{ebase}/avatar", files={"file": ("a.png", io.BytesIO(b"day"), "image/png")})
-    client.put(f"{ebase}/gallery_1", files={"file": ("n.png", io.BytesIO(b"night"), "image/png")})
+    client.put(f"{ebase}/avatar", files={"file": ("a.png", io.BytesIO(day), "image/png")})
+    client.put(f"{ebase}/gallery_1", files={"file": ("n.png", io.BytesIO(night), "image/png")})
     assert client.post(f"{ebase}/gallery_1/promote").status_code == 200
-    assert client.get(f"{ebase}/avatar").content == b"night"
-    assert client.get(f"{ebase}/gallery_1").content == b"day"
+    assert client.get(f"{ebase}/avatar").content == night
+    assert client.get(f"{ebase}/gallery_1").content == day
 
 
 def test_avatar_focus_endpoint_round_trip(client):
@@ -636,7 +719,7 @@ def test_avatar_focus_endpoint_round_trip(client):
     base = f"/api/worlds/{wid}/characters/{cid}/versions/default/images"
     # no avatar yet -> 404
     assert client.put(f"{base}/avatar/focus", json={"focus": 30}).status_code == 404
-    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(b"img"), "image/png")})
+    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
     assert client.put(f"{base}/avatar/focus", json={"focus": 30}).json() == {"ok": True}
     detail = client.get(f"/api/worlds/{wid}/characters/{cid}").json()
     assert detail["versions"][0]["avatar_focus"] == 30
@@ -644,7 +727,8 @@ def test_avatar_focus_endpoint_round_trip(client):
     assert chars[0]["avatar_focus"] == 30
     assert chars[0]["gallery_count"] == 0 and chars[0]["localized_count"] == 0
     # promoting a new image invalidates the crop
-    client.put(f"{base}/gallery_1", files={"file": ("g.png", io.BytesIO(b"g"), "image/png")})
+    client.put(f"{base}/gallery_1",
+               files={"file": ("g.png", io.BytesIO(_png_bytes(color=(9, 9, 9))), "image/png")})
     client.post(f"{base}/gallery_1/promote")
     assert client.get(f"/api/worlds/{wid}/characters/{cid}").json()["versions"][0]["avatar_focus"] is None
 
@@ -657,17 +741,18 @@ def test_entity_images_crud_promote_and_has_image(client):
     assert client.get(f"/api/worlds/{wid}/locations").json()[0]["has_image"] is False
     assert client.get(base).json() == []
 
-    r = client.put(f"{base}/avatar", files={"file": ("w.png", io.BytesIO(b"day"), "image/png")})
+    day, night = _png_bytes(color=(1, 1, 1)), _png_bytes(color=(2, 2, 2))
+    r = client.put(f"{base}/avatar", files={"file": ("w.png", io.BytesIO(day), "image/png")})
     assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
-    client.put(f"{base}/gallery_1", files={"file": ("n.png", io.BytesIO(b"night"), "image/png")})
+    client.put(f"{base}/gallery_1", files={"file": ("n.png", io.BytesIO(night), "image/png")})
 
     assert client.get(f"/api/worlds/{wid}/locations").json()[0]["has_image"] is True
     assert {i["name"] for i in client.get(base).json()} == {"avatar", "gallery_1"}
-    assert client.get(f"{base}/avatar").content == b"day"
+    assert client.get(f"{base}/avatar").content == day
 
     assert client.post(f"{base}/gallery_1/promote").status_code == 200
-    assert client.get(f"{base}/avatar").content == b"night"
-    assert client.get(f"{base}/gallery_1").content == b"day"
+    assert client.get(f"{base}/avatar").content == night
+    assert client.get(f"{base}/gallery_1").content == day
 
     assert client.delete(f"{base}/gallery_1").status_code == 200
     assert client.get(f"{base}/gallery_1").status_code == 404
@@ -684,8 +769,9 @@ def test_campaign_entity_images_served(client):
     _, cid = _campaign(client)
     eid = client.post(f"/api/campaigns/{cid}/locations", json={"name": "Crypt"}).json()["id"]
     base = f"/api/campaigns/{cid}/locations/{eid}/images"
-    client.put(f"{base}/avatar", files={"file": ("c.png", io.BytesIO(b"img"), "image/png")})
-    assert client.get(f"{base}/avatar").content == b"img"
+    png = _png_bytes()
+    client.put(f"{base}/avatar", files={"file": ("c.png", io.BytesIO(png), "image/png")})
+    assert client.get(f"{base}/avatar").content == png
     assert client.get(f"/api/campaigns/{cid}/locations").json()[0]["has_image"] is True
 
 
@@ -7161,7 +7247,7 @@ def test_large_json_responses_are_gzipped(client):
 def _png_upload(client, wid, cid):
     return client.put(
         f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar",
-        files={"file": ("a.png", io.BytesIO(b"png-bytes"), "image/png")})
+        files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
 
 
 def test_versioned_image_url_is_immutable_unversioned_revalidates(client):
@@ -7182,7 +7268,7 @@ def test_entity_list_exposes_image_version(client):
     wid = _world(client)
     client.post(f"/api/worlds/{wid}/locations", json={"name": "Docks"})
     up = client.put(f"/api/worlds/{wid}/locations/docks/images/avatar",
-                    files={"file": ("a.png", io.BytesIO(b"png-bytes"), "image/png")})
+                    files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
     assert up.status_code == 200
     items = client.get(f"/api/worlds/{wid}/locations").json()
     assert items[0]["has_image"] is True
@@ -7274,10 +7360,14 @@ def test_image_w_param_serves_downscaled_webp(client):
 
 
 def test_image_w_param_falls_back_to_original_when_not_decodable(client):
+    # Written through the store, not uploaded: an upload of bytes that are no
+    # image at all is a 400 since #321, so the only way this file exists is the
+    # one that always mattered here -- something else put it in the directory.
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
     base = f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar"
-    client.put(base, files={"file": ("a.png", io.BytesIO(b"not an image"), "image/png")})
+    store.assets.put_image(store.worlds.world_root(wid), cid, "default", "avatar",
+                           b"not an image", "png")
     r = client.get(f"{base}?w=320")
     assert r.status_code == 200
     assert r.content == b"not an image"  # original bytes, not an error
@@ -10745,12 +10835,6 @@ async def test_a_bare_speaker_marker_regenerate_puts_the_old_reply_back(
     assert '"done": true' in frames
     contents = [m["content"] for m in store.scenes.read_scene(cid, sid)["messages"]]
     assert "The tide turns." in contents
-
-
-def _png_bytes(size=(4, 4)) -> bytes:
-    buf = io.BytesIO()
-    Image.new("RGB", size, (10, 20, 30)).save(buf, "PNG")
-    return buf.getvalue()
 
 
 def test_campaign_cover_round_trip(client):

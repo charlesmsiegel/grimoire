@@ -154,6 +154,56 @@ def test_build_html_self_contained(monkeypatch, tmp_path):
     assert "example.com" not in html
 
 
+def _jpeg(size=(8, 8)) -> bytes:
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", size, (200, 40, 40)).save(buf, "JPEG")
+    return buf.getvalue()
+
+
+def test_packed_name_comes_from_the_bytes_not_the_stored_suffix(monkeypatch, tmp_path):
+    """A JPEG stored as `pier.png` -- which an upload could produce before #321
+    and which stores already on disk still hold -- must pack under `.jpg`, so
+    the media type every renderer derives from that suffix is the true one."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    docks = entities.create_entity(croot, "locations", "The Docks", body="piers")
+    assets.put_image(croot, docks, "default", "pier", _jpeg(), "png", base="locations")
+
+    images = export.Images()
+    out = export.rewrite_images(f"![d](/api/campaigns/{cid}/locations/{docks}/images/pier)",
+                                cid, images)
+    assert "![d](images/img-000.jpg)" in out
+    assert list(images.by_path.values()) == ["img-000.jpg"]
+
+
+def test_packed_name_keeps_the_stored_suffix_when_the_bytes_say_nothing(monkeypatch, tmp_path):
+    """Bytes in no format we can name leave nothing to correct: the store's own
+    guess is the best available, and an export must still produce the image."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    docks = entities.create_entity(croot, "locations", "The Docks", body="piers")
+    assets.put_image(croot, docks, "default", "pier", b"BM not really", "png", base="locations")
+
+    images = export.Images()
+    export.rewrite_images(f"![d](/api/campaigns/{cid}/locations/{docks}/images/pier)", cid, images)
+    assert list(images.by_path.values()) == ["img-000.png"]
+
+
+def test_build_html_data_uri_mime_follows_the_bytes(monkeypatch, tmp_path):
+    """The data URI carried the suffix's mime, which browsers survive by
+    sniffing -- not a reason to write a wrong one (#321)."""
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    docks = "the-docks"  # the fixture's one image-bearing location
+    assert assets.image_path(croot, docks, "default", "pier", base="locations") is not None
+    assets.put_image(croot, docks, "default", "pier", _jpeg(), "png", base="locations")
+
+    html = export.build_html(cid)[0].decode()
+    assert "data:image/jpeg;base64," in html
+    assert "data:image/png" not in html
+
+
 def test_build_text_transcript(monkeypatch, tmp_path):
     _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
     blob, filename = export.build_text(cid)

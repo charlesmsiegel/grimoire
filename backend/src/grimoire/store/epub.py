@@ -88,7 +88,12 @@ def build_epub(cid: str) -> tuple[bytes, str]:
     if data["cover"] is not None:
         try:
             cover_bytes = data["cover"].read_bytes()
-            cover_name = f"cover{data['cover'].suffix.lower()}"
+            # Named from the bytes like every other packed image (#321). An
+            # uploaded cover is already validated (`covers.validate`), so this
+            # only answers for one a sync client or a hand-edit dropped into
+            # the campaign's assets directory.
+            ext = _export.packed_ext(cover_bytes, data["cover"].name)
+            cover_name = f"cover.{ext}" if ext else "cover"
         except OSError:
             cover_bytes, cover_name = None, ""
 
@@ -117,12 +122,13 @@ def build_epub(cid: str) -> tuple[bytes, str]:
     items += [{"id": f"font-{i}", "href": f"fonts/{f.name}", "media_type": "font/ttf",
                "properties": ""}
               for i, f in enumerate(fonts)]
-    # Record images take their manifest media type from the filename suffix, so
-    # a JPEG stored as `.png` is declared `image/png` and epubcheck flags the
-    # book. Covers no longer can (`covers.validate` names the extension from the
-    # decoded format); this path still can, deliberately -- it is a pre-existing,
-    # systemic hazard across every image route and every store already on disk,
-    # and closing it is its own change rather than a rider on the cover work.
+    # The media type still comes from the packed name's suffix, and that is now
+    # honest: `export.packed_ext` names every packed image from its bytes, so a
+    # JPEG stored as `avatar.png` packs as `img-000.jpg` and is declared
+    # `image/jpeg` (#321). That holds for stores already on disk, which is the
+    # half upload validation cannot reach -- nothing in the store is renamed.
+    # A file whose bytes sniff as nothing keeps its stored suffix and is
+    # declared from that, the best guess available for bytes with no answer.
     items += [{"id": f"img-{i}", "href": f"images/{name}",
                "media_type": _EXT_MEDIA.get(name.rsplit(".", 1)[-1], "application/octet-stream"),
                "properties": ""}

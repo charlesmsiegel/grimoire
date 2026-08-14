@@ -12,7 +12,8 @@ from __future__ import annotations
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
 from .. import store
-from .common import _campaign_root_or_404, _serve_image, _world_root_or_404
+from .common import (_campaign_root_or_404, _serve_image, _upload_image_ext,
+                     _world_root_or_404)
 from .models import EntityCreate, EntityUpdate
 
 router = APIRouter()
@@ -186,8 +187,7 @@ def _image_kind_or_404(kind: str) -> None:
 async def _entity_image_put(root, kind: str, eid: str, name: str, file: UploadFile):
     _entity_kind_or_404(kind)
     data = await file.read()
-    fn = file.filename or ""
-    ext = fn.rsplit(".", 1)[-1] if "." in fn else ""
+    ext = _upload_image_ext(data)  # the bytes name the type, not `file.filename` (#321)
     try:
         stored = store.assets.put_image(root, eid, "default", name, data, ext, base=kind)
     except ValueError as exc:
