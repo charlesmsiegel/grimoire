@@ -93,7 +93,7 @@ def _norm(path: Path) -> Path:
     return Path(os.path.normpath(os.path.abspath(str(path))))
 
 
-def _skips(root: Path) -> tuple[Path, ...]:
+def _skips(root: Path, directory: Path) -> tuple[Path, ...]:
     """Directories the archive never descends into — see the module docstring.
 
     The backup directory is excluded **only when it is inside the store**, and
@@ -106,7 +106,7 @@ def _skips(root: Path) -> tuple[Path, ...]:
     """
     nroot = _norm(root)
     skips = [_norm(root / _DERIVED)]
-    target = _norm(backup_dir())
+    target = _norm(directory)
     if nroot in target.parents:
         skips.append(target)
     return tuple(skips)
@@ -140,7 +140,27 @@ def _store_file(z: zipfile.ZipFile, path: Path, arcname: str) -> None:
     z.write(path, arcname)
 
 
-def _archive_into(fh, root: Path, skip: tuple[Path, ...]) -> None:
+def _walk_error(exc: OSError) -> None:
+    """`os.walk`'s error hook: re-raise, except for a directory that vanished.
+
+    Load-bearing, and the default is the trap. `os.walk` swallows every error
+    it hits listing a directory, so without this a directory the process cannot
+    read — a permission bit, an I/O error, a sync client holding it on Windows
+    — is dropped from the archive and the backup reports success. That is the
+    exact failure the module docstring says cannot happen, and it was happening
+    at the coarsest granularity there is: the omission is a whole subtree, not
+    a file.
+
+    A vanished directory is skipped for the same reason a vanished file is: a
+    campaign deleted while the walk was running was not part of the state this
+    archive is capturing.
+    """
+    if isinstance(exc, FileNotFoundError):
+        return
+    raise exc
+
+
+def _archive_into(fh, root: Path, skip: tuple[Path, ...], directory: Path) -> None:
     """Write the store at `root` into the open binary file `fh`.
 
     ``os.walk(followlinks=False)``, not ``rglob``: a directory symlink pointing
@@ -152,7 +172,9 @@ def _archive_into(fh, root: Path, skip: tuple[Path, ...]) -> None:
     socket, a fifo) is skipped rather than opened.
 
     A member that disappears between the listing and the copy is skipped, for
-    the reason in the module docstring. Every other failure propagates.
+    the reason in the module docstring. Every other failure propagates —
+    including one hit while *listing* a directory, which `os.walk` would
+    otherwise swallow whole (see `_walk_error`).
 
     The skip check is per *directory*, not per file: `_norm` calls `getcwd`,
     and running it over every file in a library to re-answer a question the
@@ -168,12 +190,13 @@ def _archive_into(fh, root: Path, skip: tuple[Path, ...]) -> None:
     Entries are sorted so two archives of an unchanged store list their members
     in the same order.
     """
-    directory = _norm(backup_dir())
+    backups_here = _norm(directory)
     with zipfile.ZipFile(fh, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as z:
-        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for dirpath, dirnames, filenames in os.walk(root, onerror=_walk_error,
+                                                    followlinks=False):
             here = Path(dirpath)
             dirnames[:] = sorted(d for d in dirnames if not _is_skipped(here / d, skip))
-            in_backup_dir = _norm(here) == directory
+            in_backup_dir = _norm(here) == backups_here
             for name in sorted(filenames):
                 path = here / name
                 if in_backup_dir and _is_backup_artifact(name):
@@ -197,7 +220,7 @@ def _utc(when: datetime | None) -> datetime:
     return when.astimezone(timezone.utc)
 
 
-def _allocate(when: datetime) -> Path:
+def _allocate(directory: Path, when: datetime) -> Path:
     """A free archive path for `when`.
 
     Two backups in the same second are reachable — a scheduled one and the
@@ -205,7 +228,6 @@ def _allocate(when: datetime) -> Path:
     replace the first, so the name gains a `-2`, `-3`, … Called under the
     backup lock, which is what makes the check-then-create meaningful.
     """
-    directory = backup_dir()
     stamp = when.strftime(_STAMP)
     n = 1
     while True:
@@ -227,10 +249,15 @@ def create_backup(when: datetime | None = None) -> Path:
         # outside could zip one store into another's backup directory if the
         # storage location moved while this call was waiting.
         root = home()
-        target = _allocate(_utc(when))
+        # Resolved ONCE and threaded through. It used to be re-read at four
+        # points inside this one call -- the allocation, the exclusion set, the
+        # walk's own check, and the sweep that follows -- each a fresh config
+        # read silently assumed to agree with the others.
+        directory = backup_dir()
+        target = _allocate(directory, _utc(when))
         target.parent.mkdir(parents=True, exist_ok=True)
         with atomic.streaming_write(target) as fh:
-            _archive_into(fh, root, _skips(root))
+            _archive_into(fh, root, _skips(root, directory), directory)
         return target
 
 
@@ -258,8 +285,14 @@ def list_backups() -> list[dict]:
     directory. Anything that is not one of our archives is ignored — see
     `_NAME_RE`.
     """
+    return _list_in(backup_dir())
+
+
+def _list_in(directory: Path) -> list[dict]:
+    """`list_backups` against an already-resolved directory, so a caller that
+    is going to *act* on the result reads and acts on the same one."""
     try:
-        entries = list(backup_dir().iterdir())
+        entries = list(directory.iterdir())
     except FileNotFoundError:
         return []
     rows = []
@@ -291,7 +324,10 @@ def sweep(keep: int | None = None) -> list[str]:
         return []
     with locks.backup_lock():
         directory = backup_dir()
-        doomed = list(reversed(list_backups()[keep:]))
+        # Listed from the SAME resolution it deletes from: two reads of a
+        # setting that can change between them is how a sweep ends up unlinking
+        # a same-named file out of a directory it never looked at.
+        doomed = list(reversed(_list_in(directory)[keep:]))
         for row in doomed:
             try:
                 (directory / row["name"]).unlink()
@@ -338,6 +374,14 @@ def run_scheduled(now: datetime | None = None) -> Path | None:
     `due` and `create_backup` share one hold of the backup lock: apart, two
     processes ticking together would both see the same stale newest archive and
     both zip the library.
+
+    The sweep runs **after** the archive, not before it, and on a nearly-full
+    disk that is the difference between a failed backup and a lost one.
+    Sweeping first would free the space the new archive needs — and would do it
+    by deleting a restore point that exists, to make room for one that may
+    still fail, leaving fewer archives than the retention setting promised.
+    Failing to add a backup is recoverable; deleting a good one to attempt it
+    is not.
 
     A sweep that fails is logged and does not take the archive down with it.
     The archive is what this call is for and it has already landed; raising

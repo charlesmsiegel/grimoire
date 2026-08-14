@@ -96,7 +96,11 @@ def test_two_archives_in_the_same_second_do_not_collide(monkeypatch, tmp_path):
 
     assert first != second
     assert first.exists() and second.exists()
-    assert {b["name"] for b in backups.list_backups()} == {first.name, second.name}
+    # Newest first, and that ordering is NOT the filename's: `-2` sorts before
+    # `.zip` bytewise, so plain name sorting inverts every same-second pair.
+    assert [b["name"] for b in backups.list_backups()] == [second.name, first.name]
+    assert backups.sweep(keep=1) == [first.name]
+    assert second.exists()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
@@ -163,6 +167,54 @@ def test_a_file_that_vanishes_mid_walk_does_not_fail_the_backup(monkeypatch, tmp
 
     assert "worlds/realm/world.md" in names_in(archive)
     assert not any(n.endswith(".tmp") for n in names_in(archive))
+
+
+def test_a_directory_that_cannot_be_listed_fails_the_backup(monkeypatch, tmp_path):
+    """`os.walk` swallows a directory it cannot list, so without an `onerror`
+    hook a whole unreadable subtree was dropped and the backup reported
+    success — the module's stated policy failing at the coarsest granularity
+    there is. Simulated rather than chmod'd: CI may run as root, where a
+    permission bit stops nothing."""
+    root = home(monkeypatch, tmp_path)
+    small_store(root)
+    real_walk = os.walk
+
+    def blinded(path, **kw):
+        onerror = kw.get("onerror")
+        for dirpath, dirnames, filenames in real_walk(path, **kw):
+            if dirpath.endswith("realm"):
+                if onerror:
+                    onerror(PermissionError(13, "denied", dirpath))
+                continue
+            yield dirpath, dirnames, filenames
+
+    monkeypatch.setattr(backups.os, "walk", blinded)
+    with pytest.raises(PermissionError):
+        backups.create_backup(when=AT)
+
+    assert backups.list_backups() == []
+
+
+def test_a_directory_deleted_mid_walk_does_not_fail_the_backup(monkeypatch, tmp_path):
+    """The other half: a campaign deleted while the walk is running was not
+    part of the state being captured."""
+    root = home(monkeypatch, tmp_path)
+    small_store(root)
+    real_walk = os.walk
+
+    def vanishing(path, **kw):
+        onerror = kw.get("onerror")
+        for dirpath, dirnames, filenames in real_walk(path, **kw):
+            if dirpath.endswith("saltmarch"):
+                if onerror:
+                    onerror(FileNotFoundError(2, "gone", dirpath))
+                continue
+            yield dirpath, dirnames, filenames
+
+    monkeypatch.setattr(backups.os, "walk", vanishing)
+    archive = backups.create_backup(when=AT)
+
+    assert "worlds/realm/world.md" in names_in(archive)
 
 
 def test_a_file_older_than_the_zip_format_is_stored_with_a_clamped_stamp(
