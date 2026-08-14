@@ -98,6 +98,16 @@ def _scope_known(cid: str, sid: str, known: list[dict], limit: int) -> list[dict
     - drop anyone quietly. The omitted names go to the log, because a directory
       that is silently partial is indistinguishable to the reader from a world
       that is smaller than it is.
+
+    And one thing it deliberately does not tell the MODEL. The section is
+    headed "Other characters in this world" and, past the ceiling, that is no
+    longer the whole of them -- so the obvious move is a trailing "…and N
+    others". It is not made, on purpose: the line beneath the heading asks the
+    model to introduce these people only if the story calls for it, and telling
+    it that hundreds more exist that it cannot see invites exactly the invented
+    cast that instruction is there to prevent. The omission is surfaced to the
+    USER (this log, and the section's own token row in the inspector), who can
+    raise the ceiling; it is not surfaced to the model, which can only guess.
     """
     try:
         mentioned = {s["character"] for s in appearances_transitions.suggestions(cid, sid)}

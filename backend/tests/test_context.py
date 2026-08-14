@@ -665,6 +665,98 @@ def test_cast_directory_heading_travels_to_tier_three_alone(monkeypatch, tmp_pat
     assert "Off-scene cast · active elsewhere" not in labels   # empty -> no noise row
 
 
+def test_the_budget_can_now_drop_one_tier_and_keep_the_other(monkeypatch, tmp_path):
+    """Splitting the directory made it divisible: it used to be one section the
+    packer took or left whole, and tier 3 can now go on its own. That is the
+    intended shape -- tier 3 is the expendable half -- so pin it rather than
+    leave a behaviour change under budget pressure to be discovered."""
+    from grimoire.store import taglines, dossiers, config
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Aese", "main", _npc_card("Aese", description="d"))
+    characters.create_character(wroot, "Myval", "main", _npc_card("Myval", description="m"))
+    for i in range(12):                       # tier 3, deliberately the larger half
+        characters.create_character(wroot, f"Char{i:02d}", "main", _npc_card(f"Char{i:02d}"))
+        taglines.write(wroot, f"char{i:02d}", "A long tagline about a distant person. " * 6)
+
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "S")
+    other = scenes.create_scene(cid, "Other")
+    ap.appear(cid, other, "characters", "myval", "main", "npc")
+    ap.appear(cid, sid, "characters", "aese", "main", "npc")
+    dossiers.write(campaigns.campaign_root(cid), "myval", "Myval prowls the dusk road.")
+    scenes.append_message(cid, sid, "user", "hi")
+
+    rows = {s["label"]: s for s in context.context_sections(cid, sid)}
+    active, known = (rows["Off-scene cast · active elsewhere"],
+                     rows["Off-scene cast · known to exist"])
+    assert known["tokens"] > active["tokens"], "fixture must make tier 3 the larger half"
+
+    # A ceiling just under what tier 3 costs. Nothing below `background` exists
+    # in this scene and the history is one message (under the trim floor), so
+    # the packer's first real move is the largest background section.
+    before = context.context_breakdown(cid, sid)
+    config.write_config(context_budget=str(before["total_tokens"] - known["tokens"] // 2))
+
+    after = {s["label"]: s for s in context.context_breakdown(cid, sid)["sections"]}
+    assert after["Off-scene cast · known to exist"]["dropped"] is True
+    assert after["Off-scene cast · active elsewhere"]["dropped"] is False
+    # The half that survived is the half that carries the heading, so what the
+    # model reads is still a framed directory rather than a bare list.
+    sys = context.build_messages(cid, sid)[0]["content"]
+    assert "# Other characters in this world" in sys
+    assert "## Active in this campaign, elsewhere" in sys
+    assert "## Known to exist" not in sys
+
+
+def test_dropping_the_heading_half_leaves_tier_three_unframed(monkeypatch, tmp_path):
+    """The other side of the split, pinned because the cap makes it the LIKELY
+    side: tier 3 is bounded at one line each, tier 2 is unbounded dossier
+    paragraphs, so a mature campaign's tier 2 is the larger half and goes first.
+    What survives is a bare "## Known to exist" list with the directory's
+    opening instruction gone. Known and accepted -- but recorded here, so it is
+    a reviewed degradation rather than something a reader discovers in a
+    prompt."""
+    from grimoire.store import taglines, dossiers, config
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Aese", "main", _npc_card("Aese", description="d"))
+    characters.create_character(wroot, "Akane", "main", _npc_card("Akane", description="a"))
+    taglines.write(wroot, "akane", "An eager doggirl.")   # tier 3: one short line
+    for i in range(8):                                    # tier 2: eight paragraphs
+        characters.create_character(wroot, f"Npc{i:02d}", "main", _npc_card(f"Npc{i:02d}"))
+
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "S")
+    other = scenes.create_scene(cid, "Other")
+    croot = campaigns.campaign_root(cid)
+    for i in range(8):
+        ap.appear(cid, other, "characters", f"npc{i:02d}", "main", "npc")
+        dossiers.write(croot, f"npc{i:02d}", "A long standing paragraph about this person. " * 8)
+    ap.appear(cid, sid, "characters", "aese", "main", "npc")
+    scenes.append_message(cid, sid, "user", "hi")
+
+    rows = {s["label"]: s for s in context.context_sections(cid, sid)}
+    active, known = (rows["Off-scene cast · active elsewhere"],
+                     rows["Off-scene cast · known to exist"])
+    assert active["tokens"] > known["tokens"], "tier 2 is the larger half here"
+
+    before = context.context_breakdown(cid, sid)
+    config.write_config(context_budget=str(before["total_tokens"] - active["tokens"] // 2))
+
+    after = {s["label"]: s for s in context.context_breakdown(cid, sid)["sections"]}
+    assert after["Off-scene cast · active elsewhere"]["dropped"] is True
+    assert after["Off-scene cast · known to exist"]["dropped"] is False
+    sys = context.build_messages(cid, sid)[0]["content"]
+    # This is the cost, stated exactly: the list is still there and still
+    # labelled, and the sentence that told the model what to do with it is not.
+    assert "## Known to exist\nAkane: An eager doggirl." in sys
+    assert "# Other characters in this world" not in sys
+    assert "Introduce them only if the story calls for it" not in sys
+
+
 def _known_world(monkeypatch, tmp_path, n):
     """A world whose tier 3 is `n` briefed characters (`char00`…), plus `Aese`
     in the scene whose card names the LAST of them."""
@@ -697,10 +789,14 @@ def test_known_tier_capped_keeping_the_mentioned_and_logging_the_rest(monkeypatc
 
     with caplog.at_level(logging.INFO, logger="grimoire.store.context.cast"):
         sys = context.build_messages(cid, sid)[0]["content"]
-    listed = [n for n in names if f"{n} exists." in sys]
+    # Read the order OFF THE PROMPT. Filtering `names` by membership would
+    # rebuild the list in directory order whatever the prompt said, which is
+    # exactly the claim under test.
+    listed = [line.split(":")[0]
+              for line in sys.split("## Known to exist\n")[1].split("\n\n")[0].splitlines()]
     assert len(listed) == 3
     assert names[-1] in listed                 # mentioned by the in-scene card -> kept
-    assert listed == sorted(listed)            # survivors still read in directory order
+    assert listed == sorted(listed)            # ...but relevance did not reorder the block
 
     dropped = [n for n in names if n not in listed]
     assert dropped                             # the cap really cut something

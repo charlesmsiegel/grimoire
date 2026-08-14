@@ -364,11 +364,25 @@ SECTIONS = [
     # single block they were split out of — see off_scene_cast_active.j2.
     #
     # Same tier, so under budget pressure the packer may drop one and keep the
-    # other. Dropping tier 3 is the good case and the usual one (it is normally
-    # the larger, and largest goes first); dropping tier 2 leaves tier 3's list
-    # under its own "## Known to exist" heading without the directory's opening
-    # instruction. Accepted: the alternative is a section-dependency notion the
-    # packer does not have, for a case that costs one line of framing.
+    # other -- a directory that used to be taken or left whole is now divisible.
+    # Both halves of that are pinned by tests; the second one is the one to know
+    # about:
+    #
+    # - dropping tier 3 is the harmless case. The heading rides on tier 2, so
+    #   what survives is a framed directory that simply names fewer people.
+    # - dropping tier 2 leaves tier 3's list under a bare "## Known to exist"
+    #   with the directory's "introduce them only if the story calls for it"
+    #   gone. And this is the LIKELIER case in exactly the campaigns that feel
+    #   budget pressure: `offscene_known_limit` bounds tier 3 to one line each
+    #   while tier 2 is unbounded dossier paragraphs, one per roster NPC, so a
+    #   mature campaign's tier 2 is the larger half and largest goes first.
+    #
+    # Accepted rather than solved, and the options were weighed: dropping the
+    # two together needs a section-grouping notion `pack` does not have, and
+    # giving tier 3 its own lower tier means adding one to `DROP_ORDER` --
+    # defensible (a directory of absent characters is worth less than the
+    # recap) but a change to the packing model this issue did not ask for.
+    # Revisit if the unframed list turns out to cost anything in practice.
     Section("off_scene_cast_active", "Off-scene cast · active elsewhere",
             "scene/sections/off_scene_cast_active.j2", pack.BACKGROUND),
     Section("off_scene_cast_known", "Off-scene cast · known to exist",

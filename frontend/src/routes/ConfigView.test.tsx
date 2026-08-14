@@ -308,10 +308,10 @@ test("edits the context budget, recalled-scene cap and kept turn prompts", async
   expect(screen.getByLabelText(/context budget/i)).toHaveValue("0");   // unbounded by default
   expect(screen.getByLabelText(/recalled scenes/i)).toHaveValue("3");
   expect(screen.getByLabelText(/kept turn prompts/i)).toHaveValue("50");
-  expect(screen.getByLabelText(/named offstage characters/i)).toHaveValue("40");
+  expect(screen.getByLabelText(/named off-scene characters/i)).toHaveValue("40");
   fireEvent.change(screen.getByLabelText(/recalled scenes/i), { target: { value: "5" } });
   fireEvent.change(screen.getByLabelText(/kept turn prompts/i), { target: { value: "0" } });
-  fireEvent.change(screen.getByLabelText(/named offstage characters/i), { target: { value: "12" } });
+  fireEvent.change(screen.getByLabelText(/named off-scene characters/i), { target: { value: "12" } });
   save();
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
     { archive_depth: "5", prompt_log_depth: "0", offscene_known_limit: "12" }));

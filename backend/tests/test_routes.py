@@ -377,6 +377,13 @@ def test_config_model_is_empty_for_a_non_claude_connection_without_one(client):
     assert client.get("/api/config").json()["active_connection"]["model"] == ""
 
 
+def test_config_offscene_known_limit_defaults_and_roundtrips(client):
+    body = client.get("/api/config").json()
+    assert body["offscene_known_limit"] == "40"          # bounded out of the box
+    assert client.put("/api/config", json={"offscene_known_limit": "0"}).status_code == 200
+    assert client.get("/api/config").json()["offscene_known_limit"] == "0"
+
+
 def test_config_semantic_recall_defaults_to_off_and_roundtrips(client):
     body = client.get("/api/config").json()
     assert body["semantic_recall_depth"] == "0"          # off for every install

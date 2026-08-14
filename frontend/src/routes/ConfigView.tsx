@@ -508,7 +508,7 @@ export default function ConfigView() {
               one scene for long enough ages out another's. <code>0</code> records none.
             </p>
             <p className="config-copy">
-              Named offstage characters bounds the one-line directory of characters the
+              Named off-scene characters bounds the one-line directory of characters the
               campaign can see but has never cast. It grows with the world rather than with
               the story, so on a large library it quietly eats the budget everything below it
               is competing for. Past the ceiling, the characters the present cast's own cards
@@ -527,7 +527,7 @@ export default function ConfigView() {
               <NumField id="cfg-prompt-log-depth" label="Kept turn prompts" placeholder="50"
                         caption="per campaign, not per scene" value={draft.prompt_log_depth}
                         onChange={(v) => edit("prompt_log_depth", v)} />
-              <NumField id="cfg-offscene-known-limit" label="Named offstage characters"
+              <NumField id="cfg-offscene-known-limit" label="Named off-scene characters"
                         placeholder="40" caption="0 = name every one of them"
                         value={draft.offscene_known_limit}
                         onChange={(v) => edit("offscene_known_limit", v)} />
