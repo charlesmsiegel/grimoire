@@ -58,11 +58,24 @@ class SPAStaticFiles(StaticFiles):
       requests do not.
     """
 
+    @staticmethod
+    def _under_api(path: str) -> bool:
+        """Is ``path`` the ``api`` mount or something below it?
+
+        ``path`` arrives from ``StaticFiles.get_path``, which resolves the URL
+        with ``os.path`` -- so on Windows it is spelled ``api\\endpoint`` and a
+        comparison against ``"api/"`` never fires, handing every mistyped
+        endpoint the SPA fallback and a 200 (#313). Ubuntu CI cannot produce
+        that separator, so both are normalized here rather than trusting the
+        platform's.
+        """
+        return path.replace("\\", "/").split("/", 1)[0] == "api"
+
     async def get_response(self, path: str, scope):
         try:
             return await super().get_response(path, scope)
         except StarletteHTTPException as exc:
-            if exc.status_code != 404 or path == "api" or path.startswith("api/"):
+            if exc.status_code != 404 or self._under_api(path):
                 raise
             if "text/html" not in Headers(scope=scope).get("accept", ""):
                 raise
