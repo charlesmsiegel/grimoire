@@ -340,7 +340,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                       </div>
                     ))}
                     <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>
-                    <input ref={shelfFileRef} type="file" accept="image/*" hidden
+                    <input ref={shelfFileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden
                            aria-label="Add image" onChange={onShelfAdd} />
                   </div>
                 </>

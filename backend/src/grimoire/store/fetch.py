@@ -56,7 +56,13 @@ def decode_data_uri(uri: str) -> tuple[bytes, str] | None:
     if not raw or len(raw) > MAX_BYTES:
         return None
     mime = header[len("data:"):].split(";")[0].strip().lower()
-    ext = _CT_EXT.get(mime) or sniff_ext(raw)
+    # Bytes first, the URI's label second (#321). The mime written into a
+    # data-URI is a claim like any filename, and a JPEG embedded as
+    # `data:image/png;base64,...` -- which card exporters do produce -- would
+    # otherwise be stored as `.png` and declared `image/png` by everything that
+    # reads the stored suffix afterwards. The label still answers for a format
+    # `sniff_ext` does not know, which is no worse than it was.
+    ext = sniff_ext(raw) or _CT_EXT.get(mime)
     return (raw, ext) if ext else None
 
 

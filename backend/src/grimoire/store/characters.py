@@ -763,9 +763,16 @@ def _stored_avatar(root: Path, cid: str, vid: str) -> tuple[bytes, str] | None:
     if p is None:
         return None
     try:
-        return p.read_bytes(), p.suffix.lstrip(".").lower()
+        data = p.read_bytes()
     except OSError:
         return None  # an export must not fail over an image it cannot read
+    # The bytes name the type (#321), the same rule the packers and the image
+    # routes hold: this pair becomes the exported card's `data:` mime and, for
+    # CHARX, the name its bundled member is written under, so a JPEG stored as
+    # `avatar.png` would otherwise leave the app still claiming to be a PNG.
+    # A file that sniffs as nothing keeps its stored suffix -- `_usable_avatar`
+    # drops the avatar outright if that is not a type cards can carry.
+    return data, fetch.sniff_ext(data) or p.suffix.lstrip(".").lower()
 
 
 def _export_filename(root: Path, cid: str, vid: str, card: dict, fmt: str) -> str:

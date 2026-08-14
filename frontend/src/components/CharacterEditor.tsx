@@ -1736,7 +1736,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                       );
                     })}
                     <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>
-                    <input ref={shelfFileRef} type="file" accept="image/*" hidden
+                    <input ref={shelfFileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden
                            aria-label="Add image" onChange={onShelfAdd} />
                   </div>
                 </div>
@@ -1824,7 +1824,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                 {hasAvatar ? "Replace" : "Upload"}
               </button>
               {hasAvatar && <button className="subtle" type="button" onClick={removeAvatar}>Remove</button>}
-              <input ref={avatarRef} type="file" accept="image/*" hidden
+              <input ref={avatarRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden
                      aria-label="Upload avatar" onChange={onAvatar} />
             </div>
           </div>

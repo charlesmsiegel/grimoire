@@ -11,8 +11,8 @@ from fastapi.responses import Response, StreamingResponse
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from .common import (_bounded_call, _require_connection, _serve_image, _world_root_or_404,
-                     get_llm)
+from .common import (_bounded_call, _require_connection, _serve_image, _upload_image_ext,
+                     _world_root_or_404, get_llm)
 from .models import (AvatarFocus, CharacterBirthdate, CharacterCreate, ChubImportBody,
                      ChubSourceBody, DefaultVersion, TaglineSave, VersionCreate, VersionUpdate,
                      VoiceAnchorSave)
@@ -378,8 +378,7 @@ def get_world_image(wid: str, cid: str, vid: str, name: str, request: Request):
 async def put_world_image(wid: str, cid: str, vid: str, name: str, file: UploadFile = File(...)):
     root = _world_root_or_404(wid)
     data = await file.read()
-    fn = file.filename or ""
-    ext = fn.rsplit(".", 1)[-1] if "." in fn else ""
+    ext = _upload_image_ext(data)  # the bytes name the type, not `file.filename` (#321)
     try:
         stored = store.assets.put_image(root, cid, vid, name, data, ext)
     except ValueError as exc:

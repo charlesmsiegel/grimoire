@@ -1095,6 +1095,27 @@ def test_export_roundtrips_the_stored_avatar(tmp_path, fmt):
     assert _image_plane(p.read_bytes()) == _image_plane(avatar)
 
 
+def test_export_names_the_avatar_from_its_bytes_not_its_stored_suffix(tmp_path):
+    """#321: the exported card's `data:` mime and its CHARX member name both
+    come from the stored avatar's extension, so a JPEG a store holds as
+    `avatar.png` used to leave the app still claiming to be a PNG."""
+    import json
+    import zipfile
+    from io import BytesIO
+    from grimoire.store import assets
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    jpg = b"\xff\xd8\xff" + b"JPEGDATA"
+    assets.put_image(tmp_path, cid, vid, assets.AVATAR, jpg, "png")  # misnamed on disk
+
+    card = json.loads(ch.export_card(tmp_path, cid, vid, "json")[0])
+    icon = card["data"]["assets"][0]
+    assert icon["ext"] == "jpg" and icon["uri"].startswith("data:image/jpeg;base64,")
+
+    z = zipfile.ZipFile(BytesIO(ch.export_card(tmp_path, cid, vid, "charx")[0]))
+    member = json.loads(z.read("card.json"))["data"]["assets"][0]["uri"]
+    assert member.endswith(".jpg") and z.read(member.split("://", 1)[1]) == jpg
+
+
 def test_png_export_roundtrips_a_non_png_avatar_through_the_card(tmp_path):
     # The image plane can only hold a PNG, so a jpg avatar travels in the card's
     # `assets` instead -- and the import has to prefer that over the placeholder

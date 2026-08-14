@@ -58,11 +58,15 @@ TOO_LARGE = "cover image is too large (max 25 MB)"
 #: A decodable image in any other format is refused rather than stored under a
 #: name that lies about it, and the filename stops mattering at all.
 #:
-#: Deliberately covers-only. Every packed *record* image takes its manifest
-#: media type from its filename suffix the same way (`epub.py`), which is the
-#: same hazard -- but a pre-existing and systemic one, reaching every image
-#: route and every store already on disk. Closing it is its own change, not a
-#: rider on this one; the asymmetry is a scope decision, not an oversight.
+#: Record images now hold the same line, by the same rule and in two places
+#: (#321): `routes.common._upload_image_ext` names an uploaded one from its
+#: bytes, and `export.packed_ext` names a packed one from its bytes, because
+#: stores already on disk hold files misnamed before that and nothing renames
+#: them. Those use magic bytes rather than a decode -- the packer cannot refuse
+#: a file, so it needs a detector that always answers -- which is why this stays
+#: PIL-based: only the decode bounds `MAX_PIXELS`, and only a cover is
+#: thumbnailed. The two admit the same four formats, so they cannot disagree
+#: about what an accepted image is called.
 _FORMAT_EXT = {"PNG": "png", "JPEG": "jpg", "GIF": "gif", "WEBP": "webp"}
 
 
