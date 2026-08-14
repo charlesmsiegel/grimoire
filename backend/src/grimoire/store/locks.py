@@ -73,11 +73,19 @@ Ordering rules (deadlock avoidance):
   recency (#267). No LLM play flow ever holds more than its own campaign's
   lock.
 
-  Checked per holder, not structurally: ``test_locks_store.py`` spies on the
-  registry and asserts the order each of the two actually asks for. A THIRD
-  holder written tomorrow is checked by nothing, which is the gap #267 was
-  filed about and this paragraph does not close. Adding one means adding its
-  test beside those two.
+  Checked twice, and the second one is what makes the rule above binding on
+  code nobody has written yet. Per holder, behaviourally:
+  ``test_locks_store.py`` spies on the registry and asserts the order each of
+  the two actually asks for. Then structurally:
+  ``test_lock_order_guard.py`` walks this package's ASTs and fails on the
+  *shapes* that hold two campaign locks at once -- an acquisition registered on
+  an ``ExitStack``, one carried around a loop, two nested for different
+  campaigns -- anywhere but ``hold_all``. A third holder written tomorrow fails
+  on arrival rather than deadlocking in production, which is the gap #267 was
+  filed about. Add one anyway and you route it through ``hold_all`` and add its
+  behavioural test beside those two; what the guard cannot see is a lock
+  reached through an alias or a wrapper object, and two locks taken on either
+  side of a function call.
 - campaign lock -> audit baseline lock, never reversed
   (``store/audit/baselines.py``).
 
@@ -581,14 +589,18 @@ def hold_all(cids):
     So this is the fix rather than a formality: it is the ONLY place that
     sorts, and no other caller may hold more than one campaign lock.
 
-    That last sentence is a rule, not a guarantee, and the difference is worth
-    stating because getting it wrong is the whole of #267. What enforces it is
-    two per-holder tests in ``test_locks_store.py``, one for each holder that
-    exists today. Nothing checks a holder nobody has written yet -- and #267
-    happened precisely because the second holder was written without knowledge
-    of the first, each carrying a comment calling itself the only one. If you
-    are adding a third, route it through here and add its test beside those
-    two; do not trust this paragraph to have stopped you.
+    That last sentence used to be a rule and not a guarantee, and the
+    difference is the whole of #267: the second holder was written without
+    knowledge of the first, each carrying a comment calling itself the only
+    one, and the only checks were two per-holder tests in
+    ``test_locks_store.py`` -- one for each holder that already existed.
+    ``test_lock_order_guard.py`` is what now stands between this docstring and
+    a third: it reads the package's ASTs and fails any function outside here
+    that can hold two campaign locks at once, so the rule is enforced on code
+    rather than on whoever reads this. Its reach is stated in its own
+    docstring, and it stops short of a lock reached through an alias and of two
+    locks taken across a call boundary -- so if you are adding a holder, route
+    it through here and add its behavioural test beside those two.
 
     **One deadline**, not one per lock: applying ``LOCK_TIMEOUT`` to each of N
     locks while holding the earlier ones would give an N x LOCK_TIMEOUT convoy.
