@@ -117,9 +117,18 @@ def _campaign_entity_read(cid: str, kind: str, eid: str):
 
 def _campaign_entity_update(cid: str, kind: str, eid: str, body: EntityUpdate):
     _check_fields(kind, body.fields)
+    # Journalled (#31): a hand edit to a campaign copy is the same kind of write
+    # an absorb makes, and until now it was the one that left no trace and could
+    # not be taken back. The BODY only -- that is what `undo`'s entity writer
+    # restores, and claiming to reverse an edit while leaving a renamed record
+    # renamed would be worse than not offering it.
+    label = f"{body.name or eid} — {kind}"
     try:
-        store.overlay.update_entity(cid, kind, eid, name=body.name, body=body.body,
-                                    keys=body.keys, owners=body.owners, fields=body.fields)
+        with store.undo.journalled(cid, {"w": "entity", "kind": kind, "id": eid},
+                                   kind="lore", ref={"kind": kind, "id": eid},
+                                   field="body", label=label):
+            store.overlay.update_entity(cid, kind, eid, name=body.name, body=body.body,
+                                        keys=body.keys, owners=body.owners, fields=body.fields)
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
     except store.entities.EntityNotFound:

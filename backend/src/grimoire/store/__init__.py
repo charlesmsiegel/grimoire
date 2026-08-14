@@ -21,10 +21,10 @@ from __future__ import annotations
 from . import (
     absorb, alternates, appearances, assets, atomic, audit, briefing, campaign_climate, campaigns, cards, casefile, changes, characters, checks, chronicle, commitments, commits,
     chub, climates, config, context, covers, dice, dossiers, entities, entity_schema, epub, export, facts, fence, fetch, greetings, groupstate,
-    image_subjects, length_drift, lengths, llm_connections, localize, locks, lorebook, migrations, module_edit, modules, overlay, pcs, playing,
+    image_subjects, journal, length_drift, lengths, llm_connections, localize, locks, lorebook, migrations, module_edit, modules, overlay, pcs, playing,
     playstate, plot, prompt_log, proposals, provenance, relationships, response_presets, rolling_summary, rolls, scene_ids, scene_refs, scenes, sheets,
     styles, suggest,
-    sync, tags, taglines, thumbs, turnstate, voice_anchors, voice_drift, world_bundle, worlds,
+    sync, tags, taglines, thumbs, turnstate, undo, voice_anchors, voice_drift, world_bundle, worlds,
     ziputil,
 )
 # `module_display` was never exported here: it was bound as an attribute of
@@ -129,6 +129,8 @@ __all__ = [
     "plot",
     "prompt_log",
     "provenance",
+    "journal",
+    "undo",
     "relationships",
     "dice",
     "DiceError",

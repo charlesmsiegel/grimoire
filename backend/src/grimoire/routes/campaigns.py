@@ -1,6 +1,7 @@
 """Campaign-scoped routes: the campaign record, exports, the world->campaign
 sync inbox, calendar and climate settings, group state, the campaign's own
-copies of characters and PCs, change review, and the continuity ledger.
+copies of characters and PCs, change review (the rolling per-record delta, the
+append-only journal behind it, and undo), and the continuity ledger.
 
 Scenes, weather, mechanics and greetings have their own modules; the generic
 ``/campaigns/{cid}/{kind}`` entity surface lives in ``entities``.
@@ -54,8 +55,12 @@ def put_group_state(cid: str, gid: str, body: GroupStateSave):
         raise HTTPException(status_code=404, detail="group not found")
     values = {"goals": body.goals, "resources": body.resources, "focus": body.focus,
               "public_perception": body.public_perception, "secrets": body.secrets}
-    store.groupstate.write_state(store.campaigns.campaign_root(cid), gid,
-                                 store.groupstate.compose_body(values))
+    name = _record_name(cid, "groups", gid) or gid
+    with store.undo.journalled(cid, {"w": "group_state", "id": gid},
+                               kind="group_state", ref={"kind": "groups", "id": gid},
+                               field="body", label=f"{name} — group state"):
+        store.groupstate.write_state(store.campaigns.campaign_root(cid), gid,
+                                     store.groupstate.compose_body(values))
     return {"ok": True}
 
 
@@ -405,6 +410,101 @@ def get_changes(cid: str):
                     "fields": fields})
     out.sort(key=lambda r: (r["ref"]["kind"], r["name"]))
     return out
+
+
+# ---- the append-only change journal (#31) ----------------------------------
+#
+# `changes` above is a rolling upsert: one entry per record, replaced by the next
+# write-back. These two routes read the history it cannot keep, and reverse an
+# entry in it.
+
+#: How many entries a listing returns, newest first. A cap rather than paging:
+#: the panel is a "what just happened, and can I take it back" view, and
+#: `journal.RETENTION` already bounds what exists.
+JOURNAL_PAGE = 100
+
+
+def _journal_row(cid: str, entry: dict, scenes_by_id: dict, chron: dict,
+                 names: dict) -> dict:
+    """One journal entry as the panel reads it: the record's current display
+    name when it still resolves, the scene's label, and the server-side line
+    diff `changes` already renders for the rolling view.
+
+    Every field is coerced, because journal.json is hand-editable and read by a
+    bare `json.loads` -- the same rule `plot._field` states. A non-string `label`
+    handed to React blanks the whole panel, and a non-string before/after would
+    raise out of `line_diff`'s `.splitlines()`.
+    """
+    ref = entry.get("ref")
+    ref = ref if isinstance(ref, dict) else {}
+    kind = ref.get("kind") if isinstance(ref.get("kind"), str) else ""
+    eid = ref.get("id") if isinstance(ref.get("id"), str) else ""
+    key = f"{kind}/{eid}"
+    if key not in names:
+        names[key] = _record_name(cid, kind, eid) if kind and eid else None
+    sid = entry.get("scene") if isinstance(entry.get("scene"), str) else ""
+    s, c = scenes_by_id.get(sid, {}), chron.get(sid, {})
+    undone = entry.get("undone")
+    return {
+        "id": entry.get("id", "") if isinstance(entry.get("id"), str) else "",
+        "ts": entry.get("ts", "") if isinstance(entry.get("ts"), str) else "",
+        "source": entry.get("source", "") if isinstance(entry.get("source"), str) else "",
+        "kind": entry.get("kind", "") if isinstance(entry.get("kind"), str) else "",
+        "ref": {"kind": kind, "id": eid},
+        "name": names[key] or "",
+        "label": entry.get("label", "") if isinstance(entry.get("label"), str) else "",
+        "field": entry.get("field", "") if isinstance(entry.get("field"), str) else "",
+        "scene": {"id": sid, "title": s.get("title", sid), "date": c.get("date", "")},
+        "diff": store.changes.line_diff(
+            entry.get("before", "") if isinstance(entry.get("before"), str) else "",
+            entry.get("after", "") if isinstance(entry.get("after"), str) else ""),
+        # `undoable` is the server's answer, never the client's inference: the
+        # button must not offer what the store would refuse.
+        "undoable": isinstance(entry.get("undo"), dict) and not undone,
+        "why": entry.get("why", "") if isinstance(entry.get("why"), str) else "",
+        "undone": undone if isinstance(undone, dict) else None,
+    }
+
+
+@router.get("/campaigns/{cid}/journal")
+def get_journal(cid: str):
+    _campaign_root_or_404(cid)
+    scenes_by_id = {s["id"]: s for s in store.scenes.list_scenes(cid)}
+    try:
+        chron = store.chronicle.read_chronicle(cid)
+    except Exception:  # noqa: BLE001 — garbled chronicle.json: labels degrade, no 500
+        chron = {}
+    names: dict = {}
+    entries = store.journal.read(cid)[-JOURNAL_PAGE:]
+    return [_journal_row(cid, e, scenes_by_id, chron, names) for e in reversed(entries)]
+
+
+@router.post("/campaigns/{cid}/journal/{jid}/undo")
+def post_journal_undo(cid: str, jid: str):
+    """Put one journalled change back.
+
+    409 rather than 200 when the record moved since: the reversal is a
+    compare-and-swap (`store/undo.py`), and a reader undoing one edit has not
+    asked to discard whatever landed on that record afterwards.
+    """
+    _campaign_root_or_404(cid)
+    try:
+        written = store.undo.undo(cid, jid)
+    except store.undo.EntryNotFound:
+        raise HTTPException(status_code=404, detail="that change is not in this "
+                                                    "campaign's history")
+    except store.undo.AlreadyUndone:
+        raise HTTPException(status_code=409, detail="that change has already been undone")
+    except store.undo.NotUndoable as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except store.undo.UndoConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    scenes_by_id = {s["id"]: s for s in store.scenes.list_scenes(cid)}
+    try:
+        chron = store.chronicle.read_chronicle(cid)
+    except Exception:  # noqa: BLE001 — garbled chronicle.json: labels degrade, no 500
+        chron = {}
+    return {"ok": True, "entry": _journal_row(cid, written, scenes_by_id, chron, {})}
 
 
 # The recent-facts tier of the ledger. Shorter than GET /chronicle's 50: that

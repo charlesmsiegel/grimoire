@@ -14,6 +14,17 @@ from . import atomic
 from .campaigns import paths as campaigns_paths
 
 
+#: The staged-edit kinds whose write-back lands here. Declared beside the log
+#: rather than beside the writer, because it describes what this file covers and
+#: two modules now need it: `absorb.apply`, which records, and `store.undo`,
+#: which puts the latest write-back back and has to keep this in step with the
+#: record it just moved. (`absorb.apply` re-exports it under its old name; a
+#: second literal in the other caller is exactly how the two would drift.)
+BROWSABLE_KINDS: tuple[str, ...] = (
+    "character_state", "dossier", "lore", "authored", "new_character",
+    "new_location", "new_lore")
+
+
 def line_diff(before: str, after: str) -> list[dict]:
     """Tagged per-line diff of two text blobs. A `replace` span emits its deletes then
     its inserts, so the frontend can render removed-then-added lines."""
