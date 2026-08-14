@@ -3818,14 +3818,14 @@ def test_the_speaker_section_sits_after_transient_state(monkeypatch, tmp_path):
     assert ids.index("active_speaker") == ids.index("transient_state") + 1
 
 
-def test_the_speaker_section_names_the_addressed_npc(monkeypatch, tmp_path):
+def test_the_speaker_section_names_the_named_npc(monkeypatch, tmp_path):
     from grimoire.store import config
     cid, sid = _group_scene(monkeypatch, tmp_path)
     config.write_config(speaker_turn_taking="on")
     scenes.append_message(cid, sid, "user", "Winifred, what did you see?")
     row = next(r for r in context.context_sections(cid, sid) if r["id"] == "active_speaker")
     assert row["text"].startswith("# Active speaker\nWinifred carries this turn")
-    assert "spoke to them directly" in row["text"]
+    assert "the last post named them" in row["text"]
 
 
 def test_the_speaker_layer_is_inert_while_off(monkeypatch, tmp_path):
@@ -3845,3 +3845,25 @@ def test_both_layers_off_change_nothing(monkeypatch, tmp_path):
     context.layout.write_layout(_full_layout(world_info={"enabled": False},
                                              character_state={"label": "Mood"}))
     assert context.build_messages(cid, sid) == before
+
+
+def test_a_director_note_naming_an_npc_nominates_them(monkeypatch, tmp_path):
+    """The note is the turn's real input and is never persisted — the same
+    reason it already seeds world-info activation."""
+    from grimoire.store import config
+    cid, sid = _group_scene(monkeypatch, tmp_path)
+    config.write_config(speaker_turn_taking="on")
+    messages = context.build_director_messages(cid, sid, "Winifred breaks the silence.")
+    assert "Winifred carries this turn — the last post named them" in messages[0]["content"]
+
+
+def test_an_opener_prompt_naming_an_npc_nominates_them(monkeypatch, tmp_path):
+    from grimoire.store import config
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    for name in ("Seraphine", "Mara", "Winifred"):
+        characters.create_character(worlds.world_root(wid), name, "default",
+                                    _npc_card(name, description=f"{name} is here."))
+        ap.appear(cid, sid, "characters", name.lower(), "default", "npc")
+    config.write_config(speaker_turn_taking="on")
+    messages = context.build_opener_messages(cid, sid, "Mara is already waiting.")
+    assert "Mara carries this turn — the last post named them" in messages[0]["content"]

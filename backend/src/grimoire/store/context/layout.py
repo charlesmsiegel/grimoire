@@ -130,10 +130,23 @@ def describe(catalog: list, stored: list) -> list[dict]:
     Merged rather than raw, so a section this version added appears at its
     author's position instead of being invisible until the reader saves — and
     a switched-off one appears at all, or there would be no way back on.
+
+    `label` is the STORED override and is `""` when there is none — NOT the
+    effective label, which is what `merge` computes and `default_label` already
+    carries. The difference is not cosmetic: the editor binds its input to
+    `label` and placeholders it with `default_label`, so returning the
+    effective one would refill every blank input with the default, and the next
+    save would pin all thirty sections to labels the reader never typed. A
+    pinned label then survives a release that renames the section.
     """
     defaults = {s.id: s.label for s in catalog}
-    return [{"id": s.id, "label": s.label, "default_label": defaults[s.id],
-             "tier": s.tier, "enabled": on}
+    #: The overrides as stored, so a blank stays blank. `_ordered` deliberately
+    #: does not carry this: it answers "what renders", and merge wants the
+    #: label resolved.
+    overrides = {e["id"]: e.get("label", "") for e in stored
+                 if isinstance(e, dict) and isinstance(e.get("id"), str)}
+    return [{"id": s.id, "label": overrides.get(s.id, "") or "",
+             "default_label": defaults[s.id], "tier": s.tier, "enabled": on}
             for s, on in _ordered(catalog, stored)]
 
 

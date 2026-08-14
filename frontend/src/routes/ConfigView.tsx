@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  api, type Config, type ConfigUpdate, type LLMConnection, type SceneContext,
+  api, type Config, type ConfigUpdate, type LLMConnection, type PromptLayoutSection,
+  type SceneContext,
 } from "../api/client";
 import { ContextBudgetBar } from "../components/ContextBudgetBar";
 import { ColumnSection, PageShell } from "../components/PageShell";
@@ -111,6 +112,14 @@ function NumField(
   );
 }
 
+/** Whether two layouts would store the same thing. Compared field by field
+ *  rather than by JSON string so a key-order change in the API response cannot
+ *  read as an edit the reader never made. */
+function sameLayout(a: PromptLayoutSection[], b: PromptLayoutSection[]) {
+  return a.length === b.length && a.every((row, i) =>
+    row.id === b[i].id && row.label === b[i].label && row.enabled === b[i].enabled);
+}
+
 /** What the context bar is drawn from: a prompt some campaign actually built,
  *  and which campaign that was. */
 type Probe = { ctx: SceneContext; campaign: string } | null;
@@ -163,6 +172,16 @@ export default function ConfigView() {
   // it, so flipping it would re-run the effect and its cleanup would cancel the
   // read it had just started — the bar would never arrive.
   const probeStarted = useRef(false);
+  /** The prompt layout is edited HERE rather than inside `PromptLayoutEditor`,
+   *  which is presentational. The panel used to own its own draft and its own
+   *  Save button, and that made the page lie: reorder a section, and the footer
+   *  still read "no unsaved changes" while Save — the page's one Save — wrote
+   *  everything except the reordering the reader had just done. One dirty
+   *  count, one Save, or the affordance is a trap. */
+  const [layout, setLayout] = useState<PromptLayoutSection[] | null>(null);
+  const [layoutSaved, setLayoutSaved] = useState<PromptLayoutSection[] | null>(null);
+  const [layoutFailed, setLayoutFailed] = useState(false);
+  const layoutStarted = useRef(false);
 
   useEffect(() => {
     api.getConfig().then((c) => {
@@ -186,9 +205,25 @@ export default function ConfigView() {
     lastPrompt().then(setProbe);
   }, [section]);
 
+  // Same lazy rule as the probe: thirty rows fetched when the Prompt layout
+  // section is first opened, never on mount.
+  useEffect(() => {
+    if (section !== "layout" || layoutStarted.current) return;
+    layoutStarted.current = true;
+    api.getPromptLayout()
+      .then((l) => { setLayout(l.sections); setLayoutSaved(l.sections); })
+      .catch(() => setLayoutFailed(true));
+  }, [section]);
+
   const saved = config ? draftOf(config) : null;
   const dirty = draft && saved ? DRAFT_FIELDS.filter((f) => draft[f] !== saved[f]) : [];
-  const dirtyIn = (s: SectionDef) => s.fields.some((f) => dirty.includes(f));
+  /** The layout counts as ONE unsaved change however many rows moved — it is a
+   *  single stored document, and a count of moved rows would be a number the
+   *  reader cannot act on row by row. */
+  const layoutDirty = !!layout && !!layoutSaved && !sameLayout(layout, layoutSaved);
+  const dirtyCount = dirty.length + (layoutDirty ? 1 : 0);
+  const dirtyIn = (s: SectionDef) =>
+    s.fields.some((f) => dirty.includes(f)) || (s.id === "layout" && layoutDirty);
 
   function edit(field: DraftField, value: string) {
     setDraft((d) => (d ? { ...d, [field]: value } : d));
@@ -207,11 +242,12 @@ export default function ConfigView() {
     if (!saved) return;
     setDraft(saved);
     setTheme(saved.theme);
+    setLayout(layoutSaved);
     setError(null);
   }
 
   async function save() {
-    if (!draft || !dirty.length || busy) return;
+    if (!draft || !dirtyCount || busy) return;
     setBusy(true);
     setError(null);
     // Only the fields that actually changed: a whole-form PUT would carry
@@ -222,6 +258,18 @@ export default function ConfigView() {
     for (const f of dirty) patch[f] = draft[f];
     const sent = draft;
     try {
+      // The layout first, and only when it changed: it is a separate document
+      // at a separate route, and PUTting it on every Save would rewrite thirty
+      // rows because someone edited a timeout.
+      if (layoutDirty && layout) {
+        const stored = await api.putPromptLayout(layout.map(
+          (r) => ({ id: r.id, label: r.label, enabled: r.enabled })));
+        setLayout(stored.sections);
+        setLayoutSaved(stored.sections);
+      }
+      // ...and nothing at all when only the layout moved: an empty patch is a
+      // read-modify-write of config.md that stores no field.
+      if (!dirty.length) return;
       const next = await api.putConfig(patch);
       setConfig(next);
       // The new baseline is what the server says it stored — but only the
@@ -517,7 +565,21 @@ export default function ConfigView() {
               />
               Use my section order
             </label>
-            <PromptLayoutEditor />
+            <PromptLayoutEditor
+              rows={layout} failed={layoutFailed} busy={busy}
+              onChange={setLayout}
+              onReset={async () => {
+                setBusy(true);
+                try {
+                  const stored = await api.putPromptLayout([]);
+                  setLayout(stored.sections);
+                  setLayoutSaved(stored.sections);
+                } catch {
+                  setLayoutFailed(true);
+                } finally {
+                  setBusy(false);
+                }
+              }} />
             <p className="config-copy">
               The tier beside each section is the order the budget packer drops things in when a
               prompt will not fit, and it is not editable — recalled lore sits below the recalled
@@ -701,16 +763,16 @@ export default function ConfigView() {
       </div>
 
       <div className="config-bar">
-        <span className={"config-dirty" + (dirty.length ? " on" : "")}>
-          {dirty.length
-            ? `${dirty.length} unsaved ${dirty.length === 1 ? "change" : "changes"}`
+        <span className={"config-dirty" + (dirtyCount ? " on" : "")}>
+          {dirtyCount
+            ? `${dirtyCount} unsaved ${dirtyCount === 1 ? "change" : "changes"}`
             : "No unsaved changes"}
         </span>
         <div className="config-bar-actions">
-          <button className="btn-outline" onClick={revert} disabled={!dirty.length || busy}>
+          <button className="btn-outline" onClick={revert} disabled={!dirtyCount || busy}>
             Revert
           </button>
-          <button className="btn-accent" onClick={save} disabled={!dirty.length || busy}>
+          <button className="btn-accent" onClick={save} disabled={!dirtyCount || busy}>
             {busy ? "Saving…" : "Save"}
           </button>
         </div>

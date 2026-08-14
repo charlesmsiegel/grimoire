@@ -434,14 +434,14 @@ test("no stored prompt, no bar — the numbers are never invented", async () => 
 test("the Prompt layout section carries the toggle and the editor", async () => {
   (api.getPromptLayout as any).mockResolvedValue({
     enabled: false,
-    sections: [{ id: "world_info", label: "World info", default_label: "World info",
+    sections: [{ id: "world_info", label: "", default_label: "World info",
                  tier: "spotlight", enabled: true }],
   });
   renderView();
   await open(/^Prompt layout/);
   expect(await screen.findByRole("checkbox", { name: /use my section order/i }))
     .not.toBeChecked();
-  expect(await screen.findByDisplayValue("World info")).toBeInTheDocument();
+  expect(await screen.findByLabelText("Label for World info")).toBeInTheDocument();
 });
 
 test("the section order toggle saves as on/off", async () => {
@@ -463,4 +463,85 @@ test("the active-speaker toggle lives in Context and saves as on/off", async () 
   save();
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
     expect.objectContaining({ speaker_turn_taking: "on" })));
+});
+
+const twoRows = () => ({
+  enabled: false,
+  sections: [
+    { id: "world_info", label: "", default_label: "World info",
+      tier: "spotlight", enabled: true },
+    { id: "weather", label: "", default_label: "Weather",
+      tier: "spotlight", enabled: true },
+  ],
+});
+
+test("reordering a section counts as an unsaved change on the page", async () => {
+  /** The trap this replaced: the panel held its own draft, so a reordered
+   *  section left the footer reading "No unsaved changes" while the page's
+   *  Save wrote everything except the reordering. */
+  (api.getPromptLayout as any).mockResolvedValue(twoRows());
+  renderView();
+  await open(/^Prompt layout/);
+  await screen.findByLabelText("Label for World info");
+  expect(screen.getByText(/no unsaved changes/i)).toBeInTheDocument();
+
+  fireEvent.click(screen.getAllByRole("button", { name: /^move .+ down$/i })[0]);
+  expect(screen.getByText(/1 unsaved change$/i)).toBeInTheDocument();
+});
+
+test("the page's Save writes the layout, and writes no config when only it moved", async () => {
+  (api.getPromptLayout as any).mockResolvedValue(twoRows());
+  (api.putPromptLayout as any).mockImplementation((sections: any[]) =>
+    Promise.resolve({ enabled: false, sections: sections.map((s) => ({
+      ...s, default_label: s.id === "weather" ? "Weather" : "World info",
+      tier: "spotlight" })) }));
+  renderView();
+  await open(/^Prompt layout/);
+  await screen.findByLabelText("Label for World info");
+  fireEvent.click(screen.getAllByRole("button", { name: /^move .+ down$/i })[0]);
+  save();
+
+  await waitFor(() => expect(api.putPromptLayout).toHaveBeenCalled());
+  expect((api.putPromptLayout as any).mock.calls[0][0].map((s: any) => s.id))
+    .toEqual(["weather", "world_info"]);
+  // config.md is untouched: an empty patch is a read-modify-write storing nothing
+  expect(api.putConfig).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.getByText(/no unsaved changes/i)).toBeInTheDocument());
+});
+
+test("Revert puts a reordered layout back", async () => {
+  (api.getPromptLayout as any).mockResolvedValue(twoRows());
+  renderView();
+  await open(/^Prompt layout/);
+  await screen.findByLabelText("Label for World info");
+  fireEvent.click(screen.getAllByRole("button", { name: /^move .+ down$/i })[0]);
+  expect(screen.getAllByTestId("layout-row").map((r) => r.getAttribute("data-id")))
+    .toEqual(["weather", "world_info"]);
+
+  fireEvent.click(screen.getByRole("button", { name: /^revert$/i }));
+  expect(screen.getAllByTestId("layout-row").map((r) => r.getAttribute("data-id")))
+    .toEqual(["world_info", "weather"]);
+  expect(screen.getByText(/no unsaved changes/i)).toBeInTheDocument();
+});
+
+test("Reset writes immediately and clears the pending reorder", async () => {
+  (api.getPromptLayout as any).mockResolvedValue(twoRows());
+  (api.putPromptLayout as any).mockResolvedValue(twoRows());
+  renderView();
+  await open(/^Prompt layout/);
+  await screen.findByLabelText("Label for World info");
+  fireEvent.click(screen.getAllByRole("button", { name: /^move .+ down$/i })[0]);
+
+  fireEvent.click(screen.getByRole("button", { name: /reset to default order/i }));
+  await waitFor(() => expect(api.putPromptLayout).toHaveBeenCalledWith([]));
+  await waitFor(() => expect(screen.getByText(/no unsaved changes/i)).toBeInTheDocument());
+});
+
+test("the layout is fetched only when its section is opened", async () => {
+  (api.getPromptLayout as any).mockResolvedValue(twoRows());
+  renderView();
+  await screen.findByRole("button", { name: /^Storage/ });
+  expect(api.getPromptLayout).not.toHaveBeenCalled();
+  await open(/^Prompt layout/);
+  await waitFor(() => expect(api.getPromptLayout).toHaveBeenCalledTimes(1));
 });

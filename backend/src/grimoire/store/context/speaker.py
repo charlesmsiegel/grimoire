@@ -55,24 +55,39 @@ def _address_labels(names: list[str]) -> dict[str, str]:
     return {label: who[0] for label, who in owners.items() if len(who) == 1}
 
 
-def _addressed(text: str, names: list[str]) -> str | None:
+def _named(text: str, names: list[str]) -> str | None:
     """The one present NPC this text names — None for nobody, and None for more
     than one, since a post naming two of them has not singled either out.
 
     Whole-word only: "the maraud was loud" does not summon Mara.
+
+    NAMED, not addressed, and the distinction is real: "I remember what Mara
+    said" mentions her without asking her anything, and this counts it. That is
+    the deliberate trade — the precise reading needs the model, and a whole
+    extra call per turn is the cost this layer exists to avoid. It is a
+    nudge about who speaks, not a routing decision, and the section it feeds
+    words it as such.
     """
     hits = {who for label, who in _address_labels(names).items()
             if re.search(rf"(?<!\w){re.escape(label)}(?!\w)", text, re.IGNORECASE)}
     return hits.pop() if len(hits) == 1 else None
 
 
-def nominate(npc_names: list[str], history: list[dict]) -> dict | None:
+def nominate(npc_names: list[str], history: list[dict],
+             pending: str = "") -> dict | None:
     """Who should lead this turn, or None for "say nothing".
+
+    `pending` is this turn's input when it is not in `history` yet — a director
+    note, or an opener's prompt. Both are the turn's actual text and neither is
+    ever persisted, which is exactly why `_assemble` already feeds them to
+    world-info activation as `wi_seed`; naming a character in a director note
+    and having the nomination ignore it would be the same bug that seam
+    exists to prevent. It outranks the last stored post, being newer.
 
     Returns ``{"lead", "reason", "spoken", "silent_for", "quiet"}``:
 
     - ``lead`` — the NPC to carry the turn.
-    - ``reason`` — ``"addressed"`` (the last player post spoke to them) or
+    - ``reason`` — ``"named"`` (the latest input names them) or
       ``"rotation"`` (they are the most overdue).
     - ``spoken`` / ``silent_for`` — whether the lead has spoken in this scene at
       all, and how many model blocks ago, so the section can say *why*.
@@ -120,13 +135,16 @@ def nominate(npc_names: list[str], history: list[dict]) -> dict | None:
     ranked = sorted(names, key=lambda n: (-silence(n), said.get(n, 0), names.index(n)))
     lead, reason = ranked[0], "rotation"
 
-    # Being spoken to outranks having been quiet: the player named someone, and
-    # answering somebody else is the more visible failure.
+    # Being named outranks having been quiet: the input singled someone out,
+    # and answering somebody else is the more visible failure.
     last_post = next((m for m in reversed(history) if m.get("role") == "user"), None)
-    if last_post and isinstance(last_post.get("content"), str):
-        addressed = _addressed(last_post["content"], names)
-        if addressed:
-            lead, reason = addressed, "addressed"
+    latest = pending if pending.strip() else (
+        last_post["content"] if last_post and isinstance(last_post.get("content"), str)
+        else "")
+    if latest:
+        named = _named(latest, names)
+        if named:
+            lead, reason = named, "named"
 
     return {"lead": lead, "reason": reason,
             "spoken": lead in last, "silent_for": last.get(lead, 0),
