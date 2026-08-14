@@ -32,6 +32,15 @@ function describe(result: ScenarioImportResult): string {
   if (reused) parts.push(`${reused} existing character${reused === 1 ? "" : "s"} reused`);
   if (result.art.localized) parts.push(`${result.art.localized} image${result.art.localized === 1 ? "" : "s"} localized`);
   if (result.art.failed) parts.push(`${result.art.failed} image${result.art.failed === 1 ? "" : "s"} failed`);
+  // A bounded download that says nothing reads as a complete one. `skipped`
+  // covers a reference that was not an image or whose host was refused;
+  // `capped` is the per-opener download limit, and it is the one a user can act
+  // on — the images are still in the body as remote URLs.
+  const left = result.art.total - result.art.localized - result.art.failed;
+  if (left > 0) {
+    parts.push(`${left} image${left === 1 ? "" : "s"} left as remote links`
+      + (result.art.capped ? " (per-opener download limit reached)" : ""));
+  }
   return `Imported ${parts.join(", ")}.`;
 }
 
@@ -92,8 +101,21 @@ export function ScenarioImport({ wid, onImported }: { wid: string; onImported?: 
       if (!p) return p;
       const before = p.characters[i].name;
       const after = patch.name;
-      const characters = p.characters.map((c, j) => (j === i ? { ...c, ...patch } : c));
-      if (after === undefined || after === before) return { ...p, characters };
+      // A rename invalidates `exists`, which was computed for the name that is
+      // being replaced — keeping it would claim the world holds a character it
+      // was never asked about.
+      const renamed = patch.name !== undefined && patch.name !== before;
+      const characters = p.characters.map((c, j) => (
+        j === i ? { ...c, ...patch, ...(renamed ? { exists: false } : {}) } : c));
+      // Neither end of the rename may be blank. `""` is a MEANING in an
+      // opener's `character` field — nobody — not an absent name: carrying
+      // `"" -> "Mara"` would hand that row every opener the extraction
+      // deliberately left cast-less, and `"Mara" -> ""` would throw away the link
+      // rather than let the row's "not being imported" hint show it. Clearing a
+      // field and retyping it is an ordinary edit, so this is the ordinary path.
+      if (after === undefined || after === before || !before || !after) {
+        return { ...p, characters };
+      }
       const rename = (n: string) => (n === before ? after : n);
       return {
         ...p,
@@ -165,7 +187,12 @@ export function ScenarioImport({ wid, onImported }: { wid: string; onImported?: 
   // changing your mind restores the openers that named them rather than leaving
   // a picker whose current value has vanished from its own option list. Which of
   // them will actually exist is `keptNames`, and the openers say so.
-  const castNames = proposal ? proposal.characters.map((c) => c.name).filter(Boolean) : [];
+  // Deduped: a name is what an opener references, so two rows sharing one give
+  // duplicate <option> keys and a picker that cannot say which row is meant.
+  // `scenario.proposal` does not emit duplicates, but this is derived display
+  // state and must hold whatever it is handed.
+  const castNames = proposal
+    ? [...new Set(proposal.characters.map((c) => c.name).filter(Boolean))] : [];
   const keptNames = proposal && kept
     ? proposal.characters.filter((c, i) => kept.characters[i]).map((c) => c.name)
     : [];
@@ -217,6 +244,16 @@ export function ScenarioImport({ wid, onImported }: { wid: string; onImported?: 
                     <td>
                       <input type="text" aria-label={`character name ${i}`} value={c.name}
                              onChange={(e) => patchCharacter(i, { name: e.target.value })} />
+                      {/* Reuse-by-name is the right write and the wrong
+                          surprise: a world with a character of this name
+                          quietly absorbs the card's openers into them. Said
+                          before the import, while renaming the row — which
+                          clears this, since the flag describes a NAME — is
+                          still a way out. */}
+                      {c.exists && (
+                        <div className="field-hint">This world already has a “{c.name}” — the
+                          import will add to that character rather than create a second.</div>
+                      )}
                     </td>
                     <td>
                       <textarea aria-label={`character description ${i}`} rows={3} value={c.description}

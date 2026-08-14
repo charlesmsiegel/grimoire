@@ -65,6 +65,16 @@ test("importing sends the edited proposal, not the one that was proposed", async
   await screen.findByText(/imported 1 character/i);
 });
 
+test("images the import could not take are reported, not passed over in silence", async () => {
+  (api.scenarioImport as any).mockResolvedValue({
+    characters: [], entries: [], greetings: [{ name: "Opener", id: "opener" }],
+    art: { total: 14, localized: 10, skipped: 4, failed: 0, capped: true },
+  });
+  await readCard();
+  fireEvent.click(screen.getByRole("button", { name: /import 5 records/i }));
+  await screen.findByText(/4 images left as remote links \(per-opener download limit reached\)/i);
+});
+
 test("a row the reviewer unchecks is left out of the import", async () => {
   await readCard();
   fireEvent.click(screen.getByLabelText("keep character 1"));
@@ -88,6 +98,50 @@ test("renaming a cast member carries every opener that named them", async () => 
   const sent = (api.scenarioImport as any).mock.calls[0][1];
   expect(sent.greetings[0].character).toBe("Mara Vel");
   expect(sent.greetings[0].present).toEqual(["Mara Vel"]);
+});
+
+test("clearing a name and retyping it does not capture the cast-less openers", async () => {
+  // "" is a MEANING in a greeting's character field — nobody — so it can never
+  // be a rename source. Clearing a name field and typing a new one is an
+  // ordinary edit, and carrying ""→"Mara Vel" would hand her every opener the
+  // extraction deliberately left empty.
+  await readCard();
+  fireEvent.change(screen.getByLabelText("character name 0"), { target: { value: "" } });
+  fireEvent.change(screen.getByLabelText("character name 0"), { target: { value: "Mara Vel" } });
+  fireEvent.click(screen.getByRole("button", { name: /import 5 records/i }));
+  await waitFor(() => expect((api.scenarioImport as any).mock.calls.length).toBe(1));
+  const sent = (api.scenarioImport as any).mock.calls[0][1];
+  expect(sent.greetings[1].character).toBe("");     // the opener that named nobody, still nobody
+  // ...and the one that did name her keeps the name it knows, which the screen
+  // flags as not-being-imported rather than silently repointing.
+  expect(sent.greetings[0].character).toBe("Mara");
+});
+
+test("a cast member the world already has is flagged, until the row is renamed", async () => {
+  (api.scenarioParse as any).mockResolvedValue({
+    ...structuredClone(PROPOSAL),
+    characters: [{ name: "Mara", description: "d", personality: "p", exists: true }],
+  });
+  await readCard();
+  await screen.findByText(/this world already has a “mara”/i);
+  // The flag describes a NAME, so it cannot outlive one.
+  fireEvent.change(screen.getByLabelText("character name 0"), { target: { value: "Mara Vel" } });
+  expect(screen.queryByText(/this world already has a/i)).toBeNull();
+});
+
+test("a cast name proposed twice is offered once", async () => {
+  // Names are the key this whole proposal is wired on: two rows sharing one is
+  // a duplicated <option> key and a picker that cannot say which is meant.
+  (api.scenarioParse as any).mockResolvedValue({
+    ...structuredClone(PROPOSAL),
+    characters: [
+      { name: "Mara", description: "Tends the gate.", personality: "Watchful." },
+      { name: "Mara", description: "A second guess.", personality: "" },
+    ],
+  });
+  await readCard();
+  expect(screen.getAllByRole("option", { name: "Mara" }).length)
+    .toBe(PROPOSAL.greetings.length);   // one per picker, not two
 });
 
 test("repointing an opener keeps the rest of its cast present", async () => {

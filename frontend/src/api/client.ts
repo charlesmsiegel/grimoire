@@ -891,7 +891,12 @@ export type LoreEntryDraft = { name: string; keys: string[]; body: string; categ
 // the records a world is made of. A proposal speaks in cast NAMES, not ids: the
 // characters it proposes do not exist while it is being reviewed, and the
 // backend resolves the names once they do.
-export type ScenarioCharacterDraft = { name: string; description: string; personality: string };
+export type ScenarioCharacterDraft = {
+  name: string; description: string; personality: string;
+  /** The import will reuse a world character of this name rather than create
+   *  one. Advisory: the backend re-resolves at import time. */
+  exists?: boolean;
+};
 export type ScenarioGreetingDraft = {
   name: string; body: string; character: string; present: string[];
 };

@@ -543,6 +543,10 @@ class ScenarioCharacter(BaseModel):
     name: str
     description: str = ""
     personality: str = ""
+    # Set by the parse routes: the import will REUSE a world character of this
+    # name rather than create one. Advisory — `scenario.apply` re-resolves
+    # against the world as it stands and never reads this back.
+    exists: bool = False
 
 
 class ScenarioGreeting(BaseModel):
