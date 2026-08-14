@@ -5,6 +5,7 @@ import {
 } from "../api/client";
 import { ContextBudgetBar } from "../components/ContextBudgetBar";
 import { ColumnSection, PageShell } from "../components/PageShell";
+import { PromptLayoutEditor } from "../components/PromptLayoutEditor";
 import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
 import { StorageLocation } from "../components/StorageLocation";
 import { ThemePicker } from "../components/ThemePicker";
@@ -19,6 +20,7 @@ const DRAFT_FIELDS = [
   "active_connection_id", "fallback_connection_id", "llm_retries",
   "llm_timeout", "absorb_budget", "llm_call_budget",
   "context_budget", "archive_depth", "prompt_log_depth",
+  "speaker_turn_taking", "prompt_layout_enabled",
   "turnstate_depth", "promote_streak",
   "embeddings_connection_id", "embeddings_model",
   "semantic_recall_depth", "semantic_recall_threshold",
@@ -48,7 +50,7 @@ function draftOf(c: Config): Draft {
 
 type SectionId =
   | "storage" | "connection" | "timeouts"
-  | "context" | "transient" | "semantic" | "system-prompt" | "response"
+  | "context" | "layout" | "transient" | "semantic" | "system-prompt" | "response"
   | "transcript" | "playing" | "appearance";
 
 /** The column, as data: three groups, eleven sections, and which draft fields
@@ -63,7 +65,10 @@ const SECTIONS: SectionDef[] = [
   { id: "timeouts", group: "The install", label: "Timeouts",
     fields: ["llm_timeout", "absorb_budget", "llm_call_budget"] },
   { id: "context", group: "What the model sees", label: "Context",
-    fields: ["context_budget", "archive_depth", "prompt_log_depth"] },
+    fields: ["context_budget", "archive_depth", "prompt_log_depth",
+             "speaker_turn_taking"] },
+  { id: "layout", group: "What the model sees", label: "Prompt layout",
+    fields: ["prompt_layout_enabled"] },
   { id: "transient", group: "What the model sees", label: "Transient state",
     fields: ["turnstate_depth", "promote_streak"] },
   { id: "semantic", group: "What the model sees", label: "Semantic recall",
@@ -453,6 +458,24 @@ export default function ConfigView() {
                         caption="per campaign, not per scene" value={draft.prompt_log_depth}
                         onChange={(v) => edit("prompt_log_depth", v)} />
             </div>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                aria-label="Name an active speaker in group scenes"
+                checked={draft.speaker_turn_taking === "on"}
+                onChange={(e) => edit("speaker_turn_taking", e.target.checked ? "on" : "off")}
+              />
+              Name an active speaker in group scenes
+            </label>
+            <p className="config-copy">
+              With three or more characters in a scene, every card goes into the prompt and the
+              model decides for itself who answers — which is how one character monologues for
+              three turns while the others stand there. This names one to carry each turn: whoever
+              the last post spoke to, or failing that whoever has been quiet longest. It is worked
+              out from the transcript each turn and stored nowhere, so a reroll picks the same
+              character rather than advancing a rotation you never saw. It adds a short section to
+              every group-scene prompt, and does nothing in a scene with fewer than two characters.
+            </p>
             {probe && (
               <>
                 <ContextBudgetBar
@@ -473,6 +496,39 @@ export default function ConfigView() {
                 </p>
               </>
             )}
+          </>
+        )}
+
+        {draft && section === "layout" && (
+          <>
+            <p className="config-copy">
+              The system message is assembled from about thirty sections in a fixed order — the
+              system prompts, the character cards, the world info, the reply format. This is that
+              order, and yours to change: move a section, or switch one off to stop sending it at
+              all. Everything here is off until you turn it on, and turning it off again keeps
+              the layout, so you can put a change back without rebuilding it.
+            </p>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                aria-label="Use my section order"
+                checked={draft.prompt_layout_enabled === "on"}
+                onChange={(e) => edit("prompt_layout_enabled", e.target.checked ? "on" : "off")}
+              />
+              Use my section order
+            </label>
+            <PromptLayoutEditor />
+            <p className="config-copy">
+              The tier beside each section is the order the budget packer drops things in when a
+              prompt will not fit, and it is not editable — recalled lore sits below the recalled
+              scenes on purpose, so that a semantic hit can only ever add to a prompt and never
+              push something else out of it. Where a section sits in the message and what gives
+              way under pressure are two different questions.
+            </p>
+            <p className="config-copy">
+              To change what a section <em>says</em>, edit its template in <code>templates/</code>
+              — they are read from disk, so a saved edit is live on the next turn.
+            </p>
           </>
         )}
 

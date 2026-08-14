@@ -36,6 +36,24 @@ class ConfigUpdate(BaseModel):
     embeddings_model: str | None = None
     semantic_recall_depth: str | None = None
     semantic_recall_threshold: str | None = None
+    prompt_layout_enabled: str | None = None
+    speaker_turn_taking: str | None = None
+
+
+class PromptLayoutSection(BaseModel):
+    """One row of the prompt layout as the editor saves it. `label` blank means
+    "use the catalog's" — the label is the inspector's row name and never
+    reaches the model, which emits each section's heading from its template."""
+    id: str
+    label: str = ""
+    enabled: bool = True
+
+
+class PromptLayoutUpdate(BaseModel):
+    #: The WHOLE list, not a patch: `write_layout` replaces. A partial list
+    #: would merely be merged back against the catalog on read, which reorders
+    #: almost nothing -- see `context/layout.py`'s insert rule.
+    sections: list[PromptLayoutSection] = []
 
 
 class ConnectionCreate(BaseModel):

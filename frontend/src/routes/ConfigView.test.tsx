@@ -9,6 +9,7 @@ vi.mock("../api/client", () => ({
     listStyles: vi.fn(), listConnections: vi.fn(),
     listCampaigns: vi.fn(), listScenes: vi.fn(),
     listScenePrompts: vi.fn(), getScenePrompt: vi.fn(),
+    getPromptLayout: vi.fn(), putPromptLayout: vi.fn(),
   },
 }));
 const setTheme = vi.fn();
@@ -32,6 +33,7 @@ const cfg = {
   turnstate_depth: "0", promote_streak: "3", rolling_summary_every: "10",
   embeddings_connection_id: "", embeddings_model: "", semantic_recall_depth: "0",
   semantic_recall_threshold: "0.4",
+  prompt_layout_enabled: "off", speaker_turn_taking: "off",
 };
 const dataDir = {
   data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
@@ -89,7 +91,8 @@ test("the column indexes every section in three groups", async () => {
   expect(groups.map((g) => g.textContent))
     .toEqual(["The install", "What the model sees", "What you see"]);
   for (const label of [
-    /^Storage/, /^Connection/, /^Timeouts/, /^Context/, /^Transient state/,
+    /^Storage/, /^Connection/, /^Timeouts/, /^Context/, /^Prompt layout/,
+    /^Transient state/,
     /^Semantic recall/, /^System prompt/, /^Response preset/, /^Transcript/,
     /^While playing/, /^Appearance/,
   ]) {
@@ -426,4 +429,38 @@ test("no stored prompt, no bar — the numbers are never invented", async () => 
   await waitFor(() => expect(api.listCampaigns).toHaveBeenCalled());
   expect(screen.queryByText(/AGAINST THIS BUDGET/)).toBeNull();
   expect(screen.queryByText(/NOTHING DROPPED/)).toBeNull();
+});
+
+test("the Prompt layout section carries the toggle and the editor", async () => {
+  (api.getPromptLayout as any).mockResolvedValue({
+    enabled: false,
+    sections: [{ id: "world_info", label: "World info", default_label: "World info",
+                 tier: "spotlight", enabled: true }],
+  });
+  renderView();
+  await open(/^Prompt layout/);
+  expect(await screen.findByRole("checkbox", { name: /use my section order/i }))
+    .not.toBeChecked();
+  expect(await screen.findByDisplayValue("World info")).toBeInTheDocument();
+});
+
+test("the section order toggle saves as on/off", async () => {
+  (api.getPromptLayout as any).mockResolvedValue({ enabled: false, sections: [] });
+  (api.putConfig as any).mockResolvedValue({ ...cfg, prompt_layout_enabled: "on" });
+  renderView();
+  await open(/^Prompt layout/);
+  fireEvent.click(await screen.findByRole("checkbox", { name: /use my section order/i }));
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
+    expect.objectContaining({ prompt_layout_enabled: "on" })));
+});
+
+test("the active-speaker toggle lives in Context and saves as on/off", async () => {
+  (api.putConfig as any).mockResolvedValue({ ...cfg, speaker_turn_taking: "on" });
+  renderView();
+  await open(/^Context/);
+  fireEvent.click(await screen.findByRole("checkbox", { name: /name an active speaker/i }));
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
+    expect.objectContaining({ speaker_turn_taking: "on" })));
 });

@@ -30,8 +30,12 @@ export function ContextBreakdown({ ctx, models }: { ctx: SceneContext; models: M
         </div>
       )}
       <div className="ctx-caption">Breakdown · click a row to inspect</div>
+      {/* Keyed on `id`, because the label stopped being unique the moment #29
+          let a reader rename two sections the same string. `label` is the
+          fallback only for a prompt snapshot frozen before ids existed — those
+          predate editable labels too, so theirs are still unique. */}
       {ctx.sections.map((s) => (
-        <details className={"ctx-section" + (s.dropped ? " dropped" : "")} key={s.label}>
+        <details className={"ctx-section" + (s.dropped ? " dropped" : "")} key={s.id || s.label}>
           <summary>
             <span className={"ctx-dot" + (s.label.toLowerCase().includes("transcript") ? " hot" : "")} />
             <span className="ctx-label">{s.label}</span>

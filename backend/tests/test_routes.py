@@ -11574,3 +11574,74 @@ def test_world_import_413(client):
     r = client.post("/api/worlds/import", content=b"x",
                     headers={"content-length": str(5 * 1024 * 1024 * 1024)})
     assert r.status_code == 413
+
+
+# ------------------------------------------------- prompt layout (#29)
+
+def test_prompt_layout_lists_the_whole_catalog_in_render_order(client):
+    got = client.get("/api/prompt-layout").json()
+    assert got["enabled"] is False
+    ids = [s["id"] for s in got["sections"]]
+    assert ids[0] == "opener_instruction"
+    assert "active_speaker" in ids and "response_budget" in ids
+    assert len(ids) == len(set(ids))
+    assert all(s["default_label"] and s["tier"] for s in got["sections"])
+    assert all(s["enabled"] for s in got["sections"])
+
+
+def test_prompt_layout_round_trips_a_reorder_a_relabel_and_a_drop(client):
+    ids = [s["id"] for s in client.get("/api/prompt-layout").json()["sections"]]
+    reordered = ["response_budget"] + [i for i in ids if i != "response_budget"]
+    body = {"sections": [{"id": i,
+                          "label": "Lore" if i == "world_info" else "",
+                          "enabled": i != "weather"}
+                         for i in reordered]}
+    saved = client.put("/api/prompt-layout", json=body).json()
+
+    assert saved["sections"][0]["id"] == "response_budget"
+    rows = {s["id"]: s for s in saved["sections"]}
+    assert rows["world_info"]["label"] == "Lore"
+    assert rows["world_info"]["default_label"] == "World info"
+    assert rows["weather"]["enabled"] is False
+    # and it survives a reload
+    assert client.get("/api/prompt-layout").json()["sections"][0]["id"] == "response_budget"
+
+
+def test_a_disabled_section_is_still_listed_so_it_can_come_back(client):
+    ids = [s["id"] for s in client.get("/api/prompt-layout").json()["sections"]]
+    client.put("/api/prompt-layout", json={"sections": [
+        {"id": i, "label": "", "enabled": i != "weather"} for i in ids]})
+    rows = {s["id"]: s for s in client.get("/api/prompt-layout").json()["sections"]}
+    assert "weather" in rows and rows["weather"]["enabled"] is False
+
+
+def test_an_empty_put_resets_to_the_catalog(client):
+    ids = [s["id"] for s in client.get("/api/prompt-layout").json()["sections"]]
+    client.put("/api/prompt-layout", json={"sections": [
+        {"id": i, "label": "", "enabled": True} for i in reversed(ids)]})
+    assert client.get("/api/prompt-layout").json()["sections"][0]["id"] != "opener_instruction"
+
+    reset = client.put("/api/prompt-layout", json={"sections": []}).json()
+    assert [s["id"] for s in reset["sections"]] == ids
+
+
+def test_prompt_layout_reports_the_toggle(client):
+    assert client.get("/api/prompt-layout").json()["enabled"] is False
+    client.put("/api/config", json={"prompt_layout_enabled": "on"})
+    assert client.get("/api/prompt-layout").json()["enabled"] is True
+
+
+def test_an_unknown_section_id_is_rejected_from_the_stored_layout(client):
+    """Kept in the file (a build one version behind must not delete the newer
+    build's sections) but never surfaced as a section that exists."""
+    saved = client.put("/api/prompt-layout", json={"sections": [
+        {"id": "not_a_section", "label": "x", "enabled": True}]}).json()
+    assert "not_a_section" not in [s["id"] for s in saved["sections"]]
+
+
+def test_the_two_new_toggles_are_public_config(client):
+    cfg = client.get("/api/config").json()
+    assert cfg["prompt_layout_enabled"] == "off"
+    assert cfg["speaker_turn_taking"] == "off"
+    client.put("/api/config", json={"speaker_turn_taking": "on"})
+    assert client.get("/api/config").json()["speaker_turn_taking"] == "on"
