@@ -269,11 +269,11 @@ def _upload_image_ext(data: bytes) -> str:
 
     Magic bytes rather than the PIL decode `covers.validate` runs (it also has
     to bound the raster it is about to thumbnail, which a signature cannot):
-    the exporter has to name a type for files already on disk and cannot refuse
-    one, so it needs a detector that always answers -- and using that same
-    detector at both ends is what makes a stored image's suffix the suffix the
-    packer derives, rather than two rules that merely happen to agree. Both
-    admit exactly the extensions `assets` stores.
+    the export names every packed image with the very same detector, and using
+    one at both ends is what makes a stored image's suffix the suffix the packer
+    derives, rather than two rules that merely happen to agree today. The two
+    ends differ only in what they do with an answer of "no format I can name" --
+    this refuses the upload, `export.Images` drops the image from the book.
 
     Bytes in no format we can label are refused rather than stored under a name
     that lies about them: an AVIF uploaded as `avatar.png` renders in a browser
@@ -340,11 +340,15 @@ def _serve_image_file(p: Path, request: Request | None = None) -> Response:
         content = p.read_bytes()
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
-    # The bytes name the type, the stored suffix only answers for bytes that
-    # sniff as nothing (#321) -- the same rule the exporters pack under. A new
-    # upload can no longer be misnamed, but a store already on disk holds files
-    # that are, and serving one as `image/png` works only because browsers
-    # sniff too.
+    # The bytes name the type; the stored suffix answers only for bytes that
+    # sniff as nothing (#321). A new upload can no longer be misnamed, but a
+    # store already on disk holds files that are, and serving one as
+    # `image/png` works only because browsers sniff too.
+    #
+    # Serving keeps that fallback where the export drops the image instead: a
+    # response has to carry some type, the app has to render what the user put
+    # in it, and a browser sniffs past a wrong one. A book gets neither -- an
+    # EPUB reader validates the manifest and may refuse the image outright.
     ext = store.fetch.sniff_ext(content) or p.suffix.lstrip(".").lower()
     return Response(content=content,
                     media_type=_IMAGE_MEDIA.get(ext, "application/octet-stream"),

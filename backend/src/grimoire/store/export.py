@@ -39,64 +39,85 @@ EXT_MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
              "gif": "image/gif", "webp": "image/webp"}
 
 
-def packed_ext(data: bytes, stored_name: str) -> str:
-    """The extension to pack an image under: what its bytes are, else what its
-    name on disk says. "" when neither answers.
+def packed_ext(data: bytes) -> str | None:
+    """The extension to pack these bytes under -- None if they cannot be named.
 
-    The bytes decide, because every renderer names a media type from the packed
-    suffix and a name that lies produces a book epubcheck rejects (#321).
-    Uploads can no longer be misnamed (`routes.common._upload_image_ext`), but
-    stores already on disk hold files that are, nothing renames them, and this
-    is what makes a book exported from such a store valid anyway.
+    The bytes decide, and only the bytes: every renderer names a media type from
+    the packed suffix, so a name that lies produces a book epubcheck rejects
+    (#321). Uploads can no longer be misnamed (`routes.common._upload_image_ext`),
+    but stores already on disk hold files that are, and nothing renames them --
+    naming from the bytes here is what makes a book exported from such a store
+    valid anyway.
 
-    Renaming here costs nothing: the packed name is generated (`img-000`), and
-    an app image URL addresses the *logical* name -- `.../images/avatar` -- with
-    the extension living only in the filename `assets.image_path` globs for. So
-    the packed name and the declared type agree, rather than packing
-    `img-000.png` and declaring `image/jpeg` (legal, but it reads as a mistake).
+    Renaming costs nothing: the packed name is generated (`img-000`), and an app
+    image URL addresses the *logical* name -- `.../images/avatar` -- with the
+    extension living only in the filename `assets.image_path` globs for. So the
+    packed name and the declared type agree, rather than packing `img-000.png`
+    and declaring `image/jpeg` (legal, but it reads as a mistake).
 
-    The stored suffix answers for bytes that sniff as nothing -- an
-    externally-placed BMP, a truncated file. There is no truth to substitute
-    there, so the best available guess stays the one the store already made.
+    The file's own suffix is never consulted, not even as a fallback. A suffix
+    the bytes do not corroborate is the whole defect; substituting it for bytes
+    we cannot identify would just re-declare the same guess in a book that has
+    to be right. `Images` drops those images instead.
+    """
+    return fetch.sniff_ext(data)
+
+
+class Images:
+    """Registry of packed images: disk path -> packed `images/` name.
+
+    Every registered image is named from its own bytes (`packed_ext`), and an
+    image whose bytes name no format we can declare is **not registered at
+    all** -- `add` returns None and the caller degrades it exactly as it
+    degrades a remote or missing image, to its alt text.
+
+    Dropping is the point rather than a limitation. The alternative is packing
+    a file we cannot label and declaring something -- the stored suffix, or
+    `application/octet-stream` -- which is how a book fails epubcheck, and a
+    reader that refuses to render the image gets the same nothing the alt text
+    gives, minus the caption. The bytes stay in the store either way; only the
+    book declines to carry them (#321). The formats this drops are the ones the
+    store cannot serve honestly in the first place: a BMP or an AVIF a
+    downloader named `.png` (`fetch.download_url`'s last-resort ext), a
+    truncated file, a file we could not read.
+
+    That last case is a small robustness win: an unreadable image used to
+    register fine and then raise at zip time, failing the whole export. Now it
+    is simply absent from the book.
 
     One window this does not close: the header is read while the export is
     being composed and the bytes are packed later, so a writer that swaps a
     file's FORMAT in place, under the same name, mid-export still gets one
     wrongly-declared image. No app path can do that -- an upload of a different
     format lands on a different suffix and drops the old file, which makes the
-    pack fail loudly instead -- so it takes a sync client or a hand edit
-    landing inside those seconds. Closing it means either holding every image
-    in memory from collect to zip, or deriving the type at zip time and
-    threading it back into a manifest that is already built; neither is worth
-    it for a race that replaces a defect which used to be unconditional.
-    """
-    return fetch.sniff_ext(data) or Path(stored_name).suffix.lower().lstrip(".")
-
-
-def _packed_suffix(p: Path) -> str:
-    """`packed_ext` for a file on disk, read from its header alone."""
-    try:
-        with p.open("rb") as f:
-            header = f.read(12)  # every signature `sniff_ext` knows fits in 12 bytes
-    except OSError:
-        header = b""  # unreadable now; the pack-time read will answer for it
-    ext = packed_ext(header, p.name)
-    return f".{ext}" if ext else ""
-
-
-class Images:
-    """Registry of packed images: disk path -> packed images/ name.
-
-    The packed name's extension comes from the file's bytes, not its name --
-    see `packed_ext`.
+    pack fail loudly instead -- so it takes a sync client or a hand edit landing
+    inside those seconds. Closing it means either holding every image in memory
+    from collect to zip, or deriving the type at zip time and threading it back
+    into a manifest that is already built; neither is worth it for a race that
+    replaces a defect which used to be unconditional.
     """
 
     def __init__(self):
         self.by_path: dict[Path, str] = {}
+        # Paths already rejected, so a scene referencing one broken image forty
+        # times opens it once rather than forty times.
+        self._unnamable: set[Path] = set()
 
-    def add(self, p: Path) -> str:
-        if p not in self.by_path:
-            self.by_path[p] = f"img-{len(self.by_path):03d}{_packed_suffix(p)}"
+    def add(self, p: Path) -> str | None:
+        if p in self.by_path:
+            return self.by_path[p]
+        if p in self._unnamable:
+            return None
+        try:
+            with p.open("rb") as f:
+                header = f.read(12)  # every signature `sniff_ext` knows fits in 12
+        except OSError:
+            header = b""  # unreadable, a directory, gone: unnamable, so dropped
+        ext = packed_ext(header)
+        if ext is None:
+            self._unnamable.add(p)
+            return None
+        self.by_path[p] = f"img-{len(self.by_path):03d}.{ext}"
         return self.by_path[p]
 
 
@@ -115,14 +136,17 @@ def _resolve_image(cid: str, m: re.Match) -> Path | None:
 
 
 def rewrite_images(text: str, cid: str, images: Images, prefix: str = "images/") -> str:
-    """Point every markdown image at its packed copy under `prefix`; remote or
-    missing images degrade to their alt text (a broken img is worse)."""
+    """Point every markdown image at its packed copy under `prefix`; remote,
+    missing, and unnamable images degrade to their alt text (a broken img is
+    worse) -- see `Images` for why an image we cannot declare is dropped rather
+    than packed under a guess."""
     def sub(m: re.Match) -> str:
         app = _IMG_URL.match(m["url"])
         if app:
             p = _resolve_image(cid, app)
-            if p is not None:
-                return f"![{m['alt']}]({prefix}{images.add(p)})"
+            packed = images.add(p) if p is not None else None
+            if packed is not None:
+                return f"![{m['alt']}]({prefix}{packed})"
         return m["alt"]
     return _MD_IMG.sub(sub, text)
 
@@ -140,9 +164,12 @@ def _friendly_or_none(provider, native: str) -> str | None:
 
 
 def _avatar(cid: str, rid: str, vid: str, base: str, images: Images, prefix: str) -> str | None:
+    """The packed portrait URL, or None -- an actor with no avatar and one whose
+    avatar cannot be named are the same thing to a book: no portrait."""
     root = overlay.image_root(cid, rid, vid, assets.AVATAR, base=base)
     p = assets.image_path(root, rid, vid, assets.AVATAR, base=base)
-    return f"{prefix}{images.add(p)}" if p is not None else None
+    packed = images.add(p) if p is not None else None
+    return f"{prefix}{packed}" if packed is not None else None
 
 
 def _actor_sections(aroot: Path, kind: str, actor_id: str, vid: str) -> tuple[str, list[dict]]:
@@ -412,6 +439,7 @@ def build_html(cid: str) -> tuple[bytes, str]:
         # From the PACKED name, whose extension is what the bytes are (#321),
         # not from the file's own suffix, which may lie. A browser survives a
         # wrong data-URI mime by sniffing; that is not a reason to write one.
+        # Registered names are always sniffed, so the default never fires.
         mime = EXT_MEDIA.get(name.rsplit(".", 1)[-1], "application/octet-stream")
         b64 = base64.b64encode(p.read_bytes()).decode("ascii")
         doc = doc.replace(f'"images/{name}"', f'"data:{mime};base64,{b64}"')
