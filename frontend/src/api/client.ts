@@ -289,12 +289,17 @@ export const SECRECY_LABELS: Record<Secrecy, string> = {
   public: "Public", secret: "Secret", "gm-only": "GM-only",
 };
 
+// `tokens` is what this record's body costs when it reaches a prompt, counted
+// server-side with the same tokenizer as the context inspector (#51). Optional
+// because it is a measurement rather than stored data — a payload written
+// before it existed simply has none, and the badge stays off.
 export type EntitySummary = { id: string; name: string; keys?: string; owners?: string;
-  secrecy?: string; has_image?: boolean; image_v?: string | null } & Record<string, unknown>;
+  secrecy?: string; has_image?: boolean; image_v?: string | null; tokens?: number } & Record<string, unknown>;
 export type EntityDetail = {
   meta: { id: string; name: string; keys?: string; owners?: string; secrecy?: string;
     sd_prompt?: string } & Record<string, unknown>;
   body: string;
+  tokens?: number;
 };
 
 // characters (V3 cards)

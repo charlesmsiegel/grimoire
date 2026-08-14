@@ -38,6 +38,21 @@ const asSecrecy = (v: unknown): Secrecy => {
   return (SECRECY_LEVELS as readonly string[]).includes(level) ? (level as Secrecy) : "public";
 };
 
+// What a record's body costs when it reaches a prompt (#51). Counted on the
+// server with the tokenizer the context inspector uses, so the badge and the
+// inspector never disagree; the frontend only formats it.
+//
+// The cost is per ACTIVATION, not per turn, and the tooltip says so: a keyed
+// entry pays it on the turns its keys hit and nothing on the rest, so a big
+// number here is only a big prompt if the entry is always-on. Reading it as a
+// standing cost is the obvious wrong conclusion to draw from a bare number.
+const TOKEN_HINT =
+  "Tokens this body costs each time it enters the prompt — keyed entries pay it only when they activate";
+
+export function tokenLabel(n: number): string {
+  return `${n.toLocaleString()} ${n === 1 ? "token" : "tokens"}`;
+}
+
 export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, onOpenOwner, onOpenLore, module = null }: {
   wid: string;
   kind: EntityKind;
@@ -60,6 +75,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   const [secrecy, setSecrecy] = useState<Secrecy>("public");    // audience gate (#49)
   const [sdPrompt, setSdPrompt] = useState("");                 // suggested SD prompt, absorb-set only
   const [ownerOpts, setOwnerOpts] = useState<LoreOwner[]>([]); // candidates for the picker
+  const [tokenCost, setTokenCost] = useState<number | null>(null); // selected record's prompt cost
   const [mode, setMode] = useState<"view" | "edit">("edit"); // existing entries open read-only
   const [error, setError] = useState<string | null>(null);
   const [images, setImages] = useState<{ name: string; v: string }[]>([]); // selected location's assets
@@ -123,6 +139,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setOwners([]); // manual "+ New" / post-save: always world-level, never a stale nav owner
     setSecrecy("public");
     setSdPrompt("");
+    setTokenCost(null);
     setImages([]);
     setContentPreview(null);
     setWizardOpen(false);
@@ -142,6 +159,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setOwners((e.meta.owners ?? "").split(",").map((o) => o.trim()).filter(Boolean));
     setSecrecy(asSecrecy(e.meta.secrecy));
     setSdPrompt(e.meta.sd_prompt ?? "");
+    setTokenCost(typeof e.tokens === "number" ? e.tokens : null);
     setMode("view");
     reloadImages(id);
   }
@@ -241,6 +259,33 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   }
 
   const keyList = keys.split(",").map((k) => k.trim()).filter(Boolean);
+  // How often that cost is actually paid, which is the whole reason a raw
+  // number needs a sentence next to it. The branches mirror the activation
+  // rules in `context.world_state`: owners gate the entry, keys decide the
+  // turns, and a keyless LOCATION is the exception to both — it never joins
+  // world info at all and is charged only as the scene's current setting.
+  const costHint =
+    kind === "locations"
+      ? keyList.length > 0
+        ? "Charged when these keys activate it, or when it is the scene's setting."
+        : "Charged only when it is the scene's current setting."
+      : owners.length > 0
+        ? keyList.length > 0
+          ? "Charged when an owner is in the scene and these keys hit."
+          : "Charged on every turn an owner is in the scene."
+        : keyList.length > 0
+          ? "Charged on the turns these keys activate the entry."
+          : "Always-on: charged on every turn of a scene it reaches.";
+  // Beside the title in both header layouts, so it is written once rather than
+  // in the plain-<h3> branch and the image branch separately.
+  const heading = (
+    <h3>
+      {name}
+      {tokenCost !== null && (
+        <span className="token-badge" title={TOKEN_HINT}>{tokenLabel(tokenCost)}</span>
+      )}
+    </h3>
+  );
 
   // Group lore rows: "Unowned (world)" first, then one group per distinct owner ref.
   const ownersOf = (e: EntitySummary) => (e.owners ?? "").split(",").map((o) => o.trim()).filter(Boolean);
@@ -283,6 +328,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
             ) : null;
           })}
         </span>
+      )}
+      {typeof e.tokens === "number" && (
+        <span className="row-tokens" title={TOKEN_HINT}>{e.tokens.toLocaleString()}</span>
       )}
     </button>
   );
@@ -347,10 +395,10 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                 <div className="loc-head">
                   <img className="loc-head-img" alt={`${name} primary`} src={imgSrc("avatar")}
                        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
-                  <h3>{name}</h3>
+                  {heading}
                 </div>
               ) : (
-                <h3>{name}</h3>
+                heading
               )}
               {editing && (
                 <>
@@ -399,6 +447,14 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                 </div>
                 <div className="field-hint">{SECRECY_HINTS[secrecy]}</div>
               </div>
+
+              {tokenCost !== null && (
+                <div className="side-section">
+                  <h4>Context cost</h4>
+                  <div className="chips"><span className="chip on">{tokenLabel(tokenCost)}</span></div>
+                  <div className="field-hint">{costHint}</div>
+                </div>
+              )}
               {fieldSpecs.some((f) => fields[f.key]) && (
                 <div className="side-section">
                   <h4>Details</h4>

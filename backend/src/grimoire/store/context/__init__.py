@@ -22,10 +22,14 @@ from __future__ import annotations
 # -- so the order is a deliberate reading aid, not a requirement: it states the
 # package's internal layering in one line.
 #
-# `tokens.py` stands alone: `count_tokens` is what the breakdown route calls on
-# the strings `context_sections` hands back, and it imports nothing from here.
+# `tokens` is the package ABOVE this one's (#51): the per-record badge measures
+# an entity with the same counter the breakdown does, and `entities` cannot
+# import this package — `world_state` reads entities through `overlay`, so that
+# would be a cycle. It is still bound as `context.tokens`, which is where every
+# caller and every test that patches `_encoder` already looks.
+from .. import tokens  # noqa: F401
 from . import (cast, macros, semantic, world_state, mechanics, story, archive, pack,  # noqa: F401
-               tokens, layout, speaker, assemble)
+               layout, speaker, assemble)
 from .cast import (  # noqa: F401
     _campaign_player_refs, _cast_directory_data, _char_name, _drift_roster,
     _voice_notes, cast_datetime_facts,
@@ -65,4 +69,4 @@ from .assemble import (  # noqa: F401
 # `context._encoder`. Patching it here no longer intercepts: `count_tokens`
 # lives in tokens.py and calls that module's global, so a test that wants a
 # stub encoder has to patch `context.tokens._encoder` instead.
-from .tokens import _encoder, count_tokens  # noqa: F401
+from ..tokens import _encoder, count_tokens  # noqa: F401

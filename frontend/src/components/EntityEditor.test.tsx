@@ -599,3 +599,71 @@ test("an unrecognised secrecy value still reads as public", async () => {
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(side).getByText("Public")).toBeInTheDocument();
 });
+
+// ---- per-record prompt cost (#51) ----
+
+test("rail rows carry the record's token count", async () => {
+  (api.listEntities as any).mockResolvedValue([
+    { id: "salt", name: "Salt", tokens: 1240 },
+    { id: "brine", name: "Brine", tokens: 7 },
+  ]);
+  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  await screen.findByText("Salt");
+  const counts = Array.from(container.querySelectorAll(".row-tokens")).map((n) => n.textContent);
+  expect(counts).toEqual(["1,240", "7"]);
+});
+
+test("a row with no token count renders no badge", async () => {
+  // a payload from before the field existed must not render "undefined" or 0
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  await screen.findByText("Salt");
+  expect(container.querySelector(".row-tokens")).toBeNull();
+});
+
+test("the detail header and sidebar report the cost, keyed as per-activation", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 42 }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "salt", name: "Salt", keys: "pact" }, body: "Binds", tokens: 42 });
+  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  expect(container.querySelector(".detail-main h3 .token-badge")!.textContent).toBe("42 tokens");
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).getByText("Context cost")).toBeInTheDocument();
+  expect(within(side).getByText("42 tokens")).toBeInTheDocument();
+  expect(within(side).getByText(/these keys activate/i)).toBeInTheDocument();
+});
+
+test("a keyless lore entry is described as always-on, a keyless location as the setting", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 3 }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "salt", name: "Salt" }, body: "Binds", tokens: 3 });
+  const lore = render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const loreSide = lore.container.querySelector(".detail-sidebar") as HTMLElement;
+  // "always-on" alone also matches the Keys hint above it, so match the sentence
+  expect(within(loreSide).getByText(/charged on every turn/i)).toBeInTheDocument();
+  expect(within(loreSide).getByText("3 tokens")).toBeInTheDocument();  // singular only at 1
+  lore.unmount();
+
+  // a keyless LOCATION never joins world info; it is charged as the setting
+  const loc = render(<EntityEditor wid="w" kind="locations" />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const locSide = loc.container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(locSide).getByText(/current setting/i)).toBeInTheDocument();
+  expect(within(locSide).queryByText(/charged on every turn/i)).toBeNull();
+});
+
+test("the header badge clears when the form is reset for a new record", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 42 }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "salt", name: "Salt" }, body: "Binds", tokens: 42 });
+  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(container.querySelector(".token-badge")).not.toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: /\+ new lore entry/i }));
+  expect(container.querySelector(".token-badge")).toBeNull();
+});

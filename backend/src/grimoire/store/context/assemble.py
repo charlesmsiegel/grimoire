@@ -20,7 +20,8 @@ from typing import NamedTuple
 
 from ... import prompts
 from .. import (characters, commitments, config, entities, length_drift, lengths,
-                locks, overlay, pcs, plot, response_presets, styles, turnstate)
+                locks, overlay, pcs, plot, response_presets, styles, tokens,
+                turnstate)
 from ..appearances import (cast as appearances_cast, paths as appearances_paths,
                            versions as appearances_versions)
 from ..campaigns import paths as campaigns_paths, read as campaigns_read
@@ -28,7 +29,7 @@ from ..scenes import read as scenes_read, turns as scenes_turns
 # Module objects, not names: `_assemble` binds a local `cast` (hence the alias),
 # and `cast._drift_roster` has to stay patchable from the test that counts it.
 from . import (archive, cast as cast_data, layout, macros, mechanics, pack, speaker,
-               story, tokens, world_state)
+               story, world_state)
 
 OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
 

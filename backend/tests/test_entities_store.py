@@ -1,8 +1,10 @@
+import os
+import time
 from pathlib import Path
 
 import pytest
 
-from grimoire.store import entities
+from grimoire.store import entities, tokens
 
 
 def test_create_read_and_stable_id(tmp_path: Path):
@@ -182,3 +184,78 @@ def test_normalize_secrecy_is_lenient(tmp_path: Path):
     # a garbled level is never written back out as one
     eid = entities.create_entity(tmp_path, "lore", "Typo", "x", secrecy="sercet")
     assert "secrecy" not in entities.read_entity(tmp_path, "lore", eid)["meta"]
+
+
+# ---- per-record token cost (#51) ----
+
+def _age(p: Path) -> None:
+    """Move `p`'s mtime out of `statcache`'s racy window, so a signature taken
+    on it is trusted and `record_tokens` is allowed to cache."""
+    old = time.time() - 60
+    os.utime(p, (old, old))
+
+
+def test_tokens_measure_the_body_the_prompt_would_get(tmp_path: Path):
+    body = "The tide reads the ledger aloud at every turning of the year."
+    eid = entities.create_entity(tmp_path, "lore", "Saltmarch Rite", body, keys="tide")
+    got = entities.read_entity(tmp_path, "lore", eid)
+    # exactly the counter the context inspector reports, over exactly the
+    # string `context.world_state._world_info` hands the assembler
+    assert got["tokens"] == tokens.count_tokens(body)
+    assert got["tokens"] > 0
+    listed = entities.list_entities(tmp_path, "lore")
+    assert [e["tokens"] for e in listed] == [got["tokens"]]
+
+
+def test_tokens_ignore_frontmatter(tmp_path: Path):
+    lean = entities.create_entity(tmp_path, "lore", "A", "salt")
+    fat = entities.create_entity(tmp_path, "lore", "A name that is very much longer", "salt",
+                                 keys="a, b, c, d, e, f, g, h", owners="pcs:mara, pcs:winifred")
+    # frontmatter never enters the prompt, so it must not enter the badge either
+    assert (entities.read_entity(tmp_path, "lore", lean)["tokens"]
+            == entities.read_entity(tmp_path, "lore", fat)["tokens"])
+
+
+def test_an_empty_body_costs_nothing(tmp_path: Path):
+    eid = entities.create_entity(tmp_path, "lore", "Placeholder", "")
+    assert entities.read_entity(tmp_path, "lore", eid)["tokens"] == 0
+    assert entities.list_entities(tmp_path, "lore")[0]["tokens"] == 0
+
+
+def test_a_frontmatter_tokens_key_does_not_report_its_own_cost(tmp_path: Path):
+    d = tmp_path / "lore"
+    d.mkdir()
+    (d / "forged.md").write_text("---\nname: Forged\ntokens: '0'\n---\nsalt and rope\n",
+                                 encoding="utf-8")
+    real = tokens.count_tokens("salt and rope")
+    assert entities.list_entities(tmp_path, "lore")[0]["tokens"] == real
+    assert entities.read_entity(tmp_path, "lore", "forged")["tokens"] == real
+
+
+def test_tokens_are_stable_across_a_relist_and_move_with_the_body(tmp_path: Path):
+    eid = entities.create_entity(tmp_path, "lore", "Rite", "one line")
+    first = entities.list_entities(tmp_path, "lore")[0]["tokens"]
+    assert entities.list_entities(tmp_path, "lore")[0]["tokens"] == first
+    entities.update_entity(tmp_path, "lore", eid, body="one line, and then a good many more of them")
+    assert entities.list_entities(tmp_path, "lore")[0]["tokens"] > first
+
+
+def test_an_unchanged_file_is_not_re_encoded(tmp_path: Path, monkeypatch):
+    """The sweep reason the count is memoized: re-listing a world must not pay
+    tiktoken again for every record whose bytes did not move."""
+    p = tmp_path / "lore" / "rite.md"
+    entities.create_entity(tmp_path, "lore", "Rite", "salt and rope")
+    _age(p)
+    calls = []
+    real = tokens.count_tokens
+    monkeypatch.setattr(tokens, "count_tokens", lambda t: calls.append(t) or real(t))
+
+    first = entities.list_entities(tmp_path, "lore")[0]["tokens"]
+    assert calls == ["salt and rope"]           # a cold read encodes once
+    assert entities.list_entities(tmp_path, "lore")[0]["tokens"] == first
+    assert calls == ["salt and rope"]           # and the second sweep not at all
+
+    entities.update_entity(tmp_path, "lore", "rite", body="salt, rope and a longer tail")
+    _age(p)
+    assert entities.list_entities(tmp_path, "lore")[0]["tokens"] > first
+    assert calls[-1] == "salt, rope and a longer tail"  # new bytes, new encode
