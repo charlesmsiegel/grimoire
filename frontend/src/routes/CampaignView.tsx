@@ -3418,6 +3418,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           </details>
           {/* A link, not a toggle: the ledger is its own route now (4e). */}
           <Link className="scene-action" to={`/campaigns/${cid}/ledger`}>Ledger</Link>
+          {/* Its other half (#198): the ledger is what is still open, this is
+              what happened. Beside it because that is the pair. */}
+          <Link className="scene-action" to={`/campaigns/${cid}/timeline`}>Timeline</Link>
           <button className="scene-action" onClick={() => setShowChanges((v) => !v)}>
             {showChanges ? "Close" : "Changes"}
           </button>

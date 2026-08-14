@@ -2507,6 +2507,9 @@ a.column-back { text-decoration: none; }
    `table-layout: fixed` with a <colgroup> is what holds those columns still
    across sections, so switching from facts to threads moves the content and
    not the grid. */
+/* The "which campaign am I reading" block at the head of the column. Shared
+   with the timeline (#198) rather than copied under a second name: it is the
+   same block answering the same question, and two of them would drift. */
 .ledger-ident { padding: 4px 16px 14px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
 .ledger-ident-name {
   font-family: var(--fd); font-weight: 600; font-size: 21px; line-height: 1.15;
@@ -2662,4 +2665,86 @@ a.column-back { text-decoration: none; }
   /* The provenance drops under the name rather than squeezing it: at this
      width the two on one line leave about six characters for the record. */
   .search-hit-head { flex-direction: column; gap: 3px; }
+}
+
+/* ---- timeline (#198) ---- */
+/* Cards, not the ledger's table, and the difference is the shape of the
+   question. The ledger's six sections all answer the same four things about a
+   record, so they share four columns. A scene answers a different number of
+   things every time — one has a summary, a location and three beats, the next
+   is a title and a date because it has not been absorbed yet — and a fixed
+   grid renders that as rows of empty cells. */
+.timeline-list { list-style: none; margin: 22px 0 0; padding: 0; }
+/* The date rail on the left, the scene beside it. `align-items: baseline` puts
+   the moment on the same line as the title rather than floating it. */
+.timeline-card {
+  display: flex; gap: 18px; align-items: baseline;
+  padding: 16px 0; border-bottom: 1px solid var(--line);
+}
+.timeline-card:last-child { border-bottom: 0; }
+/* Fixed width so every title starts at the same x — the rail IS the timeline,
+   and a ragged one stops reading as a sequence. `UNDATED` is the same size as
+   a date for the same reason. */
+.timeline-when {
+  flex: none; width: 118px;
+  font-family: var(--fm); font-size: 10px; letter-spacing: 0.12em; line-height: 1.9;
+  text-transform: uppercase; color: var(--subtle);
+  overflow-wrap: anywhere;
+}
+/* `min-width: 0` so a long beat wraps inside the card instead of widening the
+   flex item past the page. */
+.timeline-body { flex: 1; min-width: 0; }
+.timeline-title { margin: 0; font-family: var(--fd); font-weight: 600; font-size: 17px;
+  line-height: 1.3; letter-spacing: 0.02em; }
+.timeline-title a { color: var(--ink); text-decoration: none; }
+.timeline-title a:hover { color: var(--accent); }
+.timeline-line {
+  margin: 6px 0 0; max-width: 620px;
+  font-family: var(--fb); font-weight: 300; font-size: 14px; line-height: 1.55; color: var(--ink);
+}
+/* An unabsorbed scene is the ordinary case, so its placeholder is quiet rather
+   than an error colour: nothing is wrong, the scene simply has not ended yet. */
+.timeline-line.pending { color: var(--muted); font-style: italic; }
+.timeline-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+/* These chips are labels, not controls — only the thread chips below click. */
+.timeline-meta .chip { cursor: default; }
+.timeline-beats { list-style: none; margin: 10px 0 0; padding: 0; }
+.timeline-beats li {
+  display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+  padding: 6px 0 0;
+}
+.timeline-beat-text {
+  flex: 1; min-width: 200px;
+  font-family: var(--fb); font-weight: 300; font-size: 13px; line-height: 1.55;
+  color: var(--subtle);
+}
+/* An absorbed scene reads as settled; one still in play keeps the accent edge,
+   because it is the one you can still change. */
+.timeline-card:not(.done) { border-left: 2px solid var(--accent); padding-left: 14px; }
+.timeline-card.done { border-left: 2px solid transparent; padding-left: 14px; }
+/* The two span selects, stacked in the column. */
+.timeline-span {
+  display: flex; align-items: center; gap: 10px; padding: 4px 16px 8px;
+  font-family: var(--fm); font-size: 10px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--muted);
+}
+.timeline-span span { flex: none; width: 40px; }
+.timeline-span select { flex: 1; min-width: 0; }
+/* The one control pinned under the column, sized like the ledger's toggle:
+   44px because it is a touch target, not a footnote. A button rather than that
+   toggle's <label>, so it carries its own reset. */
+.timeline-clear {
+  display: flex; align-items: center; width: 100%; min-height: 44px; padding: 0 16px;
+  background: none; border: 0; cursor: pointer; text-align: left; color: var(--muted);
+  font-family: var(--fm); font-size: 10px; letter-spacing: 0.14em; line-height: 22px;
+  text-transform: uppercase;
+}
+.timeline-clear:hover:enabled { color: var(--ink); }
+.timeline-clear:disabled { opacity: 0.45; cursor: default; }
+
+/* Phone: the date rail cannot hold a column of its own at 375px, so it becomes
+   the card's first line. */
+@media (max-width: 720px) {
+  .timeline-card { flex-direction: column; gap: 4px; }
+  .timeline-when { width: auto; line-height: 1.45; }
 }
