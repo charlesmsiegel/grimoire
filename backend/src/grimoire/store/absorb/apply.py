@@ -636,6 +636,13 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
     # reason `recorded` is: they are published in one append once the whole list
     # is through, so a commit that died mid-list must not lose the history of
     # what it had already written.
+    #
+    # It costs what `recorded` already costs, roughly doubled: a row carries the
+    # record's prior value and its post-write reading on top of the display
+    # before/after, and `checkpoint` republishes this whole dict once per edit --
+    # so the bytes a commit writes here grow with the square of its edit count.
+    # Accepted rather than optimised: the alternative to carrying the snapshot is
+    # not carrying it, and it cannot be recomputed after the write it describes.
     journalled: list = journal.setdefault("journalled", [])
     applied: list[str] = []
     failures: list[dict] = []

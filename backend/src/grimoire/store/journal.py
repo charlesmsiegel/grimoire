@@ -35,13 +35,18 @@ reader's words rather than leaving them to guess.
 scene rename like every other store that persists a scene id
 (``scene_refs.repoint``).
 
-Retention: the newest ``RETENTION`` entries. Unlike ``rolls.json`` -- a few
-hundred bytes an entry -- a journal row carries the whole prior text of the
-record it moved, twice over (``before``/``after`` for the panel, ``restore`` for
-the reversal), so an unbounded file would grow with the campaign's whole edit
-history in a folder the user may be syncing between devices. Dropping the
-oldest is the honest failure: undo reaches back a bounded distance and says so,
-rather than the store quietly becoming the largest thing in ``~/.grimoire``.
+Retention is bounded **two ways**, and the second is the one that matters.
+Unlike ``rolls.json`` -- a few hundred bytes an entry -- a journal row carries
+the whole prior text of the record it moved, up to four times over
+(``before``/``after`` for the panel, ``restore``/``expect`` for the reversal).
+A row cap alone therefore bounds nothing: 500 rows of a 20 KB lore body is a
+40 MB file, rewritten in full on every absorb save, in a folder the user may be
+syncing between devices. So ``RETENTION`` caps the rows and ``MAX_BYTES`` caps
+the serialized size, oldest dropped first until both hold.
+
+Dropping the oldest is the honest failure: undo reaches back a bounded distance
+and says so (a dropped entry is simply not found), rather than the store quietly
+becoming the largest thing in ``~/.grimoire``.
 """
 
 from __future__ import annotations
@@ -55,6 +60,10 @@ from .paths import now_iso
 
 #: How many entries are kept. Everything older is dropped on the next append.
 RETENTION = 500
+
+#: And how many bytes they may occupy once serialized. A row carries record
+#: text, so this is the cap that actually binds -- see the module docstring.
+MAX_BYTES = 2_000_000
 
 
 def _path(cid: str) -> Path:
@@ -133,10 +142,30 @@ def append(cid: str, rows: list[dict]) -> list[dict]:
             entry = {"id": f"j{doc['seq']}", "ts": ts, **row}
             doc["entries"].append(entry)
             written.append(entry)
-        if len(doc["entries"]) > RETENTION:
-            doc["entries"] = doc["entries"][-RETENTION:]
+        doc["entries"] = _trim(doc["entries"], keep=len(written))
         _write(cid, doc)
         return written
+
+
+def _trim(entries: list[dict], keep: int) -> list[dict]:
+    """Drop the oldest entries until both caps hold, never below `keep`.
+
+    `keep` is what this append just wrote. A single row can exceed `MAX_BYTES`
+    on its own -- one absorb rewriting a very long lore body -- and trimming to
+    satisfy the cap would then delete the entry for the write that just
+    happened, leaving that change with no history at all. The cap is a bound on
+    accumulation, not a licence to discard the present, so it yields.
+
+    Sizes are measured once per entry rather than by re-serializing the list on
+    each pop, which would be quadratic in exactly the case that reaches here.
+    """
+    entries = entries[-RETENTION:] if len(entries) > RETENTION else entries
+    sizes = [len(json.dumps(e, default=str)) for e in entries]
+    total, first = sum(sizes), 0
+    while total > MAX_BYTES and len(entries) - first > keep:
+        total -= sizes[first]
+        first += 1
+    return entries[first:]
 
 
 def mark_undone(cid: str, jid: str, by: str) -> bool:

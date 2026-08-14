@@ -29,6 +29,15 @@ function originLabel(entry: JournalEntry): string {
   return scene ? `absorbed from ${scene}` : "absorbed";
 }
 
+/** The journalled timestamp is UTC (`…Z`, stamped by the store); show it local.
+ *  Same helper as `SceneInspector`, and the same reason: without it a hand edit
+ *  and a reversal — neither of which belongs to a scene — carry no "when" at
+ *  all, and the rail becomes an unordered list of things that happened. */
+function whenLabel(ts: string): string {
+  const d = new Date(ts);
+  return isNaN(d.getTime()) ? ts : d.toLocaleString();
+}
+
 function Diff({ diff }: { diff: JournalEntry["diff"] }) {
   if (!diff.length) return <p className="field-hint">Nothing to show for this change.</p>;
   return (
@@ -164,6 +173,10 @@ function HistoryTab({ cid, entries, onUndone }:
                 <h4>Change</h4>
                 <span className="chip on">{active.kind}</span>
                 <p className="field-hint">{originLabel(active)}</p>
+                <p className="field-hint">{whenLabel(active.ts)}</p>
+                {active.undone && (
+                  <p className="field-hint">undone {whenLabel(active.undone.ts)}</p>
+                )}
               </div>
             </aside>
           </div>
@@ -183,7 +196,7 @@ export function ChangesPanel({ cid }: { cid: string }) {
   const loadJournal = useCallback(() => {
     api.campaignJournal(cid).then(setEntries).catch(() => setEntries([]));
     // The rolling view moves too: undoing a browsable change repoints that
-    // record's delta at the reversal (`store/undo._roll_back_changes`), so a
+    // record's delta at the reversal (`store/undo._roll_back_panels`), so a
     // Records tab left on the old response would describe a change the record
     // no longer holds.
     api.campaignChanges(cid, true).then(setRows).catch(() => setRows([]));
@@ -201,16 +214,20 @@ export function ChangesPanel({ cid }: { cid: string }) {
 
   return (
     <div className="changes-panel">
-      <div className="tabs">
-        <button className={"tab" + (tab === "records" ? " active" : "")}
-                onClick={() => setTab("records")}>Records</button>
-        <button className={"tab" + (tab === "history" ? " active" : "")}
-                onClick={() => setTab("history")}>History</button>
+      <div className="tabs" role="tablist" aria-label="Changes">
+        {([["records", "Records"], ["history", "History"]] as [Tab, string][])
+          .map(([key, label]) => (
+            <button key={key} role="tab" aria-selected={tab === key}
+                    className={"tab" + (tab === key ? " active" : "")}
+                    onClick={() => setTab(key)}>{label}</button>
+          ))}
       </div>
-      {tab === "records"
-        ? (rows === null ? <div>Loading…</div> : <RecordsTab rows={rows} />)
-        : (entries === null ? <div>Loading…</div>
-           : <HistoryTab cid={cid} entries={entries} onUndone={loadJournal} />)}
+      <div role="tabpanel">
+        {tab === "records"
+          ? (rows === null ? <div>Loading…</div> : <RecordsTab rows={rows} />)
+          : (entries === null ? <div>Loading…</div>
+             : <HistoryTab cid={cid} entries={entries} onUndone={loadJournal} />)}
+      </div>
     </div>
   );
 }

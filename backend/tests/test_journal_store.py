@@ -112,3 +112,32 @@ def test_non_dict_entries_are_stepped_over(cid):
         encoding="utf-8")
     assert [e["label"] for e in journal.read(cid)] == ["kept"]
     assert journal.append(cid, [_row()])[0]["id"] == "j5"
+
+
+def test_the_byte_cap_is_what_actually_binds(cid, monkeypatch):
+    """A row cap bounds nothing on its own: rows carry record text, up to four
+    copies of it, so 500 of them is however many megabytes the campaign's bodies
+    happen to be."""
+    monkeypatch.setattr(journal, "MAX_BYTES", 4000)
+    for i in range(20):
+        journal.append(cid, [_row(before="x" * 500, after="y" * 500)])
+    entries = journal.read(cid)
+    assert len(entries) < 20                       # the row cap never fired
+    assert len(json.dumps(entries)) <= 4000
+    assert entries[-1]["id"] == "j20"              # the newest survived
+
+
+def test_a_row_larger_than_the_cap_is_still_recorded(cid, monkeypatch):
+    """The cap bounds accumulation, not the present: trimming an oversized row
+    away would leave the write that just happened with no history at all."""
+    monkeypatch.setattr(journal, "MAX_BYTES", 100)
+    journal.append(cid, [_row(before="x" * 5000)])
+    assert [e["id"] for e in journal.read(cid)] == ["j1"]
+
+
+def test_both_caps_apply(cid, monkeypatch):
+    monkeypatch.setattr(journal, "RETENTION", 3)
+    monkeypatch.setattr(journal, "MAX_BYTES", 10_000_000)
+    for _ in range(6):
+        journal.append(cid, [_row()])
+    assert [e["id"] for e in journal.read(cid)] == ["j4", "j5", "j6"]

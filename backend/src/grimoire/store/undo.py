@@ -50,6 +50,21 @@ entry says why in `why`, rather than offering an Undo button that fails:
   _new_commitment_id` moves off a taken id), because the record the snapshot was
   taken from is then not the record that was written.
 
+**What a reversal restores is the VALUE, not everything the write did.** Two
+consequences worth knowing before trusting the word "undo":
+
+- Writing to a record a campaign still *inherits* materializes it
+  (``overlay.update_entity``), and putting the body back does not
+  de-materialize it. The text is the world's again; the copy-on-write
+  relationship is not, so later world edits arrive as incoming sync rather than
+  resolving through. Reverting that automatically would discard a
+  materialization somebody may have wanted for its own sake, so it is left
+  standing and said out loud here instead.
+- The same shape, smaller: restoring "there was no dossier" writes an empty
+  dossier rather than removing the file, and restoring "no play state" writes an
+  empty ``state.md``. Every reader treats absent and empty alike, so the value
+  round-trips; the file does not.
+
 `undo` takes ``locks.campaign_lock(cid)`` across the whole read-check-write-stamp
 -- the compare-and-swap is not one otherwise, since two readers clicking Undo on
 the same entry would both pass the check. It is deliberately NOT declared in
@@ -66,7 +81,8 @@ import logging
 from contextlib import contextmanager
 
 from . import (changes, characters, commitments, dossiers, groupstate, journal,
-               locks, overlay, playstate, plot, relationships, voice_drift)
+               locks, overlay, playstate, plot, provenance, relationships,
+               voice_drift)
 from .appearances import paths as appearances_paths, versions as appearances_versions
 from .campaigns import paths as campaigns_paths
 
@@ -362,44 +378,65 @@ def undo(cid: str, jid: str) -> dict:
                "reverted": jid,
                "undo": seal(cid, target, plan.get("expect"))}
         row["why"] = "" if row["undo"] else UNREADABLE
+        # The write first, then the history, in that order and not the other
+        # way round: a crash between them leaves an entry that reads as
+        # undoable over a record that has already moved back, and the next
+        # attempt is refused by the compare-and-swap rather than reverting
+        # twice. Stamping first would instead let a failed write leave an entry
+        # claiming a reversal that never happened, which nothing downstream can
+        # detect.
         written = journal.append(cid, [row])[0]
         journal.mark_undone(cid, jid, written["id"])
-        _roll_back_changes(cid, entry, row)
+        _roll_back_panels(cid, entry, row)
         return written
 
 
-def _roll_back_changes(cid: str, entry: dict, row: dict) -> None:
-    """Point the rolling per-record delta (`changes.json`) at the reversal.
+def _roll_back_panels(cid: str, entry: dict, row: dict) -> None:
+    """Point the two display logs at the reversal.
 
-    That log means "how this record last moved", and after a reversal it last
-    moved back -- leaving it alone would have the Records panel describing a
-    change that is no longer in the record. It can only ever be describing THIS
-    change anyway: the compare-and-swap above has already established that
-    nothing has written to the record since, and every absorb write-back
-    journals, so the entry `changes.json` holds for a browsable record is the one
-    just undone.
+    Both are rolling upserts describing "the value this record holds now", and a
+    reversal moves that value BACKWARD -- the one direction neither was written
+    for. Leaving them would have the Changes panel showing a delta the record no
+    longer holds and the provenance markers quoting the scene that justified it.
 
-    Scoped to the same kinds that log there, and only for an entry that came
-    from a scene: `changes.record` labels its entry with a scene id, and a manual
-    edit has none to give. The scene named is the one whose change was reversed,
-    which is the truest label available -- the reversal itself happened outside
-    any scene, and the History panel carries the exact story either way.
+    The provenance half is dropped rather than rewritten: the citation explained
+    the edit being undone, there is no earlier one to fall back to (the upsert
+    overwrote it), and "we do not know why this is here" is both what the panel
+    renders for an uncited field and what is now true. It covers every kind,
+    unlike the delta below -- `apply_edits` cites a fact and a plot beat too.
 
-    Never fatal. The reversal has already landed by the time this runs, and a
-    stale display log is the smaller harm -- the call `apply_edits` makes for the
-    same trade.
+    The delta half can only ever be describing THIS change: the compare-and-swap
+    above has already established that nothing has written to the record since,
+    and every absorb write-back journals, so the entry `changes.json` holds for a
+    browsable record is the one just undone. It is scoped to the kinds that log
+    there, and to an entry that came from a scene -- `changes.record` labels its
+    entry with a scene id and a hand edit has none to give. The scene named is
+    the one whose change was reversed, which is the truest label available: the
+    reversal itself happened outside any scene, and the History panel carries the
+    exact story either way.
+
+    Never fatal, and the two are attempted independently. The reversal has
+    already landed by the time this runs, so a stale display log is the smaller
+    harm -- the call `apply_edits` makes for the same trade -- and one of these
+    failing is no reason to skip the other.
     """
     ref = entry.get("ref")
     ref = ref if isinstance(ref, dict) else {}
     kind, rid, sid = ref.get("kind"), ref.get("id"), entry.get("scene")
-    if (entry.get("kind") not in changes.BROWSABLE_KINDS
-            or not isinstance(kind, str) or not kind
-            or not isinstance(rid, str) or not rid
-            or not isinstance(sid, str) or not sid):
+    named = (isinstance(kind, str) and kind) and (isinstance(rid, str) and rid)
+    if not named:
+        return
+    field = row.get("field", "")
+    try:
+        provenance.forget(cid, [f"{kind}/{rid}#{field if isinstance(field, str) else ''}"])
+    except Exception:  # the reversal landed; only the markers are stale
+        log.warning("could not clear the provenance marker for %s in %s", ref, cid,
+                    exc_info=True)
+    if entry.get("kind") not in changes.BROWSABLE_KINDS or not (isinstance(sid, str) and sid):
         return
     try:
         changes.record(cid, sid, {f"{kind}/{rid}": [
-            {"field": row.get("field", ""), "label": row.get("label", ""),
+            {"field": field, "label": row.get("label", ""),
              "before": row.get("before", ""), "after": row.get("after", "")}]})
     except Exception:  # the reversal landed; only the panel is stale
         log.warning("could not roll back the changes panel for %s in %s", ref, cid,

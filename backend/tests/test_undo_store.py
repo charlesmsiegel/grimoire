@@ -409,3 +409,80 @@ def test_journalled_skips_a_write_that_moved_nothing(cid):
                          field="body", label="The Pact — lore"):
         overlay.update_entity(cid, "lore", "pact", keys="pact, oath")
     assert journal.read(cid) == []
+
+
+# --- the display logs follow the reversal -----------------------------------
+
+def _cited_lore_edit(before, after):
+    return {**_lore_edit(before, after),
+            "review": {"quote": "The pact is broken.", "speaker": "Winifred",
+                       "certainty": 0.9, "authority": "stated", "band": "high"}}
+
+
+def test_undo_clears_the_provenance_marker(cid, sid):
+    """A citation explains the value a field HOLDS. The reversal put an older
+    value back, and the quote that justified the edit does not justify it —
+    there is no earlier citation to fall back to, so uncited is the honest
+    state."""
+    from grimoire.store import provenance
+    entities.create_entity(campaigns.campaign_root(cid), "lore", "Pact", body="old body")
+    absorb.apply_edits(cid, [_cited_lore_edit("old body", "new body")], sid)
+    assert provenance.read(cid)["lore/pact#body"]["quote"] == "The pact is broken."
+    undo.undo(cid, "j1")
+    assert provenance.read(cid) == {}
+
+
+def test_undo_clears_the_marker_for_a_kind_the_delta_never_covered(cid, sid):
+    """Provenance covers every kind, so the clearing has to as well — a plot
+    beat is cited and is not browsable."""
+    from grimoire.store import provenance
+    edit = {**_plot_edit("It moved."),
+            "review": {"quote": "The map moved.", "speaker": "Mara",
+                       "certainty": 0.8, "authority": "stated", "band": "high"}}
+    absorb.apply_edits(cid, [edit], sid)
+    assert provenance.read(cid)
+    undo.undo(cid, "j1")
+    assert provenance.read(cid) == {}
+
+
+def test_undo_leaves_another_records_marker_alone(cid, sid):
+    from grimoire.store import provenance
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "Pact", body="old body")
+    entities.create_entity(croot, "lore", "Tithe", body="old tithe")
+    other = {**_cited_lore_edit("old tithe", "new tithe"),
+             "id": "lore:tithe", "target": {"kind": "lore", "id": "tithe"},
+             "label": "The Tithe — lore"}
+    absorb.apply_edits(cid, [_cited_lore_edit("old body", "new body"), other], sid)
+    undo.undo(cid, "j1")
+    assert set(provenance.read(cid)) == {"lore/tithe#body"}
+
+
+# --- the one branch where the write moves off the probed record -------------
+
+def test_a_commitment_whose_id_was_reallocated_carries_no_reversal(cid, sid):
+    """`materialize._new_commitment_id` moves a row staged as NEW off an id that
+    a different, unresolved commitment already holds. The snapshot was taken from
+    that other record, so it describes a commitment this edit never touched —
+    offering it as the reversal would revert somebody else's promise."""
+    from grimoire.store.absorb import conflicts
+    commitments.set_movement(cid, "pay-mara", "Pay Mara", "promise", "open", None,
+                             "He promised.", "s0")
+    # Staged as NEW (`before` empty) against an id the slug collided with, and
+    # answered over the conflict that collision raises -- the shape that reaches
+    # the reallocation.
+    edit = {"id": "com", "kind": "commitment",
+            "target": {"kind": "commitments", "id": "pay-mara"},
+            "label": "Pay, Mara — open", "field": "beat",
+            "before": "", "after": "A different promise entirely.",
+            "authored": False, "resolve": "replace",
+            "resolve_from": conflicts.commitment_line(commitments.get(cid, "pay-mara")),
+            "payload": {"id": "pay-mara", "title": "Pay, Mara", "kind": "promise",
+                        "status": "open", "due": None, "scene": "s1"}}
+    applied, failures = absorb.apply_edits(cid, [edit], sid)
+    assert applied and not failures
+    entry = _only(cid)
+    assert entry["ref"]["id"] == "pay-mara-2"      # the reallocated id
+    assert entry["undo"] is None and entry["why"] == undo.GENERIC
+    # ...and the record the snapshot came from is untouched by any of it.
+    assert len(commitments.get(cid, "pay-mara")["beats"]) == 1
