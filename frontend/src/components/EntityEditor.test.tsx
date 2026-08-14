@@ -611,6 +611,22 @@ test("rail rows carry the record's token count", async () => {
   await screen.findByText("Salt");
   const counts = Array.from(container.querySelectorAll(".row-tokens")).map((n) => n.textContent);
   expect(counts).toEqual(["1,240", "7"]);
+  // the rail drops the unit for width, so the row's accessible name carries it
+  expect(screen.getByRole("button", { name: /Salt 1,240 tokens/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /Brine 7 tokens/ })).toBeInTheDocument();
+});
+
+test("a zero-token record still shows its count, in the rail and the detail", async () => {
+  // 0 is falsy: a `{e.tokens && ...}` guard would silently blank an empty
+  // record's badge, which reads identically to the field being absent.
+  (api.listEntities as any).mockResolvedValue([{ id: "stub", name: "Stub", tokens: 0 }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "stub", name: "Stub" }, body: "", tokens: 0 });
+  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByText("Stub"));
+  expect(container.querySelector(".row-tokens")!.textContent).toBe("0");
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  expect(container.querySelector(".token-badge")!.textContent).toBe("0 tokens");
 });
 
 test("a row with no token count renders no badge", async () => {
