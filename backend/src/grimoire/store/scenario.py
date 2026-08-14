@@ -64,6 +64,20 @@ PROMPT_FIELDS: tuple[tuple[str, str], ...] = (
 #: member the scenario never quotes is invention with nothing behind it.
 CHARACTER_FIELDS: tuple[str, ...] = ("name", "description", "personality")
 
+#: How much of one world-info entry, and one opener, the prompt may spend.
+#:
+#: The cards this module exists for are the big ones — a whole setting, dozens
+#: of entries, a dozen long openers — and their bodies are what makes them big.
+#: Neither is needed whole: an entry is re-filed by NAME (its text is already
+#: exact and is never retyped), and an opener is read for who appears in it,
+#: which the opening lines say. The card's own description/scenario are NOT
+#: clipped: those are the setting, and clipping them would gut the extraction.
+#:
+#: This bounds the prompt; it does not bound the import. `proposal` and `apply`
+#: carry every body whole — see `_clip`.
+ENTRY_PROMPT_CHARS = 600
+GREETING_PROMPT_CHARS = 900
+
 
 def _card_data(card: dict) -> dict:
     data = card.get("data")
@@ -90,6 +104,17 @@ def strip_images(text: str) -> str:
         start, end = ref.span
         text = text[:start] + text[end:]
     return text
+
+
+def _clip(text: str, limit: int) -> str:
+    """`text` cut to `limit` characters, ending in an ellipsis when it was cut.
+
+    The marker is the point: a model handed a body that stops mid-sentence with
+    nothing to say so reads it as the whole entry, and may "complete" what it
+    thinks is a truncated fact. Clipping only ever happens on the way INTO the
+    prompt, so no import ever loses a character of the card.
+    """
+    return text if len(text) <= limit else text[:limit].rstrip() + " …"
 
 
 def lorebook_entries(card: dict) -> list[dict]:
@@ -123,16 +148,28 @@ def card_greetings(card: dict) -> list[dict]:
     return out
 
 
+def prompt_entries(card: dict) -> list[dict]:
+    """`lorebook_entries` with each body clipped — what the prompt is shown."""
+    return [{**e, "body": _clip(e["body"], ENTRY_PROMPT_CHARS)} for e in lorebook_entries(card)]
+
+
 def prompt_greetings(card: dict) -> list[dict]:
-    """`card_greetings` with the art taken out — what the prompt is shown."""
-    return [{"name": g["name"], "body": strip_images(g["body"])} for g in card_greetings(card)]
+    """`card_greetings` with the art taken out and each body clipped.
+
+    Both cuts are the prompt's alone. `_primary` reads the WHOLE opener when it
+    decides whose it is, so nothing here narrows the cast an opener resolves to
+    — the model is only being asked which people exist, not which are in this
+    one.
+    """
+    return [{"name": g["name"], "body": _clip(strip_images(g["body"]), GREETING_PROMPT_CHARS)}
+            for g in card_greetings(card)]
 
 
 def build_prompt(card: dict) -> list[dict]:
     return [{"role": "system", "content": prompts.render("scenario/system.j2")},
             {"role": "user", "content": prompts.render(
                 "scenario/user.j2", card=_card_data(card), fields=PROMPT_FIELDS,
-                entries=lorebook_entries(card), greetings=prompt_greetings(card))}]
+                entries=prompt_entries(card), greetings=prompt_greetings(card))}]
 
 
 def _keys(v) -> list[str]:
@@ -256,9 +293,16 @@ def proposal(card: dict, extracted: dict) -> dict:
     Pure. `extracted` is `parse_output`'s result — pass `{"characters": [],
     "entries": []}` to see what the card alone yields, which is what a world
     with no LLM connection can still import.
+
+    Cast names are normalized here rather than trusted, even though
+    `parse_output` already trims them: the two halves of a proposal reference
+    each other BY NAME, so a cast row reading " Mara " beside an opener reading
+    "Mara" is a review screen whose picker has no option for its own value, and
+    an `apply` that resolves neither. One spelling, decided in one place.
     """
-    chars = [dict(c) for c in extracted.get("characters", [])]
-    names = [c["name"] for c in chars if c.get("name")]
+    chars = [{**dict(c), "name": _text(c.get("name"))} for c in extracted.get("characters", [])]
+    chars = [c for c in chars if c["name"]]
+    names = [c["name"] for c in chars]
     entries = merge_entries(lorebook_entries(card), extracted.get("entries", []))
     openers = []
     for g in card_greetings(card):

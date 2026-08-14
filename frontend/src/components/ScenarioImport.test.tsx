@@ -76,6 +76,41 @@ test("a row the reviewer unchecks is left out of the import", async () => {
   expect(sent.greetings.map((g: any) => g.name)).toEqual(["Saltmarch"]);
 });
 
+test("renaming a cast member carries every opener that named them", async () => {
+  // The openers reference the cast by NAME, so a rename that does not travel
+  // leaves them pointing at somebody who will never be created — and the
+  // backend drops an unresolvable name silently, so the opener would arrive
+  // with no cast at all.
+  await readCard();
+  fireEvent.change(screen.getByLabelText("character name 0"), { target: { value: "Mara Vel" } });
+  fireEvent.click(screen.getByRole("button", { name: /import 5 records/i }));
+  await waitFor(() => expect((api.scenarioImport as any).mock.calls.length).toBe(1));
+  const sent = (api.scenarioImport as any).mock.calls[0][1];
+  expect(sent.greetings[0].character).toBe("Mara Vel");
+  expect(sent.greetings[0].present).toEqual(["Mara Vel"]);
+});
+
+test("repointing an opener keeps the rest of its cast present", async () => {
+  (api.scenarioParse as any).mockResolvedValue({
+    ...structuredClone(PROPOSAL),
+    greetings: [{ name: "Saltmarch", body: "Mara and Winifred.",
+                  character: "Mara", present: ["Mara", "Winifred"] }],
+  });
+  await readCard();
+  fireEvent.change(screen.getByLabelText("greeting character 0"), { target: { value: "Winifred" } });
+  fireEvent.click(screen.getByRole("button", { name: /import 4 records/i }));
+  await waitFor(() => expect((api.scenarioImport as any).mock.calls.length).toBe(1));
+  const sent = (api.scenarioImport as any).mock.calls[0][1];
+  // Winifred leads now; Mara is still in the scene rather than written out of it.
+  expect(sent.greetings[0].present).toEqual(["Winifred", "Mara"]);
+});
+
+test("an opener pointing at a cast member that is not being imported says so", async () => {
+  await readCard();
+  fireEvent.click(screen.getByLabelText("keep character 0"));   // drop Mara
+  expect(screen.getByText(/mara is not being imported/i)).toBeTruthy();
+});
+
 test("an opener can be pointed at any proposed cast member", async () => {
   await readCard();
   fireEvent.change(screen.getByLabelText("greeting character 1"), { target: { value: "Winifred" } });
