@@ -60,10 +60,10 @@ TOO_LARGE = "cover image is too large (max 25 MB)"
 #:
 #: Record images now hold the same line, by the same rule and in two places
 #: (#321): `routes.common._upload_image_ext` names an uploaded one from its
-#: bytes, and `export.packed_ext` names a packed one from its bytes, because
-#: stores already on disk hold files misnamed before that and nothing renames
-#: them. Those use magic bytes rather than a decode -- the packer cannot refuse
-#: a file, so it needs a detector that always answers -- which is why this stays
+#: bytes, and `export.Images` names a packed one from its bytes and drops the
+#: image entirely when they name no format it can declare -- because stores
+#: already on disk hold files misnamed before that and nothing renames them.
+#: Those use magic bytes rather than a decode, which is why this stays
 #: PIL-based: only the decode bounds `MAX_PIXELS`, and only a cover is
 #: thumbnailed. The two map the same four formats to the same four extensions,
 #: so an image both accept is named identically by either; where they part is

@@ -74,7 +74,7 @@ def _fixture_campaign(monkeypatch, tmp_path):
     croot = campaigns.campaign_root(cid)
     docks = entities.create_entity(croot, "locations", "The Docks", body="Salt-stained piers.")
     entities.create_entity(croot, "locations", "The Keep", body="Never visited.")
-    assets.put_image(croot, docks, "default", "pier", b"pierbytes", "png", base="locations")
+    assets.put_image(croot, docks, "default", "pier", _png(), "png", base="locations")
 
     sid1 = scenes.create_scene(cid, "Arrival")
     appearances.appear(cid, sid1, "pcs", "elara", "default", "player")
@@ -152,7 +152,7 @@ def test_build_epub_packs_images_and_fonts(monkeypatch, tmp_path):
     z = _open(blob)
     imgs = [n for n in z.namelist() if n.startswith("images/")]
     assert imgs == ["images/img-000.png"]
-    assert z.read("images/img-000.png") == b"pierbytes"
+    assert z.read("images/img-000.png") == _png()
     ch1 = z.read("text/chapter-001.xhtml").decode()
     assert 'src="../images/img-000.png"' in ch1
     assert "example.com" not in ch1 and "lost" in ch1  # remote image degraded to alt
@@ -190,9 +190,11 @@ def test_manifest_media_type_follows_the_bytes_not_the_stored_name(monkeypatch, 
     assert 'src="../images/img-000.jpg"' in z.read("text/chapter-001.xhtml").decode()
 
 
-def test_manifest_falls_back_to_the_stored_name_for_unrecognizable_bytes(monkeypatch, tmp_path):
-    """Bytes in no format we can name have no truth to substitute; the book
-    still packs, declaring the store's own guess rather than octet-stream."""
+def test_an_image_the_book_cannot_declare_is_left_out_of_it(monkeypatch, tmp_path):
+    """The book carries no image it cannot name (#321). Declaring the store's
+    guess, or `application/octet-stream`, is what epubcheck rejects -- and a
+    reader that refuses to render the image shows the same nothing, minus the
+    caption. The alt text stays, the file stays on disk, the book stays valid."""
     _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     docks = "the-docks"  # the fixture's one image-bearing location
@@ -200,11 +202,27 @@ def test_manifest_falls_back_to_the_stored_name_for_unrecognizable_bytes(monkeyp
     assets.put_image(croot, docks, "default", "pier", b"BM not really", "png", base="locations")
 
     z = _open(epub.build_epub(cid)[0])
+    assert [n for n in z.namelist() if n.startswith("images/")] == []
     opf = ET.fromstring(z.read("package.opf"))
-    item = next(i for i in opf.findall(".//opf:item", OPF_NS)
-                if i.get("href").startswith("images/"))
-    assert item.get("href") == "images/img-000.png"
-    assert item.get("media-type") == "image/png"
+    assert [i for i in opf.findall(".//opf:item", OPF_NS)
+            if i.get("href").startswith("images/")] == []
+    ch1 = z.read("text/chapter-001.xhtml").decode()
+    assert "<img" not in ch1 and "The docks" in ch1  # degraded to its alt text
+    assert assets.image_path(croot, docks, "default", "pier", base="locations") is not None
+
+
+def test_a_cover_the_book_cannot_declare_produces_the_no_cover_book(monkeypatch, tmp_path):
+    """Same rule for the cover, and it already has somewhere to land: the
+    degradation a cover that vanishes mid-export gets."""
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    covers.put_cover(cid, b"BM not really", "png")  # bypasses `covers.validate`, as a stray file does
+
+    z = _open(epub.build_epub(cid)[0])
+    assert "text/cover.xhtml" not in z.namelist()
+    assert not [n for n in z.namelist() if n.startswith("images/cover")]
+    opf = ET.fromstring(z.read("package.opf"))
+    assert not [i for i in opf.findall(".//opf:item", OPF_NS)
+                if i.get("properties") == "cover-image"]
 
 
 def test_cover_is_packed_under_the_extension_its_bytes_are(monkeypatch, tmp_path):
@@ -266,7 +284,7 @@ def test_chapter_and_appendix_include_inherited_world_location(monkeypatch, tmp_
 def test_appendix_actors_and_visited_locations(monkeypatch, tmp_path):
     _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
-    assets.put_image(croot, "seraphine", "default", assets.AVATAR, b"face", "png")
+    assets.put_image(croot, "seraphine", "default", assets.AVATAR, _png(), "png")
     blob, _ = epub.build_epub(cid)
     z = _open(blob)
     names = z.namelist()

@@ -8,6 +8,23 @@ import zipfile
 from grimoire.store import appearances, assets, campaigns, characters, chronicle, covers, entities, export, pcs, scenes, worlds
 
 
+def _img(fmt: str = "PNG", color=(10, 20, 30), size=(8, 8)) -> bytes:
+    """A real image.
+
+    Since #321 an export names each packed image from its own bytes and drops
+    one whose bytes name no format it can declare, so a fixture that stores a
+    marker string is not storing an image the book will carry.
+    """
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, fmt)
+    return buf.getvalue()
+
+
+def _jpeg(size=(8, 8)) -> bytes:
+    return _img("JPEG", (200, 40, 40), size)
+
+
 def _campaign(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Saltmarch")
@@ -19,7 +36,7 @@ def test_rewrite_images_maps_local_and_drops_remote(monkeypatch, tmp_path):
     wid, cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     docks = entities.create_entity(croot, "locations", "The Docks", body="piers")
-    assets.put_image(croot, docks, "default", "pier", b"pierbytes", "png", base="locations")
+    assets.put_image(croot, docks, "default", "pier", _img(), "png", base="locations")
     images = export.Images()
     text = (f"Look: ![The docks](/api/campaigns/{cid}/locations/{docks}/images/pier) "
             "and ![lost](https://example.com/x.png)")
@@ -36,7 +53,7 @@ def test_rewrite_images_world_fallback(monkeypatch, tmp_path):
     wid, cid = _campaign(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     # greeting images only ever live world-side
-    assets.put_image(wroot, "g1", "default", "vista", b"vistabytes", "jpg", base="greetings")
+    assets.put_image(wroot, "g1", "default", "vista", _jpeg(), "jpg", base="greetings")
     images = export.Images()
     out = export.rewrite_images(f"![v](/api/worlds/{wid}/greetings/g1/images/vista)", cid, images)
     assert "![v](images/img-000.jpg)" in out
@@ -51,7 +68,7 @@ def test_rewrite_images_honors_asset_tombstone(monkeypatch, tmp_path):
     wid = worlds.create_world("Saltmarch")
     wroot = worlds.world_root(wid)
     aid, _ = characters.create_character(wroot, "Seraphine")
-    assets.put_image(wroot, aid, "default", "avatar", b"worldbytes", "png")
+    assets.put_image(wroot, aid, "default", "avatar", _img(), "png")
     cid = campaigns.create_campaign("Run One", wid)
     # the campaign deletes the inherited avatar -> only a tombstone, no copy
     overlay.delete_image(cid, aid, "default", "avatar")
@@ -82,7 +99,7 @@ def _fixture_campaign(monkeypatch, tmp_path):
     croot = campaigns.campaign_root(cid)
     docks = entities.create_entity(croot, "locations", "The Docks", body="Salt-stained piers.")
     entities.create_entity(croot, "locations", "The Keep", body="Never visited.")
-    assets.put_image(croot, docks, "default", "pier", b"pierbytes", "png", base="locations")
+    assets.put_image(croot, docks, "default", "pier", _img(), "png", base="locations")
 
     sid1 = scenes.create_scene(cid, "Arrival")
     appearances.appear(cid, sid1, "pcs", "elara", "default", "player")
@@ -131,7 +148,7 @@ def test_build_markdown_bundle(monkeypatch, tmp_path):
     assert "index.md" in names
     assert "001-arrival.md" in names and "002-below.md" in names
     assert "images/img-000.png" in names
-    assert z.read("images/img-000.png") == b"pierbytes"
+    assert z.read("images/img-000.png") == _img()
     ch1 = z.read("001-arrival.md").decode()
     assert "**Seraphine:** \"Welcome,\" she says." in ch1
     assert "![The docks](images/img-000.png)" in ch1
@@ -154,13 +171,6 @@ def test_build_html_self_contained(monkeypatch, tmp_path):
     assert "example.com" not in html
 
 
-def _jpeg(size=(8, 8)) -> bytes:
-    from PIL import Image
-    buf = io.BytesIO()
-    Image.new("RGB", size, (200, 40, 40)).save(buf, "JPEG")
-    return buf.getvalue()
-
-
 def test_packed_name_comes_from_the_bytes_not_the_stored_suffix(monkeypatch, tmp_path):
     """A JPEG stored as `pier.png` -- which an upload could produce before #321
     and which stores already on disk still hold -- must pack under `.jpg`, so
@@ -177,17 +187,56 @@ def test_packed_name_comes_from_the_bytes_not_the_stored_suffix(monkeypatch, tmp
     assert list(images.by_path.values()) == ["img-000.jpg"]
 
 
-def test_packed_name_keeps_the_stored_suffix_when_the_bytes_say_nothing(monkeypatch, tmp_path):
-    """Bytes in no format we can name leave nothing to correct: the store's own
-    guess is the best available, and an export must still produce the image."""
+def test_an_image_whose_bytes_name_no_format_is_dropped_from_the_export(monkeypatch, tmp_path):
+    """Bytes in no format we can declare leave nothing to correct, so the book
+    does not carry them (#321): packing them under the store's own guess is
+    exactly the wrong media type that makes a book invalid. The image degrades
+    to its alt text, like a remote or missing one, and the file stays on disk.
+
+    `fetch.download_url` is what puts such a file there -- its last-resort
+    `ext = "png"` for bytes it cannot sniff -- so this is not a hypothetical
+    store, it is what downloading an AVIF avatar produces today.
+    """
     wid, cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     docks = entities.create_entity(croot, "locations", "The Docks", body="piers")
     assets.put_image(croot, docks, "default", "pier", b"BM not really", "png", base="locations")
 
     images = export.Images()
-    export.rewrite_images(f"![d](/api/campaigns/{cid}/locations/{docks}/images/pier)", cid, images)
-    assert list(images.by_path.values()) == ["img-000.png"]
+    out = export.rewrite_images(f"![the docks](/api/campaigns/{cid}/locations/{docks}/images/pier)",
+                                cid, images)
+    assert out == "the docks"          # alt text, no image reference
+    assert images.by_path == {}        # nothing to pack, nothing to declare
+    # still in the store: only the book declined it
+    assert assets.image_path(croot, docks, "default", "pier", base="locations") is not None
+
+
+def test_an_unreadable_image_is_dropped_rather_than_failing_the_export(monkeypatch, tmp_path):
+    """It used to register at collect and raise at zip time, taking the whole
+    export with it. A book missing one image beats no book."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    docks = entities.create_entity(croot, "locations", "The Docks", body="piers")
+    assets.put_image(croot, docks, "default", "pier", _img(), "png", base="locations")
+    p = assets.image_path(croot, docks, "default", "pier", base="locations")
+    p.unlink()
+    p.mkdir()  # a directory where the file was: open() raises, and it is not an image
+
+    images = export.Images()
+    out = export.rewrite_images(f"![d](/api/campaigns/{cid}/locations/{docks}/images/pier)",
+                                cid, images)
+    assert out == "d" and images.by_path == {}
+
+
+def test_a_portrait_that_cannot_be_named_leaves_the_actor_without_one(monkeypatch, tmp_path):
+    """The appendix already renders an actor with no avatar; an avatar the book
+    cannot declare has to reach that same path rather than a broken <img>."""
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(croot, "seraphine", "default", assets.AVATAR, b"BM not really", "png")
+
+    entry = next(e for e in export.collect(cid)["appendix"] if e["name"] == "Seraphine")
+    assert entry["portrait"] is None
 
 
 def test_build_html_data_uri_mime_follows_the_bytes(monkeypatch, tmp_path):

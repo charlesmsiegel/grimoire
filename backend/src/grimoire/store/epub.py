@@ -88,12 +88,17 @@ def build_epub(cid: str) -> tuple[bytes, str]:
     if data["cover"] is not None:
         try:
             cover_bytes = data["cover"].read_bytes()
-            # Named from the bytes like every other packed image (#321). An
-            # uploaded cover is already validated (`covers.validate`), so this
-            # only answers for one a sync client or a hand-edit dropped into
-            # the campaign's assets directory.
-            ext = _export.packed_ext(cover_bytes, data["cover"].name)
-            cover_name = f"cover.{ext}" if ext else "cover"
+            # Named from the bytes like every other packed image, and dropped on
+            # the same terms (#321): a cover we cannot declare would invalidate
+            # the book it is the first page of. An uploaded cover is already
+            # validated (`covers.validate`), so this only answers for one a sync
+            # client or a hand-edit dropped into the campaign's assets
+            # directory -- and a dropped one lands in the no-cover book below,
+            # the same degradation a cover that vanishes mid-export gets.
+            ext = _export.packed_ext(cover_bytes)
+            if ext is None:
+                raise OSError("cover is not an image we can declare")
+            cover_name = f"cover.{ext}"
         except OSError:
             cover_bytes, cover_name = None, ""
 
@@ -123,12 +128,14 @@ def build_epub(cid: str) -> tuple[bytes, str]:
                "properties": ""}
               for i, f in enumerate(fonts)]
     # The media type still comes from the packed name's suffix, and that is now
-    # honest: `export.packed_ext` names every packed image from its bytes, so a
-    # JPEG stored as `avatar.png` packs as `img-000.jpg` and is declared
+    # honest: every packed image is named from its own bytes (`export.Images`),
+    # so a JPEG stored as `avatar.png` packs as `img-000.jpg` and is declared
     # `image/jpeg` (#321). That holds for stores already on disk, which is the
     # half upload validation cannot reach -- nothing in the store is renamed.
-    # A file whose bytes sniff as nothing keeps its stored suffix and is
-    # declared from that, the best guess available for bytes with no answer.
+    # An image whose bytes name no format we can declare never reached this
+    # registry: it was dropped to its alt text at collect, so the
+    # `application/octet-stream` default below is unreachable, and every
+    # manifest entry names a core EPUB image type.
     items += [{"id": f"img-{i}", "href": f"images/{name}",
                "media_type": _EXT_MEDIA.get(name.rsplit(".", 1)[-1], "application/octet-stream"),
                "properties": ""}
