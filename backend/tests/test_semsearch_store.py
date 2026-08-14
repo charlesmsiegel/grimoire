@@ -329,3 +329,18 @@ def test_the_tail_of_a_long_transcript_is_searchable_not_silently_dropped(world,
     out = run("brine", rounds=2, scope="campaign")
     assert [h["kind"] for h in out["hits"] if h["kind"] == "scenes"] == ["scenes"]
     assert out["indexed"] == out["corpus"]
+
+
+def test_a_snippet_from_inside_a_record_says_it_is_from_inside(world, provider):
+    """A passage from post 40 rendered exactly like a passage from post 1, so
+    every semantic hit read as the opening of the record it came from."""
+    wid, _ = world
+    configure()
+    cid = campaigns.create_campaign("The Long Run", wid)
+    sid = scenes.create_scene(cid, "A long night")
+    scenes.append_message(cid, sid, "user", "gravel " * 400)
+    scenes.append_message(cid, sid, "assistant", "brine at the end")
+    provider.rules = [("brine", NEAR), ("gravel", MID)]
+    out = run("brine", rounds=3, scope="campaign")
+    hit = next(h for h in out["hits"] if h["kind"] == "scenes")
+    assert hit["snippet"].startswith("…")

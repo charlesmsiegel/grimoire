@@ -207,6 +207,12 @@ export default function SearchView() {
     return () => window.clearTimeout(timer);
   }, [draft, q, mode, setQuery]);
 
+  // A mode change drops what the other mode answered, rather than leaving it
+  // on screen under the new mode's active row. The other filters resolve
+  // within a debounce; a semantic query can take a round trip and a warm run,
+  // which is long enough for one ranking to read as the other's answer.
+  useEffect(() => { setResult(null); }, [mode]);
+
   useEffect(() => {
     if (!q.trim()) { setResult(null); setFailed(false); return; }
     // Superseded responses are dropped rather than raced: a slow sweep for

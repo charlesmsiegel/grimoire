@@ -347,8 +347,11 @@ def search_semantic(q: str, *, scope: str = "", root: str = "",
                         # Framed with no terms, so the window is the head of the
                         # passage that matched -- which is the evidence a
                         # semantic hit has to offer, there being no term in it
-                        # to point at.
-                        "snippet": search.snippet(rec["chunks"][index], "", [])})
+                        # to point at. Ellipsed at the front when that passage
+                        # is not the record's first: without it, a hit on post
+                        # 40 of a transcript reads as the scene's opening line.
+                        "snippet": ("…" if index else "")
+                                   + search.snippet(rec["chunks"][index], "", [])})
 
     return {"q": q, "terms": [], **search.summarize(matched, kinds, limit),
             "indexed": indexed, "corpus": len(counted)}
