@@ -161,10 +161,12 @@ first if you think one should be skipped.
 - Several architecture rules are enforced by tests that parse the package's own
   ASTs: `test_atomic_guard.py` (every store write goes through `store.atomic`),
   `test_overlay_guard.py`, `test_pydantic_guard.py` (v1/v2-agnostic pydantic),
-  `test_paths_guard.py` (filesystem access goes through the resolvers) and
-  `test_lock_domain_guard.py` (below). Clear a genuinely-safe call with
+  `test_paths_guard.py` (filesystem access goes through the resolvers),
+  `test_lock_order_guard.py` (only `locks.hold_all` holds more than one campaign
+  lock) and `test_lock_domain_guard.py` (below). Clear a genuinely-safe call with
   `# atomic-ok: <reason>` / `# overlay-ok: <reason>` / `# pydantic-ok: <reason>`
-  / `# paths-ok: <reason>` / `# lock-domain-ok: <reason>` — a marker with no
+  / `# paths-ok: <reason>` / `# lock-order-ok: <reason>` /
+  `# lock-domain-ok: <reason>` — a marker with no
   reason fails, deliberately, and each guard caps how many exist.
 - **Adding a module that mutates campaign-scoped state?** Classify it in
   `store/locks.py`, or `test_lock_domain_guard.py` fails naming your module. The
@@ -177,6 +179,12 @@ first if you think one should be skipped.
   are the artifact this protects: they cannot be regenerated, and `store/scenes`
   serializes its whole mutator surface through `@_serialized` to keep two
   concurrent read-modify-writes from losing one.
+- **Needing more than one campaign lock at a time?** There is exactly one way:
+  `locks.hold_all(cids)`, which sorts, and `test_lock_order_guard.py` fails any
+  other function whose shape can hold two (an acquisition on an `ExitStack`, one
+  carried around a loop, two nested for different campaigns). Two holders once
+  acquired every campaign lock in *different* orders — one by recency, one by id
+  — and two concurrent requests wedged permanently (#267).
 - **Imports in `backend/src/grimoire/` are all at module scope and the module
   graph is acyclic**, enforced by `backend/tests/test_import_guard.py`. Inside
   `store/`, a cross-package import binds a *submodule* and keeps it as a module

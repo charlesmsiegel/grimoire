@@ -364,6 +364,14 @@ def test_module_edit_holds_every_campaign_lock_from_this_registry():
 # while put_world_module sorts by cid. The inversion was live (#267); hold_all
 # is what closes it, not a guarantee bolted onto an existing agreement.
 #
+# These are per-holder and behavioural: they prove the two holders that exist
+# ask for their locks in sorted order. What they cannot do is say anything about
+# a holder nobody has written yet, which is the half of #267 that
+# `test_lock_order_guard.py` covers -- it fails any function outside `hold_all`
+# whose *shape* can hold two campaign locks. The two are complementary, not
+# redundant: a source guard cannot see through an alias, and these cannot see a
+# holder that does not exist yet.
+#
 # That mistake is also why the order tests below stamp `updated`. Campaigns
 # created back-to-back share one `updated` second, and a stable sort on equal
 # keys leaves them in iterdir order -- which IS cid order. Assert against that
