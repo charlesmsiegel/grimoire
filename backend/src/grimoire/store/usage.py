@@ -42,6 +42,12 @@ Pricing has two sources, and the difference between them is the point:
   "unknown"; ``unpriced_calls`` is what makes that visible in a rollup rather
   than quietly understating the total.
 
+The token counts follow the same absent-not-zero rule, so a row never claims a
+call used no tokens when nobody counted them. A bucket's token total is
+therefore a floor whenever ``unpriced_calls`` is non-zero — with these adapters
+a usage block is all-or-nothing, so the calls that report no price are the same
+ones that report no counts.
+
 Retention is deliberately none. A row is ~250 bytes, so a year of heavy play is
 single-digit megabytes, and the month files are trivially deletable by hand —
 which is a better answer than a pruner that silently destroys the history
@@ -131,7 +137,7 @@ def month_path(ts: str) -> Path:
 
 def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = "",
            model: str = "", connection: str = "", provider: str = "",
-           prompt_tokens: int = 0, completion_tokens: int = 0,
+           prompt_tokens: int | None = None, completion_tokens: int | None = None,
            cost_usd: float | None = None, cost_basis: str = "",
            duration_ms: int = 0, status: str = "ok", error: str = "",
            attempts: int = 1, ts: str | None = None) -> dict | None:
@@ -159,8 +165,17 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
                        ("connection", connection), ("provider", provider)):
         if value:
             row[key] = value
-    row["prompt_tokens"] = int(prompt_tokens or 0)
-    row["completion_tokens"] = int(completion_tokens or 0)
+    # Absent, not zero, when the provider counted nothing -- the same rule the
+    # price gets a few lines down, and for the same reason. A row saying zero
+    # tokens is a row saying the call used none, which is a claim no
+    # `openai_compatible` endpoint has made; `0` stays available for the empty
+    # reply that genuinely completed none. A rollup adds an absent count as
+    # zero either way, so what this buys is a file that can still be re-read
+    # honestly later.
+    for key, count in (("prompt_tokens", prompt_tokens),
+                       ("completion_tokens", completion_tokens)):
+        if count is not None:
+            row[key] = int(count)
     if cost_usd is not None:
         row["cost_usd"] = float(cost_usd)
         row["cost_basis"] = cost_basis or "billed"
@@ -253,8 +268,8 @@ class Meter:
             model=self.usage.get("model") or self.model,
             connection=self.usage.get("connection", ""),
             provider=self.usage.get("provider", ""),
-            prompt_tokens=self.usage.get("prompt_tokens", 0),
-            completion_tokens=self.usage.get("completion_tokens", 0),
+            prompt_tokens=self.usage.get("prompt_tokens"),
+            completion_tokens=self.usage.get("completion_tokens"),
             cost_usd=cost, cost_basis=self.usage.get("cost_basis", ""),
             duration_ms=int((time.monotonic() - self._t0) * 1000),
             status=status, error=error, attempts=self.usage.get("attempts", 1))
