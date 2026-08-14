@@ -90,10 +90,20 @@ SCENARIO_CARD = {"data": {
     "creator_notes": "Play it slow.",
     "mes_example": "<START>\n**Mara:** The gate stays shut.",
     "first_mes": "Mara is waiting at the tide-gate.",
-    "alternate_greetings": ["The square is empty.",
-                            "![](data:image/png;base64,AAAA)\n\nWinifred counts the stalls."],
+    "alternate_greetings": [
+        "The square is empty.",
+        "![](data:image/png;base64,AAAA)\n\nWinifred counts the stalls.",
+        # Past GREETING_PROMPT_CHARS, so the clip is exercised rather than
+        # asserted about: every body in this fixture used to be short enough
+        # that `_clip` was the identity, and a harness that only ever takes the
+        # no-op branch proves nothing about the branch that moves.
+        "Winifred opens the ledger. " + "The tide came in. " * 120,
+    ],
     "character_book": {"entries": [
         {"keys": ["gate"], "name": "The Tide-Gate", "content": "Iron and barnacle.",
+         "enabled": True},
+        {"keys": ["ledger"], "name": "The Ledger",   # ...and past ENTRY_PROMPT_CHARS
+         "content": "Six stalls and a scale. " + "It lists every crossing. " * 60,
          "enabled": True}]},
 }}
 for label, scard in (("full", SCENARIO_CARD), ("bare", {"data": {"name": "Saltmarch"}})):
@@ -101,12 +111,19 @@ for label, scard in (("full", SCENARIO_CARD), ("bare", {"data": {"name": "Saltma
     check(f"scenario system ({label})", exp[0]["content"], render("scenario/system.j2"))
     check(f"scenario user ({label})", exp[1]["content"],
           render("scenario/user.j2", card=scard["data"], fields=scenario.PROMPT_FIELDS,
-                 entries=scenario.lorebook_entries(scard),
+                 entries=scenario.prompt_entries(scard),
                  greetings=scenario.prompt_greetings(scard)))
-assert "Existing entries:" in scenario.build_prompt(SCENARIO_CARD)[1]["content"], \
+scenario_user = scenario.build_prompt(SCENARIO_CARD)[1]["content"]
+assert "Existing entries:" in scenario_user, \
     "scenario user no longer lists the card's own world-info -- the model cannot re-file it"
-assert "base64" not in scenario.build_prompt(SCENARIO_CARD)[1]["content"], \
+assert "base64" not in scenario_user, \
     "scenario user is carrying an opener's embedded image into the prompt"
+# The two clipped bodies really were clipped, so the comparison above covered
+# the clipping helper rather than a fixture that happened to fit.
+assert scenario_user.count(" …") == 2, \
+    f"the scenario fixture no longer exercises _clip (found {scenario_user.count(' …')} clips)"
+assert len(scenario_user) < 4000, \
+    "scenario user is unbounded again -- a big card would blow the context window"
 
 transcript = "**You:** Where is it?\n\n**Seraphine Vale:** Gone."
 for prior in ("", "She ran the dock and owed the Guild."):

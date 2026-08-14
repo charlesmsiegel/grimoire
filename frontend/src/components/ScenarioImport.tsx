@@ -77,14 +77,59 @@ export function ScenarioImport({ wid, onImported }: { wid: string; onImported?: 
   };
   const parseUrl = () => (url.trim() ? run(() => api.scenarioParseUrl(wid, url.trim())) : undefined);
 
+  /** Edit one proposed character — and, when the edit is a RENAME, carry it
+   *  through every opener that named them.
+   *
+   *  The openers reference the cast by name, because none of them have ids yet.
+   *  A rename that stops at this table leaves them pointing at somebody who
+   *  will never be created, and the backend drops an unresolvable name rather
+   *  than writing a dangling id — so the opener would arrive with no cast at
+   *  all, silently. Renaming a hallucinated or misspelled cast member is one of
+   *  the two things this review screen exists for, so it cannot be the edit
+   *  that quietly breaks the openers. */
   function patchCharacter(i: number, patch: Partial<ScenarioCharacterDraft>) {
-    setProposal((p) => p && { ...p, characters: p.characters.map((c, j) => (j === i ? { ...c, ...patch } : c)) });
+    setProposal((p) => {
+      if (!p) return p;
+      const before = p.characters[i].name;
+      const after = patch.name;
+      const characters = p.characters.map((c, j) => (j === i ? { ...c, ...patch } : c));
+      if (after === undefined || after === before) return { ...p, characters };
+      const rename = (n: string) => (n === before ? after : n);
+      return {
+        ...p,
+        characters,
+        greetings: p.greetings.map((g) => ({
+          ...g, character: rename(g.character), present: g.present.map(rename),
+        })),
+      };
+    });
   }
   function patchEntry(i: number, patch: Partial<LoreEntryDraft>) {
     setProposal((p) => p && { ...p, entries: p.entries.map((e, j) => (j === i ? { ...e, ...patch } : e)) });
   }
   function patchGreeting(i: number, patch: Partial<ScenarioGreetingDraft>) {
     setProposal((p) => p && { ...p, greetings: p.greetings.map((g, j) => (j === i ? { ...g, ...patch } : g)) });
+  }
+
+  /** Point an opener at a different cast member, keeping the rest of the scene.
+   *
+   *  `present` is the whole cast at the opener, not a restatement of who leads
+   *  it: replacing it with `[picked]` would write everyone else out of a scene
+   *  the extraction found them in, for the cost of one click on the wrong row.
+   *  The picked name leads, matching what `scenario.apply` does with the two
+   *  fields on the way in. */
+  function repoint(i: number, picked: string) {
+    setProposal((p) => p && {
+      ...p,
+      greetings: p.greetings.map((g, j) => {
+        if (j !== i) return g;
+        // Only the picked name is lifted out — the previous lead stays in the
+        // scene, because who LEADS an opener and who is IN it are different
+        // questions and only the first one was just answered.
+        const rest = g.present.filter((n) => n !== picked);
+        return { ...g, character: picked, present: picked ? [picked, ...rest] : rest };
+      }),
+    });
   }
   function toggle(section: keyof Kept, i: number) {
     setKept((k) => k && { ...k, [section]: k[section].map((on, j) => (j === i ? !on : on)) });
@@ -116,7 +161,14 @@ export function ScenarioImport({ wid, onImported }: { wid: string; onImported?: 
     ? kept.characters.filter(Boolean).length + kept.entries.filter(Boolean).length
       + kept.greetings.filter(Boolean).length
     : 0;
+  // Every proposed name is offered, kept or not, so unchecking a character and
+  // changing your mind restores the openers that named them rather than leaving
+  // a picker whose current value has vanished from its own option list. Which of
+  // them will actually exist is `keptNames`, and the openers say so.
   const castNames = proposal ? proposal.characters.map((c) => c.name).filter(Boolean) : [];
+  const keptNames = proposal && kept
+    ? proposal.characters.filter((c, i) => kept.characters[i]).map((c) => c.name)
+    : [];
 
   return (
     <div>
@@ -239,10 +291,17 @@ export function ScenarioImport({ wid, onImported }: { wid: string; onImported?: 
                       {/* Cast NAMES, not ids — nothing has been created yet. Renaming a
                           character above moves every opener that names them. */}
                       <select aria-label={`greeting character ${i}`} value={g.character}
-                              onChange={(e) => patchGreeting(i, { character: e.target.value, present: e.target.value ? [e.target.value] : [] })}>
+                              onChange={(e) => repoint(i, e.target.value)}>
                         <option value="">(nobody)</option>
                         {castNames.map((n) => <option key={n} value={n}>{n}</option>)}
                       </select>
+                      {/* The backend drops a name no character answers to, which is the
+                          right write and the wrong silence: an opener whose lead is not
+                          being imported would arrive with no cast and nothing said. */}
+                      {g.character && !keptNames.includes(g.character) && (
+                        <div className="field-hint">{g.character} is not being imported — this
+                          opener will have no cast.</div>
+                      )}
                     </td>
                     <td>{g.body.length > 80 ? g.body.slice(0, 80) + "…" : g.body}</td>
                   </tr>

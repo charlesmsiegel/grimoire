@@ -88,6 +88,44 @@ def test_the_openers_reach_the_prompt_without_their_art():
     assert "base64" not in text and "AAAA" not in text
 
 
+def test_the_prompt_bounds_what_one_entry_or_opener_can_cost():
+    """The cards this exists for are the big ones — a whole setting, dozens of
+    world-info entries, a dozen illustrated openers. Bodies are the dominant
+    term and the model needs none of them whole: an entry it re-files by name,
+    and an opener it reads for who is in it. So each is clipped, visibly."""
+    card = {"data": {
+        "name": "Saltmarch",
+        "first_mes": "Mara waits. " + "x" * 20_000,
+        "character_book": {"entries": [
+            {"keys": [], "name": "Long", "content": "The gate. " + "y" * 20_000,
+             "enabled": True}]},
+    }}
+    text = scenario.build_prompt(card)[1]["content"]
+    assert len(text) < 5_000
+    assert "Mara waits." in text and "The gate." in text     # the head of each survives
+    assert "…" in text                                        # ...and says it was clipped
+    # The clip is the PROMPT's, never the import's: what gets written is the
+    # card's own text, whole.
+    assert len(scenario.proposal(card, {"characters": [], "entries": []})
+               ["greetings"][0]["body"]) > 20_000
+    assert len(scenario.proposal(card, {"characters": [], "entries": []})
+               ["entries"][0]["body"]) > 20_000
+
+
+def test_a_proposal_never_offers_a_cast_name_its_openers_cannot_match():
+    """The two halves of a proposal reference each other by name, so the names
+    have to be spelled one way. A cast row saying " Mara " while its opener says
+    "Mara" is a picker whose value is not in its own option list."""
+    prop = scenario.proposal(CARD, {"characters": [
+        {"name": "  Mara  ", "description": "d", "personality": "p"},
+        {"name": "   ", "description": "", "personality": ""},
+    ], "entries": []})
+    assert [c["name"] for c in prop["characters"]] == ["Mara"]   # blank row dropped
+    assert prop["greetings"][0]["character"] == "Mara"
+    for g in prop["greetings"]:
+        assert g["character"] in {"", *[c["name"] for c in prop["characters"]]}
+
+
 def test_strip_images_drops_every_reference_shape_localize_knows():
     body = ('![a](https://example.com/one.png) prose '
             '<img src="https://example.com/two.png"> more '
