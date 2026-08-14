@@ -14,6 +14,7 @@ import CampaignWizard from "./routes/CampaignWizard";
 import CampaignView from "./routes/CampaignView";
 import LedgerView from "./routes/LedgerView";
 import LibraryView from "./routes/LibraryView";
+import SearchView from "./routes/SearchView";
 import WorldsView from "./routes/WorldsView";
 import WorldView from "./routes/WorldView";
 import ModulesView from "./routes/ModulesView";
@@ -93,6 +94,9 @@ function Shell(
             show do not fit in a panel wedged above the scene. */}
         <Route path="/campaigns/:cid/ledger" element={<LedgerView />} />
         <Route path="/library" element={<LibraryView />} />
+        {/* Search keeps its query in the URL, so a result page is a link and
+            the back button returns to it after following a hit. */}
+        <Route path="/search" element={<SearchView />} />
         <Route path="/worlds" element={<WorldsView />} />
         <Route path="/worlds/:wid" element={<WorldView />} />
         <Route path="/modules" element={<ModulesView />} />

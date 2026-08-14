@@ -281,3 +281,14 @@ def test_a_v1_card_without_a_data_block_is_read_flat(world):
     (root / "characters" / cid / "old.json").write_text(
         json.dumps({"name": "Seraphine", "description": "The drowned keeper."}), encoding="utf-8")
     assert [h["sub"] for h in search.search("drowned keeper")["hits"]] == ["old"]
+
+
+def test_a_snippet_quotes_the_prose_not_the_frontmatter(world):
+    """A record's frontmatter is searchable, but a snippet from a short record
+    would otherwise run straight off the end of the body and into its key
+    list — quoting machinery back at the reader as if it were writing."""
+    _, root = world
+    entities.create_entity(root, "lore", "The Salt Pact", body="Owed to the sea.", keys="brine")
+    assert search.search("owed")["hits"][0]["snippet"] == "Owed to the sea."
+    # A metadata-only match still snippets from where its match actually is.
+    assert "brine" in search.search("brine")["hits"][0]["snippet"]
