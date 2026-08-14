@@ -147,8 +147,9 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
     **Never raises.** This runs on the generating path, inside the SSE
     finalizers, and a bookkeeping row that can fail a turn is a worse bug than
     the one it exists to diagnose — the judgement ``prompt_log.record`` already
-    makes, for the same reason. A full disk, a read-only store or a home that
-    cannot be created costs the row and nothing else.
+    makes, for the same reason. A full disk, a read-only store, a home that
+    cannot be created, or a field holding something that will not serialize:
+    each costs the row and nothing else.
 
     Takes no lock, unlike every other writer here. There is nothing to
     serialize: the write is a single ``O_APPEND`` line (see
@@ -157,45 +158,60 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
     both stall a turn and exclude the calls that have no campaign to lock.
     """
     ts = ts or _now()
-    row = {"ts": ts, "kind": kind, "task": task}
-    # Optional identity fields are omitted rather than written empty: a tagline
-    # has no campaign and no scene, and `"campaign": ""` in the file reads as a
-    # campaign whose id is the empty string.
-    for key, value in (("campaign", campaign), ("scene", scene), ("model", model),
-                       ("connection", connection), ("provider", provider)):
-        if value:
-            row[key] = value
-    # Absent, not zero, when the provider counted nothing -- the same rule the
-    # price gets a few lines down, and for the same reason. A row saying zero
-    # tokens is a row saying the call used none, which is a claim no
-    # `openai_compatible` endpoint has made; `0` stays available for the empty
-    # reply that genuinely completed none. A rollup adds an absent count as
-    # zero either way, so what this buys is a file that can still be re-read
-    # honestly later.
-    for key, count in (("prompt_tokens", prompt_tokens),
-                       ("completion_tokens", completion_tokens)):
-        if count is not None:
-            row[key] = int(count)
-    if cost_usd is not None:
-        row["cost_usd"] = float(cost_usd)
-        row["cost_basis"] = cost_basis or "billed"
-    row["duration_ms"] = int(duration_ms or 0)
-    row["status"] = status
-    if error:
-        row["error"] = error
-    if attempts and attempts != 1:
-        row["attempts"] = int(attempts)
+    # The WHOLE body is inside the guard, the row's construction included. The
+    # coercions can raise exactly as the write can -- `int()` on a value that is
+    # not a number is a ValueError -- and this function's contract is that
+    # nothing it does can fail the turn it is accounting for. Building the row
+    # above the `try` left precisely that hole.
     try:
+        row = {"ts": ts, "kind": kind, "task": task}
+        # Optional identity fields are omitted rather than written empty: a
+        # tagline has no campaign and no scene, and `"campaign": ""` in the file
+        # reads as a campaign whose id is the empty string.
+        for key, value in (("campaign", campaign), ("scene", scene), ("model", model),
+                           ("connection", connection), ("provider", provider)):
+            if value:
+                row[key] = value
+        # Absent, not zero, when the provider counted nothing -- the same rule
+        # the price gets below, and for the same reason. A row saying zero
+        # tokens is a row saying the call used none, which is a claim no
+        # `openai_compatible` endpoint has made; `0` stays available for the
+        # empty reply that genuinely completed none. A rollup adds an absent
+        # count as zero either way, so what this buys is a file that can still
+        # be re-read honestly later.
+        for key, count in (("prompt_tokens", prompt_tokens),
+                           ("completion_tokens", completion_tokens)):
+            if count is not None:
+                row[key] = int(count)
+        if cost_usd is not None:
+            # The literal rather than `llm_usage.BILLED`: the store does not
+            # import the gateway (#239), and one default spelled in two modules
+            # is a cheaper price than that rule.
+            row["cost_usd"] = float(cost_usd)
+            row["cost_basis"] = cost_basis or "billed"
+        row["duration_ms"] = int(duration_ms or 0)
+        row["status"] = status
+        if error:
+            row["error"] = error
+        if attempts and attempts != 1:
+            row["attempts"] = int(attempts)
         path = month_path(ts)
         path.parent.mkdir(parents=True, exist_ok=True)
-        atomic.append_line(path, json.dumps(row))
-    except (OSError, ValueError):
-        # ValueError as well as OSError: a value that will not serialize
-        # (a stray object in `model`, an infinite float from a malformed
-        # provider reply) raises from `json.dumps` rather than from the write,
-        # and must not escape either.
+        # `allow_nan=False` is the load-bearing argument. The default writes an
+        # infinite float as the bare token `Infinity` and reads it back happily,
+        # so a Python-only round trip never notices -- while every other JSON
+        # reader rejects the line, and a ledger nothing else can parse is not a
+        # ledger. Refusing at the encoder costs one row instead of a month.
+        atomic.append_line(path, json.dumps(row, allow_nan=False))
+        return row
+    except (OSError, TypeError, ValueError):
+        # All three, and each is a real escape from a function whose whole
+        # contract is that it cannot fail a turn. OSError is the write. A field
+        # holding something unserializable -- an object where a model name
+        # belongs -- raises TypeError from `json.dumps`, not ValueError, which
+        # is the sort of thing only a test finds. ValueError covers `allow_nan`
+        # and every `int()`/`float()` above it.
         return None
-    return row
 
 
 class Meter:

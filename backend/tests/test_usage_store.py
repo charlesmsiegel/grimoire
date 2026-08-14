@@ -341,3 +341,29 @@ def test_a_provider_that_counted_exactly_zero_is_recorded_as_zero(home):
 
     row, = _rows(home)
     assert row["completion_tokens"] == 0
+
+
+def test_a_row_is_never_written_as_a_json_no_other_reader_can_parse(home):
+    """`json.dumps` writes `Infinity` for an infinite float and reads it back
+    happily, so a Python-only round trip hides it -- and every other JSON reader
+    in the world rejects the line. The row is dropped instead."""
+    assert usage.record(task="chat", model="realm/opus", cost_usd=float("inf"),
+                        ts="2026-08-14T10:00:00Z") is None
+    assert usage.record(task="chat", model="realm/opus", cost_usd=float("nan"),
+                        ts="2026-08-14T10:00:00Z") is None
+    assert _rows(home) == []
+
+
+def test_a_value_that_will_not_serialize_costs_the_row_and_nothing_else(home):
+    assert usage.record(task="chat", model=object()) is None
+
+
+def test_no_field_can_turn_a_bookkeeping_call_into_a_failed_turn(home):
+    """`record` runs inside the SSE finalizers, so "never raises" has to hold
+    for the coercions as well as the write -- the row is built inside the same
+    guard for that reason."""
+    for bad in ({"prompt_tokens": "many"}, {"duration_ms": "ages"},
+                {"cost_usd": "free"}, {"attempts": "twice"},
+                {"completion_tokens": []}):
+        assert usage.record(task="chat", model="realm/opus", **bad) is None, bad
+    assert _rows(home) == []
