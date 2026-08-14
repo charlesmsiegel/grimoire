@@ -67,9 +67,13 @@ SCAN_LIMIT_DAYS = 400
 #: that hits sets `truncated`, so a trimmed list never reads as a complete one.
 MAX_ROWS = 60
 
-#: How many advances the log keeps. It is a convenience record, not a
-#: transcript — the durable history of when scenes happened lives in each
-#: scene's `time_history` and in the chronicle, neither of which this trims.
+#: How many advances the log keeps; past it the oldest row is dropped. Say what
+#: that costs rather than implying it is free: the *dates* time moved through
+#: survive in each scene's `time_history` and in the chronicle, but a dropped
+#: row's **reason** is recorded nowhere else and is simply gone. The cap exists
+#: because `POST /advance` is a public endpoint and nothing else bounds the
+#: file, which `now()` re-parses on every scene date pre-fill and every
+#: suggestion snapshot. 500 rows is far past any campaign's real use.
 LOG_LIMIT = 500
 
 
@@ -117,16 +121,16 @@ def _row(entry: dict) -> dict:
             for k in ("from", "to", "reason", "at")}
 
 
-def now(cid: str) -> str:
-    """The campaign's current moment: the clock, else where the story left off.
+def _seed(cid: str, fallback: str | None) -> str:
+    """Where the story left off, for a campaign whose clock was never set.
 
-    The chronicle fallback is what makes this safe to adopt everywhere at once
-    — a campaign that has never advanced its clock answers exactly what its
-    callers computed for themselves before.
+    The caller's datum when it has one, else the latest chronicle date. This
+    fallback is what makes the clock safe to adopt everywhere at once — an
+    unclocked campaign answers exactly what its callers computed for themselves
+    before there was a clock.
     """
-    stored = read(cid)["now"]
-    if stored:
-        return stored
+    if fallback is not None:
+        return fallback
     try:
         recent = chronicle.recent(cid, 1)
     except Exception:  # noqa: BLE001 — garbled chronicle.json: no date, not a crash
@@ -135,6 +139,29 @@ def now(cid: str) -> str:
         return ""
     date = recent[-1].get("date", "")
     return date if isinstance(date, str) else ""
+
+
+def now(cid: str, fallback: str | None = None) -> str:
+    """The campaign's current moment: the clock, else where the story left off.
+
+    `fallback` is for the caller that has *already* read the chronicle for its own
+    reasons (`suggest.build_snapshot` reads the last three records): pass the
+    latest record's date and this uses it instead of parsing chronicle.json a
+    second time in the same call. The precedence stays defined here — the caller
+    supplies the datum, not the rule.
+    """
+    return read(cid)["now"] or _seed(cid, fallback)
+
+
+def state(cid: str, fallback: str | None = None) -> dict:
+    """`{"now": <resolved>, "log": [...]}` — one read of clock.json for both.
+
+    What the panel wants in one call: `now`'s precedence applied, and the log
+    beside it. `now(cid)` plus `read(cid)["log"]` is the same answer from two
+    parses of one file.
+    """
+    stored = read(cid)
+    return {"now": stored["now"] or _seed(cid, fallback), "log": stored["log"]}
 
 
 def _write(cid: str, data: dict) -> None:
@@ -163,7 +190,7 @@ def _commit(cid: str, target: str, entry: dict) -> None:
 
 
 def _provider(cid: str):
-    provider = birthdays.provider_for(cid)
+    provider = calendars.primary_provider(campaigns_paths.campaign_root(cid))
     if provider is None:
         raise ClockError("this campaign's calendar cannot be loaded")
     return provider
@@ -178,9 +205,31 @@ def _stamp(provider, native: str) -> tuple[int, int]:
     return calendars.fixed_of(provider, native), calendars.minutes_of(native) or 0
 
 
+def _current(provider, cid: str) -> str:
+    """The moment being left, in canonical form where the provider can give one.
+
+    Canonicalized rather than taken as stored, because `now` may be a *seed*: a
+    chronicle date is whatever the absorb wrote, and a calendar that canonicalizes
+    its own notation (Hebrew capitalizes the month) would otherwise make a
+    re-advance to the same day look like a move — logging a row whose `from` and
+    `to` are one date spelled two ways, and returning `moved: True` for a clock
+    that did not budge.
+
+    A moment this calendar cannot read at all is returned unchanged: it is still
+    the moment being left, and the digest already reports no span for it.
+    """
+    stored = now(cid)
+    if not stored:
+        return ""
+    try:
+        return calendars.normalize(provider, stored)
+    except calendars.CalendarError:
+        return stored
+
+
 def _resolve(provider, cid: str, to: str | None, days: int | None) -> tuple[str, str]:
     """(moment being left, canonical target). Raises ClockError / CalendarError."""
-    start = now(cid)
+    start = _current(provider, cid)
     if to is not None and str(to).strip():
         return start, calendars.normalize(provider, str(to).strip())
     if days is None:
@@ -229,27 +278,48 @@ def _holidays(cid: str, primary, lo_fixed: int, hi_fixed: int) -> list[dict]:
 
     Half-open at the start for the same reason as `birthdays.crossed`: the day
     being left has already been lived through.
+
+    `in_days` counts from `lo_fixed` — the *earlier* end of the span, which for a
+    forward advance is the moment being left ("Christmas, one day in") and for a
+    backward one is the moment being returned to. Stated because the two are not
+    the same thing and the field would otherwise invite the forward reading in
+    both cases.
     """
     seen: set[tuple[str, int]] = set()
     out: list[dict] = []
     for provider in _configured(cid, primary):
         try:
-            found = provider.holidays(lo_fixed + 1, hi_fixed)
+            # `list(... or [])` inside the try, not just the call: a plugin whose
+            # `holidays` returns None, or a generator that raises partway through
+            # the range, both fail at iteration rather than at the call, and
+            # neither should be a 500.
+            found = list(provider.holidays(lo_fixed + 1, hi_fixed) or [])
         except Exception:  # noqa: BLE001 — a provider (or a plugin) that cannot answer a range
             continue
         for h in found:
-            key = (h.get("name", ""), h.get("fixed", 0))
-            if key in seen:
-                continue
-            seen.add(key)
+            # Both fields are validated rather than trusted, because a provider
+            # may be a user-authored plugin: a non-integer `fixed` would reach
+            # `describe` and raise a TypeError this module has no business
+            # turning into a 500, and a non-string `name` would reach React,
+            # which refuses an object as a child and blanks the panel that was
+            # about to show it (the `plot._field` failure).
             try:
-                described = primary.describe(h["fixed"])
-                native = primary.format(h["fixed"])
-            except (calendars.CalendarError, KeyError, ValueError):
+                fixed = int(h["fixed"])
+            except (KeyError, TypeError, ValueError):
                 continue
-            out.append({"name": h.get("name", ""), "native": native,
+            name = h.get("name", "")
+            name = name if isinstance(name, str) else ""
+            if (name, fixed) in seen:
+                continue
+            seen.add((name, fixed))
+            try:
+                described = primary.describe(fixed)
+                native = primary.format(fixed)
+            except (calendars.CalendarError, KeyError, TypeError, ValueError):
+                continue
+            out.append({"name": name, "native": native,
                         "friendly": described["friendly"],
-                        "in_days": h["fixed"] - lo_fixed})
+                        "in_days": fixed - lo_fixed})
     out.sort(key=lambda h: (h["in_days"], h["name"]))
     return out
 
@@ -264,6 +334,16 @@ def digest(cid: str, provider, from_native: str, to_native: str) -> dict:
     is more useful than refusing it. The crossings are computed over the span
     actually traversed in either direction, so a backward move reports the
     holidays and birthdays it just un-lived rather than silently nothing.
+
+    Days, not minutes: a move between two moments of the same day reports
+    `elapsed_days: 0` and crosses nothing, which is what day precision means
+    (#105 owns finer granularity). The clock still moves — `advance` returns
+    `moved: True` — because the moment did change.
+
+    No weather here, though `weather.sweep`'s own docstring says it exists to
+    name transitions "for the digest": that sweep is scoped to the locations one
+    *scene* has visited, and a campaign-level advance is in no scene. The scene
+    datetime route still reports it, which is the only place the scope exists.
     """
     to_fixed = calendars.fixed_of(provider, to_native)
     to_friendly = provider.describe(to_fixed)["friendly"]
@@ -350,14 +430,20 @@ def observe(cid: str, native: str, reason: str) -> dict:
     keeps the module graph acyclic, since this one reads the chronicle and the
     chronicle reads scenes.
 
+    That puts the reconciliation in a *caller*, so it holds only for callers that
+    remember it. `PUT /campaigns/{cid}/scenes/{sid}/datetime` is the only caller
+    `set_datetime` has today, which is why one call site is enough; a second one
+    has to call this too, or the campaign's present silently stops following the
+    scenes that move it.
+
     Silent about failure by design: a scene's date is already set by the time
     this runs, and a clock that cannot follow it must not turn that completed
     write into an error.
     """
-    provider = birthdays.provider_for(cid)
+    provider = calendars.primary_provider(campaigns_paths.campaign_root(cid))
     if provider is None:
         return {"moved": False, "now": read(cid)["now"]}
-    current = now(cid)
+    current = _current(provider, cid)   # canonical, so the log reads consistently
     try:
         canonical = calendars.normalize(provider, native)
         stamp = _stamp(provider, canonical)

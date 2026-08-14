@@ -6,5 +6,6 @@ from .base import (  # noqa: F401
     age, is_anniversary,
 )
 from .config import (  # noqa: F401
-    default_calendar, read_calendar, write_calendar, copy_calendar, validate_calendar,
+    default_calendar, primary_provider, read_calendar, write_calendar, copy_calendar,
+    validate_calendar,
 )

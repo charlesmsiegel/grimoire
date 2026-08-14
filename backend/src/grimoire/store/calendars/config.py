@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .base import get_provider
+from .base import CalendarError, get_provider
 from .. import atomic
 
 
@@ -50,6 +50,26 @@ def write_calendar(root: Path, cfg: dict) -> None:
            "secondary": _normalize_block(cfg.get("secondary")),
            "confirmed": bool(cfg.get("confirmed", False))}
     atomic.write_text(_path(root), json.dumps(out, indent=2) + "\n")
+
+
+def primary_provider(root: Path):
+    """The root's primary calendar provider, or None when it cannot be loaded.
+
+    The tolerant read-and-resolve that every caller which only wants to *compute*
+    with a calendar needs: an unknown provider id, a plugin that fails to import,
+    or a config with no primary block all answer None rather than raising.
+    Callers that must report the failure (the calendar settings routes) still go
+    through `get_provider` directly and let `CalendarError` out.
+
+    Here rather than once per caller because there were three copies of this
+    try/except before the campaign clock (#100) wanted a fourth — and the one it
+    reached for lived in `birthdays`, which made "resolve this campaign's
+    calendar" read like a question about birthdays.
+    """
+    try:
+        return get_provider(read_calendar(root)["primary"])
+    except (CalendarError, KeyError):
+        return None
 
 
 def copy_calendar(wroot: Path, croot: Path) -> None:
