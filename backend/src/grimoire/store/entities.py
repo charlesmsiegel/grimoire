@@ -26,7 +26,16 @@ SYNCED_KINDS: tuple[str, ...] = ENTITY_KINDS + ("greetings",)
 #   public  — the default, and the way every entry has always behaved
 #   secret  — activates exactly as before, but renders under a heading telling
 #             the model not to let uninvolved characters voice or act on it
-#   gm-only — never enters the prompt at all; the editor is the only reader
+#   gm-only — its BODY never reaches a prompt: `context.activate` drops it,
+#             `_assemble` suppresses it as the current setting, and
+#             `absorb.snapshots.group_snapshot` skips it
+#
+# Secrecy gates the body, not the record's existence. A gm-only location still
+# has a NAME, and the app still uses it where it must refer to the place at all
+# -- a mechanics sheet label for a location with a sheet
+# (`context.mechanics`), the scene-suggestion picker (`suggest`). Suppressing
+# those would break mechanics and make the location unpickable, which is a
+# worse failure than naming a room the scene is already set in.
 PUBLIC, SECRET, GM_ONLY = "public", "secret", "gm-only"
 SECRECY_LEVELS: tuple[str, ...] = (PUBLIC, SECRET, GM_ONLY)
 

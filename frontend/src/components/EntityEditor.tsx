@@ -15,14 +15,14 @@ export const KIND_LABELS: Record<EntityKind, string> = {
 };
 
 // What each secrecy level does to the prompt, in the words the picker shows.
-// "scene prompt", not "the model": a gm-only group is also kept out of the
-// absorb prompt, but a location's NAME still reaches the scene-suggestion
-// picker (it has to, or you could not pick it), so the broader claim would be
-// a promise the app does not keep.
+// "this text", not "this entry": secrecy gates the BODY, and the record still
+// has a name the app uses where it must refer to the place at all — the
+// scene-suggestion picker, a mechanics sheet label. Claiming the whole entry
+// disappears would be a promise the app does not keep.
 const SECRECY_HINTS: Record<Secrecy, string> = {
   public: "activates normally; any character may know it",
   secret: "activates normally, but uninvolved characters must not reveal it",
-  "gm-only": "never enters the scene prompt — visible only here",
+  "gm-only": "this text never reaches the model; the name may still be used",
 };
 
 // Anything unrecognised (a hand-edited file) reads as public, exactly as
