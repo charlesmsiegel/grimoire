@@ -245,6 +245,12 @@ export default function ConfigView() {
 
   const current = SECTIONS.find((s) => s.id === section)!;
   const recallOff = !draft?.embeddings_connection_id || draft.semantic_recall_depth === "0";
+  /** The fallback as the picker can show it: a saved id equal to the active
+   *  connection is no longer offered as an option, and the backend drops it
+   *  anyway, so it reads as None. */
+  const fallbackShown =
+    draft && draft.fallback_connection_id !== draft.active_connection_id
+      ? draft.fallback_connection_id : "";
 
   const column = (
     <>
@@ -360,7 +366,7 @@ export default function ConfigView() {
               <div className="config-field">
                 <label htmlFor="cfg-fallback-connection">Fallback connection</label>
                 <select id="cfg-fallback-connection" aria-label="Fallback connection"
-                        value={draft.fallback_connection_id}
+                        value={fallbackShown}
                         onChange={(e) => edit("fallback_connection_id", e.target.value)}>
                   <option value="">None</option>
                   {connections.filter((c) => c.id !== draft.active_connection_id)
@@ -370,11 +376,17 @@ export default function ConfigView() {
                     than merely ignored by the backend: offering it would look
                     like a working setting, and falling back to the connection
                     that just failed is a third attempt wearing a different
-                    name. A saved value that has since become the active one
-                    shows as None here, which is what it now does. */}
+                    name.
+
+                    Hence `fallbackShown` rather than the draft value: a saved
+                    fallback that has since been promoted to active matches no
+                    option, and a <select> whose value matches no option
+                    renders *blank* — not "None", not the stale name, nothing.
+                    Shown as None, which is what it now behaves as. The draft
+                    keeps the id, so it is neither silently rewritten on disk
+                    nor lost if the active connection changes back. */}
                 <p className="config-caption">
-                  {draft.fallback_connection_id &&
-                   draft.fallback_connection_id !== draft.active_connection_id
+                  {fallbackShown
                     ? "tried once when the connection above is exhausted"
                     : "no fallback — an exhausted connection is an error"}
                 </p>

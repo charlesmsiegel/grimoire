@@ -570,6 +570,109 @@ def test_backoff_grows_exponentially_capped_and_jittered(monkeypatch):
     assert llm_mod._backoff_delay(30) <= llm_mod.RETRY_CAP
 
 
+# --- Retry-After: the provider naming its own window (#144) ---
+
+
+def _record_sleeps(monkeypatch):
+    """Capture what the backoff asks to sleep for, without sleeping through it.
+
+    The real `asyncio.sleep` is bound BEFORE patching: `llm` reaches it as
+    `asyncio.sleep`, so the patch lands on the module `llm` shares with this
+    test, and a replacement that called `asyncio.sleep` by name would call
+    itself. Sleeps are recorded per slice (the wait is cut at the heartbeat
+    interval), so assertions are on the sum.
+    """
+    real, slept = asyncio.sleep, []
+
+    async def fake(seconds):
+        slept.append(seconds)
+        await real(0)
+
+    monkeypatch.setattr(asyncio, "sleep", fake)
+    return slept
+
+
+class RateLimited:
+    """429s `failures` times, naming `retry_after` seconds each time."""
+
+    def __init__(self, failures, retry_after):
+        self.failures = failures
+        self.retry_after = retry_after
+        self.attempts = 0
+
+    async def stream(self, messages, *args, **kwargs):
+        self.attempts += 1
+        if self.attempts <= self.failures:
+            raise LLMError("rate_limit", "slow down", self.retry_after)
+        yield "ok"
+
+
+async def test_a_named_window_beats_our_own_backoff(monkeypatch):
+    """Retrying before the provider's own window is a request it has already
+    said it will reject."""
+    slept = _record_sleeps(monkeypatch)
+    provider = RateLimited(failures=1, retry_after=3.0)
+    client = _retry_client(provider, retries=1)
+    assert [c async for c in client.stream([], _conn("openrouter"))] == ["ok"]
+    assert sum(slept) == pytest.approx(3.0)
+
+
+async def test_our_backoff_wins_when_it_is_longer(monkeypatch):
+    """`max`, not a replacement: a `Retry-After: 1` late in a sequence must not
+    walk the backoff back down below the wait the attempt before it had."""
+    from grimoire import llm as llm_mod
+    monkeypatch.setattr(llm_mod, "RETRY_BASE", 4.0)
+    slept = _record_sleeps(monkeypatch)
+    provider = RateLimited(failures=1, retry_after=0.001)
+    client = _retry_client(provider, retries=1)
+    [c async for c in client.stream([], _conn("openrouter"))]
+    assert sum(slept) >= 2.0   # the schedule's floor for attempt 0, not 0.001
+
+
+async def test_a_window_longer_than_we_will_wait_stops_the_retries():
+    """A multi-minute window is the provider saying it will not serve this
+    soon. Sitting on it holds a scene hostage; the honest answer is to stop."""
+    from grimoire import llm as llm_mod
+    provider = RateLimited(failures=99, retry_after=llm_mod.RETRY_AFTER_CAP + 1)
+    client = _retry_client(provider, retries=5)
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream([], _conn("openrouter"))]
+    assert provider.attempts == 1
+    assert exc.value.kind == "rate_limit"
+
+
+async def test_a_window_we_will_not_wait_out_still_takes_the_fallback():
+    """Stopping the retries must not also skip the route that could answer."""
+    from grimoire import llm as llm_mod
+
+    class Recorder:
+        models = []
+
+        async def stream(self, messages, model="", *args, **kwargs):
+            Recorder.models.append(model)
+            if model == "primary":
+                raise LLMError("rate_limit", "come back later", llm_mod.RETRY_AFTER_CAP + 1)
+            yield f"from {model}"
+
+    Recorder.models = []
+    client = _retry_client(Recorder(), retries=5, fallback=lambda: _route("b", "backup"))
+    assert [c async for c in client.stream([], _route("a", "primary"))] == ["from backup"]
+    assert Recorder.models == ["primary", "backup"]
+
+
+async def test_an_error_that_names_no_window_uses_the_schedule():
+    provider = RateLimited(failures=1, retry_after=None)
+    client = _retry_client(provider, retries=1)
+    assert [c async for c in client.stream([], _conn("openrouter"))] == ["ok"]
+    assert provider.attempts == 2
+
+
+def test_an_error_defaults_to_naming_no_window():
+    """Every raise site that has no response to read from — and there are
+    dozens — keeps working untouched."""
+    assert LLMError("network", "reset").retry_after is None
+
+
 # --- the fallback route ---
 
 
@@ -612,13 +715,50 @@ async def test_the_fallback_is_tried_for_non_retryable_failures_too():
     assert provider.models == ["primary", "backup"]  # no wasted retries
 
 
-async def test_the_primary_error_survives_a_failing_fallback():
+async def test_when_both_routes_fail_the_message_names_both():
+    """Neither error alone is the whole truth. Reporting only the fallback's
+    sends someone off to debug an endpoint they were not using; reporting only
+    the primary's leaves them fixing it and still getting nothing."""
     provider = RouteRecorder(failing={"primary", "backup"})
     client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
     with pytest.raises(LLMError) as exc:
         [c async for c in client.stream([], _route("a", "primary"))]
-    assert exc.value.detail == "backup is unavailable"
+    assert "primary is unavailable" in exc.value.detail
+    assert "backup is unavailable" in exc.value.detail
     assert provider.models == ["primary", "backup"]
+
+
+async def test_the_kind_is_the_primary_connections():
+    """The `kind` is what the frontend branches on — a `missing_key` prompt for
+    a key, say — so it has to describe the connection the user actually chose."""
+    provider = RouteRecorder(failing={"primary", "backup"}, kind="rate_limit")
+
+    async def stream(messages, model="", *args, **kwargs):
+        provider.models.append(model)
+        raise LLMError("rate_limit" if model == "primary" else "network", f"{model} down")
+        yield  # unreachable; it is what makes this an async generator
+
+    provider.stream = stream
+    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream([], _route("a", "primary"))]
+    assert exc.value.kind == "rate_limit"
+
+
+async def test_a_single_route_failure_is_re_raised_untouched():
+    """No fallback, no synthesis: the provider's own exception object reaches
+    the caller, message and all."""
+    original = LLMError("rate_limit", "slow down")
+
+    class Raiser:
+        async def stream(self, messages, *args, **kwargs):
+            raise original
+            yield  # unreachable; it is what makes this an async generator
+
+    client = _retry_client(Raiser(), retries=0, fallback=lambda: None)
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream([], _route("a", "primary"))]
+    assert exc.value is original
 
 
 async def test_no_fallback_configured_leaves_one_route():

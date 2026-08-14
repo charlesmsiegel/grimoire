@@ -14,7 +14,7 @@ from typing import AsyncIterator
 import certifi
 import httpx
 
-from .llm_errors import LLMError
+from .llm_errors import LLMError, retry_after_seconds
 
 
 class OpenAICompatibleError(LLMError):
@@ -123,7 +123,12 @@ class OpenAICompatibleClient:
             ) as resp:
                 if resp.status_code >= 400:
                     await resp.aread()
-                    raise OpenAICompatibleError(_status_kind(resp.status_code), _extract_error(resp.text))
+                    # The provider's own window, when it names one. A guessed
+                    # backoff is what you use for not knowing; Retry-After is
+                    # knowing (#144).
+                    raise OpenAICompatibleError(_status_kind(resp.status_code),
+                                               _extract_error(resp.text),
+                                               retry_after_seconds(resp.headers))
                 async for line in resp.aiter_lines():
                     # Proof of life for the facade's idle bound, including the
                     # frames dropped below (keep-alives, and deltas carrying
