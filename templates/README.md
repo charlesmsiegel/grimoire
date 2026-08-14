@@ -236,7 +236,9 @@ substituted by code:
 - `secret_world_info_bodies` — the same selection's `secrecy: secret` bodies,
   rendered in the same section under `scene/_secrecy.j2`'s heading.
   `secrecy: gm-only` entries are absent from both lists: `activate` drops
-  them before any selection rule runs, so they never reach a template
+  them before any selection rule runs, so their BODY never reaches a template.
+  Their name still can — `mechanics_sheets` labels a sheeted location by name
+  whatever its level, because a sheet is functional data, not lore
 - `recalled_lore_bodies` / `secret_recalled_lore_bodies` — the same split for
   what `context.semantic.recall` added on top of the keyword rule
 - `group_states` / `secret_group_states` — `[{name, goals, resources,
