@@ -534,5 +534,34 @@ class LorebookCommit(BaseModel):
     entries: list[LoreEntry]
 
 
+# ---- scenario-card import (#217) ----
+# A proposal speaks in cast NAMES, not ids: the characters it proposes do not
+# exist when the reviewer edits it, and `store.scenario.apply` resolves the
+# names once they do. That is also what lets a reviewer retype a name and have
+# the opener follow it.
+class ScenarioCharacter(BaseModel):
+    name: str
+    description: str = ""
+    personality: str = ""
+
+
+class ScenarioGreeting(BaseModel):
+    name: str = ""
+    body: str = ""
+    character: str = ""
+    present: list[str] = []
+
+
+class ScenarioProposal(BaseModel):
+    characters: list[ScenarioCharacter] = []
+    entries: list[LoreEntry] = []
+    greetings: list[ScenarioGreeting] = []
+    art: bool = True
+
+
+class ScenarioUrlBody(BaseModel):
+    url: str
+
+
 class AppearBatch(BaseModel):
     refs: list[Appear]

@@ -1,5 +1,6 @@
 """World-scoped routes: the world record itself, its bound mechanics module
-and sheets, tags, player characters, calendar and lorebook import.
+and sheets, tags, player characters, calendar, and the two import flows that
+populate a world wholesale — a lorebook, and a scenario card (#217).
 
 Characters and greetings have their own modules; the generic
 ``/worlds/{wid}/{kind}`` entity surface lives in ``entities``.
@@ -11,14 +12,18 @@ import os
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from .. import store
-from .common import _content_fields, _dump, _spooled_upload, _world_root_or_404
+from ..llm import LLMClient
+from ..llm_errors import LLMError
+from .common import (_bounded_call, _content_fields, _dump, _require_connection,
+                     _spooled_upload, _world_root_or_404, get_llm)
 from .models import (LorebookCommit, ModuleSetting, NameBody, PCCreate, PCUpdate,
-                     PersonaVersionCreate, PersonaVersionUpdate, SheetBody, SheetCreationBody)
+                     PersonaVersionCreate, PersonaVersionUpdate, ScenarioProposal,
+                     ScenarioUrlBody, SheetBody, SheetCreationBody)
 
 router = APIRouter()
 
@@ -425,6 +430,82 @@ def post_lorebook_import(wid: str, body: LorebookCommit):
     except store.lorebook.LorebookError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"created": created}
+
+
+# ---- scenario-card import (#217) ----
+# Three routes, one flow: get the card (from an upload or a URL), extract a
+# proposal from it, and — after the user has edited that proposal — write it.
+# Only the third writes anything, which is what makes the review gate real
+# rather than a confirmation dialog over work already done.
+async def _scenario_proposal(card: dict, client: LLMClient, conn: dict) -> dict:
+    """Extract a proposal from `card`.
+
+    One bounded completion, exactly like the tagline and voice-anchor previews.
+    A reply the extraction cannot use — prose, a refusal, a truncated object —
+    is not an error: `parse_output` yields empty sections and the proposal falls
+    back to what the card alone holds, which is its own world-info and its
+    openers. A provider that *failed* is a different thing and surfaces as a 502.
+    """
+    try:
+        text = await _bounded_call(client.complete(store.scenario.build_prompt(card), conn))
+    except LLMError as exc:
+        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+    return store.scenario.proposal(card, store.scenario.parse_output(text))
+
+
+@router.post("/worlds/{wid}/scenario/parse")
+async def post_scenario_parse(wid: str, file: UploadFile = File(...), format: str = Form(...),
+                              client: LLMClient = Depends(get_llm)):
+    _world_root_or_404(wid)
+    # Before the upload is read, and before the download in the sibling route:
+    # "you have no model configured" is a setup mistake, and reporting it only
+    # after the user has fixed a card (or waited on a slow host) tells them the
+    # wrong thing first.
+    conn = _require_connection()
+    data = await file.read()
+    try:
+        card = store.cards.loads(data, format)
+    except store.cards.CardParseError as exc:
+        raise HTTPException(status_code=400, detail=f"could not parse card: {exc}")
+    return await _scenario_proposal(card, client, conn)
+
+
+@router.post("/worlds/{wid}/scenario/parse-url")
+async def post_scenario_parse_url(wid: str, body: ScenarioUrlBody,
+                                  client: LLMClient = Depends(get_llm)):
+    _world_root_or_404(wid)
+    conn = _require_connection()
+    try:
+        # The download is blocking and this route is async, so it goes to the
+        # threadpool rather than stalling the event loop for a slow host --
+        # the same treatment `post_world_import` gives its unpacking.
+        data, fmt, _url, _node = await run_in_threadpool(store.characters.download_card, body.url)
+        card = store.cards.loads(data, fmt)
+    except store.chub.ChubParseError:
+        raise HTTPException(status_code=400, detail="not a valid URL")
+    except store.chub.ChubFetchError:
+        raise HTTPException(status_code=404, detail="could not fetch a card from that URL")
+    except store.cards.CardParseError as exc:
+        raise HTTPException(status_code=400, detail=f"could not parse card: {exc}")
+    return await _scenario_proposal(card, client, conn)
+
+
+@router.post("/worlds/{wid}/scenario/import")
+async def post_scenario_import(wid: str, body: ScenarioProposal):
+    root = _world_root_or_404(wid)
+    prop = _dump(body)
+    # `art` is a request option, not part of the proposal — it rides on the same
+    # body so the reviewer's "download the openers' images" checkbox needs no
+    # second round trip, and is lifted back out here.
+    prop.pop("art", None)
+    try:
+        # Localizing the openers' art downloads one image per reference, so the
+        # whole write goes to the threadpool: without it a card with a dozen
+        # illustrated openers holds the event loop for the length of a dozen
+        # HTTP fetches.
+        return await run_in_threadpool(store.scenario.apply, root, wid, prop, art=body.art)
+    except store.lorebook.LorebookError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/worlds/{wid}/calendar/months")
