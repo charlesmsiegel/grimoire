@@ -47,7 +47,7 @@ test("a query in the URL is searched for and its hits are listed", async () => {
   // Queried by role, not by text: the matched term is wrapped in a <mark>, so
   // the name is three nodes rather than one.
   expect(await screen.findByRole("button", { name: /the salt pact/i })).toBeInTheDocument();
-  expect(api.search).toHaveBeenCalledWith("salt", { scope: "", kinds: [] });
+  expect(api.search).toHaveBeenCalledWith("salt", { scope: "", kinds: [], mode: "keyword" });
   // The box is seeded from the URL, so the page is a link rather than a state
   // someone has to retype into.
   expect(screen.getByRole("searchbox", { name: /search the library/i })).toHaveValue("salt");
@@ -77,7 +77,7 @@ test("typing settles before it searches, and only the settled query is asked", a
   // per keystroke would put four in flight for a five-letter word.
   expect(api.search).not.toHaveBeenCalled();
   await waitFor(() => expect(api.search).toHaveBeenCalledTimes(1));
-  expect(api.search).toHaveBeenCalledWith("salt", { scope: "", kinds: [] });
+  expect(api.search).toHaveBeenCalledWith("salt", { scope: "", kinds: [], mode: "keyword" });
 });
 
 test("a hit says which world or campaign holds it", async () => {
@@ -106,10 +106,10 @@ test("the kind column filters, and clicking the live filter clears it", async ()
   const column = within(await screen.findByRole("complementary"));
   fireEvent.click(column.getByRole("button", { name: /^Lore/ }));
   await waitFor(() =>
-    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "", kinds: ["lore"] }));
+    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "", kinds: ["lore"], mode: "keyword" }));
   fireEvent.click(column.getByRole("button", { name: /^Lore/ }));
   await waitFor(() =>
-    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "", kinds: [] }));
+    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "", kinds: [], mode: "keyword" }));
 });
 
 test("the scope column narrows to worlds or campaigns", async () => {
@@ -117,7 +117,7 @@ test("the scope column narrows to worlds or campaigns", async () => {
   const column = within(await screen.findByRole("complementary"));
   fireEvent.click(column.getByRole("button", { name: /^Campaigns/ }));
   await waitFor(() =>
-    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "campaign", kinds: [] }));
+    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "campaign", kinds: [], mode: "keyword" }));
 });
 
 test("only the kinds this query found are offered as filters", async () => {
@@ -133,7 +133,7 @@ test("nothing matching says so, and offers the way out of the filter", async () 
   expect(await screen.findByText(/nothing matches/i)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /search everywhere instead/i }));
   await waitFor(() =>
-    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "", kinds: [] }));
+    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "", kinds: [], mode: "keyword" }));
 });
 
 test("a failed search degrades to a message rather than a stuck spinner", async () => {
@@ -185,7 +185,7 @@ test("the kind still filtering stays in the column when its count drops to 0", a
   await waitFor(() => expect(column.getByRole("button", { name: /^Lore/ })).toHaveClass("active"));
   fireEvent.click(column.getByRole("button", { name: /^Lore/ }));
   await waitFor(() =>
-    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "", kinds: [] }));
+    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "", kinds: [], mode: "keyword" }));
 });
 
 test("the result count is announced, not just shown", async () => {
@@ -217,4 +217,45 @@ test("a slow answer for an old query never lands on top of a newer one", async (
   await waitFor(() => expect(api.search).toHaveBeenCalledTimes(2));
   expect(screen.queryByRole("button", { name: /the salt pact/i })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: /the tide table/i })).toBeInTheDocument();
+});
+
+// ---- mode: keywords or meaning (#34) --------------------------------------
+
+test("the mode is part of the query and lives in the URL like every other filter", async () => {
+  show();
+  await screen.findByRole("button", { name: /the salt pact/i });
+  fireEvent.click(screen.getByRole("button", { name: /meaning/i }));
+  await waitFor(() =>
+    expect(api.search).toHaveBeenLastCalledWith("salt", { scope: "", kinds: [], mode: "semantic" }));
+  expect(screen.getByTestId("where").textContent).toContain("mode=semantic");
+});
+
+test("an answer that fell back to keywords says so, and why", async () => {
+  (api.search as any).mockResolvedValue(result([hit()], {
+    mode: "keyword", requested_mode: "semantic",
+    note: "Semantic search needs an embeddings connection and model.",
+  }));
+  show("/search?q=salt&mode=semantic");
+  expect(await screen.findByText(/needs an embeddings connection/i)).toBeInTheDocument();
+  // And the results are still there — a degraded answer is an answer.
+  expect(screen.getByRole("button", { name: /the salt pact/i })).toBeInTheDocument();
+});
+
+test("a semantic answer says how much of the library has been indexed", async () => {
+  (api.search as any).mockResolvedValue(result([hit()], {
+    mode: "semantic", requested_mode: "semantic", note: "", terms: [],
+    indexed: 40, corpus: 100,
+  }));
+  show("/search?q=salt&mode=semantic");
+  expect(await screen.findByText(/40 of 100/i)).toBeInTheDocument();
+});
+
+test("a fully indexed semantic answer does not nag about indexing", async () => {
+  (api.search as any).mockResolvedValue(result([hit()], {
+    mode: "semantic", requested_mode: "semantic", note: "", terms: [],
+    indexed: 100, corpus: 100,
+  }));
+  show("/search?q=salt&mode=semantic");
+  await screen.findByRole("button", { name: /the salt pact/i });
+  expect(screen.queryByText(/of 100 passages/i)).not.toBeInTheDocument();
 });

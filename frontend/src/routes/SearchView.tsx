@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { api, type SearchHit, type SearchResult } from "../api/client";
+import { api, type SearchHit, type SearchMode, type SearchResult } from "../api/client";
 import { ColumnSection, PageShell } from "../components/PageShell";
 
 /** How the kinds are grouped in the filter column, in the order they are
@@ -119,6 +119,20 @@ const EMPTY: SearchResult = {
   q: "", terms: [], total: 0, facets: {}, scopes: {}, truncated: false, hits: [],
 };
 
+/** The two rankings, and what each one is for in a reader's words.
+ *
+ *  Not a "search harder" switch: keywords find the record that says the word,
+ *  meaning finds the record that is about it and never uses it. Which is why
+ *  both stay on offer rather than one superseding the other. */
+const MODES: { key: SearchMode; label: string; hint: string }[] = [
+  { key: "keyword", label: "Keywords", hint: "Every term has to appear" },
+  { key: "semantic", label: "Meaning", hint: "Close in sense, not in wording" },
+];
+
+function isMode(value: string): value is SearchMode {
+  return MODES.some((m) => m.key === value);
+}
+
 /** How long typing has to stop before the sweep runs. Every query walks the
  *  whole store, so a request per keystroke would have four of them in flight
  *  for a five-letter word — and the answer to the first four is never shown. */
@@ -136,6 +150,10 @@ export default function SearchView() {
   const q = params.get("q") ?? "";
   const scope = params.get("scope") ?? "";
   const kind = params.get("kind") ?? "";
+  // A mode nobody offers reads as the default rather than as an error: the
+  // URL is hand-editable and shareable, and a typo in it should still search.
+  const rawMode = params.get("mode") ?? "";
+  const mode: SearchMode = isMode(rawMode) ? rawMode : "keyword";
 
   // What is in the box, which is not the same thing as what has been searched
   // for: the box leads the URL by up to `SETTLE_MS`, and the URL leads the
@@ -176,11 +194,11 @@ export default function SearchView() {
     // "sal" must not land on top of the answer for "salt".
     let live = true;
     setFailed(false);
-    api.search(q, { scope, kinds: kind ? [kind] : [] })
+    api.search(q, { scope, kinds: kind ? [kind] : [], mode })
       .then((r) => { if (live) setResult(r); })
       .catch(() => { if (live) { setResult(null); setFailed(true); } });
     return () => { live = false; };
-  }, [q, scope, kind]);
+  }, [q, scope, kind, mode]);
 
   const facets = result?.facets ?? {};
   const scopes = result?.scopes ?? {};
@@ -211,6 +229,18 @@ export default function SearchView() {
         <div className="eyebrow">Across the whole library</div>
         <h2 className="search-ident-name">Search</h2>
       </div>
+      <ColumnSection label="How">
+        {MODES.map((m) => (
+          <button key={m.key}
+                  className={"column-row" + (mode === m.key ? " active" : "")}
+                  onClick={() => setQuery({ mode: m.key === "keyword" ? "" : m.key }, false)}>
+            <span className="column-row-label">{m.label}</span>
+          </button>
+        ))}
+        <p className="field-hint search-mode-hint">
+          {MODES.find((m) => m.key === mode)?.hint}
+        </p>
+      </ColumnSection>
       <ColumnSection label="Where" count={result ? shown.total : undefined}>
         {[{ key: "", label: "Everywhere" },
           { key: "world", label: "Worlds" },
@@ -249,6 +279,17 @@ export default function SearchView() {
     </button>
   ) : undefined;
 
+  // What the reader needs to know about the answer itself rather than about
+  // the records in it: that meaning-search was asked for and could not run, or
+  // that it ran against a library it has not finished reading. Both are stated
+  // rather than hidden — a page ranked on a tenth of the corpus that says
+  // nothing about it is a page that quietly means less than it looks like.
+  const answered = result?.mode ?? "keyword";
+  const fellBack = result !== null && result.requested_mode === "semantic"
+    && answered !== "semantic";
+  const partial = answered === "semantic" && result?.corpus
+    && (result.indexed ?? 0) < result.corpus;
+
   return (
     <PageShell column={column} footer={footer} columnLabel="Search filters">
       <div className="page-wide view-anim">
@@ -279,7 +320,24 @@ export default function SearchView() {
               play has established: the chronicle, the timeline, threads, standing facts,
               relationships and dossiers.
             </span>{" "}
-            Terms are ANDed; wrap a phrase in quotes to match it whole.
+            {mode === "semantic"
+              ? "Ranked by what a passage means rather than by the words in it, so a "
+                + "description of a thing finds it without naming it."
+              : "Terms are ANDed; wrap a phrase in quotes to match it whole."}
+          </p>
+        )}
+
+        {fellBack && (
+          <p className="empty-state">
+            <span className="empty-what">Answered with keywords.</span>{" "}
+            {result?.note}
+          </p>
+        )}
+
+        {partial && (
+          <p className="ledger-lead">
+            Indexed {result?.indexed} of {result?.corpus} passages so far. Searching
+            again reads more of the library; until then this ranks what has been read.
           </p>
         )}
 

@@ -869,10 +869,13 @@ export type SearchHit = {
   snippet: string;
   score: number;
 };
+export type SearchMode = "keyword" | "semantic";
+
 export type SearchResult = {
   q: string;
   /** The query as the server split it — phrases kept whole — so the client
-   *  highlights exactly what matched rather than re-implementing the split. */
+   *  highlights exactly what matched rather than re-implementing the split.
+   *  Empty in semantic mode: nothing matched a term, so nothing is marked. */
   terms: string[];
   /** Hits after the kind filter; `hits` is this list cut to the limit. */
   total: number;
@@ -882,6 +885,20 @@ export type SearchResult = {
   scopes: Record<string, number>;
   truncated: boolean;
   hits: SearchHit[];
+  /** The ranking that actually produced this page, which is not always the one
+   *  that was asked for: semantic mode needs an embeddings connection, and
+   *  falls back to keyword when it has none rather than erroring (#34). */
+  mode?: SearchMode;
+  requested_mode?: SearchMode;
+  /** Why the two differ, written to be shown to the reader. "" when they do
+   *  not. */
+  note?: string;
+  /** Semantic mode only: passages of the corpus that had a vector to score
+   *  against, out of how many there are. A query warms a bounded number of
+   *  them, so a large library indexes over several searches rather than
+   *  stalling the first one. */
+  indexed?: number;
+  corpus?: number;
 };
 
 // pre-scene briefing (#118) — the ledger's per-scene sibling. The rows are the
@@ -1216,11 +1233,13 @@ export const api = {
   // on the path — which for a repeated query is the same path, so a result
   // arriving for the query BEFORE an edit-and-undo would be served as the
   // answer to the current one.
-  search: (q: string, opts?: { scope?: string; root?: string; kinds?: string[]; limit?: number }) => {
+  search: (q: string, opts?: { scope?: string; root?: string; kinds?: string[];
+                               mode?: SearchMode; limit?: number }) => {
     const params = new URLSearchParams({ q });
     if (opts?.scope) params.set("scope", opts.scope);
     if (opts?.root) params.set("root", opts.root);
     if (opts?.kinds?.length) params.set("kinds", opts.kinds.join(","));
+    if (opts?.mode) params.set("mode", opts.mode);
     if (opts?.limit) params.set("limit", String(opts.limit));
     return request<SearchResult>("GET", `/api/search?${params}`, undefined, { fresh: true });
   },
