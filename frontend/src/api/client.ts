@@ -445,6 +445,23 @@ export function splitNativeDate(native: string): { date: string; time: string | 
 
 export type CalendarConfig = { primary: CalendarBlock; secondary: CalendarBlock | null; confirmed: boolean };
 
+// ---- the campaign clock (#100) ----
+/** One row of the clock's log: where time went, why, and when that was recorded. */
+export type ClockLogEntry = { from: string; to: string; reason: string; at: string };
+export type CampaignClock = { now: string; friendly: string; log: ClockLogEntry[] };
+/** What an advance crosses. Deterministic, so the preview and the advance that
+ *  follows it report the same thing. `truncated` means the span was too long to
+ *  itemize — `elapsed_days` is exact either way. */
+export type AdvanceDigest = {
+  from: string; to: string; from_friendly: string; to_friendly: string;
+  elapsed_days: number; backward: boolean; truncated: boolean;
+  holidays: { name: string; native: string; friendly: string; in_days: number }[];
+  birthdays: { name: string; age: number; native: string; friendly: string }[];
+  open_threads: { id: string; title: string; status: string; last_scene: string; latest_beat: string }[];
+};
+/** `to` skips to a date, `days` advances by a duration; `to` wins if both are sent. */
+export type AdvanceRequest = { to?: string; days?: number; reason?: string };
+
 // ---- weather (#45, #195) and climates (#40) ----
 export const WEATHER_AXES = ["condition", "temperature", "wind"] as const;
 export type WeatherAxis = (typeof WEATHER_AXES)[number];
@@ -1423,12 +1440,25 @@ export const api = {
   getSceneDatetime: (cid: string, sid: string) =>
     request<SceneDatetime>("GET", `/api/campaigns/${cid}/scenes/${sid}/datetime`),
   setSceneDatetime: (cid: string, sid: string, datetime: string) =>
-    request<{ ok: boolean; advanced: boolean; friendly: string; id: string }>(
+    request<{ ok: boolean; advanced: boolean; friendly: string; id: string;
+              // Whether this scene's moment carried the campaign clock forward
+              // with it (#100). Forward only: a flashback reports moved: false.
+              clock?: { moved: boolean; now: string } }>(
       "PUT", `/api/campaigns/${cid}/scenes/${sid}/datetime`, { datetime }),
   getCalendarConfig: (cid: string) =>
     request<CalendarConfig>("GET", `/api/campaigns/${cid}/calendar`),
   getCalendarProviders: () =>
     request<{ providers: { id: string; name: string }[] }>("GET", "/api/calendars/providers"),
+
+  // ---- the campaign clock (#100) ----
+  getCampaignClock: (cid: string) =>
+    request<CampaignClock>("GET", `/api/campaigns/${cid}/clock`),
+  /** The digest an advance would produce, writing nothing. Needs no reason. */
+  previewAdvance: (cid: string, body: AdvanceRequest) =>
+    request<{ digest: AdvanceDigest }>("POST", `/api/campaigns/${cid}/advance/preview`, body),
+  advanceTime: (cid: string, body: AdvanceRequest) =>
+    request<{ ok: boolean; moved: boolean; now: string; friendly: string; digest: AdvanceDigest }>(
+      "POST", `/api/campaigns/${cid}/advance`, body),
 
   // ---- weather (#45, #195) and climates (#40) ----
   getSceneWeather: (cid: string, sid: string, opts?: { location?: string; native?: string }) => {

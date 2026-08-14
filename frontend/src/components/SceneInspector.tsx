@@ -12,6 +12,7 @@ import { ContextBreakdown, contextPercent } from "./ContextBreakdown";
 import { Portrait } from "./Portrait";
 import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
 import { CalendarDatePicker } from "./CalendarDatePicker";
+import { ClockPanel } from "./ClockPanel";
 import { WeatherWidget } from "./WeatherWidget";
 import { ResponsePresetPicker } from "./ResponsePresetPicker";
 import { LOCKED_WHILE_GENERATING } from "./sceneLock";
@@ -844,6 +845,20 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             </div>
           </>
         )}
+      </SideSection>
+
+      {/* Campaign-scoped, next to the scene's own When: advancing the clock is
+          the same question one level up, and this is where a reader already
+          comes to ask it (#100). Keyed on `refreshKey` so setting this scene's
+          date — which carries the clock forward with it — shows up here too, and
+          `onAdvanced` reloads When because a dateless scene takes its date
+          pre-fill from the clock this just moved.
+          Collapsed by default: this is the one section about the campaign rather
+          than the scene, so it should not push the scene's own state down the
+          rail until a reader asks for it. */}
+      <SideSection id="clock" title="Campaign clock" collapsed={collapsed.clock ?? true}
+                   onToggle={toggleSection}>
+        <ClockPanel cid={cid} refreshKey={refreshKey} onAdvanced={reloadWhen} />
       </SideSection>
 
       <SideSection id="weather" title="Weather" collapsed={!!collapsed.weather} onToggle={toggleSection}>
