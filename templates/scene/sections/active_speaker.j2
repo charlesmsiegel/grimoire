@@ -5,5 +5,5 @@
     context/speaker.py; this template receives the nomination.
     Vars: speaker (None | {lead, quiet, reason, spoken, silent_for}). -#}
 {%- if speaker %}# Active speaker
-{{ speaker.lead }} carries this turn{% if speaker.reason == "named" %} — the last post named them{% elif not speaker.spoken %} — they have not spoken yet in this scene{% elif speaker.silent_for %} — they have been silent for {{ speaker.silent_for }} posts{% endif %}.
+{{ speaker.lead }} carries this turn{% if speaker.reason == "named" %} — the last post named them{% elif speaker.reason == "opening" %}{% elif not speaker.spoken %} — they have not spoken yet in this scene{% elif speaker.silent_for %} — they have been silent for {{ speaker.silent_for }} posts{% endif %}.
 {% if speaker.quiet %}{{ speaker.quiet | join(", ") }} {{ "is" if speaker.quiet | length == 1 else "are" }} also present: let them react briefly, or not at all. Do not give every character a turn.{% endif %}{% endif -%}
