@@ -126,8 +126,19 @@ const EMPTY: SearchResult = {
  *  both stay on offer rather than one superseding the other. */
 const MODES: { key: SearchMode; label: string; hint: string }[] = [
   { key: "keyword", label: "Keywords", hint: "Every term has to appear" },
-  { key: "semantic", label: "Meaning", hint: "Close in sense, not in wording" },
+  // The hint carries the "press Enter" because meaning mode deliberately does
+  // not search as you type — see the settle effect. A control that behaves
+  // differently from its neighbour has to say so where the choice is made.
+  { key: "semantic", label: "Meaning",
+    hint: "Close in sense, not in wording · press Enter to search" },
 ];
+
+/** Kinds whose `sub` names something a reader can tell apart at a glance: a
+ *  card version, a persona version. Everything else's `sub` is machinery — a
+ *  timeline line number, a relationship's side — and belongs nowhere near a
+ *  result row. Without this, a character found by its tagline or its display
+ *  name returns one identical-looking row per version. */
+const VERSIONED = new Set(["characters", "pcs"]);
 
 function isMode(value: string): value is SearchMode {
   return MODES.some((m) => m.key === value);
@@ -359,6 +370,13 @@ export default function SearchView() {
           </p>
         )}
 
+        {/* Meaning mode does not search as you type, so the box can sit ahead
+            of the results indefinitely rather than for one debounce. Saying so
+            is the difference between "waiting on me" and "stale". */}
+        {mode === "semantic" && draft.trim() && draft !== q && (
+          <p className="column-empty">Press Enter to search for “{draft.trim()}”.</p>
+        )}
+
         {q.trim() && !failed && result === null && (
           <p className="column-empty">Reading the library…</p>
         )}
@@ -385,7 +403,9 @@ export default function SearchView() {
                   <span className="search-hit-head">
                     <span className="search-hit-name">{markTerms(hit.name, shown.terms)}</span>
                     <span className="search-hit-where">
-                      {LABELS[hit.kind] ?? hit.kind} · {hit.root_name}
+                      {LABELS[hit.kind] ?? hit.kind}
+                      {VERSIONED.has(hit.kind) && hit.sub ? ` · ${hit.sub}` : ""}
+                      {" · "}{hit.root_name}
                       {hit.scope === "campaign" ? " · campaign" : ""}
                     </span>
                   </span>

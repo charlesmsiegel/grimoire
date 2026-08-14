@@ -298,3 +298,24 @@ test("meaning mode waits to be asked rather than searching as you type", async (
   await waitFor(() => expect(api.search).toHaveBeenCalledWith(
     "salt", { scope: "", kinds: [], mode: "semantic" }));
 });
+
+test("a character hit names the version it matched, so two versions are two rows", async () => {
+  // A tagline or a display name matches every version of a character, so the
+  // rows are otherwise identical: same name, same kind, same world.
+  (api.search as any).mockResolvedValue(result([
+    hit({ kind: "characters", id: "seraphine", sub: "default", name: "Seraphine" }),
+    hit({ kind: "characters", id: "seraphine", sub: "veiled", name: "Seraphine" }),
+  ]));
+  show();
+  await screen.findAllByRole("button", { name: /seraphine/i });
+  expect(screen.getByText(/veiled/)).toBeInTheDocument();
+  expect(screen.getByText(/default/)).toBeInTheDocument();
+});
+
+test("meaning mode says the box is ahead of the results rather than looking stale", async () => {
+  show("/search?q=salt&mode=semantic");
+  await screen.findByRole("button", { name: /the salt pact/i });
+  fireEvent.change(screen.getByRole("searchbox", { name: /search the library/i }),
+                   { target: { value: "brine" } });
+  expect(await screen.findByText(/press enter to search for “brine”/i)).toBeInTheDocument();
+});

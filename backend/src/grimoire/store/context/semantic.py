@@ -176,7 +176,7 @@ def settings() -> dict | None:
         depth = max(_int(cfg.get("semantic_recall_depth"), 0), 0)
         if depth <= 0:
             return None
-        space = embed_space.resolve()
+        space = embed_space.resolve(cfg)
         if space is None:
             return None
         threshold = _float(cfg.get("semantic_recall_threshold"),

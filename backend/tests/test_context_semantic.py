@@ -857,3 +857,16 @@ def test_owned_lore_stays_out_of_the_built_prompt_however_similar(store, provide
     assert BODY not in ctx.build_messages(cid, sid)[0]["content"]
     # ...and it was never sent to the embeddings provider either.
     assert all(BODY not in text for call in provider.calls for text in call)
+
+
+def test_resolving_the_settings_reads_config_once(store, monkeypatch):
+    """`settings` and the endpoint resolution it shares with search both want
+    config.md, and `read_config` parses the file on every call. Recall runs on
+    every turn, so reading it twice per turn is a cost the split must not
+    introduce."""
+    configure()
+    reads = []
+    real = config.read_config
+    monkeypatch.setattr(config, "read_config", lambda: (reads.append(1), real())[1])
+    assert semantic.settings() is not None
+    assert len(reads) == 1
