@@ -382,3 +382,42 @@ def test_a_shrinking_transcript_never_hands_back_more_posts_than_the_window(monk
     pins.set_rule(cid, "lore:tide-oath", pins.PIN, sid=sid, ttl_posts=2, posts=4)
     assert pins.records(cid, sid, 4)[0]["remaining"] == 2
     assert pins.records(cid, sid, 1)[0]["remaining"] == 2      # not 5
+
+
+# --- where a pin stops: gm-only secrecy (#49) --------------------------------
+
+def test_a_pin_cannot_resurrect_a_gm_only_entry():
+    """The one gate a pin does not open, and the distinction is the point: the
+    owner gate and the keyword rule are CONDITIONS a pin answers, while gm-only
+    is the entry saying it is not for the model at all. A pin that overrode it
+    would turn pinning into a way to leak the GM's own notes."""
+    entries = [{"name": "GM note", "body": "b", "keys": [], "kind": "lore",
+                "id": "gm-note", "secrecy": "gm-only"}]
+    assert context.activate(entries, "x", pinned_refs=frozenset({"lore:gm-note"})) == []
+
+
+def test_a_pinned_gm_only_entry_never_reaches_the_prompt(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    entities.create_entity(campaigns.campaign_root(cid), "lore", "GM note",
+                           "The tide oath was forged.", secrecy="gm-only")
+    scenes.append_message(cid, sid, "user", "hello")
+    pins.set_rule(cid, "lore:gm-note", pins.PIN, sid=sid)
+    assert "tide oath was forged" not in _system(cid, sid)
+
+
+def test_a_pinned_secret_entry_is_still_pinned(monkeypatch, tmp_path):
+    """`secret` is not `gm-only`: it reaches the prompt, in its own block of the
+    World info section, so a pin on one protects that section like any other."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    entities.create_entity(campaigns.campaign_root(cid), "lore", "Tide oath",
+                           "The tide keeps its promises. " * 60, keys="dragon",
+                           secrecy="secret")
+    _crowded(cid, sid)
+    pins.set_rule(cid, "lore:tide-oath", pins.PIN, sid=sid)
+
+    sent = _system(cid, sid)
+    assert "tide keeps its promises" in sent          # pinned past its unmatched key
+    config.write_config(context_budget=str(context.count_tokens(sent) // 2))
+    secs = {s["label"]: s for s in context.context_sections(cid, sid)}
+    assert secs["World info"]["dropped"] is False
+    assert secs["World info"]["pinned"] is True
