@@ -307,17 +307,23 @@ def test_a_rule_naming_something_the_campaign_lost_is_inert(monkeypatch, tmp_pat
 
 # --- the seams a later refactor could quietly break -------------------------
 
-def test_every_protected_label_is_a_section_that_exists():
-    """`_pinned_sections` names sections by their inspector label, and a pin
-    protects nothing at all if that label stops matching. Two of the three
-    mappings (Transient state, Group state) are cheap to break and expensive to
-    notice, since a pin that protects nothing looks exactly like a pin whose
-    content did not activate."""
+def test_every_protected_id_is_a_section_that_exists():
+    """`_pinned_sections` names sections by `Section.id`, and a pin protects
+    nothing at all if that id stops matching. Two of the three mappings
+    (transient_state, group_state) are cheap to break and expensive to notice,
+    since a pin that protects nothing looks exactly like a pin whose content did
+    not activate.
+
+    Ids rather than labels since #29 made the label the reader's to edit: two
+    sections may legitimately carry the same label, so matching on it could hold
+    up the wrong one. Against the CATALOG rather than a rendered layout: a
+    reader may have dropped a section from their own order, and that is them
+    choosing to lose it, not this mapping being wrong."""
     from grimoire.store.context import assemble
-    labels = {s.label for s in assemble._SECTIONS}
+    ids = {s.id for s in assemble.SECTIONS}
     protected = {*assemble._CAST_SECTIONS, assemble._WORLD_INFO_SECTION,
                  assemble._GROUP_STATE_SECTION, assemble._SETTING_SECTION}
-    assert protected <= labels
+    assert protected <= ids
 
 
 def test_a_pinned_group_holds_up_its_state_block_too(monkeypatch, tmp_path):
