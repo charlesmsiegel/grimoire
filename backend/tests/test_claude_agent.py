@@ -204,3 +204,64 @@ async def test_an_impossible_cost_is_dropped_rather_than_poisoning_a_total(monke
         client = ClaudeAgentClient()
         [c async for c in client.stream([], "opus", usage=usage)]
         assert "cost_usd" not in usage, cost
+
+
+# ---- the cache split (#148) ----
+
+async def test_the_cache_split_is_recorded_beside_the_prompt_total(monkeypatch):
+    """The three prompt keys are summed into `prompt_tokens` because that is
+    what was billed as input. These say how that input divided — and this is
+    the provider that caches without being asked, so on a long campaign the
+    read is most of every prompt and a total that only knows the sum cannot
+    show it."""
+    result = types.SimpleNamespace(
+        usage={"input_tokens": 900, "output_tokens": 45,
+               "cache_read_input_tokens": 100, "cache_creation_input_tokens": 20})
+    install_fake_sdk(monkeypatch, replies=[_AssistantMessage([_TextBlock("Hi")]), result])
+
+    usage = {}
+    [c async for c in ClaudeAgentClient().stream([], "opus", usage=usage)]
+
+    assert usage["prompt_tokens"] == 1020        # unchanged: still the whole input
+    assert usage["cache_read_tokens"] == 100
+    assert usage["cache_write_tokens"] == 20
+
+
+async def test_a_ttl_split_cache_creation_is_read_when_the_flat_field_is_absent(monkeypatch):
+    """Anthropic added per-TTL tiers without removing the flat total. Summing
+    both would report every cache write twice, so the flat one wins and the
+    split is only a fallback."""
+    result = types.SimpleNamespace(
+        usage={"input_tokens": 10, "output_tokens": 1,
+               "cache_creation": {"ephemeral_5m_input_tokens": 500,
+                                  "ephemeral_1h_input_tokens": 200}})
+    install_fake_sdk(monkeypatch, replies=[result])
+
+    usage = {}
+    [c async for c in ClaudeAgentClient().stream([], "opus", usage=usage)]
+
+    assert usage["cache_write_tokens"] == 700
+
+
+async def test_the_flat_cache_creation_field_wins_over_the_split(monkeypatch):
+    result = types.SimpleNamespace(
+        usage={"input_tokens": 10, "output_tokens": 1,
+               "cache_creation_input_tokens": 700,
+               "cache_creation": {"ephemeral_5m_input_tokens": 500,
+                                  "ephemeral_1h_input_tokens": 200}})
+    install_fake_sdk(monkeypatch, replies=[result])
+
+    usage = {}
+    [c async for c in ClaudeAgentClient().stream([], "opus", usage=usage)]
+
+    assert usage["cache_write_tokens"] == 700
+
+
+async def test_a_run_that_cached_nothing_records_no_cache_keys(monkeypatch):
+    result = types.SimpleNamespace(usage={"input_tokens": 10, "output_tokens": 1})
+    install_fake_sdk(monkeypatch, replies=[result])
+
+    usage = {}
+    [c async for c in ClaudeAgentClient().stream([], "opus", usage=usage)]
+
+    assert "cache_read_tokens" not in usage and "cache_write_tokens" not in usage

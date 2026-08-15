@@ -298,3 +298,43 @@ def test_the_scenario_extraction_files_a_world_level_row(client, home):
     assert row["task"] == "scenario"
     assert "campaign" not in row, "a scenario card is imported into a world"
     assert row["prompt_tokens"] == 900
+
+
+# ---- the cache split reaches the ledger and the rollup (#148) ----
+
+def test_a_cached_turn_files_its_split_and_the_rollup_keeps_it_out_of_the_total(client, home):
+    """End to end: what the provider said about caching survives the adapter,
+    the meter and the row, and a rollup reports it as a breakdown rather than
+    folding it into a total that already counts it once."""
+    _use(client.app, FakeOpenRouter(["Hel", "lo"],
+                                    usage={**USAGE, "prompt_tokens": 5000,
+                                           "cache_read_tokens": 4096,
+                                           "cache_write_tokens": 512}))
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
+
+    row, = _rows(home)
+    assert row["prompt_tokens"] == 5000
+    assert row["cache_read_tokens"] == 4096
+    assert row["cache_write_tokens"] == 512
+
+    totals = client.get("/api/usage/summary").json()["totals"]
+    assert totals["cache_read_tokens"] == 4096
+    assert totals["cache_write_tokens"] == 512
+    # 5000 prompt + 40 completion. The 4096 already sits inside the 5000.
+    assert totals["total_tokens"] == 5040
+
+
+def test_a_turn_with_no_caching_leaves_the_rollups_cache_columns_at_zero(client, home):
+    _use(client.app, FakeOpenRouter(["Hel", "lo"], usage=USAGE))
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
+
+    row, = _rows(home)
+    assert "cache_read_tokens" not in row      # absent per row: nobody said
+    totals = client.get("/api/usage/summary").json()["totals"]
+    assert totals["cache_read_tokens"] == 0    # present per bucket: nothing cached

@@ -237,3 +237,57 @@ async def test_a_malformed_usage_block_is_dropped_not_fatal():
     chunks = [c async for c in client.stream([], "m", "sk-or-x", usage=usage)]
     assert "".join(chunks) == "x"
     assert usage == {}
+
+
+# ---- the cache split (#148) ----
+
+CACHED_BODY = (
+    'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'
+    'data: {"choices":[],"model":"realm/opus","usage":{"prompt_tokens":5000,'
+    '"completion_tokens":120,"cost":0.002,"prompt_tokens_details":{"cached_tokens":4096}}}\n\n'
+    "data: [DONE]\n\n"
+)
+
+
+async def test_a_cache_hit_is_read_out_of_the_prompt_token_details():
+    """On this wire shape the cache count is nested under
+    `prompt_tokens_details` rather than named at the top of the block, and
+    `prompt_tokens` ALREADY includes it — so it lands beside the prompt count,
+    never added to it."""
+    def handler(request):
+        return httpx.Response(200, text=CACHED_BODY)
+
+    usage = {}
+    [c async for c in make_client(handler).stream([], "m", "sk-or-x", usage=usage)]
+
+    assert usage["prompt_tokens"] == 5000        # unchanged by the split
+    assert usage["cache_read_tokens"] == 4096
+    assert "cache_write_tokens" not in usage     # this reply wrote nothing
+
+
+async def test_a_top_level_cache_read_field_is_read_too():
+    """A provider routed through this endpoint can report the Anthropic
+    spelling instead; both name the same quantity and map to one column."""
+    body = ('data: {"choices":[],"usage":{"prompt_tokens":900,"completion_tokens":10,'
+            '"cache_read_input_tokens":800,"cache_creation_input_tokens":50}}\n\n'
+            "data: [DONE]\n\n")
+
+    def handler(request):
+        return httpx.Response(200, text=body)
+
+    usage = {}
+    [c async for c in make_client(handler).stream([], "m", "sk-or-x", usage=usage)]
+
+    assert usage["cache_read_tokens"] == 800
+    assert usage["cache_write_tokens"] == 50
+
+
+async def test_a_reply_that_cached_nothing_records_no_cache_keys():
+    def handler(request):
+        return httpx.Response(200, text=USAGE_BODY)
+
+    usage = {}
+    [c async for c in make_client(handler).stream([], "m", "sk-or-x", usage=usage)]
+
+    assert usage["prompt_tokens"] == 120         # the block is otherwise intact
+    assert "cache_read_tokens" not in usage and "cache_write_tokens" not in usage

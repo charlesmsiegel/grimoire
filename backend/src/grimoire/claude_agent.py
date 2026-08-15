@@ -104,6 +104,16 @@ def _capture_usage(message, usage: dict | None) -> None:
         completion = llm_usage.tokens(block.get("output_tokens"))
         if completion is not None:
             usage["completion_tokens"] = completion
+        # Recorded a second time, on purpose, and not double-counted: the sum
+        # above folds these INTO `prompt_tokens` because that is what was
+        # billed as input, and these say how that input split between a cache
+        # hit and a fresh read (#148). This is the provider that caches without
+        # being asked, so on a long campaign the read is most of every prompt --
+        # which is invisible in a total that only knows the three added up.
+        for key, count in (("cache_read_tokens", llm_usage.cache_read(block)),
+                           ("cache_write_tokens", llm_usage.cache_written(block))):
+            if count is not None:
+                usage[key] = count
     cost = llm_usage.money(getattr(message, "total_cost_usd", None))
     if cost is not None:
         usage["cost_usd"] = cost
