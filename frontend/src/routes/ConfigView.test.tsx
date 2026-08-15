@@ -566,6 +566,8 @@ test("a failed layout write reports itself and leaves the settings unwritten", a
   // ...and the reorder is still on screen to retry, not silently discarded
   expect(screen.getAllByTestId("layout-row").map((r) => r.getAttribute("data-id")))
     .toEqual(["weather", "world_info"]);
+});
+
 // ---- backups (#32) ---------------------------------------------------------
 
 test("the backups row says off until the setting is on", async () => {
