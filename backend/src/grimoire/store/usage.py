@@ -48,6 +48,18 @@ therefore a floor whenever ``unpriced_calls`` is non-zero — with these adapter
 a usage block is all-or-nothing, so the calls that report no price are the same
 ones that report no counts.
 
+**The cache pair is a breakdown, not a component** (#148).
+``cache_read_tokens`` and ``cache_write_tokens`` are slices of
+``prompt_tokens`` — the part of the prompt that was already cached, and the
+part this call paid to put there — so they are summed into columns of their own
+and deliberately left out of ``total_tokens``. Folding them in would count a
+cached prefix twice. They are what turns "this month cost X" into "this month
+cost X, and caching is doing Y about it": a read is billed at a fraction of a
+fresh token, a write at a small premium, and without the split a rollup cannot
+tell a library whose prompts cache well from one whose prompts thrash. Absent
+whenever a provider says nothing about caching, which includes every
+``openai_compatible`` endpoint that reports no usage at all.
+
 Retention is deliberately none. A row is ~250 bytes, so a year of heavy play is
 single-digit megabytes, and the month files are trivially deletable by hand —
 which is a better answer than a pruner that silently destroys the history
@@ -88,8 +100,12 @@ _SESSION_START = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 #: is stored rather than derived so a bucket is self-describing to the frontend
 #: reading it, and ``calls``/``errors`` are separate because a failed call still
 #: costs time and may still have been billed for tokens it generated.
+#:
+#: `cache_read_tokens`/`cache_write_tokens` are inside `prompt_tokens` and so
+#: are deliberately absent from `total_tokens` -- see `_add`.
 _ZERO = {"calls": 0, "errors": 0, "prompt_tokens": 0, "completion_tokens": 0,
-         "total_tokens": 0, "cost_usd": 0.0, "estimated_usd": 0.0,
+         "total_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0,
+         "cost_usd": 0.0, "estimated_usd": 0.0,
          "priced_calls": 0, "unpriced_calls": 0, "duration_ms": 0}
 
 #: Cents-of-a-cent. Provider costs run to eight decimal places on a cheap model,
@@ -138,6 +154,7 @@ def month_path(ts: str) -> Path:
 def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = "",
            model: str = "", connection: str = "", provider: str = "",
            prompt_tokens: int | None = None, completion_tokens: int | None = None,
+           cache_read_tokens: int | None = None, cache_write_tokens: int | None = None,
            cost_usd: float | None = None, cost_basis: str = "",
            duration_ms: int = 0, status: str = "ok", error: str = "",
            attempts: int = 1, ts: str | None = None) -> dict | None:
@@ -179,8 +196,14 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
         # empty reply that genuinely completed none. A rollup adds an absent
         # count as zero either way, so what this buys is a file that can still
         # be re-read honestly later.
+        # The cache pair sits under the same rule, and carries one more of its
+        # own: both are slices OF `prompt_tokens` rather than counts beside it
+        # (#148), so a reader adding them to a total would count a cached prefix
+        # twice. `_add` is where that promise is kept for rollups.
         for key, count in (("prompt_tokens", prompt_tokens),
-                           ("completion_tokens", completion_tokens)):
+                           ("completion_tokens", completion_tokens),
+                           ("cache_read_tokens", cache_read_tokens),
+                           ("cache_write_tokens", cache_write_tokens)):
             if count is not None:
                 row[key] = int(count)
         if cost_usd is not None:
@@ -302,6 +325,8 @@ class Meter:
             provider=self.usage.get("provider", ""),
             prompt_tokens=self.usage.get("prompt_tokens"),
             completion_tokens=self.usage.get("completion_tokens"),
+            cache_read_tokens=self.usage.get("cache_read_tokens"),
+            cache_write_tokens=self.usage.get("cache_write_tokens"),
             cost_usd=cost, cost_basis=self.usage.get("cost_basis", ""),
             duration_ms=int((time.monotonic() - self._t0) * 1000),
             status=status, error=error, attempts=self.usage.get("attempts", 1))
@@ -394,6 +419,14 @@ def _add(bucket: dict, row: dict) -> None:
     bucket["prompt_tokens"] += prompt
     bucket["completion_tokens"] += completion
     bucket["total_tokens"] += prompt + completion
+    # NOT folded into `total_tokens`, and this is the line to read twice: a
+    # cache read is part of the prompt the provider already counted, so adding
+    # it would bill a cached prefix to the total twice over (#148). They get
+    # their own columns because they answer a question the totals cannot --
+    # how much of what was sent was already there, which is the whole measure
+    # of whether prompt caching is working.
+    bucket["cache_read_tokens"] += _int(row.get("cache_read_tokens"))
+    bucket["cache_write_tokens"] += _int(row.get("cache_write_tokens"))
     bucket["duration_ms"] += _int(row.get("duration_ms"))
     cost = _float(row.get("cost_usd"))
     if cost is None:

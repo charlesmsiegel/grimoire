@@ -11,10 +11,27 @@ What it fills is the plain dict `LLMClient.stream` threads down to the adapter
 than a return value. Keys, all optional:
 
     prompt_tokens / completion_tokens   ints, as the provider counted them
+    cache_read_tokens                   how much of the prompt was a cache HIT
+    cache_write_tokens                  how much of it was written to the cache
     cost_usd + cost_basis               money, when the provider names a price
     model                               what actually answered, which can differ
                                         from what was asked for (a provider
                                         routing an alias, or a fallback route)
+
+**The two cache counts are slices OF `prompt_tokens`, never additions to it**
+(#148), and every consumer downstream depends on that: `store.usage` sums them
+into their own columns and deliberately leaves `total_tokens` alone. A cached
+prefix is billed at a fraction of a fresh one, so these are what say whether
+caching is working at all -- the ledger without them can report what a month
+cost but not what it saved, and cannot show a hit rate.
+
+Getting the containment backwards is the one mistake here that corrupts a
+number rather than losing it, and the wire shapes invite it: OpenAI's
+`prompt_tokens` already counts the cache hit inside it, while Anthropic's
+`input_tokens` counts only what was neither read nor written. The two adapters
+therefore arrive at `prompt_tokens` differently -- `from_openai_chunk` takes it
+as given, and `claude_agent` sums its three prompt keys -- and both end up
+meaning the same thing before anything here records a cache count beside it.
 
 `tokens` and `money` are exported rather than private because `claude_agent`
 uses them too. Its wire shape is entirely different (an SDK object, not an SSE
@@ -65,6 +82,49 @@ def money(value: object) -> float | None:
     return value
 
 
+def cache_written(block: dict) -> int | None:
+    """Tokens this call wrote to the prompt cache, or None if it did not say.
+
+    Exported for the same reason `tokens` and `money` are: `claude_agent` asks
+    the identical question of a different wire shape, and the answer has two
+    spellings that must not be added together. `cache_creation_input_tokens` is
+    the flat total; `cache_creation` is that same total split per TTL tier
+    (`ephemeral_5m_input_tokens`, `ephemeral_1h_input_tokens`, ...), which
+    Anthropic added without removing the flat field. So the flat one wins
+    whenever it is there, and the split is summed only as the fallback for a
+    provider that sends the breakdown alone -- summing both would report every
+    cache write twice.
+
+    A split whose every entry is unusable answers None rather than 0, the rule
+    `tokens` sets: "nobody counted" and "wrote nothing" are different claims.
+    """
+    flat = tokens(block.get("cache_creation_input_tokens"))
+    if flat is not None:
+        return flat
+    split = block.get("cache_creation")
+    if not isinstance(split, dict):
+        return None
+    counted = [n for n in (tokens(v) for v in split.values()) if n is not None]
+    return sum(counted) if counted else None
+
+
+def cache_read(block: dict) -> int | None:
+    """Tokens this call read from the prompt cache, or None if it did not say.
+
+    Two spellings again, and this time from two different providers rather than
+    two eras of one: Anthropic reports `cache_read_input_tokens` at the top of
+    the block, while OpenAI-shaped endpoints (OpenRouter included) nest it as
+    `prompt_tokens_details.cached_tokens`. Both name the same quantity -- the
+    part of the prompt that was already in the cache -- so both map to one
+    column rather than to a pair a reader would have to know to add.
+    """
+    flat = tokens(block.get("cache_read_input_tokens"))
+    if flat is not None:
+        return flat
+    details = block.get("prompt_tokens_details")
+    return tokens(details.get("cached_tokens")) if isinstance(details, dict) else None
+
+
 def from_openai_chunk(obj: object, usage: dict | None) -> None:
     """Fold one SSE chunk's `usage` block (and `model`) into `usage`, if it has
     them.
@@ -90,6 +150,13 @@ def from_openai_chunk(obj: object, usage: dict | None) -> None:
         return
     for key in ("prompt_tokens", "completion_tokens"):
         count = tokens(block.get(key))
+        if count is not None:
+            usage[key] = count
+    # Beside `prompt_tokens`, never added to it (#148): on this wire shape the
+    # prompt count already includes the cache hit, and the detail says how much
+    # of it was free.
+    for key, count in (("cache_read_tokens", cache_read(block)),
+                       ("cache_write_tokens", cache_written(block))):
         if count is not None:
             usage[key] = count
     # OpenRouter's `cost` is denominated in credits, which are USD one-for-one.

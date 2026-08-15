@@ -200,6 +200,7 @@ def test_an_empty_ledger_summarizes_to_zero_rather_than_failing(home, monkeypatc
     out = usage.summary(days=30)
     assert out["totals"] == {"calls": 0, "errors": 0, "prompt_tokens": 0,
                             "completion_tokens": 0, "total_tokens": 0,
+                            "cache_read_tokens": 0, "cache_write_tokens": 0,
                             "cost_usd": 0.0, "estimated_usd": 0.0,
                             "priced_calls": 0, "unpriced_calls": 0, "duration_ms": 0}
     assert out["by_day"] == []
@@ -385,3 +386,77 @@ def test_a_caller_walking_away_from_a_one_shot_call_is_aborted_not_an_error(home
     rows = _rows(home)
     assert [r["status"] for r in rows] == ["aborted", "aborted"]
     assert all("error" not in r for r in rows)
+
+
+# ---- the cache split (#148) ----
+
+def test_a_cached_prompt_records_its_split_beside_the_prompt_count(home):
+    usage.record(task="chat", prompt_tokens=5000, completion_tokens=120,
+                 cache_read_tokens=4096, cache_write_tokens=512,
+                 ts="2026-08-14T10:00:00Z")
+
+    row, = _rows(home)
+    assert row["prompt_tokens"] == 5000
+    assert row["cache_read_tokens"] == 4096
+    assert row["cache_write_tokens"] == 512
+
+
+def test_a_provider_that_says_nothing_about_caching_records_no_cache_columns(home):
+    """Absent, not zero — the rule the token counts already follow. Zero would
+    claim a call cached nothing, which is not what an endpoint that never
+    mentions caching has said."""
+    usage.record(task="chat", prompt_tokens=100, completion_tokens=10,
+                 ts="2026-08-14T10:00:00Z")
+
+    row, = _rows(home)
+    assert "cache_read_tokens" not in row and "cache_write_tokens" not in row
+
+
+def test_the_cache_split_is_summed_apart_from_the_token_total(home, monkeypatch):
+    """The line worth reading twice: a cache read is part of the prompt the
+    provider already counted, so folding it into `total_tokens` would bill a
+    cached prefix to the total twice over."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    usage.record(task="chat", prompt_tokens=5000, completion_tokens=100,
+                 cache_read_tokens=4000, cache_write_tokens=500,
+                 ts="2026-08-14T10:00:00Z")
+    usage.record(task="chat", prompt_tokens=6000, completion_tokens=200,
+                 cache_read_tokens=5500, ts="2026-08-14T11:00:00Z")
+
+    totals = usage.summary(days=30)["totals"]
+
+    assert totals["prompt_tokens"] == 11000
+    assert totals["total_tokens"] == 11000 + 300      # prompt + completion, and nothing else
+    assert totals["cache_read_tokens"] == 9500
+    assert totals["cache_write_tokens"] == 500
+
+
+def test_a_window_with_no_caching_reports_zeroes_rather_than_missing_keys(home, monkeypatch):
+    """A bucket is read straight by the frontend, so the columns are always
+    there even when nothing cached — absence is a per-ROW claim, not a
+    per-bucket one."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    usage.record(task="chat", prompt_tokens=100, completion_tokens=10,
+                 ts="2026-08-14T10:00:00Z")
+
+    totals = usage.summary(days=30)["totals"]
+
+    assert totals["cache_read_tokens"] == 0 and totals["cache_write_tokens"] == 0
+
+
+def test_a_hand_edited_cache_count_costs_that_field_and_not_the_report(home, monkeypatch):
+    """Same defensive read the other counts get: a ledger line is a file a human
+    can edit, and a string where a number belongs must not take the rollup down
+    or subtract from a month."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    (home / "usage").mkdir(parents=True)
+    (home / "usage" / "2026-08.jsonl").write_text(
+        json.dumps({"ts": "2026-08-14T10:00:00Z", "kind": "llm", "task": "chat",
+                    "prompt_tokens": 100, "completion_tokens": 10,
+                    "cache_read_tokens": "loads", "cache_write_tokens": -999}) + "\n",
+        encoding="utf-8")
+
+    totals = usage.summary(days=30)["totals"]
+
+    assert totals["calls"] == 1
+    assert totals["cache_read_tokens"] == 0 and totals["cache_write_tokens"] == 0
