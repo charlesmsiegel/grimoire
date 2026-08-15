@@ -5,6 +5,7 @@ import CampaignView from "./CampaignView";
 import CommandPalette, { usePaletteHotkey } from "../components/CommandPalette";
 import { PaletteProvider } from "../components/palette";
 import type { ChatEvent } from "../api/stream";
+import type { Mock } from "vitest";
 
 // CastPanel, NewSceneChooser, and CalendarConfig have their own tests + make their own
 // API calls; stub them here.
@@ -122,6 +123,38 @@ const RESPONSE_BUNDLE = {
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
+  // Every api mock also gets its IMPLEMENTATION reset, which `clearAllMocks`
+  // above does not do — it clears call history only. That gap was a real flake.
+  //
+  // ~20 tests below deliberately mock an api with a promise that never settles
+  // ("never lands", "never settles") to hold a request in flight. Those
+  // implementations outlived their test, so any later test in this file that
+  // touched the same api awaited a promise nobody would ever resolve, and hung
+  // until testing-library's async ceiling.
+  //
+  // It presented as load — a different test failing each run, always a `findBy*`
+  // timing out — so it read as a slow machine and cost CI reds on branches that
+  // had not touched any of it. It is not load, and raising the ceiling only
+  // moves when the hang is reported: measured, it still failed at 8000ms (at
+  // 8074ms) on an idle machine.
+  //
+  // Scoped to `api` deliberately, having tried both neighbours: naming the
+  // offending apis individually does not hold, because the list is whatever the
+  // file mocks today and the next test to hold a request in flight rejoins the
+  // class unnoticed; and `vi.resetAllMocks()` reaches too far, wiping the
+  // module-scope mocks (`getModels`, the child-component stubs) that three tests
+  // here depend on. `api` is exactly the surface with the problem, and exactly
+  // the surface the defaults below rebuild.
+  //
+  // Reset to a RESOLVED promise rather than bare: a reset mock returns
+  // `undefined`, and a component that does `api.thing().then(…)` — WeatherWidget
+  // does — throws on it during commit instead of waiting. An already-settled
+  // promise is the smallest default that lets no api leave a caller waiting.
+  for (const fn of Object.values(api)) {
+    if (typeof fn === "function" && "mockReset" in fn) {
+      (fn as unknown as Mock).mockReset().mockResolvedValue(undefined);
+    }
+  }
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Run One", world: "w", world_name: "Saltmarch" }, body: "" });
   (api.getWorld as any).mockResolvedValue({ meta: { id: "w", name: "Saltmarch" }, body: "", counts: {} });
   (api.listScenes as any).mockResolvedValue([]);
