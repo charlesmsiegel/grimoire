@@ -3867,3 +3867,35 @@ def test_an_opener_prompt_naming_an_npc_nominates_them(monkeypatch, tmp_path):
     config.write_config(speaker_turn_taking="on")
     messages = context.build_opener_messages(cid, sid, "Mara is already waiting.")
     assert "Mara carries this turn — the last post named them" in messages[0]["content"]
+
+
+def test_a_layout_with_every_section_off_sends_no_system_message(monkeypatch, tmp_path):
+    """Reachable: nothing stops a reader switching all thirty off. The turn must
+    still be a valid request — a system message that is only blank lines is the
+    failure to avoid."""
+    from grimoire.store import config
+    cid, sid = _group_scene(monkeypatch, tmp_path)
+    context.layout.write_layout([{"id": s.id, "label": "", "enabled": False}
+                                 for s in context.SECTIONS])
+    config.write_config(prompt_layout_enabled="on")
+
+    messages = context.build_messages(cid, sid)
+    assert [m["role"] for m in messages] == ["user"]
+    assert [r["id"] for r in context.context_sections(cid, sid)] == ["history"]
+
+
+def test_the_packer_drops_by_tier_not_by_the_reader_s_order(monkeypatch, tmp_path):
+    """Reordering moves a section within the message; it does not change what
+    gives way when the message will not fit. Lock-in survives at the bottom of
+    a reversed layout exactly as it does at the top of the catalog."""
+    from grimoire.store import config
+    cid, sid = _group_scene(monkeypatch, tmp_path)
+    context.layout.write_layout([{"id": s.id, "label": "", "enabled": True}
+                                 for s in reversed(context.SECTIONS)])
+    config.write_config(prompt_layout_enabled="on", context_budget="120")
+
+    rows = context.context_breakdown(cid, sid)["sections"]
+    kept = [r["id"] for r in rows if not r["dropped"]]
+    assert kept[0] == "response_budget"          # the reader's order held
+    assert "response_format" in kept             # ...and lock-in was not dropped
+    assert all(r["tier"] != context.LOCK_IN for r in rows if r["dropped"])
