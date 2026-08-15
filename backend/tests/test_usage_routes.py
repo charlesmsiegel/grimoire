@@ -277,3 +277,24 @@ def test_the_whole_chain_from_the_wire_to_the_ledger(client, home):
     assert body["totals"]["cost_usd"] == 0.00915
     assert body["totals"]["total_tokens"] == 1241
     assert body["totals"]["unpriced_calls"] == 0
+
+
+def test_the_scenario_extraction_files_a_world_level_row(client, home):
+    """Main's scenario import (#217) landed while this branch was open, and the
+    usage guard caught it unmetered. This pins the row itself, since the guard
+    only proves the holder was passed, not that anything files it."""
+    import io
+
+    _use(client.app, FakeOpenRouterComplete("{}", usage=USAGE))
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+
+    r = client.post(f"/api/worlds/{wid}/scenario/parse",
+                    files={"file": ("card.json", io.BytesIO(b'{"name": "Saltmarch"}'),
+                                    "application/json")},
+                    data={"format": "json"})
+    assert r.status_code == 200
+
+    row, = _rows(home)
+    assert row["task"] == "scenario"
+    assert "campaign" not in row, "a scenario card is imported into a world"
+    assert row["prompt_tokens"] == 900
