@@ -44,6 +44,13 @@ Campaign scope means standing until removed.
 decision and the one the reader can see in front of them. So "never in this
 campaign, except in this scene" is expressible, and so is its opposite.
 
+**What a pin does not reach.** `secrecy: gm-only` (#49). That level says the
+entry is not for the model at all, which is a property of the record rather than
+a condition about this turn -- unlike the owner gate and the keyword rule, which
+a pin exists to answer. Pinning a gm-only entry is inert, exactly like pinning a
+record the campaign has since deleted; see `context.activate`, where the two
+rules meet and the order is spelled out.
+
 **What an exclude does not reach.** It governs SELECTION -- which records the
 context builder pulls into the prompt -- not the text already written down. An
 excluded character's name still appears in the transcript they spoke in, in the

@@ -61,15 +61,25 @@ def activate(entries: list[dict], recent_text: str, present: frozenset = frozens
     resolved by `pins.active`), checked next — ahead of the owner gate, the
     keyword rule and `recall` alike. That ordering is the feature: those are
     guesses about what the scene needs, and a pin is the reader saying they
-    already know. It does NOT extend to `gm-only` above; see the final
-    paragraph.
+    already know.
 
-    A pin beats the OWNER GATE, which is the one override that costs something:
-    an entry owned by a character who is not in the scene stays out of the
-    prompt precisely so absent people's lore cannot leak into it. A pin names
-    that entry explicitly, by a reader looking at their own campaign, so it goes
-    in — but nothing else opens that gate, and an owned entry the reader has not
-    named is as silent as it ever was.
+    **A pin does not beat `gm-only`,** and the difference from the gates it does
+    beat is the whole reason the order above is what it is. The owner gate and
+    the keyword rule are CONDITIONAL — "not unless her owner is here", "not
+    unless someone says the word" — and a pin is the reader answering the
+    condition. `gm-only` is not a condition; it is the entry saying it is not
+    for the model at all, which is a property of the record rather than of this
+    turn. A pin that could override it would make pinning a way to leak the GM's
+    own notes into the prompt, which is precisely what #49 exists to prevent.
+    Pinning one is therefore inert, exactly like pinning a record the campaign
+    has since deleted.
+
+    A pin DOES beat the owner gate, which is the one override that costs
+    something: an entry owned by a character who is not in the scene stays out
+    so absent people's lore cannot leak into it. A pin names that entry
+    explicitly, by a reader looking at their own campaign, so it goes in — but
+    nothing else opens that gate, and an owned entry the reader has not named is
+    as silent as it ever was.
 
     An excluded entry is dropped outright rather than merely failing the keyword
     rule: `recall` only ever sees what the keyword rule REJECTED, so leaving it
