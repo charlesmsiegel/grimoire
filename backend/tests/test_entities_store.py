@@ -134,3 +134,51 @@ def test_all_refs_and_counts(tmp_path: Path):
     assert set(entities.all_refs(tmp_path)) == {("lore", "a"), ("locations", "b")}
     assert entities.entity_counts(tmp_path) == {
         "locations": 1, "lore": 1, "items": 0, "groups": 0, "creatures": 0}
+
+
+# ---- secrecy (#49) ----------------------------------------------------------
+
+def test_secrecy_round_trip(tmp_path: Path):
+    eid = entities.create_entity(tmp_path, "lore", "The Twist", "x", secrecy="secret")
+    assert entities.read_entity(tmp_path, "lore", eid)["meta"]["secrecy"] == "secret"
+    entities.update_entity(tmp_path, "lore", eid, secrecy="gm-only")
+    assert entities.read_entity(tmp_path, "lore", eid)["meta"]["secrecy"] == "gm-only"
+    # back to public: the key goes away rather than being written out
+    entities.update_entity(tmp_path, "lore", eid, secrecy="public")
+    got = entities.read_entity(tmp_path, "lore", eid)
+    assert "secrecy" not in got["meta"]
+    assert got["body"].strip() == "x"                 # body untouched throughout
+
+
+def test_secrecy_public_leaves_the_file_as_it_always_was(tmp_path: Path):
+    """An unmarked record must be byte-identical to a pre-secrecy one — the
+    world->campaign sync hashes whole files, so a stray `secrecy: public` would
+    show every entity as edited."""
+    plain = entities.create_entity(tmp_path, "lore", "Plain", "x")
+    marked = entities.create_entity(tmp_path, "lore", "Plain public", "x", secrecy="public")
+    read = (tmp_path / "lore" / f"{plain}.md").read_text(encoding="utf-8")
+    assert "secrecy" not in read
+    assert "secrecy" not in (tmp_path / "lore" / f"{marked}.md").read_text(encoding="utf-8")
+
+
+def test_secrecy_omitted_on_update_keeps_the_stored_level(tmp_path: Path):
+    eid = entities.create_entity(tmp_path, "lore", "Twist", "x", secrecy="secret")
+    entities.update_entity(tmp_path, "lore", eid, body="edited")   # secrecy=None
+    got = entities.read_entity(tmp_path, "lore", eid)
+    assert got["meta"]["secrecy"] == "secret"
+    assert got["body"].strip() == "edited"
+
+
+def test_secrecy_survives_in_list_summaries(tmp_path: Path):
+    entities.create_entity(tmp_path, "lore", "Twist", "x", secrecy="secret")
+    assert entities.list_entities(tmp_path, "lore")[0]["secrecy"] == "secret"
+
+
+def test_normalize_secrecy_is_lenient(tmp_path: Path):
+    assert entities.normalize_secrecy(None) == "public"
+    assert entities.normalize_secrecy("") == "public"
+    assert entities.normalize_secrecy("  SECRET ") == "secret"
+    assert entities.normalize_secrecy("sercet") == "public"      # typo reads as public
+    # a garbled level is never written back out as one
+    eid = entities.create_entity(tmp_path, "lore", "Typo", "x", secrecy="sercet")
+    assert "secrecy" not in entities.read_entity(tmp_path, "lore", eid)["meta"]

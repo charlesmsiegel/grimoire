@@ -11,8 +11,8 @@ missing character record.
 from __future__ import annotations
 
 from ... import prompts
-from .. import (characters, commitments, facts, groupstate, overlay, playstate,
-                plot, relationships)
+from .. import (characters, commitments, entities, facts, groupstate, overlay,
+                playstate, plot, relationships)
 from ..appearances import cast as appearances_cast, paths as appearances_paths
 from ..campaigns import paths as campaigns_paths
 
@@ -80,11 +80,21 @@ def fact_snapshot(cid: str, sid: str | None = None) -> str:
 
 def group_snapshot(cid: str) -> str:
     """Every campaign group with its current state — feeds the absorb prompt so
-    the model uses real ids and rewrites from stored values, not from memory."""
+    the model uses real ids and rewrites from stored values, not from memory.
+
+    Except `secrecy: gm-only` groups (#49). This is a second prompt, built by a
+    different module from the scene context, so the gate in `context.activate`
+    does not reach it — and this one carries `groupstate`'s `secrets` field
+    verbatim, which makes it the worst place to leave the level unenforced.
+    Absorb is a GM-side pass, but "never sent to the model" has to mean every
+    model or it means nothing.
+    """
     try:
         croot = campaigns_paths.campaign_root(cid)
         lines = []
         for meta in overlay.list_entities(cid, "groups"):
+            if entities.normalize_secrecy(meta.get("secrecy")) == entities.GM_ONLY:
+                continue
             st = groupstate.read_state(croot, meta["id"])
             parts = [f"{groupstate.LABELS[k]}: {st[k]}" for k in groupstate.FIELDS
                      if st and st.get(k, "").strip()] if st else []

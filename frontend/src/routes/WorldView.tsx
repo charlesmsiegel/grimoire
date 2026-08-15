@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type EntityScope, type ModuleDetail } from "../api/client";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
@@ -78,9 +78,20 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const [loreReset, setLoreReset] = useState(0);
   const [focusChar, setFocusChar] = useState<{ cid: string; vid: string } | null>(null);
   const [focusGreeting, setFocusGreeting] = useState<string | null>(null);
-  const [loreNav, setLoreNav] = useState<{ focusEntry?: string; newOwner?: string } | null>(null);
+  /** A pending "open this entity" for whichever EntityEditor is mounted. Keyed
+   *  by kind so a nav aimed at Lore cannot be consumed by Items: all six
+   *  editors are the same component, and only the kind tells them apart. */
+  const [entityNav, setEntityNav] =
+    useState<{ kind: IndexKey; focusEntry?: string; newOwner?: string } | null>(null);
   const [moduleCtx, setModuleCtx] = useState<ModuleDetail | null>(null);
   const [worldMid, setWorldMid] = useState("");
+  const [params] = useSearchParams();
+
+  /** The pending nav, but only for the editor that was aimed at. Every
+   *  EntityEditor gets this rather than the raw state, so the first one to
+   *  mount cannot swallow a nav meant for another kind. */
+  const navFor = (kind: IndexKey) =>
+    (entityNav && entityNav.kind === kind ? entityNav : null);
 
   // Editing a campaign's world is still being in that campaign, but it is a
   // different route: CampaignView unmounts and clears the context, so without
@@ -175,6 +186,12 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     setSection(key);
     if (key === "characters") { setCharReset((n) => n + 1); setFocusChar(null); }
     if (key === "greetings") setFocusGreeting(null);
+    // ...and any entity nav, for the same reason the two above are cleared:
+    // choosing a section from the column means the list, not whoever happened
+    // to be open in it. No path reaching here today leaves one pending -- every
+    // setter sets the section in the same breath, and the editor consumes it on
+    // mount -- so this is the invariant stated rather than a hole plugged.
+    setEntityNav(null);
   }
 
   // a present-character link from the greeting view jumps to that character
@@ -191,8 +208,14 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
 
   // an owner editor's lore panel routes to Lore (open an entry, or start a pre-owned one)
   function openLore(nav: { focusEntry?: string; newOwner?: string }) {
-    setLoreNav({ ...nav });
+    setEntityNav({ kind: "lore", ...nav });
     setSection("lore");
+  }
+
+  // a search hit, or any other deep link, opens the record it names
+  function openEntity(kind: IndexKey, id: string) {
+    setEntityNav({ kind, focusEntry: id });
+    setSection(kind);
   }
 
   // an owner chip inside Lore jumps to that record's section
@@ -204,6 +227,36 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     else if (kind === "pcs") setSection("pcs");
     else if (kind === "locations") setSection("locations");
   }
+
+  /** Open what the URL names: `?section=lore&id=the-salt-pact`, plus `&v=` for
+   *  a character's card version.
+   *
+   *  This is what makes a search hit followable — a result is a record, and
+   *  landing on the section it lives in and leaving the reader to find it
+   *  again would be answering a question with the index. Query params rather
+   *  than path segments because the section and the open record are this
+   *  page's *state*, not a deeper resource: everything else here changes them
+   *  without moving the route, and a deep link has to arrive at the same
+   *  place, not at a second one.
+   *
+   *  Re-runs when the params change, and only then: picking a section from the
+   *  column leaves the URL alone, so nothing here undoes it. */
+  useEffect(() => {
+    const section = params.get("section") ?? "";
+    const id = params.get("id") ?? "";
+    if (!section) return;
+    if (section === "characters") { openCharacter(id, params.get("v") ?? ""); return; }
+    if (section === "greetings") { openGreeting(id); return; }
+    if (INDEX.some((g) => g.rows.some((r) => r.key === section && r.key !== "tags"))) {
+      // `pcs` has no per-record focus of its own yet; the section is as close
+      // as this can land, which is still nearer than the page it started on.
+      if (section === "pcs") setSection("pcs");
+      else openEntity(section as IndexKey, id);
+    }
+    // The openers are redeclared every render and close over nothing that
+    // outlives one -- `params` is the only real dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
 
   /** What this page contributes to ⌘K: its own index, so a section can be
    *  reached by name from anywhere in the world rather than only by finding
@@ -316,7 +369,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         {section === "characters" && <CharacterEditor scope={scope} wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} onOpenGreeting={openGreeting} module={moduleCtx} />}
         {section === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore} module={moduleCtx} />}
         {!campaign && section === "tags" && <TagEditor wid={wid} />}
-        {section === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations" onOpenLore={openLore} module={moduleCtx} />}
+        {section === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations" nav={navFor("locations")}
+                                          onNavConsumed={() => setEntityNav(null)} onOpenLore={openLore} module={moduleCtx} />}
         {section === "lore" && (
           <>
             {/* Controlled so the column's pinned import row can open it: the
@@ -327,13 +381,16 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
               <summary>Import lorebook / world-info</summary>
               <LorebookImport wid={wid} onImported={() => setLoreReset((n) => n + 1)} />
             </details>}
-            <EntityEditor key={loreReset} wid={wid} scope={scope} kind="lore" nav={loreNav}
-                          onNavConsumed={() => setLoreNav(null)} onOpenOwner={openOwner} module={moduleCtx} />
+            <EntityEditor key={loreReset} wid={wid} scope={scope} kind="lore" nav={navFor("lore")}
+                          onNavConsumed={() => setEntityNav(null)} onOpenOwner={openOwner} module={moduleCtx} />
           </>
         )}
-        {section === "items" && <EntityEditor wid={wid} scope={scope} kind="items" module={moduleCtx} />}
-        {section === "groups" && <EntityEditor wid={wid} scope={scope} kind="groups" module={moduleCtx} />}
-        {section === "creatures" && <EntityEditor wid={wid} scope={scope} kind="creatures" module={moduleCtx} />}
+        {section === "items" && <EntityEditor wid={wid} scope={scope} kind="items" nav={navFor("items")}
+                                          onNavConsumed={() => setEntityNav(null)} module={moduleCtx} />}
+        {section === "groups" && <EntityEditor wid={wid} scope={scope} kind="groups" nav={navFor("groups")}
+                                          onNavConsumed={() => setEntityNav(null)} module={moduleCtx} />}
+        {section === "creatures" && <EntityEditor wid={wid} scope={scope} kind="creatures" nav={navFor("creatures")}
+                                          onNavConsumed={() => setEntityNav(null)} module={moduleCtx} />}
         {section === "greetings" && <GreetingEditor scope={scope} wid={wid} onOpenCharacter={openCharacter} focus={focusGreeting} />}
       </div>
     </PageShell>

@@ -1523,6 +1523,62 @@ def test_entity_keys_via_routes(client):
     assert client.get(f"/api/worlds/{wid}/lore/{eid}").json()["meta"]["keys"] == "pact, salt"
 
 
+def test_entity_secrecy_via_routes(client):
+    wid = _world(client)
+    eid = client.post(f"/api/worlds/{wid}/lore",
+                      json={"name": "The Twist", "body": "p", "secrecy": "secret"}).json()["id"]
+    assert client.get(f"/api/worlds/{wid}/lore/{eid}").json()["meta"]["secrecy"] == "secret"
+    assert client.get(f"/api/worlds/{wid}/lore").json()[0]["secrecy"] == "secret"
+    client.put(f"/api/worlds/{wid}/lore/{eid}", json={"secrecy": "gm-only"})
+    assert client.get(f"/api/worlds/{wid}/lore/{eid}").json()["meta"]["secrecy"] == "gm-only"
+    client.put(f"/api/worlds/{wid}/lore/{eid}", json={"secrecy": "public"})
+    assert "secrecy" not in client.get(f"/api/worlds/{wid}/lore/{eid}").json()["meta"]
+    # an unmarked entity carries no secrecy at all
+    other = client.post(f"/api/worlds/{wid}/lore", json={"name": "Plain"}).json()["id"]
+    assert "secrecy" not in client.get(f"/api/worlds/{wid}/lore/{other}").json()["meta"]
+
+
+def test_entity_secrecy_rejects_an_unknown_level(client):
+    """A typo must be reported, not silently normalized: normalizing to public
+    is the one direction that publishes what the user meant to hide."""
+    wid = _world(client)
+    r = client.post(f"/api/worlds/{wid}/lore", json={"name": "Twist", "secrecy": "sercet"})
+    assert r.status_code == 400
+    assert "secrecy" in r.json()["detail"]
+    assert client.get(f"/api/worlds/{wid}/lore").json() == []       # nothing was written
+    eid = client.post(f"/api/worlds/{wid}/lore",
+                      json={"name": "Twist", "secrecy": "secret"}).json()["id"]
+    assert client.put(f"/api/worlds/{wid}/lore/{eid}",
+                      json={"secrecy": "hidden"}).status_code == 400
+    assert client.get(f"/api/worlds/{wid}/lore/{eid}").json()["meta"]["secrecy"] == "secret"
+
+
+def test_campaign_can_mark_an_inherited_world_entity_secret(client):
+    """Setting secrecy on a world entity from campaign scope goes through
+    `overlay.materialize_entity` first — the one path where a copy could drop
+    the field. The world's own copy must stay public."""
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/lore", json={"name": "The Twist", "body": "p"})
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    client.put(f"/api/campaigns/{cid}/lore/the-twist", json={"secrecy": "secret"})
+    got = client.get(f"/api/campaigns/{cid}/lore/the-twist").json()
+    assert got["meta"]["secrecy"] == "secret"
+    assert got["body"].strip() == "p"          # materialize kept the inherited body
+    assert "secrecy" not in client.get(f"/api/worlds/{wid}/lore/the-twist").json()["meta"]
+
+
+def test_campaign_entity_secrecy_via_routes(client):
+    wid = _world(client)
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    eid = client.post(f"/api/campaigns/{cid}/lore",
+                      json={"name": "The Twist", "body": "p", "secrecy": "secret"}).json()["id"]
+    assert client.get(f"/api/campaigns/{cid}/lore/{eid}").json()["meta"]["secrecy"] == "secret"
+    assert client.put(f"/api/campaigns/{cid}/lore/{eid}",
+                      json={"secrecy": "nope"}).status_code == 400
+    client.put(f"/api/campaigns/{cid}/lore/{eid}", json={"secrecy": "gm-only"})
+    assert client.get(f"/api/campaigns/{cid}/lore/{eid}").json()["meta"]["secrecy"] == "gm-only"
+
+
 def test_unknown_kind_404(client):
     wid = _world(client)
     assert client.get(f"/api/worlds/{wid}/weapons").status_code == 404
@@ -11015,7 +11071,14 @@ def test_a_corrupt_scene_stamp_cannot_pin_a_campaign_atop_recent(client, monkeyp
 
     row = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]
     assert row["activity"] != "zzzz", "a corrupt scene stamp must not rank the campaign"
-    assert row["activity"] == row["updated"] != ""
+    # A REAL stamp won, and it is at least as new as campaign.md's. Not equality:
+    # creating the scene stamps the activity file a moment after the campaign
+    # write, so the two agree only when both land inside the same wall-clock
+    # second. That held locally and failed on a slower runner (PR #327).
+    # The shape check is what keeps `>=` strict -- "zzzz" outranks every real
+    # stamp lexically, so ordering alone would accept the value under test.
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", row["activity"])
+    assert row["activity"] >= row["updated"] != ""
 
     # and a later write still moves it, rather than being outranked forever
     monkeypatch.setattr("grimoire.store.campaigns.read.now_iso", lambda: _soon(60))

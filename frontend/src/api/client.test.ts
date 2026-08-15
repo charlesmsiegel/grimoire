@@ -803,3 +803,23 @@ test("exportUrl points at the version's export route, one URL per format", () =>
   expect(api.exportUrl("w", "seraphine", "winter", "charx"))
     .toBe("/api/worlds/w/characters/seraphine/versions/winter/export?format=charx");
 });
+
+test("search builds the query string and omits what was not asked for", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ hits: [] }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.search("the salt pact");
+  expect(fetchMock.mock.calls[0][0]).toBe("/api/search?q=the+salt+pact");
+
+  await api.search("salt", { scope: "campaign", root: "run", kinds: ["lore", "scenes"], limit: 10 });
+  expect(fetchMock.mock.calls[1][0])
+    .toBe("/api/search?q=salt&scope=campaign&root=run&kinds=lore%2Cscenes&limit=10");
+});
+
+test("two searches for the same query are two requests, not one shared read", async () => {
+  // The shared-promise cache is keyed on the path, so an edit-and-undo would
+  // otherwise be answered by the read issued before the edit.
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ hits: [] }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await Promise.all([api.search("salt"), api.search("salt")]);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});

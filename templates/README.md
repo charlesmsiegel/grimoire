@@ -236,12 +236,29 @@ substituted by code:
   (fulfilled/broken/expired) rather than merely advancing like a plot thread
 - `today` — `calendars.today_facts()` fields + `cast`
   (`context.cast_datetime_facts()`), or None when the scene has no date
-- `current_setting` — the current location's body ("" if none)
-- `world_info_bodies` — bodies selected by `context.activate()` (the
-  current location is excluded here and shown as `current_setting` instead)
-- `group_states` — `[{name, goals, resources, focus, public_perception,
-  secrets}]` from `groupstate.read_state()` for activated `groups` entries
-  that have a state.md
+- `current_setting` — the current location's body ("" if none, and "" for a
+  `secrecy: gm-only` location: the setting block is the one world-info body
+  that does NOT pass through `context.activate`, so the gate is applied in
+  `_assemble` instead)
+- `current_setting_secret` — bool; the current location is `secrecy: secret`,
+  so its body renders under `scene/_secrecy.j2`'s heading
+- `world_info_bodies` — `secrecy: public` bodies selected by
+  `context.activate()` (the current location is excluded here and shown as
+  `current_setting` instead)
+- `secret_world_info_bodies` — the same selection's `secrecy: secret` bodies,
+  rendered in the same section under `scene/_secrecy.j2`'s heading.
+  `secrecy: gm-only` entries are absent from both lists: `activate` drops
+  them before any selection rule runs, so their BODY never reaches a template.
+  Their name still can — `mechanics_sheets` labels a sheeted location by name
+  whatever its level, because a sheet is functional data, not lore
+- `recalled_lore_bodies` / `secret_recalled_lore_bodies` — the same split for
+  what `context.semantic.recall` added on top of the keyword rule
+- `group_states` / `secret_group_states` — `[{name, goals, resources,
+  public_perception, focus, secrets}]` from `groupstate.read_state()` for
+  activated `groups` entries that have a state.md, split by the group's
+  secrecy. The secret list renders in the same section under
+  `scene/_secrecy.j2`'s heading rather than relying on the (separately
+  dropped) World info section to carry it
 - `offscene_active` / `offscene_known` — the cast-directory tiers
   (dossiers / taglines + version ids)
 - `player_names` — seated player names (the response-format guard)

@@ -1,4 +1,10 @@
-{#- The scene's current location body. Vars: current_setting (str — the
-    location entity's body, stripped; "" when the scene has no location). -#}
+{#- The scene's current location body. A `secrecy: secret` location carries the
+    same heading world info gives a secret entry — the party is standing in the
+    room, but that does not mean every character in it knows what the room is.
+    A `gm-only` location never gets here at all: `_assemble` leaves
+    `current_setting` empty for one (#49).
+    Vars: current_setting (str — the location entity's body, stripped; "" when
+    the scene has no location), current_setting_secret (bool). -#}
+{%- from "scene/_secrecy.j2" import secret_block -%}
 {%- if current_setting %}# Current setting
-{{ current_setting }}{% endif -%}
+{{ secret_block([current_setting]) if current_setting_secret else current_setting }}{% endif -%}

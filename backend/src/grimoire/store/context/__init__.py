@@ -37,7 +37,7 @@ from .macros import (  # noqa: F401
 )
 from .world_state import (  # noqa: F401
     _character_states, _group_states, _today_data, _transient_states, _weather_data,
-    _world_info, activate, keyword_hit,
+    _world_info, activate, keyword_hit, secrecy_split,
 )
 from .archive import _archive_entries, archive_depth  # noqa: F401
 # The tier constants and the budget reader, by value; `pack.pack` itself is

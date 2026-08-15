@@ -300,9 +300,22 @@ entities.create_entity(croot, "lore", "The Ledger", "The ledger lists a decade o
                        keys="ledger")
 entities.create_entity(croot, "lore", "Sera secret", "She was exiled from the Guild.",
                        owners=f"characters:{sera}")
+# Secrecy (#49): a `secret` entry so the World info section renders its labelled
+# block here, and a `gm-only` one that must never appear in any render at all.
+entities.create_entity(croot, "lore", "The Ledger's true owner",
+                       "The Guildmaster keeps the ledger himself.",
+                       keys="ledger", secrecy="secret")
+entities.create_entity(croot, "lore", "Referee note", "The warehouse burns on day nine.",
+                       secrecy="gm-only")
 circle = entities.create_entity(croot, "groups", "Salt Circle",
                                 "A quiet cabal moving contraband.")  # keyless -> always-on
 groupstate.write_state(croot, circle, "## Goals\nCorner the ledger before the Guild does.")
+# A secret group WITH state, so the Group state section renders both of its
+# blocks here: state is the half of a group worth gating (FIELDS ends in
+# `secrets`), and it must not depend on World info to carry the heading.
+cabal = entities.create_entity(croot, "groups", "The Quiet Office",
+                               "Nobody admits it exists.", secrecy="secret")
+groupstate.write_state(croot, cabal, "## Secrets\nThey hold the Guildmaster's debt.")
 scenes.set_location(cid, sid, dock)
 sid = scenes.set_datetime(cid, sid, "2026-07-05")["id"]  # first date set renames the scene
 
@@ -337,6 +350,14 @@ chronicle.absorb(cid, {"id": "000--2026-06-20--harbor-run",
                        "one_line": "The warehouse changed hands.",
                        "summary": "The bonded warehouse changed hands after a bad night on the pier.",
                        "keywords": ["warehouse"], "cast": [], "location": "", "date": "2026-06-20"})
+
+
+def _secrecy_of(meta: dict) -> str:
+    """`entities.normalize_secrecy`, re-implemented rather than imported: this
+    harness is the independent copy of the data contract, so it spells the rule
+    out the way the templates/README.md description does."""
+    level = (meta.get("secrecy") or "public").strip().lower()
+    return level if level in ("public", "secret", "gm-only") else "public"
 
 
 def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) -> dict:
@@ -411,8 +432,13 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
     history_ids = scenes.get_location_history(cid, scene_id)
     current_loc = history_ids[-1] if history_ids else None
     current_setting = ""
+    current_setting_secret = False
     if current_loc:
-        current_setting = entities.read_entity(croot, "locations", current_loc)["body"].strip()
+        loc_meta = entities.read_entity(croot, "locations", current_loc)
+        loc_secrecy = _secrecy_of(loc_meta["meta"])
+        if loc_secrecy != "gm-only":
+            current_setting = loc_meta["body"].strip()
+            current_setting_secret = loc_secrecy == "secret"
 
     scan = max(int(cfg.get("context_scan_depth", "8")), 0)
     recent_text = "\n".join(m["content"] for m in scene["messages"][-scan:]) if scan else ""
@@ -447,19 +473,22 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             if kind == "locations" and not keys:
                 continue
             entries.append({"body": e["body"].strip(), "keys": keys, "owners": owners,
-                            "kind": kind, "id": meta["id"],
+                            "secrecy": _secrecy_of(e["meta"]), "kind": kind, "id": meta["id"],
                             "name": e["meta"].get("name", meta["id"])})
     present = set(tokens) | ({f"locations:{current_loc}"} if current_loc else set())
     activated = context.activate(entries, recent_text, frozenset(present))
-    world_info_bodies = [e["body"] for e in activated]
+    world_info_bodies = [e["body"] for e in activated if e["secrecy"] != "secret"]
+    secret_world_info_bodies = [e["body"] for e in activated if e["secrecy"] == "secret"]
     recalled_lore_bodies = []   # recall is off in this harness, as by default
-    group_states = []
+    secret_recalled_lore_bodies = []
+    group_states, secret_group_states = [], []
     for e in activated:
         if e["kind"] != "groups":
             continue
         st = groupstate.read_state(croot, e["id"])
         if st and any(st[k] for k in groupstate.FIELDS):
-            group_states.append({"name": e["name"], **st})
+            bucket = secret_group_states if e["secrecy"] == "secret" else group_states
+            bucket.append({"name": e["name"], **st})
 
     mid = modules.resolve(cid)
     mechanics_rules, mechanics_sheets, mechanics_checks = [], [], []
@@ -591,9 +620,14 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             "plot_lines": plot.render_open(cid, with_id=False),
             "commitment_lines": commitments.render_open(cid, with_id=False), "today": today,
             "weather": weather_now,
-            "current_setting": current_setting, "world_info_bodies": world_info_bodies,
+            "current_setting": current_setting,
+            "current_setting_secret": current_setting_secret,
+            "world_info_bodies": world_info_bodies,
+            "secret_world_info_bodies": secret_world_info_bodies,
             "recalled_lore_bodies": recalled_lore_bodies,
+            "secret_recalled_lore_bodies": secret_recalled_lore_bodies,
             "group_states": group_states,
+            "secret_group_states": secret_group_states,
             "offscene_active": offscene_active, "offscene_known": offscene_known,
             "player_names": player_names, "pcless": pcless,
             "story_full": bool(full_recap), "opener": False,

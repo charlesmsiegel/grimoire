@@ -279,10 +279,21 @@ export const ENTITY_FIELDS: Record<EntityKind, { key: string; label: string }[]>
   creatures: [{ key: "creature_type", label: "Type" }, { key: "threat", label: "Threat" }],
 };
 
+// Mirrors store.entities.SECRECY_LEVELS. `owners` says what puts an entry in
+// the prompt; `secrecy` says how the prompt may use it once there — "secret"
+// renders under a "don't let uninvolved characters reveal this" heading,
+// "gm-only" never reaches the model at all. Absent == "public".
+export const SECRECY_LEVELS = ["public", "secret", "gm-only"] as const;
+export type Secrecy = (typeof SECRECY_LEVELS)[number];
+export const SECRECY_LABELS: Record<Secrecy, string> = {
+  public: "Public", secret: "Secret", "gm-only": "GM-only",
+};
+
 export type EntitySummary = { id: string; name: string; keys?: string; owners?: string;
-  has_image?: boolean; image_v?: string | null } & Record<string, unknown>;
+  secrecy?: string; has_image?: boolean; image_v?: string | null } & Record<string, unknown>;
 export type EntityDetail = {
-  meta: { id: string; name: string; keys?: string; owners?: string; sd_prompt?: string } & Record<string, unknown>;
+  meta: { id: string; name: string; keys?: string; owners?: string; secrecy?: string;
+    sd_prompt?: string } & Record<string, unknown>;
   body: string;
 };
 
@@ -820,6 +831,42 @@ export type Ledger = {
   chronicle: LedgerFact[];
 };
 
+// keyword search (#33)
+/** One record the query matched.
+ *
+ *  `scope` and `root` together say *which* record: a world's lore and a
+ *  campaign's fork of it carry the same `id`, and only the scope tells them
+ *  apart. `sub` is what inside the record matched where a record has parts — a
+ *  card version, a persona version, a relationship's side — and "" where it
+ *  does not. */
+export type SearchHit = {
+  scope: "world" | "campaign";
+  root: string;
+  root_name: string;
+  kind: string;
+  id: string;
+  sub: string;
+  name: string;
+  /** A one-line window of the body around the first matching term, ellipsed at
+   *  either end. Plain text, not markdown: the emphasis runs are stripped. */
+  snippet: string;
+  score: number;
+};
+export type SearchResult = {
+  q: string;
+  /** The query as the server split it — phrases kept whole — so the client
+   *  highlights exactly what matched rather than re-implementing the split. */
+  terms: string[];
+  /** Hits after the kind filter; `hits` is this list cut to the limit. */
+  total: number;
+  /** Hits per kind BEFORE the kind filter, so a chip can say what dropping the
+   *  current filter would find. */
+  facets: Record<string, number>;
+  scopes: Record<string, number>;
+  truncated: boolean;
+  hits: SearchHit[];
+};
+
 // pre-scene briefing (#118) — the ledger's per-scene sibling. The rows are the
 // ledger's, minus the `scene` label (this view is about who, not when) and plus
 // `involves`: the display names of the scene's cast this row can be traced to,
@@ -1119,6 +1166,20 @@ export const api = {
   campaignLedger: (cid: string) =>
     request<Ledger>("GET", `/api/campaigns/${cid}/ledger`, undefined, { fresh: true }),
 
+  // search (#33). Never coalesced with an in-flight read: a search page issues
+  // one of these per settled keystroke, and the shared-promise cache is keyed
+  // on the path — which for a repeated query is the same path, so a result
+  // arriving for the query BEFORE an edit-and-undo would be served as the
+  // answer to the current one.
+  search: (q: string, opts?: { scope?: string; root?: string; kinds?: string[]; limit?: number }) => {
+    const params = new URLSearchParams({ q });
+    if (opts?.scope) params.set("scope", opts.scope);
+    if (opts?.root) params.set("root", opts.root);
+    if (opts?.kinds?.length) params.set("kinds", opts.kinds.join(","));
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    return request<SearchResult>("GET", `/api/search?${params}`, undefined, { fresh: true });
+  },
+
   // scenes
   // Never coalesced, like the scene, alternates and proposal reads above — and
   // opted out for every caller rather than at each mutation's call site, which
@@ -1234,12 +1295,14 @@ export const api = {
   listEntities: (scope: EntityScope, kind: EntityKind) =>
     request<EntitySummary[]>("GET", `${entityBase(scope)}/${kind}`),
   createEntity: (scope: EntityScope, kind: EntityKind,
-                 body: { name: string; body?: string; keys?: string; owners?: string; fields?: Record<string, string> }) =>
+                 body: { name: string; body?: string; keys?: string; owners?: string;
+                         secrecy?: string; fields?: Record<string, string> }) =>
     request<{ id: string }>("POST", `${entityBase(scope)}/${kind}`, body),
   readEntity: (scope: EntityScope, kind: EntityKind, id: string) =>
     request<EntityDetail>("GET", `${entityBase(scope)}/${kind}/${id}`),
   updateEntity: (scope: EntityScope, kind: EntityKind, id: string,
-                 patch: { name?: string; body?: string; keys?: string; owners?: string; fields?: Record<string, string> }) =>
+                 patch: { name?: string; body?: string; keys?: string; owners?: string;
+                          secrecy?: string; fields?: Record<string, string> }) =>
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/${kind}/${id}`, patch),
   deleteEntity: (scope: EntityScope, kind: EntityKind, id: string) =>
     request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/${kind}/${id}`),

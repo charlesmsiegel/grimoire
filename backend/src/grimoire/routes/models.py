@@ -297,6 +297,7 @@ class EntityCreate(BaseModel):
     body: str = ""
     keys: str = ""
     owners: str = ""
+    secrecy: str = ""      # "" == public; see store.entities.SECRECY_LEVELS
     fields: dict | None = None
 
 
@@ -305,6 +306,7 @@ class EntityUpdate(BaseModel):
     body: str | None = None
     keys: str | None = None
     owners: str | None = None
+    secrecy: str | None = None
     fields: dict | None = None
 
 
