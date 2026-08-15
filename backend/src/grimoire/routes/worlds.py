@@ -447,7 +447,12 @@ async def _scenario_proposal(card: dict, client: LLMClient, conn: dict, root) ->
     openers. A provider that *failed* is a different thing and surfaces as a 502.
     """
     try:
-        text = await _bounded_call(client.complete(store.scenario.build_prompt(card), conn))
+        # Metered like every other generation (#152): a world-level call, so the
+        # row carries no campaign -- the same shape the tagline and voice-anchor
+        # previews file.
+        with store.usage.meter("scenario") as m:
+            text = await _bounded_call(
+                client.complete(store.scenario.build_prompt(card), conn, m.usage))
     except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     # The world's roster comes along so each proposed row can say whether the
