@@ -683,3 +683,37 @@ test("the header badge clears when the form is reset for a new record", async ()
   fireEvent.click(screen.getByRole("button", { name: /\+ new lore entry/i }));
   expect(container.querySelector(".token-badge")).toBeNull();
 });
+
+test("a GM-only record's count is marked as never charged, not as a live cost", async () => {
+  // #49 drops a gm-only body before every activation rule, so the number is
+  // what it WOULD cost. Showing it plain would read as a standing charge.
+  (api.listEntities as any).mockResolvedValue([{ id: "vault", name: "Vault", tokens: 88, secrecy: "gm-only" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "vault", name: "Vault", secrecy: "gm-only" }, body: "Behind the seawall.", tokens: 88 });
+  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  // by role, not by text: the same mock feeds `loreOwnerOptions`, so "Vault"
+  // is also an owner checkbox label further down the form
+  const railRow = await screen.findByRole("button", { name: /Vault.*88 tokens/ });
+  expect(container.querySelector(".row-tokens")!.className).toContain("never-charged");
+  // Struck-through text does not announce as struck, so the name has to say it.
+  // The row also carries #49's own GM-only tag, hence the gap in the middle --
+  // asserted loosely so that tag's wording stays that feature's business.
+  expect(screen.getByRole("button", { name: /Vault.*88 tokens, never charged/ })).toBeInTheDocument();
+
+  fireEvent.click(railRow);
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  expect(container.querySelector(".token-badge")!.className).toContain("never-charged");
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).getByText(/never charged/i)).toBeInTheDocument();
+});
+
+test("a public record's count carries no never-charged marking", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 88 }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "salt", name: "Salt" }, body: "Binds", tokens: 88 });
+  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Salt.*88 tokens/ }));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  expect(container.querySelector(".row-tokens")!.className).not.toContain("never-charged");
+  expect(container.querySelector(".token-badge")!.className).not.toContain("never-charged");
+});

@@ -185,7 +185,6 @@ def test_normalize_secrecy_is_lenient(tmp_path: Path):
     eid = entities.create_entity(tmp_path, "lore", "Typo", "x", secrecy="sercet")
     assert "secrecy" not in entities.read_entity(tmp_path, "lore", eid)["meta"]
 
-
 # ---- per-record token cost (#51) ----
 
 def _age(p: Path) -> None:
@@ -290,3 +289,20 @@ def test_the_count_is_of_the_stored_text_macros_unexpanded(tmp_path: Path):
     badge = entities.read_entity(tmp_path, "lore", eid)["tokens"]
     assert badge == tokens.count_tokens(stored)
     assert badge > tokens.count_tokens("Seraphine owes the tide. The wind is rising.")
+
+
+def test_a_gm_only_body_is_still_measured(tmp_path: Path):
+    """Secrecy (#49) gates whether the body is SENT; it does not change what the
+    body would cost. The count stays the size of the text, because that is what
+    the editor needs to answer "what does publishing this buy me" -- the UI
+    marks it as never charged rather than reporting zero, which would be
+    indistinguishable from an empty entry.
+    """
+    body = "The tide reads the ledger aloud at every turning of the year."
+    eid = entities.create_entity(tmp_path, "lore", "Rite", body, secrecy=entities.GM_ONLY)
+    got = entities.read_entity(tmp_path, "lore", eid)
+    assert got["meta"]["secrecy"] == entities.GM_ONLY
+    assert got["tokens"] == tokens.count_tokens(body)
+    # ...and marking it public again does not move the number
+    entities.update_entity(tmp_path, "lore", eid, secrecy=entities.PUBLIC)
+    assert entities.read_entity(tmp_path, "lore", eid)["tokens"] == got["tokens"]

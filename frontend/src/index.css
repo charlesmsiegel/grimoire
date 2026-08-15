@@ -1234,6 +1234,12 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 /* The owner stack already claims the free space in a lore row, so the count
    sits next to it rather than fighting it for the same `auto` margin. */
 .owner-stack + .row-tokens { margin-left: 6px; }
+/* A gm-only body never reaches a prompt (#49), so its count is what it WOULD
+   cost, not what it does. Struck rather than hidden: the size is still the
+   thing you want when deciding whether to publish it. */
+.row-tokens.never-charged, .token-badge.never-charged {
+  text-decoration: line-through; opacity: 0.55;
+}
 .token-badge {
   margin-left: 10px; vertical-align: middle;
   font-family: var(--fm); font-size: 10px; letter-spacing: 0.08em;

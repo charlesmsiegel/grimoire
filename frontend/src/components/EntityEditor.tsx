@@ -14,30 +14,6 @@ export const KIND_LABELS: Record<EntityKind, string> = {
   locations: "location", lore: "lore entry", items: "item", groups: "group", creatures: "creature",
 };
 
-// What each secrecy level does to the prompt, in the words the picker shows.
-// "this text", not "this entry": secrecy gates the BODY, and the record still
-// has a name the app uses where it must refer to the place at all — the
-// scene-suggestion picker, a mechanics sheet label. Claiming the whole entry
-// disappears would be a promise the app does not keep.
-const SECRECY_HINTS: Record<Secrecy, string> = {
-  public: "activates normally; any character may know it",
-  secret: "activates normally, but uninvolved characters must not reveal it",
-  "gm-only": "this text never reaches the model; the name may still be used",
-};
-
-// Anything unrecognised (a hand-edited file) reads as public, exactly as
-// store.entities.normalize_secrecy does on the other side -- INCLUDING the trim
-// and the lowercase. Matching only the canonical spelling looked harmless and
-// was not: the backend reads `secrecy: Secret` as secret and keeps the entry
-// out of ignorant characters' mouths, while this returned "public", badged the
-// entry Public, and made the next save send `secrecy: "public"` -- a valid
-// level, so the route accepts it and the key is deleted. Editing the body of a
-// hand-marked secret silently published it.
-const asSecrecy = (v: unknown): Secrecy => {
-  const level = String(v ?? "").trim().toLowerCase();
-  return (SECRECY_LEVELS as readonly string[]).includes(level) ? (level as Secrecy) : "public";
-};
-
 // What a record's body costs when it reaches a prompt (#51). Counted on the
 // server with the same tokenizer the context inspector uses; the frontend only
 // formats it.
@@ -61,9 +37,49 @@ const TOKEN_HINT =
   "Tokens this body costs each time it enters the prompt — keyed entries pay it only when they "
   + "activate, and macros are counted unexpanded";
 
+// A gm-only body is dropped before every activation rule (#49), so it costs
+// nothing, ever. The count is still shown -- it is the size of the text, and it
+// is what the entry would cost the moment someone marks it public again -- but
+// it has to LOOK spent-out rather than sit there reading like a live charge.
+const TOKEN_HINT_NEVER =
+  "This body never reaches the prompt while it is GM-only — what it would cost if published";
+
 function tokenLabel(n: number): string {
   return `${n.toLocaleString()} ${n === 1 ? "token" : "tokens"}`;
 }
+
+const isNeverCharged = (level: Secrecy) => level === "gm-only";
+const tokenClass = (level: Secrecy, base = "token-badge") =>
+  base + (isNeverCharged(level) ? " never-charged" : "");
+const tokenTitle = (level: Secrecy) => (isNeverCharged(level) ? TOKEN_HINT_NEVER : TOKEN_HINT);
+// Struck-through text does not announce as struck through, so the exemption has
+// to be in the name rather than only in the styling.
+const tokenAria = (n: number, level: Secrecy) =>
+  isNeverCharged(level) ? `${tokenLabel(n)}, never charged` : tokenLabel(n);
+
+// What each secrecy level does to the prompt, in the words the picker shows.
+// "this text", not "this entry": secrecy gates the BODY, and the record still
+// has a name the app uses where it must refer to the place at all — the
+// scene-suggestion picker, a mechanics sheet label. Claiming the whole entry
+// disappears would be a promise the app does not keep.
+const SECRECY_HINTS: Record<Secrecy, string> = {
+  public: "activates normally; any character may know it",
+  secret: "activates normally, but uninvolved characters must not reveal it",
+  "gm-only": "this text never reaches the model; the name may still be used",
+};
+
+// Anything unrecognised (a hand-edited file) reads as public, exactly as
+// store.entities.normalize_secrecy does on the other side -- INCLUDING the trim
+// and the lowercase. Matching only the canonical spelling looked harmless and
+// was not: the backend reads `secrecy: Secret` as secret and keeps the entry
+// out of ignorant characters' mouths, while this returned "public", badged the
+// entry Public, and made the next save send `secrecy: "public"` -- a valid
+// level, so the route accepts it and the key is deleted. Editing the body of a
+// hand-marked secret silently published it.
+const asSecrecy = (v: unknown): Secrecy => {
+  const level = String(v ?? "").trim().toLowerCase();
+  return (SECRECY_LEVELS as readonly string[]).includes(level) ? (level as Secrecy) : "public";
+};
 
 export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, onOpenOwner, onOpenLore, module = null }: {
   wid: string;
@@ -273,28 +289,34 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   const keyList = keys.split(",").map((k) => k.trim()).filter(Boolean);
   // How often that cost is actually paid, which is the whole reason a raw
   // number needs a sentence next to it. The branches mirror the activation
-  // rules in `context.world_state`: owners gate the entry, keys decide the
-  // turns, and a keyless LOCATION is the exception to both — it never joins
-  // world info at all and is charged only as the scene's current setting.
+  // rules in `context.world_state`: gm-only drops the body before any other
+  // rule, then owners gate the entry, keys decide the turns, and a keyless
+  // LOCATION is the exception to the rest — it never joins world info at all
+  // and is charged only as the scene's current setting.
   const costHint =
-    kind === "locations"
-      ? keyList.length > 0
-        ? "Charged when these keys activate it, or when it is the scene's setting."
-        : "Charged only when it is the scene's current setting."
-      : owners.length > 0
+    secrecy === "gm-only"
+      ? "Never charged: a GM-only body does not reach the prompt at all."
+      : kind === "locations"
         ? keyList.length > 0
-          ? "Charged when an owner is in the scene and these keys hit."
-          : "Charged on every turn an owner is in the scene."
-        : keyList.length > 0
-          ? "Charged on the turns these keys activate the entry."
-          : "Always-on: charged on every turn of a scene it reaches.";
+          ? "Charged when these keys activate it, or when it is the scene's setting."
+          : "Charged only when it is the scene's current setting."
+        : owners.length > 0
+          ? keyList.length > 0
+            ? "Charged when an owner is in the scene and these keys hit."
+            : "Charged on every turn an owner is in the scene."
+          : keyList.length > 0
+            ? "Charged on the turns these keys activate the entry."
+            : "Always-on: charged on every turn of a scene it reaches.";
   // Beside the title in both header layouts, so it is written once rather than
   // in the plain-<h3> branch and the image branch separately.
   const heading = (
     <h3>
       {name}
       {tokenCost !== null && (
-        <span className="token-badge" title={TOKEN_HINT}>{tokenLabel(tokenCost)}</span>
+        <span className={tokenClass(secrecy)} title={tokenTitle(secrecy)}
+              aria-label={tokenAria(tokenCost, secrecy)}>
+          {tokenLabel(tokenCost)}
+        </span>
       )}
     </h3>
   );
@@ -346,7 +368,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
           its contents, so without this a screen reader reads "Salt 1,240" and
           the number could be anything; `title` alone is not announced. */}
       {typeof e.tokens === "number" && (
-        <span className="row-tokens" title={TOKEN_HINT} aria-label={tokenLabel(e.tokens)}>
+        <span className={tokenClass(asSecrecy(e.secrecy), "row-tokens")}
+              title={tokenTitle(asSecrecy(e.secrecy))}
+              aria-label={tokenAria(e.tokens, asSecrecy(e.secrecy))}>
           {e.tokens.toLocaleString()}
         </span>
       )}
@@ -465,7 +489,6 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                 </div>
                 <div className="field-hint">{SECRECY_HINTS[secrecy]}</div>
               </div>
-
               {tokenCost !== null && (
                 <div className="side-section">
                   <h4>Context cost</h4>
