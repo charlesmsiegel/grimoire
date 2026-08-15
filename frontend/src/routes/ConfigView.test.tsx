@@ -545,3 +545,22 @@ test("the layout is fetched only when its section is opened", async () => {
   await open(/^Prompt layout/);
   await waitFor(() => expect(api.getPromptLayout).toHaveBeenCalledTimes(1));
 });
+
+test("a failed layout write reports itself and leaves the settings unwritten", async () => {
+  /** One Save, one outcome: the settings must not land while the layout the
+   *  same click was meant to store did not. */
+  (api.getPromptLayout as any).mockResolvedValue(twoRows());
+  (api.putPromptLayout as any).mockRejectedValue({ detail: "disk full" });
+  renderView();
+  await open(/^Prompt layout/);
+  await screen.findByLabelText("Label for World info");
+  fireEvent.click(screen.getAllByRole("button", { name: /^move .+ down$/i })[0]);
+  fireEvent.click(await screen.findByRole("checkbox", { name: /use my section order/i }));
+  save();
+
+  expect(await screen.findByText(/disk full/i)).toBeInTheDocument();
+  expect(api.putConfig).not.toHaveBeenCalled();
+  // ...and the reorder is still on screen to retry, not silently discarded
+  expect(screen.getAllByTestId("layout-row").map((r) => r.getAttribute("data-id")))
+    .toEqual(["weather", "world_info"]);
+});
