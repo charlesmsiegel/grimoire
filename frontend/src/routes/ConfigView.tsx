@@ -257,19 +257,32 @@ export default function ConfigView() {
     const patch: ConfigUpdate = {};
     for (const f of dirty) patch[f] = draft[f];
     const sent = draft;
-    try {
-      // The layout first, and only when it changed: it is a separate document
-      // at a separate route, and PUTting it on every Save would rewrite thirty
-      // rows because someone edited a timeout.
-      if (layoutDirty && layout) {
+    // The layout first, and only when it changed: it is a separate document at
+    // a separate route, and PUTting it on every Save would rewrite thirty rows
+    // because someone edited a timeout.
+    //
+    // Its own try, deliberately: the settings catch below puts the theme
+    // preview back, which is the right repair for a failed config write and a
+    // non-sequitur for a failed layout one — the theme is not in this request.
+    if (layoutDirty && layout) {
+      try {
         const stored = await api.putPromptLayout(layout.map(
           (r) => ({ id: r.id, label: r.label, enabled: r.enabled })));
         setLayout(stored.sections);
         setLayoutSaved(stored.sections);
+      } catch (e: any) {
+        setError(e?.detail ?? "Could not save the prompt layout");
+        setBusy(false);
+        return;   // the settings are not written either: one Save, one outcome
       }
-      // ...and nothing at all when only the layout moved: an empty patch is a
-      // read-modify-write of config.md that stores no field.
-      if (!dirty.length) return;
+    }
+    // Nothing more to do when only the layout moved: an empty patch is a
+    // read-modify-write of config.md that stores no field.
+    if (!dirty.length) {
+      setBusy(false);
+      return;
+    }
+    try {
       const next = await api.putConfig(patch);
       setConfig(next);
       // The new baseline is what the server says it stored — but only the
