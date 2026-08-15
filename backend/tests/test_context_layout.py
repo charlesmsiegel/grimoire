@@ -263,3 +263,13 @@ def test_an_empty_write_clears_the_layout(store_home):
     assert layout.read_layout() == []
     config.write_config(prompt_layout_enabled="on")
     assert [s.id for s in layout.apply(CATALOG)] == ["a", "b", "c", "d"]
+
+
+def test_describe_and_merge_agree_about_a_repeated_id():
+    """Only a hand-edited file can carry one -- `sanitize` dedupes on the way
+    in -- which is exactly the file with no other protection. Both functions
+    must read the FIRST entry, or the editor shows one label and the prompt
+    renders another."""
+    stored = [{"id": "a", "label": "First"}, {"id": "a", "label": "Second"}]
+    assert {s.id: s.label for s in layout.merge(CATALOG, stored)}["a"] == "First"
+    assert {r["id"]: r["label"] for r in layout.describe(CATALOG, stored)}["a"] == "First"

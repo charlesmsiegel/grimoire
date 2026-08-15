@@ -151,8 +151,17 @@ def describe(catalog: list, stored: list) -> list[dict]:
     #: The overrides as stored, so a blank stays blank. `_ordered` deliberately
     #: does not carry this: it answers "what renders", and merge wants the
     #: label resolved.
-    overrides = {e["id"]: e.get("label", "") for e in stored
-                 if isinstance(e, dict) and isinstance(e.get("id"), str)}
+    #:
+    #: FIRST occurrence wins, because that is the one `_ordered` keeps. A
+    #: last-wins dict would let a hand-edited file with a repeated id show one
+    #: label in the editor and render another — the two functions reading the
+    #: same file and disagreeing about it. `sanitize` already dedupes on the
+    #: way in, so this only bites a file written by hand, which is exactly the
+    #: file that gets no other protection.
+    overrides: dict[str, str] = {}
+    for e in stored:
+        if isinstance(e, dict) and isinstance(e.get("id"), str):
+            overrides.setdefault(e["id"], e.get("label", ""))
     return [{"id": s.id, "label": overrides.get(s.id, "") or "",
              "default_label": defaults[s.id], "tier": s.tier, "enabled": on}
             for s, on in _ordered(catalog, stored)]
