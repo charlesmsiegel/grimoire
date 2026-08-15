@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from grimoire import store
 from grimoire.main import create_app
-from grimoire.store import external
+from grimoire.store import config, external
 
 
 def write(path: Path, text: str = "x") -> Path:
@@ -63,6 +63,24 @@ def test_the_scan_skips_caches_backups_and_sync_metadata(home):
     write(home / "backups/2026-01-01/pact.sync-conflict-1.md")
     write(home / "worlds/realm/.stversions/pact.sync-conflict-1.md")
     assert external.scan()["conflicts"] == []
+
+
+def test_the_configured_backup_directory_is_skipped_wherever_it_sits(home):
+    # `backup_dir` is a setting (#32), so the default name is not the whole
+    # answer: an archive unpacked anywhere inside the store would otherwise
+    # report a second copy of every conflict already listed from the live tree.
+    config.write_config(backup_dir=str(home / "archives"))
+    write(home / "archives/restored/pact.sync-conflict-1.md")
+    write(home / "worlds/realm/lore/pact.sync-conflict-1.md")
+    assert paths_of(external.scan()) == ["worlds/realm/lore/pact.sync-conflict-1.md"]
+
+
+def test_a_backup_directory_outside_the_store_prunes_nothing(home, tmp_path):
+    # Pointing it at an ancestor of the store is the natural "somewhere else",
+    # and must not match every path in the walk and report a clean library.
+    config.write_config(backup_dir=str(tmp_path.parent))
+    write(home / "worlds/realm/lore/pact.sync-conflict-1.md")
+    assert paths_of(external.scan()) == ["worlds/realm/lore/pact.sync-conflict-1.md"]
 
 
 def test_a_world_named_backups_is_still_scanned(home):

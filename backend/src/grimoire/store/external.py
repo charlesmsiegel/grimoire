@@ -38,7 +38,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import paths
+from . import backups, paths
 
 # Patterns are matched case-folded against the file name, so a store synced
 # from a case-insensitive volume matches the same way a case-sensitive one
@@ -52,13 +52,16 @@ RULES: tuple[tuple[str, str], ...] = (
 )
 
 # Never walked, at the store root only: `.cache/` is derived data the app writes
-# itself, and `backups/` (#32) holds copies of records by design -- a conflict
-# artifact caught in a backup is a copy of one already reported from the live
-# tree. Deeper down these are ordinary names: a world may legitimately be called
-# `backups`, so the skip does not apply recursively. `.cache` is named here even
-# though the dot-directory rule below already covers it -- this list is the
-# statement about reserved store-root names, and it should not quietly stop
-# being true if that rule is ever narrowed.
+# itself, and `backups/` is where #32 puts archives unless told otherwise -- a
+# conflict artifact caught inside a backup is a copy of one already reported
+# from the live tree. Deeper down these are ordinary names: a world may
+# legitimately be called `backups`, so the skip does not apply recursively.
+# `.cache` is named here even though the dot-directory rule below already covers
+# it -- this list is the statement about reserved store-root names, and it
+# should not quietly stop being true if that rule is ever narrowed.
+#
+# The *configured* backup directory is pruned separately (`_pruned`), because
+# it is a setting and need not be either of these names.
 SKIP_AT_ROOT = frozenset({"backups", ".cache"})
 
 MAX_RESULTS = 200
@@ -75,6 +78,41 @@ def _tool(name: str) -> str | None:
 
 def _stamp(mtime: float) -> str:
     return datetime.fromtimestamp(mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _norm(path: Path) -> Path:
+    """Absolute and lexically normalized, for comparison only — the same
+    treatment `backups._norm` gives both sides of its own containment test.
+    Lexical rather than `resolve()`: the walk builds paths from `home()` as it
+    was handed to us, and resolving one side but not the other disagrees on any
+    store reached through a symlink."""
+    return Path(os.path.normpath(os.path.abspath(str(path))))
+
+
+def _pruned(base: Path) -> frozenset[Path]:
+    """Directories to skip wherever they sit, as normalized absolute paths.
+
+    Just the configured backup directory today, and only when it is **inside**
+    the store — the same condition, for the same reason, that `backups._skips`
+    applies. Pointing it at an ancestor of the store (`~`, the obvious choice
+    for "somewhere else") would otherwise match everything and report a library
+    as clean without looking at it. Outside the store there is nothing to
+    prune, because nothing out there is being walked.
+
+    `SKIP_AT_ROOT` covers the default location by name; this covers a user who
+    moved it. Both are needed: the default folder can still hold archives from
+    before the setting was changed.
+
+    A backup directory that cannot be resolved is not a reason to refuse the
+    whole scan -- the worst case is listing a conflicted copy twice, which is
+    noise, where failing here would be silence.
+    """
+    try:
+        target = _norm(backups.backup_dir())
+    except (OSError, ValueError):
+        return frozenset()  # a bad setting is not a reason to refuse the scan
+    nbase = _norm(base)
+    return frozenset({target}) if nbase in target.parents else frozenset()
 
 
 def scan() -> dict:
@@ -95,6 +133,7 @@ def scan() -> dict:
     root that merely does not exist yet is clean, and truthfully so.
     """
     base = paths.home()
+    prune = _pruned(base)
     conflicts: list[dict] = []
     truncated = False
     seen = 0
@@ -128,8 +167,10 @@ def scan() -> dict:
             except OSError:
                 continue
             if is_dir and (entry.name.startswith(".")
-                           or (depth == 0 and entry.name in SKIP_AT_ROOT)):
-                continue  # sync metadata (.stversions, .dropbox.cache) and our own
+                           or (depth == 0 and entry.name in SKIP_AT_ROOT)
+                           or _norm(Path(entry.path)) in prune):
+                continue  # sync metadata (.stversions, .dropbox.cache), our own
+                          # derived data, and wherever backups are configured to go
             tool = _tool(entry.name)
             if tool is None:
                 if is_dir:
