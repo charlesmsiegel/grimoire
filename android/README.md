@@ -73,3 +73,37 @@ synced-library flow (requires All-files access).
 Cold start shows a spinner for roughly the interpreter + import time (budget
 ≤2.5 s mid-range; measure per device class), then the regular grimoire UI.
 Add the OpenRouter key under Configuration, exactly as on desktop.
+
+## Syncing the store with a phone
+
+`make sync-phone` reports what a sync would do; `make sync-phone-apply` does
+it. Both drive `scripts/grimoire_sync.py`, which finds the store on each side
+the way the app does (`GRIMOIRE_HOME` → the `data_dir` in the `.grimoire.json`
+pointer → `~/.grimoire`) rather than assuming a path, so a library moved from
+the Storage-location page still syncs.
+
+Freshness is decided against a *baseline* — the hash each file had when the two
+sides last agreed, kept per device under `~/.grimoire-sync/` — not against
+mtimes, which `adb push` rewrites as it copies. That is what distinguishes
+"changed on the phone" from "changed on the PC" from "changed in both places".
+
+Two rules make it safe to run without reading the diff first:
+
+- **It never deletes.** A file on one side and not the other is copied, never
+  removed, because "deleted here" and "created there" are the same observation
+  and only one reading can be undone. Removing a record means removing it in
+  both places yourself.
+- **It never resolves a conflict.** When both sides moved, the phone's copy
+  lands beside the PC's as `<name>.sync-conflict-<stamp>-<serial><ext>` and
+  both originals stay put. That name matches `store/external.py`'s Syncthing
+  rule, so the Configuration page lists them alongside any other sync client's.
+
+`--apply` also git-commits the PC store first (it is a repo) and force-stops
+the app on the phone, so nothing is being written while files move.
+
+This needs the phone's store to be readable over USB, which is what
+`android_entry._open_store_to_usb` arranges: Android runs apps with
+`umask 0077`, so files landed `0600` and every `adb pull` failed. It relaxes
+the umask and walks the existing tree once. **Open the app on the phone at
+least once after installing a build with that change**, or the sync reports the
+older files as unreadable.

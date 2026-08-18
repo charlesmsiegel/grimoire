@@ -68,7 +68,7 @@ export JAVA_HOME
 # by its SDK location.
 ADB = $(call fixpath,$(SDK_DIR)/platform-tools/adb)
 
-.PHONY: apk apk-release apk-install android-bootstrap android-clean         check check-py check-web check-lint check-templates check-pydantic1         check-apk web-dist
+.PHONY: apk apk-release apk-install android-bootstrap android-clean         check check-py check-web check-lint check-templates check-pydantic1         check-apk web-dist sync-phone sync-phone-apply
 
 apk:
 	$(GRADLEW) :app:assembleDebug $(if $(BUILD_PYTHON),-Pgrimoire.buildPython="$(BUILD_PYTHON)",)
@@ -139,3 +139,15 @@ check-apk: web-dist
 
 web-dist:
 	cd frontend && npm ci && npm run build
+
+# ---- store sync (PC <-> USB-connected phone) ----
+#
+# `sync-phone` only reports; `sync-phone-apply` copies. Split into two targets
+# rather than one with a flag because the half that writes should have to be
+# typed. Neither ever deletes: see scripts/grimoire_sync.py, which also
+# explains why the freshness test is a recorded baseline rather than mtimes.
+sync-phone:
+	"$(call fixpath,$(PY))" scripts/grimoire_sync.py --adb "$(ADB)"
+
+sync-phone-apply:
+	"$(call fixpath,$(PY))" scripts/grimoire_sync.py --adb "$(ADB)" --apply
