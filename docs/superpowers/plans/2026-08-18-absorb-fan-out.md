@@ -4,7 +4,7 @@
 
 **Goal:** Make ending a scene take one round of concurrent LLM calls instead of ten sequential ones, without turning a slow campaign into a 502.
 
-**Architecture:** Three ordered changes to `routes/scenes.py` and its test harness. First the test fakes stop answering by call order (a precondition — nothing concurrent can be tested against an ordered script). Then the time budget is re-derived while absorb is still sequential, so its new failure semantics are provable in isolation. Only then do the phases run under one `asyncio.gather` bounded by a semaphore. No prompt template changes; no change to what `PUT /chronicle` writes.
+**Architecture:** Three ordered changes to `routes/scenes.py` and its test harness. First the test fakes stop answering by call order (a precondition — nothing concurrent can be tested against an ordered script). Then the phases run under one `asyncio.gather` bounded by a semaphore. `_Budget` is deliberately untouched: a fan-out gives each phase the full budget independently, so nothing about it needs re-deriving (a Task 3 that thought otherwise was written, implemented, disproved and withdrawn). No prompt template changes; no change to what `PUT /chronicle` writes.
 
 **Tech Stack:** Python 3.11+/3.14, FastAPI, pytest, asyncio. Backend only — no frontend or Android work in this plan.
 
@@ -225,122 +225,22 @@ the system prompt that owns each call instead of on position."
 
 ---
 
-### Task 3: Re-derive the budget, while absorb is still sequential
+### Task 3 (withdrawn): the budget rework
 
-**Why now and not with the fan-out:** `routes/common.py::_bounded_call` documents why absorb is excluded from `llm_call_budget` — `_Budget` "bounds a whole *sequence* and knows which of its steps are droppable". Concurrently nothing is droppable: every call shares one deadline, so an overrun takes **narrative** with it, and narrative failing is a 502 that loses the whole review. Today an overrun degrades. Landing this first means the new semantics are provable without concurrency in the picture.
+**Withdrawn during execution, after implementing it.** The premise was that a
+fan-out makes all phases share one deadline, so an overrun would kill the
+extraction and 502 the review. `_Budget.run` reads `remaining()` when it is
+called and every phase calls it at t≈0, so each independently gets the *full*
+budget; parallel phases do not consume one another's wall-clock. A slow dossier
+phase cannot expire the clock out from under the extraction.
 
-**Files:**
-- Modify: `backend/src/grimoire/routes/scenes.py` (`_Budget`, `post_absorb`)
-- Test: `backend/tests/test_routes.py`
+Implementing it broke two tests that were right:
+`test_absorb_extraction_overrunning_the_budget_is_502` (the exemption removed
+the only bound on a wedged extraction) and
+`test_the_one_shot_ceiling_does_not_bound_absorb` (compensating with the
+per-call ceiling narrowed the documented `absorb_budget = 0` escape hatch).
 
-**Interfaces:**
-- Consumes: `_clock` (the monotonic indirection tests drive off a fake), `BudgetRefused`, `_budget_overrun`, `BUDGET_EXHAUSTED` — all already in `routes/scenes.py`.
-- Produces: `_Budget.run(coro, on_start=None, *, exempt: bool = False)` — `exempt=True` runs the coroutine under no overall deadline. Task 4 calls it that way for the extraction phase.
-
-- [ ] **Step 1: Write the failing test**
-
-```python
-def test_budget_overrun_never_costs_the_extraction(client, monkeypatch):
-    """An exhausted absorb budget degrades the droppable phases and leaves the
-    review intact. The fan-out is about to make every call share one deadline;
-    without the exemption that turns a slow campaign into a 502 and loses a
-    review that today comes back with a summary and a reported failure."""
-    _seed_scene_with_npc(client)
-    monkeypatch.setattr(routes.scenes, "_clock", _expired_clock())
-    client.app.dependency_overrides[routes.get_llm] = lambda: from_entries([
-        {"when": _WHEN_EXTRACTION, "reply": ABSORB_JSON},
-        {"when": _WHEN_DOSSIER, "reply": _DOSSIER},
-        {"when": _WHEN_AUDIT, "reply": AUDIT_OK}])
-
-    r = client.post(f"/campaigns/{CID}/scenes/{SID}/absorb")
-
-    assert r.status_code == 200, "an exhausted budget must not 502 the review"
-    body = r.json()
-    assert body["one_line"], "extraction is exempt from the overall ceiling"
-    phases = {p["name"]: p for p in body["phases"]}
-    assert phases["extraction"]["status"] == "ok"
-    assert phases["dossiers"]["budget_exhausted"] is True
-    assert phases["dossiers"]["attempted"] is False, "refused, not failed mid-flight"
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `cd backend && PYTHONPATH=src .venv/bin/python -m pytest tests/test_routes.py -k budget_overrun_never_costs -v`
-Expected: FAIL — 502, because today the extraction call is inside the shared budget and `post_absorb` raises `HTTPException(502)` on any extraction `LLMError`.
-
-- [ ] **Step 3: Add the exemption to `_Budget.run`**
-
-In `backend/src/grimoire/routes/scenes.py`:
-
-```python
-    async def run(self, coro, on_start=None, *, exempt: bool = False):
-        """Await `coro` under the remaining budget.
-
-        `exempt` runs it under no overall deadline at all. Exactly one caller
-        needs it and the reason is structural: once the phases run
-        concurrently they all share this clock, so an expiry that is meant to
-        drop the optional work would take the extraction with it — and a
-        failed extraction is a 502 and the loss of the whole review. The
-        per-call ceiling (`common._bounded_call`) still bounds an exempt call;
-        what it is exempt from is the SEQUENCE's clock, which exists to shed
-        droppable work and cannot shed this.
-        """
-        if exempt:
-            if on_start:
-                on_start()
-            return await coro
-        ...  # the existing body, unchanged from here down
-```
-
-- [ ] **Step 4: Make the extraction call exempt**
-
-In `post_absorb`, the extraction call becomes:
-
-```python
-        with store.usage.meter("absorb", campaign=cid, scene=sid) as m:
-            # Exempt: see _Budget.run. The overall ceiling sheds droppable
-            # phases; this is the one phase whose loss is a 502.
-            text = await budget.run(client.complete(messages, conn, m.usage), exempt=True)
-```
-
-- [ ] **Step 5: Run test to verify it passes**
-
-Run: `cd backend && PYTHONPATH=src .venv/bin/python -m pytest tests/test_routes.py -k budget_overrun_never_costs -v`
-Expected: PASS
-
-- [ ] **Step 6: Confirm no existing budget test regressed**
-
-Run: `cd backend && PYTHONPATH=src .venv/bin/python -m pytest tests/test_routes.py -k "budget or absorb" -q`
-Expected: PASS. If a test asserted a 502 on an exhausted budget at the extraction step, that assertion encoded the behaviour this task deliberately changes — update it and say so in the commit body.
-
-- [ ] **Step 7: Update `DEFAULT_ABSORB_BUDGET`'s comment**
-
-`backend/src/grimoire/store/config.py:70` still describes the calls as running "sequentially inside a single request". Correct it now so it is not stale between this task and the next:
-
-```python
-# Wall-clock ceiling on one absorb's DROPPABLE work — the dossier, voice and
-# audit phases. Extraction is exempt (routes/scenes.py::_Budget.run): losing it
-# is a 502 and the loss of the whole review, which is not a degradation. "0"
-# means no ceiling at all.
-DEFAULT_ABSORB_BUDGET = "600"
-```
-
-- [ ] **Step 8: Commit**
-
-```bash
-git add backend/src/grimoire/routes/scenes.py backend/src/grimoire/store/config.py backend/tests/test_routes.py
-git commit -m "Exempt the extraction from the budget that sheds optional work
-
-The absorb budget exists to drop the phases an absorb can do without.
-Extraction is not one of them: it fails as a 502 and takes the review
-with it. Sequentially that never bit, because extraction had already
-returned before the clock mattered. Concurrently every call shares the
-deadline, so without this the first slow campaign loses a whole review
-where today it gets a summary and a reported failure.
-
-Landed ahead of the fan-out so the new semantics are provable while the
-calls still run one at a time."
-```
+`_Budget` is untouched. See the spec's "The budget needs nothing done to it".
 
 ---
 
@@ -353,7 +253,7 @@ calls still run one at a time."
 - Test: `backend/tests/test_routes.py`
 
 **Interfaces:**
-- Consumes: `from_entries` (Task 1), `_Budget.run(..., exempt=True)` (Task 3), `_stage_dossiers`, `_stage_voice_drift`, `_run_audit`, `_watched`, `Abandoned` — all existing.
+- Consumes: `from_entries` (Task 1), `_stage_dossiers`, `_stage_voice_drift`, `_run_audit`, `_watched`, `Abandoned` — all existing.
 - Produces: `store.config.absorb_concurrency() -> int`; `_gather_phases(*coros, limit: int) -> list` returning results positionally, exceptions included.
 
 - [ ] **Step 1: Write the failing concurrency test**
@@ -457,7 +357,7 @@ Everything above `budget = _Budget(...)` and below the `return {...}` is unchang
 ```python
     budget = _Budget(store.config.absorb_budget())
     with store.usage.meter("absorb", campaign=cid, scene=sid) as m:
-        extraction = budget.run(client.complete(messages, conn, m.usage), exempt=True)
+        extraction = budget.run(client.complete(messages, conn, m.usage))
         results = await _gather_phases(
             extraction,
             _stage_dossiers(cid, sid, transcript, client, conn, budget),
