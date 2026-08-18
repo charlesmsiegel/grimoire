@@ -226,6 +226,20 @@ def from_cassette(name: str) -> FakeLLM:
     return FakeLLM(cassette=Cassette.load(name))
 
 
+def from_entries(entries: list[dict], name: str = "<inline>") -> FakeLLM:
+    """A fake replaying cassette entries given inline, for a test whose bodies
+    are its own rather than the shared `campaign_flow` fixture's.
+
+    The point is not brevity, it is order-independence. A scripted fake answers
+    call 1 and then call 2; absorb issues its calls concurrently, so "call 1"
+    names nothing. Matching on the prompt that OWNS each call keeps the
+    assertion about which reply the code got rather than about which order it
+    asked in -- and an unmatched request still raises `CassetteMiss` rather
+    than falling through, which is what keeps the migrated tests meaningful.
+    """
+    return FakeLLM(cassette=Cassette({"entries": entries}, name))
+
+
 class FakeOpenRouter(FakeLLM):
     """One turn, streamed as the given deltas — the default every route test
     gets from `test_routes.py`'s `client` fixture."""
