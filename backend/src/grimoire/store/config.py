@@ -70,6 +70,12 @@ DEFAULT_LLM_TIMEOUT = "120"
 # Wall-clock ceiling on one absorb, whose LLM calls (extraction, one dossier
 # per present NPC, audit) run sequentially inside a single request.
 DEFAULT_ABSORB_BUDGET = "600"
+# How many of one absorb's LLM calls may be in flight at once. Its own key
+# rather than a constant for two reasons: a per-account rate limit is a fact no
+# default can know, and "1" has to stay available as an exact restoration of
+# the sequential behaviour every version before the fan-out had -- which makes
+# this change reversible from the config page instead of by a revert.
+DEFAULT_ABSORB_CONCURRENCY = "4"
 # --- retry + fallback (#144) ---
 # How many times a failed generation is re-attempted before the connection is
 # given up on. Only transient failures are retried at all (`llm.RETRYABLE_KINDS`)
@@ -156,7 +162,7 @@ _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "quote_color", "recap_depth", "archive_depth", "context_budget",
                 "user_label", "assistant_label",
                 "default_style_id", "active_connection_id",
-                "llm_timeout", "absorb_budget", "setup_done",
+                "llm_timeout", "absorb_budget", "absorb_concurrency", "setup_done",
                 "llm_retries", "fallback_connection_id",
                 "prompt_log_depth",
                 "turnstate_depth", "promote_streak",
@@ -184,6 +190,7 @@ def read_config() -> dict[str, str]:
                 "user_label": DEFAULT_USER_LABEL, "assistant_label": DEFAULT_ASSISTANT_LABEL,
                 "default_style_id": "", "active_connection_id": "",
                 "llm_timeout": DEFAULT_LLM_TIMEOUT, "absorb_budget": DEFAULT_ABSORB_BUDGET,
+                "absorb_concurrency": DEFAULT_ABSORB_CONCURRENCY,
                 "setup_done": DEFAULT_SETUP_DONE,
                 "llm_retries": DEFAULT_LLM_RETRIES,
                 "fallback_connection_id": DEFAULT_FALLBACK_CONNECTION_ID,
@@ -239,8 +246,22 @@ def llm_timeout() -> float:
 
 
 def absorb_budget() -> float:
-    """Wall-clock seconds one absorb's whole LLM sequence may take."""
+    """Wall-clock seconds one absorb's LLM work may take.
+
+    Its phases run concurrently, so each is given this whole window rather than
+    a share of it -- which makes this a ceiling on the absorb, not on the sum
+    of its calls. "0" means no ceiling at all, the escape hatch for a slow
+    local endpoint (`test_the_one_shot_ceiling_does_not_bound_absorb`)."""
     return _seconds("absorb_budget", DEFAULT_ABSORB_BUDGET)
+
+
+def absorb_concurrency() -> int:
+    """How many of one absorb's LLM calls may be in flight at once.
+
+    Clamped to at least 1. Zero would describe an absorb that never issues a
+    call, which is nobody's intent -- and `_count`'s usual "0 means off"
+    reading would invite exactly that."""
+    return max(1, _count("absorb_concurrency", DEFAULT_ABSORB_CONCURRENCY))
 
 
 def mark_setup_done() -> None:

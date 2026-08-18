@@ -28,6 +28,8 @@ def _public_config(cfg: dict[str, str]) -> dict:
             "assistant_label": cfg.get("assistant_label", "Grimoire"),
             "llm_timeout": cfg.get("llm_timeout", store.config.DEFAULT_LLM_TIMEOUT),
             "absorb_budget": cfg.get("absorb_budget", store.config.DEFAULT_ABSORB_BUDGET),
+            "absorb_concurrency": cfg.get("absorb_concurrency",
+                                          store.config.DEFAULT_ABSORB_CONCURRENCY),
             "llm_call_budget": cfg.get("llm_call_budget",
                                        store.config.DEFAULT_LLM_CALL_BUDGET),
             "llm_retries": cfg.get("llm_retries", store.config.DEFAULT_LLM_RETRIES),

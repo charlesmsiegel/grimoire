@@ -868,6 +868,61 @@ async def _watched(coro, abandoned, poll: float = ABANDON_POLL):
         raise
 
 
+def _phase_or_raise(result):
+    """One phase's `(edits, block)` pair, or its exception re-raised.
+
+    `_stage_dossiers`, `_stage_voice_drift` and `_run_audit` each document that
+    they never raise for absorb -- every failure comes back as a status the
+    inspector renders. `gather(return_exceptions=True)` would quietly turn a
+    breach of that into a tuple-unpacking error somewhere else, so it is
+    surfaced here instead, where the traceback still points at the phase.
+    """
+    if isinstance(result, BaseException):
+        raise result
+    return result
+
+
+async def _gather_phases(*coros, limit: int) -> list:
+    """Run absorb's phase coroutines concurrently, at most `limit` in flight,
+    returning their results POSITIONALLY.
+
+    Positional, so the staged edits are assembled in a fixed order however the
+    calls happen to finish -- the review a reviewer reads must not be shuffled
+    by which provider replied first, and `test_frozen_campaign` would notice.
+
+    `return_exceptions=True` is not a convenience. A bare `gather` propagates
+    the first exception and leaves its siblings RUNNING: orphaned provider
+    calls nobody will read and nothing is bounding. `Abandoned` and
+    `BudgetRefused` both fly through this code, so that is the ordinary path
+    here rather than the exotic one, and the caller unpacks each result and
+    decides. Only the extraction's failure is fatal; the other three never
+    raise for absorb (each has its own failure boundary) and report a status.
+
+    Each phase still carries its own share of the budget: `_Budget.run` reads
+    the remaining time when it is called, and every phase calls it at once, so
+    each gets the whole window rather than a slice. Parallel phases do not
+    consume one another's wall-clock.
+    """
+    sem = asyncio.Semaphore(limit)
+
+    async def guarded(coro):
+        async with sem:
+            return await coro
+
+    tasks = [asyncio.ensure_future(guarded(c)) for c in coros]
+    try:
+        return await asyncio.gather(*tasks, return_exceptions=True)
+    except asyncio.CancelledError:
+        # The REQUEST was cancelled -- shutdown, or a server that cancels
+        # handlers on disconnect. Detach rather than await, for `_watched`'s
+        # reason: waiting for the cancellation you asked for hands the
+        # unwinding the very control you were taking back.
+        for t in tasks:
+            t.cancel()
+            t.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        raise
+
+
 class BudgetRefused(LLMError):
     """The budget was already gone, so the call was never issued.
 
@@ -1475,13 +1530,34 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
         store.absorb.plot_snapshot(cid), store.absorb.group_snapshot(cid),
         store.absorb.commitment_snapshot(cid), store.absorb.fact_snapshot(cid, sid))
     budget = _Budget(store.config.absorb_budget())
-    try:
-        with store.usage.meter("absorb", campaign=cid, scene=sid) as m:
-            text = await budget.run(client.complete(messages, conn, m.usage))
-    except LLMError as exc:
-        # Including a budget overrun on this first call: nothing has been
-        # produced yet, so there is nothing to degrade to.
-        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+    # All four phases AT ONCE. Nothing here ever needed the one before it:
+    # `_run_audit` re-reads the scene and transcript itself and never touches
+    # `parsed`, and both per-NPC phases take only `transcript`, captured from
+    # the snapshot above -- so what read as a pipeline was only ever a fan-out
+    # written as a chain. Ten sequential calls on a five-NPC scene become one
+    # round.
+    #
+    # The extraction is first in the list so it claims the first semaphore slot:
+    # it is the one phase whose failure is fatal, so it must never be the one
+    # left queued.
+    with store.usage.meter("absorb", campaign=cid, scene=sid) as m:
+        results = await _gather_phases(
+            budget.run(client.complete(messages, conn, m.usage)),
+            _stage_dossiers(cid, sid, transcript, client, conn, budget),
+            _stage_voice_drift(cid, sid, transcript, client, conn, budget),
+            _run_audit(cid, sid, client, conn, budget),
+            limit=store.config.absorb_concurrency())
+    text, dossier_result, voice_result, audit_result = results
+    if isinstance(text, BaseException):
+        # Only the extraction is fatal, and a budget overrun on it is included:
+        # nothing has been produced yet, so there is nothing to degrade to. The
+        # other three never raise for absorb (each has its own failure
+        # boundary), so an exception in one of them is a bug in that boundary
+        # rather than a state to report -- `_phase_or_raise` says so.
+        if isinstance(text, LLMError):
+            raise HTTPException(status_code=502,
+                                detail={"detail": text.detail, "kind": text.kind})
+        raise text
     parsed = store.absorb.parse_output(text)
     # Both halves come from the SAME snapshot, and for the same reason: a reroll
     # or an append landing while the call was in flight would otherwise have the
@@ -1489,17 +1565,13 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     # (#121) measure a ledger this review does not summarize.
     edits = store.absorb.materialize(cid, sid, parsed, scene["messages"],
                                      turn_ledger=ledger)
-    # Phase 2: propose each present NPC's refreshed campaign dossier -- staged, not
-    # written (never raises -- see _stage_dossiers' own failure boundary).
-    dossier_edits, dossiers = await _stage_dossiers(cid, sid, transcript, client, conn, budget)
+    # Unpacked in the order the phases were listed, not the order they
+    # finished, so `edits` reads the same way every time.
+    dossier_edits, dossiers = _phase_or_raise(dossier_result)
+    voice_edits, voice = _phase_or_raise(voice_result)
+    audit_edits, mechanics = _phase_or_raise(audit_result)
     edits += dossier_edits
-    # #59: judge each anchored NPC's dialogue against its voice anchor -- staged,
-    # not written (never raises -- see _stage_voice_drift's own failure boundary).
-    voice_edits, voice = await _stage_voice_drift(cid, sid, transcript, client, conn, budget)
     edits += voice_edits
-    # Phase 5: audit the scene's mechanics against the sheeted cast (never
-    # raises -- see _run_audit's own failure boundary).
-    audit_edits, mechanics = await _run_audit(cid, sid, client, conn, budget)
     return {"one_line": parsed["one_line"], "summary": parsed["summary"],
             "keywords": parsed["keywords"], "timeline_events": parsed["timeline_events"],
             **facts, "edits": edits + audit_edits, "mechanics": mechanics,

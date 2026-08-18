@@ -4330,6 +4330,18 @@ _WHEN_EXTRACTION = {"system_contains": "You are absorbing a completed role-play 
 _WHEN_AUDIT = {"system_contains": "You are auditing a completed role-play scene"}
 _WHEN_DOSSIER = {"system_contains": "You are updating a game master's dossier"}
 _WHEN_VOICE = {"system_contains": "You are checking one character's dialogue"}
+#: The order a positional reply list means, for the fakes that take one.
+_PHASE_ORDER = (_WHEN_EXTRACTION, _WHEN_DOSSIER, _WHEN_VOICE, _WHEN_AUDIT)
+
+
+def _absorb_script(extraction, dossier=None, voice=None, audit=None):
+    """A fake answering absorb's phases by which one is asking.
+
+    The shape-matched replacement for a positional list. Absorb issues its
+    calls concurrently, so a reply tied to a position is tied to nothing.
+    """
+    pairs = zip(_PHASE_ORDER, (extraction, dossier, voice, audit))
+    return from_entries([{"when": w, "reply": r} for w, r in pairs if r is not None])
 
 _EXTRACTION = ('{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}')
 _DOSSIER = "Aese now trusts the owner."
@@ -4339,9 +4351,7 @@ def test_absorb_stages_voice_drift_without_writing_it(client):
     """The judge runs, but absorb writes NOTHING: the finding comes back as an
     approvable edit, on the same commit boundary as every other one (#235)."""
     cid, sid = _voice_scene(client)
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER,
-         '{"verdict": "drift", "note": "She used contractions twice; Aese never does."}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She used contractions twice; Aese never does."}')
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
     edit = next(e for e in body["edits"] if e["kind"] == "voice_drift")
     assert edit["id"] == "voice_drift:aese"
@@ -4369,8 +4379,7 @@ def test_an_anchorless_npc_is_never_judged(client):
 
 def test_voice_drift_edit_is_written_on_save(client):
     cid, sid = _voice_scene(client)
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}')
     edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                    json={"one_line": "o", "summary": "s", "keywords": [],
@@ -4384,8 +4393,7 @@ def test_the_saved_flag_records_the_anchor_it_was_judged_against(client):
     cannot be suppressed when the anchor moves after the commit."""
     cid, sid = _voice_scene(client)
     wid = store.campaigns.read_campaign(cid)["meta"]["world"]
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}')
     edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
     client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                json={"one_line": "o", "summary": "s", "keywords": [],
@@ -4401,8 +4409,7 @@ def test_an_in_voice_scene_stages_a_clear_for_a_standing_flag(client):
     corrected. Without this the flag is permanent and the corrective never
     stops firing."""
     cid, sid = _voice_scene(client, prior="She hedged.")
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
     edit = next(e for e in body["edits"] if e["kind"] == "voice_drift")
     assert edit["before"] == "She hedged." and edit["after"] == ""
@@ -4415,8 +4422,7 @@ def test_an_in_voice_scene_stages_a_clear_for_a_standing_flag(client):
 
 def test_an_in_voice_scene_with_no_flag_stages_nothing(client):
     cid, sid = _voice_scene(client)
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
     assert body["voice"]["status"] == "ok" and body["voice"]["checked"] == ["aese"]
@@ -4426,8 +4432,7 @@ def test_a_drift_verdict_with_no_note_is_reported_not_staged(client):
     """The note IS the corrective. A verdict without one must not be quietly
     downgraded to "in voice", nor staged as a blank instruction."""
     cid, sid = _voice_scene(client)
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": ""}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": ""}')
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
     assert body["voice"]["status"] == "failed"
@@ -4439,8 +4444,8 @@ def test_an_unreadable_verdict_never_clears_a_standing_flag(client):
     arrive default-approved, so treating it as in-voice would retire a real
     corrective the moment the user hits Save."""
     cid, sid = _voice_scene(client, prior="She hedged.")
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, "I'm sorry, I can't help with that."])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(
+        _EXTRACTION, _DOSSIER, "I'm sorry, I can't help with that.")
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
     assert body["voice"]["status"] == "failed"
@@ -4455,8 +4460,7 @@ def test_a_silent_character_never_clears_a_standing_flag(client):
     nothing is not proof of sounding right, so the flag holds until a scene
     actually shows the voice again."""
     cid, sid = _voice_scene(client, prior="She hedged.")
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, '{"verdict": "not_enough", "note": ""}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "not_enough", "note": ""}')
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
     # a real judgment, so the phase is ok -- but named apart from "in voice",
@@ -4473,8 +4477,7 @@ def test_a_finding_judged_against_a_replaced_anchor_is_rejected_on_save(client):
     turn, so the save reports a conflict instead."""
     cid, sid = _voice_scene(client)
     wid = store.campaigns.read_campaign(cid)["meta"]["world"]
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}')
     edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
     store.voice_anchors.write(store.worlds.world_root(wid), "aese", "Warm and rambling now.")
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
@@ -4491,8 +4494,7 @@ def test_reformatting_the_anchor_still_lets_a_finding_land(client):
     real findings for an innocuous edit."""
     cid, sid = _voice_scene(client, anchor="Clipped. Never uses contractions.")
     wid = store.campaigns.read_campaign(cid)["meta"]["world"]
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}')
     edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
     store.voice_anchors.write(store.worlds.world_root(wid),
                               "aese", "  Clipped. Never uses contractions.\n\n")
@@ -4509,8 +4511,7 @@ def test_a_clear_lands_even_when_the_anchor_moved(client):
     made obsolete."""
     cid, sid = _voice_scene(client, prior="She hedged.")
     wid = store.campaigns.read_campaign(cid)["meta"]["world"]
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
     edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
     store.voice_anchors.write(store.worlds.world_root(wid), "aese", "A different standard.")
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
@@ -4529,8 +4530,7 @@ def test_the_judge_is_told_the_locked_card_name(client):
     card = store.characters.read_card(aroot, "aese", "main")
     card["data"]["name"] = "Aese Vane"           # card name diverges from meta "Aese"
     store.characters.update_version(aroot, "aese", "main", card)
-    fake = FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}'])
+    fake = _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     seen = []
     real = store.voice_drift.build_prompt
@@ -4638,8 +4638,7 @@ def test_a_clash_with_a_player_character_still_disqualifies(client):
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                 json={"kind": "characters", "id": "mara", "version": "main", "role": "pc"})
 
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, _DOSSIER])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER)
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
     assert [f["id"] for f in body["voice"]["failed"]] == ["aese"]
 
@@ -4659,9 +4658,7 @@ def test_one_malformed_roster_card_does_not_fail_the_whole_voice_phase(client):
         store.appearances.locked_actor_root(cid), "mara", "main").write_text(
         "{}", encoding="utf-8")
 
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER,
-         '{"verdict": "drift", "note": "She used contractions; Aese never does."}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She used contractions; Aese never does."}')
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
     assert body["voice"]["status"] == "ok"          # not "failed"
@@ -4704,8 +4701,7 @@ def test_an_oversized_judge_note_is_reported_not_staged(client):
     cid, sid = _voice_scene(client)
     huge = "She used contractions. " * 200
     assert len(huge) > store.voice_drift.MAX_NOTE
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, json.dumps({"verdict": "drift", "note": huge})])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, json.dumps({"verdict": "drift", "note": huge}))
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
@@ -4723,8 +4719,7 @@ def test_a_clean_verdict_clears_the_flag_however_chatty_its_note(client):
     cid, sid = _voice_scene(client, prior="She hedged.")
     huge = "She sounded exactly right, at length. " * 200
     assert len(huge) > store.voice_drift.MAX_NOTE
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, json.dumps({"verdict": "in_voice", "note": huge})])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, json.dumps({"verdict": "in_voice", "note": huge}))
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
     assert body["voice"]["failed"] == []
@@ -4845,9 +4840,7 @@ def test_a_unique_name_is_still_judged_alongside_a_clashing_pair(client):
     card["data"]["name"] = "Aese"                # mara + aese clash; winifred is unique
     store.characters.update_version(aroot, "mara", "main", card)
 
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, _DOSSIER, _DOSSIER,
-         '{"verdict": "drift", "note": "Winifred rambled; she is normally curt."}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "Winifred rambled; she is normally curt."}')
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
     assert body["voice"]["checked"] == ["winifred"]
@@ -4882,8 +4875,7 @@ def test_a_stale_voice_finding_is_reported_as_a_conflict(client):
     """Same discipline as the dossier: the staged `before` dates the proposal, so
     a newer verdict already on disk must not be silently overwritten."""
     cid, sid = _voice_scene(client)
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}')
     edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
     store.voice_drift.write(store.campaigns.campaign_root(cid), "aese", "a newer finding")
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
@@ -5998,6 +5990,71 @@ def test_a_timeout_from_inside_the_call_is_not_blamed_on_the_ceiling(client):
     assert r.json()["detail"] == "the upstream gave up"
 
 
+class _OverlapRecorder:
+    """Wraps a cassette fake and records how many completes are in flight at
+    once.
+
+    An overlap count, deliberately not a duration: a wall-clock assertion
+    measures the machine the suite runs on, and would go green on a fast box
+    for a change that had not landed.
+    """
+
+    def __init__(self, fake, hold=0.02):
+        self._fake, self._hold = fake, hold
+        self.inflight = self.peak = self.calls = 0
+
+    async def stream(self, m, cfg, usage=None):
+        async for delta in self._fake.stream(m, cfg, usage):
+            yield delta
+
+    async def complete(self, m, cfg, usage=None):
+        self.inflight += 1
+        self.peak = max(self.peak, self.inflight)
+        self.calls += 1
+        try:
+            await asyncio.sleep(self._hold)   # hold the slot so an overlap can occur
+            return await self._fake.complete(m, cfg, usage)
+        finally:
+            self.inflight -= 1
+
+
+def _absorb_recorder(hold=0.02):
+    return _OverlapRecorder(from_entries([
+        {"when": _WHEN_EXTRACTION, "reply": ABSORB_JSON},
+        {"when": _WHEN_DOSSIER, "reply": "A standing paragraph."},
+        {"when": _WHEN_VOICE, "reply": VOICE_OK},
+        {"when": _WHEN_AUDIT, "reply": AUDIT_OK}]), hold=hold)
+
+
+def test_absorb_runs_its_phases_at_once(client, npc_module_scene):
+    """The phases overlap. Nothing here ever needed the one before it: the
+    audit re-reads the scene itself, and the per-NPC phases take only the
+    snapshot captured before the extraction call."""
+    cid, sid = npc_module_scene
+    rec = _absorb_recorder()
+    client.app.dependency_overrides[routes.get_llm] = lambda: rec
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert body["one_line"] == "o"                 # the review is intact
+    assert rec.calls > 1                           # several phases really ran
+    assert rec.peak > 1, "the phases still run one at a time"
+
+
+def test_absorb_concurrency_of_one_is_exactly_todays_behaviour(client, npc_module_scene):
+    """The escape hatch a rate-limited provider needs, and what makes this
+    change reversible from the config page rather than by a revert."""
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_concurrency": "1"})
+    rec = _absorb_recorder()
+    client.app.dependency_overrides[routes.get_llm] = lambda: rec
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert body["one_line"] == "o"
+    assert rec.peak == 1, "absorb_concurrency = 1 must serialize the phases"
+
+
 def test_the_one_shot_ceiling_does_not_bound_absorb(client, npc_module_scene):
     """`absorb_budget = 0` means "no ceiling at all, however long the calls
     take" -- the documented escape hatch for a slow local endpoint. Absorb
@@ -6059,52 +6116,108 @@ class ClockEatingFake:
 
     def __init__(self, clock, cost, replies):
         self.clock, self.cost, self.replies, self.calls = clock, cost, replies, 0
+        # Which phases actually reached the provider. `calls` alone stopped
+        # being a proxy for that when the phases started running together: an
+        # absorb now issues the audit whether or not a dossier was refused.
+        self.systems: list[str] = []
 
     async def stream(self, m, cfg, usage=None):
         yield "{}"
 
     async def complete(self, m, cfg, usage=None):
-        reply = self.replies[min(self.calls, len(self.replies) - 1)]
+        system = "\n".join(x.get("content", "") for x in m if x.get("role") == "system")
+        self.systems.append(system)
+        # `replies` is positional BY PHASE -- extraction, dossier, voice, audit
+        # -- and no longer by call order, which stopped meaning anything when
+        # the phases began running together. A short list leaves the later
+        # phases on its last entry, exactly as consuming it in order did.
+        idx = next((i for i, w in enumerate(_PHASE_ORDER)
+                    if w["system_contains"] in system), len(self.replies) - 1)
+        reply = self.replies[min(idx, len(self.replies) - 1)]
         self.calls += 1
         self.clock[0] += self.cost
         return reply
 
 
-def test_absorb_budget_exhaustion_skips_dossiers_and_fails_the_audit(
-        client, npc_module_scene, monkeypatch):
-    """The extraction is the expensive part and is kept; the trailing steps
-    degrade rather than running unbounded (or discarding the absorb)."""
+class _SlowPhaseFake:
+    """Answers by request shape and really sleeps, per phase.
+
+    `ClockEatingFake` advances a FAKE clock when a call returns, which models a
+    sequence and cannot model a fan-out: concurrently every phase reads the
+    remaining budget before any of them has returned, so nothing is ever
+    refused. The budget is enforced by `wait_for`, which uses real time, so a
+    test about the budget cancelling a phase has to spend real time -- kept to
+    fractions of a second.
+    """
+
+    def __init__(self, slow_when, slow=1.0, quick=0.0):
+        self._slow_when, self._slow, self._quick = slow_when, slow, quick
+        self.calls = 0
+        self._replies = [(_WHEN_EXTRACTION, ABSORB_JSON), (_WHEN_DOSSIER, "Aese is steady."),
+                         (_WHEN_VOICE, VOICE_OK), (_WHEN_AUDIT, AUDIT_OK)]
+
+    def _kind(self, messages):
+        system = "\n".join(m.get("content", "") for m in messages if m.get("role") == "system")
+        for when, reply in self._replies:
+            if when["system_contains"] in system:
+                return when, reply
+        raise AssertionError(f"no phase matches this request: {system[:120]!r}")
+
+    async def stream(self, m, cfg, usage=None):
+        yield "{}"
+
+    async def complete(self, m, cfg, usage=None):
+        when, reply = self._kind(m)
+        self.calls += 1
+        await asyncio.sleep(self._slow if when is self._slow_when else self._quick)
+        return reply
+
+
+def test_absorb_budget_exhaustion_cancels_the_slow_phase_and_keeps_the_rest(
+        client, npc_module_scene):
+    """A phase that overruns is cut off; the ones that fit still land.
+
+    This is what the budget does now that the phases are concurrent. It used to
+    SKIP the whole tail, because a phase that had not started yet could be
+    refused -- and sequentially every later phase was one of those. Nothing
+    trails anything any more, so the clock stops the phase that is actually
+    slow and the others finish inside the same ceiling: strictly more work
+    completes, and `absorb_budget` still bounds the whole absorb rather than
+    the sum of its calls.
+
+    What survives unchanged is the reporting #243 asked for: the phase says the
+    clock is why, and the review comes back rather than 502ing."""
     cid, sid = npc_module_scene
-    client.put("/api/config", json={"absorb_budget": "60"})
-    clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
-    fake = ClockEatingFake(clock, 90.0, [ABSORB_JSON])  # one call eats the budget
+    client.put("/api/config", json={"absorb_budget": "0.20"})
+    fake = _SlowPhaseFake(slow_when=_WHEN_DOSSIER, slow=2.0)
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
     assert body["one_line"] == "o"                    # prose absorb intact
-    assert fake.calls == 1                            # dossier + audit never called
     assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == ""
-    assert body["mechanics"]["status"] == "failed"
-    assert "budget" in body["mechanics"]["reason"]
+    assert body["dossiers"]["status"] == "failed"
+    assert _phase(body, "dossiers")["budget_exhausted"] is True
+    # the phases that fit are no longer collateral damage
+    assert body["mechanics"]["status"] == "ok"
 
 
-def test_absorb_names_the_dossiers_the_budget_skipped(client, npc_module_scene, monkeypatch):
-    """Skipping the tail is deliberate; skipping it silently is the bug #236
-    closed for failures — a budget skip reports through the same status."""
+def test_absorb_names_the_budget_when_it_stops_a_dossier(client, npc_module_scene):
+    """Losing a dossier to the clock is deliberate; losing it silently is the
+    bug #236 closed for failures — a budget casualty reports through the same
+    status, whether it was refused before it started or cancelled in flight."""
     cid, sid = npc_module_scene
-    client.put("/api/config", json={"absorb_budget": "60"})
-    clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    client.put("/api/config", json={"absorb_budget": "0.20"})
     client.app.dependency_overrides[routes.get_llm] = \
-        lambda: ClockEatingFake(clock, 90.0, [ABSORB_JSON])
+        lambda: _SlowPhaseFake(slow_when=_WHEN_DOSSIER, slow=2.0)
 
     dossiers = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["dossiers"]
 
     assert dossiers["status"] == "failed"
-    assert dossiers["skipped"] == ["aese"] and dossiers["proposed"] == []
-    assert "budget" in dossiers["reason"]
+    assert dossiers["proposed"] == []
+    assert dossiers["budget_exhausted"] is True
+    assert "budget" in dossiers["reason"] or any(
+        "budget" in f["reason"] for f in dossiers["failed"])
 
 
 def test_absorb_reports_a_partially_skipped_dossier_phase_as_degraded(
@@ -6195,23 +6308,25 @@ def test_audit_retry_gets_a_fresh_budget(client, npc_module_scene, monkeypatch):
 
 # ---- the dossier phase's own scoped retry (#286) ----
 
-def test_dossier_retry_gets_a_fresh_budget(client, npc_module_scene, monkeypatch):
+def test_dossier_retry_gets_a_fresh_budget(client, npc_module_scene):
     """The asymmetry #286 closes: an absorb whose clock ran out before the
     dossier phase left the reviewer with nothing but End scene, which replaces
     the whole review. This re-runs that phase alone, on a budget of its own."""
     cid, sid = npc_module_scene
-    client.put("/api/config", json={"absorb_budget": "60"})
-    clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    # Real seconds, and no faked `_clock`: the budget is enforced by `wait_for`,
+    # which reads real time, so a frozen clock would leave `spent()` false and
+    # the overrun reported as a plain timeout instead of as the budget.
+    client.put("/api/config", json={"absorb_budget": "0.20"})
     client.app.dependency_overrides[routes.get_llm] = \
-        lambda: ClockEatingFake(clock, 90.0, [ABSORB_JSON])
+        lambda: _SlowPhaseFake(slow_when=_WHEN_DOSSIER, slow=2.0)
     absorbed = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
-    assert absorbed["dossiers"]["skipped"] == ["aese"]
+    assert absorbed["dossiers"]["status"] == "failed"
+    assert absorbed["dossiers"]["budget_exhausted"] is True
 
-    # The clock is now well past the absorb's deadline; a retry that inherited
-    # it would refuse every call before sending one.
+    # A retry that inherited the absorb's deadline would have none of it left;
+    # this one builds its own, which is the whole point of #286.
     client.app.dependency_overrides[routes.get_llm] = \
-        lambda: ClockEatingFake(clock, 1.0, ["Aese is steady."])
+        lambda: from_entries([{"when": _WHEN_DOSSIER, "reply": "Aese is steady."}])
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers").json()
 
     assert body["dossiers"]["status"] == "ok"
@@ -6555,28 +6670,28 @@ def test_absorb_reports_every_phase_attempted(client, npc_module_scene, monkeypa
     assert not any(p["budget_exhausted"] for p in body["phases"])
 
 
-def test_absorb_phases_name_the_steps_the_budget_never_attempted(
-        client, npc_module_scene, monkeypatch):
-    """The reported bug: a slow-but-healthy extraction eats the budget and the
-    absorb comes back looking like one the model had nothing to add to. The
-    phase rows say which steps never ran, and that the clock is why."""
+def test_absorb_phases_name_the_steps_the_budget_stopped(client, npc_module_scene):
+    """The reported bug: a slow-but-healthy phase eats the budget and the absorb
+    comes back looking like one the model had nothing to add to. The phase rows
+    say which step the clock stopped, and that the clock is why."""
     cid, sid = npc_module_scene
-    client.put("/api/config", json={"absorb_budget": "60"})
-    clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
-    fake = ClockEatingFake(clock, 90.0, [ABSORB_JSON])
+    client.put("/api/config", json={"absorb_budget": "0.20"})
+    fake = _SlowPhaseFake(slow_when=_WHEN_DOSSIER, slow=2.0)
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
-    assert fake.calls == 1
     assert _phase(body, "extraction") == {"name": "extraction", "attempted": True,
                                           "status": "ok", "reason": None,
                                           "budget_exhausted": False}
-    for name in ("dossiers", "audit"):
-        assert _phase(body, name)["attempted"] is False, name
-        assert _phase(body, name)["budget_exhausted"] is True, name
-        assert "budget" in _phase(body, name)["reason"], name
+    # `attempted` is now True: the phases start together, so a phase the clock
+    # stops was cancelled in flight rather than never reached. That is the
+    # distinction the flag exists to draw, and it still draws it -- what it
+    # reports has changed because what happens has changed.
+    dossiers = _phase(body, "dossiers")
+    assert dossiers["attempted"] is True
+    assert dossiers["budget_exhausted"] is True
+    assert dossiers["status"] == "failed"
 
 
 def test_absorb_phases_mirror_the_dossier_and_mechanics_blocks(
@@ -6664,19 +6779,24 @@ def test_a_budget_spent_by_the_reads_before_the_call_is_not_an_attempt(
     client.put("/api/config", json={"absorb_budget": "60"})
     clock = [0.0]
     monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
-    fake = ClockEatingFake(clock, 30.0, [ABSORB_JSON, "Aese is steady."])
+    fake = ClockEatingFake(clock, 0.0, [ABSORB_JSON, "Aese is steady."])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     real_read = store.dossiers.read
 
     def slow_read(*a, **kw):
-        clock[0] += 40.0          # 30 left after the extraction, so this eats it
+        # The whole budget, not a share of it: the phases now start together,
+        # so how much the extraction had already spent depends on scheduling.
+        # What this test is about is the gap between the loop's own check and
+        # the call, which this eats on its own.
+        clock[0] += 70.0
         return real_read(*a, **kw)
 
     monkeypatch.setattr(store.dossiers, "read", slow_read)
 
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
-    assert fake.calls == 1                       # the dossier request never left
+    assert not any(_WHEN_DOSSIER["system_contains"] in sysmsg
+                   for sysmsg in fake.systems)      # the dossier request never left
     dossiers = _phase(body, "dossiers")
     assert dossiers["attempted"] is False
     assert dossiers["budget_exhausted"] is True
@@ -10966,8 +11086,7 @@ def test_a_raise_edited_down_to_blank_is_refused_not_treated_as_a_clear(client):
     empty."""
     cid, sid = _voice_scene(client, prior="She hedged.")
     croot = store.campaigns.campaign_root(cid)
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "A newer corrective."}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "A newer corrective."}')
     edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
     for e in edits:                      # the reviewer empties the textarea
         if e["kind"] == "voice_drift":
@@ -10987,8 +11106,7 @@ def test_a_stale_clear_cannot_delete_a_re_confirmed_flag(client):
     had just revalidated against the current anchor."""
     cid, sid = _voice_scene(client, prior="She hedged.")
     croot = store.campaigns.campaign_root(cid)
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
     edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
     # meanwhile another review re-confirms the same note against a new anchor
     store.voice_drift.write(croot, "aese", "She hedged.", "a-newer-fingerprint")
@@ -11007,8 +11125,7 @@ def test_a_clear_row_typed_into_is_checked_like_the_raise_it_became(client):
     anchor checks and write one unverified."""
     cid, sid = _voice_scene(client, prior="She hedged.")
     croot = store.campaigns.campaign_root(cid)
-    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
-        [_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
     edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
     for e in edits:                    # the reviewer types a note into the clear row
         if e["kind"] == "voice_drift":
