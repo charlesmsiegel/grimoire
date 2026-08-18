@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { ColumnSection, PageShell, PlainShell } from "./PageShell";
+import { FocusProvider, useFocus } from "./focus";
 
 function Shelf({ label = "Context" }: { label?: string }) {
   return (
@@ -148,5 +149,67 @@ test("rotating into a wide viewport gives both panes back", () => {
     fireEvent(window, new Event("resize"));
     expect(document.querySelector(".shell")).not.toHaveClass("phone");
     expect(screen.queryByRole("button", { name: /^worlds$/i })).not.toBeInTheDocument();
+  } finally { restore(); }
+});
+
+// ---- focus mode ----
+
+/** Turns focus on from inside the provider, the way the app header does. */
+function EnterFocus() {
+  const { setFocus } = useFocus();
+  return <button onClick={() => setFocus(true)}>enter-focus</button>;
+}
+
+function focusShelf() {
+  return (
+    <MemoryRouter>
+      <FocusProvider>
+        <EnterFocus />
+        <Shelf label="Worlds" />
+      </FocusProvider>
+    </MemoryRouter>
+  );
+}
+
+beforeEach(() => localStorage.clear());
+
+test("focus mode drops the phone's index toggle with the column it opens", () => {
+  // Leaving it behind would make it the only bar on screen — 44px of chrome
+  // above a transcript, guarding a column focus mode has already hidden.
+  const restore = atWidth(375);
+  try {
+    render(focusShelf());
+    expect(screen.getByRole("button", { name: /worlds/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("enter-focus"));
+    expect(document.querySelector(".shell")).toHaveClass("focus");
+    expect(screen.queryByRole("button", { name: /worlds|close/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("main")).toHaveTextContent("Main");
+  } finally { restore(); }
+});
+
+test("a column left open when focus starts does not reappear over the page", () => {
+  const restore = atWidth(375);
+  try {
+    render(focusShelf());
+    fireEvent.click(screen.getByRole("button", { name: /worlds/i }));
+    expect(document.querySelector(".shell")).toHaveClass("show-column");
+
+    fireEvent.click(screen.getByText("enter-focus"));
+    // The push is gated on focus, not on the toggle's own state: the toggle is
+    // no longer rendered, so nothing would ever turn it back off.
+    expect(document.querySelector(".shell")).not.toHaveClass("show-column");
+  } finally { restore(); }
+});
+
+test("focus mode takes the column at desktop width too", () => {
+  const restore = atWidth(1200);
+  try {
+    render(focusShelf());
+    fireEvent.click(screen.getByText("enter-focus"));
+    expect(document.querySelector(".shell")).toHaveClass("focus");
+    // The aside stays in the tree — the stylesheet is what removes it — so the
+    // page keeps its shape and only its width changes.
+    expect(screen.getByRole("main")).toHaveTextContent("Main");
   } finally { restore(); }
 });

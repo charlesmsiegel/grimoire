@@ -24,6 +24,7 @@ import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
 import { usePublishShellContext } from "../components/ShellStatus";
 import { RollProposal, type ResolveBody } from "../components/RollProposal";
 import { ColumnSection, PageShell } from "../components/PageShell";
+import { useFocus } from "../components/focus";
 import CastColumn from "../components/play/CastColumn";
 import DossierColumn from "../components/play/DossierColumn";
 import Conditions from "../components/play/Conditions";
@@ -247,10 +248,15 @@ const RenderedMarkdown = memo(function RenderedMarkdown({ content }: { content: 
   );
 });
 
-export default function CampaignView({ ready, topbarCollapsed = false, onToggleTopbar = () => {} }: {
-  ready: boolean; topbarCollapsed?: boolean; onToggleTopbar?: () => void;
-}) {
+export default function CampaignView({ ready }: { ready: boolean }) {
   const { cid = "" } = useParams();
+  // Focus mode: the scene bar and the scene head go with the app header and the
+  // context column, leaving the transcript and the composer. Together they were
+  // the ~300px above the first line of prose on a phone — the scene bar worst of
+  // all, because eleven controls at a 44px touch target wrap into four rows at
+  // 375px. The review bar is NOT included: a review is not a scene being read,
+  // and it carries the only rename control that can reach an absorbing scene.
+  const { focus } = useFocus();
   // The scene segment is a CHILD route (App.tsx), so `useParams` here — which
   // only sees params matched down to this element's own route — never carries
   // it. `useMatch` reads it off the full location instead, and does it without
@@ -3494,7 +3500,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               the absorb that neither of them states. */}
           <span className="review-audit">Audit {absorb.mechanics.status}</span>
         </div>
-        ) : (
+        ) : focus ? null : (
         <div className="scene-actions">
           <span className="eyebrow">{name}</span>
           <span className="header-spacer" />
@@ -3571,12 +3577,18 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             </div>
           )}
           {!absorb && (<>
-          {showCalendar && (
+          {/* Every one of these five is opened AND closed from the scene bar,
+              which focus mode does not render — so one left open when focus
+              starts would be a panel above the transcript with no control that
+              can shut it. They keep their state and come back with the bar. The
+              inspector below is deliberately not in this list: its toggle lives
+              in the composer, which focus mode keeps. */}
+          {!focus && showCalendar && (
             <div className="panel-slot">
               <CalendarConfig cid={cid} />
             </div>
           )}
-          {showMechanics && (
+          {!focus && showMechanics && (
             <div className="panel-slot">
               {/* Guarded against a save that settles after the reader has moved
                   on: the callback this panel holds is the one it was handed, so
@@ -3599,18 +3611,18 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               <MechanicsConfig key={cid} cid={cid} onChanged={() => readModuleBound()} />
             </div>
           )}
-          {showStyle && (
+          {!focus && showStyle && (
             <div className="panel-slot">
               <ResponsePresetPicker scope="campaign" cid={cid}
                                     onChanged={() => activeId && selectScene(activeId)} />
             </div>
           )}
-          {showCover && (
+          {!focus && showCover && (
             <div className="panel-slot">
               <CampaignCover cid={cid} />
             </div>
           )}
-          {showChanges && <ChangesPanel cid={cid} />}
+          {!focus && showChanges && <ChangesPanel cid={cid} />}
           {editFailures.length > 0 && (
             <div className="mechanics-notice">
               <p>{editFailures.length} change{editFailures.length === 1 ? "" : "s"} did not apply</p>
@@ -3795,7 +3807,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                               posts={messages.length} />
             </div>
           )}
-          {activeId && (
+          {activeId && !focus && (
             <div className="scene-head">
               <div className="eyebrow">
                 SCENE {sceneNumber(activeId, scenes.length)} · {messages.length}{" "}

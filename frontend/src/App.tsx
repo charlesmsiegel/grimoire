@@ -6,6 +6,7 @@ import { DEFAULT_MODE } from "./theme/themes";
 import AppHeader from "./components/AppHeader";
 import AppPaletteSource from "./components/AppPaletteSource";
 import CommandPalette, { usePaletteHotkey } from "./components/CommandPalette";
+import { FocusProvider, FocusRestore, useFocus } from "./components/focus";
 import { PaletteProvider } from "./components/palette";
 import { ShellStatusProvider } from "./components/ShellStatus";
 import { onConfigChanged } from "./appEvents";
@@ -37,10 +38,20 @@ function Shell(
 ) {
   const location = useLocation();
   usePaletteHotkey();
+  const { focus } = useFocus();
 
   return (
     <>
-      <AppHeader model={model} connection={connection} ready={ready} />
+      {/* Focus mode swaps the 52px strip for the pill that undoes it, and that
+          is a swap rather than a `display: none` on purpose: a hidden header is
+          still nine tab stops between the reader and the composer, and the
+          restore control has to be the FIRST of them. `PageShell` drops the
+          context column and its phone toggle on the same flag, and
+          `CampaignView` the scene bar and scene head — together those are the
+          ~300px of chrome that, on a phone, left a transcript about half the
+          viewport. */}
+      {focus ? <FocusRestore />
+             : <AppHeader model={model} connection={connection} ready={ready} />}
       <AppPaletteSource />
       <CommandPalette />
       {/* Every route renders its own `PageShell`, so the 274px column belongs
@@ -184,11 +195,13 @@ export default function App() {
   return (
     <ThemeProvider initial={theme}>
       <ShellStatusProvider>
-        <PaletteProvider>
-          <Shell inSetup={inSetup} dataDir={dataDir} ready={ready}
-                 connection={connection} model={model}
-                 onLeftSetup={setLeftSetupFor} />
-        </PaletteProvider>
+        <FocusProvider>
+          <PaletteProvider>
+            <Shell inSetup={inSetup} dataDir={dataDir} ready={ready}
+                   connection={connection} model={model}
+                   onLeftSetup={setLeftSetupFor} />
+          </PaletteProvider>
+        </FocusProvider>
       </ShellStatusProvider>
     </ThemeProvider>
   );

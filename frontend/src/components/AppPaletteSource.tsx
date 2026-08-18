@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type CampaignMeta, type WorldMeta } from "../api/client";
 import { LIBRARY_SECTIONS } from "../librarySections";
+import { useFocus } from "./focus";
 import { usePalette, usePaletteSource, type PaletteItem } from "./palette";
 
 /** The offers that exist on every route: campaigns, worlds, the library's
@@ -12,6 +13,7 @@ import { usePalette, usePaletteSource, type PaletteItem } from "./palette";
  *  IN THIS CAMPAIGN and SCENES, and those come first. */
 export default function AppPaletteSource() {
   const { open } = usePalette();
+  const { focus, setFocus } = useFocus();
   const [campaigns, setCampaigns] = useState<CampaignMeta[]>([]);
   const [worlds, setWorlds] = useState<WorldMeta[]>([]);
 
@@ -60,6 +62,14 @@ export default function AppPaletteSource() {
                meta: "start one", action: true, to: "/campaigns/new" });
     out.push({ id: "section:/config", group: "ELSEWHERE", label: "Configuration",
                meta: "storage, model, appearance", to: "/config" });
+    // Typeable as well as clickable, for the same reason every route is: the
+    // header button is the only other way in, and it is one of the things this
+    // hides. Offered in both directions so the palette never describes a state
+    // you are already in.
+    out.push({ id: "action:focus", group: "ELSEWHERE",
+               label: focus ? "Leave focus mode" : "Focus mode",
+               meta: focus ? "bring the bars back" : "hide every bar but the composer",
+               action: true, run: () => setFocus(!focus) });
     // Full-text search, offered from the palette rather than from a topbar box
     // that would sit unused on every screen: the palette matches names, and
     // this row is how the same keystrokes reach bodies, transcripts and facts.
@@ -74,7 +84,7 @@ export default function AppPaletteSource() {
       });
     }
     return out;
-  }, [campaigns, worlds]);
+  }, [campaigns, worlds, focus, setFocus]);
 
   usePaletteSource(source);
   return null;

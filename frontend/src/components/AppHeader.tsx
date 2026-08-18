@@ -1,4 +1,5 @@
 import { NavLink } from "react-router-dom";
+import { useFocus } from "./focus";
 import { usePalette } from "./palette";
 import { useShellStatus } from "./ShellStatus";
 
@@ -15,6 +16,7 @@ export default function AppHeader(
   { model, connection, ready }: { model: string; connection: string; ready: boolean },
 ) {
   const { setOpen } = usePalette();
+  const { setFocus } = useFocus();
   const { context, usage } = useShellStatus();
 
   const where = context
@@ -57,6 +59,16 @@ export default function AppHeader(
           </span>
         </span>
       </div>
+
+      {/* The way out of the chrome, and it lives in the chrome: on a phone
+          this strip plus the scene bar plus the scene head is most of a
+          screenful, and a transcript is the one thing in the app that is worth
+          the whole viewport. Its counterpart -- the pill that brings the bars
+          back -- is `FocusRestore`, which the shell renders in its place. */}
+      <button type="button" className="header-focus" onClick={() => setFocus(true)}
+              title="Hide the toolbars and read the scene" aria-label="Enter focus mode">
+        FOCUS
+      </button>
 
       <NavLink to="/config"
                className={({ isActive }) => "config-link" + (isActive ? " active" : "")}>
