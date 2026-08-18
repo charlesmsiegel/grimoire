@@ -6,6 +6,11 @@ is lost with nothing to resume from.
 
 Three complaints, one shape behind them.
 
+Touches the machinery of #243 (the absorb time budget), #236 (dossier failure
+visibility), #112 (citation authority), #59 (voice drift) and #235 (staged
+edits and the already-absorbed guard). It changes none of their decisions —
+only the order the calls run in and the evidence a citation rests on.
+
 ## Problem
 
 `routes.scenes.post_absorb` runs its whole LLM sequence **strictly
@@ -58,10 +63,12 @@ loss anywhere else is recoverable and a loss in extraction is not.
 
 ## Scope
 
-In: concurrent execution of absorb's phases; batching the per-NPC phases;
-splitting extraction into three focused prompts; a citation contract the store
-can actually verify; skipping work that cannot produce a finding; a retryable
-extraction endpoint; foreground-service promotion during absorb.
+In: concurrent execution of absorb's phases and the budget rework that has to
+precede it; batching the per-NPC phases; splitting extraction into three
+focused prompts; a citation contract the store can actually verify; skipping
+work that cannot produce a finding; a retryable extraction endpoint;
+foreground-service promotion during absorb. Two new config keys,
+`absorb_concurrency` and absorb's newly-inherited `llm_call_budget`.
 
 Out: prompt-caching breakpoints (`cache_control` is absent from `llm.py` and
 `openrouter.py` entirely — a separate piece of work); server-side staging of
@@ -74,37 +81,85 @@ Five present NPCs, three anchored, two of whom actually speak:
 
 | | today | proposed |
 |---|---|---|
-| LLM calls | 10, strictly sequential | 6, all concurrent |
+| LLM calls | 10, strictly sequential | 6, concurrent |
 | transcript copies sent | 10 | 6 |
-| wall clock | sum of 10 calls | ≈ slowest single call |
+| wall clock | sum of 10 calls | slowest call × ⌈6 ÷ cap⌉ |
 
 Six calls: three extraction, one dossier batch, one voice batch, one audit.
 Extraction is the one count that rises, and the three replacing it are each far
 shorter than the monolith they replace.
 
+The wall-clock row is deliberately not "one call". With a semaphore cap below
+six the calls run in rounds, and a provider that rate-limits a burst will
+serialize them regardless of what the cap allows — so the honest claim is one
+round rather than one call, and a cap of 3 is two rounds, not ten.
+
 ## Decisions
 
 ### Fan out, in-request, under a cap
 
-`post_absorb` stays one POST. Its four phases become one `asyncio.gather` over
-the phase coroutines, bounded by a semaphore so a large cast cannot open twenty
+`post_absorb` stays one POST. Its phases become one `asyncio.gather` over the
+phase coroutines, bounded by a semaphore so a large cast cannot open twenty
 sockets at once.
 
+The cap is a new config key, `absorb_concurrency`, beside `absorb_budget` and
+`llm_call_budget` — not a constant. A rate-limited provider is a per-account
+fact no default can know, and `absorb_concurrency = 1` has to remain available
+as an exact restoration of today's sequential behaviour: the one setting that
+makes this change reversible without a revert.
+
 The alternative — the client firing four requests and assembling the review
-itself — was considered and not taken. The shared `_Budget` and the
-`commit_token` epoch stamped at the top of the handler both exist because the
-whole review is prepared from one snapshot under one hold; splitting the
-request would require re-deciding both, for no latency the fan-out does not
-already deliver.
+itself — was considered and not taken. The `commit_token` epoch is stamped at
+the top of the handler precisely because the whole review is prepared from one
+snapshot under one hold (#271); splitting the request would mean re-deciding
+that, for no latency the fan-out does not already deliver.
 
-`_Budget` becomes a ceiling on the *slowest* phase rather than on their sum,
-which is what it was always trying to express. Its `BudgetRefused` / overrun
-reporting and the `phases` projection are unchanged — every phase still reports
-`attempted` and `budget_exhausted`, and `_phase_report` still projects one row
-per step from the block that owns it.
+### The budget has to be re-derived, not reinterpreted
 
-`_watched`'s disconnect handling survives the change: each phase coroutine is
-already the unit it wraps.
+This is the part the fan-out breaks, and it is not a detail.
+
+`routes/common.py::_bounded_call` documents in so many words why absorb is
+excluded from `llm_call_budget`: `_Budget` "bounds a whole *sequence* and knows
+which of its steps are droppable". Under a fan-out **nothing is droppable** —
+every call is already in flight — so that rationale collapses, and the failure
+mode inverts. Today a budget overrun degrades: extraction has already returned,
+and the tail is dropped and reported. Concurrently, all six calls share one
+deadline and **all six die together, narrative included** — which is a 502 and
+the loss of the entire review. Fanning out naively makes budget exhaustion
+strictly worse than it is today.
+
+So `_Budget` is replaced rather than reread:
+
+- **Each phase gets its own per-call ceiling**, which is what `llm_call_budget`
+  already is. Absorb stops being special-cased out of it, because the reason
+  for the special case was sequence-awareness that no longer exists.
+- **`absorb_budget` becomes an overall ceiling that only the droppable phases
+  answer to.** Narrative is exempt: it is the one call whose loss is a 502, and
+  a shared clock must not be able to take it out. Ledger, new-material,
+  dossiers, voice and audit each degrade to their existing reported status when
+  the overall ceiling expires, exactly as the tail does today.
+- `absorb_budget = 0` keeps meaning "no ceiling at all".
+
+`BudgetRefused`, `_budget_overrun` and the `phases` projection all survive:
+every phase still reports `attempted` and `budget_exhausted`, and
+`_phase_report` still projects one row per step from the block that owns it.
+What changes is that `attempted: false` now means "refused before the call went
+out" for a *queued* call rather than an *unreached* one.
+
+### gather semantics, spelled out
+
+`asyncio.gather` without `return_exceptions=True` propagates the first exception
+and leaves its siblings **running, detached** — five orphaned LLM calls billed
+to nobody. `Abandoned` and `BudgetRefused` both fly through this code, so this
+is the expected path, not the exotic one.
+
+The fan-out therefore uses `return_exceptions=True` and cancels the remaining
+tasks explicitly, following the detach-don't-await discipline `_watched` and
+`common._abandon` already established for exactly this reason: waiting on a
+cancellation hands the unwinding the control you were taking back.
+
+`_watched`'s disconnect handling moves out of the individual phases to wrap the
+gather, since a disconnect abandons the whole review, not one phase of it.
 
 ### Batch the per-NPC phases — cheaper *and* better
 
@@ -129,6 +184,13 @@ entirely. With every speaker in one prompt the judge can be shown the speaker
 roster explicitly and asked to attribute against it, so a `Winifred Vance` and
 a `Winifred Vale` in the same scene stop costing each other their voice checks.
 
+Chunking has one constraint beyond size: **NPCs whose names are `confusable`
+with each other must land in the same chunk.** Splitting them across calls
+would hand each chunk the ambiguity the batching was supposed to resolve, and
+silently — the judge would answer confidently about lines it cannot attribute.
+Where co-locating them would overflow the chunk, they keep today's behaviour
+and are reported as disqualified rather than judged.
+
 Chunking rather than one unbounded batch: a twelve-NPC scene would otherwise
 risk a truncated reply, and one bad reply would lose every dossier. Parsing is
 per-NPC, so a reply good for four of five stages those four and reports the
@@ -147,6 +209,12 @@ as a budget casualty.
 
 The same filter does not apply to dossiers: a character can matter to a scene
 without speaking in it.
+
+**Skipping the audit when the scene logged no rolls was considered and
+rejected.** It looks like the same saving and is the opposite: a scene where
+the narration resolves a lock-picking and no roll was ever logged is precisely
+the scene the audit exists to flag. Gating the check on the presence of the
+thing it checks for would blind it to every absence.
 
 ### Split extraction into three
 
@@ -176,24 +244,47 @@ sections missing, reported like any other phase, rather than failing the
 absorb — except narrative, which keeps today's 502 behaviour, since a review
 with no summary is not a review.
 
-### Cite the line, not the words
+### Cite the message, not the words
 
 The citation contract changes from "reproduce a short verbatim excerpt" to
-"name the line you read it in".
+"name the message you read it in". Every edit carries `"src": 12`, and
+`routing.authority` looks message 12 up directly: the speaker is known exactly,
+with no `match_name` prefix guessing and no way for a tidied apostrophe to be
+reported as a fabrication.
 
-`snippets/transcript.j2` numbers its lines (`[12] Mara: …`). Every edit carries
-`"src": 12`. `routing.authority` looks message 12 up directly: the speaker is
-known exactly, with no `match_name` prefix guessing, no normalization, and no
-way for a tidied apostrophe to be reported as a fabrication.
+Two things the first draft of this got wrong, both load-bearing:
 
-This is cheaper as well as better — an integer replaces a quoted excerpt on
-every one of dozens of rows — but correctness is the reason. Pointing at a line
-is a thing models do reliably; reproducing text verbatim is not, and the
-existing design charges the difference to the reviewer as a collapsed row.
+**The numbering does not go in `snippets/transcript.j2`.** That snippet is
+shared — `chronicle.transcript_text` renders it for the absorb, dossier, voice,
+audit and rolling-summary prompts *and* for `store/export.py`, which is the
+epub and markdown a human reads. Numbering it would stamp `[12]` markers
+through exported campaign documents and change every other prompt in the app
+for a change that concerns one of them. Absorb gets its own numbered renderer,
+built from the same two label pieces so `routing._label` still agrees with what
+the model saw, and the shared snippet is untouched.
 
-Nothing regresses: `quote` stays as an optional display field, and the existing
+**It numbers messages, not lines.** The snippet joins bodies with `\n\n` and
+interpolates `m.content` verbatim, so a multi-paragraph post is already several
+lines. `src` indexes the message list — the same list `speaker_index` walks —
+so the two cannot disagree about what 12 means.
+
+**`src` is not strictly better than the quote; it is better at the thing that
+is failing.** The substring check proved the cited *words* exist, which is weak
+evidence about attribution and real evidence about relevance. An index proves
+attribution exactly and proves nothing about relevance: a model can point at a
+message that does not support its claim. The trade is deliberate — the observed
+failure is honest rows collapsing as fabrications, not fabricated rows sailing
+through — but it is a trade, and `certainty` remains the only signal about
+whether the cited message says what the edit claims.
+
+The numbering is computed **once**, from the snapshot, and shared by all three
+extraction prompts and by `speaker_index`. Renumbering per call would let two
+prompts disagree about what 12 means while both looked correct.
+
+Nothing regresses: `quote` stays as an optional display field and the existing
 substring path stays as the fallback for a row that gives a quote and no index.
-An out-of-range or missing `src` falls through to exactly today's behaviour.
+An out-of-range, non-integer or missing `src` falls through to exactly today's
+behaviour.
 
 The tier vocabulary (`NARRATION` / `SELF` / `OTHER` / `UNATTRIBUTED` /
 `UNCITED`), the `WEIGHTS` table, the band edges and the rule that **nothing
@@ -222,27 +313,70 @@ ordering leaves the option open.
 
 ### Android: promote, then retry
 
-Two changes, in that order of importance.
+Two changes, in that order of importance. The first is much larger than
+"promote the service" makes it sound, and the spec should say so.
 
-`ServerService` promotes to foreground for the duration of an absorb, exactly
-as `docs/android-architecture.md` §4 already specs for a scene stream, and
-demotes when the review is returned. This is what stops the OS killing the
-radio mid-call, and it is the only one of the two that prevents the failure
-rather than recovering from it.
+`ServerService` today is a bare started service: no `foregroundServiceType`, no
+`FOREGROUND_SERVICE` permission in the manifest, no notification channel, and
+no way for the Python side to tell the Kotlin side that a call is in flight.
+Promotion needs all of it:
+
+- `FOREGROUND_SERVICE` and a typed `FOREGROUND_SERVICE_DATA_SYNC` permission,
+  with `android:foregroundServiceType="dataSync"` on the service — Android 14
+  rejects an untyped promotion.
+- `POST_NOTIFICATIONS` at runtime (Android 13+) and a notification channel, or
+  the required notification never appears.
+- A signal path from the request to the service. The server is in-process, so
+  the cheapest honest option is the WebView side promoting on fetch start and
+  demoting on settle, rather than a Chaquopy callback per request.
+- An accepted limit: `dataSync` foreground services are capped at roughly six
+  cumulative hours per day on Android 14+. That is far above any absorb, but it
+  is shared with the scene-stream promotion §4 already plans, so the two want
+  one owner rather than two independent promoters.
+
+This is the change that *prevents* the failure rather than recovering from it,
+and it is the one piece here that is plausibly its own piece of work.
 
 `POST /campaigns/{cid}/scenes/{sid}/extract` joins the existing `audit` and
-`dossiers` retries, so extraction stops being the one unrecoverable phase. With
+`dossiers` retries, so extraction stops being the one unrecoverable phase. A
+retry is a single phase, so it takes the per-call ceiling and not the overall
+one — the overall ceiling exists to bound a fan-out, and there is no fan-out in
+a retry of one step. With
 the fan-out, a drop that still happens costs one round of calls rather than ten
 minutes, and each phase has its own button.
 
-Absorb remains non-idempotent and the `force` / `already_absorbed` guard is
-untouched: a retry re-runs a *phase* of an open review, never a second
+Absorb remains non-idempotent and the `force` / `already_absorbed` guard (#235)
+is untouched: a retry re-runs a *phase* of an open review, never a second
 absorption.
+
+## Staging
+
+Six changes ride in this spec, and landing them as one diff would make a real
+regression indistinguishable from a fake answering out of order. They have a
+required order, and the first two are not optional preludes:
+
+1. **Migrate the order-dependent fakes to cassettes.** Behaviour-preserving,
+   large, and a precondition for anything concurrent. Lands green on its own.
+2. **Re-derive the budget** — per-call ceilings, narrative exempt from the
+   overall one — while absorb is still sequential, so the new failure semantics
+   are provable without concurrency in the picture.
+3. **Fan out**, with the gather/cancellation discipline. This is the whole
+   latency win and it changes no prompt.
+4. **Batch the per-NPC phases** and add the silent-NPC filter.
+5. **Split extraction** into narrative / ledger / new-material, with the
+   reordered cache-friendly prompts. The only step that can move output quality.
+6. **The citation contract**, then **Android**. Independent of each other and of
+   1–5; either can be dropped without stranding the rest.
+
+Steps 1–3 deliver the latency complaint on their own. Everything after is the
+"without making it worse" half, and 5 is where that claim is actually at risk.
 
 ## Testing
 
 - **Concurrency**: a fake client recording call start/end timestamps proves the
-  four phases overlap, and that the semaphore caps them.
+  six calls overlap, that the semaphore caps how many are open at once, and
+  that a cap of 1 reproduces today's sequential behaviour exactly — which is
+  the escape hatch a rate-limited provider needs.
 - **The fake-client migration is the largest single piece of this work, and it
   is a precondition rather than a consequence.** `llm_fakes`' cassettes answer
   by *what the request looks like*, so they tolerate arrival order; the
@@ -262,15 +396,19 @@ absorption.
   `src` falls back to the quote path; a row with a quote and no `src` bands
   exactly as it does today. The existing `routing` tests are the regression
   suite for that last one and must not be edited.
-- **Budget**: `_clock` still drives the arithmetic off a fake clock; the
-  ceiling now applies to the slowest phase, and a phase refused before its
-  first call still reports `attempted: false`.
+- **Budget**: `_clock` still drives the arithmetic off a fake clock. The case
+  that matters is the one the fan-out threatens — an overall ceiling expiring
+  mid-flight must leave narrative alive and degrade only the droppable phases,
+  never 502 the review. A phase refused while queued behind the semaphore still
+  reports `attempted: false`.
 - **Templates**: `scripts/verify_templates.py` covers the three new extraction
   prompts and the reordered dossier/voice prompts; the eval suite's verbatim
   section checks are extended to the split prompts, since that harness is what
   proves the instructions survived the split.
-- **Frozen campaign**: `snapshot.json` is regenerated only if the split
-  deliberately moves rendered text, reviewed and committed with the change.
+- **Frozen campaign**: `snapshot.json` must come back **unchanged**. The shared
+  transcript snippet is deliberately untouched, so a diff there is the signal
+  that the numbering leaked into the shared renderer — the failure this design
+  is arranged to prevent, caught by the fixture built to catch exactly it.
 
 ## Risks
 
@@ -289,7 +427,12 @@ call-count drop suggests.
 would not. Chunk size is the mitigation and per-NPC parsing is the backstop.
 
 **Concurrency reaches provider rate limits** that sequential execution never
-did. The semaphore cap is the knob; it wants to be config, not a constant.
+did. `absorb_concurrency` is the knob, and `1` restores today's behaviour.
+
+**The budget rework is the sharpest edge here, not the concurrency.** Getting
+it wrong converts today's graceful degradation into a 502 on every slow
+campaign — a strictly worse outcome than the latency being fixed. It is staged
+ahead of the fan-out for that reason, so it can be proven sequentially.
 
 **The order-dependent test fakes are load-bearing and numerous.** Twenty call
 sites script replies by call order, and a fan-out makes call order
