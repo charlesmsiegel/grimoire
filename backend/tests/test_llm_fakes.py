@@ -163,6 +163,36 @@ async def test_a_cassette_reply_can_be_streamed_as_deltas():
     assert len(deltas) > 1 and "".join(deltas).startswith("**Seraphine:**")
 
 
+async def test_from_entries_answers_by_shape_not_order():
+    """An inline cassette is order-independent: each request gets the reply its
+    own shape selects, whichever order the two arrive in.
+
+    This is what absorb's tests need once its phases run concurrently -- "the
+    first call" stops naming anything, so a reply can only be tied to a request
+    by what the request looks like.
+    """
+    fake = llm_fakes.from_entries([
+        {"when": {"system_contains": "absorbing a completed"}, "reply": "EXTRACTION"},
+        {"when": {"system_contains": "auditing a completed"}, "reply": "AUDIT"},
+    ])
+    audit_first = await fake.complete(
+        [{"role": "system", "content": "You are auditing a completed scene"}], CONN)
+    extraction_second = await fake.complete(
+        [{"role": "system", "content": "You are absorbing a completed scene"}], CONN)
+    assert audit_first == "AUDIT"
+    assert extraction_second == "EXTRACTION"
+
+
+async def test_from_entries_refuses_a_request_it_does_not_cover():
+    """Inline entries inherit the file cassette's refusal. A default reply here
+    would make every migrated absorb test vacuous in exactly the way the
+    ordered script it replaced could not be."""
+    fake = llm_fakes.from_entries(
+        [{"when": {"system_contains": "absorbing"}, "reply": "X"}])
+    with pytest.raises(CassetteMiss):
+        await fake.complete([{"role": "system", "content": "something else"}], CONN)
+
+
 # ---- the shipped cassette still matches the shipped prompts ----
 #: Every system prompt a cassette entry can be keyed on, rendered from the real
 #: template. `scene_suggestions/system.j2` and the reply-format section are the
