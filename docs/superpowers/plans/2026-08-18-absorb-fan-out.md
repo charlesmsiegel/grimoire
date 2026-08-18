@@ -422,6 +422,29 @@ absorb_concurrency = 1 restores the sequential behaviour exactly."
 
 ---
 
+## Measured outcome
+
+Benchmarked against a fake provider at 0.40s per call, 5 present NPCs all
+anchored (11 calls), using `absorb_concurrency` to get a true sequential
+baseline from the same build:
+
+| | wall clock |
+|---|---|
+| `absorb_concurrency = 1` (today's behaviour) | 4.46s |
+| `absorb_concurrency = 8` | 2.02s |
+
+**2.2x, not the ~10x the call count suggests** — and the gap is the whole
+argument for the next plan. The four phases now overlap, but the per-NPC loops
+are still sequential *inside* `_stage_dossiers` and `_stage_voice_drift`, so
+the dossier phase alone is 5 x 0.40s and dominates the round:
+
+    max(extraction 0.4, dossiers 2.0, voice 2.0, audit 0.4) = 2.0s
+
+Batching those loops into one call each (spec step 3) collapses that to
+`max(0.4, 0.4, 0.4, 0.4)` — about 11x against sequential. So batching is not a
+follow-on nicety, it is the larger half of the win, and this plan delivers the
+smaller half. Say so rather than quoting the call-count ratio.
+
 ## Self-Review
 
 **Spec coverage (steps 1–3 only):**
