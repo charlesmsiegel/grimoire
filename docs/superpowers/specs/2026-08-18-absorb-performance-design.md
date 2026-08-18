@@ -63,12 +63,10 @@ loss anywhere else is recoverable and a loss in extraction is not.
 
 ## Scope
 
-In: concurrent execution of absorb's phases and the budget rework that has to
-precede it; batching the per-NPC phases; splitting extraction into three
+In: concurrent execution of absorb's phases; batching the per-NPC phases; splitting extraction into three
 focused prompts; a citation contract the store can actually verify; skipping
 work that cannot produce a finding; a retryable extraction endpoint;
-foreground-service promotion during absorb. Two new config keys,
-`absorb_concurrency` and absorb's newly-inherited `llm_call_budget`.
+foreground-service promotion during absorb. One new config key, `absorb_concurrency`.
 
 Out: prompt-caching breakpoints (`cache_control` is absent from `llm.py` and
 `openrouter.py` entirely — a separate piece of work); server-side staging of
@@ -114,37 +112,40 @@ the top of the handler precisely because the whole review is prepared from one
 snapshot under one hold (#271); splitting the request would mean re-deciding
 that, for no latency the fan-out does not already deliver.
 
-### The budget has to be re-derived, not reinterpreted
+### The budget needs nothing done to it — a correction
 
-This is the part the fan-out breaks, and it is not a detail.
+An earlier draft of this spec called the budget the sharpest edge in the
+change, on the following reasoning: `routes/common.py::_bounded_call` excludes
+absorb from `llm_call_budget` because `_Budget` "bounds a whole *sequence* and
+knows which of its steps are droppable"; under a fan-out nothing is droppable;
+therefore all phases share one deadline and an overrun would take the
+extraction with it, turning today's graceful degradation into a 502.
 
-`routes/common.py::_bounded_call` documents in so many words why absorb is
-excluded from `llm_call_budget`: `_Budget` "bounds a whole *sequence* and knows
-which of its steps are droppable". Under a fan-out **nothing is droppable** —
-every call is already in flight — so that rationale collapses, and the failure
-mode inverts. Today a budget overrun degrades: extraction has already returned,
-and the tail is dropped and reported. Concurrently, all six calls share one
-deadline and **all six die together, narrative included** — which is a 502 and
-the loss of the entire review. Fanning out naively makes budget exhaustion
-strictly worse than it is today.
+**That reasoning is wrong, and it was caught by implementing it.** `_Budget.run`
+reads `remaining()` at the moment it is called and passes it to `wait_for`. In
+a fan-out every phase calls `run` at t≈0, so each independently receives the
+*full* budget. Parallel phases do not consume one another's wall-clock, so a
+slow dossier phase cannot expire the clock out from under the extraction. The
+only way the deadline can pass while the extraction is still in flight is the
+extraction alone exceeding the whole budget — which is exactly the case
+`test_absorb_extraction_overrunning_the_budget_is_502` says *should* be a 502.
 
-So `_Budget` is replaced rather than reread:
+Two invariants would have been broken by the "fix":
 
-- **Each phase gets its own per-call ceiling**, which is what `llm_call_budget`
-  already is. Absorb stops being special-cased out of it, because the reason
-  for the special case was sequence-awareness that no longer exists.
-- **`absorb_budget` becomes an overall ceiling that only the droppable phases
-  answer to.** Narrative is exempt: it is the one call whose loss is a 502, and
-  a shared clock must not be able to take it out. Ledger, new-material,
-  dossiers, voice and audit each degrade to their existing reported status when
-  the overall ceiling expires, exactly as the tail does today.
-- `absorb_budget = 0` keeps meaning "no ceiling at all".
+- `absorb_budget = 0` means "no ceiling at all, however long the calls take" —
+  the documented escape hatch for a slow local endpoint, defended by
+  `test_the_one_shot_ceiling_does_not_bound_absorb`. Routing absorb through the
+  per-call ceiling to compensate for the exemption narrows that hatch silently,
+  which is the specific regression that test exists to catch.
+- Exempting the extraction *without* the per-call ceiling leaves it bounded by
+  nothing but the facade's idle timeout — strictly worse than the 502 the
+  exemption was meant to prevent.
 
-`BudgetRefused`, `_budget_overrun` and the `phases` projection all survive:
-every phase still reports `attempted` and `budget_exhausted`, and
-`_phase_report` still projects one row per step from the block that owns it.
-What changes is that `attempted: false` now means "refused before the call went
-out" for a *queued* call rather than an *unreached* one.
+So `_Budget` is untouched. Its semantics do shift, for free and in the right
+direction: a ceiling that used to bound the *sum* of the calls now bounds each
+of them, and since they are concurrent that is a ceiling on the whole absorb.
+`drop_tail` still works — `_stage_dossiers` checks `spent()` between NPCs, so a
+dossier loop that runs long still sheds its tail and reports it.
 
 ### gather semantics, spelled out
 
@@ -357,19 +358,16 @@ required order, and the first two are not optional preludes:
 
 1. **Migrate the order-dependent fakes to cassettes.** Behaviour-preserving,
    large, and a precondition for anything concurrent. Lands green on its own.
-2. **Re-derive the budget** — per-call ceilings, narrative exempt from the
-   overall one — while absorb is still sequential, so the new failure semantics
-   are provable without concurrency in the picture.
-3. **Fan out**, with the gather/cancellation discipline. This is the whole
-   latency win and it changes no prompt.
-4. **Batch the per-NPC phases** and add the silent-NPC filter.
-5. **Split extraction** into narrative / ledger / new-material, with the
+2. **Fan out**, with the gather/cancellation discipline. This is the whole
+   latency win and it changes no prompt. `_Budget` is untouched (see above).
+3. **Batch the per-NPC phases** and add the silent-NPC filter.
+4. **Split extraction** into narrative / ledger / new-material, with the
    reordered cache-friendly prompts. The only step that can move output quality.
-6. **The citation contract**, then **Android**. Independent of each other and of
-   1–5; either can be dropped without stranding the rest.
+5. **The citation contract**, then **Android**. Independent of each other and of
+   1–4; either can be dropped without stranding the rest.
 
-Steps 1–3 deliver the latency complaint on their own. Everything after is the
-"without making it worse" half, and 5 is where that claim is actually at risk.
+Steps 1–2 deliver the latency complaint on their own. Everything after is the
+"without making it worse" half, and 4 is where that claim is actually at risk.
 
 ## Testing
 
@@ -396,11 +394,12 @@ Steps 1–3 deliver the latency complaint on their own. Everything after is the
   `src` falls back to the quote path; a row with a quote and no `src` bands
   exactly as it does today. The existing `routing` tests are the regression
   suite for that last one and must not be edited.
-- **Budget**: `_clock` still drives the arithmetic off a fake clock. The case
-  that matters is the one the fan-out threatens — an overall ceiling expiring
-  mid-flight must leave narrative alive and degrade only the droppable phases,
-  never 502 the review. A phase refused while queued behind the semaphore still
-  reports `attempted: false`.
+- **Budget**: unchanged behaviour, so the existing budget tests are the
+  regression suite and must keep passing untouched — including
+  `test_the_one_shot_ceiling_does_not_bound_absorb`, which defends
+  `absorb_budget = 0`, and `test_absorb_extraction_overrunning_the_budget_is_502`.
+  Both were broken by the rework this spec no longer proposes, which is how the
+  reasoning behind it was found to be wrong.
 - **Templates**: `scripts/verify_templates.py` covers the three new extraction
   prompts and the reordered dossier/voice prompts; the eval suite's verbatim
   section checks are extended to the split prompts, since that harness is what
@@ -428,11 +427,6 @@ would not. Chunk size is the mitigation and per-NPC parsing is the backstop.
 
 **Concurrency reaches provider rate limits** that sequential execution never
 did. `absorb_concurrency` is the knob, and `1` restores today's behaviour.
-
-**The budget rework is the sharpest edge here, not the concurrency.** Getting
-it wrong converts today's graceful degradation into a 502 on every slow
-campaign — a strictly worse outcome than the latency being fixed. It is staged
-ahead of the fan-out for that reason, so it can be proven sequentially.
 
 **The order-dependent test fakes are load-bearing and numerous.** Twenty call
 sites script replies by call order, and a fan-out makes call order
