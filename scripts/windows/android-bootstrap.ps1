@@ -41,18 +41,19 @@ cmd /c "`"$SdkMgr`" --sdk_root=`"$Sdk`" --licenses < `"$yes`"" | Select-Object -
 cmd /c "`"$SdkMgr`" --sdk_root=`"$Sdk`" platform-tools `"platforms;android-34`" `"build-tools;34.0.0`" < `"$yes`"" | Select-Object -Last 1
 Remove-Item $yes
 
-# Chaquopy 15's build-machine python must be 3.8-3.12 (the 3.11 APK runtime
-# is downloaded by the plugin and unrelated). Probe the py launcher, newest
-# supported first.
+# Chaquopy 17 requires the build-machine python to be the *same* minor version
+# as the runtime packaged in the APK, which android/app/build.gradle.kts pins to
+# $RuntimePy. (Chaquopy 15 accepted any supported version, so this used to probe
+# a range; 17 fails the build on a mismatch.) Keep this in lockstep with the
+# `version =` line in the chaquopy block.
+$RuntimePy = "3.12"
 $buildPy = $null
-foreach ($v in "3.12", "3.11", "3.10", "3.9", "3.8") {
-    try {
-        $exe = & py "-$v" -c "import sys; print(sys.executable)" 2>$null
-        if ($LASTEXITCODE -eq 0 -and $exe) { $buildPy = "$exe".Trim(); break }
-    } catch {}
-}
+try {
+    $exe = & py "-$RuntimePy" -c "import sys; print(sys.executable)" 2>$null
+    if ($LASTEXITCODE -eq 0 -and $exe) { $buildPy = "$exe".Trim() }
+} catch {}
 if (-not $buildPy) {
-    Write-Warning "No Python 3.8-3.12 found; Chaquopy will fall back to 'python' on PATH, which it may not support."
+    Write-Warning "Python $RuntimePy not found. Chaquopy $RuntimePy builds require it exactly; install it or pass -Pgrimoire.buildPython=<path>."
 }
 
 $props = @("sdk.dir=" + $Sdk.Replace('\', '/'))

@@ -49,16 +49,17 @@ fi
 yes | "$SDKMGR" --sdk_root="$SDK" --licenses >/dev/null
 "$SDKMGR" --sdk_root="$SDK" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-# Chaquopy 15's build-machine python must be 3.8-3.12 (the 3.11 APK runtime
-# is downloaded by the plugin and unrelated). Probe newest supported first.
+# Chaquopy 17 requires the build-machine python to be the *same* minor version
+# as the runtime packaged in the APK, which android/app/build.gradle.kts pins to
+# RUNTIME_PY. (Chaquopy 15 accepted any supported version, so this used to probe
+# a range; 17 fails the build on a mismatch.) Keep this in lockstep with the
+# `version =` line in the chaquopy block.
+RUNTIME_PY=3.12
 build_py=""
-for v in 3.12 3.11 3.10 3.9 3.8; do
-    if command -v "python$v" >/dev/null 2>&1; then
-        build_py=$(command -v "python$v")
-        break
-    fi
-done
-[ -n "$build_py" ] || echo "WARNING: no python3.8-3.12 found; Chaquopy will fall back to 'python', which it may not support." >&2
+if command -v "python$RUNTIME_PY" >/dev/null 2>&1; then
+    build_py=$(command -v "python$RUNTIME_PY")
+fi
+[ -n "$build_py" ] || echo "WARNING: python$RUNTIME_PY not found. Chaquopy $RUNTIME_PY builds require it exactly; install it or pass -Pgrimoire.buildPython=/path/to/python$RUNTIME_PY." >&2
 
 {
     echo "sdk.dir=$SDK"

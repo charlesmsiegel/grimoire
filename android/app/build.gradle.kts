@@ -44,8 +44,9 @@ android {
     }
 }
 
-// Chaquopy's build-machine Python (distinct from the 3.11 runtime packaged in
-// the APK) must be a version the plugin supports — <= 3.12 for Chaquopy 15.
+// Chaquopy's build-machine Python must be the *same minor version* as the
+// runtime packaged in the APK (3.12 below). Chaquopy 15 accepted any supported
+// version; 17 requires an exact match and fails the build otherwise.
 // Resolution: -Pgrimoire.buildPython=... > grimoire.buildPython in
 // local.properties (written by scripts/*/android-bootstrap) > plugin default.
 val localProps = Properties().apply {
@@ -57,7 +58,9 @@ val buildPythonOverride = (findProperty("grimoire.buildPython") as? String)
 
 chaquopy {
     defaultConfig {
-        version = "3.11"
+        // Kept in lockstep with buildPython above — Chaquopy 17 requires them to
+        // match. 3.12 is also what the desktop backend runs.
+        version = "3.12"
         buildPythonOverride?.let { buildPython(it) }
         pip {
             // Keep in lockstep with backend/pyproject.toml *base* dependencies
@@ -65,8 +68,10 @@ chaquopy {
             // count_tokens falls back to a heuristic without tiktoken).
             //
             // pydantic is pinned to the pure-python 1.10 line: pydantic v2's
-            // Rust core has no Android wheel in Chaquopy 15's repository
-            // (docs/android-architecture.md §7 risk 1, fallback 2). FastAPI
+            // Rust core had no Android wheel in Chaquopy 15's repository when
+            // this was pinned (docs/android-architecture.md §7 risk 1,
+            // fallback 2). Not re-checked against Chaquopy 17 — lifting the pin
+            // would also mean retiring `make check-pydantic1`. FastAPI
             // supports both lines, and the routes package is v1/v2-agnostic (_dump).
             install("pydantic==1.10.*")
             // Upper bound shared with `make check-pydantic1`, which runs the whole
