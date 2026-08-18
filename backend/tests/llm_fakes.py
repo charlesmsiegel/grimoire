@@ -250,8 +250,13 @@ class FakeOpenRouter(FakeLLM):
 
 class FakeOpenRouterComplete(FakeLLM):
     """A completer whose reply is a single string (one-call tests) or a list
-    consumed one-per-call, in order — absorb's extraction `complete()` followed
-    by the audit's, say. The last reply repeats after the list runs out."""
+    consumed one-per-call, in order. The last reply repeats after the list runs
+    out, so a single-element list answers every call the same way.
+
+    A MULTI-element list is only correct where the caller's call order is part
+    of what the test asserts. Absorb's is not — its phases run concurrently, so
+    position names nothing — and absorb tests use `from_entries` (or
+    `from_cassette`), matching on the system prompt that owns each call."""
 
     def __init__(self, text, usage: dict | None = None):
         super().__init__([[t] for t in (text if isinstance(text, list) else [text])],

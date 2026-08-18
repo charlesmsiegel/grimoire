@@ -21,7 +21,7 @@ from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from tests.llm_fakes import (  # the shared gateway fakes (#204)
     CapturingOpenRouter, FailingOpenRouter, FakeOpenRouter, FakeOpenRouterComplete,
-    QuietThenAnswers, StallingOpenRouter)
+    QuietThenAnswers, StallingOpenRouter, from_entries)
 
 
 @pytest.fixture
@@ -4320,6 +4320,17 @@ def _voice_scene(client, anchor: str = "Clipped. Never uses contractions.", prio
 #: The three absorb calls a one-NPC anchored scene makes, in order: extraction,
 #: the dossier refresh, the voice check. (There is no audit call -- these
 #: campaigns bind no mechanics module.)
+# Which of absorb's calls a request IS, keyed on a phrase from the system
+# prompt that owns it. Deliberately a phrase from the prompt rather than a word
+# that might also appear in a transcript -- and deliberately not a call index:
+# absorb's phases run concurrently, so position names nothing.
+# test_llm_fakes.py renders every real template and fails if one of these stops
+# matching, which is how a reworded prompt surfaces here rather than silently.
+_WHEN_EXTRACTION = {"system_contains": "You are absorbing a completed role-play scene"}
+_WHEN_AUDIT = {"system_contains": "You are auditing a completed role-play scene"}
+_WHEN_DOSSIER = {"system_contains": "You are updating a game master's dossier"}
+_WHEN_VOICE = {"system_contains": "You are checking one character's dialogue"}
+
 _EXTRACTION = ('{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}')
 _DOSSIER = "Aese now trusts the owner."
 
@@ -4346,7 +4357,8 @@ def test_an_anchorless_npc_is_never_judged(client):
     """The cost control for the whole feature: no anchor, no LLM call. A library
     that has never set one must absorb exactly as it did before."""
     cid, sid = _voice_scene(client, anchor="")
-    fake = FakeOpenRouterComplete([_EXTRACTION, _DOSSIER])
+    fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
+                         {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
     assert fake.calls == 2                       # extraction + dossier, and nothing else
@@ -4547,7 +4559,8 @@ def test_two_npcs_sharing_a_transcript_name_are_reported_not_judged(client):
     card["data"]["name"] = "Aese"                # now indistinguishable from the other NPC
     store.characters.update_version(aroot, "mara", "main", card)
 
-    fake = FakeOpenRouterComplete([_EXTRACTION, _DOSSIER, _DOSSIER])
+    fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
+                         {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
@@ -4577,7 +4590,8 @@ def test_a_prefix_ambiguous_name_is_reported_not_judged(client):
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                 json={"kind": "characters", "id": "mara", "version": "main", "role": "npc"})
 
-    fake = FakeOpenRouterComplete([_EXTRACTION, _DOSSIER, _DOSSIER])
+    fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
+                         {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
@@ -4601,7 +4615,8 @@ def test_a_clash_with_an_unanchored_npc_still_disqualifies(client):
     card["data"]["name"] = "Aese"        # same label, but mara has NO anchor
     store.characters.update_version(aroot, "mara", "main", card)
 
-    fake = FakeOpenRouterComplete([_EXTRACTION, _DOSSIER, _DOSSIER])
+    fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
+                         {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
@@ -4672,7 +4687,8 @@ def test_a_departed_speaker_sharing_the_label_still_disqualifies(client):
     client.delete(f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/mara")
     assert "mara" not in [a["id"] for a in store.appearances.scene_cast(cid, sid)]
 
-    fake = FakeOpenRouterComplete([_EXTRACTION, _DOSSIER, _DOSSIER])
+    fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
+                         {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
@@ -4757,7 +4773,8 @@ def test_a_card_with_no_name_is_not_judged_against_its_slug(client):
         assert [a["name"] for a in store.appearances.scene_cast(cid, sid)
                 if a["id"] == "aese"] == ["aese"]
 
-        fake = FakeOpenRouterComplete([_EXTRACTION, _DOSSIER])
+        fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
+                             {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
         client.app.dependency_overrides[routes.get_llm] = lambda: fake
         r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
 
@@ -4778,7 +4795,8 @@ def test_a_name_the_transcript_cannot_carry_fails_that_actor(client):
         card["data"]["name"] = bad
         store.characters.update_version(aroot, "aese", "main", card)
 
-        fake = FakeOpenRouterComplete([_EXTRACTION, _DOSSIER])
+        fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
+                             {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
         client.app.dependency_overrides[routes.get_llm] = lambda: fake
         r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
 
@@ -4799,7 +4817,8 @@ def test_an_unusable_card_name_fails_that_actor_not_the_absorb(client):
     card["data"]["name"] = {"first": "Aese"}          # not a string
     store.characters.update_version(aroot, "aese", "main", card)
 
-    fake = FakeOpenRouterComplete([_EXTRACTION, _DOSSIER])
+    fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
+                         {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
 
@@ -5701,7 +5720,8 @@ def plain_scene(client):
 
 def test_absorb_runs_audit_on_module_campaign(client, module_scene):
     cid, sid = module_scene
-    fake = FakeOpenRouterComplete([ABSORB_JSON, AUDIT_OK])  # 2 sequential completes
+    fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": ABSORB_JSON},
+                         {"when": _WHEN_AUDIT, "reply": AUDIT_OK}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
     assert r.status_code == 200
@@ -5737,7 +5757,8 @@ def test_absorb_audit_schema_failure_is_failed_not_clean(client, module_scene):
     cid, sid = module_scene
     for bad in ("{}", '{"warnings": null, "sheet_deltas": null}', "utter garbage"):
         client.app.dependency_overrides[routes.get_llm] = \
-            lambda b=bad: FakeOpenRouterComplete([ABSORB_JSON, b])
+            lambda b=bad: from_entries([{"when": _WHEN_EXTRACTION, "reply": ABSORB_JSON},
+                                        {"when": _WHEN_AUDIT, "reply": b}])
         body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
         assert body["one_line"]                       # prose absorb intact
         assert body["mechanics"]["status"] == "failed"
@@ -5749,7 +5770,8 @@ def test_absorb_dropped_delta_degrades(client, module_scene):
     bad_delta = ('{"warnings": [], "sheet_deltas": [{"id": "characters:mara", '
                  '"field": "athletics", "value": 5, "note": "static tamper"}]}')
     client.app.dependency_overrides[routes.get_llm] = \
-        lambda: FakeOpenRouterComplete([ABSORB_JSON, bad_delta])
+        lambda: from_entries([{"when": _WHEN_EXTRACTION, "reply": ABSORB_JSON},
+                              {"when": _WHEN_AUDIT, "reply": bad_delta}])
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
     assert body["mechanics"]["status"] == "degraded"
     assert body["mechanics"]["dropped"]
@@ -5763,7 +5785,8 @@ def test_absorb_survives_audit_pipeline_crash(client, module_scene, monkeypatch)
     monkeypatch.setattr(audit_mod, "materialize",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     client.app.dependency_overrides[routes.get_llm] = \
-        lambda: FakeOpenRouterComplete([ABSORB_JSON, AUDIT_OK])
+        lambda: from_entries([{"when": _WHEN_EXTRACTION, "reply": ABSORB_JSON},
+                              {"when": _WHEN_AUDIT, "reply": AUDIT_OK}])
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
     assert r.status_code == 200
     body = r.json()
@@ -6421,7 +6444,10 @@ def test_absorb_does_not_ask_whether_it_was_abandoned(client, npc_module_scene, 
 
     monkeypatch.setattr(Request, "is_disconnected", gone)
     client.app.dependency_overrides[routes.get_llm] = \
-        lambda: FakeOpenRouterComplete([ABSORB_JSON, "Aese is steady.", VOICE_OK, AUDIT_OK])
+        lambda: from_entries([{"when": _WHEN_EXTRACTION, "reply": ABSORB_JSON},
+                              {"when": _WHEN_DOSSIER, "reply": "Aese is steady."},
+                              {"when": _WHEN_VOICE, "reply": VOICE_OK},
+                              {"when": _WHEN_AUDIT, "reply": AUDIT_OK}])
 
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
