@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
+import { useFocus } from "./focus";
 
 /** Below this the column and main cannot share a row: 274px of column leaves a
  *  375px phone about 100px of content. Matches the breakpoint `index.css` uses
@@ -75,10 +76,20 @@ export function PageShell(
   const [showColumn, setShowColumn] = useState(false);
   useEffect(() => { setShowColumn(false); }, [pathname]);
 
-  const onPhone = phone && showColumn;
+  // Focus mode answers "what am I navigating" with "nothing, I am reading", so
+  // the column goes with the rest of the chrome — and its phone toggle with it,
+  // rather than being left as a 44px strip that is now the only bar on screen.
+  // `showColumn` is deliberately not reset here: it is the state of a control
+  // that is not rendered, and leaving focus mode should hand back the page as
+  // it was left, not with an index open over it. That is why the phone push is
+  // gated on `!focus` too and not on `showColumn` alone.
+  const { focus } = useFocus();
+
+  const onPhone = phone && showColumn && !focus;
   return (
     <div className={"shell" + (className ? " " + className : "")
-                    + (phone ? " phone" : "") + (onPhone ? " show-column" : "")}>
+                    + (phone ? " phone" : "") + (focus ? " focus" : "")
+                    + (onPhone ? " show-column" : "")}>
       <aside className="context-column" aria-label={columnLabel}>
         <div className="column-scroll">{column}</div>
         {footer !== undefined && <div className="column-pinned">{footer}</div>}
@@ -86,7 +97,7 @@ export function PageShell(
       <main className="shell-main" ref={mainRef}>
         {/* Phone only, and rendered rather than CSS-hidden: a control that does
             nothing at desktop width should not be in the tab order there. */}
-        {phone && (
+        {phone && !focus && (
           <button type="button" className="phone-index"
                   aria-expanded={showColumn}
                   onClick={() => setShowColumn((v) => !v)}>

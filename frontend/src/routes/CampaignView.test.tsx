@@ -4,6 +4,7 @@ import { MemoryRouter, Routes, Route, Link, useLocation, useNavigate } from "rea
 import CampaignView from "./CampaignView";
 import CommandPalette, { usePaletteHotkey } from "../components/CommandPalette";
 import { PaletteProvider } from "../components/palette";
+import { FocusProvider, useFocus } from "../components/focus";
 import type { ChatEvent } from "../api/stream";
 import type { Mock } from "vitest";
 
@@ -7715,4 +7716,86 @@ test("an uncited row offers no find, because there is nothing to find", async ()
   ] });
   expect(screen.queryByRole("button", { name: /in transcript/i })).toBeNull();
   expect(screen.getByText(/NO QUOTE · CERTAINTY UNRATED/)).toBeInTheDocument();
+});
+
+// ---- focus mode ----
+
+/** Stands in for the app header's FOCUS button, which is not on this screen. */
+function EnterFocus() {
+  const { setFocus } = useFocus();
+  return <button onClick={() => setFocus(true)}>enter-focus</button>;
+}
+
+function renderFocusable() {
+  return render(
+    <MemoryRouter initialEntries={["/campaigns/run"]}>
+      <FocusProvider>
+        {withPalette(<><EnterFocus /><Here />{playRoutes()}</>)}
+      </FocusProvider>
+    </MemoryRouter>,
+  );
+}
+
+test("focus mode leaves the transcript and the composer, and nothing above them", async () => {
+  localStorage.clear();
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old" },
+    messages: [{ role: "assistant", content: "a reply" }],
+  });
+  renderFocusable();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  expect(screen.getByRole("button", { name: /End scene/ })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByText("enter-focus"));
+
+  // The scene bar: eleven controls that wrap into four rows at 375px.
+  expect(screen.queryByRole("button", { name: /End scene/ })).toBeNull();
+  expect(screen.queryByRole("link", { name: /^Ledger$/ })).toBeNull();
+  // The scene head: its title, its turn count and its rename/delete pair.
+  expect(screen.queryByRole("heading", { name: /^Old$/ })).toBeNull();
+  expect(screen.queryByText(/SCENE 1 ·/i)).toBeNull();
+  expect(screen.queryByRole("button", { name: /rename scene/i })).toBeNull();
+
+  // What is left is what the mode is for.
+  expect(within(screen.getByTestId("stream")).getByText("a reply")).toBeInTheDocument();
+  expect(screen.getByRole("textbox")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /continue ▶|send ▸/i })).toBeInTheDocument();
+});
+
+test("a panel the scene bar opened does not outlive the bar that closes it", async () => {
+  localStorage.clear();
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old" },
+    messages: [{ role: "assistant", content: "a reply" }],
+  });
+  renderFocusable();
+  await screen.findByRole("heading", { name: /^Old$/ });
+
+  fireEvent.click(screen.getByRole("button", { name: /^Calendar$/ }));
+  expect(await screen.findByTestId("calendar-config")).toBeInTheDocument();
+
+  // Its Close is the same bar button, so leaving it up would strand a panel
+  // above the transcript with nothing that could shut it.
+  fireEvent.click(screen.getByText("enter-focus"));
+  expect(screen.queryByTestId("calendar-config")).toBeNull();
+});
+
+test("the inspector stays reachable in focus mode, because its toggle does", async () => {
+  localStorage.clear();
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old" },
+    messages: [{ role: "assistant", content: "a reply" }],
+  });
+  renderFocusable();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  fireEvent.click(screen.getByText("enter-focus"));
+
+  // The composer is the input area focus mode exists to keep, and this link is
+  // part of it — so unlike the bar's five panels this one can be shut again.
+  fireEvent.click(screen.getByRole("button", { name: /what the model saw/i }));
+  expect(await screen.findByRole("button", { name: /hide what the model saw/i }))
+    .toBeInTheDocument();
 });

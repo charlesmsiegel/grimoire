@@ -196,6 +196,45 @@ body::before {
 .app-header .config-link:hover { color: var(--ink); }
 .app-header .config-link.active { color: var(--accent); }
 
+/* ---- focus mode ---- */
+/* The chrome above a transcript is the app header, the scene bar, the scene
+   head and — on a phone — the index toggle. On a 375x660 phone that is close
+   to half the viewport before a word of prose, and the scene bar is the worst
+   of it: eleven controls at the 44px touch target this width mandates wrap
+   into four rows. Focus mode drops all of it and the context column with it,
+   and every piece is unrendered rather than hidden, so none of them is left in
+   the tab order between the reader and the composer. */
+.app-header .header-focus {
+  flex: none; background: none; border: 0; padding: 0; cursor: pointer;
+  font-family: var(--fm); font-size: 10px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--muted);
+}
+.app-header .header-focus:hover { color: var(--ink); }
+
+/* The one control focus mode leaves on screen, and therefore the only thing
+   standing between the reader and a view they cannot leave: fixed, so a long
+   transcript never scrolls it away, and small enough to sit in the corner of
+   the measure rather than over it. */
+.focus-restore {
+  position: fixed; top: 8px; right: 8px; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; padding: 0; cursor: pointer;
+  border: 1px solid var(--line-strong); border-radius: 999px;
+  background: var(--panel); color: var(--muted); font-size: 13px; line-height: 1;
+  box-shadow: var(--shadow-pop);
+  transition: color 140ms ease-out, border-color 140ms ease-out;
+}
+.focus-restore:hover { color: var(--accent); border-color: var(--accent); }
+/* Transcript prose may scroll under the pill — it is opaque, and a floating
+   control that content passes beneath is what one is for. A banner may not: it
+   is the first block in `main` and so sits at exactly the pill's height
+   forever, with the link it exists to offer under the pill's left half. */
+.shell.focus .banner { margin-right: 50px; }
+/* `display`, not the `visibility` the phone rules use for the same column:
+   this has to beat those rules at every width, and it does — a class pair
+   outranks the bare selector inside the media query regardless of order. */
+.shell.focus .context-column { display: none; }
+
 /* ---- the one shape: header → 274px context column → main ---- */
 .shell { display: flex; flex: 1; min-height: 0; }
 /* Fixed rather than a fraction: the column holds labelled rows of a known

@@ -379,3 +379,47 @@ test("a scene URL renders one CampaignView, not a second nested one", async () =
   await screen.findByTestId("campaign-view");
   expect(screen.getAllByTestId("campaign-view")).toHaveLength(1);
 });
+
+test("focus mode swaps the header for the pill that puts it back", async () => {
+  render(<MemoryRouter><App /></MemoryRouter>);
+  await screen.findByText(/GRIMOIRE/);
+
+  fireEvent.click(header().getByRole("button", { name: /enter focus mode/i }));
+
+  // The whole strip, not just its contents: the 52px it costs is the point.
+  expect(screen.queryByRole("banner")).not.toBeInTheDocument();
+  const restore = screen.getByRole("button", { name: /leave focus mode/i });
+  expect(restore).toBeInTheDocument();
+
+  fireEvent.click(restore);
+  expect(screen.getByRole("banner")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /leave focus mode/i })).toBeNull();
+});
+
+test("focus mode is remembered across a reload, and is still leavable", async () => {
+  const first = render(<MemoryRouter><App /></MemoryRouter>);
+  await screen.findByText(/GRIMOIRE/);
+  fireEvent.click(header().getByRole("button", { name: /enter focus mode/i }));
+  first.unmount();
+
+  render(<MemoryRouter><App /></MemoryRouter>);
+  // No header to find, so wait on the page underneath instead.
+  await waitFor(() => expect(campaignsPage()).toBeInTheDocument());
+  expect(screen.queryByRole("banner")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /leave focus mode/i }));
+  expect(screen.getByRole("banner")).toBeInTheDocument();
+});
+
+test("⌘K offers focus mode, and offers the way out once it is on", async () => {
+  render(<MemoryRouter><App /></MemoryRouter>);
+  await screen.findByText(/GRIMOIRE/);
+
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  fireEvent.click(await screen.findByRole("option", { name: /focus mode/i }));
+  expect(screen.queryByRole("banner")).not.toBeInTheDocument();
+
+  // The row flips rather than repeating an offer for the state you are in.
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  fireEvent.click(await screen.findByRole("option", { name: /leave focus mode/i }));
+  expect(screen.getByRole("banner")).toBeInTheDocument();
+});
