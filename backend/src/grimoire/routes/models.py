@@ -22,6 +22,7 @@ class ConfigUpdate(BaseModel):
     active_connection_id: str | None = None
     llm_timeout: str | None = None
     absorb_budget: str | None = None
+    absorb_concurrency: str | None = None
     llm_call_budget: str | None = None
     llm_retries: str | None = None
     fallback_connection_id: str | None = None

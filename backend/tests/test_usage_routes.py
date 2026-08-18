@@ -189,14 +189,16 @@ async def test_a_cancelled_turn_is_recorded_as_aborted_not_as_a_failure(client, 
 
 def test_an_absorb_step_the_budget_refuses_files_no_row(client, home, monkeypatch):
     """`_Budget.run` closes the coroutine unawaited when the clock is spent, so
-    the dossier and audit calls never leave the process. A row for each would
-    make an absorb that ran out of time look like one that made three free
-    requests."""
+    a refused call never leaves the process. A row for it would make an absorb
+    that ran out of time look like one that made a free request.
+
+    Refused is not cancelled: a phase the clock stops mid-flight WAS sent and
+    does file a row. Only the never-sent case is covered here."""
     from grimoire import routes as routes_pkg
 
     class ClockEatingFake(FakeOpenRouterComplete):
-        """Answers instantly but advances the (faked) absorb clock, so the
-        budget is exhausted after the extraction without any real waiting."""
+        """Answers instantly, optionally advancing the (faked) absorb clock, so
+        budget arithmetic is exercised without any real waiting."""
 
         def __init__(self, clock, cost, text, usage=None):
             super().__init__(text, usage=usage)
@@ -219,15 +221,28 @@ def test_an_absorb_step_the_budget_refuses_files_no_row(client, home, monkeypatc
     clock = [0.0]
     monkeypatch.setattr(routes_pkg.scenes, "_clock", lambda: clock[0])
     _use(client.app, ClockEatingFake(
-        clock, 90.0,
+        clock, 0.0,
         '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}',
         usage=USAGE))
 
+    # The budget is eaten by the dossier phase's OWN reads, not by an earlier
+    # phase. The phases run concurrently, so "the extraction spent the clock
+    # first" is no longer a thing that can be arranged -- and this is the more
+    # direct setup anyway: the gap between the loop's budget check and the call
+    # is exactly where a refusal happens.
+    real_read = store.dossiers.read
+
+    def slow_read(*a, **kw):
+        clock[0] += 70.0
+        return real_read(*a, **kw)
+
+    monkeypatch.setattr(store.dossiers, "read", slow_read)
+
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
 
-    rows = _rows(home)
-    assert [r["task"] for r in rows] == ["absorb"], (
-        "only the extraction was ever sent")
+    tasks = [r["task"] for r in _rows(home)]
+    assert "dossier" not in tasks, "a call the budget refused must file no row"
+    assert "absorb" in tasks, "the extraction was sent and must file one"
 
 
 def test_the_whole_chain_from_the_wire_to_the_ledger(client, home):
