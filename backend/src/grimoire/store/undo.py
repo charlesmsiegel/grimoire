@@ -80,10 +80,23 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 
-from . import (changes, characters, commitments, dossiers, groupstate, journal,
-               locks, overlay, playstate, plot, provenance, relationships,
-               voice_drift)
-from .appearances import paths as appearances_paths, versions as appearances_versions
+from . import (
+    changes,
+    characters,
+    commitments,
+    dossiers,
+    groupstate,
+    journal,
+    locks,
+    overlay,
+    playstate,
+    plot,
+    provenance,
+    relationships,
+    voice_drift,
+)
+from .appearances import paths as appearances_paths
+from .appearances import versions as appearances_versions
 from .campaigns import paths as campaigns_paths
 
 log = logging.getLogger(__name__)

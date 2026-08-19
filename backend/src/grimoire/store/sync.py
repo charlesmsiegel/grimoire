@@ -12,9 +12,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import atomic, characters, entities, greetings, overlay, pcs
-from .appearances import paths as appearances_paths, versions as appearances_versions
-from .campaigns import (lifecycle as campaigns_lifecycle, paths as campaigns_paths,
-                        read as campaigns_read)
+from .appearances import paths as appearances_paths
+from .appearances import versions as appearances_versions
+from .campaigns import lifecycle as campaigns_lifecycle
+from .campaigns import paths as campaigns_paths
+from .campaigns import read as campaigns_read
 
 
 def _ref_str(kind: str, eid: str) -> str:

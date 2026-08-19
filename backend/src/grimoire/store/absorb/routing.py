@@ -40,8 +40,10 @@ not reading, so the nudge only ever runs toward reading more.
 
 from __future__ import annotations
 
-from ..appearances import cast as appearances_cast, paths as appearances_paths
-from ..scenes import read as scenes_read, serialize as scenes_serialize
+from ..appearances import cast as appearances_cast
+from ..appearances import paths as appearances_paths
+from ..scenes import read as scenes_read
+from ..scenes import serialize as scenes_serialize
 
 #: The narrator says so. Un-labelled prose on either side of the table: the
 #: model's narration ("Grimoire") and the player's own un-labelled posts

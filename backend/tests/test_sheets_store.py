@@ -1,9 +1,17 @@
 import json
 
 import pytest
-
-from grimoire.store import (atomic, campaigns, characters, entities, locks, modules, pcs,
-                            sheets, worlds)
+from grimoire.store import (
+    atomic,
+    campaigns,
+    characters,
+    entities,
+    locks,
+    modules,
+    pcs,
+    sheets,
+    worlds,
+)
 
 
 def _campaign(monkeypatch, tmp_path, module="pool-basic"):
@@ -229,7 +237,8 @@ def test_no_seed_without_module_and_no_reseed_on_bind(monkeypatch, tmp_path):
 
 
 def test_campaign_coverage(monkeypatch, tmp_path):
-    from grimoire.store import entities as ent, overlay
+    from grimoire.store import entities as ent
+    from grimoire.store import overlay
     wid, cid = _campaign(monkeypatch, tmp_path)          # pool-basic
     ent.create_entity(worlds.world_root(wid), "items", "Moon Disc")
     ent.create_entity(worlds.world_root(wid), "locations", "Old Chapel")

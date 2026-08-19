@@ -28,11 +28,11 @@ def parse_spec() -> dict[str, dict[str, str]]:
     text = SPEC.read_text(encoding="utf-8")
     out: dict[str, dict[str, str]] = {}
     for sec in SECTIONS:
-        m = re.search(rf"^### `{re.escape(sec)}/`\n(.*?)(?=^### |^## )", text, re.S | re.M)
+        m = re.search(rf"^### `{re.escape(sec)}/`\n(.*?)(?=^### |^## )", text, re.DOTALL | re.MULTILINE)
         if not m:
             continue   # main() turns a missing section into a hard failure
         mapping: dict[str, str] = {}
-        for row in re.finditer(r"^\| `([a-z_]+)\.py` \|(.*)$", m.group(1), re.M):
+        for row in re.finditer(r"^\| `([a-z_]+)\.py` \|(.*)$", m.group(1), re.MULTILINE):
             stem, rest = row.group(1), row.group(2)
             for name in re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", rest):
                 mapping[name] = stem
@@ -306,7 +306,7 @@ PLAN = pathlib.Path("docs/superpowers/plans/2026-07-30-store-import-layering.md"
 
 
 def plan_agrees(spec: dict[str, dict[str, str]]) -> int:
-    """Every `<pkg>/<file>.py: \`name\`` claim in the plan matches the spec.
+    r"""Every `<pkg>/<file>.py: \`name\`` claim in the plan matches the spec.
 
     Corrections that landed in the spec but not in a task interface were the
     single largest defect source across review rounds six to nine --

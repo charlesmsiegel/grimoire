@@ -117,7 +117,7 @@ def _path(space: str, text: str) -> Path:
     # it carries a URL and a model id, both full of slashes, and slugifying
     # them would let two spaces share a directory. A hex digest also cannot
     # name anything outside the cache dir.
-    key = hashlib.sha256(f"{space}\0{text}".encode("utf-8")).hexdigest()
+    key = hashlib.sha256(f"{space}\0{text}".encode()).hexdigest()
     return _cache_dir() / f"{key}{SUFFIX}"
 
 

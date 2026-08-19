@@ -29,9 +29,24 @@ trail (`store.usage.KIND_RENAME`).
 
 from __future__ import annotations
 
-from . import (alternates, changes, chronicle, commitments, commits, facts, journal,
-               pins, plot, prompt_log, provenance, replay, rolls, scene_ideas,
-               turnstate, usage)
+from . import (
+    alternates,
+    changes,
+    chronicle,
+    commitments,
+    commits,
+    facts,
+    journal,
+    pins,
+    plot,
+    prompt_log,
+    provenance,
+    replay,
+    rolls,
+    scene_ideas,
+    turnstate,
+    usage,
+)
 from .appearances import paths as appearances_paths
 from .audit import baselines as audit_baselines
 

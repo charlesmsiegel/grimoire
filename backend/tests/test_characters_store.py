@@ -1,5 +1,4 @@
 import pytest
-
 from grimoire.store import characters as ch
 from grimoire.store import fetch
 
@@ -128,6 +127,7 @@ def test_png_import_saves_avatar(tmp_path):
 
 def test_json_import_downloads_avatar_url(tmp_path, monkeypatch):
     import json as _json
+
     from grimoire.store import assets
     card = ch.blank_card("Imp")
     card["data"]["assets"] = [{"type": "icon", "uri": "https://x/pic.png", "name": "main", "ext": "png"}]
@@ -153,6 +153,7 @@ def test_import_card_update_vid_overwrites_in_place(tmp_path):
 
 def test_import_card_update_vid_downloads_avatar_for_json(tmp_path, monkeypatch):
     import json as _json
+
     from grimoire.store import assets
     cid, vid = ch.create_character(tmp_path, "Imp")
     card = ch.blank_card("Imp Updated")
@@ -167,6 +168,7 @@ def test_import_card_update_vid_downloads_avatar_for_json(tmp_path, monkeypatch)
 
 def test_json_import_download_failure_is_swallowed(tmp_path, monkeypatch):
     import json as _json
+
     from grimoire.store import assets
     card = ch.blank_card("Imp")
     card["data"]["assets"] = [{"type": "icon", "uri": "https://x/pic.png"}]
@@ -183,6 +185,7 @@ def test_json_import_decodes_data_uri_avatar(tmp_path):
     # an embedded base64 data-URI avatar is decoded and stored without any network.
     import base64 as _b64
     import json as _json
+
     from grimoire.store import assets
     png = b"\x89PNG\r\n\x1a\nDATA"
     card = ch.blank_card("Imp")
@@ -218,6 +221,7 @@ def test_resolving_without_the_network_never_fetches(tmp_path, monkeypatch):
 
 def test_json_import_no_url_makes_no_call(tmp_path, monkeypatch):
     import json as _json
+
     from grimoire.store import assets
 
     def boom(url):
@@ -1102,6 +1106,7 @@ def test_export_names_the_avatar_from_its_bytes_not_its_stored_suffix(tmp_path):
     import json
     import zipfile
     from io import BytesIO
+
     from grimoire.store import assets
     cid, vid = ch.create_character(tmp_path, "Seraphine")
     jpg = b"\xff\xd8\xff" + b"JPEGDATA"
@@ -1203,6 +1208,7 @@ def test_import_keeps_the_long_standing_candidate_order(tmp_path, monkeypatch):
     # entry first, so nothing about the round trip needs that precedence changed.
     import base64 as _b64
     import json as _json
+
     from grimoire.store import assets
     card = ch.blank_card("Seraphine")
     card["data"]["assets"] = [
@@ -1226,6 +1232,7 @@ def test_png_import_still_prefers_the_pngs_own_pixels(tmp_path):
     # must still be imported as the picture it shows (Codex review) -- the
     # card's copy only wins when the pixels are our own placeholder.
     import base64 as _b64
+
     from grimoire.store import assets, cards
     card = ch.blank_card("Seraphine")
     card["data"]["assets"] = [
@@ -1249,6 +1256,7 @@ def test_round_trip_keeps_a_card_that_already_embedded_its_own_avatar(tmp_path):
     # different hash (Codex review).
     import base64 as _b64
     import json as _json
+
     from grimoire.store import assets
     avatar = _avatar_png()
     uri = "data:image/png;base64," + _b64.b64encode(avatar).decode()
@@ -1307,6 +1315,7 @@ def test_import_bounds_the_bytes_one_card_can_inflate(tmp_path, monkeypatch):
     import json as _json
     import zipfile as _zip
     from io import BytesIO
+
     from grimoire.store import cards
     card = ch.blank_card("Seraphine")
     card["data"]["assets"] = [
@@ -1343,6 +1352,7 @@ def test_import_bounds_lookups_even_when_no_bytes_are_read(tmp_path):
     import json as _json
     import zipfile as _zip
     from io import BytesIO
+
     from grimoire.store import cards
     card = ch.blank_card("Seraphine")
     card["data"]["assets"] = [
@@ -1461,8 +1471,9 @@ def _stale_sibling(tmp_path, cid, vid, ext="gif"):
     """The state `put_in` leaves for a moment and leaves for good if its unlink
     fails: two files sharing one stem. `path_in` resolves newest-wins, and
     self-heals exactly this, so it is reachable state and not a hypothetical."""
-    from grimoire.store import assets
     import os
+
+    from grimoire.store import assets
     served = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
     stale = served.with_suffix(f".{ext}")
     stale.write_bytes(b"stale bytes of a different length")

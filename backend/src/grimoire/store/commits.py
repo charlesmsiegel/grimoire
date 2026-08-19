@@ -40,7 +40,7 @@ import hashlib
 import json
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from . import atomic
 from .campaigns import paths as campaigns_paths
@@ -273,7 +273,7 @@ def lookup(cid: str, token: str) -> dict | None:
 
 def _prune(tokens: dict) -> dict:
     """Drop completed entries past RETAIN_DAYS. Reservations are kept."""
-    cutoff = (datetime.now(timezone.utc)
+    cutoff = (datetime.now(UTC)
               - timedelta(days=RETAIN_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {t: e for t, e in tokens.items()
             if not (isinstance(e, dict) and e.get("done")

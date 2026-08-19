@@ -63,9 +63,21 @@ the one thing a retcon must not do on its own.
 
 from __future__ import annotations
 
-from . import changes, chronicle, commitments, commits, plot, provenance, scene_ids
-from . import alternates, cascade, locks, turnstate
-from .scenes import read as scenes_read, write as scenes_write
+from . import (
+    alternates,
+    cascade,
+    changes,
+    chronicle,
+    commitments,
+    commits,
+    locks,
+    plot,
+    provenance,
+    scene_ids,
+    turnstate,
+)
+from .scenes import read as scenes_read
+from .scenes import write as scenes_write
 
 #: Where an attribution came from, in the order they are consulted. Exposed
 #: because the row carries it: a reviewer told "scene 4 changed this" is owed

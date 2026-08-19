@@ -13,8 +13,10 @@ import json
 from pathlib import Path
 
 from .. import locks
-from ..modules import (binding as modules_binding, fields as modules_fields,
-                       pack as modules_pack, validate as modules_validate)
+from ..modules import binding as modules_binding
+from ..modules import fields as modules_fields
+from ..modules import pack as modules_pack
+from ..modules import validate as modules_validate
 from ..paths import safe_id
 from . import paths, schema
 from .paths import FILE_KINDS, SheetConflict, SheetError

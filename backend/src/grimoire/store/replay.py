@@ -61,9 +61,11 @@ from pathlib import Path
 from . import alternates, atomic, cascade, commits, config, locks, turnstate
 from .campaigns import paths as campaigns_paths
 from .paths import now_iso
-from .scenes import paths as scenes_paths, read as scenes_read, \
-    serialize as scenes_serialize, turns as scenes_turns, write as scenes_write
-
+from .scenes import paths as scenes_paths
+from .scenes import read as scenes_read
+from .scenes import serialize as scenes_serialize
+from .scenes import turns as scenes_turns
+from .scenes import write as scenes_write
 
 log = logging.getLogger(__name__)
 

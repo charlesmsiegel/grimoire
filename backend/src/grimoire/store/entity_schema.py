@@ -10,7 +10,7 @@ game mechanics are deferred (issues #221/#222).
 from __future__ import annotations
 
 import math
-from typing import Callable
+from collections.abc import Callable
 
 from . import climates
 

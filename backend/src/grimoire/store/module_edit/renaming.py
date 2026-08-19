@@ -20,8 +20,9 @@ from pathlib import Path
 from .. import atomic, proposals
 from ..campaigns import read as campaigns_read
 from ..frontmatter import dump_frontmatter, parse_frontmatter
-from ..modules import (binding as modules_binding, fields as modules_fields,
-                       pack as modules_pack)
+from ..modules import binding as modules_binding
+from ..modules import fields as modules_fields
+from ..modules import pack as modules_pack
 from .layout import _layout_name_edit, _specialize_layout
 from .migrate import _apply, _sheet_files
 from .packfile import _read_json, _read_sheets, _write_json

@@ -26,41 +26,136 @@ do ``from grimoire.store import x``, which is the whole reason that test exists.
 from __future__ import annotations
 
 from . import (
-    absorb, aging, alternates, appearances, assets, atomic, audit, backups, birthdays, briefing, campaign_climate, campaign_images, campaigns, cards, cascade, casefile, changes, characters, checks, chronicle, clock, commitments, commits,
-    chub, climates, config, context, covers, dice, dossiers, embed_space, entities, entity_schema, epub, events, export, external, facts, fence, fetch, fieldtext, fork, greetings, groupstate,
-    image_subjects, journal, length_drift, lengths, llm_connections, localize, locks, lorebook, migrations, module_edit, modules, overlay, pcs, playing,
-    pins, playstate, plot, prompt_log, proposals, provenance, relationships, replay, retcon, response_presets, rolling_summary, rolls, scenario, scene_break, scene_ideas, scene_ids, scene_refs, scenes, search, semsearch, sheets,
-    styles, suggest,
-    sync, tags, taglines, thumbs, timeline, tokens, turnstate, undo, usage, voice_anchors, voice_drift, world_bundle, worlds,
+    absorb,
+    aging,
+    alternates,
+    appearances,
+    assets,
+    atomic,
+    audit,
+    backups,
+    birthdays,
+    briefing,
+    campaign_climate,
+    campaign_images,
+    campaigns,
+    cards,
+    cascade,
+    casefile,
+    changes,
+    characters,
+    checks,
+    chronicle,
+    chub,
+    climates,
+    clock,
+    commitments,
+    commits,
+    config,
+    context,
+    covers,
+    dice,
+    dossiers,
+    embed_space,
+    entities,
+    entity_schema,
+    epub,
+    events,
+    export,
+    external,
+    facts,
+    fence,
+    fetch,
+    fieldtext,
+    fork,
+    greetings,
+    groupstate,
+    image_subjects,
+    journal,
+    length_drift,
+    lengths,
+    llm_connections,
+    localize,
+    locks,
+    lorebook,
+    migrations,
+    module_edit,
+    modules,
+    overlay,
+    pcs,
+    pins,
+    playing,
+    playstate,
+    plot,
+    prompt_log,
+    proposals,
+    provenance,
+    relationships,
+    replay,
+    response_presets,
+    retcon,
+    rolling_summary,
+    rolls,
+    scenario,
+    scene_break,
+    scene_ideas,
+    scene_ids,
+    scene_refs,
+    scenes,
+    search,
+    semsearch,
+    sheets,
+    styles,
+    suggest,
+    sync,
+    taglines,
+    tags,
+    thumbs,
+    timeline,
+    tokens,
+    turnstate,
+    undo,
+    usage,
+    voice_anchors,
+    voice_drift,
+    world_bundle,
+    worlds,
     ziputil,
 )
+from .appearances import AppearError
+from .campaigns import CampaignNotFound
+from .cards import CardParseError
+from .characters import CharacterNotFound, VersionNotFound
+from .chub import ChubFetchError, ChubParseError
+from .config import DEFAULT_MODEL, DEFAULT_THEME, read_config, write_config
+from .dice import DiceError
+from .entities import EntityNotFound, UnknownKind
+from .frontmatter import dump_frontmatter, parse_frontmatter
+from .greetings import GreetingNotFound
+from .llm_connections import ConnectionNotFound
+from .lorebook import LorebookError
+
 # `module_display` was never exported here: it was bound as an attribute of
 # this package only as a side effect of the flat `modules.py` importing it.
 # Folding it into `modules/display.py` removes that side effect, so the name
 # is aliased explicitly. Deliberately absent from `__all__` -- it was not
 # there before either, and the facade's public list is frozen.
 from .modules import display as module_display
-from .appearances import AppearError
-from .campaigns import CampaignNotFound
-from .cards import CardParseError
-from .characters import CharacterNotFound, VersionNotFound
-from .chub import ChubFetchError, ChubParseError
-from .dice import DiceError
-from .rolls import RollNotFound
-from .llm_connections import ConnectionNotFound
-from .styles import BuiltInStyleImmutable, StyleNotFound
-from .greetings import GreetingNotFound
-from .lorebook import LorebookError
-from .playing import PlayError
-from .pcs import PCNotFound, PCVersionNotFound
-from .tags import TagNotFound
-from .config import DEFAULT_MODEL, DEFAULT_THEME, read_config, write_config
-from .entities import EntityNotFound, UnknownKind
-from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import (
-    data_dir_info, ensure_home, home, now_iso, set_data_dir, slugify, uniquify,
+    data_dir_info,
+    ensure_home,
+    home,
+    now_iso,
+    set_data_dir,
+    slugify,
+    uniquify,
 )
+from .pcs import PCNotFound, PCVersionNotFound
+from .playing import PlayError
+from .rolls import RollNotFound
 from .scenes import SceneNotFound
+from .styles import BuiltInStyleImmutable, StyleNotFound
+from .tags import TagNotFound
 from .world_bundle import BundleError
 from .worlds import WorldNotFound
 

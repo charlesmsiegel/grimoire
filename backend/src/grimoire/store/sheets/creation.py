@@ -10,11 +10,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from .. import characters, entities, locks, overlay, pcs
-from ..modules import (binding as modules_binding, pack as modules_pack,
-                       validate as modules_validate)
+from ..modules import binding as modules_binding
+from ..modules import pack as modules_pack
+from ..modules import validate as modules_validate
 from ..paths import safe_id
 from ..worlds import paths as worlds_paths
 from . import paths, schema, writer
+
 # Aliased: `_checked_creation_write` has a local named `pools` (the sheet
 # type's creation pools), which would shadow the submodule.
 from . import pools as pools_mod

@@ -2,10 +2,11 @@ import threading
 import time
 
 import pytest
-
 from grimoire.store import appearances, campaigns, frontmatter, pcs, scenes, worlds
-from grimoire.store.scenes import (lifecycle as scenes_lifecycle, moment as scenes_moment,
-                                   read as scenes_read, write as scenes_write)
+from grimoire.store.scenes import lifecycle as scenes_lifecycle
+from grimoire.store.scenes import moment as scenes_moment
+from grimoire.store.scenes import read as scenes_read
+from grimoire.store.scenes import write as scenes_write
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -204,6 +205,7 @@ def test_set_datetime_first_silent_then_advance(monkeypatch, tmp_path):
 
 def test_first_datetime_rename_carries_references(monkeypatch, tmp_path):
     import json
+
     from grimoire.store import appearances
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")

@@ -11,10 +11,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from . import atomic
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import now_iso
-from . import atomic
-
 
 _HEADERS = {"current state": "current_state", "knows": "knows", "suspects": "suspects"}
 

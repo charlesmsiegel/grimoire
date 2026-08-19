@@ -12,8 +12,13 @@ from __future__ import annotations
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
 from .. import store
-from .common import (_campaign_root_or_404, _fresh_or_409, _serve_image,
-                     _upload_image_ext, _world_root_or_404)
+from .common import (
+    _campaign_root_or_404,
+    _fresh_or_409,
+    _serve_image,
+    _upload_image_ext,
+    _world_root_or_404,
+)
 from .models import EntityCreate, EntityUpdate
 
 router = APIRouter()

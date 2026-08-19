@@ -23,8 +23,8 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))                      # for `evals`
 sys.path.insert(0, str(REPO / "backend" / "src"))  # for `grimoire`
 
-from evals import cases as case_mod       # noqa: E402
-from evals import runner                  # noqa: E402
+from evals import cases as case_mod  # noqa: E402
+from evals import runner  # noqa: E402
 
 
 @contextlib.contextmanager

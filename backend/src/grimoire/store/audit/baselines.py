@@ -15,8 +15,10 @@ from pathlib import Path
 
 from .. import atomic, locks
 from ..campaigns import paths as campaigns_paths
-from ..modules import binding as modules_binding, pack as modules_pack
-from ..sheets import reader as sheets_reader, schema as sheets_schema
+from ..modules import binding as modules_binding
+from ..modules import pack as modules_pack
+from ..sheets import reader as sheets_reader
+from ..sheets import schema as sheets_schema
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()

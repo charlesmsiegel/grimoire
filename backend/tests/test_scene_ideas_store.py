@@ -11,9 +11,16 @@ import json
 import threading
 
 import pytest
-
-from grimoire.store import (appearances, campaigns, overlay, playing, scene_ideas,
-                            scenes, suggest, worlds)
+from grimoire.store import (
+    appearances,
+    campaigns,
+    overlay,
+    playing,
+    scene_ideas,
+    scenes,
+    suggest,
+    worlds,
+)
 
 
 def _bare(monkeypatch, tmp_path):

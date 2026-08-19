@@ -18,12 +18,26 @@ from pathlib import Path
 import markdown as _md_lib
 from markupsafe import escape
 
-from . import (assets, calendars, campaign_images, chronicle, characters, covers, entities,
-               fetch, overlay, pcs, worlds)
-from .appearances import cast as appearances_cast, paths as appearances_paths
-from .scenes import read as scenes_read, serialize as scenes_serialize
-from .campaigns import paths as campaigns_paths, read as campaigns_read
+from . import (
+    assets,
+    calendars,
+    campaign_images,
+    characters,
+    chronicle,
+    covers,
+    entities,
+    fetch,
+    overlay,
+    pcs,
+    worlds,
+)
+from .appearances import cast as appearances_cast
+from .appearances import paths as appearances_paths
+from .campaigns import paths as campaigns_paths
+from .campaigns import read as campaigns_read
 from .paths import slugify
+from .scenes import read as scenes_read
+from .scenes import serialize as scenes_serialize
 
 # Localized app image URLs (see store.localize): EVERY shape the app writes. A
 # URL shape missing from here is not a rendering bug -- it is a book shipped

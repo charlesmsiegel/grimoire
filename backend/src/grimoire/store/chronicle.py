@@ -22,7 +22,8 @@ from . import atomic, entities, overlay
 from .appearances import cast as appearances_cast
 from .campaigns import paths as campaigns_paths
 from .paths import now_iso
-from .scenes import read as scenes_read, serialize as scenes_serialize
+from .scenes import read as scenes_read
+from .scenes import serialize as scenes_serialize
 
 
 def _chronicle_path(cid: str) -> Path:

@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import re
 
-from . import (characters, dice, entities, expressions,
-               locks, modules, overlay, pcs)
-from .appearances import cast as appearances_cast, paths as appearances_paths, versions as appearances_versions
+from . import characters, dice, entities, expressions, locks, modules, overlay, pcs
+from .appearances import cast as appearances_cast
+from .appearances import paths as appearances_paths
+from .appearances import versions as appearances_versions
 from .scenes import read as scenes_read
-from .sheets import paths as sheets_paths, reader as sheets_reader, schema as sheets_schema
+from .sheets import paths as sheets_paths
+from .sheets import reader as sheets_reader
+from .sheets import schema as sheets_schema
 
 
 class CheckError(Exception):

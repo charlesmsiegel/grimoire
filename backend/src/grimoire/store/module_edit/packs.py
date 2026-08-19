@@ -19,7 +19,8 @@ from pathlib import Path
 
 from .. import atomic, ziputil
 from ..frontmatter import dump_frontmatter, parse_frontmatter
-from ..modules import admin as modules_admin, pack as modules_pack
+from ..modules import admin as modules_admin
+from ..modules import pack as modules_pack
 from . import migrate
 from .staging import _M, _publish, _staging_root, locked, new_mid
 

@@ -10,8 +10,9 @@ from __future__ import annotations
 import json
 
 from .. import expressions, locks
-from ..modules import (binding as modules_binding, fields as modules_fields,
-                       pack as modules_pack)
+from ..modules import binding as modules_binding
+from ..modules import fields as modules_fields
+from ..modules import pack as modules_pack
 from . import creation, paths, reader, schema
 from .paths import SheetError
 

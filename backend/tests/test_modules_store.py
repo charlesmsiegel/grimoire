@@ -1,9 +1,7 @@
 import json
 
 import pytest
-
 from grimoire.store import modules
-
 
 GOOD_SHEETS = {
     "groups": {
@@ -864,7 +862,10 @@ def test_builtin_reference_modules_validate(monkeypatch, tmp_path):
 
 # ---- Task 6: binding — world/campaign module: keys + resolve() ----
 
-from grimoire.store import campaigns, worlds  # noqa: E402 - deliberate late import; see the lines above
+from grimoire.store import (  # noqa: E402 - deliberate late import; see the lines above
+    campaigns,
+    worlds,
+)
 
 
 def _world_campaign(monkeypatch, tmp_path, **kw):

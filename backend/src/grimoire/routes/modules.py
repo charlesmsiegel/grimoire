@@ -9,9 +9,19 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import store
 from .common import _spooled_upload
-from .models import (ModuleCheckBody, ModuleContentBody, ModuleCreate, ModuleDefaultsBody,
-                     ModuleGroupBody, ModuleLayoutBody, ModuleManifestBody, ModuleRenameBody,
-                     ModuleRuleBody, ModuleSheetTypeBody, ModuleThemeBody)
+from .models import (
+    ModuleCheckBody,
+    ModuleContentBody,
+    ModuleCreate,
+    ModuleDefaultsBody,
+    ModuleGroupBody,
+    ModuleLayoutBody,
+    ModuleManifestBody,
+    ModuleRenameBody,
+    ModuleRuleBody,
+    ModuleSheetTypeBody,
+    ModuleThemeBody,
+)
 
 router = APIRouter()
 

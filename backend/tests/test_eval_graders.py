@@ -15,7 +15,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from grimoire import prompts
 from grimoire.store import absorb, scenes
 
@@ -23,7 +22,7 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from evals import graders                     # noqa: E402
+from evals import graders  # noqa: E402
 
 TERSE = {"reply_words": 150, "blocks": 3, "paragraphs": 1,
          "speakers": 2, "blocks_per_speaker": 1}
@@ -318,7 +317,7 @@ def _absorb_json(**overrides) -> str:
     """A complete absorb object, built from the SAME derived contract the
     grader checks — so a new section added to absorb/parse.py appears here too,
     rather than turning every test in this block red."""
-    obj = {k: "filled in" for k in graders.ABSORB_TEXT}
+    obj = dict.fromkeys(graders.ABSORB_TEXT, "filled in")
     obj.update({k: [] for k in graders.ABSORB_LISTS})
     obj.update(overrides)
     return json.dumps(obj)

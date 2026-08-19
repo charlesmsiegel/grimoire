@@ -1,5 +1,4 @@
 import pytest
-
 from grimoire.store import characters, voice_drift, worlds
 
 

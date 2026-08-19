@@ -73,7 +73,7 @@ def upcoming(cid: str, now: str, roster: list[dict]) -> list[dict]:
     for row in gather(cid, roster):
         try:
             when = None
-            for d in range(0, calendars.UPCOMING_WINDOW_DAYS + 1):
+            for d in range(calendars.UPCOMING_WINDOW_DAYS + 1):
                 if calendars.is_anniversary(provider, row["birth"], provider.format(now_fixed + d)):
                     when = "today" if d == 0 else f"in {d} days"
                     break

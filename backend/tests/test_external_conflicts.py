@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-
 from grimoire import store
 from grimoire.main import create_app
 from grimoire.store import config, external

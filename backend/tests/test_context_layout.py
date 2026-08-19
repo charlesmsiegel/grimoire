@@ -3,7 +3,6 @@
 from types import SimpleNamespace
 
 import pytest
-
 from grimoire.store import config
 from grimoire.store.context import layout
 

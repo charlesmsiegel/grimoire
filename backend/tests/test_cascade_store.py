@@ -11,10 +11,22 @@ standing.
 import json
 
 import pytest
-
-from grimoire.store import (alternates, campaigns, cascade, changes, chronicle,
-                            commitments, commits, entities, journal, plot,
-                            provenance, scenes, turnstate, worlds)
+from grimoire.store import (
+    alternates,
+    campaigns,
+    cascade,
+    changes,
+    chronicle,
+    commitments,
+    commits,
+    entities,
+    journal,
+    plot,
+    provenance,
+    scenes,
+    turnstate,
+    worlds,
+)
 from grimoire.store.scenes import turns as scenes_turns
 
 

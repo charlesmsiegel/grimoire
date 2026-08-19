@@ -2,9 +2,18 @@ import shutil
 from pathlib import Path
 
 import pytest
-
-from grimoire.store import (appearances, assets, atomic, campaigns, characters, entities,
-                            greetings, overlay, pcs, worlds)
+from grimoire.store import (
+    appearances,
+    assets,
+    atomic,
+    campaigns,
+    characters,
+    entities,
+    greetings,
+    overlay,
+    pcs,
+    worlds,
+)
 from grimoire.store.campaigns import lifecycle
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 

@@ -42,10 +42,8 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
             return {}, text
         block = rest[:end]
         after = rest[end + 4:]
-    if after.startswith("\n"):
-        after = after[1:]
-    if after.startswith("\n"):
-        after = after[1:]
+    after = after.removeprefix("\n")
+    after = after.removeprefix("\n")
     meta: dict[str, str] = {}
     for line in block.splitlines():
         if not line.strip():

@@ -11,10 +11,9 @@ about the citation outliving the row.
 import importlib
 import json
 
+import grimoire.store as store
 import pytest
 from fastapi.testclient import TestClient
-
-import grimoire.store as store
 from grimoire.main import create_app
 
 

@@ -1,5 +1,4 @@
 import pytest
-
 from grimoire.store import response_presets as rp
 
 

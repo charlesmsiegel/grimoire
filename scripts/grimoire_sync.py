@@ -45,7 +45,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
 APP_ID = "app.grimoire"
@@ -258,7 +258,7 @@ def hash_phone(adb: Adb, root: str) -> tuple[dict[str, str], list[str]]:
         digest, path = parts[0].strip(), parts[1].strip()
         if len(digest) != 64 or not path:
             continue
-        rel = PurePosixPath(path[2:] if path.startswith("./") else path)
+        rel = PurePosixPath(path.removeprefix("./"))
         if _excluded(rel):
             continue
         out[str(rel)] = digest
@@ -316,7 +316,7 @@ def save_baseline(
         "serial": serial,
         "pc_root": str(pc),
         "phone_root": phone,
-        "synced_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "synced_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "files": files,
         "conflicts": conflicts,
     }
@@ -423,7 +423,7 @@ def git_snapshot(root: Path) -> str | None:
     if not dirty:
         return "clean"
     subprocess.run(["git", "-C", str(root), "add", "-A"], check=False)
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%SZ")
     subprocess.run(
         ["git", "-C", str(root), "commit", "-q", "-m",
          f"Pre-sync snapshot {stamp}"],
@@ -662,7 +662,7 @@ def main(argv: list[str] | None = None) -> int:
         adb.shell(f"am force-stop {args.app_id}")
         print(f"stopped {args.app_id} on the device")
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     new_base = dict(base)
     new_conflicts = dict(known)
     failures: list[str] = []

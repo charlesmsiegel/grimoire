@@ -6,9 +6,8 @@ The route half lives in `test_rolling_summary_routes.py`.
 
 import importlib
 
-import pytest
-
 import grimoire.store as store
+import pytest
 from grimoire.store import campaigns, frontmatter, rolling_summary, scenes, worlds
 from grimoire.store.scenes import paths as scenes_paths
 

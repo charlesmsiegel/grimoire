@@ -106,9 +106,21 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
-from . import (alternates, changes, chronicle, commitments, commits, journal,
-               locks, plot, provenance, turnstate, undo)
-from .scenes import read as scenes_read, write as scenes_write
+from . import (
+    alternates,
+    changes,
+    chronicle,
+    commitments,
+    commits,
+    journal,
+    locks,
+    plot,
+    provenance,
+    turnstate,
+    undo,
+)
+from .scenes import read as scenes_read
+from .scenes import write as scenes_write
 
 log = logging.getLogger(__name__)
 

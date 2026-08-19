@@ -55,9 +55,11 @@ from pathlib import Path
 
 from . import atomic, locks
 from .appearances import cast as appearances_cast
-from .scenes import (paths as scenes_paths, read as scenes_read,
-                     serialize as scenes_serialize, turns as scenes_turns,
-                     write as scenes_write)
+from .scenes import paths as scenes_paths
+from .scenes import read as scenes_read
+from .scenes import serialize as scenes_serialize
+from .scenes import turns as scenes_turns
+from .scenes import write as scenes_write
 
 #: How many variants one generation keeps. Trimmed oldest-first at write time:
 #: a scene rerolled fifty times would otherwise carry fifty transcripts of

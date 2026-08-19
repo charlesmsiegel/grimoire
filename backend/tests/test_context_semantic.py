@@ -12,10 +12,19 @@ Two halves, deliberately kept apart:
 import struct
 
 import pytest
-
 from grimoire import embeddings
-from grimoire.store import (campaigns, chronicle, config, context as ctx, entities,
-                            groupstate, llm_connections, scenes, vectors, worlds)
+from grimoire.store import (
+    campaigns,
+    chronicle,
+    config,
+    entities,
+    groupstate,
+    llm_connections,
+    scenes,
+    vectors,
+    worlds,
+)
+from grimoire.store import context as ctx
 from grimoire.store.context import semantic, world_state
 
 # --- a fake provider -------------------------------------------------------

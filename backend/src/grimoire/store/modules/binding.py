@@ -7,9 +7,12 @@ The only part of this package that reaches sideways into ``campaigns`` and
 from __future__ import annotations
 
 from .. import atomic
-from ..campaigns import paths as campaigns_paths, read as campaigns_read
+from ..campaigns import paths as campaigns_paths
+from ..campaigns import read as campaigns_read
 from ..frontmatter import dump_frontmatter, parse_frontmatter
-from ..worlds import paths as worlds_paths, read as worlds_read
+from ..worlds import paths as worlds_paths
+from ..worlds import read as worlds_read
+
 # Through the module object, not by value: `load_pack` is a fault-injection
 # target (test_audit_store.py), and in the flat module `resolve` reached it as
 # a plain global -- i.e. the same binding the patch replaces. Aliased because

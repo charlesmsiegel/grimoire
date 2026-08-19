@@ -13,8 +13,17 @@ from __future__ import annotations
 
 import errno
 
-from .. import (alternates, atomic, calendars, commits, pins, prompt_log, scene_ids,
-                scene_refs, turnstate)
+from .. import (
+    alternates,
+    atomic,
+    calendars,
+    commits,
+    pins,
+    prompt_log,
+    scene_ids,
+    scene_refs,
+    turnstate,
+)
 from ..audit import baselines
 from ..campaigns import paths as campaigns_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter

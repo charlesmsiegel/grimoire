@@ -47,7 +47,7 @@ import logging
 import os
 import re
 import zipfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from . import atomic, config, locks
@@ -214,10 +214,10 @@ def _utc(when: datetime | None) -> datetime:
     every timestamp this module writes or parses is UTC, so interpreting one
     input as local would make an archive's name disagree with its own series."""
     if when is None:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     if when.tzinfo is None:
-        return when.replace(tzinfo=timezone.utc)
-    return when.astimezone(timezone.utc)
+        return when.replace(tzinfo=UTC)
+    return when.astimezone(UTC)
 
 
 def _allocate(directory: Path, when: datetime) -> Path:
@@ -284,7 +284,7 @@ def _parsed(name: str) -> tuple[datetime, int] | None:
     if not m:
         return None
     try:
-        taken = datetime.strptime(m.group(1), _STAMP).replace(tzinfo=timezone.utc)
+        taken = datetime.strptime(m.group(1), _STAMP).replace(tzinfo=UTC)
     except ValueError:
         return None
     return taken, int(m.group(2) or 1)

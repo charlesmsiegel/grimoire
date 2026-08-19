@@ -17,11 +17,14 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .. import atomic, locks
-from ..campaigns import paths as campaigns_paths, read as campaigns_read
-from ..modules import binding as modules_binding, pack as modules_pack
+from ..campaigns import paths as campaigns_paths
+from ..campaigns import read as campaigns_read
+from ..modules import binding as modules_binding
+from ..modules import pack as modules_pack
 from ..paths import safe_id
 from ..sheets import schema as sheets_schema
-from ..worlds import paths as worlds_paths, read as worlds_read
+from ..worlds import paths as worlds_paths
+from ..worlds import read as worlds_read
 from .scope import _RenameCollision
 from .staging import _M, _staging_root
 

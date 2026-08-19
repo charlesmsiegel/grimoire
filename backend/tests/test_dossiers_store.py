@@ -1,4 +1,4 @@
-from grimoire.store import dossiers, characters, worlds
+from grimoire.store import characters, dossiers, worlds
 
 
 def _root(monkeypatch, tmp_path):

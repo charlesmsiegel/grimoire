@@ -10,11 +10,14 @@ import re
 
 from .. import characters, overlay
 from ..campaigns import read as campaigns_read
+
 # Only the read/write/serialize leaves, never the `scenes` facade: `scenes/
 # read.py` imports `cast.py` from this package, so binding whole packages in
 # both directions would close a cycle these file-level edges do not.
-from ..scenes import (paths as scenes_paths, read as scenes_read,
-                      serialize as scenes_serialize, write as scenes_write)
+from ..scenes import paths as scenes_paths
+from ..scenes import read as scenes_read
+from ..scenes import serialize as scenes_serialize
+from ..scenes import write as scenes_write
 from . import cast, paths, versions
 
 

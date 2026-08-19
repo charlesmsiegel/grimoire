@@ -10,23 +10,55 @@ Scenes, weather, mechanics and greetings have their own modules; the generic
 
 from __future__ import annotations
 
-
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from .common import (computes_only, _bounded_call, _campaign_root_or_404, _content_fields,
-                     _display_name_or_400, _dump, _llm_http_error, _page_of, _page_window,
-                     _require_connection, _response_body, get_llm, _serve_image,
-                     _serve_image_file, _upload_image_ext, _write_response)
-from .models import (AdvanceTime, AvatarFocus, CalendarConfig, CampaignClimate, CopyFromGreeting,
-                     ScheduledEventCreate, ScheduledEventEdit,
-                     DefaultVersion, ForkCampaign, GroupStateSave, NameBody, NewCampaign, PCCreate,
-                     PCUpdate, PersonaVersionCreate, PersonaVersionUpdate, PickBody, PinRule,
-                     RefList, ResponseSettings, VersionCreate, VersionUpdate,
-                     VoiceAnchorSave)
+from .common import (
+    _bounded_call,
+    _campaign_root_or_404,
+    _content_fields,
+    _display_name_or_400,
+    _dump,
+    _llm_http_error,
+    _page_of,
+    _page_window,
+    _require_connection,
+    _response_body,
+    _serve_image,
+    _serve_image_file,
+    _upload_image_ext,
+    _write_response,
+    computes_only,
+    get_llm,
+)
+from .models import (
+    AdvanceTime,
+    AvatarFocus,
+    CalendarConfig,
+    CampaignClimate,
+    CopyFromGreeting,
+    DefaultVersion,
+    ForkCampaign,
+    GroupStateSave,
+    NameBody,
+    NewCampaign,
+    PCCreate,
+    PCUpdate,
+    PersonaVersionCreate,
+    PersonaVersionUpdate,
+    PickBody,
+    PinRule,
+    RefList,
+    ResponseSettings,
+    ScheduledEventCreate,
+    ScheduledEventEdit,
+    VersionCreate,
+    VersionUpdate,
+    VoiceAnchorSave,
+)
 
 router = APIRouter()
 
@@ -44,7 +76,7 @@ def get_group_state(cid: str, gid: str):
         raise HTTPException(status_code=404, detail="group not found")
     st = store.groupstate.read_state(store.campaigns.campaign_root(cid), gid)
     if st is None:
-        return {**{k: "" for k in store.groupstate.FIELDS}, "updated": ""}
+        return {**dict.fromkeys(store.groupstate.FIELDS, ""), "updated": ""}
     return st
 
 

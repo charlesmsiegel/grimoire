@@ -18,8 +18,13 @@ from ..frontmatter import parse_frontmatter
 from ..paths import home, safe_id
 from . import display
 from .fields import CONTENT_KINDS
-from .validate import (_validate_checks, _validate_manifest, _validate_outcomes,
-                       _validate_sheets, validate_sheet_values)
+from .validate import (
+    _validate_checks,
+    _validate_manifest,
+    _validate_outcomes,
+    _validate_sheets,
+    validate_sheet_values,
+)
 
 
 class ModuleError(Exception):

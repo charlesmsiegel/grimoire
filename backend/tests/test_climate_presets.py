@@ -1,5 +1,4 @@
 import pytest
-
 from grimoire.store import climates
 
 EXPECTED = {"temperate-interior", "temperate-coastal", "high-desert",
@@ -43,6 +42,7 @@ def test_every_preset_id_matches_its_filename(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     import json
     import pathlib
+
     from grimoire.store import climates as reg
     presets = pathlib.Path(reg.__file__).parent / "presets"
     for path in presets.glob("*.json"):

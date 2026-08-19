@@ -11,7 +11,6 @@ raised over a scene somebody is playing.
 from __future__ import annotations
 
 import pytest
-
 from grimoire.store import calendars, scene_break
 
 EVERY = 10

@@ -11,9 +11,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .schema import ClimateError, validate
-from ..paths import home
 from .. import atomic
+from ..paths import home
+from .schema import ClimateError, validate
 
 FALLBACK_ID = "temperate-interior"
 

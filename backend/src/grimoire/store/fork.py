@@ -66,10 +66,13 @@ import logging
 import shutil
 
 from . import atomic, cascade, locks
-from .campaigns import paths as campaigns_paths, read as campaigns_read
+from .campaigns import paths as campaigns_paths
+from .campaigns import read as campaigns_read
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import ensure_home, now_iso, slugify, uniquify
-from .scenes import lifecycle as scenes_lifecycle, paths as scenes_paths, read as scenes_read
+from .scenes import lifecycle as scenes_lifecycle
+from .scenes import paths as scenes_paths
+from .scenes import read as scenes_read
 
 log = logging.getLogger(__name__)
 

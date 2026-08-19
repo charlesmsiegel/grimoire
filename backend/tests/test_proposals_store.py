@@ -4,7 +4,6 @@ import pathlib
 import threading
 
 import pytest
-
 from grimoire.store import campaigns, proposals, worlds
 
 

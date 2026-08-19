@@ -1,7 +1,6 @@
 import shutil
 
 import pytest
-
 from grimoire.store import appearances as ap
 from grimoire.store import campaigns, characters, entities, greetings, overlay, sync, worlds
 

@@ -19,6 +19,7 @@ from grimoire.store import cards, characters, entities, greetings, overlay, tags
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.paths import home
 
+
 def build_index(root: Path) -> dict:
     """Compact existing-content summary for the merge stage: id/name only, no
     body excerpts, so it stays cheap for worlds with 1000+ lore entries."""
@@ -363,15 +364,14 @@ def apply_greeting_imports(root: Path, specs: list[dict], results: dict) -> dict
 def resolve_ref(ref: str, ref_map: dict[str, str], root: Path) -> str | None:
     if ref in ref_map:
         return ref_map[ref]
-    elif ref.startswith("id:"):
+    if ref.startswith("id:"):
         gid = ref[len("id:"):]
         try:
             greetings.read_greeting(root, gid)
         except greetings.GreetingNotFound:
             return None
         return gid
-    else:
-        return None
+    return None
 
 
 def _resolve_refs(refs: list[str], ref_map: dict[str, str], root: Path, results: dict, stage: str) -> list[str]:

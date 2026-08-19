@@ -1,4 +1,4 @@
-from grimoire.store import taglines, characters, worlds
+from grimoire.store import characters, taglines, worlds
 
 
 def _world_with_char(monkeypatch, tmp_path):

@@ -2,7 +2,6 @@ import json
 import threading
 
 import pytest
-
 from grimoire.store import campaigns, dice, rolls, worlds
 
 

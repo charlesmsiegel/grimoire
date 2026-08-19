@@ -1,4 +1,4 @@
-from grimoire.store import parse_frontmatter, dump_frontmatter
+from grimoire.store import dump_frontmatter, parse_frontmatter
 from grimoire.store.frontmatter import parse_frontmatter_head
 
 

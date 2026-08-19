@@ -9,8 +9,17 @@ from __future__ import annotations
 
 import json
 
-from grimoire.store import (aging, calendars, campaigns, chronicle, clock,
-                            commitments, plot, scenes, worlds)
+from grimoire.store import (
+    aging,
+    calendars,
+    campaigns,
+    chronicle,
+    clock,
+    commitments,
+    plot,
+    scenes,
+    worlds,
+)
 
 
 def _campaign(monkeypatch, tmp_path, calendar="gregorian"):

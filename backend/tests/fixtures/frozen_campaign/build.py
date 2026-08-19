@@ -26,7 +26,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 
@@ -36,7 +36,7 @@ class Clock:
     strictly increasing (world and campaign listings sort on `updated`, and
     equal stamps would leave that order up to the filesystem)."""
 
-    START = datetime(2026, 1, 1, 9, 0, 0, tzinfo=timezone.utc)
+    START = datetime(2026, 1, 1, 9, 0, 0, tzinfo=UTC)
 
     def __init__(self) -> None:
         self.ticks = 0

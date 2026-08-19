@@ -8,11 +8,28 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from .. import store
 from ..llm import LLMClient
-from .common import (_campaign_root_or_404, _fresh_or_409, _record_prompt,
-                     _require_connection, _require_scene, _world_char_version_or_404,
-                     _world_root_or_404, get_llm)
-from .models import (CopyFromGreeting, Edges, FirstPost, GreetingCreate, GreetingUpdate,
-                     ImportGreetings, MarkBody, Opener, StartFromGreeting, SubjectsBody)
+from .common import (
+    _campaign_root_or_404,
+    _fresh_or_409,
+    _record_prompt,
+    _require_connection,
+    _require_scene,
+    _world_char_version_or_404,
+    _world_root_or_404,
+    get_llm,
+)
+from .models import (
+    CopyFromGreeting,
+    Edges,
+    FirstPost,
+    GreetingCreate,
+    GreetingUpdate,
+    ImportGreetings,
+    MarkBody,
+    Opener,
+    StartFromGreeting,
+    SubjectsBody,
+)
 from .streaming import _ephemeral_stream, _persist_reply
 
 router = APIRouter()
@@ -209,9 +226,9 @@ def get_available_greetings(cid: str, after: str | None = None):
 def get_campaign_greetings(cid: str):
     _campaign_root_or_404(cid)
     marks = store.playing.read_marks(cid)
-    mark_of = {g: "played" for g in marks["played"]}
-    mark_of.update({g: "completed" for g in marks["completed"]})
-    mark_of.update({g: "skipped" for g in marks["skipped"]})
+    mark_of = dict.fromkeys(marks["played"], "played")
+    mark_of.update(dict.fromkeys(marks["completed"], "completed"))
+    mark_of.update(dict.fromkeys(marks["skipped"], "skipped"))
     return [{**g, "mark": mark_of.get(g["id"])} for g in store.overlay.list_greetings(cid)]
 
 

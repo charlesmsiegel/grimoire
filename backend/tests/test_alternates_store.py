@@ -4,10 +4,18 @@ import json
 import pathlib
 
 import pytest
-
-from grimoire.store import (alternates, appearances, atomic, campaigns, migrations, pcs,
-                            scene_ids, scenes,
-                            scene_refs, worlds)
+from grimoire.store import (
+    alternates,
+    appearances,
+    atomic,
+    campaigns,
+    migrations,
+    pcs,
+    scene_ids,
+    scene_refs,
+    scenes,
+    worlds,
+)
 from grimoire.store.scenes import paths as scenes_paths
 
 

@@ -92,7 +92,6 @@ import asyncio  # noqa: E402 - deliberate late import; see the lines above
 
 import pytest  # noqa: E402 - deliberate late import; see the lines above
 
-
 STALL = 2.0  # >> the 0.05s timeouts below, but bounded so an unguarded
              # regression fails the suite in seconds instead of hanging it
 
@@ -922,9 +921,7 @@ def _sibling_imports(name: str) -> set[str]:
         if isinstance(node, ast.ImportFrom):
             if node.level == 1 and node.module:  # from .llm import x
                 found.add(node.module)
-            elif node.level == 1:  # from . import llm
-                found.update(a.name for a in node.names)
-            elif node.level == 0 and node.module == "grimoire":  # from grimoire import llm
+            elif node.level == 1 or (node.level == 0 and node.module == "grimoire"):  # from . import llm
                 found.update(a.name for a in node.names)
             elif node.level == 0 and (node.module or "").startswith("grimoire."):
                 found.add(node.module.split(".", 1)[1])  # from grimoire.llm import x

@@ -10,9 +10,17 @@ import threading
 import time
 
 import pytest
-
-from grimoire.store import (campaigns, config, context, entities, locks, prompt_log,
-                            scene_refs, scenes, worlds)
+from grimoire.store import (
+    campaigns,
+    config,
+    context,
+    entities,
+    locks,
+    prompt_log,
+    scene_refs,
+    scenes,
+    worlds,
+)
 
 
 def _campaign(monkeypatch, tmp_path):

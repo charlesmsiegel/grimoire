@@ -7,7 +7,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 import pytest
-
 from grimoire.store import fetch
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16

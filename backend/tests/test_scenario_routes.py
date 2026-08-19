@@ -10,13 +10,13 @@ import importlib
 import io
 import json
 
+import grimoire.store as store
 import pytest
 from fastapi.testclient import TestClient
-from PIL import Image
-
-import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
+from PIL import Image
+
 from tests.llm_fakes import FailingOpenRouter, FakeOpenRouterComplete
 
 CARD = {

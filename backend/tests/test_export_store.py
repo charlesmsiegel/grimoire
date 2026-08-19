@@ -7,8 +7,20 @@ import zipfile
 
 import pytest
 
-from grimoire.store import (appearances, assets, campaign_images, campaigns, characters,
-                            chronicle, covers, entities, export, pcs, scenes, worlds)
+from grimoire.store import (
+    appearances,
+    assets,
+    campaign_images,
+    campaigns,
+    characters,
+    chronicle,
+    covers,
+    entities,
+    export,
+    pcs,
+    scenes,
+    worlds,
+)
 
 
 def _img(fmt: str = "PNG", color=(10, 20, 30), size=(8, 8)) -> bytes:

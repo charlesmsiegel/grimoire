@@ -175,7 +175,7 @@ def _validate_advancement(st: dict, fields: list[dict], scope: set[str],
         if unknown:
             errors.append(f"{where}.advancement.costs.{field_key}: unknown names {sorted(unknown)}")
             continue
-        sample = {name: 1 for name in cost_scope}
+        sample = dict.fromkeys(cost_scope, 1)
         try:
             result = expressions.evaluate(expr, sample)
         except expressions.ExpressionError as e:

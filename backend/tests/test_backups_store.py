@@ -5,10 +5,9 @@ from __future__ import annotations
 import os
 import threading
 import zipfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from grimoire.store import backups, campaigns, config, entities, locks, worlds
 
 
@@ -27,7 +26,7 @@ def small_store(root):
     (root / "config.md").write_text("---\ntheme: system\n---\n", encoding="utf-8")
 
 
-AT = datetime(2026, 8, 14, 21, 0, 0, tzinfo=timezone.utc)
+AT = datetime(2026, 8, 14, 21, 0, 0, tzinfo=UTC)
 
 
 def names_in(path):

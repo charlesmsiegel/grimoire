@@ -11,10 +11,13 @@ from __future__ import annotations
 import re
 
 from .. import checks, entities, locks, overlay
-from ..modules import (binding as modules_binding, content as modules_content,
-                       fields as modules_fields, pack as modules_pack)
+from ..modules import binding as modules_binding
+from ..modules import content as modules_content
+from ..modules import fields as modules_fields
+from ..modules import pack as modules_pack
 from ..scenes import read as scenes_read
-from ..sheets import reader as sheets_reader, schema as sheets_schema
+from ..sheets import reader as sheets_reader
+from ..sheets import schema as sheets_schema
 
 
 def _sheet_type_label(sheets_def: dict, type_id) -> str:

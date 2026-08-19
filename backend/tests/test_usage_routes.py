@@ -6,12 +6,12 @@ import importlib
 import json
 from datetime import date, timedelta
 
+import grimoire.store as store
 import pytest
 from fastapi.testclient import TestClient
-
-import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
+
 from tests.llm_fakes import FailingOpenRouter, FakeOpenRouter, FakeOpenRouterComplete
 
 USAGE = {"prompt_tokens": 900, "completion_tokens": 40, "cost_usd": 0.0042,

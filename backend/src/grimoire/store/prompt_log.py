@@ -66,6 +66,7 @@ from . import atomic, config, locks
 from .campaigns import paths as campaigns_paths
 from .paths import safe_id
 
+
 def depth() -> int:
     """How many snapshots to keep; 0 disables capture entirely.
 

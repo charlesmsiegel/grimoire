@@ -1,8 +1,19 @@
 import json
 
-from grimoire.store import (appearances, calendars, campaigns, characters, chronicle, clock,
-                            entities,
-                            plot, scenes, suggest, taglines, worlds)
+from grimoire.store import (
+    appearances,
+    calendars,
+    campaigns,
+    characters,
+    chronicle,
+    clock,
+    entities,
+    plot,
+    scenes,
+    suggest,
+    taglines,
+    worlds,
+)
 
 
 def _world(monkeypatch, tmp_path):

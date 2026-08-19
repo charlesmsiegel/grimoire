@@ -7,8 +7,22 @@ import filecmp
 import shutil
 from pathlib import Path
 
-from .. import (assets, atomic, calendars, campaign_climate, characters, climates,
-                entities, greetings, locks, modules, overlay, pcs, sheets, usage)
+from .. import (
+    assets,
+    atomic,
+    calendars,
+    campaign_climate,
+    characters,
+    climates,
+    entities,
+    greetings,
+    locks,
+    modules,
+    overlay,
+    pcs,
+    sheets,
+    usage,
+)
 from ..appearances import paths as appearances_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import ensure_home, now_iso, slugify, uniquify

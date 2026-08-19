@@ -8,12 +8,26 @@ materialize` would bind the function rather than the module.
 
 from __future__ import annotations
 
-from .. import (characters, commitments, config, entities, facts, groupstate, overlay,
-                pcs, playstate, plot, relationships, turnstate)
-from ..appearances import paths as appearances_paths, versions as appearances_versions
+from .. import (
+    characters,
+    commitments,
+    config,
+    entities,
+    facts,
+    groupstate,
+    overlay,
+    pcs,
+    playstate,
+    plot,
+    relationships,
+    turnstate,
+)
+from ..appearances import paths as appearances_paths
+from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..paths import slugify
-from ..scenes import paths as scenes_paths, read as scenes_read
+from ..scenes import paths as scenes_paths
+from ..scenes import read as scenes_read
 from . import conflicts, parse, routing, weather
 
 _CARD_FIELDS = ("description", "personality", "scenario")

@@ -10,10 +10,18 @@ refusal the caller can degrade on rather than an error the reader sees.
 from __future__ import annotations
 
 import pytest
-
 from grimoire.embeddings import EmbeddingsError
-from grimoire.store import (campaigns, characters, config, entities, llm_connections,
-                            scenes, search, semsearch, worlds)
+from grimoire.store import (
+    campaigns,
+    characters,
+    config,
+    entities,
+    llm_connections,
+    scenes,
+    search,
+    semsearch,
+    worlds,
+)
 
 # Vectors are 2-D and hand-picked so a similarity is readable at the call site:
 # the query points at [1, 0], so a document at [1, 0] scores 1.0 and one at

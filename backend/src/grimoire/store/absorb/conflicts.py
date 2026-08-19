@@ -56,10 +56,20 @@ conflict contract.
 
 from __future__ import annotations
 
-from .. import (changes, characters, commitments, facts, groupstate, overlay,
-                playstate, plot, relationships, weather as weather_store)
-from ..appearances import (paths as appearances_paths,
-                           versions as appearances_versions)
+from .. import (
+    changes,
+    characters,
+    commitments,
+    facts,
+    groupstate,
+    overlay,
+    playstate,
+    plot,
+    relationships,
+)
+from .. import weather as weather_store
+from ..appearances import paths as appearances_paths
+from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 
 #: Why each kind is conflicted, in the reviewer's words. Membership *is* the set

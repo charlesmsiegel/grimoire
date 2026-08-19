@@ -12,10 +12,23 @@ import json
 import os
 
 import pytest
-
-from grimoire.store import (campaigns, characters, chronicle, entities, facts, frontmatter,
-                            greetings, overlay, pcs, plot, relationships, scenes, search,
-                            taglines, worlds)
+from grimoire.store import (
+    campaigns,
+    characters,
+    chronicle,
+    entities,
+    facts,
+    frontmatter,
+    greetings,
+    overlay,
+    pcs,
+    plot,
+    relationships,
+    scenes,
+    search,
+    taglines,
+    worlds,
+)
 
 
 @pytest.fixture

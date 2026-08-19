@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from grimoire.store import usage
 
 
@@ -236,9 +235,8 @@ def test_a_call_that_never_went_out_is_not_a_row(home):
     time and never happened -- pure noise in every rollup."""
     from grimoire.llm_errors import LLMError
 
-    with pytest.raises(LLMError):
-        with usage.meter("dossier", campaign="saltmarch"):
-            raise LLMError("timeout", "the absorb budget is spent")
+    with pytest.raises(LLMError), usage.meter("dossier", campaign="saltmarch"):
+        raise LLMError("timeout", "the absorb budget is spent")
 
     assert _rows(home) == []
 
@@ -264,10 +262,9 @@ def test_the_meter_records_what_the_facade_filled_in(home, monkeypatch):
 def test_a_failed_call_is_still_a_row_carrying_the_failure_kind(home):
     from grimoire.llm_errors import LLMError
 
-    with pytest.raises(LLMError):
-        with usage.meter("chat", campaign="saltmarch") as m:
-            m.usage.update(_SENT)       # the facade stamped the route, then failed
-            raise LLMError("rate_limit", "slow down")
+    with pytest.raises(LLMError), usage.meter("chat", campaign="saltmarch") as m:
+        m.usage.update(_SENT)       # the facade stamped the route, then failed
+        raise LLMError("rate_limit", "slow down")
 
     row, = _rows(home)
     assert row["status"] == "error"

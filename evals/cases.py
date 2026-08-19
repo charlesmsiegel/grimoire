@@ -32,15 +32,33 @@ CLAUDE.md on why no real campaign content may appear in this repo.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
-from grimoire.store import (appearances, campaigns, characters, checks, chronicle,
-                            commitments, config, context, entities, facts, groupstate,
-                            lengths, pcs, playstate, plot, relationships,
-                            response_presets, scenes, sheets, worlds)
 from grimoire.store import absorb as absorb_store
+from grimoire.store import (
+    appearances,
+    campaigns,
+    characters,
+    checks,
+    chronicle,
+    commitments,
+    config,
+    context,
+    entities,
+    facts,
+    groupstate,
+    lengths,
+    pcs,
+    playstate,
+    plot,
+    relationships,
+    response_presets,
+    scenes,
+    sheets,
+    worlds,
+)
 
 from . import graders
 from .graders import Check

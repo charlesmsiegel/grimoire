@@ -2,10 +2,24 @@ import logging
 from pathlib import Path
 
 import pytest
-
-from grimoire.store import (appearances, assets, atomic, campaigns, characters, entities, failsoft,
-                            greetings, groupstate, overlay, pcs, playstate, sync, taglines,
-                            voice_anchors, worlds)
+from grimoire.store import (
+    appearances,
+    assets,
+    atomic,
+    campaigns,
+    characters,
+    entities,
+    failsoft,
+    greetings,
+    groupstate,
+    overlay,
+    pcs,
+    playstate,
+    sync,
+    taglines,
+    voice_anchors,
+    worlds,
+)
 from grimoire.store.campaigns import read as campaigns_read
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 

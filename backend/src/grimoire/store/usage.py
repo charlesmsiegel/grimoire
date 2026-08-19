@@ -314,7 +314,7 @@ class Meter:
         self._done = False
         self._t0 = time.monotonic()
 
-    def __enter__(self) -> "Meter":
+    def __enter__(self) -> Meter:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
