@@ -8,7 +8,18 @@ import type { CampaignImage } from "../api/types";
  *  speaks for nobody — `store/scenes/write.py` records speaker `None`) offers
  *  the campaign's own image library, which exists precisely because a narrator
  *  has no record to hang art off. `version` is the version the roster has
- *  locked for this actor — the one that spoke — and is the group offered first. */
+ *  locked for this actor — the one that spoke — and is the group offered first.
+ *
+ *  Greeting art is deliberately NOT a third scope, though `image_subjects`
+ *  records which characters appear in each greeting image and could answer
+ *  "greeting art you appear in". Two reasons. Assembling it means listing every
+ *  greeting in the world and reading each one's subjects map, to find pictures
+ *  the reader can already reach; and the URL it would insert is world-scoped,
+ *  so a post would carry a reference into the world rather than into the
+ *  campaign the post belongs to — the one shape here that does not follow a
+ *  campaign that later diverges. The supported route is the one that already
+ *  exists: `copy-from-greeting` puts the greeting's image on the character's
+ *  own version, campaign-side, and it turns up in this picker. */
 export type PickerTarget =
   | { kind: "characters" | "pcs"; id: string; version: string; name: string }
   | { kind: "campaign"; name: string };
@@ -33,11 +44,18 @@ export function nameFromFile(filename: string): string {
   return slug || "image";
 }
 
-/** `base`, or the first `base-N` no existing name has taken. */
+/** `base`, or the first `base-N` no existing name has taken.
+ *
+ *  Occupancy is CASE-FOLDED, for the reason `assets._free_gallery` folds its
+ *  own: on Windows and macOS an existing `Coast.png` *is* `coast.png`, so a
+ *  case-sensitive comparison hands out a name that cannot be claimed without
+ *  replacing somebody's image. Skipping a case variant on a case-sensitive
+ *  filesystem too is merely conservative — the next suffix is equally good. */
 export function freeName(base: string, taken: string[]): string {
-  if (!taken.includes(base)) return base;
+  const used = new Set(taken.map((t) => t.toLowerCase()));
+  if (!used.has(base.toLowerCase())) return base;
   let n = 2;
-  while (taken.includes(`${base}-${n}`)) n += 1;
+  while (used.has(`${base}-${n}`.toLowerCase())) n += 1;
   return `${base}-${n}`;
 }
 
@@ -138,13 +156,14 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
     return () => { live = false; };
   }, [cid, targetKey, revision]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function upload(file: File | undefined) {
-    if (!file) return;
+  /** Run one library mutation: busy while it is in flight, its reason shown if
+   *  it fails, and the listing re-read if it lands — so the grid is always the
+   *  server's answer rather than a second copy kept here. */
+  async function mutate(fn: () => Promise<unknown>) {
     setBusy(true);
     setError(null);
     try {
-      await api.putCampaignImage(
-        cid, freeName(nameFromFile(file.name), (library ?? []).map((i) => i.name)), file);
+      await fn();
       setRevision((r) => r + 1);
     } catch (err: any) {
       setError(err?.detail ?? String(err));
@@ -153,7 +172,13 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
     }
   }
 
-  async function remove(name: string) {
+  function upload(file: File | undefined) {
+    if (!file) return;
+    const name = freeName(nameFromFile(file.name), (library ?? []).map((i) => i.name));
+    void mutate(() => api.putCampaignImage(cid, name, file));
+  }
+
+  function remove(name: string) {
     // Confirmed, unlike the cover's Remove: a cover is referenced by nothing,
     // and one of these can already be linked from forty posts, which would then
     // render as broken images with no way back but re-uploading under the very
@@ -161,16 +186,7 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
     if (!window.confirm(
       `Remove "${name}" from this campaign? Posts that already link to it will `
       + "show a broken image.")) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await api.deleteCampaignImage(cid, name);
-      setRevision((r) => r + 1);
-    } catch (err: any) {
-      setError(err?.detail ?? String(err));
-    } finally {
-      setBusy(false);
-    }
+    void mutate(() => api.deleteCampaignImage(cid, name));
   }
 
   const empty = groups !== null && groups.every((g) => g.images.length === 0);
@@ -192,10 +208,14 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
         </p>
         {error && <div className="banner">{error}</div>}
         {groups === null && <p className="field-hint">Loading…</p>}
-        {empty && (
+        {/* Withheld when anything went wrong: on a failed listing `groups` is
+            empty because the read never landed, and telling the reader there
+            are no images — under a disabled Add — would be the banner's
+            opposite. */}
+        {empty && error === null && (
           <p className="field-hint">
             {isLibrary
-              ? "No campaign images yet. Add one below."
+              ? "No campaign images yet."
               : `Nothing stored for ${target.name} yet — art is added in the library editor.`}
           </p>
         )}
@@ -239,7 +259,7 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
               </label>
               <input id="campaign-library-file" type="file" disabled={busy || library === null}
                      accept="image/png,image/jpeg,image/gif,image/webp"
-                     onChange={(e) => { void upload(e.target.files?.[0]); e.target.value = ""; }} />
+                     onChange={(e) => { upload(e.target.files?.[0]); e.target.value = ""; }} />
             </>
           )}
           <button className="subtle" type="button" onClick={onClose}>Cancel</button>
