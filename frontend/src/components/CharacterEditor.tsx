@@ -579,23 +579,24 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     );
   }
 
-  // localize and the embedded-lore import both read the server-stored card, so
-  // running either with unsaved editor changes would discard them — guard both
-  // buttons when the form is dirty. Compare through buildCard()'s normalization
-  // (it always rewrites alternate_greetings) so an unedited card isn't flagged
-  // as dirty.
-  const storedCard = detail?.versions.find((v) => v.id === vid)?.card;
+  // localize reads/writes the server-stored card, so running it with unsaved
+  // editor changes would discard them — guard the button when the form is dirty.
+  // Compare through buildCard()'s normalization (it always rewrites
+  // alternate_greetings) so an unedited card isn't flagged as dirty.
+  const storedVersion = detail?.versions.find((v) => v.id === vid);
+  const storedCard = storedVersion?.card;
   const normalizedStored = storedCard && {
     ...storedCard,
     data: { ...storedCard.data, alternate_greetings: (storedCard.data.alternate_greetings ?? []).filter((g) => g.trim() !== "") },
   };
   const dirty = !!(card && normalizedStored && JSON.stringify(buildCard()) !== JSON.stringify(normalizedStored));
-  // Count the STORED card's entries, not the editor's: importCharacterBook
-  // posts no payload, so the backend commits whatever character_book is on
-  // disk for this version. A count read off the live card would name entries
-  // the import cannot deliver (or hide ones it would) the moment the two
-  // diverge (#16).
-  const bookCount = storedCard?.data.character_book?.entries?.length ?? 0;
+  // The import posts no card: the route commits whatever character_book is on
+  // disk for this version, normalized. So the label counts the server's
+  // `importable_lore`, never the live editor card and never the raw `entries`
+  // list — the first drifts the moment the form is edited, and the second
+  // counts the disabled and blank entries normalization drops, offering an
+  // import of 4 that lands 1 (#16).
+  const bookCount = storedVersion?.importable_lore ?? 0;
 
   function localizeControls(blocked: boolean, blockedHint?: string) {
     if (!detail) return null;
@@ -1958,6 +1959,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
               <button className="subtle" type="button" disabled={dirty} onClick={importBook}>
                 Import {bookCount} embedded lore {bookCount === 1 ? "entry" : "entries"} to world
               </button>
+              {/* The import reads the stored card, so while the form is dirty the
+                  entries it would commit are not the ones the editor is showing. */}
               {dirty && <span className="field-hint">Save your changes before importing embedded lore</span>}
               {bookMsg && <span className="field-hint">{bookMsg}</span>}
             </div>

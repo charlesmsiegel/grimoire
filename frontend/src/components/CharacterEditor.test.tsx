@@ -57,7 +57,9 @@ const CARD = {
 };
 const DETAIL = {
   meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
-  versions: [{ id: "default", name: "default", card: CARD, images: ["avatar"] }],
+  // `importable_lore` is the server's count of what the embedded-lore import
+  // would actually commit -- CARD's one entry is enabled and non-blank, so 1.
+  versions: [{ id: "default", name: "default", card: CARD, images: ["avatar"], importable_lore: 1 }],
 };
 
 beforeEach(() => {
@@ -211,11 +213,11 @@ test("imports an embedded character_book and shows the result", async () => {
   await screen.findByText(/imported 1/i);
 });
 
-// The import posts no card -- the backend commits whatever character_book is
-// stored for the version -- so an unsaved form is a promise the button cannot
-// keep: the label counts entries the server may not have, and the click
-// commits a book the editor no longer shows. Same read-the-stored-card
-// semantics as localize, so the same dirty guard (#16).
+// The import posts no card -- the route commits whatever character_book is
+// stored for the version. It does not write the card back (unlike localize),
+// so unsaved edits survive it; what they do is make the click act on a version
+// of the book the editor is no longer showing. Blocked until saved, so the
+// entries committed are the ones the user is looking at (#16).
 test("the embedded-lore import is blocked while the form has unsaved edits", async () => {
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
@@ -230,24 +232,43 @@ test("the embedded-lore import is blocked while the form has unsaved edits", asy
   expect(api.importCharacterBook).not.toHaveBeenCalled();
 });
 
-// The count names the stored version's entries, so switching to a version
-// whose stored card carries no book takes the button away with it.
-test("the embedded-lore count follows the selected version's stored card", async () => {
-  const twoEntries = {
+// `character_book.entries` is the raw list; the import commits it normalized,
+// which drops disabled and blank entries. Counting the raw list offers an
+// import of 4 that lands 1, so the label takes the server's count instead --
+// down to the singular (#16).
+test("the embedded-lore count is the server's importable count, not the raw entry list", async () => {
+  const fourRawOneImportable = {
     ...CARD,
-    data: { ...CARD.data, character_book: { entries: [{ keys: ["pact"], content: "x" }, { keys: ["tide"], content: "y" }] } },
+    data: { ...CARD.data, character_book: { entries: [
+      { keys: ["pact"], content: "the salt pact" },
+      { keys: ["tide"], content: "the tide table", enabled: false },
+      { keys: ["gate"], content: "   " },
+      { keys: ["reeve"], content: "the reeve's debt", disable: true },
+    ] } },
   };
-  const bookless = { ...CARD, data: { ...CARD.data, character_book: undefined } };
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", card: fourRawOneImportable, images: ["avatar"], importable_lore: 1 }],
+  });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  await screen.findByRole("button", { name: /^import 1 embedded lore entry to world$/i });
+  expect(screen.queryByRole("button", { name: /import 4 /i })).toBeNull();
+});
+
+// A version whose card offers nothing importable shows no button at all, and
+// the count is per-version -- switching versions re-reads it.
+test("the embedded-lore button follows the selected version and vanishes when it offers nothing", async () => {
   (api.readCharacter as any).mockResolvedValue({
     meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
     versions: [
-      { id: "default", name: "default", card: twoEntries, images: ["avatar"] },
-      { id: "young", name: "young", card: bookless, images: [] },
+      { id: "default", name: "default", card: CARD, images: ["avatar"], importable_lore: 2 },
+      { id: "young", name: "young", card: CARD, images: [], importable_lore: 0 },
     ],
   });
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
-  await screen.findByRole("button", { name: /import 2 embedded lore entries to world/i });
+  await screen.findByRole("button", { name: /^import 2 embedded lore entries to world$/i });
 
   fireEvent.change(screen.getByLabelText("Version"), { target: { value: "young" } });
   await waitFor(() => expect(screen.queryByRole("button", { name: /import .* lore/i })).toBeNull());
