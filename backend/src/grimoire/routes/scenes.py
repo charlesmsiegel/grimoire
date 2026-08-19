@@ -2043,6 +2043,221 @@ async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: i
     # rather than the `stale: false` a just-written summary would otherwise
     # always claim. The panel's Refresh button renders this answer directly.
     return {**_rolling_body(result["view"], every), "refreshed": result["landed"]}
+
+
+# ---- scene-break detection (#84) -------------------------------------------
+#
+# Heuristic first, model second, player last. `store.scene_break.evaluate` scores
+# what the scene already records -- posts, moves, clock advances -- and only a
+# crossing buys the one call that asks whether the story actually arrived
+# somewhere. Nothing here ever ends or splits a scene: the answer is a
+# suggestion in the inspector, and the only writes are the watermark that says
+# what has been asked about and the proposal the player accepts or dismisses.
+
+
+def _break_provider(cid: str):
+    """This campaign's primary calendar, or None if it cannot be loaded.
+
+    Only used to SIZE a time skip, so None is not a failure: the fact that the
+    clock moved is in `time_history` regardless, and only the extra point for a
+    long skip depends on measuring it. Swallowed rather than raised because a
+    campaign with an unreadable calendar must still get the other two signals,
+    and because this runs off the play loop where raising would put a banner
+    over a scene mid-turn.
+    """
+    root = _campaign_root_or_404(cid)   # outside the try: a 404 is not a calendar failure
+    try:
+        return store.calendars.primary_provider(root)
+    except Exception:  # noqa: BLE001 -- user-authored provider code, hand-edited calendar.json
+        return None
+
+
+def _break_view(scene: dict, every: int, provider) -> dict:
+    """The scene's break state, scored out of ONE snapshot of the scene.
+
+    The transcript, the watermark and both histories all come off the `scene`
+    handed in rather than from fresh reads, for `_rolling_view`'s reason and a
+    sharper version of it: the histories and the transcript move TOGETHER (a
+    move appends its transition line in the same mutator that extends
+    `location_history`), so reading them separately can produce a location move
+    counted against a transcript that does not contain the post announcing it.
+    """
+    stored = store.scenes.scene_break_fields(scene["meta"])
+    history = store.scenes.histories(scene["meta"])
+    scored = store.scene_break.evaluate(scene["messages"], history["locations"],
+                                        history["times"], stored, every, provider)
+    return {**scored, "stored": stored}
+
+
+def _break_body(view: dict, every: int) -> dict:
+    """What both scene-break routes answer with.
+
+    `verdict` is a tri-state string rather than a boolean: `""` is "nothing has
+    been asked, or the last answer was dismissed", which is a different thing
+    from "asked, and the model said no" -- and the panel says different things
+    about them.
+
+    `due` always answers the AUTOMATIC question, never the forced one, for
+    `_rolling_body`'s reason: the panel reads this field to say when the next
+    question is coming, and a forced call that found nothing new would
+    otherwise report `due: false` about a different question entirely.
+    """
+    stored = view["stored"]
+    return {"verdict": stored["verdict"], "reason": stored["reason"],
+            "title": stored["title"], "posts": view["posts"], "score": view["score"],
+            "signals": view["signals"], "every": every, "due": view["due"]}
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/scene-break")
+def get_scene_break(cid: str, sid: str):
+    """Read the score and the standing proposal without ever spending a call.
+
+    Needs no LLM connection on purpose, like the rolling-summary GET: the
+    inspector reads this on every scene select, and a store with no key
+    configured must still render the panel.
+    """
+    scene = _require_scene(cid, sid)
+    every = store.config.scene_break_every()
+    return _break_body(_break_view(scene, every, _break_provider(cid)), every)
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/scene-break")
+async def post_scene_break(cid: str, sid: str, force: bool = False,
+                           upto: int | None = None,
+                           client: LLMClient = Depends(get_llm)):
+    """Ask the model whether the scene has reached a place to stop.
+
+    Fired by the client after every turn and not awaited by it, so the ordinary
+    outcome is `asked: false` having touched no provider -- the heuristic
+    declined. `force` is the panel's own button, and also the only way to reach
+    the feature when `scene_break_every` is 0.
+
+    The connection check runs BEFORE the due check, deliberately and for
+    `post_rolling_summary`'s reason: a 409 that only appeared once a scene
+    happened to be due would be indistinguishable, on the client, from the quiet
+    no-op that is this route's normal answer.
+
+    `upto` bounds the question to a transcript the caller knows was a clean
+    boundary, exactly as the rolling summary does: the play loop releases the
+    scene before firing this, so a fast next send can append an unanswered
+    player post, and a question that took that post as the scene's END would be
+    asking about a beat whose reply had not arrived.
+
+    No in-flight coalescing, unlike the rolling summary, and the difference is
+    the write rather than the call: two overlapping folds regress a summary's
+    coverage if the older one lands second, where two overlapping questions
+    produce two answers about nearly the same transcript and the later write
+    simply wins. `_break_commit` still refuses a write whose transcript moved
+    underneath it, which is the case that actually corrupts.
+    """
+    scene = _require_scene(cid, sid)
+    if upto is not None:
+        if upto < 0:
+            raise HTTPException(status_code=400, detail="upto must not be negative")
+        scene = {**scene, "messages": scene["messages"][:upto]}
+    conn = _require_connection()
+    every = store.config.scene_break_every()
+    provider = _break_provider(cid)
+    view = _break_view(scene, every, provider)
+    # `force` overrides the threshold, never the emptiness: a forced question
+    # about a scene with nothing new since the last one would pay a provider to
+    # answer the question it just answered.
+    if not (view["due"] or (force and view["posts"] > 0)):
+        return {**_break_body(view, every), "asked": False}
+    return await _break_ask(cid, sid, scene, view, every, conn, client, provider)
+
+
+async def _break_ask(cid: str, sid: str, scene: dict, view: dict, every: int,
+                     conn: dict, client: LLMClient, provider) -> dict:
+    """The paid half of `post_scene_break`, split out so the route above reads as
+    the decision it is."""
+    messages = scene["messages"]
+    base = min(view["stored"]["at"], len(messages))
+    facts = store.chronicle.scene_facts(cid, sid)
+    prompt = store.scene_break.build_prompt(
+        store.chronicle.transcript_text(messages[base:]), view["signals"], facts,
+        scene["meta"].get("title", ""))
+    try:
+        with store.usage.meter("scene-break", campaign=cid, scene=sid) as m:
+            text = await client.complete(prompt, conn, m.usage)
+    except LLMError as exc:
+        # `from exc`: the provider failure IS the cause, and dropping it here
+        # would leave the 502's traceback starting at this line with nothing
+        # saying which call failed or why.
+        raise HTTPException(status_code=502,
+                            detail={"detail": exc.detail, "kind": exc.kind}) from exc
+    answer = store.scene_break.parse_output(text)
+    # The prefix the question was asked ABOUT, digested before the write goes
+    # anywhere near the file. `rolling_summary.covered_digest` is the right tool
+    # and is reused rather than reimplemented: same transcript, same question
+    # ("is this still the same prose?"), same three fields.
+    digest = store.rolling_summary.covered_digest(messages)
+    try:
+        landed = await run_in_threadpool(_break_commit, cid, sid, view["watermark"],
+                                         answer, digest, every, provider)
+    except store.scenes.SceneNotFound:
+        # Renamed or deleted while the model was answering -- the race
+        # `_rolling_refresh` documents, reachable here for the same reason (the
+        # play loop fires this after releasing the scene). There is nowhere to
+        # put the answer and this call is fire-and-forget from the client.
+        return {**_break_body(view, every), "asked": False}
+    return {**_break_body(landed["view"], every), "asked": landed["landed"]}
+
+
+def _break_commit(cid: str, sid: str, watermark: dict, answer: dict, digest: str,
+                  every: int, provider) -> dict:
+    """Store a verdict only if the transcript it was formed FROM is still there,
+    and report the state that results either way.
+
+    Read-verify-write under one campaign hold (reentrant, so the mutators' own
+    acquisitions are free). The verification is `_rolling_commit`'s, for its
+    reasons and one of this feature's own: `delete_scene` frees a scene's id and
+    the numbering reuses it, so a scene deleted and remade under the same title
+    mid-call hands this write the very id it holds -- and a proposal is prose
+    ABOUT a story, so landing one on a different scene puts a suggestion to end
+    a scene that has not started under a reason nobody can place.
+
+    An ordinary turn appending during the call passes, which it must, or a busy
+    scene could never be asked about at all. What fails is an edit or a reroll
+    inside the prefix, a trim, and a recycled id.
+
+    `provider` is resolved by the caller and handed in, never looked up here:
+    a calendar provider is user-authored code, and this codebase does not run
+    that under the campaign lock (`scenes.moment.set_datetime` and
+    `scenes.lifecycle._date_hint` make the same cut).
+    """
+    with store.locks.campaign_lock(cid):
+        scene = store.scenes.read_scene(cid, sid)
+        covered = min(watermark["at"], len(scene["messages"]))
+        landed = (covered == watermark["at"]
+                  and store.rolling_summary.covered_digest(
+                      scene["messages"][:covered]) == digest)
+        if landed:
+            store.scenes.set_scene_break(
+                cid, sid, watermark["at"], watermark["locs"], watermark["times"],
+                "yes" if answer["break"] else "no", answer["reason"],
+                answer["title"] if answer["break"] else "")
+            scene = store.scenes.read_scene(cid, sid)
+        return {"landed": landed, "view": _break_view(scene, every, provider)}
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/scene-break/dismiss")
+def post_scene_break_dismiss(cid: str, sid: str):
+    """"Not here" — retire the proposal and start counting from the scene as it
+    stands.
+
+    The watermark is moved by the mutator off the file it already holds open,
+    not by this route off a read of its own: a dismissal that recorded a length
+    read a moment earlier would leave the post that landed in between outside
+    both the retired question and the next one.
+    """
+    _require_scene(cid, sid)
+    store.scenes.dismiss_scene_break(cid, sid)
+    scene = _require_scene(cid, sid)
+    every = store.config.scene_break_every()
+    return _break_body(_break_view(scene, every, _break_provider(cid)), every)
+
+
 @router.post("/campaigns/{cid}/scenes/{sid}/dossiers")
 async def post_dossiers(cid: str, sid: str, request: Request,
                         client: LLMClient = Depends(get_llm)):

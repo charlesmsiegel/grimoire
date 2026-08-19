@@ -43,6 +43,8 @@ def _public_config(cfg: dict[str, str]) -> dict:
             "promote_streak": cfg.get("promote_streak", store.config.DEFAULT_PROMOTE_STREAK),
             "rolling_summary_every": cfg.get("rolling_summary_every",
                                              store.config.DEFAULT_ROLLING_SUMMARY_EVERY),
+            "scene_break_every": cfg.get("scene_break_every",
+                                         store.config.DEFAULT_SCENE_BREAK_EVERY),
             "offscene_known_limit": cfg.get("offscene_known_limit",
                                             store.config.DEFAULT_OFFSCENE_KNOWN_LIMIT),
             "embeddings_connection_id": cfg.get("embeddings_connection_id",

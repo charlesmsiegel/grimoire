@@ -29,7 +29,7 @@ const DRAFT_FIELDS = [
   "semantic_recall_depth", "semantic_recall_threshold",
   "system_prompt",
   "quote_color", "user_label", "assistant_label",
-  "rolling_summary_every",
+  "rolling_summary_every", "scene_break_every",
   "backup_enabled", "backup_interval_hours", "backup_keep", "backup_dir",
   "theme",
 ] as const;
@@ -86,7 +86,7 @@ const SECTIONS: SectionDef[] = [
   { id: "transcript", group: "What you see", label: "Transcript",
     fields: ["quote_color", "user_label", "assistant_label"] },
   { id: "playing", group: "What you see", label: "While playing",
-    fields: ["rolling_summary_every"] },
+    fields: ["rolling_summary_every", "scene_break_every"] },
   { id: "appearance", group: "What you see", label: "Appearance", fields: ["theme"] },
 ];
 const GROUPS = SECTIONS.reduce<string[]>(
@@ -836,11 +836,24 @@ export default function ConfigView() {
               automatic refresh off — the inspector's own <em>Refresh</em> button still works. The
               summary is a reading aid only: it is never added to what the model is told.
             </p>
+            <p className="config-copy">
+              It also watches for the moment a scene has run its course — a long stretch of
+              posts, a move, a jump in the clock — and asks the model whether that is really
+              where the scene ends. The number below is only how often it may look; the
+              signals still have to agree before anything reaches the model, so it costs
+              well under one call per that many posts. It never ends or splits a scene: the
+              answer is a suggestion in the inspector, and yours to take or wave off.
+              <code>0</code> turns it off, panel and all.
+            </p>
             <div className="config-fields">
               <NumField id="cfg-rolling-every" label="Summarize the scene every"
                         unit="posts" placeholder="10" caption="0 = only on demand"
                         value={draft.rolling_summary_every}
                         onChange={(v) => edit("rolling_summary_every", v)} />
+              <NumField id="cfg-break-every" label="Scene-break check, at most every"
+                        unit="posts" placeholder="20" caption="0 = off"
+                        value={draft.scene_break_every}
+                        onChange={(v) => edit("scene_break_every", v)} />
             </div>
           </>
         )}

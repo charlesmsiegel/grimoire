@@ -25,7 +25,7 @@ def list_scenes(cid: str) -> list[dict]:
             if not safe_id(p.stem):   # enumeration agrees with the resolvers
                 continue
             meta = parse_frontmatter_head(p)  # never reads the transcript body
-            history = [x for x in meta.get("time_history", "").split(",") if x]
+            history = histories(meta)["times"]
             out.append({
                 "id": p.stem,
                 "title": meta.get("title", p.stem),
@@ -129,22 +129,39 @@ def trailing_transitions(messages: list[dict]) -> int:
     return n
 
 
+def histories(meta: dict) -> dict:
+    """A scene's two histories out of its frontmatter: `{"locations", "times"}`.
+
+    Both are stored as one comma-joined line and both are read the same way, so
+    they are split in one place -- four copies of `[x for x in
+    raw.split(",") if x]` is four places for the empty-string entry a bare
+    `"".split(",")` produces to be forgotten.
+
+    Takes a `meta` for `rolling_summary_fields`' reason: a caller scoring a
+    transcript it has ALREADY read must measure the histories against THAT
+    snapshot, or a move that landed between the two reads is counted against a
+    transcript that does not contain the post announcing it.
+    """
+    return {"locations": [x for x in meta.get("location_history", "").split(",") if x],
+            "times": [x for x in meta.get("time_history", "").split(",") if x]}
+
+
 def get_location_history(cid: str, sid: str) -> list[str]:
     """Ordered campaign-location ids this scene has been at; last is current. Missing ⇒ []."""
-    p = paths._scene_path(cid, sid)
-    if not safe_id(sid) or not p.exists():
-        return []
-    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
-    return [x for x in meta.get("location_history", "").split(",") if x]
+    return _history(cid, sid, "locations")
 
 
 def get_time_history(cid: str, sid: str) -> list[str]:
     """Ordered scene moments (native datetime strings); last is current. Missing ⇒ []."""
+    return _history(cid, sid, "times")
+
+
+def _history(cid: str, sid: str, which: str) -> list[str]:
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         return []
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
-    return [x for x in meta.get("time_history", "").split(",") if x]
+    return histories(meta)[which]
 
 
 def rolling_summary_fields(meta: dict) -> dict:
@@ -166,11 +183,22 @@ def rolling_summary_fields(meta: dict) -> dict:
     on the play path: a non-numeric value means "we have covered nothing", which
     costs one re-fold, where raising would 500 a panel refresh.
     """
-    raw = meta.get("rolling_at", "")
     return {"summary": meta.get("rolling_summary", ""),
-            "at": int(raw) if raw.lstrip("-").isdigit() and int(raw) >= 0 else 0,
+            "at": _count(meta.get("rolling_at", "")),
             "digest": meta.get("rolling_digest", ""),
             "facts": meta.get("rolling_facts", "")}
+
+
+def _count(raw: str) -> int:
+    """A non-negative count out of hand-editable frontmatter; junk reads as 0.
+
+    Shared by the two watermarks that live in scene frontmatter
+    (`rolling_summary_fields`, `scene_break_fields`) because they answer the
+    same question about the same file and must answer it the same way: a
+    negative `at` would make "posts since" larger than the transcript, and a
+    non-numeric one must cost a re-fold rather than a 500 on the play path."""
+    raw = str(raw)
+    return int(raw) if raw.isdigit() else 0
 
 
 def get_rolling_summary(cid: str, sid: str) -> dict:
@@ -186,6 +214,46 @@ def get_rolling_summary(cid: str, sid: str) -> dict:
         return {"summary": "", "at": 0, "digest": "", "facts": ""}
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     return rolling_summary_fields(meta)
+
+
+def scene_break_fields(meta: dict) -> dict:
+    """The scene-break watermark and proposal out of a scene's frontmatter (#84).
+
+    `{"at", "locs", "times", "verdict", "reason", "title"}` — the transcript
+    length, the location moves and the clock advances the last confirmation
+    call already covered, then what it answered.
+
+    Takes a `meta` for `rolling_summary_fields`' reason, and it is the same
+    reason: reading the file a second time pairs one snapshot's transcript with
+    another snapshot's watermark, and a watermark from after a post that the
+    transcript in hand does not have reports "nothing new" about a scene that
+    has moved on.
+
+    The three counts are parsed defensively, because frontmatter is
+    hand-editable and this sits on the play path. A junk value reads as 0,
+    which costs at most one extra question; raising would 500 a panel refresh.
+
+    `verdict` is the tri-state the panel renders: `""` means nothing has been
+    asked (or the answer was dismissed), `"yes"` and `"no"` are the two answers.
+    A bare boolean could not tell the first case from the second.
+    """
+    return {"at": _count(meta.get("break_at", "")),
+            "locs": _count(meta.get("break_locs", "")),
+            "times": _count(meta.get("break_times", "")),
+            "verdict": meta.get("break_verdict", ""),
+            "reason": meta.get("break_reason", ""),
+            "title": meta.get("break_title", "")}
+
+
+def get_scene_break(cid: str, sid: str) -> dict:
+    """`scene_break_fields` for a scene read fresh off disk. A scene that has
+    never been asked, and one that is not there at all, both report the empty
+    state — `get_rolling_summary`'s posture, for its reason."""
+    p = paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        return scene_break_fields({})
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    return scene_break_fields(meta)
 
 
 def get_suggested_date(cid: str, sid: str) -> str:

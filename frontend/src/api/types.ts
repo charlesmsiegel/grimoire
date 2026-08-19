@@ -62,6 +62,11 @@ export type Config = {
   /** Posts between live rolling-summary refreshes; "0" turns the automatic
    *  refresh off, leaving only the inspector's own Refresh button. */
   rolling_summary_every: string;
+  /** Posts between scene-break questions; "0" turns the whole feature off,
+   *  panel included. Only the cadence — the heuristic still has to agree
+   *  before anything reaches a provider, so the real cost is well under one
+   *  call per this many posts. */
+  scene_break_every: string;
   /** Characters the off-scene cast's "known to exist" tier may name; "0" = no
    *  ceiling. Over it, the ones the in-scene cast mentions are kept first. */
   offscene_known_limit: string;
@@ -99,6 +104,7 @@ export type ConfigUpdate = Partial<Pick<Config,
   "llm_retries" | "fallback_connection_id" |
   "context_budget" | "archive_depth" | "setup_done" | "prompt_log_depth" |
   "turnstate_depth" | "promote_streak" | "rolling_summary_every" |
+  "scene_break_every" |
   "offscene_known_limit" |
   "embeddings_connection_id" | "embeddings_model" |
   "semantic_recall_depth" | "semantic_recall_threshold" |
@@ -627,6 +633,28 @@ export type RollingSummary = {
 /** `refreshed` is false whenever the call spent nothing: not due, an empty
  *  scene, or a provider that answered with no text. */
 export type RollingSummaryRefresh = RollingSummary & { refreshed: boolean };
+/** One deterministic reason the scene-break detector is asking (#84). `detail`
+ *  is the only field with a reader — `kind` and `weight` are the scorer's
+ *  bookkeeping, carried so a future panel can group or rank without a second
+ *  round trip. */
+export type SceneBreakSignal = { kind: string; weight: number; detail: string };
+/** The scene-break detector's state for one scene (#84).
+ *
+ *  `verdict` is a tri-state: "" is "nothing has been asked, or the last answer
+ *  was dismissed", which the panel says differently from "asked, and the model
+ *  said no". `posts`/`score`/`signals` are the heuristic's side — what has
+ *  happened since the last question and whether it adds up — and `due` is what
+ *  a POST without `force` would decide, so the client never has to know what
+ *  `every` means. */
+export type SceneBreak = {
+  verdict: "" | "yes" | "no";
+  reason: string; title: string;
+  posts: number; score: number; signals: SceneBreakSignal[];
+  every: number; due: boolean;
+};
+/** `asked` is false whenever the call spent nothing: the heuristic declined, a
+ *  forced call found nothing new, or the transcript moved under the answer. */
+export type SceneBreakAnswer = SceneBreak & { asked: boolean };
 export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
 /** One feeling this actor holds toward another in the room. The three axes run
  *  0–5 and the column draws them as five pips each. */

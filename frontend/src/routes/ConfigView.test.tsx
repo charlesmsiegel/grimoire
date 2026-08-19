@@ -33,6 +33,7 @@ const cfg = {
   context_budget: "0", archive_depth: "3",
   prompt_log_depth: "50", offscene_known_limit: "40",
   turnstate_depth: "0", promote_streak: "3", rolling_summary_every: "10",
+  scene_break_every: "20",
   embeddings_connection_id: "", embeddings_model: "", semantic_recall_depth: "0",
   semantic_recall_threshold: "0.4",
   prompt_layout_enabled: "off", speaker_turn_taking: "off",
@@ -366,6 +367,15 @@ test("saves the rolling-summary cadence", async () => {
   fireEvent.change(screen.getByLabelText(/summarize the scene every/i), { target: { value: "4" } });
   save();
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ rolling_summary_every: "4" }));
+});
+
+test("saves the scene-break cadence, and 0 as the way to turn it off", async () => {
+  renderView();
+  await open(/^While playing/);
+  expect(screen.getByLabelText(/scene-break check/i)).toHaveValue("20");
+  fireEvent.change(screen.getByLabelText(/scene-break check/i), { target: { value: "0" } });
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ scene_break_every: "0" }));
 });
 
 // ---- the context budget bar ----

@@ -27,6 +27,7 @@ import {
   type RosterEntry, type ScenarioImportResult, type ScenarioProposal, type SceneAbsorb,
   type SceneAlternates, type SceneCheckActor, type SceneContext, type SceneDatetime,
   type SceneIdea, type SceneIdeaDraft, type SceneIntentResult, type SceneLocation,
+  type SceneBreak, type SceneBreakAnswer,
   type SceneMeta, type ScenePage, type SceneSuggestion, type SceneWeather, type SearchMode,
   type SearchResult, type Sheet, type SheetCoverage, type SheetExpected, type StagedEdit,
   type StoreConflicts, type Style, type StyleDetail, type StyleDraft, type Suggestion,
@@ -972,6 +973,33 @@ export const api = {
     return request<RollingSummaryRefresh>(
       "POST", `/api/campaigns/${cid}/scenes/${sid}/rolling-summary${qs ? `?${qs}` : ""}`);
   },
+  // `fresh`, like `getRollingSummary` and for its reason: the panel re-reads
+  // this immediately after the automatic POST commits, which is exactly when a
+  // shared in-flight GET issued *before* that write would hand back a pre-write
+  // answer and install it as the newest word.
+  getSceneBreak: (cid: string, sid: string) =>
+    request<SceneBreak>("GET", `/api/campaigns/${cid}/scenes/${sid}/scene-break`,
+                        undefined, { fresh: true }),
+  /** Ask the server whether the scene has reached a place to stop. Without
+   *  `force` it is a no-op unless the heuristic agrees, which is why the play
+   *  loop can fire it after every turn: the gate is the server's, not the
+   *  caller's. `upto` bounds the question to a transcript the caller knows was
+   *  a clean boundary — same hazard `refreshRollingSummary` documents, since a
+   *  question that took an unanswered player post as the scene's END would be
+   *  asking about a beat whose reply had not arrived. */
+  askSceneBreak: (cid: string, sid: string, force = false, upto?: number) => {
+    const params = new URLSearchParams();
+    if (force) params.set("force", "true");
+    if (upto !== undefined) params.set("upto", String(upto));
+    const qs = params.toString();
+    return request<SceneBreakAnswer>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/scene-break${qs ? `?${qs}` : ""}`);
+  },
+  /** "Not here" — retires the proposal and starts the count again from the
+   *  scene as it stands, so the same posts cannot re-earn the same suggestion.
+   *  Answers with the state it wrote. */
+  dismissSceneBreak: (cid: string, sid: string) =>
+    request<SceneBreak>("POST", `/api/campaigns/${cid}/scenes/${sid}/scene-break/dismiss`),
   sceneSuggestions: (cid: string, after?: string, offscreen?: boolean,
                      direction?: string, rank = true) => {
     const params = new URLSearchParams();

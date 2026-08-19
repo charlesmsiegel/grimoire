@@ -89,6 +89,7 @@ vi.mock("../api/client", async () => {
       getCasefile: vi.fn(),
       listAppearances: vi.fn(), listEntityImages: vi.fn(), listEntities: vi.fn(),
       getRollingSummary: vi.fn(), refreshRollingSummary: vi.fn(),
+      getSceneBreak: vi.fn(), askSceneBreak: vi.fn(), dismissSceneBreak: vi.fn(),
       actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, n: string) =>
         `/img/${k}/${a}/${v}/${n}`,
       entityImageUrl: () => "/loc-img",
@@ -101,6 +102,14 @@ import { getModels } from "../api/models";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 
 const ONE_SCENE = [{ id: "s1", title: "Old", model: "", created: "", updated: "" }];
+// The scene-break detector saying nothing (#84), so every suite that predates
+// it renders the rail it always did and the play loop's per-post question is a
+// no-op it never has to think about.
+const NO_SCENE_BREAK = {
+  verdict: "" as const, reason: "", title: "",
+  posts: 0, score: 0, signals: [], every: 20, due: false,
+};
+
 // Stand-in `phases` for the absorb mocks that are about something else. What
 // every one of them relies on is the single property named here: no phase was
 // cut short by the time budget, so no budget notice renders.
@@ -262,6 +271,9 @@ beforeEach(() => {
   (api.refreshRollingSummary as any).mockResolvedValue({
     summary: "", at: 0, total: 0, stale: false, every: 10, due: false,
     refreshed: false });
+  (api.getSceneBreak as any).mockResolvedValue(NO_SCENE_BREAK);
+  (api.askSceneBreak as any).mockResolvedValue({ ...NO_SCENE_BREAK, asked: false });
+  (api.dismissSceneBreak as any).mockResolvedValue(NO_SCENE_BREAK);
 });
 
 // The two paths the play view answers to, nested exactly as App.tsx nests them
@@ -6511,6 +6523,59 @@ test("a finished turn asks the server to refold the scene summary", async () => 
   // ordinary turn spends nothing. The fourth argument is the turn's transcript
   // boundary, so a fast next send cannot be swallowed by this fold.
   await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith(
+    "run", "s1", false, expect.anything()));
+});
+
+// ---- the scene-break detector (#84) ----
+test("a finished turn also asks whether the scene has reached a break", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Go on." } });
+  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  // Without `force` and with the same boundary the fold gets: the heuristic is
+  // the server's, so an ordinary turn spends nothing, and a question that took
+  // an unanswered next post as the scene's END would be asking about a beat
+  // whose reply had not arrived.
+  await waitFor(() => expect(api.askSceneBreak).toHaveBeenCalledWith(
+    "run", "s1", false, expect.anything()));
+});
+
+test("a break question that fails never surfaces an error over the turn", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.askSceneBreak as any).mockRejectedValue(
+    new ApiError(409, "OpenRouter key not set", "missing_key"));
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Go on." } });
+  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  await waitFor(() => expect(api.askSceneBreak).toHaveBeenCalled());
+  expect(screen.queryByText(/OpenRouter key not set/)).toBeNull();
+});
+
+test("a failed summary refold does not take the break question down with it", async () => {
+  // Fired separately rather than chained, precisely so neither is a
+  // precondition for the other.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.refreshRollingSummary as any).mockRejectedValue(
+    new ApiError(409, "OpenRouter key not set", "missing_key"));
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Go on." } });
+  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  await waitFor(() => expect(api.askSceneBreak).toHaveBeenCalled());
+});
+
+test("a manual dice roll also asks whether the scene has reached a break", async () => {
+  // Rolls append narrator posts, so a mechanics-heavy stretch of play can cross
+  // the cadence with no generated turn to carry the request.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.roll as any).mockResolvedValue({ ok: true, total: 7, message: "" });
+  renderCampaign();
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: "Roll dice" }));
+  fireEvent.change(screen.getByLabelText("Dice notation"), { target: { value: "2d6" } });
+  fireEvent.click(screen.getByRole("button", { name: "Roll ▸" }));
+  await waitFor(() => expect(api.askSceneBreak).toHaveBeenCalledWith(
     "run", "s1", false, expect.anything()));
 });
 
