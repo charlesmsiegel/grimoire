@@ -33,7 +33,7 @@ const cfg = {
   context_budget: "0", archive_depth: "3",
   prompt_log_depth: "50", offscene_known_limit: "40",
   turnstate_depth: "0", promote_streak: "3", rolling_summary_every: "10",
-  scene_break_every: "20",
+  scene_break_every: "20", replay_fork_threshold: "10",
   embeddings_connection_id: "", embeddings_model: "", semantic_recall_depth: "0",
   semantic_recall_threshold: "0.4",
   prompt_layout_enabled: "off", speaker_turn_taking: "off",
@@ -376,6 +376,15 @@ test("saves the scene-break cadence, and 0 as the way to turn it off", async () 
   fireEvent.change(screen.getByLabelText(/scene-break check/i), { target: { value: "0" } });
   save();
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ scene_break_every: "0" }));
+test("saves the replay fork threshold (#80)", async () => {
+  renderView();
+  await open(/^While playing/);
+  expect(screen.getByLabelText(/offer to fork before replaying/i)).toHaveValue("10");
+  fireEvent.change(screen.getByLabelText(/offer to fork before replaying/i),
+                   { target: { value: "4" } });
+  save();
+  await waitFor(() =>
+    expect(api.putConfig).toHaveBeenCalledWith({ replay_fork_threshold: "4" }));
 });
 
 // ---- the context budget bar ----

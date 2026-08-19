@@ -194,3 +194,20 @@ def test_a_negative_count_reads_as_disabled(monkeypatch, tmp_path):
     s.write_config(turnstate_depth="-4", promote_streak="-1")
     assert s.config.turnstate_depth() == 0
     assert s.config.promote_streak() == 0
+
+
+def test_the_replay_fork_threshold_round_trips(monkeypatch, tmp_path):
+    """The retcon replay's nudge (#80) is configuration rather than a constant:
+    what counts as "many turns" depends on what the reader's model charges."""
+    s = reload_with_home(monkeypatch, tmp_path)
+    assert s.config.replay_fork_threshold() == 10
+    s.write_config(replay_fork_threshold="3")
+    assert s.config.replay_fork_threshold() == 3
+
+
+def test_an_unparseable_replay_threshold_falls_back_to_the_default(monkeypatch, tmp_path):
+    """A cleared field must not silently turn the guard off — that is the one
+    direction where the mistake is expensive."""
+    s = reload_with_home(monkeypatch, tmp_path)
+    s.write_config(replay_fork_threshold="")
+    assert s.config.replay_fork_threshold() == 10
