@@ -7,7 +7,7 @@ docs/superpowers/specs/2026-07-10-claude-provider-design.md for the policy notes
 
 from __future__ import annotations
 
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from . import llm_usage
 from .llm_errors import LLMError
@@ -18,8 +18,14 @@ from .llm_errors import LLMError
 # exception escaping here would stop the app from starting; stream() reports what
 # was captured instead, leaving the failure at the same call it hit before.
 try:
-    from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions,
-                                  CLINotFoundError, ProcessError, TextBlock, query)
+    from claude_agent_sdk import (
+        AssistantMessage,
+        ClaudeAgentOptions,
+        CLINotFoundError,
+        ProcessError,
+        TextBlock,
+        query,
+    )
     _SDK_IMPORT_ERROR: Exception | None = None
 except ImportError as exc:                  # the `claude` extra is not installed
     AssistantMessage = ClaudeAgentOptions = TextBlock = query = None

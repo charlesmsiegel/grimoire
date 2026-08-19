@@ -357,9 +357,7 @@ def _bindings(tree: ast.AST):
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             targets, value = node.targets, node.value
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            targets, value = [node.target], node.value
-        elif isinstance(node, ast.NamedExpr):
+        elif (isinstance(node, ast.AnnAssign) and node.value is not None) or isinstance(node, ast.NamedExpr):
             targets, value = [node.target], node.value
         else:
             continue
@@ -570,7 +568,7 @@ class _Surface(typing.NamedTuple):
     trusted_locks: bool = True
 
     @classmethod
-    def of(cls, tree: ast.AST, package: str = "store") -> "_Surface":
+    def of(cls, tree: ast.AST, package: str = "store") -> _Surface:
         namespaces = _fs_namespaces(tree)
         writers = _imported_writers(tree) | _assigned_writers(tree, namespaces)
         return cls(frozenset(writers), namespaces, not _rebinds_locks(tree, package))

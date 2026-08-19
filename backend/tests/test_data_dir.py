@@ -1,8 +1,7 @@
 import logging
 
-import pytest
-
 import grimoire.store as store
+import pytest
 from grimoire.store import failsoft, paths
 
 

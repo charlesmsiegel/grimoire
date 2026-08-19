@@ -9,7 +9,7 @@ import asyncio
 import logging
 import random
 import time
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from .claude_agent import ClaudeAgentClient
 from .llm_errors import LLMError

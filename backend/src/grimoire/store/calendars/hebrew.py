@@ -6,7 +6,8 @@ from __future__ import annotations
 
 from datetime import date
 
-from pyluach import dates as _pd, hebrewcal as _pc
+from pyluach import dates as _pd
+from pyluach import hebrewcal as _pc
 
 from .base import CalendarError, CalendarProvider, register
 

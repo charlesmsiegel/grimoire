@@ -1,5 +1,4 @@
 import pytest
-
 from grimoire.store import styles
 
 

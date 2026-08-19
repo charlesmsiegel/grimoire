@@ -46,10 +46,21 @@ import shutil
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import (assets, atomic, cards, characters, entities, failsoft, greetings,
-               pcs, taglines, voice_anchors)
+from . import (
+    assets,
+    atomic,
+    cards,
+    characters,
+    entities,
+    failsoft,
+    greetings,
+    pcs,
+    taglines,
+    voice_anchors,
+)
 from .appearances import paths as appearances_paths
-from .campaigns import paths as campaigns_paths, read as campaigns_read
+from .campaigns import paths as campaigns_paths
+from .campaigns import read as campaigns_read
 from .paths import natural_key, safe_id
 from .worlds import paths as worlds_paths
 

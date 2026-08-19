@@ -3,9 +3,18 @@
 import threading
 
 import pytest
-
-from grimoire.store import (audit, appearances, campaigns, characters, dice,
-                            modules, rolls, scenes, sheets, worlds)
+from grimoire.store import (
+    appearances,
+    audit,
+    campaigns,
+    characters,
+    dice,
+    modules,
+    rolls,
+    scenes,
+    sheets,
+    worlds,
+)
 
 
 @pytest.fixture

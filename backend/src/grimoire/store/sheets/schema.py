@@ -5,7 +5,8 @@ mutable field value. Nothing here touches the filesystem."""
 from __future__ import annotations
 
 from .. import expressions
-from ..modules import fields as modules_fields, validate as modules_validate
+from ..modules import fields as modules_fields
+from ..modules import validate as modules_validate
 from . import paths
 from .paths import SheetError
 

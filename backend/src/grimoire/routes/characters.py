@@ -11,12 +11,30 @@ from fastapi.responses import Response, StreamingResponse
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from .common import (_bounded_call, _display_name_or_400, _llm_http_error, _require_connection,
-                     _serve_image, _upload_image_ext, _world_char_version_or_404,
-                     _world_root_or_404, get_llm)
-from .models import (AvatarFocus, CharacterBirthdate, CharacterCreate, ChubImportBody,
-                     ChubSourceBody, DefaultVersion, NameBody, TaglineSave, VersionCreate, VersionUpdate,
-                     VoiceAnchorSave)
+from .common import (
+    _bounded_call,
+    _display_name_or_400,
+    _llm_http_error,
+    _require_connection,
+    _serve_image,
+    _upload_image_ext,
+    _world_char_version_or_404,
+    _world_root_or_404,
+    get_llm,
+)
+from .models import (
+    AvatarFocus,
+    CharacterBirthdate,
+    CharacterCreate,
+    ChubImportBody,
+    ChubSourceBody,
+    DefaultVersion,
+    NameBody,
+    TaglineSave,
+    VersionCreate,
+    VersionUpdate,
+    VoiceAnchorSave,
+)
 
 router = APIRouter()
 

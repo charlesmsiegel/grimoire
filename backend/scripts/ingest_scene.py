@@ -16,7 +16,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from grimoire.llm import LLMClient
 from grimoire.store import (
-    absorb, appearances, atomic, campaigns, characters, chronicle, llm_connections, locks, overlay,
+    absorb,
+    appearances,
+    atomic,
+    campaigns,
+    characters,
+    chronicle,
+    llm_connections,
+    locks,
+    overlay,
     scenes,
 )
 from grimoire.store.paths import slugify

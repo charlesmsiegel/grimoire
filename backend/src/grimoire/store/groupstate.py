@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from . import atomic
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import now_iso
-from . import atomic
 
 LABELS: dict[str, str] = {
     "goals": "Goals", "resources": "Resources", "focus": "Focus",
@@ -34,7 +34,7 @@ def _is_header(line: str) -> str | None:
 
 
 def _parse_body(body: str) -> dict:
-    fields = {k: "" for k in FIELDS}
+    fields = dict.fromkeys(FIELDS, "")
     lines = body.splitlines()
     first = next((ln for ln in lines if ln.strip()), "")
     if _is_header(first) is None:

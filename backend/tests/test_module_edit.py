@@ -4,7 +4,6 @@ import threading
 import zipfile
 
 import pytest
-
 from grimoire.store import campaigns, locks, module_edit, modules, worlds
 from grimoire.store.frontmatter import parse_frontmatter
 from grimoire.store.module_edit import migrate as me_migrate
@@ -848,9 +847,8 @@ def test_check_archive_rejects_component_drive_colon(monkeypatch, tmp_path):
     }
     for label, entries in cases.items():
         buf = io.BytesIO(_zip_bytes(entries))
-        with zipfile.ZipFile(buf) as z:
-            with pytest.raises(modules.ModuleError):
-                module_edit._check_archive(z)
+        with zipfile.ZipFile(buf) as z, pytest.raises(modules.ModuleError):
+            module_edit._check_archive(z)
     assert not any(modules.user_dir().iterdir()) if modules.user_dir().is_dir() else True
     staging = module_edit._staging_root()
     assert not staging.is_dir() or not any(staging.iterdir())
@@ -998,6 +996,7 @@ def test_proposal_derivation_excluded_by_edit_lock(monkeypatch, tmp_path):
 
 def test_proposal_route_sites_locked():
     import inspect
+
     from grimoire.routes import streaming
     src = inspect.getsource(streaming)
     for line_marker in ("proposals.new(",):
@@ -1012,8 +1011,10 @@ def test_proposal_route_sites_locked():
 
 def test_r2_consumers_reference_campaign_lock():
     import inspect
-    from grimoire.store import checks as checks_mod, context as context_mod
+
     from grimoire.routes import mechanics
+    from grimoire.store import checks as checks_mod
+    from grimoire.store import context as context_mod
     assert "campaign_lock" in inspect.getsource(checks_mod.resolve_check)
     assert "campaign_lock" in inspect.getsource(context_mod._mechanics)
     assert "campaign_lock" in inspect.getsource(mechanics._continuation_rule_bodies)

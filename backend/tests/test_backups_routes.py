@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import anyio
 import pytest
 from fastapi.testclient import TestClient
-
 from grimoire import main
 from grimoire.main import create_app
 from grimoire.store import backups, config
@@ -24,7 +23,7 @@ def client(monkeypatch, tmp_path):
 
 #: Deliberately in the past: the route stamps its archive with the real clock,
 #: and these have to sort under it whenever the suite happens to run.
-AT = datetime(2019, 5, 17, 21, 0, 0, tzinfo=timezone.utc)
+AT = datetime(2019, 5, 17, 21, 0, 0, tzinfo=UTC)
 
 
 # ---- the routes ------------------------------------------------------------
@@ -195,7 +194,7 @@ def test_a_failed_pass_does_not_end_the_schedule(monkeypatch, tmp_path):
         passes.append(len(passes))
         if len(passes) == 1:
             raise OSError("no space left on device")
-        return None
+        return
 
     monkeypatch.setattr(backups, "run_scheduled", flaky)
     _tick_until(lambda: len(passes) >= 3)

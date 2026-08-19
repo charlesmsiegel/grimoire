@@ -30,35 +30,77 @@ from __future__ import annotations
 # Without them `edits`, `layout`, `migrate` and `renaming` are one cycle:
 # `edits` reads `_field_keys`/`_group_scope`, `layout` reads `_fragment_users`,
 # and `migrate._apply` catches `_RenameCollision`.
-from . import (packfile, scope, staging, layout, migrate, packs,  # noqa: F401
-               renaming, edits)
-from .packfile import _read_json, _read_sheets, _write_json  # noqa: F401
-from .scope import (  # noqa: F401
-    _RenameCollision, _field_keys, _fragment_users, _group_scope,
+from . import edits, layout, migrate, packfile, packs, renaming, scope, staging  # noqa: F401
+from .edits import (  # noqa: F401
+               _rule_meta,
+               delete_check,
+               delete_content,
+               delete_group,
+               delete_rule,
+               delete_sheet_type,
+               set_check_defaults,
+               set_layout,
+               set_manifest,
+               set_theme,
+               upsert_check,
+               upsert_content,
+               upsert_group,
+               upsert_rule,
+               upsert_sheet_type,
 )
-from .staging import _M, _publish, _staging_root, locked, new_mid  # noqa: F401
 from .layout import (  # noqa: F401
-    _edit_tree, _layout_name_edit, _prune_layout, _prune_node,
-    _specialize_layout,
+               _edit_tree,
+               _layout_name_edit,
+               _prune_layout,
+               _prune_node,
+               _specialize_layout,
 )
 from .migrate import (  # noqa: F401
-    _apply, _campaign_locks, _content_ids, _file_kind, _impact,
-    _iter_ref_values, _migrate_file, _migrate_preview, _replay_journal,
-    _require_user_root, _result, _run_migration, _sample, _sheet_files,
-    _sidecar_stats_at, _would_migrate, recover,
+               _apply,
+               _campaign_locks,
+               _content_ids,
+               _file_kind,
+               _impact,
+               _iter_ref_values,
+               _migrate_file,
+               _migrate_preview,
+               _replay_journal,
+               _require_user_root,
+               _result,
+               _run_migration,
+               _sample,
+               _sheet_files,
+               _sidecar_stats_at,
+               _would_migrate,
+               recover,
 )
+from .packfile import _read_json, _read_sheets, _write_json  # noqa: F401
 from .packs import (  # noqa: F401
-    MAX_MEMBERS, MAX_UNCOMPRESSED, _check_archive,
-    _member_parts, create_module, delete_module, duplicate_module,
-    export_module, import_module,
+               MAX_MEMBERS,
+               MAX_UNCOMPRESSED,
+               _check_archive,
+               _member_parts,
+               create_module,
+               delete_module,
+               duplicate_module,
+               export_module,
+               import_module,
 )
 from .renaming import (  # noqa: F401
-    _RENAME_KINDS, _SAFE_KEY, _composing_tids, _rename_map_key,
-    _rewrite_expr, _rewrite_exprs, _rewrite_placeholders,
-    check_proposal_guard, rename,
+               _RENAME_KINDS,
+               _SAFE_KEY,
+               _composing_tids,
+               _rename_map_key,
+               _rewrite_expr,
+               _rewrite_exprs,
+               _rewrite_placeholders,
+               check_proposal_guard,
+               rename,
 )
-from .edits import (  # noqa: F401
-    _rule_meta, delete_check, delete_content, delete_group, delete_rule,
-    delete_sheet_type, set_check_defaults, set_layout, set_manifest, set_theme,
-    upsert_check, upsert_content, upsert_group, upsert_rule, upsert_sheet_type,
+from .scope import (  # noqa: F401
+               _field_keys,
+               _fragment_users,
+               _group_scope,
+               _RenameCollision,
 )
+from .staging import _M, _publish, _staging_root, locked, new_mid  # noqa: F401

@@ -8,15 +8,27 @@ gathers the data one section renders from.
 from __future__ import annotations
 
 import re
-from typing import Callable
+from collections.abc import Callable
 
-from .. import (calendars, characters, entities, events, groupstate, overlay, pcs,
-                playstate, turnstate, weather)
+from .. import (
+    calendars,
+    characters,
+    entities,
+    events,
+    groupstate,
+    overlay,
+    pcs,
+    playstate,
+    turnstate,
+    weather,
+)
 from ..appearances import versions as appearances_versions
 from ..scenes import read as scenes_read
+
 # Aliased to match `assemble.py` and `macros.py`, and because `_character_states`
 # below takes a parameter named `cast`.
-from . import cast as cast_data, semantic
+from . import cast as cast_data
+from . import semantic
 
 
 def keyword_hit(keys, text: str) -> bool:

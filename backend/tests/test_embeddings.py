@@ -4,7 +4,6 @@ import time
 
 import httpx
 import pytest
-
 from grimoire import embeddings
 from grimoire.embeddings import BATCH, READ_SLICE, TIMEOUT, EmbeddingsClient, EmbeddingsError
 

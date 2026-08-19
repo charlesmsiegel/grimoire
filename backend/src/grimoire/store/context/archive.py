@@ -32,6 +32,7 @@ from __future__ import annotations
 from .. import chronicle, config
 from . import world_state
 
+
 def archive_depth() -> int:
     """How many archived scenes may be recalled at once. 0 disables retrieval."""
     try:

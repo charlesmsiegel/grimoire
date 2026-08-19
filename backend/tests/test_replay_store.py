@@ -9,10 +9,9 @@ to happen BEFORE the cut rather than after it.
 """
 
 import pytest
-
-from grimoire.store import (campaigns, chronicle, replay, scenes, scene_refs,
-                            worlds)
-from grimoire.store.scenes import serialize as scenes_serialize, turns as scenes_turns
+from grimoire.store import campaigns, chronicle, replay, scene_refs, scenes, worlds
+from grimoire.store.scenes import serialize as scenes_serialize
+from grimoire.store.scenes import turns as scenes_turns
 
 
 @pytest.fixture

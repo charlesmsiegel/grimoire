@@ -1,7 +1,5 @@
 import asyncio
-from collections import Counter
 import contextlib
-from datetime import datetime, timedelta, timezone
 import importlib
 import io
 import json
@@ -9,19 +7,28 @@ import re
 import shutil
 import time
 import zipfile
+from collections import Counter
+from datetime import UTC, datetime, timedelta
 
-from PIL import Image
 import pytest
 from fastapi import Request
+from PIL import Image
 
 import grimoire.store as store
-from grimoire.store import atomic
 from grimoire import llm, routes
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
+from grimoire.store import atomic
 from tests.llm_fakes import (  # the shared gateway fakes (#204)
-    CapturingOpenRouter, FailingOpenRouter, FakeModelsClient, FakeOpenRouter,
-    FakeOpenRouterComplete, QuietThenAnswers, StallingOpenRouter, from_entries)
+    CapturingOpenRouter,
+    FailingOpenRouter,
+    FakeModelsClient,
+    FakeOpenRouter,
+    FakeOpenRouterComplete,
+    QuietThenAnswers,
+    StallingOpenRouter,
+    from_entries,
+)
 
 
 def _world(client, name="W"):
@@ -60,7 +67,7 @@ def _soon(seconds: int) -> str:
     `_valid_stamp` now disbelieves -- these tests want "later than now", not
     "implausible".
     """
-    return (datetime.now(timezone.utc)
+    return (datetime.now(UTC)
             + timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -5315,7 +5322,7 @@ def test_post_voice_anchor_generate_requires_key(client):
 
 # ---- scene calendar ----
 def test_campaign_create_writes_calendar_with_region(client):
-    from grimoire.store import campaigns, calendars
+    from grimoire.store import calendars, campaigns
     wid = _world(client)
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid, "region": "GB"}).json()["id"]
     cfg = calendars.read_calendar(campaigns.campaign_root(cid))
@@ -5323,7 +5330,7 @@ def test_campaign_create_writes_calendar_with_region(client):
 
 
 def test_campaign_create_defaults_region_us(client):
-    from grimoire.store import campaigns, calendars
+    from grimoire.store import calendars, campaigns
     _wid, cid = _campaign(client)
     assert calendars.read_calendar(campaigns.campaign_root(cid))["primary"]["region"] == "US"
 
@@ -8854,7 +8861,7 @@ def test_get_chronicle_offset_walks_back_from_the_newest_record(client):
     # `offset` ALONE slides the default-sized window back -- it does not turn
     # the route into "everything after a skip". The one combination whose
     # meaning is not obvious from the other two, so it is pinned here.
-    assert page(offset=10) == [f"s{i:03d}" for i in range(0, 50)]
+    assert page(offset=10) == [f"s{i:03d}" for i in range(50)]
     assert page(offset=0) == page()   # an explicit zero is the same as omitting it
 
 

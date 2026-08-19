@@ -17,10 +17,12 @@ from pathlib import Path
 
 from .. import prompts
 from . import atomic, config, lengths, styles
-from .campaigns import paths as campaigns_paths, read as campaigns_read
+from .campaigns import paths as campaigns_paths
+from .campaigns import read as campaigns_read
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, natural_key, safe_id, slugify, uniquify
-from .scenes import paths as scenes_paths, read as scenes_read
+from .scenes import paths as scenes_paths
+from .scenes import read as scenes_read
 
 # The explicit "clear whatever a broader scope supplies" marker, as opposed to
 # "" which means "this record has no opinion". Prefixed with U+2063 (invisible

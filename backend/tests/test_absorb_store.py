@@ -1,7 +1,6 @@
 import json
 
 import pytest
-
 from grimoire.store import absorb, audit, campaigns, changes, playstate, sheets, worlds
 
 
@@ -892,6 +891,7 @@ def test_materialize_new_character_drops_world_inherited_name_collision(monkeypa
     campaign) must still suppress a duplicate new_character proposal -- dedup
     has to see the overlay's merged namespace, not just the campaign copy."""
     import shutil
+
     from grimoire.store import scenes
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")

@@ -1,7 +1,17 @@
 import json
 
 from grimoire.store import appearances as ap
-from grimoire.store import campaigns, characters, chronicle, greetings, migrations, overlay, scenes, sync, worlds
+from grimoire.store import (
+    campaigns,
+    characters,
+    chronicle,
+    greetings,
+    migrations,
+    overlay,
+    scenes,
+    sync,
+    worlds,
+)
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 

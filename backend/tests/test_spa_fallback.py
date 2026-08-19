@@ -12,7 +12,6 @@ import os.path
 
 import pytest
 from fastapi.testclient import TestClient
-
 from grimoire.main import SPAStaticFiles
 
 PAGE = {"accept": "text/html,application/xhtml+xml"}

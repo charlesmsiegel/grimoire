@@ -11,9 +11,20 @@ from __future__ import annotations
 
 import copy
 
-from grimoire.store import (absorb, campaigns, characters, dossiers, entities,
-                            groupstate, overlay, playstate, plot, relationships,
-                            scenes, worlds)
+from grimoire.store import (
+    absorb,
+    campaigns,
+    characters,
+    dossiers,
+    entities,
+    groupstate,
+    overlay,
+    playstate,
+    plot,
+    relationships,
+    scenes,
+    worlds,
+)
 from grimoire.store.absorb import conflicts
 
 
@@ -853,8 +864,9 @@ def test_a_resume_does_not_mistake_another_record_holding_the_same_text(monkeypa
 # --- the fact ledger (#114) ---------------------------------------------------
 
 def _staged_fact(cid, sid, **row):
-    from grimoire.store import absorb as absorb_pkg
     import json as _json
+
+    from grimoire.store import absorb as absorb_pkg
     parsed = absorb_pkg.parse_output(_json.dumps({"facts": [row]}))
     (edit,) = absorb_pkg.materialize(cid, sid, parsed)
     return edit

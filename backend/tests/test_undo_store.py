@@ -14,10 +14,24 @@ all places where a plausible inverse is not one.
 """
 
 import pytest
-
-from grimoire.store import (absorb, appearances, campaigns, characters, commitments,
-                            dossiers, entities, groupstate, journal, playstate, plot,
-                            overlay, relationships, scenes, undo, worlds)
+from grimoire.store import (
+    absorb,
+    appearances,
+    campaigns,
+    characters,
+    commitments,
+    dossiers,
+    entities,
+    groupstate,
+    journal,
+    overlay,
+    playstate,
+    plot,
+    relationships,
+    scenes,
+    undo,
+    worlds,
+)
 
 
 @pytest.fixture
@@ -315,11 +329,10 @@ def test_journalled_records_a_hand_edit(cid):
 
 def test_journalled_records_nothing_when_the_write_raises(cid):
     target = {"w": "entity", "kind": "lore", "id": "pact"}
-    with pytest.raises(RuntimeError):
-        with undo.journalled(cid, target, kind="lore",
-                             ref={"kind": "lore", "id": "pact"}, field="body",
-                             label="The Pact — lore"):
-            raise RuntimeError("the write failed")
+    with pytest.raises(RuntimeError), undo.journalled(cid, target, kind="lore",
+                         ref={"kind": "lore", "id": "pact"}, field="body",
+                         label="The Pact — lore"):
+        raise RuntimeError("the write failed")
     assert journal.read(cid) == []
 
 

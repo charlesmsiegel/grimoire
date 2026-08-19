@@ -1,7 +1,6 @@
 import math
 
 import pytest
-
 from grimoire.store.weather.noise import field, quantile, window
 
 

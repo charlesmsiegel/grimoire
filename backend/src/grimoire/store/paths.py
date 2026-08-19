@@ -7,8 +7,9 @@ import os
 import re
 import stat
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+
 from . import atomic, failsoft
 
 DEFAULT_HOME = Path.home() / ".grimoire"  # paths-ok: this IS the resolver's default root
@@ -163,7 +164,7 @@ def _names_a_record(entry: Path, meta_name: str) -> bool:
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def slugify(text: str) -> str:

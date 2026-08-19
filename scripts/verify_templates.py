@@ -94,9 +94,20 @@ def check_messages(label: str, expected: list[dict], actual: list[dict]) -> None
 
 # ---------------------------------------------------------------- pure checks
 
-from grimoire.store import (absorb, chronicle, context, dossiers, relationships,  # noqa: E402
-                            rolling_summary, scenario, scene_break, suggest, taglines,
-                            voice_anchors, voice_drift)
+from grimoire.store import (  # noqa: E402
+    absorb,
+    chronicle,
+    context,
+    dossiers,
+    relationships,
+    rolling_summary,
+    scenario,
+    scene_break,
+    suggest,
+    taglines,
+    voice_anchors,
+    voice_drift,
+)
 
 card = {"name": "Seraphine Vale", "description": "Tall, sharp-eyed smuggler.",
         "personality": "Wry and wary.", "scenario": "Runs the night dock."}
@@ -319,14 +330,36 @@ assert 'prompts.render("scene/roll_declined.j2")' in routes_src, \
 # ------------------------------------------------------------- store fixture
 
 from grimoire.store import appearances as ap  # noqa: E402
-from grimoire.store import (audit, calendars, campaigns, characters, checks,  # noqa: E402
-                            commitments, config,
-                            dossiers as dstore, entities, events, facts as fstore,
-                            groupstate,
-                            length_drift, lengths, modules, pcs,
-                            playstate, plot, response_presets, scenes, sheets, styles,
-                            taglines as tstore, turnstate, voice_anchors as vastore,
-                            voice_drift as vdstore, weather as wstore, worlds)
+from grimoire.store import (  # noqa: E402
+    audit,
+    calendars,
+    campaigns,
+    characters,
+    checks,
+    commitments,
+    config,
+    entities,
+    events,
+    groupstate,
+    length_drift,
+    lengths,
+    modules,
+    pcs,
+    playstate,
+    plot,
+    response_presets,
+    scenes,
+    sheets,
+    styles,
+    turnstate,
+    worlds,
+)
+from grimoire.store import dossiers as dstore
+from grimoire.store import facts as fstore
+from grimoire.store import taglines as tstore
+from grimoire.store import voice_anchors as vastore
+from grimoire.store import voice_drift as vdstore
+from grimoire.store import weather as wstore
 
 # recap_depth=1 narrows the recap window to the newest absorbed scene, which is
 # what leaves an older one outside it for archive retrieval (#127) to recall —

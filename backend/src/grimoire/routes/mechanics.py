@@ -8,10 +8,23 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from .. import prompts, store
 from ..llm import LLMClient
-from .common import (computes_only, _campaign_root_or_404, _record_prompt,
-                     _require_connection, _require_scene, get_llm)
-from .models import (CheckBody, ModuleSetting, ProposalAction, RollBody, SheetAdvanceBody,
-                     SheetBody, SheetCreationBody)
+from .common import (
+    _campaign_root_or_404,
+    _record_prompt,
+    _require_connection,
+    _require_scene,
+    computes_only,
+    get_llm,
+)
+from .models import (
+    CheckBody,
+    ModuleSetting,
+    ProposalAction,
+    RollBody,
+    SheetAdvanceBody,
+    SheetBody,
+    SheetCreationBody,
+)
 from .streaming import _continuation_stream, _sse, _sse_response
 
 router = APIRouter()

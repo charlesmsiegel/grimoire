@@ -11,7 +11,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ..modules import binding as modules_binding, pack as modules_pack
+from ..modules import binding as modules_binding
+from ..modules import pack as modules_pack
 from ..paths import safe_id
 from ..worlds import paths as worlds_paths
 from . import paths, schema

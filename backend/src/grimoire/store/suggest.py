@@ -13,9 +13,21 @@ from __future__ import annotations
 import json
 
 from .. import prompts
-from . import (birthdays, calendars, characters, chronicle, clock, events,
-               greetings, overlay, pcs, playing, plot)
-from .appearances import cast as appearances_cast, paths as appearances_paths
+from . import (
+    birthdays,
+    calendars,
+    characters,
+    chronicle,
+    clock,
+    events,
+    greetings,
+    overlay,
+    pcs,
+    playing,
+    plot,
+)
+from .appearances import cast as appearances_cast
+from .appearances import paths as appearances_paths
 from .campaigns import paths as campaigns_paths
 
 

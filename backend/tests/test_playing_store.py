@@ -1,9 +1,18 @@
 import threading
 
 import pytest
-
 from grimoire.store import appearances as ap
-from grimoire.store import campaigns, characters, greetings, pcs, playing, scenes, suggest, tags, worlds
+from grimoire.store import (
+    campaigns,
+    characters,
+    greetings,
+    pcs,
+    playing,
+    scenes,
+    suggest,
+    tags,
+    worlds,
+)
 
 
 def _world(monkeypatch, tmp_path):

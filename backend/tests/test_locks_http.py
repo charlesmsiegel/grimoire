@@ -3,7 +3,6 @@ or a mislabelled error (#234)."""
 
 import pytest
 from fastapi.testclient import TestClient
-
 from grimoire import main, store
 from grimoire.store import campaigns, locks, worlds
 
@@ -101,7 +100,6 @@ def test_a_busy_finalize_emits_an_error_frame_and_persists_nothing(
     guarding only the call leaves a generator's StoreBusy escaping the `for`.
     """
     import anyio
-
     from grimoire.routes import streaming
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))

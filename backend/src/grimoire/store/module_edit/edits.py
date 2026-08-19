@@ -9,7 +9,8 @@ from pathlib import Path
 
 from .. import atomic
 from ..frontmatter import dump_frontmatter
-from ..modules import fields as modules_fields, pack as modules_pack
+from ..modules import fields as modules_fields
+from ..modules import pack as modules_pack
 from ..paths import safe_id
 from .layout import _prune_layout
 from .migrate import _apply

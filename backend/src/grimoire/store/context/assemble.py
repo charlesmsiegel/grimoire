@@ -19,17 +19,35 @@ from __future__ import annotations
 from typing import NamedTuple
 
 from ... import prompts
-from .. import (characters, commitments, config, entities, length_drift, lengths,
-                locks, overlay, pcs, pins, plot, response_presets, styles, tokens,
-                turnstate)
-from ..appearances import (cast as appearances_cast, paths as appearances_paths,
-                           versions as appearances_versions)
-from ..campaigns import paths as campaigns_paths, read as campaigns_read
-from ..scenes import read as scenes_read, turns as scenes_turns
+from .. import (
+    characters,
+    commitments,
+    config,
+    entities,
+    length_drift,
+    lengths,
+    locks,
+    overlay,
+    pcs,
+    pins,
+    plot,
+    response_presets,
+    styles,
+    tokens,
+    turnstate,
+)
+from ..appearances import cast as appearances_cast
+from ..appearances import paths as appearances_paths
+from ..appearances import versions as appearances_versions
+from ..campaigns import paths as campaigns_paths
+from ..campaigns import read as campaigns_read
+from ..scenes import read as scenes_read
+from ..scenes import turns as scenes_turns
+
 # Module objects, not names: `_assemble` binds a local `cast` (hence the alias),
 # and `cast._drift_roster` has to stay patchable from the test that counts it.
-from . import (archive, cast as cast_data, layout, macros, mechanics, pack, speaker,
-               story, world_state)
+from . import archive, layout, macros, mechanics, pack, speaker, story, world_state
+from . import cast as cast_data
 
 OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
 

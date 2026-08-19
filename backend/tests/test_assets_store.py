@@ -2,7 +2,6 @@ import errno
 import os
 
 import pytest
-
 from grimoire.store import assets
 
 

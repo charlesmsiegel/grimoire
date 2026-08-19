@@ -6,7 +6,6 @@ import zlib
 from io import BytesIO
 
 import pytest
-
 from grimoire.store import cards
 
 

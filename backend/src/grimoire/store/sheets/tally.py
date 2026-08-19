@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from .. import atomic, characters, entities, locks, overlay, pcs
 from ..campaigns import read as campaigns_read
-from ..modules import binding as modules_binding, pack as modules_pack
+from ..modules import binding as modules_binding
+from ..modules import pack as modules_pack
 from ..worlds import paths as worlds_paths
 from . import paths
+
 # Aliased: `_tally` takes a parameter named `reader`, which would shadow the
 # submodule inside it.
 from . import reader as sheet_reader

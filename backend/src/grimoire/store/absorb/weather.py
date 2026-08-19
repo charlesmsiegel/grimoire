@@ -8,7 +8,8 @@ they sit together: `materializer.materialize` calls `_weather_edits` and
 
 from __future__ import annotations
 
-from .. import calendars, entities, overlay, weather as weather_store
+from .. import calendars, entities, overlay
+from .. import weather as weather_store
 from ..campaigns import paths as campaigns_paths
 from ..scenes import read as scenes_read
 from . import routing

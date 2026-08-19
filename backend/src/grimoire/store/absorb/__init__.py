@@ -27,29 +27,65 @@ from __future__ import annotations
 # keeping the review policy in one file is what makes "none of this is
 # permission" checkable by reading `apply.py`'s imports -- it does not import
 # `routing`, and a change that made it do so would be visible on that line.
-from . import (prompt, parse, snapshots, routing, weather, conflicts,  # noqa: F401
-               materializer, apply)
-from .prompt import build_prompt  # noqa: F401
-from .parse import (  # noqa: F401
-    CITATION_FIELDS, CITATION_TEXT, _certainty, _cite, _confidence, _int05,
-    _truthy, extract_object, parse_output,
+from . import (  # noqa: F401
+               apply,
+               conflicts,
+               materializer,
+               parse,
+               prompt,
+               routing,
+               snapshots,
+               weather,
 )
+from .apply import _BROWSABLE_KINDS, UNCONFIRMED, apply_edits  # noqa: F401
+from .conflicts import (  # noqa: F401
+               MERGEABLE,
+               RESOLUTIONS,
+               batch_verdicts,
+               check_conflicts,
+               commitment_line,
+               conflict_row,
+               current_value,
+               fact_line,
+               merge_text,
+               plot_line,
+               resolved,
+)
+from .materializer import (  # noqa: F401
+               _CARD_FIELDS,
+               _actor_exists,
+               _char_name,
+               _entity_kind,
+               _new_character_dossier,
+               _new_character_provenance,
+               materialize,
+)
+from .parse import (  # noqa: F401
+               CITATION_FIELDS,
+               CITATION_TEXT,
+               _certainty,
+               _cite,
+               _confidence,
+               _int05,
+               _truthy,
+               extract_object,
+               parse_output,
+)
+from .prompt import build_prompt  # noqa: F401
+
 # `routing` is bound as a MODULE only, unlike every other submodule here. Its
 # public names are `HIGH`, `LOW`, `WEIGHTS`, `band`, `review`, `authority` --
 # each of which says what it means read as `routing.HIGH` and nothing at all
 # read as `absorb.HIGH`, in a package whose namespace already holds conflict
 # `RESOLUTIONS` and a `review`-shaped word in half its docstrings.
 from .snapshots import (  # noqa: F401
-    FACT_SNAPSHOT_LIMIT, _snapshot_line, commitment_snapshot, fact_snapshot,
-    group_snapshot, plot_snapshot, relationships_snapshot, state_snapshot,
+               FACT_SNAPSHOT_LIMIT,
+               _snapshot_line,
+               commitment_snapshot,
+               fact_snapshot,
+               group_snapshot,
+               plot_snapshot,
+               relationships_snapshot,
+               state_snapshot,
 )
 from .weather import _apply_weather, _weather_edits  # noqa: F401
-from .conflicts import (  # noqa: F401
-    MERGEABLE, RESOLUTIONS, batch_verdicts, check_conflicts, commitment_line,
-    conflict_row, current_value, fact_line, merge_text, plot_line, resolved,
-)
-from .materializer import (  # noqa: F401
-    _CARD_FIELDS, _actor_exists, _char_name, _entity_kind,
-    _new_character_dossier, _new_character_provenance, materialize,
-)
-from .apply import UNCONFIRMED, _BROWSABLE_KINDS, apply_edits  # noqa: F401

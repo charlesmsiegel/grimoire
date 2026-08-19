@@ -11,9 +11,19 @@ missing character record.
 from __future__ import annotations
 
 from ... import prompts
-from .. import (characters, commitments, entities, facts, groupstate, overlay,
-                playstate, plot, relationships)
-from ..appearances import cast as appearances_cast, paths as appearances_paths
+from .. import (
+    characters,
+    commitments,
+    entities,
+    facts,
+    groupstate,
+    overlay,
+    playstate,
+    plot,
+    relationships,
+)
+from ..appearances import cast as appearances_cast
+from ..appearances import paths as appearances_paths
 from ..campaigns import paths as campaigns_paths
 
 

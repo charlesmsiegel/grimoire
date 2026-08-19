@@ -108,9 +108,18 @@ def test_secrecy_split_separates_secret_bodies():
 
 
 from grimoire.store import appearances as ap  # noqa: E402
-from grimoire.store import campaigns, characters, chronicle, entities, plot, pcs, scenes, worlds  # noqa: E402
+from grimoire.store import (  # noqa: E402
+    campaigns,
+    characters,
+    chronicle,
+    entities,
+    groupstate,
+    pcs,
+    plot,
+    scenes,
+    worlds,
+)
 from grimoire.store.context import cast as context_cast  # noqa: E402
-from grimoire.store import groupstate  # noqa: E402
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -319,7 +328,7 @@ def test_no_budget_renders_a_secret_without_its_heading(monkeypatch, tmp_path):
     scenes.set_location(cid, sid, loc)
     scenes.append_message(cid, sid, "user", "look around")
 
-    from grimoire.store import config          # local, as the other budget tests do
+    from grimoire.store import config  # local, as the other budget tests do
 
     full = context.context_breakdown(cid, sid)["total_tokens"]
     carrying = set()
@@ -575,7 +584,7 @@ def test_depth_zero_and_unparseable_fallback(monkeypatch, tmp_path):
 
 
 def test_cast_directory_tiers(monkeypatch, tmp_path):
-    from grimoire.store import taglines, dossiers
+    from grimoire.store import dossiers, taglines
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     wroot = worlds.world_root(wid)
@@ -672,7 +681,7 @@ def _two_tier_world(monkeypatch, tmp_path, n_active, n_known):
     below: each tier's per-entry text is fixed, so `n_active` and `n_known`
     decide which half is the larger and therefore which one the packer reaches
     for first. Returns `(cid, sid)`."""
-    from grimoire.store import taglines, dossiers
+    from grimoire.store import dossiers, taglines
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     wroot = worlds.world_root(wid)
@@ -780,6 +789,7 @@ def test_known_tier_capped_keeping_the_mentioned_and_logging_the_rest(monkeypatc
     """Tier 3 is bounded (#3), relevance decides who survives, and the omitted
     names are logged rather than silently gone."""
     import logging
+
     from grimoire.store import config
     cid, sid, names = _known_world(monkeypatch, tmp_path, 6)
     config.write_config(offscene_known_limit="3")
@@ -808,6 +818,7 @@ def test_known_tier_drop_log_summarises_a_long_tail(monkeypatch, tmp_path, caplo
     trip the ceiling is big enough that spelling out every omission on every
     generated turn is its own problem."""
     import logging
+
     from grimoire.store import config
     n, limit = context_cast._LOGGED_DROPS + 5, 2
     cid, sid, names = _known_world(monkeypatch, tmp_path, n)
@@ -1035,8 +1046,15 @@ def test_story_so_far_tolerates_garbled_chronicle(monkeypatch, tmp_path):
 
 
 def test_character_state_section_injected(monkeypatch, tmp_path):
-    from grimoire.store import (appearances, campaigns, characters, context,
-                                playstate, scenes, worlds)
+    from grimoire.store import (
+        appearances,
+        campaigns,
+        characters,
+        context,
+        playstate,
+        scenes,
+        worlds,
+    )
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     cid = campaigns.create_campaign("Run", wid)
@@ -1051,8 +1069,15 @@ def test_character_state_section_injected(monkeypatch, tmp_path):
 
 
 def test_character_state_renders_knowledge(monkeypatch, tmp_path):
-    from grimoire.store import (appearances, campaigns, characters, context,
-                                playstate, scenes, worlds)
+    from grimoire.store import (
+        appearances,
+        campaigns,
+        characters,
+        context,
+        playstate,
+        scenes,
+        worlds,
+    )
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     cid = campaigns.create_campaign("Run", wid)
@@ -1068,8 +1093,15 @@ def test_character_state_renders_knowledge(monkeypatch, tmp_path):
 
 
 def test_character_state_no_dangling_name_when_current_state_empty(monkeypatch, tmp_path):
-    from grimoire.store import (appearances, campaigns, characters, context,
-                                playstate, scenes, worlds)
+    from grimoire.store import (
+        appearances,
+        campaigns,
+        characters,
+        context,
+        playstate,
+        scenes,
+        worlds,
+    )
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     cid = campaigns.create_campaign("Run", wid)
@@ -1084,8 +1116,15 @@ def test_character_state_no_dangling_name_when_current_state_empty(monkeypatch, 
 
 
 def test_character_state_multiline_knowledge_stays_indented(monkeypatch, tmp_path):
-    from grimoire.store import (appearances, campaigns, characters, context,
-                                playstate, scenes, worlds)
+    from grimoire.store import (
+        appearances,
+        campaigns,
+        characters,
+        context,
+        playstate,
+        scenes,
+        worlds,
+    )
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     cid = campaigns.create_campaign("Run", wid)
@@ -1138,8 +1177,15 @@ def test_character_state_absent_when_none(monkeypatch, tmp_path):
 
 
 def test_relationships_section_injected(monkeypatch, tmp_path):
-    from grimoire.store import (appearances, campaigns, characters, context,
-                                relationships, scenes, worlds)
+    from grimoire.store import (
+        appearances,
+        campaigns,
+        characters,
+        context,
+        relationships,
+        scenes,
+        worlds,
+    )
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -1730,8 +1776,16 @@ def test_a_suspicion_naming_the_player_through_the_macro_is_withheld(monkeypatch
     expands it to the present player's, and the private suspicion arrives at the
     model reading like any other. The filter runs first, so the filter has to
     know the macro."""
-    from grimoire.store import (appearances, campaigns, characters, context, pcs,
-                                playstate, scenes, worlds)
+    from grimoire.store import (
+        appearances,
+        campaigns,
+        characters,
+        context,
+        pcs,
+        playstate,
+        scenes,
+        worlds,
+    )
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -3551,6 +3605,7 @@ def test_a_director_note_seeds_archive_retrieval(monkeypatch, tmp_path):
 # ------------------------------------------------------- voice drift (#59)
 
 from grimoire.store import voice_anchors, voice_drift  # noqa: E402
+
 
 def _voice_scene(monkeypatch, tmp_path):
     """A scene with one present, anchored NPC (Winifred), ready to have a drift

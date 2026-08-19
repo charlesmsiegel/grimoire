@@ -215,7 +215,7 @@ def resolve(provider: CalendarProvider, native: str, near: str = "") -> str:
         anchor = fixed_of(provider, near)
     except CalendarError as e:
         raise CalendarError(f"bad date: {native!r}") from e
-    for offset in range(0, RESOLVE_WINDOW_DAYS + 1):
+    for offset in range(RESOLVE_WINDOW_DAYS + 1):
         # Outward from the anchor, and FORWARD first at each distance: the
         # caller is dating the next scene, and where a calendar renders two days
         # the same way the later one is the likelier read. Ordered explicitly
@@ -245,7 +245,7 @@ def resolve(provider: CalendarProvider, native: str, near: str = "") -> str:
     # written the same way, the one closest to the campaign's present is the
     # one that was meant -- and the common case (days or weeks ahead) stops
     # the scan early rather than walking the whole window.
-    for offset in range(0, RESOLVE_WINDOW_DAYS + 1):
+    for offset in range(RESOLVE_WINDOW_DAYS + 1):
         for fixed in ({anchor + offset, anchor - offset} if offset else {anchor}):
             try:
                 canonical = provider.format(fixed)

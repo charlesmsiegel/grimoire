@@ -15,14 +15,25 @@ import threading
 import time
 
 import pytest
-
-from grimoire.store import (audit, calendars, campaigns, dice, locks, proposals, rolls,
-                            scenes, sheets, worlds)
-from grimoire.store.audit import apply as audit_apply, baselines as audit_baselines
+from grimoire.store import (
+    audit,
+    calendars,
+    campaigns,
+    dice,
+    locks,
+    proposals,
+    rolls,
+    scenes,
+    sheets,
+    worlds,
+)
+from grimoire.store.audit import apply as audit_apply
+from grimoire.store.audit import baselines as audit_baselines
 from grimoire.store.campaigns import read as campaigns_read
 from grimoire.store.scenes import locking as scenes_locking
-from grimoire.store.sheets import (advancement as sheets_advancement,
-                                   creation as sheets_creation, writer as sheets_writer)
+from grimoire.store.sheets import advancement as sheets_advancement
+from grimoire.store.sheets import creation as sheets_creation
+from grimoire.store.sheets import writer as sheets_writer
 
 
 def _campaign(monkeypatch, tmp_path, name="Run", module="pool-basic"):
@@ -65,9 +76,8 @@ def _blocks_while_held(cid, call, hold=None) -> bool:
 def test_campaign_lock_is_stable_and_reentrant(monkeypatch, tmp_path):
     _wid, cid = _campaign(monkeypatch, tmp_path)
     lock = locks.campaign_lock(cid)
-    with lock:
-        with lock:  # RLock: no deadlock (audit.apply_delta composes set_field)
-            pass
+    with lock, lock:  # RLock: no deadlock (audit.apply_delta composes set_field)
+        pass
     assert locks.campaign_lock(cid) is lock
 
 
@@ -461,7 +471,6 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
     sorts by cid, so it is only distinguishable from the one that iterates
     `list_campaigns()` when those two orders disagree."""
     from fastapi.testclient import TestClient
-
     from grimoire import main
 
     wid = _three_campaigns_in_reverse_recency(monkeypatch, tmp_path)
@@ -562,9 +571,8 @@ def test_a_second_process_cannot_hold_the_same_campaign(monkeypatch, tmp_path):
     p = _hold_in_child(tmp_path, "campaign_lock(%r)" % cid)
     try:
         monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.5)
-        with pytest.raises(locks.CampaignBusy):
-            with locks.campaign_lock(cid):
-                pass
+        with pytest.raises(locks.CampaignBusy), locks.campaign_lock(cid):
+            pass
     finally:
         p.kill()
         p.wait(timeout=10)
@@ -687,9 +695,8 @@ def test_the_thread_lock_is_released_after_a_timeout(monkeypatch, tmp_path):
 def test_an_exception_inside_the_block_releases_both_layers(monkeypatch, tmp_path):
     _wid, cid = _campaign(monkeypatch, tmp_path)
     lock = locks.campaign_lock(cid)
-    with pytest.raises(ValueError):
-        with lock:
-            raise ValueError("boom")
+    with pytest.raises(ValueError), lock:
+        raise ValueError("boom")
     assert not lock._is_owned()
     assert lock.acquire(timeout=5)
     lock.release()
@@ -715,9 +722,8 @@ def test_a_failing_unlock_still_closes_the_fd_and_releases(monkeypatch, tmp_path
 
     monkeypatch.setattr(locks.proclock, "acquire", spy)
     monkeypatch.setattr(locks.proclock, "_unlock", bad_unlock)
-    with pytest.raises(OSError):
-        with lock:
-            pass
+    with pytest.raises(OSError), lock:
+        pass
     assert fds, "the lock was taken"
     with pytest.raises(OSError):        # EBADF: the fd really was closed
         os.fstat(fds[0])
@@ -745,9 +751,8 @@ def test_hold_all_keeps_unwinding_when_one_release_raises(monkeypatch, tmp_path)
         raise OSError("release exploded")
 
     monkeypatch.setattr(first, "release", angry)
-    with pytest.raises(OSError):
-        with locks.hold_all(["aaa", "bbb"]):
-            pass
+    with pytest.raises(OSError), locks.hold_all(["aaa", "bbb"]):
+        pass
     assert calls == ["aaa"]
     assert locks.campaign_lock("bbb").acquire(timeout=5), "bbb was stranded"
     locks.campaign_lock("bbb").release()
@@ -758,9 +763,8 @@ def test_hold_all_unwinds_everything_when_a_later_lock_is_busy(monkeypatch, tmp_
     p = _hold_in_child(tmp_path, "campaign_lock('zulu')")
     try:
         monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.5)
-        with pytest.raises(locks.CampaignBusy):
-            with locks.hold_all(["alpha", "zulu"]):
-                pass
+        with pytest.raises(locks.CampaignBusy), locks.hold_all(["alpha", "zulu"]):
+            pass
         assert not locks.campaign_lock("alpha")._is_owned(), "alpha was stranded"
         assert locks.campaign_lock("alpha").acquire(timeout=5)
         locks.campaign_lock("alpha").release()
@@ -977,7 +981,6 @@ def test_a_manual_roll_and_its_transcript_line_share_one_hold(
     whole property, and it is verified red-green.
     """
     from fastapi.testclient import TestClient
-
     from grimoire import main
     from grimoire.store import rolls
 
@@ -1024,7 +1027,6 @@ def test_the_chronicle_save_persists_under_one_hold(monkeypatch, tmp_path):
     ROUTE established -- 1 with the outer hold, 0 without.
     """
     from fastapi.testclient import TestClient
-
     from grimoire import main
     from grimoire.store import chronicle
 
@@ -1087,9 +1089,8 @@ def test_nowait_reports_contention_instead_of_waiting(monkeypatch, tmp_path):
 
 def test_nowait_is_reentrant_for_a_thread_that_already_holds_it(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    with locks.campaign_lock("run"):
-        with locks.campaign_lock_nowait("run") as got:
-            assert got is True
+    with locks.campaign_lock("run"), locks.campaign_lock_nowait("run") as got:
+        assert got is True
     # and the outer release still leaves it fully free
     with locks.campaign_lock_nowait("run") as got:
         assert got is True

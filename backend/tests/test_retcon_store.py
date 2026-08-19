@@ -9,9 +9,19 @@ are the ones where it declines to make one.
 """
 
 import pytest
-
-from grimoire.store import (campaigns, changes, chronicle, commitments, entities,
-                            plot, provenance, retcon, scenes, turnstate, worlds)
+from grimoire.store import (
+    campaigns,
+    changes,
+    chronicle,
+    commitments,
+    entities,
+    plot,
+    provenance,
+    retcon,
+    scenes,
+    turnstate,
+    worlds,
+)
 from grimoire.store.scenes import serialize as scenes_serialize
 
 

@@ -8,10 +8,9 @@ into a wizard, so these tests are as interested in the cases that must answer
 import importlib
 import threading
 
+import grimoire.store as store
 import pytest
 from fastapi.testclient import TestClient
-
-import grimoire.store as store
 from grimoire.main import create_app
 from grimoire.store import paths
 

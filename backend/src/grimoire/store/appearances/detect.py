@@ -45,12 +45,14 @@ import re
 from .. import overlay
 from ..entities import ENTITY_KINDS
 from ..paths import slugify
+
 # Only the read/serialize leaves, never the `scenes` facade -- `scenes/read.py`
 # imports this package's `cast.py`, so binding whole packages in both directions
 # would close a cycle these file-level edges do not (same cut `transitions.py`
 # makes).
-from ..scenes import (read as scenes_read, serialize as scenes_serialize,
-                      turns as scenes_turns)
+from ..scenes import read as scenes_read
+from ..scenes import serialize as scenes_serialize
+from ..scenes import turns as scenes_turns
 from . import cast
 
 #: How many unknown names one turn may offer. A turn that mentions a dozen

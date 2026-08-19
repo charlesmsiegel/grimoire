@@ -10,10 +10,9 @@ from __future__ import annotations
 
 import importlib
 
+import grimoire.store as store
 import pytest
 from fastapi.testclient import TestClient
-
-import grimoire.store as store
 from grimoire.main import create_app
 
 #: Quoted, so the four words are one term rather than four -- "the" alone

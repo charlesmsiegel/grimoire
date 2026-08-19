@@ -13,9 +13,10 @@ from __future__ import annotations
 import logging
 
 from .. import calendars, characters, config, dossiers, overlay, pcs, voice_drift
-from ..appearances import (cast as appearances_cast, paths as appearances_paths,
-                           transitions as appearances_transitions,
-                           versions as appearances_versions)
+from ..appearances import cast as appearances_cast
+from ..appearances import paths as appearances_paths
+from ..appearances import transitions as appearances_transitions
+from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..scenes import serialize as scenes_serialize
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import ssl
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import certifi
 import httpx

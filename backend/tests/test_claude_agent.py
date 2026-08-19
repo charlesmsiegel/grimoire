@@ -1,8 +1,7 @@
 import types
 
-import pytest
-
 import grimoire.claude_agent as claude_agent
+import pytest
 from grimoire.claude_agent import ClaudeAgentClient, ClaudeAgentError
 
 # The six SDK names are read once, at import; patching sys.modules would leave

@@ -13,10 +13,8 @@ import types
 
 import pytest
 from fastapi.testclient import TestClient
-
 from grimoire.main import create_app
-from grimoire.store import (appearances, campaigns, characters, entities, overlay, pcs,
-                            sync, worlds)
+from grimoire.store import appearances, campaigns, characters, entities, overlay, pcs, sync, worlds
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.paths import safe_id
 
@@ -489,8 +487,15 @@ def _reject_mark(monkeypatch):
 
 
 def test_no_listing_hands_back_an_id_its_own_lookups_refuse(monkeypatch, tmp_path):
-    from grimoire.store import (assets, greetings, llm_connections, response_presets,
-                                scenes, sheets, styles)
+    from grimoire.store import (
+        assets,
+        greetings,
+        llm_connections,
+        response_presets,
+        scenes,
+        sheets,
+        styles,
+    )
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("Realm")
     wroot = worlds.world_root(wid)

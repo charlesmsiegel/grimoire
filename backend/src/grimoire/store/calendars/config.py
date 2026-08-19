@@ -7,9 +7,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .base import CalendarError, get_provider
 from .. import atomic
-
+from .base import CalendarError, get_provider
 
 #: How long a thread or commitment may go untouched before the ledger calls it
 #: stale (#103). It lives here, beside `confirmed`, because it is the one

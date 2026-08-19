@@ -23,7 +23,12 @@ def test_markdown_dependency():
     assert markdown.markdown("**hi**") == "<p><strong>hi</strong></p>"
 
 
-from grimoire.store import assets, campaigns, epub, worlds  # noqa: E402 - deliberate late import; see the lines above
+from grimoire.store import (  # noqa: E402 - deliberate late import; see the lines above
+    assets,
+    campaigns,
+    epub,
+    worlds,
+)
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -46,9 +51,15 @@ import pathlib  # noqa: E402 - deliberate late import; see the lines above
 import xml.etree.ElementTree as ET  # noqa: E402 - deliberate late import; see the lines above
 import zipfile  # noqa: E402 - deliberate late import; see the lines above
 
+from grimoire.store import (  # noqa: E402 - deliberate late import; see the lines above
+    appearances,
+    characters,
+    covers,
+    entities,
+    pcs,
+    scenes,
+)
 from PIL import Image  # noqa: E402 - deliberate late import; see the lines above
-
-from grimoire.store import appearances, characters, covers, entities, pcs, scenes  # noqa: E402 - deliberate late import; see the lines above
 
 OPF_NS = {"opf": "http://www.idpf.org/2007/opf"}
 

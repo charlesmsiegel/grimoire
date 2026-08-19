@@ -1,5 +1,4 @@
 import pytest
-
 from grimoire.store import appearances as ap
 from grimoire.store import assets, campaigns, characters, dossiers, overlay, pcs, scenes, worlds
 

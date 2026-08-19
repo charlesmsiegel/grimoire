@@ -20,8 +20,8 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from evals import cases as case_mod          # noqa: E402
-from evals import runner                     # noqa: E402
+from evals import cases as case_mod  # noqa: E402
+from evals import runner  # noqa: E402
 
 PAIRS = [(case, rec) for case in case_mod.CASES for rec in case.recordings]
 

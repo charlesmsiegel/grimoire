@@ -1,7 +1,17 @@
 import json
 
-from grimoire.store import (appearances, campaigns, changes, chronicle, commitments,
-                            facts, plot, provenance, scene_refs, worlds)
+from grimoire.store import (
+    appearances,
+    campaigns,
+    changes,
+    chronicle,
+    commitments,
+    facts,
+    plot,
+    provenance,
+    scene_refs,
+    worlds,
+)
 
 
 def _campaign(monkeypatch, tmp_path):

@@ -1,7 +1,6 @@
 import textwrap
 
 import pytest
-
 from grimoire.store.calendars import CalendarError, get_provider, list_providers
 
 _PROVIDER_SRC = textwrap.dedent(

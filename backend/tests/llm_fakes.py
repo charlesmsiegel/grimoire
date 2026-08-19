@@ -94,7 +94,7 @@ class Cassette:
             raise ValueError(f"cassette {name} has no entries")
 
     @classmethod
-    def load(cls, name: str) -> "Cassette":
+    def load(cls, name: str) -> Cassette:
         path = FIXTURES / f"{name}.json"
         return cls(json.loads(path.read_text(encoding="utf-8")), name)
 

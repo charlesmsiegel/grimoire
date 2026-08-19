@@ -6,7 +6,6 @@ covered in `test_routes.py`.
 """
 
 import pytest
-
 from grimoire.store import appearances as ap
 from grimoire.store import campaigns, characters, entities, pcs, scenes, worlds
 

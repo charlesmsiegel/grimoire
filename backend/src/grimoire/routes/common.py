@@ -379,7 +379,7 @@ async def _bounded_call(coro):
             "timeout", f"the reply did not finish within {seconds:g}s — giving up")
     try:
         return task.result()
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         # asyncio.TimeoutError IS the builtin TimeoutError from 3.11 on, so an
         # upstream that gives up on its own lands in the same handler as an
         # expired ceiling. It keeps its own message: blaming a setting that had

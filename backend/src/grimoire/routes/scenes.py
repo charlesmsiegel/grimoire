@@ -16,13 +16,43 @@ from starlette.concurrency import run_in_threadpool
 from .. import prompts, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from .common import (computes_only, _bounded_call, _campaign_root_or_404, _dump, _llm_http_error,
-                     _page_of, _page_window, _record_prompt, _require_connection, _require_scene,
-                     _response_body, _turn_override, _write_response, get_llm)
-from .models import (Appear, AppearBatch, ChatTurn, ChronicleSave, Dismiss, EditMessage,
-                     EmergentCast, NewScene, RegenerateBody, RenameScene, ReplayCancel,
-                     ReplayStart, ResponseSettings, RetryBody, SceneDatetime,
-                     SceneIdeaCreate, SceneIdeaStatus, SceneIntent, SceneLocation)
+from .common import (
+    _bounded_call,
+    _campaign_root_or_404,
+    _dump,
+    _llm_http_error,
+    _page_of,
+    _page_window,
+    _record_prompt,
+    _require_connection,
+    _require_scene,
+    _response_body,
+    _turn_override,
+    _write_response,
+    computes_only,
+    get_llm,
+)
+from .models import (
+    Appear,
+    AppearBatch,
+    ChatTurn,
+    ChronicleSave,
+    Dismiss,
+    EditMessage,
+    EmergentCast,
+    NewScene,
+    RegenerateBody,
+    RenameScene,
+    ReplayCancel,
+    ReplayStart,
+    ResponseSettings,
+    RetryBody,
+    SceneDatetime,
+    SceneIdeaCreate,
+    SceneIdeaStatus,
+    SceneIntent,
+    SceneLocation,
+)
 from .streaming import _chat_stream
 
 router = APIRouter()
@@ -1040,7 +1070,7 @@ class _Budget:
             on_start()
         try:
             return await asyncio.wait_for(coro, left)
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             # asyncio.TimeoutError is the builtin TimeoutError from 3.11 on, so
             # this also catches one raised *inside* the call. Only blame the
             # budget when the budget is actually gone.

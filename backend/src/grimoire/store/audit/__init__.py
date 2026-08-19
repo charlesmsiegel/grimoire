@@ -19,14 +19,27 @@ from __future__ import annotations
 # What does matter is that `baselines` itself imports no scene state, which is
 # the whole point of the cut (it is what removed the audit/scene_refs/scenes
 # cycle). `apply` reads both siblings.
-from . import baselines, prompt, apply  # noqa: F401
+from . import apply, baselines, prompt  # noqa: F401
+from .apply import AuditParseError, apply_delta, materialize, parse_output  # noqa: F401
 from .baselines import (  # noqa: F401
-    _LOCKS, _LOCKS_GUARD, _lock, _path, _write, baseline_entry_valid,
-    baseline_field, capture_baseline, clear_baselines, read_baselines,
-    repoint_scenes, schema_stamp,
+    _LOCKS,
+    _LOCKS_GUARD,
+    _lock,
+    _path,
+    _write,
+    baseline_entry_valid,
+    baseline_field,
+    capture_baseline,
+    clear_baselines,
+    read_baselines,
+    repoint_scenes,
+    schema_stamp,
 )
 from .prompt import (  # noqa: F401
-    _field_label, build_prompt, render_value, roll_lines, sheet_blocks,
+    _field_label,
+    build_prompt,
+    render_value,
+    roll_lines,
+    sheet_blocks,
     sheet_scope,
 )
-from .apply import AuditParseError, apply_delta, materialize, parse_output  # noqa: F401

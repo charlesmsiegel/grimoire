@@ -14,7 +14,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from grimoire.store import atomic
 
 PRIOR = "---\ntitle: before\n---\n\nthe original body\n"
@@ -398,10 +397,9 @@ def test_a_failed_streaming_write_publishes_nothing_and_leaves_no_litter(tmp_pat
     p = tmp_path / "big.zip"
     _write_prior(p)
 
-    with pytest.raises(RuntimeError):
-        with atomic.streaming_write(p) as fh:
-            fh.write(b"half of an archive")
-            raise RuntimeError("interrupted")
+    with pytest.raises(RuntimeError), atomic.streaming_write(p) as fh:
+        fh.write(b"half of an archive")
+        raise RuntimeError("interrupted")
 
     assert p.read_text(encoding="utf-8") == PRIOR
     assert sorted(x.name for x in tmp_path.iterdir()) == ["big.zip"]

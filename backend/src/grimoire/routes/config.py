@@ -9,11 +9,25 @@ from fastapi import APIRouter, Depends, HTTPException
 from .. import llm, store
 from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
-from .common import (_dump, _llm_http_error, _response_body, _write_response,
-                     get_openai_compatible_client)
-from .models import (ConfigUpdate, ConnectionCreate, ConnectionUpdate, DataDirUpdate,
-                     PromptLayoutUpdate, ResponsePresetCreate, ResponsePresetUpdate,
-                     ResponseSettings, StyleCreate, StyleUpdate)
+from .common import (
+    _dump,
+    _llm_http_error,
+    _response_body,
+    _write_response,
+    get_openai_compatible_client,
+)
+from .models import (
+    ConfigUpdate,
+    ConnectionCreate,
+    ConnectionUpdate,
+    DataDirUpdate,
+    PromptLayoutUpdate,
+    ResponsePresetCreate,
+    ResponsePresetUpdate,
+    ResponseSettings,
+    StyleCreate,
+    StyleUpdate,
+)
 
 router = APIRouter()
 

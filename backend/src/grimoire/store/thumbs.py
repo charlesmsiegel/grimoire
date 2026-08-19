@@ -18,8 +18,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from .paths import home
 from . import atomic
+from .paths import home
 
 QUALITY = 80
 
@@ -37,7 +37,7 @@ def thumbnail(src: Path, width: int) -> Path | None:
     except OSError:
         return None
     key = hashlib.sha256(
-        f"{src}|{st.st_mtime_ns}|{st.st_size}|{width}".encode("utf-8")).hexdigest()[:32]
+        f"{src}|{st.st_mtime_ns}|{st.st_size}|{width}".encode()).hexdigest()[:32]
     out = _cache_dir() / f"{key}.webp"
     if out.exists():
         return out

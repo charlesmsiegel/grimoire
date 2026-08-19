@@ -1,7 +1,6 @@
 import math
 
 import pytest
-
 from grimoire.store.weather.noise import latent_u, latent_z
 
 # Spec reference vectors. Determinism here is scoped to this installation

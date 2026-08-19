@@ -1,7 +1,6 @@
 import warnings
 
 import pytest
-
 from grimoire.store.climates.schema import ClimateError, validate
 
 

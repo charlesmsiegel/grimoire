@@ -7,11 +7,14 @@ import json
 from pathlib import Path
 
 from . import atomic, characters, greetings, locks, overlay, pcs, scene_ideas
-from .appearances import cast as appearances_cast, transitions as appearances_transitions, versions as appearances_versions
+from .appearances import cast as appearances_cast
+from .appearances import transitions as appearances_transitions
+from .appearances import versions as appearances_versions
 from .campaigns import paths as campaigns_paths
 from .context import macros as context_macros
-from .scenes import (lifecycle as scenes_lifecycle, read as scenes_read,
-                     write as scenes_write)
+from .scenes import lifecycle as scenes_lifecycle
+from .scenes import read as scenes_read
+from .scenes import write as scenes_write
 
 
 class PlayError(Exception):
@@ -116,8 +119,8 @@ def available_greetings(cid: str, after: str | None = None) -> list[dict]:
     out = greetings.availability(overlay.list_greetings(cid), plotmap,
                                  marks["played"] | marks["completed"],
                                  player_tags(cid), skipped=marks["skipped"])
-    mark_of = {gid: "played" for gid in marks["played"]}
-    mark_of.update({gid: "completed" for gid in marks["completed"]})
+    mark_of = dict.fromkeys(marks["played"], "played")
+    mark_of.update(dict.fromkeys(marks["completed"], "completed"))
     for g in out:
         g["mark"] = mark_of.get(g["id"])
     unlocked: set[str] = set()

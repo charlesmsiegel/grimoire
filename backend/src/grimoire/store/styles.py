@@ -14,9 +14,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from .. import prompts
+from . import atomic
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, natural_key, safe_id, slugify, uniquify
-from . import atomic
 
 
 class StyleNotFound(Exception):

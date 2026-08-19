@@ -13,7 +13,6 @@ from pathlib import Path
 from . import atomic
 from .campaigns import paths as campaigns_paths
 
-
 #: The staged-edit kinds whose write-back lands here. Declared beside the log
 #: rather than beside the writer, because it describes what this file covers and
 #: two modules now need it: `absorb.apply`, which records, and `store.undo`,

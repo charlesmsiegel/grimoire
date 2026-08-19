@@ -4,10 +4,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import (alternates, atomic, cards, characters, entities, greetings, locks, overlay,
-               scene_ids, scene_refs, worlds)
-from .appearances import paths as appearances_paths, versions as appearances_versions
-from .campaigns import paths as campaigns_paths, read as campaigns_read
+from . import (
+    alternates,
+    atomic,
+    cards,
+    characters,
+    entities,
+    greetings,
+    locks,
+    overlay,
+    scene_ids,
+    scene_refs,
+    worlds,
+)
+from .appearances import paths as appearances_paths
+from .appearances import versions as appearances_versions
+from .campaigns import paths as campaigns_paths
+from .campaigns import read as campaigns_read
 from .frontmatter import parse_frontmatter
 from .paths import home, safe_id, slugify, uniquify
 from .scenes import lifecycle as scenes_lifecycle

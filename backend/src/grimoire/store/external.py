@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import backups, paths
@@ -77,7 +77,7 @@ def _tool(name: str) -> str | None:
 
 
 def _stamp(mtime: float) -> str:
-    return datetime.fromtimestamp(mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.fromtimestamp(mtime, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _norm(path: Path) -> Path:

@@ -98,7 +98,7 @@ _TARGET = re.compile(r"^(check-[a-z0-9-]+):", re.MULTILINE)
 # Words, for the duplication check. Keeps the characters that make an
 # identifier one token (`store.paths`, `check-py`, `backend/src`).
 _WORD = re.compile(r"[a-z0-9_./-]+")
-_FENCE = re.compile(r"```.*?```", re.S)
+_FENCE = re.compile(r"```.*?```", re.DOTALL)
 
 
 def _read(path: pathlib.Path) -> str:

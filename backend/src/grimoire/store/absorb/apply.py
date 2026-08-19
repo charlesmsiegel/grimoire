@@ -13,19 +13,35 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from .. import (cards, changes, characters, commitments, dossiers, entities, facts,
-                groupstate, overlay, playstate, plot, provenance, relationships,
-                undo as undo_store, voice_drift)
+from .. import (
+    cards,
+    changes,
+    characters,
+    commitments,
+    dossiers,
+    entities,
+    facts,
+    groupstate,
+    overlay,
+    playstate,
+    plot,
+    provenance,
+    relationships,
+    voice_drift,
+)
+
 # Aliased because `apply_edits` binds `journal` to the commit progress dict --
 # the crash-resume ledger, which is a different thing from the change journal
 # and predates it. Two `journal`s in one function would read as one.
 from .. import journal as change_journal
-from ..appearances import (paths as appearances_paths,
-                           transitions as appearances_transitions,
-                           versions as appearances_versions)
+from .. import undo as undo_store
+from ..appearances import paths as appearances_paths
+from ..appearances import transitions as appearances_transitions
+from ..appearances import versions as appearances_versions
 from ..audit import apply as audit_apply
 from ..campaigns import paths as campaigns_paths
-from ..scenes import moment as scenes_moment, read as scenes_read
+from ..scenes import moment as scenes_moment
+from ..scenes import read as scenes_read
 from ..sheets import paths as sheets_paths
 from . import conflicts, materializer, weather
 

@@ -8,9 +8,18 @@ carries the removed scenes' ids and says so where it cannot.
 """
 
 import pytest
-
-from grimoire.store import (appearances, campaigns, chronicle, entities, fork, journal,
-                            overlay, plot, scenes, worlds)
+from grimoire.store import (
+    appearances,
+    campaigns,
+    chronicle,
+    entities,
+    fork,
+    journal,
+    overlay,
+    plot,
+    scenes,
+    worlds,
+)
 
 
 @pytest.fixture

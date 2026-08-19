@@ -8,8 +8,8 @@ from pathlib import Path
 
 from .. import atomic
 from ..frontmatter import dump_frontmatter, parse_frontmatter
-from ..worlds import paths as worlds_paths
 from ..paths import any_child_record, ensure_home, now_iso, safe_id
+from ..worlds import paths as worlds_paths
 from . import paths
 
 # A campaign may record no world at all, and every world-side read still wants

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import math
 
+from . import atomic, locks
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import ensure_home, home
-from . import atomic, locks
 
 DEFAULT_MODEL = "anthropic/claude-opus-4.1"
 # One theme in two modes. The field is free-form here on purpose: the frontend
@@ -227,7 +227,7 @@ def read_config() -> dict[str, str]:
                 "backup_interval_hours": DEFAULT_BACKUP_INTERVAL_HOURS,
                 "backup_keep": DEFAULT_BACKUP_KEEP,
                 "backup_dir": DEFAULT_BACKUP_DIR,
-                **{k: "" for k in _LENGTH_KEYS}}
+                **dict.fromkeys(_LENGTH_KEYS, "")}
     if not path.exists():
         # Materializing the defaults is a write, and two first-ever readers
         # racing here would each publish a whole file.

@@ -12,10 +12,12 @@ import random
 import re
 
 from .. import calendars, characters, dice, pcs
-from ..appearances import (cast as appearances_cast, paths as appearances_paths,
-                           versions as appearances_versions)
+from ..appearances import cast as appearances_cast
+from ..appearances import paths as appearances_paths
+from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..scenes import read as scenes_read
+
 # Aliased to match `assemble.py` and `world_state.py`, where the plain name
 # `cast` is taken by a local holding the scene's cast list.
 from . import cast as cast_data
@@ -43,7 +45,7 @@ def scene_substitutions(cid: str, sid: str) -> dict[str, str]:
         try:
             if a["role"] == "npc":
                 continue
-            elif a["kind"] == "pcs":
+            if a["kind"] == "pcs":
                 player_names.append(pcs.read_persona(aroot, a["id"], vid).get("name", a["id"]))
             else:
                 player_names.append(characters.read_card(aroot, a["id"], vid)["data"].get("name", a["id"]))

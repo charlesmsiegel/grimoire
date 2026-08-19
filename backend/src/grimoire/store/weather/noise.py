@@ -29,7 +29,7 @@ def latent_u(cid: str, zone: str, axis: str, i: int) -> float:
     obvious repair of midpoints over 53 bits is not representable at the top of
     the range and collapses distinct inputs onto one value.
     """
-    key = f"{cid}\x1f{zone}\x1f{axis}\x1f{i}".encode("utf-8")
+    key = f"{cid}\x1f{zone}\x1f{axis}\x1f{i}".encode()
     digest = hashlib.blake2b(key, digest_size=32).digest()
     n = int.from_bytes(digest[:8], "big") >> 12  # leading 52 bits
     return (2 * n + 1) / _MANTISSA

@@ -10,11 +10,10 @@ start over instead of carrying prose about a post the player deleted.
 import asyncio
 import importlib
 
+import grimoire.store as store
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-
-import grimoire.store as store
 from grimoire import routes
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
