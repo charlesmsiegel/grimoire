@@ -285,6 +285,20 @@ OUTSIDE_DOMAIN: dict[str, str] = {
         "makes the overlap reachable. Same known gap as "
         "`store.campaigns.lifecycle`, whose mutators it races."
     ),
+    "store.usage": (
+        "A considered exclusion, not a gap. `repoint_scenes` is the only public "
+        "cid-taking mutator here, and it does not read-modify-write anything: "
+        "each rename is a single `O_APPEND` line (`atomic.append_line`), so "
+        "concurrent callers interleave rows instead of losing them -- the same "
+        "reasoning `record` already documents for the generating path it runs "
+        "on. Taking the campaign lock would buy nothing and cost two things "
+        "that matter: it would stall a turn behind whatever else holds that "
+        "campaign, and this ledger is home-scoped, so most of its writes belong "
+        "to no campaign at all (a tagline, a connection test) and have no lock "
+        "to take. The file is append-only by design -- nothing here ever "
+        "rewrites a row -- which is what makes the unlocked write safe rather "
+        "than merely convenient."
+    ),
     "store.campaigns.paths": (
         "`write_manifest` republishes the whole campaign manifest from a dict "
         "its callers read a moment earlier -- `overlay`, `sync`, `migrations` "
