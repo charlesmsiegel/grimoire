@@ -90,11 +90,18 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, character, onSe
     if (!opener.trim() || !character) return;
     const name = window.prompt("Name this greeting?", "Opener")?.trim();
     if (!name) return;
-    // an opener saved as a greeting belongs to the campaign, not the world baseline
-    await api.createGreeting({ kind: "campaign", id: cid }, {
-      name, character: character.id, version: character.default_version, body: opener,
-    });
-    setOpener("");
+    onError(null);
+    try {
+      // an opener saved as a greeting belongs to the campaign, not the world baseline
+      await api.createGreeting({ kind: "campaign", id: cid }, {
+        name, character: character.id, version: character.default_version, body: opener,
+      });
+      setOpener("");
+    } catch (err: any) {
+      // Clearing the preview on a failed save would throw away the only copy
+      // of a generation that cost a call, so the text stays put.
+      onError(errMsg(err));
+    }
   }
 
   return (

@@ -13,8 +13,10 @@ import { SuggestedCast } from "./SuggestedCast";
  *  Each row owns its own load/save (`SceneSettingField`, `SceneDateField`,
  *  `SuggestedCast`, `OpenerComposer`); what stays here is the state two of them
  *  share — the cast, and the actor the picker has selected, which is also the
- *  character an opener can be saved against. Errors funnel into one banner so
- *  the panel never grows a second place to look. */
+ *  character an opener can be saved against. Everything those rows fail at
+ *  reports through the one banner below, so the panel has a single place to
+ *  look. `SuggestedCast` is the exception and keeps its own: it renders in the
+ *  inspector too, which has no banner of this one's to borrow. */
 export function CastPanel({
   cid, sid, ready, onSeeded, onSceneRenamed, initialPrompt, pcless, sceneLocked,
   onRenaming,
@@ -115,14 +117,10 @@ export function CastPanel({
           </div>
         </div>
 
-        {/* Directly under the picker it is an alternative to. The scan reads
-            the cards of whoever is already seated, so it moves as the cast does
-            (hence the reload key) and has nothing to say about an empty one —
-            which is also why an empty cast is not worth a request. */}
-        {cast.length > 0 && (
-          <SuggestedCast cid={cid} sid={sid} nameOf={nameOf} refreshKey={cast.length}
-                         onCast={reloadCast} />
-        )}
+        {/* Directly under the picker it is an alternative to. It takes the
+            cast rather than a refresh key: that list is the scan's only moving
+            input, so it decides both when to re-run and whether to run at all. */}
+        <SuggestedCast cid={cid} sid={sid} cast={cast} nameOf={nameOf} onCast={reloadCast} />
 
         <OpenerComposer cid={cid} sid={sid} ready={ready} initialPrompt={initialPrompt}
                         character={selected} onSeeded={onSeeded} onError={setError} />

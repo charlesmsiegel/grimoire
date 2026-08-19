@@ -141,6 +141,26 @@ test("generating an opener streams into the preview and can be saved as a greeti
   );
 });
 
+test("a failed greeting save says so and keeps the opener", async () => {
+  // The preview is the only copy of a generation that cost a call — dropping
+  // it on a failed save would throw the reader's text away.
+  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
+    onEvent({ delta: "Mist rolls in." });
+  });
+  (api.createGreeting as any).mockRejectedValue({ detail: "name taken" });
+  vi.spyOn(window, "prompt").mockReturnValue("Opener");
+  renderPanel();
+  await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
+  fireEvent.change(screen.getByLabelText("Opener prompt"), { target: { value: "A foggy harbor" } });
+  fireEvent.click(screen.getByRole("button", { name: /generate/i }));
+  await screen.findByText("Mist rolls in.");
+  fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "seraphine" } });
+  fireEvent.click(screen.getByRole("button", { name: /save as greeting/i }));
+
+  expect(await screen.findByText("name taken")).toBeInTheDocument();
+  expect(screen.getByText("Mist rolls in.")).toBeInTheDocument();
+});
+
 test("Use adopts the generated opener as the scene's first post", async () => {
   (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
     onEvent({ delta: "Mist rolls in." });
@@ -229,6 +249,31 @@ test("first date set renames the scene: adopts the new id via onSceneRenamed", a
   fireEvent.click(screen.getByRole("button", { name: /advance to|set date/i }));
   await waitFor(() => expect(onSceneRenamed).toHaveBeenCalledWith("001--2026-07-04--s"));
   expect(onSeeded).not.toHaveBeenCalled();  // the parent re-selects via the new id instead
+});
+
+test("suggested cast: a mention in a seated character's card can be seated from here", async () => {
+  (api.getCast as any).mockResolvedValue([{ kind: "characters", id: "seraphine", role: "npc" }]);
+  (api.getSuggestions as any).mockResolvedValue([
+    { character: "mara", name: "Mara", mentioned_by: ["seraphine"] },
+  ]);
+  renderPanel();
+  await screen.findByText("Suggested cast");
+  // the id the scan returns is resolved against the picker's character list
+  expect(screen.getByText("mentioned by Seraphine")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Add Mara to the scene" }));
+  await waitFor(() => expect(api.addToCast).toHaveBeenCalledWith(
+    "c", "s", { kind: "characters", id: "mara", role: "npc" }));
+  // seated through the ordinary path, so the panel's own cast list refreshes
+  await waitFor(() => expect(api.getCast).toHaveBeenCalledTimes(2));
+});
+
+test("suggested cast: an empty scene has no cast to scan, so no strip", async () => {
+  (api.getCast as any).mockResolvedValue([]);
+  renderPanel();
+  await screen.findByText(/add to scene/i);
+  expect(screen.queryByText("Suggested cast")).toBeNull();
+  expect(api.getSuggestions).not.toHaveBeenCalled();
 });
 
 test("offscreen scene hides PC and player seating", async () => {

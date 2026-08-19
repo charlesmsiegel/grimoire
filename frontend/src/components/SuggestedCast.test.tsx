@@ -25,10 +25,11 @@ beforeEach(() => {
 });
 
 const NAMES: Record<string, string> = { seraphine: "Seraphine", mara: "Mara" };
+const CAST = [{ kind: "characters", id: "seraphine", role: "npc", name: "Seraphine" }] as any;
 
-function renderStrip(props: Partial<{ refreshKey: number; onCast: () => void }> = {}) {
-  render(<SuggestedCast cid="c" sid="s" nameOf={(id) => NAMES[id] ?? id}
-                        refreshKey={props.refreshKey} onCast={props.onCast} />);
+function renderStrip(props: Partial<{ cast: any; onCast: () => void }> = {}) {
+  render(<SuggestedCast cid="c" sid="s" cast={props.cast ?? CAST}
+                        nameOf={(id) => NAMES[id] ?? id} onCast={props.onCast} />);
 }
 
 test("renders one chip per suggestion, with who mentioned them", async () => {
@@ -40,15 +41,22 @@ test("renders one chip per suggestion, with who mentioned them", async () => {
 
 test("renders nothing when there are no suggestions", async () => {
   (api.getSuggestions as any).mockResolvedValue([]);
-  const { container } = render(<SuggestedCast cid="c" sid="s" />);
+  const { container } = render(<SuggestedCast cid="c" sid="s" cast={CAST} />);
   await waitFor(() => expect(api.getSuggestions).toHaveBeenCalled());
   expect(container).toBeEmptyDOMElement();
 });
 
 test("a failing fetch stays silent rather than blocking the panel", async () => {
   (api.getSuggestions as any).mockRejectedValue({ detail: "nope" });
-  const { container } = render(<SuggestedCast cid="c" sid="s" />);
+  const { container } = render(<SuggestedCast cid="c" sid="s" cast={CAST} />);
   await waitFor(() => expect(api.getSuggestions).toHaveBeenCalled());
+  expect(container).toBeEmptyDOMElement();
+});
+
+test("an empty cast is never scanned: it can name nobody", async () => {
+  const { container } = render(<SuggestedCast cid="c" sid="s" cast={[]} />);
+  await new Promise((r) => setTimeout(r, 0));
+  expect(api.getSuggestions).not.toHaveBeenCalled();
   expect(container).toBeEmptyDOMElement();
 });
 
@@ -77,11 +85,59 @@ test("a failed Add surfaces the reason and leaves the chip in place", async () =
   expect(screen.getByText("Mara")).toBeInTheDocument();
 });
 
-test("refreshKey refetches: the scan depends on who is already in the scene", async () => {
-  const { rerender } = render(<SuggestedCast cid="c" sid="s" refreshKey={1} />);
+test("a changed cast rescans; the same cast re-rendered does not", async () => {
+  // The scan reads the cards of who is cast, so the cast is the only thing
+  // worth re-running for — and re-running for anything else is a request per
+  // turn spent to be told the same thing.
+  const grown = [...CAST, { kind: "characters", id: "mara", role: "npc", name: "Mara" }] as any;
+  const { rerender } = render(<SuggestedCast cid="c" sid="s" cast={CAST} />);
   await waitFor(() => expect(api.getSuggestions).toHaveBeenCalledTimes(1));
-  rerender(<SuggestedCast cid="c" sid="s" refreshKey={2} />);
+  rerender(<SuggestedCast cid="c" sid="s" cast={[...CAST]} nameOf={(id) => id} />);
+  await new Promise((r) => setTimeout(r, 0));
+  expect(api.getSuggestions).toHaveBeenCalledTimes(1);   // same people, no rescan
+  rerender(<SuggestedCast cid="c" sid="s" cast={grown} />);
   await waitFor(() => expect(api.getSuggestions).toHaveBeenCalledTimes(2));
+});
+
+test("a swap keeps the cast's size but still rescans", async () => {
+  // The bug a length-keyed reload would have: one out, one in, no refetch.
+  const swapped = [{ kind: "characters", id: "winifred", role: "npc", name: "Winifred" }] as any;
+  const { rerender } = render(<SuggestedCast cid="c" sid="s" cast={CAST} />);
+  await waitFor(() => expect(api.getSuggestions).toHaveBeenCalledTimes(1));
+  rerender(<SuggestedCast cid="c" sid="s" cast={swapped} />);
+  await waitFor(() => expect(api.getSuggestions).toHaveBeenCalledTimes(2));
+});
+
+test("the row being acted on is the one that says so", async () => {
+  let release: (v: any) => void = () => {};
+  (api.addToCast as any).mockImplementation(() => new Promise((r) => { release = r; }));
+  (api.getSuggestions as any).mockResolvedValue([
+    ...SUGGESTIONS.slice(0, 1),
+    { character: "winifred", name: "Winifred", mentioned_by: ["mara"] },
+  ]);
+  renderStrip();
+  fireEvent.click(await screen.findByRole("button", { name: "Add Mara to the scene" }));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Add Mara to the scene" })).toHaveTextContent("…"));
+  expect(screen.getByRole("button", { name: "Add Winifred to the scene" })).toHaveTextContent("Add");
+  expect(screen.getByRole("button", { name: "Dismiss Winifred" })).toBeDisabled();
+
+  // settle it inside the test: an unresolved write outliving the test lands
+  // its reload in whatever runs next
+  release({ ok: true });
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Add Mara to the scene" })).toHaveTextContent("Add"));
+});
+
+test("a double click seats the character once", async () => {
+  // React flushes a click before the next one is dispatched, so `disabled`
+  // is what actually stops the second write — this fails the moment it goes.
+  renderStrip();
+  const add = await screen.findByRole("button", { name: "Add Mara to the scene" });
+  fireEvent.click(add);
+  fireEvent.click(add);
+  await waitFor(() => expect(api.getSuggestions).toHaveBeenCalledTimes(2));
+  expect(api.addToCast).toHaveBeenCalledTimes(1);
 });
 
 test("a suggestion answering the previous scene never lands on this one", async () => {
@@ -91,8 +147,8 @@ test("a suggestion answering the previous scene never lands on this one", async 
   (api.getSuggestions as any)
     .mockImplementationOnce(() => new Promise((r) => { release = r; }))
     .mockResolvedValueOnce([]);
-  const { rerender, container } = render(<SuggestedCast cid="c" sid="s" />);
-  rerender(<SuggestedCast cid="c" sid="s2" />);
+  const { rerender, container } = render(<SuggestedCast cid="c" sid="s" cast={CAST} />);
+  rerender(<SuggestedCast cid="c" sid="s2" cast={CAST} />);
   await waitFor(() => expect(api.getSuggestions).toHaveBeenCalledTimes(2));
   release(SUGGESTIONS);
   await new Promise((r) => setTimeout(r, 0));

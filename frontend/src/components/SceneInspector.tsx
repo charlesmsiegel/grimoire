@@ -929,19 +929,18 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           )}
           <button className="primary" onClick={addCastMember} disabled={!addActorId}>+ Add</button>
         </div>
-        {/* "Who should appear" (#96), under the picker it shortcuts. Keyed on
-            `refreshKey` because the scan reads the cards of whoever is cast
-            *now*, so a turn that seats someone can surface new names. */}
-        {cast.length > 0 && (
-          <SuggestedCast cid={cid} sid={sid} refreshKey={refreshKey}
-                         nameOf={(id) => names[`characters/${id}`]
-                                         ?? chars.find((c) => c.id === id)?.name ?? id}
-                         onCast={() => {
-                           reloadCast();
-                           onSceneChanged();
-                           askRolling();   // a join appends a transition post (#85)
-                         }} />
-        )}
+        {/* "Who should appear" (#96), under the picker it shortcuts. Takes the
+            cast, NOT `refreshKey`: the scan reads these characters' cards and
+            never the transcript, so keying it on the turn counter would buy a
+            request per turn to be told the same thing. */}
+        <SuggestedCast cid={cid} sid={sid} cast={cast}
+                       nameOf={(id) => names[`characters/${id}`]
+                                       ?? chars.find((c) => c.id === id)?.name ?? id}
+                       onCast={() => {
+                         reloadCast();
+                         onSceneChanged();
+                         askRolling();   // a join appends a transition post (#85)
+                       }} />
       </SideSection>
 
       {/* Pins & excludes (#129). Directly under the cast, because the row
