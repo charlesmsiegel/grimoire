@@ -48,10 +48,15 @@ test("an uploaded file's own name becomes the stored name, minus what a URL cann
   expect(nameFromFile("...png")).toBe("image");   // nothing addressable survived
 });
 
-test("a name already taken gets the first free suffix", () => {
+test("a name already taken gets the first free suffix, case folded", () => {
   expect(freeName("map", [])).toBe("map");
   expect(freeName("map", ["map"])).toBe("map-2");
   expect(freeName("map", ["map", "map-2", "map-3"])).toBe("map-4");
+  // On Windows and macOS `Coast.png` IS `coast.png`, so a case-sensitive
+  // comparison would hand out a name that cannot be claimed without replacing
+  // the image already there.
+  expect(freeName("Coast", ["coast"])).toBe("Coast-2");
+  expect(freeName("Coast", ["coast", "COAST-2"])).toBe("Coast-3");
 });
 
 test("the inserted url carries no cache token", () => {
@@ -127,6 +132,8 @@ test("a library whose listing failed offers no upload", async () => {
                           onInsert={() => {}} onClose={() => {}} />);
   expect(await screen.findByText("campaign not found")).toBeTruthy();
   expect((screen.getByLabelText(/add an image/i) as HTMLInputElement).disabled).toBe(true);
+  // and it does not also claim there are no images: the read is what failed
+  expect(screen.queryByText(/no campaign images yet/i)).toBeNull();
 });
 
 test("removing a library image is confirmed first, and names what it costs", async () => {
