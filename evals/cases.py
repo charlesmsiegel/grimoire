@@ -525,25 +525,30 @@ def build_turn_taking() -> dict:
 
 
 def grade_turn_taking(ctx: dict, output: str) -> list[Check]:
-    nomination = ctx["nomination"] or {}
-    return [
-        # Positive control FIRST, as in owned-lore: every check below reads the
-        # nomination, so a fixture that stopped producing the intended one would
-        # score some other question under this case's name.
-        Check("turns.control",
-              nomination.get("lead") == _OVERDUE
-              and nomination.get("reason") == "rotation",
-              f"fixture nominated {nomination or None!r}, wanted {_OVERDUE!r} by "
-              "rotation; the fixture, not the model, is broken"),
-        # The prompt half, and the only half replay can judge: render the
-        # section from the nomination the case computed and require it verbatim.
-        # Switch the flag off, empty the template, or break the variable feeding
-        # it, and this fails offline — the output checks below cannot, because a
-        # recording does not react to a template edit.
-    ] + graders.grade_prompt_section(ctx["messages"], "active_speaker",
-                                     "scene/sections/active_speaker.j2",
-                                     speaker=nomination or None)       + graders.grade_turn_taking(output, nomination, ctx["players"],
-                                  ctx["npc_names"])
+    # None when the fixture stopped producing a nomination at all, which the
+    # control check below reports and the two graders each handle: an empty
+    # render fails `prompt.active_speaker`, and grade_turn_taking says there
+    # was nothing to score against rather than raising.
+    nomination = ctx["nomination"]
+    control = Check(
+        # Positive control FIRST, as in owned-lore: every check after this one
+        # reads the nomination, so a fixture that stopped producing the intended
+        # one would score some other question under this case's name.
+        "turns.control",
+        bool(nomination) and nomination["lead"] == _OVERDUE
+        and nomination["reason"] == "rotation",
+        f"fixture nominated {nomination!r}, wanted {_OVERDUE!r} by rotation; "
+        "the fixture, not the model, is broken")
+    # The prompt half, and the only half replay can judge: the section is
+    # rendered from the nomination this case computed and required verbatim in
+    # the assembled prompt. Switch the flag off, empty the template or break the
+    # variable feeding it and this fails offline — the output checks cannot,
+    # because a recording does not react to a template edit.
+    section = graders.grade_prompt_section(ctx["messages"], "active_speaker",
+                                           "scene/sections/active_speaker.j2",
+                                           speaker=nomination)
+    return [control] + section + graders.grade_turn_taking(
+        output, nomination, ctx["players"], ctx["npc_names"])
 
 
 # ------------------------------------------------------------------- the suite
