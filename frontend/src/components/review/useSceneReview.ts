@@ -34,10 +34,11 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   /** Clear the banner outright — what End scene does on the way in, because it
    *  is the page's own recovery from whatever was last on screen. */
   clearError: () => void;
-  /** Drop a banner this review raised, by tag — and only those two tags: an
-   *  untagged chat error (with its generate-a-reply Retry) is not this review's
-   *  to take. */
-  dismissError: (from: string) => void;
+  /** Drop a banner this review raised, by tag. Narrowed to the two tags this
+   *  review actually raises, so the rule is the type rather than a promise in
+   *  a comment: the banner is shared, and an untagged chat error — whose Retry
+   *  generates another scene reply — is not this review's to take. */
+  dismissError: (from: "audit" | "dossiers") => void;
   /** A committed review rewrote every file behind the page's panels. */
   onSaved: () => void;
 }) {
