@@ -11,28 +11,59 @@ import { render, screen, fireEvent, waitFor, act, within } from "@testing-librar
 import { MemoryRouter, Link } from "react-router-dom";
 
 // The mocks and the per-test defaults are shared with the play-view suite; see
-// `routes/campaignHarness`. A `vi.mock` factory is hoisted above every import
+// `src/testkit/campaignHarness`. A `vi.mock` factory is hoisted above every import
 // and can close over nothing, hence the dynamic imports.
 vi.mock("../CastPanel", async () =>
-  (await import("../../routes/campaignMocks")).componentStubs.CastPanel());
+  (await import("../../testkit/campaignMocks")).componentStubs.CastPanel());
 vi.mock("../NewSceneChooser", async () =>
-  (await import("../../routes/campaignMocks")).componentStubs.NewSceneChooser());
+  (await import("../../testkit/campaignMocks")).componentStubs.NewSceneChooser());
 vi.mock("../CalendarConfig", async () =>
-  (await import("../../routes/campaignMocks")).componentStubs.CalendarConfig());
+  (await import("../../testkit/campaignMocks")).componentStubs.CalendarConfig());
 vi.mock("../ReplayPanel", async () =>
-  (await import("../../routes/campaignMocks")).componentStubs.ReplayPanel());
+  (await import("../../testkit/campaignMocks")).componentStubs.ReplayPanel());
 vi.mock("../ResponsePresetPicker", async () =>
-  (await import("../../routes/campaignMocks")).componentStubs.ResponsePresetPicker());
+  (await import("../../testkit/campaignMocks")).componentStubs.ResponsePresetPicker());
 vi.mock("../../api/client", async () =>
-  (await import("../../routes/campaignMocks")).campaignApiMock());
+  (await import("../../testkit/campaignMocks")).campaignApiMock());
 vi.mock("../../api/models", () => ({ getModels: vi.fn() }));
 import { api } from "../../api/client";
 import {
-  cardFor, installCampaignMocks, ONE_SCENE, openScene, PHASES_NONE_CUT, playRoutes,
-  renderCampaign, reviewColumn, showProposal, withPalette,
-} from "../../routes/campaignHarness";
+  installCampaignMocks, ONE_SCENE, openScene, PHASES_NONE_CUT, playRoutes,
+  renderCampaign, withPalette,
+} from "../../testkit/campaignHarness";
 
 beforeEach(installCampaignMocks);
+
+/** The review shows one store's proposals at a time, chosen in its column.
+ *  Open drawers until `present()` finds what the test is after — which is what
+ *  a reviewer does, and saves every test from having to know which store each
+ *  edit kind is filed under. */
+/** The proposal card whose label matches — approval is a standing verdict on
+ *  the card now, not a checkbox inside it. */
+/** The review's own column. Named, because the transcript pane beside it is a
+ *  `complementary` too. */
+export const reviewColumn = () => within(screen.getByRole("complementary", { name: /proposals/i }));
+
+export function cardFor(label: RegExp): HTMLElement {
+  const find = () => Array.from(document.querySelectorAll(".absorb-edit"))
+    .find((el) => label.test(el.textContent ?? ""));
+  showProposal(find);
+  const card = find();
+  if (!card) throw new Error(`no proposal card matching ${label}`);
+  return card as HTMLElement;
+}
+
+export function showProposal(present: () => unknown) {
+  if (present()) return;
+  // Re-queried each pass: clicking a drawer re-renders the column, so a
+  // NodeList captured up front holds elements React has already replaced.
+  const drawers = () =>
+    Array.from(document.querySelectorAll(".context-column .column-row")) as HTMLElement[];
+  for (let i = 0; i < drawers().length; i++) {
+    fireEvent.click(drawers()[i]);
+    if (present()) return;
+  }
+}
 
 test("End scene fetches a preview, edits, and saves the chronicle", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);

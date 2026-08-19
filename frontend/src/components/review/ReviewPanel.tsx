@@ -6,8 +6,8 @@ import type { SceneReview } from "./useSceneReview";
 
 export default function ReviewPanel({ review }: { review: SceneReview }) {
   const {
-    absorb, setAbsorb, budgetCutPhases, conflictByRow, editRows, shownRows,
-    reviewSection: openSection, uncitedRows, saveError, saveAbsorb, discard,
+    absorb, editChronicle, budgetCutPhases, conflictByRow, editRows, shownRows,
+    openSection, uncitedRows, saveError, saveAbsorb, discard,
     undecidedCount, saving, reviewBusy, retryAudit, retryingAudit,
     retryDossiers, retryingDossiers,
   } = review;
@@ -17,10 +17,10 @@ export default function ReviewPanel({ review }: { review: SceneReview }) {
       <h4>Review scene summary</h4>
       <label className="field-hint" htmlFor="absorb-oneline">One line</label>
       <input id="absorb-oneline" aria-label="Scene one-line" value={absorb.one_line}
-             onChange={(e) => setAbsorb({ ...absorb, one_line: e.target.value })} />
+             onChange={(e) => editChronicle({ one_line: e.target.value })} />
       <label className="field-hint" htmlFor="absorb-summary">Summary</label>
       <textarea id="absorb-summary" aria-label="Scene summary" rows={5} value={absorb.summary}
-                onChange={(e) => setAbsorb({ ...absorb, summary: e.target.value })} />
+                onChange={(e) => editChronicle({ summary: e.target.value })} />
       {absorb.timeline_events.length > 0 && (
         <ul className="absorb-timeline">
           {absorb.timeline_events.map((t, i) => (

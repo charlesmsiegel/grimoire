@@ -7,7 +7,7 @@ import type { SceneReview } from "./useSceneReview";
 export default function ReviewColumn({ review }: { review: SceneReview }) {
   const {
     editRows, approvedCount, rejectedCount, undecidedCount, uncitedRows, lowRows, groupCounts,
-    reviewSection: openSection, setReviewSection,
+    openSection, openDrawer,
   } = review;
   return (
     <>
@@ -37,13 +37,13 @@ export default function ReviewColumn({ review }: { review: SceneReview }) {
           about her state", and it is the one with a deadline. */}
       <ColumnSection label="Needs you">
         <button className={"column-row alert" + (openSection === "uncited" ? " active" : "")}
-                onClick={() => setReviewSection("uncited")}>
+                onClick={() => openDrawer("uncited")}>
           <span className="column-row-label">Uncited</span>
           <span className="column-row-count">{uncitedRows.length}</span>
         </button>
         {lowRows.length > 0 && (
           <button className={"column-row alert" + (openSection === "low" ? " active" : "")}
-                  onClick={() => setReviewSection("low")}>
+                  onClick={() => openDrawer("low")}>
             <span className="column-row-label">Low confidence</span>
             <span className="column-row-count">{lowRows.length}</span>
           </button>
@@ -54,7 +54,7 @@ export default function ReviewColumn({ review }: { review: SceneReview }) {
         {groupCounts.map((g) => (
           <button key={g.key}
                   className={"column-row" + (openSection === g.key ? " active" : "")}
-                  onClick={() => setReviewSection(g.key)}>
+                  onClick={() => openDrawer(g.key)}>
             <span className="column-row-label">{g.label}</span>
             <span className="column-row-count">{g.n}</span>
           </button>

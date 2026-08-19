@@ -46,6 +46,12 @@ export default defineConfig({
         // report as an unreachable 0% that no test could ever move.
         "src/theme/types.ts",
         "src/**/*.d.ts",
+        // Shared test scaffolding -- mock factories, fixtures and render
+        // helpers that several `.test.tsx` files import rather than restate.
+        // It is test code that happens not to be named `.test.`, so counting
+        // it here would put hundreds of lines of `vi.fn()` in the denominator
+        // of a number this config goes out of its way to keep honest.
+        "src/testkit/**",
       ],
     },
   },
