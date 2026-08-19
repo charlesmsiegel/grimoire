@@ -717,7 +717,13 @@ def list_characters(cid: str) -> list[dict]:
 def _patch_pc_item(cid: str, item: dict) -> dict:
     """The PC counterpart of `_patch_char_item`: `pcs.list_pcs` computed these
     against one root, but a thin campaign's PC can hold its images world-side,
-    so the derived fields have to come from the overlay union (#219)."""
+    so the derived fields have to come from the overlay union (#219).
+
+    That does mean the store-level scan is always discarded here -- two asset
+    scans per row for one answer. It is kept rather than parameterised away
+    because `pcs.list_pcs` is also the world route's answer, where the values
+    it computes are the ones served; `_patch_char_item` has carried the same
+    cost since characters got theirs."""
     names = [i["name"] for i in list_images(cid, item["id"], item["default_version"],
                                             pcs.ASSET_BASE)]
     return {**item,

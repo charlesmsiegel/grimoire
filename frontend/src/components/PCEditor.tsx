@@ -40,6 +40,11 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
   const reload = useCallback(() => api.listPCs(scope).then(setPCs), [scope.kind, scope.id]);  // eslint-disable-line react-hooks/exhaustive-deps
   const reloadImages = useCallback((pid: string, version: string) => {
     if (!version) { setImages([]); return; }
+    // Swallowed on purpose, and narrowly: the shelf is one section of a screen
+    // whose subject is the persona. A listing that fails leaves the reader
+    // their PC with no art shown, which is the same thing an empty store
+    // looks like -- far better than replacing the whole record with a banner
+    // about a directory scan. Every WRITE on this shelf reports.
     api.listPCImages(scope, pid, version).then(setImages).catch(() => setImages([]));
   }, [scope.kind, scope.id]);  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -151,8 +156,11 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
     .filter((n) => n.startsWith("gallery_"))
     .sort((a, b) => Number(a.slice("gallery_".length)) - Number(b.slice("gallery_".length)));
   const avatarFocus = detail?.versions.find((v) => v.id === vid)?.avatar_focus ?? null;
-  const imgSrc = (n: string) => {
-    const base = api.actorImageUrl(scope, "pcs", detail?.meta.id ?? "", vid, n);
+  // Only ever called from inside the `detail &&` branch, so the id is there;
+  // taking it as an argument says that instead of papering it over with a
+  // `?? ""` that would build a URL with an empty path segment.
+  const imgSrc = (pid: string, n: string) => {
+    const base = api.actorImageUrl(scope, "pcs", pid, vid, n);
     const v = images.find((i) => i.name === n)?.v;
     return v ? `${base}?v=${v}` : base;
   };
@@ -255,7 +263,7 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
         {pcs.map((p) => (
           <button
             key={p.id}
-            className={"row pc-row" + (detail?.meta.id === p.id ? " active" : "")}
+            className={"row" + (detail?.meta.id === p.id ? " active" : "")}
             onClick={() => select(p.id)}
           >
             {/* aria-hidden: the row is a button named from its contents, and a
@@ -292,7 +300,7 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
         ) : mode === "view" ? (
           <div className="detail-view">
             {cropOpen && hasAvatar && (
-              <AvatarFocusPicker src={imgSrc("avatar")} initial={avatarFocus ?? 50}
+              <AvatarFocusPicker src={imgSrc(detail.meta.id, "avatar")} initial={avatarFocus ?? 50}
                                  onSave={saveFocus} onClose={() => setCropOpen(false)} />
             )}
             <div className="detail-main">
@@ -301,7 +309,7 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
                   <button className="pc-head-art avatar-crop-btn" type="button"
                           aria-label="Adjust avatar crop" title="Adjust avatar crop"
                           onClick={() => setCropOpen(true)}>
-                    <Portrait src={imgSrc("avatar")} name={persona.name || detail.meta.name}
+                    <Portrait src={imgSrc(detail.meta.id, "avatar")} name={persona.name || detail.meta.name}
                               focus={avatarFocus} />
                   </button>
                 ) : (
@@ -311,12 +319,18 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
                 )}
                 <h3>{persona.name || detail.meta.name}</h3>
               </div>
+              {/* Write controls in the read-only view, deliberately, and the
+                  same way `EntityEditor` does it: an image is a separate
+                  resource that persists the moment it is chosen, with no Save
+                  to wait for. Putting the shelf inside the form would file it
+                  under the persona draft the form's Cancel throws away, which
+                  is the opposite of what happens to an uploaded file. */}
               <div className="section-label">Images</div>
               <div className="images-shelf">
                 {hasAvatar ? (
                   <figure className="shelf-tile avatar-tile">
-                    <a href={imgSrc("avatar")} target="_blank" rel="noreferrer">
-                      <img alt="avatar image" src={imgSrc("avatar")} />
+                    <a href={imgSrc(detail.meta.id, "avatar")} target="_blank" rel="noreferrer">
+                      <img alt="avatar image" src={imgSrc(detail.meta.id, "avatar")} />
                     </a>
                     <figcaption>avatar</figcaption>
                     <button className="shelf-promote" onClick={() => removeImage("avatar")}>Remove</button>
@@ -326,7 +340,7 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
                 )}
                 {galleryNames.map((n) => (
                   <div className="shelf-tile" key={n}>
-                    <a href={imgSrc(n)} target="_blank" rel="noreferrer"><img alt={n} src={imgSrc(n)} /></a>
+                    <a href={imgSrc(detail.meta.id, n)} target="_blank" rel="noreferrer"><img alt={n} src={imgSrc(detail.meta.id, n)} /></a>
                     <button className="shelf-promote" onClick={() => promoteImage(n)}>Set as avatar</button>
                     <button className="shelf-promote" onClick={() => removeImage(n)}>Remove</button>
                   </div>

@@ -36,22 +36,31 @@ export class ApiError extends Error {
  *
  *  `catch (err: any)` followed by `err.detail ?? String(err)` is what this
  *  replaces, at every call site that had it. The `any` bought nothing and cost
- *  the compiler's check on everything else the handler touched; the behaviour
- *  is deliberately identical, so this is a narrowing, not a rewrite.
+ *  the compiler's check on everything else the handler touched.
  *
  *  It reads `detail` structurally rather than only off `ApiError`, and that is
  *  the part that has to stay: `request` and `requestForm` do throw `ApiError`,
  *  but a rejection can also arrive as a bare `{detail}` from a stream error
  *  frame or a hand-built rejection, and those used to render their message.
  *  An `instanceof` test alone would quietly turn every one of them into
- *  "[object Object]" on screen. */
+ *  "[object Object]" on screen.
+ *
+ *  Two deliberate departures from the `??` it replaces, both because `??` only
+ *  guards null and undefined:
+ *
+ *  - an EMPTY detail falls back instead of rendering as a blank banner. The
+ *    old expression showed the empty string, and did so from `ApiError` and a
+ *    plain object alike, so a backend that answered `{"detail": ""}` produced
+ *    an error box with nothing in it.
+ *  - a null or non-object rejection no longer throws. `err.detail` on `null`
+ *    is a TypeError raised inside the `catch`, which is the one place a
+ *    throw has nowhere left to go. */
 export function errorText(err: unknown): string {
-  if (err instanceof ApiError) return err.detail;
-  if (typeof err === "object" && err !== null) {
-    const { detail } = err as { detail?: unknown };
-    if (typeof detail === "string" && detail) return detail;
-  }
-  return String(err);
+  const detail = err instanceof ApiError ? err.detail
+    : typeof err === "object" && err !== null
+      ? (err as { detail?: unknown }).detail
+      : undefined;
+  return typeof detail === "string" && detail ? detail : String(err);
 }
 
 async function requestRaw<T>(method: string, path: string, body?: unknown,

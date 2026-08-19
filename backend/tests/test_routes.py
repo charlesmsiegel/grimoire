@@ -1043,6 +1043,95 @@ def test_campaign_pc_image_promote_copies_up_before_swapping(client):
     assert client.post(f"{cbase}/gallery_9/promote").status_code == 404
 
 
+def test_pc_image_routes_refuse_an_id_that_names_no_pc_or_version(client):
+    """`put_image` creates the directory it writes into, so an unchecked id
+    turns a typo into `pcs/<typo>/assets/<vid>/avatar.png` -- a folder
+    `list_pcs` never shows (it needs `pc.md`) and `read_pc` never reaches, so
+    the bytes are orphaned on disk forever. Every route on this surface is
+    gated on the PC *and* the version, including delete: removing an image that
+    is already gone is idempotent, but removing one from a PC that does not
+    exist is a typo worth reporting."""
+    wid = _world(client)
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    png = {"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}
+
+    ghost_pc = f"/api/worlds/{wid}/pcs/nobody/versions/default/images"
+    ghost_ver = f"/api/worlds/{wid}/pcs/{pid}/versions/typo/images"
+    for base, detail in ((ghost_pc, "pc not found"), (ghost_ver, "version not found")):
+        for method, url in (("GET", base), ("GET", f"{base}/avatar"),
+                            ("DELETE", f"{base}/avatar"),
+                            ("POST", f"{base}/avatar/promote")):
+            r = client.request(method, url)
+            assert (r.status_code, r.json()["detail"]) == (404, detail), (method, url)
+        r = client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+        assert (r.status_code, r.json()["detail"]) == (404, detail), base
+        r = client.put(f"{base}/avatar/focus", json={"focus": 10})
+        assert (r.status_code, r.json()["detail"]) == (404, detail), base
+
+    # and nothing was created on the way to those 404s
+    wroot = store.worlds.world_root(wid)
+    assert not (wroot / "pcs" / "nobody").exists()
+    assert not (wroot / "pcs" / pid / "assets" / "typo").exists()
+    # the real version still works, so the gate is not just refusing everything
+    assert client.put(f"/api/worlds/{wid}/pcs/{pid}/versions/default/images/avatar",
+                      files=png).status_code == 200
+
+
+def test_campaign_pc_image_routes_gate_on_the_inherited_pc_not_the_campaign_copy(client):
+    """The gate resolves through `overlay.pc_root`. A croot-only check would
+    404 every PC a thin campaign has not materialized -- which is all of them."""
+    wid, cid = _campaign(client)
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    assert not (store.campaigns.campaign_root(cid) / "pcs" / pid).exists()
+
+    base = f"/api/campaigns/{cid}/pcs/{pid}/versions/default/images"
+    assert client.get(base).status_code == 200          # inherited PC resolves
+    assert client.put(f"{base}/avatar",
+                      files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}
+                      ).status_code == 200
+
+    ghost = f"/api/campaigns/{cid}/pcs/nobody/versions/default/images"
+    assert client.get(ghost).status_code == 404
+    assert client.put(f"{ghost}/avatar",
+                      files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}
+                      ).status_code == 404
+    assert not (store.campaigns.campaign_root(cid) / "pcs" / "nobody").exists()
+
+    # A PC this campaign has DELETED resolves to the campaign root, where there
+    # is no pc.md -- so the gate refuses it for the same reason it refuses a
+    # typo, and art cannot be filed against a record the campaign disowned.
+    store.overlay.add_deleted(cid, f"pcs/{pid}")
+    assert client.get(f"/api/campaigns/{cid}/pcs").json() == []
+    r = client.put(f"{base}/avatar",
+                   files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    assert (r.status_code, r.json()["detail"]) == (404, "pc not found")
+
+
+def test_a_purged_version_cannot_be_given_campaign_art(client):
+    """Picking a version removes the siblings from the campaign, so a request
+    still aimed at one of them names a version this campaign no longer has.
+    The gate is load-bearing here rather than merely tidy: without it the
+    upload lands in `assets/<purged-vid>/`, which nothing in the campaign can
+    ever render, list or delete."""
+    wid, cid = _campaign(client)
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    older = client.post(f"/api/worlds/{wid}/pcs/{pid}/versions",
+                        json={"name": "Older",
+                              "persona": store.pcs.blank_persona("Winifred")}).json()["version"]
+    assert client.post(f"/api/campaigns/{cid}/pcs/{pid}/pick-version",
+                       json={"version": "default"}).status_code == 200
+    assert [v["id"] for v in client.get(f"/api/campaigns/{cid}/pcs/{pid}").json()["versions"]] == ["default"]
+
+    r = client.put(f"/api/campaigns/{cid}/pcs/{pid}/versions/{older}/images/avatar",
+                   files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    assert (r.status_code, r.json()["detail"]) == (404, "version not found")
+    assert not (store.campaigns.campaign_root(cid) / "pcs" / pid / "assets" / older).exists()
+    # the world still has that version, and it can still be given art there
+    assert client.put(f"/api/worlds/{wid}/pcs/{pid}/versions/{older}/images/avatar",
+                      files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}
+                      ).status_code == 200
+
+
 def test_campaign_pc_image_routes_404_for_an_unknown_campaign(client):
     """Every campaign PC image route gates on the campaign existing, so a typo
     in the slug is a 404 rather than an empty listing or a stray directory."""

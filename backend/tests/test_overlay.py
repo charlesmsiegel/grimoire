@@ -428,6 +428,28 @@ def test_pc_promote_copies_up_and_leaves_the_world_alone(monkeypatch, tmp_path):
     assert assets.image_path(wroot, pid, "default", "gallery_1", base).read_bytes() == PNG + b"2"
 
 
+def test_a_pcs_campaign_art_outlives_dematerialization(monkeypatch, tmp_path):
+    """Reverting a PC to inherited drops its persona files and keeps its art.
+
+    That is the per-file overlay's whole contract, and it is worth pinning for
+    PCs specifically: `dematerialize_actor` unlinks `*.md` and then rmdirs the
+    directory *if it is empty*, so an `assets/` subdirectory is what stops the
+    removal taking the campaign's own images with it."""
+    wroot, cid, pid = _pc_pair(monkeypatch, tmp_path)
+    base = pcs.ASSET_BASE
+    assets.put_image(wroot, pid, "default", "avatar", PNG, "png", base)
+    overlay.materialize_actor(cid, "pcs", pid)
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(croot, pid, "default", "avatar", PNG + b"mine", "png", base)
+
+    overlay.dematerialize_actor(cid, "pcs", pid)
+
+    assert overlay.pc_root(cid, pid) == wroot                     # persona reverted
+    assert not (croot / "pcs" / pid / "default.md").exists()
+    assert overlay.image_root(cid, pid, "default", "avatar", base) == croot   # art kept
+    assert overlay.read_pc(cid, pid)["versions"][0]["images"] == ["avatar"]
+
+
 def test_a_detached_pc_does_not_inherit_a_strangers_image(monkeypatch, tmp_path):
     """`_flat_ref("pcs", pid)` in `detached` governs PC assets too: once the
     world PC is gone and a new one takes its id, the campaign's spared copy
