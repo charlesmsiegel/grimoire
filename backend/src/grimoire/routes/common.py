@@ -478,6 +478,11 @@ def _world_char_version_or_404(wid: str, cid: str, vid: str):
     departs from `worlds._world_pc_version_or_404`: they create nothing, they
     already answer "no image" for an id that names nothing, and
     `GET .../images/avatar` is hit once per portrait per rendered grid.
+
+    Honest about its reach: this refuses an id that names nothing *now*. A
+    version deleted between the check and the write still strands the upload,
+    because no lock spans the two -- it is a guard against a typo, not against
+    a race.
     """
     root = _world_root_or_404(wid)
     try:

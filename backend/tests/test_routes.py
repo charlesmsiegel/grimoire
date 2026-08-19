@@ -15,7 +15,6 @@ import pytest
 from fastapi import Request
 
 import grimoire.store as store
-from grimoire.main import app
 from grimoire.store import atomic
 from grimoire import llm, routes
 from grimoire.llm import LLMClient
@@ -641,10 +640,10 @@ def test_copy_image_from_greeting_refuses_a_character_that_is_not_there(client):
         assert not (root / "characters" / chid / "assets" / "typo").exists()
 
 
-def _actor_image_write_routes():
+def _actor_image_write_routes(client):
     """Every registered write route on the per-version actor image surface.
 
-    Enumerated from the app rather than listed here on purpose: the point is to
+    Enumerated from the app under test rather than listed here on purpose: the point is to
     catch route number nineteen, added later by someone who did not read this
     file. Nine handlers were hardened by hand for #360 and a tenth
     (`routes/greetings.py`'s world-side copy-from-greeting) was only found by
@@ -662,7 +661,7 @@ def _actor_image_write_routes():
 
     surface = re.compile(r"^/api/(worlds|campaigns)/\{\w+\}/(characters|pcs)/\{\w+\}"
                          r"/versions/\{\w+\}/images")
-    return sorted({(m, path) for methods, path in flatten(app.routes)
+    return sorted({(m, path) for methods, path in flatten(client.app.routes)
                    for m in methods & {"PUT", "POST", "DELETE"}
                    if surface.match(path)})
 
@@ -762,7 +761,7 @@ def test_every_actor_image_write_route_refuses_an_unknown_actor_or_version(clien
                            "embed-abc123def456", b"art", "png", base="greetings")
     real = {"characters": chid, "pcs": pid}
 
-    routes = _actor_image_write_routes()
+    routes = _actor_image_write_routes(client)
     seen = Counter((path.split("/")[2], path.split("/")[4]) for _m, path in routes)
     assert set(seen) == {("worlds", "characters"), ("worlds", "pcs"),
                          ("campaigns", "characters"), ("campaigns", "pcs")}, seen

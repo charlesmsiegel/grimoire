@@ -454,11 +454,19 @@ def delete_version_images(root: Path, cid: str, vid: str, base: str = "character
     Unlocked, like the whole-record `shutil.rmtree` in `characters.delete_character`
     and `pcs.delete_pc`: the version it belongs to is already gone, so an upload
     racing this is writing art for a version that no longer exists either way.
+
+    A symlinked folder loses the link, never what it points at. `rmtree`
+    refuses a symlink outright (`OSError`), which would 500 the delete *after*
+    the record file is already unlinked; and a store on a synced folder is
+    exactly where someone points an asset directory at an art library living
+    somewhere else.
     """
     if not (safe_id(cid) and safe_id(vid)):
         return
     d = _dir(root, cid, vid, base)
-    if d.is_dir():
+    if d.is_symlink():
+        d.unlink()
+    elif d.is_dir():
         shutil.rmtree(d)
 
 

@@ -218,7 +218,8 @@ def delete_version(root: Path, pid: str, vid: str) -> None:
     if len(_version_ids(root, pid)) == 1:
         raise ValueError("cannot delete the last version of a PC")
     p.unlink()
-    # the persona was the only thing that made this version's art addressable (#360)
+    # the persona was the only thing that made this version's art addressable;
+    # after the unlink for the reason characters.delete_version gives (#360)
     assets.delete_version_images(root, pid, vid, ASSET_BASE)
     meta = _read_meta(root, pid)
     if meta.get("default_version") == vid:
