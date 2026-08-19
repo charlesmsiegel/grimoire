@@ -327,11 +327,12 @@ def scan_depth() -> int:
 
     0 is a real answer rather than a disabled feature -- it empties the window,
     so no keyword in the TRANSCRIPT activates anything. It does not silence the
-    turn's own un-persisted input: `_assemble`'s `wi_seed` folds a scene
-    opener's prompt or a director's note in regardless, because nothing in the
-    history has said those words yet. A cleared or hand-mangled field falls back
-    to the default instead, which is `_count`'s split between a choice and a
-    mistake and the reason this is not parsed inline.
+    turn's own un-persisted input: the context builder seeds activation with a
+    scene opener's prompt or a director's note regardless of this setting,
+    because nothing in the history has said those words yet. A cleared or
+    hand-mangled field falls back to the default instead, which is `_count`'s
+    split between a choice and a mistake and the reason this is not parsed
+    inline.
     """
     return _count("context_scan_depth", DEFAULT_SCAN_DEPTH)
 
