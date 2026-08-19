@@ -17,7 +17,7 @@ vi.mock("../api/client", async () => {
     },
   };
 });
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 
 const GREG_MONTHS = [
   { key: "01", name: "January", days: 31 },
@@ -311,16 +311,47 @@ it("a gallery image can be promoted to avatar, and either can be removed", async
   (api.listPCImages as any).mockResolvedValue([
     { name: "avatar", ext: "png", v: "a1" }, { name: "gallery_1", ext: "png", v: "g1" },
   ]);
-  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const { container } = render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Elara"));
 
   fireEvent.click(await screen.findByRole("button", { name: "Set as avatar" }));
   await waitFor(() => expect(api.promotePCImage).toHaveBeenCalledWith(
     { kind: "world", id: "w" }, "elara", "default", "gallery_1"));
 
-  fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]);
+  // Scoped to each tile rather than picked out of a flat list by index: both
+  // tiles carry a button reading "Remove", so a positional query would keep
+  // passing if the shelf's order changed under it.
+  const tile = (sel: string) => within(container.querySelector(sel) as HTMLElement);
+  fireEvent.click(tile(".avatar-tile").getByRole("button", { name: "Remove" }));
   await waitFor(() => expect(api.deletePCImage).toHaveBeenCalledWith(
     { kind: "world", id: "w" }, "elara", "default", "avatar"));
+
+  const gallery = [...container.querySelectorAll(".shelf-tile")]
+    .find((t) => t.querySelector('img[alt="gallery_1"]')) as HTMLElement;
+  fireEvent.click(within(gallery).getByRole("button", { name: "Remove" }));
+  await waitFor(() => expect(api.deletePCImage).toHaveBeenLastCalledWith(
+    { kind: "world", id: "w" }, "elara", "default", "gallery_1"));
+});
+
+it("a failed image write is reported in the banner, not swallowed", async () => {
+  // Every WRITE on this shelf reports; only the listing is allowed to fail
+  // quietly. `errorText` is what turns the rejection into the sentence shown.
+  (api.putPCImage as any).mockRejectedValue(new ApiError(400, "unsupported image type"));
+  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Elara"));
+  await screen.findByText("no avatar");
+
+  fireEvent.change(screen.getByLabelText("Add image"), { target: { files: [FILE] } });
+  expect(await screen.findByText("unsupported image type")).toBeInTheDocument();
+});
+
+it("a listing that fails leaves the persona readable instead of a banner", async () => {
+  (api.listPCImages as any).mockRejectedValue(new ApiError(500, "disk gone"));
+  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Elara"));
+  await screen.findByText("a wanderer");            // the record still reads
+  expect(screen.getByText("no avatar")).toBeInTheDocument();
+  expect(screen.queryByText("disk gone")).toBeNull();
 });
 
 it("clicking the portrait opens the crop picker and saves a focus", async () => {

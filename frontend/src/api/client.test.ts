@@ -1,4 +1,4 @@
-import { api, ApiError, invalidateConfigCache } from "./client";
+import { api, ApiError, errorText, invalidateConfigCache } from "./client";
 import { onCampaignsChanged, onConfigChanged } from "../appEvents";
 import type { LocalizeEvent } from "./stream";
 
@@ -822,4 +822,41 @@ test("two searches for the same query are two requests, not one shared read", as
   globalThis.fetch = fetchMock as unknown as typeof fetch;
   await Promise.all([api.search("salt"), api.search("salt")]);
   expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+
+// `errorText` replaced `err.detail ?? String(err)` at 34 call sites across the
+// two actor editors, so what it returns IS the error message the user reads.
+test("errorText reads an ApiError's detail", () => {
+  expect(errorText(new ApiError(404, "character not found"))).toBe("character not found");
+});
+
+test("errorText reads a bare {detail} too, not only an ApiError", () => {
+  // Stream error frames and hand-built rejections arrive as plain objects, and
+  // an `instanceof` test alone would render every one as "[object Object]".
+  expect(errorText({ detail: "could not fetch from chub.ai" }))
+    .toBe("could not fetch from chub.ai");
+});
+
+test("errorText falls back for anything with no usable detail", () => {
+  expect(errorText(new Error("boom"))).toBe("Error: boom");
+  expect(errorText("just a string")).toBe("just a string");
+  expect(errorText({ code: 7 })).toBe("[object Object]");
+  expect(errorText({ detail: 42 })).toBe("[object Object]");   // not a string
+});
+
+test("errorText survives a null rejection instead of throwing inside the catch", () => {
+  // `err.detail` on null is a TypeError raised inside the `catch` that was
+  // meant to be handling the failure -- the one place a throw has nowhere left
+  // to go. This is a deliberate departure from the `??` it replaced.
+  expect(errorText(null)).toBe("null");
+  expect(errorText(undefined)).toBe("undefined");
+});
+
+test("errorText treats an empty detail as no message at all", () => {
+  // Also deliberate, and also because `??` only guards null/undefined: a
+  // backend answering {"detail": ""} used to produce an error banner with
+  // nothing written in it, from an ApiError and a plain object alike.
+  expect(errorText(new ApiError(500, ""))).toBe("Error");
+  expect(errorText({ detail: "" })).toBe("[object Object]");
 });

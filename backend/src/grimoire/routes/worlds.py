@@ -419,22 +419,45 @@ def delete_pc_version(wid: str, pid: str, vid: str):
 # `/pcs/{pid}/images`: a PC's art belongs to the version it depicts, exactly as
 # a character's does, and the flat shape is already claimed by the generic
 # `/worlds/{wid}/{kind}/{eid}/images` routes.
+def _world_pc_version_or_404(wid: str, pid: str, vid: str):
+    """The world root, once `pid`/`vid` are known to name a real PC version.
+
+    Every image route below goes through this, and that is a deliberate
+    departure from the character routes it otherwise mirrors: those hand
+    `assets.put_image` whatever id the URL carried, and `put_image` creates the
+    directory it writes into. A typo'd PC or version therefore *succeeds* with
+    200 and leaves `pcs/<typo>/assets/<vid>/avatar.png` on disk -- a folder no
+    listing shows (`list_pcs` needs `pc.md`, `read_pc` needs the version file)
+    and nothing ever collects. The character surface has the same hole -- filed
+    as #360, since closing it changes the status code of nine live handlers --
+    but there is no reason to ship a second copy of it here.
+    """
+    root = _world_root_or_404(wid)
+    try:
+        store.pcs.require_version(root, pid, vid)   # two stats, no read
+    except store.pcs.PCNotFound:
+        raise HTTPException(status_code=404, detail="pc not found")
+    except store.pcs.PCVersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    return root
+
+
 @router.get("/worlds/{wid}/pcs/{pid}/versions/{vid}/images")
 def list_world_pc_images(wid: str, pid: str, vid: str):
-    return store.assets.list_images(_world_root_or_404(wid), pid, vid,
+    return store.assets.list_images(_world_pc_version_or_404(wid, pid, vid), pid, vid,
                                     base=store.pcs.ASSET_BASE)
 
 
 @router.get("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}")
 def get_world_pc_image(wid: str, pid: str, vid: str, name: str, request: Request):
-    return _serve_image(_world_root_or_404(wid), pid, vid, name,
+    return _serve_image(_world_pc_version_or_404(wid, pid, vid), pid, vid, name,
                         base=store.pcs.ASSET_BASE, request=request)
 
 
 @router.put("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}")
 async def put_world_pc_image(wid: str, pid: str, vid: str, name: str,
                              file: UploadFile = File(...)):
-    root = _world_root_or_404(wid)
+    root = _world_pc_version_or_404(wid, pid, vid)
     data = await file.read()
     ext = _upload_image_ext(data)  # the bytes name the type, not `file.filename` (#321)
     try:
@@ -447,16 +470,19 @@ async def put_world_pc_image(wid: str, pid: str, vid: str, name: str,
 
 @router.delete("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}")
 def delete_world_pc_image(wid: str, pid: str, vid: str, name: str):
-    store.assets.delete_image(_world_root_or_404(wid), pid, vid, name,
+    # Gated on the PC and version, not on the image: removing an image that is
+    # already gone is the caller getting what they asked for, but removing one
+    # from a PC that does not exist is a typo worth reporting.
+    store.assets.delete_image(_world_pc_version_or_404(wid, pid, vid), pid, vid, name,
                               base=store.pcs.ASSET_BASE)
     return {"ok": True}
 
 
 @router.post("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}/promote")
 def promote_world_pc_image(wid: str, pid: str, vid: str, name: str):
+    root = _world_pc_version_or_404(wid, pid, vid)
     try:
-        store.assets.promote_image(_world_root_or_404(wid), pid, vid, name,
-                                   base=store.pcs.ASSET_BASE)
+        store.assets.promote_image(root, pid, vid, name, base=store.pcs.ASSET_BASE)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
     except ValueError as exc:
@@ -467,7 +493,7 @@ def promote_world_pc_image(wid: str, pid: str, vid: str, name: str):
 
 @router.put("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/avatar/focus")
 def put_world_pc_avatar_focus(wid: str, pid: str, vid: str, body: AvatarFocus):
-    root = _world_root_or_404(wid)
+    root = _world_pc_version_or_404(wid, pid, vid)
     if store.assets.image_path(root, pid, vid, store.assets.AVATAR,
                                base=store.pcs.ASSET_BASE) is None:
         raise HTTPException(status_code=404, detail="image not found")

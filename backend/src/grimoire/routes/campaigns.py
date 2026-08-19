@@ -1318,15 +1318,37 @@ def delete_campaign_pc_version(cid: str, pid: str, vid: str):
 # in `worlds.py`, resolved through the overlay exactly as the character image
 # routes above are: reads take the union, deletes tombstone, promotion copies
 # up first.
+def _campaign_pc_version_or_404(cid: str, pid: str, vid: str):
+    """The campaign root, once `pid`/`vid` are known to name a real PC version.
+
+    Resolved through `overlay.pc_root`, not the campaign root: on a thin
+    campaign the PC's persona files are still the world's, so a croot-only
+    check would 404 every inherited PC. The root this *returns* is always the
+    campaign's, because that is where a write has to land.
+
+    Why gate at all: see `worlds._world_pc_version_or_404`. `put_image` creates
+    the directory it writes into, so an unchecked id turns a typo into a
+    permanent, unlisted folder of orphaned bytes.
+    """
+    root = _campaign_root_or_404(cid)
+    try:
+        store.pcs.require_version(store.overlay.pc_root(cid, pid), pid, vid)
+    except store.pcs.PCNotFound:
+        raise HTTPException(status_code=404, detail="pc not found")
+    except store.pcs.PCVersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    return root
+
+
 @router.get("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images")
 def list_campaign_pc_images(cid: str, pid: str, vid: str):
-    _campaign_root_or_404(cid)
+    _campaign_pc_version_or_404(cid, pid, vid)
     return store.overlay.list_images(cid, pid, vid, base=store.pcs.ASSET_BASE)
 
 
 @router.get("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/{name}")
 def get_campaign_pc_image(cid: str, pid: str, vid: str, name: str, request: Request):
-    _campaign_root_or_404(cid)
+    _campaign_pc_version_or_404(cid, pid, vid)
     return _serve_image(
         store.overlay.image_root(cid, pid, vid, name, base=store.pcs.ASSET_BASE),
         pid, vid, name, base=store.pcs.ASSET_BASE, request=request)
@@ -1335,7 +1357,7 @@ def get_campaign_pc_image(cid: str, pid: str, vid: str, name: str, request: Requ
 @router.put("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/{name}")
 async def put_campaign_pc_image(cid: str, pid: str, vid: str, name: str,
                                 file: UploadFile = File(...)):
-    root = _campaign_root_or_404(cid)
+    root = _campaign_pc_version_or_404(cid, pid, vid)
     data = await file.read()
     ext = _upload_image_ext(data)  # the bytes name the type, not `file.filename` (#321)
     try:
@@ -1348,7 +1370,7 @@ async def put_campaign_pc_image(cid: str, pid: str, vid: str, name: str,
 
 @router.delete("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/{name}")
 def delete_campaign_pc_image(cid: str, pid: str, vid: str, name: str):
-    _campaign_root_or_404(cid)
+    _campaign_pc_version_or_404(cid, pid, vid)
     # tombstone so a still-materialized world image doesn't show back through
     # the overlaid read the moment the campaign's own copy is gone
     store.overlay.delete_image(cid, pid, vid, name, base=store.pcs.ASSET_BASE)
@@ -1357,7 +1379,7 @@ def delete_campaign_pc_image(cid: str, pid: str, vid: str, name: str):
 
 @router.post("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/{name}/promote")
 def promote_campaign_pc_image(cid: str, pid: str, vid: str, name: str):
-    _campaign_root_or_404(cid)
+    _campaign_pc_version_or_404(cid, pid, vid)
     try:
         store.overlay.promote_image(cid, pid, vid, name, base=store.pcs.ASSET_BASE)
     except FileNotFoundError:
@@ -1370,7 +1392,7 @@ def promote_campaign_pc_image(cid: str, pid: str, vid: str, name: str):
 
 @router.put("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/avatar/focus")
 def put_campaign_pc_avatar_focus(cid: str, pid: str, vid: str, body: AvatarFocus):
-    root = _campaign_root_or_404(cid)
+    root = _campaign_pc_version_or_404(cid, pid, vid)
     # a thin campaign may only have this avatar through the inherited world PC,
     # so the existence gate checks the overlay union, not croot alone
     names = {i["name"] for i in store.overlay.list_images(cid, pid, vid,

@@ -112,17 +112,11 @@ def create_version(root: Path, pid: str, version_name: str, persona: dict) -> st
 
 
 def update_version(root: Path, pid: str, vid: str, persona: dict) -> None:
-    _require_pc(root, pid)
-    p = _version_path(root, pid, vid)
-    if not safe_id(vid) or not p.exists():
-        raise PCVersionNotFound(vid)
-    atomic.write_text(p, _dump_persona(persona))
+    atomic.write_text(require_version(root, pid, vid), _dump_persona(persona))
 
 
 def set_default_version(root: Path, pid: str, vid: str) -> None:
-    _require_pc(root, pid)
-    if not safe_id(vid) or not _version_path(root, pid, vid).exists():
-        raise PCVersionNotFound(vid)
+    require_version(root, pid, vid)
     meta = _read_meta(root, pid)
     _write_meta(root, pid, meta.get("name", pid), _tags_of(meta), vid)
 
@@ -139,12 +133,26 @@ def _version_ids(root: Path, pid: str) -> list[str]:
                   if p.name != "pc.md" and safe_id(p.stem))
 
 
-def read_persona(root: Path, pid: str, vid: str) -> dict:
+def require_version(root: Path, pid: str, vid: str) -> Path:
+    """Assert `pid`/`vid` name a real PC version; return the persona's path.
+
+    Two stats and no read, which is the point: the image routes gate on this
+    per request, and `GET .../images/avatar` is hit once per portrait per
+    rendered grid. Doing it with `read_persona` -- as the first cut of that
+    gate did -- put a file read and a frontmatter parse on the hottest route in
+    the feature to answer a question `Path.exists` answers.
+
+    Raises the same two exceptions the mutators here already raised inline;
+    this is the guard pair they were each repeating, named once."""
     _require_pc(root, pid)
     p = _version_path(root, pid, vid)
     if not safe_id(vid) or not p.exists():
         raise PCVersionNotFound(vid)
-    return _load_persona(p.read_text(encoding="utf-8"))
+    return p
+
+
+def read_persona(root: Path, pid: str, vid: str) -> dict:
+    return _load_persona(require_version(root, pid, vid).read_text(encoding="utf-8"))
 
 
 def read_pc(root: Path, pid: str) -> dict:
@@ -189,6 +197,11 @@ def list_pcs(root: Path) -> list[dict]:
             # same derived image fields characters.list_characters does. No
             # `localized_count`: only a character card's text is localized, so a
             # PC has no `embed-` images to count.
+            #
+            # This adds two stats per art-less PC and nothing more: both
+            # `list_images` and `read_focus` return early on a directory or
+            # sidecar that is not there, so the scan and the parse are only
+            # paid by PCs that actually have images.
             names = [i["name"] for i in assets.list_images(root, pid, default, ASSET_BASE)]
             out.append({"id": pid, "name": meta.get("name", pid), "tags": _tags_of(meta),
                         "default_version": default,
@@ -201,10 +214,7 @@ def list_pcs(root: Path) -> list[dict]:
 
 
 def delete_version(root: Path, pid: str, vid: str) -> None:
-    _require_pc(root, pid)
-    p = _version_path(root, pid, vid)
-    if not safe_id(vid) or not p.exists():
-        raise PCVersionNotFound(vid)
+    p = require_version(root, pid, vid)
     if len(_version_ids(root, pid)) == 1:
         raise ValueError("cannot delete the last version of a PC")
     p.unlink()
