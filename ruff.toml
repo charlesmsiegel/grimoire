@@ -1,23 +1,111 @@
 # The lint gate. Runs as `make check-lint` locally and as the `lint` CI job.
 #
-# Deliberately narrow: every selected rule maps to a real bug class or to a
-# convention this codebase already annotates for. E501 is NOT selected — at
-# ruff's default 88 columns it reports 2420 findings against a codebase whose
-# real distribution is p99 = 99, so line length is a formatter decision rather
-# than a lint gate. The rest of E7 (E701/E702/E731/E741) is deferred with it.
+# `make check-lint` does not run ruff directly -- it runs ruff through
+# `scripts/ratchet.py`, which holds the tree to a committed count of findings
+# per (file, rule) in `lint-baselines/ruff.json`. That is what let this
+# selection widen from five rule families to thirty-three in one change: a rule
+# whose existing findings are real work lands blocking against its current
+# count, so new code is held to it immediately while the backlog shrinks on its
+# own schedule. Nothing here is report-only.
 target-version = "py311"
 line-length = 100                 # documentation only; E501 is not selected
 exclude = ["backend/.venv", "node_modules", "build", "dist", ".worktrees", "OLD"]
 
 [lint]
-# RUF100 is the rule most on this branch's theme: a noqa naming a rule that is
-# not enabled is an inert guard. E402 is enabled because the codebase already
-# believes in it -- 21 markers existed for deliberate sys.path-then-import
-# patterns, and deleting them to satisfy RUF100 would discard real information.
-select = ["F", "BLE", "E9", "E402", "RUF100"]
+# Thirty-three families, selected because each names a bug class, a portability
+# trap, or a convention this codebase already annotates for. The ones
+# deliberately left out are listed under `ignore` and in the block below it --
+# the omissions carry as much information as the selections, and an
+# undocumented one gets re-proposed every six months. Every count in this file
+# was measured against the tree at the commit that landed it; they are here to
+# show the shape of the decision, not as figures anything holds to.
+select = [
+  "F",                     # pyflakes: the undefined name, the unused import
+  "E4", "E7", "E9",        # imports, statement-level errors, syntax
+  "W",                     # invalid escapes, trailing whitespace
+  "I",                     # import sorting
+  "B",                     # bugbear: the mutable default, the swallowed cause
+  "C4", "C90",             # comprehensions; mccabe complexity (see below)
+  "UP",                    # syntax this repo's floor (3.11) has made redundant
+  "SIM", "RET", "PIE", "FURB", "FLY", "PERF",
+  "BLE",                   # the bare `except Exception` that hides a bug
+  "A",                     # a shadowed builtin reads as the builtin
+  "N",                     # PEP 8 names
+  "ISC",                   # the missing comma that silently concatenates
+  "LOG", "G",              # logging call shapes
+  "PGH",                   # the blanket `# type: ignore` mypy cannot check
+  "PLE", "PLW",            # pylint's error and warning tiers
+  "DTZ",                   # naive datetimes in an app that renders calendars
+  "ASYNC",                 # blocking calls inside async def
+  "EXE", "INT", "SLOT", "YTT",
+  "T20",                   # a debug `print` reaching a server process
+  "RUF",
+]
+# E501 is NOT selected: at ruff's default 88 columns it reports 4795 findings
+# against a codebase whose real distribution is p99 = 96, so line length is a
+# formatter decision rather than a lint gate. The rest of E7 that is purely
+# typographic is deferred with it.
+ignore = ["E501", "E701", "E702", "E731", "E741"]
+
+# Families considered and left out, so the question does not get reopened
+# without the answer:
+#   S     11633 findings, nearly all `assert` in tests -- which is how pytest
+#         is written. The security rules worth having here are covered by
+#         `test_path_guard_store.py`, which knows what an id is.
+#   PT     1006, of which 895 are PT018 (split a composite assert). A style
+#         preference, and this suite's asserts carry explanatory messages that
+#         splitting would duplicate.
+#   PLC     790, of which 789 are PLC0415 (import outside top level). That rule
+#         exists here already and is stricter: `test_import_guard.py` enforces
+#         module-scope imports with `# import-ok:` reasons, and knows that
+#         `store/` submodule binding is the real subject.
+#   PLR    1727, of which 1468 are PLR2004 (magic value in comparison). Against
+#         a codebase full of HTTP status codes and calendar arithmetic that is
+#         noise, not a finding.
+#   TRY     393, of which 371 are TRY003 (long message at the raise site). The
+#         messages are the API surface of `StoreError`; moving them into
+#         exception classes would hide them.
+#   TID     489, all TID252 (relative import). CLAUDE.md *requires* relative
+#         imports inside `store/`; this rule would fight the architecture.
+#   TC      192. It moves annotations into `if TYPE_CHECKING:` blocks, which
+#         FastAPI and pydantic resolve at runtime -- the fix breaks the app.
+#   ERA       5, every one a guard test quoting code in a comment on purpose.
+#   D, ANN, CPY, EM, ARG, FBT, Q, COM
+#         docstring, annotation, copyright, exception-message, unused-argument,
+#         boolean-trap and formatting families: house style, not bug classes.
+
+[lint.mccabe]
+# ruff's default is 10, and 10 is also this tree's p99 (89 of 9142 functions
+# are above it) -- the default is already calibrated to this codebase, so
+# raising it would only be a way of not having the argument. The 89 that are
+# over sit in `lint-baselines/ruff.json` as C901 entries, which is the argument,
+# itemized.
+max-complexity = 10
+
+[lint.flake8-bugbear]
+# B008 exists because a mutable default is evaluated once. FastAPI's dependency
+# markers are evaluated once *on purpose* -- that is the whole mechanism. 29 of
+# the rule's 35 findings were those markers, so they are declared immutable
+# here rather than carrying a suppression each; the other 6 stay in the
+# baseline, where they are a finding about this code rather than about FastAPI.
+extend-immutable-calls = [
+  "fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body",
+  "fastapi.Form", "fastapi.File", "fastapi.Header", "fastapi.Cookie",
+]
 
 [lint.per-file-ignores]
 # Named files, not a **/__init__.py glob: these two are the only aggregators,
 # and a glob would hand every future package initializer a blind spot.
 "backend/src/grimoire/store/__init__.py"  = ["F401"]  # 60-submodule aggregation
 "backend/src/grimoire/routes/__init__.py" = ["F401"]  # router aggregation
+# T201 the other way round: these *are* globs, because the whole of each tree
+# is command-line tooling whose output is the point. `where.py` is named
+# individually -- it is the one module inside the shipped package that is also
+# a CLI (`python -m grimoire.where`), and the rest of the package must keep
+# failing on a stray debug print.
+"scripts/**"                              = ["T201"]
+"backend/scripts/**"                      = ["T201"]
+"evals/**"                                = ["T201"]
+".claude/**"                              = ["T201"]
+"backend/tests/fixtures/**"               = ["T201"]
+"backend/src/grimoire/where.py"           = ["T201"]

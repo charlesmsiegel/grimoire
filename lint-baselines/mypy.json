@@ -1,0 +1,268 @@
+{
+  "backend/src/grimoire/claude_agent.py": {
+    "misc": 1,
+    "union-attr": 2
+  },
+  "backend/src/grimoire/llm.py": {
+    "attr-defined": 1,
+    "misc": 1,
+    "union-attr": 5
+  },
+  "backend/src/grimoire/routes/campaigns.py": {
+    "union-attr": 2
+  },
+  "backend/src/grimoire/routes/mechanics.py": {
+    "assignment": 1,
+    "index": 1,
+    "return": 1
+  },
+  "backend/src/grimoire/routes/scenes.py": {
+    "arg-type": 1,
+    "return": 3,
+    "var-annotated": 1
+  },
+  "backend/src/grimoire/routes/streaming.py": {
+    "arg-type": 1,
+    "misc": 1,
+    "return": 1
+  },
+  "backend/src/grimoire/routes/weather.py": {
+    "arg-type": 10,
+    "operator": 4
+  },
+  "backend/src/grimoire/store/absorb/apply.py": {
+    "arg-type": 3,
+    "index": 2
+  },
+  "backend/src/grimoire/store/absorb/materializer.py": {
+    "arg-type": 2,
+    "assignment": 4,
+    "union-attr": 3
+  },
+  "backend/src/grimoire/store/absorb/routing.py": {
+    "return-value": 1
+  },
+  "backend/src/grimoire/store/appearances/cast.py": {
+    "arg-type": 4
+  },
+  "backend/src/grimoire/store/appearances/transitions.py": {
+    "arg-type": 1
+  },
+  "backend/src/grimoire/store/backups.py": {
+    "return": 2
+  },
+  "backend/src/grimoire/store/briefing.py": {
+    "var-annotated": 1
+  },
+  "backend/src/grimoire/store/calendars/base.py": {
+    "call-arg": 1,
+    "operator": 4
+  },
+  "backend/src/grimoire/store/calendars/gregorian.py": {
+    "assignment": 1
+  },
+  "backend/src/grimoire/store/calendars/plugins.py": {
+    "arg-type": 1,
+    "union-attr": 2
+  },
+  "backend/src/grimoire/store/campaign_climate.py": {
+    "return-value": 1
+  },
+  "backend/src/grimoire/store/cards.py": {
+    "index": 2
+  },
+  "backend/src/grimoire/store/cascade.py": {
+    "return": 2
+  },
+  "backend/src/grimoire/store/characters.py": {
+    "arg-type": 4,
+    "index": 1,
+    "return-value": 1,
+    "union-attr": 5
+  },
+  "backend/src/grimoire/store/checks.py": {
+    "arg-type": 1,
+    "return": 1,
+    "union-attr": 1
+  },
+  "backend/src/grimoire/store/commitments.py": {
+    "arg-type": 2,
+    "return": 1
+  },
+  "backend/src/grimoire/store/commits.py": {
+    "assignment": 1
+  },
+  "backend/src/grimoire/store/config.py": {
+    "return": 1
+  },
+  "backend/src/grimoire/store/context/assemble.py": {
+    "arg-type": 4,
+    "var-annotated": 1
+  },
+  "backend/src/grimoire/store/context/cast.py": {
+    "arg-type": 2
+  },
+  "backend/src/grimoire/store/context/macros.py": {
+    "arg-type": 2,
+    "misc": 1
+  },
+  "backend/src/grimoire/store/context/mechanics.py": {
+    "return": 1
+  },
+  "backend/src/grimoire/store/context/world_state.py": {
+    "arg-type": 2,
+    "call-overload": 1,
+    "operator": 1
+  },
+  "backend/src/grimoire/store/covers.py": {
+    "return": 1
+  },
+  "backend/src/grimoire/store/events.py": {
+    "return": 5
+  },
+  "backend/src/grimoire/store/export.py": {
+    "assignment": 1
+  },
+  "backend/src/grimoire/store/expressions.py": {
+    "arg-type": 1,
+    "assignment": 1,
+    "attr-defined": 1,
+    "operator": 1,
+    "return-value": 1
+  },
+  "backend/src/grimoire/store/facts.py": {
+    "index": 6,
+    "return": 2
+  },
+  "backend/src/grimoire/store/groupstate.py": {
+    "var-annotated": 1
+  },
+  "backend/src/grimoire/store/journal.py": {
+    "return": 2
+  },
+  "backend/src/grimoire/store/locks.py": {
+    "attr-defined": 2,
+    "exit-return": 1
+  },
+  "backend/src/grimoire/store/module_edit/layout.py": {
+    "arg-type": 1,
+    "assignment": 1
+  },
+  "backend/src/grimoire/store/module_edit/migrate.py": {
+    "arg-type": 4,
+    "index": 2,
+    "operator": 2,
+    "return": 1,
+    "union-attr": 3
+  },
+  "backend/src/grimoire/store/module_edit/packs.py": {
+    "return": 3
+  },
+  "backend/src/grimoire/store/module_edit/renaming.py": {
+    "dict-item": 1,
+    "index": 1,
+    "operator": 1,
+    "union-attr": 1
+  },
+  "backend/src/grimoire/store/module_edit/scope.py": {
+    "union-attr": 1
+  },
+  "backend/src/grimoire/store/modules/content.py": {
+    "var-annotated": 1
+  },
+  "backend/src/grimoire/store/modules/display.py": {
+    "union-attr": 2
+  },
+  "backend/src/grimoire/store/modules/pack.py": {
+    "arg-type": 1,
+    "attr-defined": 1,
+    "misc": 2,
+    "var-annotated": 1
+  },
+  "backend/src/grimoire/store/modules/validate.py": {
+    "arg-type": 2,
+    "operator": 3
+  },
+  "backend/src/grimoire/store/pins.py": {
+    "return": 1
+  },
+  "backend/src/grimoire/store/playstate.py": {
+    "var-annotated": 1
+  },
+  "backend/src/grimoire/store/plot.py": {
+    "arg-type": 2
+  },
+  "backend/src/grimoire/store/proclock.py": {
+    "attr-defined": 4
+  },
+  "backend/src/grimoire/store/proposals.py": {
+    "return": 5
+  },
+  "backend/src/grimoire/store/provenance.py": {
+    "return": 1
+  },
+  "backend/src/grimoire/store/replay.py": {
+    "return": 4
+  },
+  "backend/src/grimoire/store/retcon.py": {
+    "return": 1
+  },
+  "backend/src/grimoire/store/rolls.py": {
+    "return": 3
+  },
+  "backend/src/grimoire/store/scene_ideas.py": {
+    "return": 2
+  },
+  "backend/src/grimoire/store/scenes/serialize.py": {
+    "return-value": 1
+  },
+  "backend/src/grimoire/store/search.py": {
+    "union-attr": 3
+  },
+  "backend/src/grimoire/store/sheets/advancement.py": {
+    "arg-type": 3,
+    "dict-item": 1,
+    "return": 1,
+    "return-value": 1,
+    "union-attr": 2
+  },
+  "backend/src/grimoire/store/sheets/pools.py": {
+    "return-value": 1
+  },
+  "backend/src/grimoire/store/sheets/reader.py": {
+    "arg-type": 2
+  },
+  "backend/src/grimoire/store/sheets/schema.py": {
+    "union-attr": 1
+  },
+  "backend/src/grimoire/store/sheets/tally.py": {
+    "misc": 1,
+    "return": 1
+  },
+  "backend/src/grimoire/store/sync.py": {
+    "assignment": 1
+  },
+  "backend/src/grimoire/store/thumbs.py": {
+    "assignment": 1
+  },
+  "backend/src/grimoire/store/undo.py": {
+    "arg-type": 4,
+    "assignment": 1,
+    "return": 1,
+    "union-attr": 3
+  },
+  "backend/src/grimoire/store/usage.py": {
+    "assignment": 4,
+    "exit-return": 1
+  },
+  "backend/src/grimoire/store/weather/overrides.py": {
+    "arg-type": 3,
+    "misc": 2,
+    "operator": 8,
+    "type-var": 1
+  },
+  "backend/src/grimoire/store/world_bundle.py": {
+    "arg-type": 2,
+    "assignment": 1
+  }
+}

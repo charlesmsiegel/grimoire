@@ -33,6 +33,10 @@ dev = [
     # Pinned exactly: an unpinned linter turns a green commit red on someone
     # else's release schedule. The `lint` CI job installs this same pin.
     "ruff==0.16.0",
+    # Same reasoning, and one more: the type gate is ratcheted against a
+    # committed count of findings, and a mypy release that reports one more (or
+    # one fewer) would fail every branch until someone regenerated it.
+    "mypy==2.3.0",
 ]
 
 [build-system]

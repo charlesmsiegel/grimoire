@@ -65,6 +65,11 @@ run green.
 - **Follow the review gates.** The spec → plan → implementation pipeline has
   mandatory Codex checkpoints (`CLAUDE.md`, "Development workflow"). Don't skip
   one because a change feels small; ask first.
+- **Fixing a lint finding is two steps.** `check-lint`, `check-mypy` and
+  `check-eslint` are ratcheted against `lint-baselines/`, so removing a finding
+  leaves the recorded count stale and the gate red until `make baseline` is run
+  and the smaller file committed with the fix. Resist the reading that the
+  gate is broken; it is telling you it has good news to record.
 - **Don't invent fixtures.** Names come from the existing placeholder set
   (Seraphine, Mara, Winifred, Realm, Saltmarch); LLM behaviour comes from
   `backend/tests/llm_fakes.py`, never a new inline fake.

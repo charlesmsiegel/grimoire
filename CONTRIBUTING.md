@@ -71,9 +71,11 @@ locally with the same one-line command.
 
 | Target | What it runs | CI job |
 |---|---|---|
-| `make check-lint` | `ruff check .` | lint |
+| `make check-lint` | ruff, against `lint-baselines/ruff.json` | lint |
+| `make check-mypy` | mypy, against `lint-baselines/mypy.json` | mypy |
 | `make check-py` | `pytest backend -q` | backend (py3.11, py3.14) |
 | `make check-web` | `npm ci && npm run typecheck && npm run test:coverage` in `frontend/` | frontend |
+| `make check-eslint` | eslint, against `lint-baselines/eslint.json` | eslint |
 | `make check-templates` | `scripts/verify_templates.py` — builders and templates agree byte-for-byte | templates |
 | `make check-pydantic1` | the same suite again, in a throwaway venv resolved to what the APK ships | pydantic1 |
 | `make check-apk` | builds `frontend/dist` and then the debug APK | apk |
@@ -85,6 +87,30 @@ runs it as its own job. (The `check:` line in the `Makefile` is the list that
 counts — `test_docs_guard.py` fails if a target here goes unmentioned, but no
 test can tell you a sentence about *how many* there are went stale, which is
 why there is no number in this one.)
+
+### The three ratcheted gates
+
+`check-lint`, `check-mypy` and `check-eslint` do not just run their tool: each
+compares what it found to a committed count per (file, rule) under
+`lint-baselines/`, and fails **in both directions**.
+
+- **More findings than the baseline** — ordinary failure. Fix them. A file with
+  no entry at all is held to every rule, so nothing you add inherits the
+  backlog.
+- **Fewer findings than the baseline** — also a failure, and the message says
+  so. Regenerate and commit the smaller file:
+
+  ```bash
+  make baseline
+  ```
+
+  Do that in the same commit as the fix that earned it, the way
+  `snapshot.json` is committed with the change that moved it.
+
+`scripts/ratchet.py` opens with why these landed against a baseline instead of
+as a report nobody reads. The short version: the tools between them report
+about ten thousand things today, that is a program of work rather than one
+change, and in the meantime none of it may get worse.
 
 ### Four things that will bite you
 
@@ -143,6 +169,7 @@ cannot fail a test run.
 | `test_import_guard.py` | module-scope imports, acyclic graph, submodule binding inside `store/` | `# import-ok:` |
 | `test_path_guard_store.py` | the store never joins a caller-supplied id onto a path unchecked | — |
 | `test_docs_guard.py` | this page, `AGENTS.md` and `docs/store-guarantees.md` still match the code | — |
+| `test_ratchet_guard.py` | the lint baselines are canonical, positive, and name files that exist | — |
 
 Clearing a genuinely safe call takes `# <marker>: <reason>`. **A marker with no
 reason fails, deliberately**, each guard caps how many exemptions exist, and —
@@ -258,7 +285,7 @@ the pull request rather than to pass over silently.
 2. Keep the diff to one concern. The commit message should say *why*, not
    restate the diff — the surrounding history is the model to match.
 3. `make check` passes locally.
-4. Open a PR against `main`. CI runs the same six targets; a red job reproduces
+4. Open a PR against `main`. CI runs one job per target; a red job reproduces
    with the one command in [the table above](#the-gate-make-check).
 
 And once more, because it is the one mistake with no cheap fix: **no real

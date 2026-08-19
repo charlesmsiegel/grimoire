@@ -1,0 +1,719 @@
+{
+  ".claude/skills/populate-world-content/scripts/populate_world_content.py": {
+    "C901": 2,
+    "PERF401": 5,
+    "PLW1510": 1
+  },
+  "android/app/src/main/python/android_entry.py": {
+    "SIM105": 2
+  },
+  "backend/scripts/ingest_scene.py": {
+    "C901": 2,
+    "N818": 1
+  },
+  "backend/src/grimoire/claude_agent.py": {
+    "C901": 1
+  },
+  "backend/src/grimoire/embeddings.py": {
+    "C901": 1
+  },
+  "backend/src/grimoire/llm.py": {
+    "ASYNC109": 2,
+    "C901": 1,
+    "SIM105": 1
+  },
+  "backend/src/grimoire/main.py": {
+    "RET503": 1
+  },
+  "backend/src/grimoire/openai_compatible.py": {
+    "C901": 2
+  },
+  "backend/src/grimoire/openrouter.py": {
+    "C901": 1
+  },
+  "backend/src/grimoire/prompts.py": {
+    "A002": 1
+  },
+  "backend/src/grimoire/routes/campaigns.py": {
+    "B904": 85,
+    "RUF003": 1
+  },
+  "backend/src/grimoire/routes/characters.py": {
+    "A002": 2,
+    "B904": 44,
+    "SIM105": 1
+  },
+  "backend/src/grimoire/routes/common.py": {
+    "B904": 6,
+    "RUF005": 1,
+    "SIM105": 1
+  },
+  "backend/src/grimoire/routes/config.py": {
+    "A002": 4,
+    "B904": 31,
+    "PERF401": 1
+  },
+  "backend/src/grimoire/routes/entities.py": {
+    "B904": 21,
+    "RUF005": 1
+  },
+  "backend/src/grimoire/routes/greetings.py": {
+    "B904": 18
+  },
+  "backend/src/grimoire/routes/mechanics.py": {
+    "B904": 14,
+    "C901": 1,
+    "SIM105": 1
+  },
+  "backend/src/grimoire/routes/modules.py": {
+    "A002": 3,
+    "B904": 8
+  },
+  "backend/src/grimoire/routes/scenes.py": {
+    "A002": 3,
+    "B904": 40,
+    "C901": 5,
+    "N818": 2,
+    "RUF003": 2,
+    "SIM105": 6
+  },
+  "backend/src/grimoire/routes/search.py": {
+    "B904": 2
+  },
+  "backend/src/grimoire/routes/streaming.py": {
+    "C901": 4,
+    "SIM105": 2
+  },
+  "backend/src/grimoire/routes/usage.py": {
+    "B904": 1
+  },
+  "backend/src/grimoire/routes/weather.py": {
+    "B904": 9,
+    "C901": 1,
+    "RET504": 1
+  },
+  "backend/src/grimoire/routes/worlds.py": {
+    "A002": 2,
+    "B904": 48,
+    "SIM105": 1
+  },
+  "backend/src/grimoire/store/__init__.py": {
+    "RUF022": 1
+  },
+  "backend/src/grimoire/store/absorb/apply.py": {
+    "C901": 2,
+    "SIM105": 1
+  },
+  "backend/src/grimoire/store/absorb/conflicts.py": {
+    "C901": 1
+  },
+  "backend/src/grimoire/store/absorb/materializer.py": {
+    "C901": 2,
+    "SIM401": 2
+  },
+  "backend/src/grimoire/store/absorb/parse.py": {
+    "C901": 1,
+    "PERF401": 1,
+    "RUF005": 1
+  },
+  "backend/src/grimoire/store/absorb/routing.py": {
+    "RUF001": 3
+  },
+  "backend/src/grimoire/store/alternates.py": {
+    "N818": 1,
+    "RUF002": 2,
+    "SIM105": 1
+  },
+  "backend/src/grimoire/store/appearances/detect.py": {
+    "RUF001": 7
+  },
+  "backend/src/grimoire/store/assets.py": {
+    "SIM105": 1
+  },
+  "backend/src/grimoire/store/atomic.py": {
+    "SIM105": 5
+  },
+  "backend/src/grimoire/store/audit/apply.py": {
+    "B023": 2,
+    "B904": 1
+  },
+  "backend/src/grimoire/store/backups.py": {
+    "SIM105": 1
+  },
+  "backend/src/grimoire/store/calendars/base.py": {
+    "C901": 1
+  },
+  "backend/src/grimoire/store/calendars/hebrew.py": {
+    "PERF401": 1,
+    "RUF012": 1
+  },
+  "backend/src/grimoire/store/campaigns/lifecycle.py": {
+    "B023": 2,
+    "C901": 2
+  },
+  "backend/src/grimoire/store/campaigns/paths.py": {
+    "N818": 1
+  },
+  "backend/src/grimoire/store/campaigns/read.py": {
+    "DTZ007": 2
+  },
+  "backend/src/grimoire/store/cards.py": {
+    "PERF403": 1
+  },
+  "backend/src/grimoire/store/casefile.py": {
+    "RUF002": 1,
+    "RUF003": 1
+  },
+  "backend/src/grimoire/store/characters.py": {
+    "N818": 2,
+    "PERF401": 1
+  },
+  "backend/src/grimoire/store/checks.py": {
+    "B904": 2,
+    "C901": 1
+  },
+  "backend/src/grimoire/store/chronicle.py": {
+    "PLW2901": 1
+  },
+  "backend/src/grimoire/store/climates/schema.py": {
+    "C901": 1
+  },
+  "backend/src/grimoire/store/commits.py": {
+    "RUF003": 1
+  },
+  "backend/src/grimoire/store/config.py": {
+    "RUF005": 1
+  },
+  "backend/src/grimoire/store/context/assemble.py": {
+    "B905": 1,
+    "C901": 1
+  },
+  "backend/src/grimoire/store/context/mechanics.py": {
+    "C901": 1
+  },
+  "backend/src/grimoire/store/context/pack.py": {
+    "C901": 1
+  },
+  "backend/src/grimoire/store/context/semantic.py": {
+    "B905": 1,
+    "C901": 1
+  },
+  "backend/src/grimoire/store/context/world_state.py": {
+    "B905": 2,
+    "C901": 1,
+    "RUF001": 3,
+    "SIM105": 3
+  },
+  "backend/src/grimoire/store/covers.py": {
+    "N818": 2
+  },
+  "backend/src/grimoire/store/dice.py": {
+    "RUF001": 1
+  },
+  "backend/src/grimoire/store/dossiers.py": {
+    "N818": 1
+  },
+  "backend/src/grimoire/store/entities.py": {
+    "N818": 2,
+    "PERF401": 1,
+    "PERF403": 1,
+    "RUF005": 1
+  },
+  "backend/src/grimoire/store/epub.py": {
+    "A002": 1,
+    "C901": 1
+  },
+  "backend/src/grimoire/store/export.py": {
+    "C901": 1,
+    "SIM105": 1
+  },
+  "backend/src/grimoire/store/expressions.py": {
+    "B905": 1,
+    "C901": 1,
+    "PGH003": 1
+  },
+  "backend/src/grimoire/store/external.py": {
+    "C901": 1
+  },
+  "backend/src/grimoire/store/fork.py": {
+    "SIM102": 1
+  },
+  "backend/src/grimoire/store/greetings.py": {
+    "C901": 1,
+    "N818": 1,
+    "RUF005": 1
+  },
+  "backend/src/grimoire/store/image_subjects.py": {
+    "PERF401": 1
+  },
+  "backend/src/grimoire/store/llm_connections.py": {
+    "A001": 2,
+    "A002": 10,
+    "N818": 1
+  },
+  "backend/src/grimoire/store/localize.py": {
+    "C901": 2
+  },
+  "backend/src/grimoire/store/locks.py": {
+    "C901": 1,
+    "N818": 1
+  },
+  "backend/src/grimoire/store/lorebook.py": {
+    "SIM108": 1
+  },
+  "backend/src/grimoire/store/module_edit/edits.py": {
+    "PERF403": 1
+  },
+  "backend/src/grimoire/store/module_edit/migrate.py": {
+    "C901": 2
+  },
+  "backend/src/grimoire/store/module_edit/packs.py": {
+    "B904": 1
+  },
+  "backend/src/grimoire/store/module_edit/renaming.py": {
+    "C901": 2,
+    "SIM102": 1
+  },
+  "backend/src/grimoire/store/module_edit/scope.py": {
+    "N818": 1
+  },
+  "backend/src/grimoire/store/modules/content.py": {
+    "A002": 1,
+    "PERF403": 1
+  },
+  "backend/src/grimoire/store/modules/display.py": {
+    "C901": 3
+  },
+  "backend/src/grimoire/store/modules/pack.py": {
+    "C901": 2,
+    "N818": 2,
+    "PERF401": 2,
+    "RET504": 1
+  },
+  "backend/src/grimoire/store/modules/validate.py": {
+    "C901": 5,
+    "PERF401": 1
+  },
+  "backend/src/grimoire/store/overlay.py": {
+    "RET504": 3,
+    "SIM105": 2
+  },
+  "backend/src/grimoire/store/pcs.py": {
+    "N818": 2
+  },
+  "backend/src/grimoire/store/playing.py": {
+    "SIM102": 1
+  },
+  "backend/src/grimoire/store/proclock.py": {
+    "SIM105": 1
+  },
+  "backend/src/grimoire/store/prompt_log.py": {
+    "SIM105": 2
+  },
+  "backend/src/grimoire/store/proposals.py": {
+    "SIM102": 1
+  },
+  "backend/src/grimoire/store/provenance.py": {
+    "RUF002": 1
+  },
+  "backend/src/grimoire/store/relationships.py": {
+    "A002": 1
+  },
+  "backend/src/grimoire/store/response_presets.py": {
+    "C901": 1,
+    "N818": 3,
+    "RUF005": 2
+  },
+  "backend/src/grimoire/store/retcon.py": {
+    "SIM105": 2
+  },
+  "backend/src/grimoire/store/rolls.py": {
+    "N818": 1
+  },
+  "backend/src/grimoire/store/scenario.py": {
+    "C901": 1
+  },
+  "backend/src/grimoire/store/scenes/paths.py": {
+    "N818": 1
+  },
+  "backend/src/grimoire/store/scenes/serialize.py": {
+    "RUF003": 1
+  },
+  "backend/src/grimoire/store/scenes/turns.py": {
+    "B905": 1,
+    "N818": 1,
+    "PLW2901": 1
+  },
+  "backend/src/grimoire/store/scenes/write.py": {
+    "N818": 1,
+    "RUF005": 2,
+    "SIM105": 1
+  },
+  "backend/src/grimoire/store/search.py": {
+    "C901": 2,
+    "N818": 2,
+    "RUF005": 2
+  },
+  "backend/src/grimoire/store/semsearch.py": {
+    "B905": 1,
+    "N818": 1
+  },
+  "backend/src/grimoire/store/sheets/advancement.py": {
+    "B904": 2
+  },
+  "backend/src/grimoire/store/sheets/creation.py": {
+    "C901": 1
+  },
+  "backend/src/grimoire/store/sheets/paths.py": {
+    "N818": 1,
+    "RUF005": 1
+  },
+  "backend/src/grimoire/store/sheets/schema.py": {
+    "ISC004": 1
+  },
+  "backend/src/grimoire/store/styles.py": {
+    "N818": 2
+  },
+  "backend/src/grimoire/store/suggest.py": {
+    "A001": 2,
+    "C901": 1
+  },
+  "backend/src/grimoire/store/sync.py": {
+    "C901": 1
+  },
+  "backend/src/grimoire/store/tags.py": {
+    "N818": 1
+  },
+  "backend/src/grimoire/store/thumbs.py": {
+    "PLW2901": 1
+  },
+  "backend/src/grimoire/store/undo.py": {
+    "C901": 3,
+    "N818": 4
+  },
+  "backend/src/grimoire/store/usage.py": {
+    "PERF403": 1
+  },
+  "backend/src/grimoire/store/vectors.py": {
+    "B905": 1
+  },
+  "backend/src/grimoire/store/voice_anchors.py": {
+    "N818": 1
+  },
+  "backend/src/grimoire/store/voice_drift.py": {
+    "N818": 1
+  },
+  "backend/src/grimoire/store/weather/__init__.py": {
+    "PERF401": 1
+  },
+  "backend/src/grimoire/store/weather/overrides.py": {
+    "C901": 2,
+    "PERF401": 1,
+    "PLW2901": 1
+  },
+  "backend/src/grimoire/store/world_bundle.py": {
+    "B904": 3,
+    "N818": 1
+  },
+  "backend/src/grimoire/store/worlds/lifecycle.py": {
+    "N818": 1
+  },
+  "backend/src/grimoire/store/worlds/paths.py": {
+    "N818": 1
+  },
+  "backend/src/grimoire/store/ziputil.py": {
+    "B904": 2
+  },
+  "backend/tests/llm_fakes.py": {
+    "N818": 1
+  },
+  "backend/tests/test_absorb_conflicts.py": {
+    "SIM105": 3
+  },
+  "backend/tests/test_absorb_routing.py": {
+    "RUF059": 2
+  },
+  "backend/tests/test_absorb_store.py": {
+    "RUF059": 3,
+    "UP031": 1
+  },
+  "backend/tests/test_alternates_store.py": {
+    "RUF002": 2,
+    "RUF015": 1
+  },
+  "backend/tests/test_appearances_store.py": {
+    "RUF059": 6
+  },
+  "backend/tests/test_assets_store.py": {
+    "SIM105": 1
+  },
+  "backend/tests/test_atomic_guard.py": {
+    "B007": 1,
+    "C901": 1
+  },
+  "backend/tests/test_backups_routes.py": {
+    "ASYNC110": 1
+  },
+  "backend/tests/test_calendars.py": {
+    "E402": 1,
+    "N802": 1
+  },
+  "backend/tests/test_campaigns_store.py": {
+    "C408": 1,
+    "N818": 4,
+    "RUF059": 3,
+    "SIM105": 1
+  },
+  "backend/tests/test_casefile_route.py": {
+    "RUF059": 1
+  },
+  "backend/tests/test_character_sync.py": {
+    "RUF059": 1
+  },
+  "backend/tests/test_characters_store.py": {
+    "RUF059": 2
+  },
+  "backend/tests/test_checks_store.py": {
+    "RUF059": 1
+  },
+  "backend/tests/test_claude_agent.py": {
+    "PLW0108": 1
+  },
+  "backend/tests/test_commitments_store.py": {
+    "UP031": 2
+  },
+  "backend/tests/test_commits_store.py": {
+    "RUF001": 2,
+    "RUF002": 1
+  },
+  "backend/tests/test_context.py": {
+    "ISC004": 4,
+    "RUF005": 1,
+    "RUF059": 42
+  },
+  "backend/tests/test_context_layout.py": {
+    "RUF015": 1
+  },
+  "backend/tests/test_docs_guard.py": {
+    "RUF005": 1
+  },
+  "backend/tests/test_eval_graders.py": {
+    "ISC002": 1
+  },
+  "backend/tests/test_export_store.py": {
+    "RUF059": 5
+  },
+  "backend/tests/test_fence.py": {
+    "RUF059": 3
+  },
+  "backend/tests/test_fetch_store.py": {
+    "RUF043": 1
+  },
+  "backend/tests/test_import_guard.py": {
+    "B023": 1,
+    "C901": 2,
+    "N815": 1
+  },
+  "backend/tests/test_ingest_scene.py": {
+    "RUF059": 1
+  },
+  "backend/tests/test_journal_store.py": {
+    "B007": 1
+  },
+  "backend/tests/test_llm.py": {
+    "A002": 1,
+    "PERF401": 3,
+    "RUF005": 2,
+    "RUF012": 1
+  },
+  "backend/tests/test_llm_connections_store.py": {
+    "SIM105": 1
+  },
+  "backend/tests/test_llm_fakes.py": {
+    "PERF401": 1
+  },
+  "backend/tests/test_localize_store.py": {
+    "UP031": 1
+  },
+  "backend/tests/test_lock_domain_guard.py": {
+    "B008": 6,
+    "B023": 2,
+    "C417": 1,
+    "C901": 7,
+    "ISC004": 45,
+    "RUF012": 1,
+    "RUF059": 2,
+    "SIM103": 1,
+    "SIM108": 1
+  },
+  "backend/tests/test_lock_order_guard.py": {
+    "ISC004": 34
+  },
+  "backend/tests/test_locks_http.py": {
+    "RUF005": 1
+  },
+  "backend/tests/test_locks_store.py": {
+    "N806": 1,
+    "PLW1510": 1,
+    "SIM117": 2,
+    "UP031": 11
+  },
+  "backend/tests/test_module_edit.py": {
+    "B007": 1,
+    "PERF102": 1,
+    "RUF059": 11,
+    "SIM105": 1
+  },
+  "backend/tests/test_modules_store.py": {
+    "RUF005": 4,
+    "RUF059": 2
+  },
+  "backend/tests/test_overlay.py": {
+    "RUF013": 2,
+    "RUF059": 18
+  },
+  "backend/tests/test_overlay_guard.py": {
+    "B023": 1,
+    "B905": 1,
+    "C901": 2,
+    "ISC004": 21,
+    "SIM102": 1
+  },
+  "backend/tests/test_path_guard_store.py": {
+    "PERF401": 1,
+    "RUF015": 2
+  },
+  "backend/tests/test_pcs_store.py": {
+    "RUF059": 1
+  },
+  "backend/tests/test_pins_context.py": {
+    "RUF059": 2
+  },
+  "backend/tests/test_pins_routes.py": {
+    "RUF059": 2
+  },
+  "backend/tests/test_playing_store.py": {
+    "RUF059": 7
+  },
+  "backend/tests/test_populate_world_content.py": {
+    "PLW1510": 8,
+    "RUF059": 35
+  },
+  "backend/tests/test_proposals_store.py": {
+    "PERF401": 1
+  },
+  "backend/tests/test_pydantic_guard.py": {
+    "PERF401": 1
+  },
+  "backend/tests/test_response_presets.py": {
+    "RUF015": 1,
+    "RUF059": 1
+  },
+  "backend/tests/test_retcon_store.py": {
+    "RUF059": 1
+  },
+  "backend/tests/test_rolls_store.py": {
+    "C401": 1
+  },
+  "backend/tests/test_route_order.py": {
+    "B905": 2
+  },
+  "backend/tests/test_routes.py": {
+    "B023": 2,
+    "B905": 1,
+    "PLW0108": 24,
+    "RUF015": 29,
+    "RUF059": 30,
+    "SIM105": 2
+  },
+  "backend/tests/test_scenario_store.py": {
+    "UP031": 1
+  },
+  "backend/tests/test_scene_break_routes.py": {
+    "UP031": 1
+  },
+  "backend/tests/test_scene_break_store.py": {
+    "N802": 2
+  },
+  "backend/tests/test_scene_store.py": {
+    "RUF001": 7,
+    "RUF002": 1
+  },
+  "backend/tests/test_search_store.py": {
+    "RUF059": 2
+  },
+  "backend/tests/test_semsearch_store.py": {
+    "RUF059": 2
+  },
+  "backend/tests/test_sheets_store.py": {
+    "RUF059": 1
+  },
+  "backend/tests/test_stale_writes.py": {
+    "RET504": 1
+  },
+  "backend/tests/test_statcache.py": {
+    "B023": 1,
+    "RUF059": 1
+  },
+  "backend/tests/test_sync_store.py": {
+    "RUF059": 8
+  },
+  "backend/tests/test_turnstate_flow.py": {
+    "C402": 2,
+    "RUF059": 7
+  },
+  "backend/tests/test_usage_store.py": {
+    "B017": 1,
+    "SIM117": 1
+  },
+  "backend/tests/test_voice_drift_store.py": {
+    "UP031": 3
+  },
+  "backend/tests/test_weather_absorb.py": {
+    "RUF059": 3
+  },
+  "backend/tests/test_weather_field.py": {
+    "B905": 2
+  },
+  "backend/tests/test_weather_overrides.py": {
+    "RUF059": 7
+  },
+  "backend/tests/test_weather_resolve.py": {
+    "RUF059": 2
+  },
+  "backend/tests/test_weather_routes.py": {
+    "RUF059": 25
+  },
+  "backend/tests/test_where.py": {
+    "PLW1510": 1
+  },
+  "evals/cases.py": {
+    "RUF005": 1
+  },
+  "evals/graders.py": {
+    "A002": 1,
+    "RUF005": 2
+  },
+  "scripts/gen_android_icon.py": {
+    "B905": 1,
+    "RUF005": 1
+  },
+  "scripts/grimoire_sync.py": {
+    "C901": 1,
+    "PLW2901": 1
+  },
+  "scripts/validate_partition.py": {
+    "B007": 1,
+    "C416": 1,
+    "C901": 4,
+    "RUF005": 1,
+    "RUF015": 1
+  },
+  "scripts/verify_templates.py": {
+    "A002": 1,
+    "B905": 2,
+    "C901": 1,
+    "E402": 6,
+    "ISC004": 1
+  }
+}

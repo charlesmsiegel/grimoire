@@ -129,9 +129,10 @@ first if you think one should be skipped.
   floors to `requires-python` and `engines.node`.
 - **Run the gate with `make check`** — the same targets `.github/workflows/ci.yml`
   runs, so a CI failure reproduces locally with one command. Individually:
-  `make check-py` (pytest), `check-web` (npm ci + typecheck + vitest under
-  coverage),
-  `check-lint` (ruff), `check-templates` (`verify_templates.py`),
+  `make check-py` (pytest), `check-web` (npm ci + typecheck +
+  vitest under coverage),
+  `check-lint` (ruff), `check-mypy` (mypy), `check-eslint` (eslint),
+  `check-templates` (`verify_templates.py`),
   `check-pydantic1` (the whole suite against the Android dependency set —
   pydantic 1.10, no `desktop` extra — in a throwaway venv). `make check-apk`
   is excluded from `check` because it needs `make android-bootstrap` first.
@@ -182,6 +183,16 @@ first if you think one should be skipped.
     Left in `src/routes/` instead, scaffolding lands in the coverage
     denominator the paragraph above exists to keep honest, and a helper only
     one suite uses belongs in that suite, not in the shared half.
+- **The three lint gates are ratcheted, and fixing a finding is a two-step.**
+  `check-lint`, `check-mypy` and `check-eslint` run their tool and compare the
+  result to `lint-baselines/<tool>.json`, keyed by (file, rule). Landing them
+  any other way was not an option: ruff's widened selection, mypy at its
+  defaults and typescript-eslint's type-checked rules report ~10 000 findings
+  against this tree between them, and report-only jobs get ignored until the
+  number is unrecoverable. The consequence to remember is that **an
+  improvement fails the gate too** — resolve a finding and the recorded count
+  is stale, so `make baseline` and commit the smaller file with the fix.
+  `scripts/ratchet.py` and `CONTRIBUTING.md` carry the rest.
 - **The frozen campaign** (`backend/tests/fixtures/frozen_campaign/`) is a whole
   store tree checked in as a fixture — the only store in the repo that today's
   code did not write, which is the only way to catch a change that breaks
