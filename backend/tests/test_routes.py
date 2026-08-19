@@ -368,6 +368,18 @@ def test_config_model_is_empty_for_a_non_claude_connection_without_one(client):
     assert client.get("/api/config").json()["active_connection"]["model"] == ""
 
 
+def test_config_context_scan_depth_defaults_and_roundtrips(client):
+    """The oldest context setting was the last one reachable over HTTP (#11).
+    It has been in `_CONFIG_KEYS` since the context builder shipped, so the
+    store took it and the builder read it, while `ConfigUpdate` had no field
+    for it and `_public_config` never reported it -- a PUT that answered 200
+    and changed nothing, which is exactly what the round trip catches."""
+    body = client.get("/api/config").json()
+    assert body["context_scan_depth"] == "8"
+    assert client.put("/api/config", json={"context_scan_depth": "3"}).status_code == 200
+    assert client.get("/api/config").json()["context_scan_depth"] == "3"
+
+
 def test_config_offscene_known_limit_defaults_and_roundtrips(client):
     body = client.get("/api/config").json()
     assert body["offscene_known_limit"] == "40"          # bounded out of the box

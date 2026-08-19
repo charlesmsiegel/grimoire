@@ -37,6 +37,7 @@ class ConfigUpdate(BaseModel):
     llm_retries: str | None = None
     fallback_connection_id: str | None = None
     context_budget: str | None = None
+    context_scan_depth: str | None = None
     archive_depth: str | None = None
     setup_done: str | None = None
     prompt_log_depth: str | None = None

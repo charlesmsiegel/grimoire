@@ -44,6 +44,10 @@ export type Config = {
    *  tried once; "" = no fallback. */
   fallback_connection_id: string;
   context_budget: string;
+  /** Recent messages every keyword scan reads — world info, chronicle recall,
+   *  keyed mechanics rules and the semantic-recall query all share this
+   *  window; "0" empties it, leaving only always-on entries. */
+  context_scan_depth: string;
   archive_depth: string;
   /** "on" once the setup wizard has been finished or dismissed (#194). */
   setup_done: string;
@@ -106,7 +110,8 @@ export type ConfigUpdate = Partial<Pick<Config,
   "theme" | "system_prompt" | "quote_color" | "user_label" | "assistant_label" |
   "active_connection_id" | "llm_timeout" | "absorb_budget" | "llm_call_budget" |
   "llm_retries" | "fallback_connection_id" |
-  "context_budget" | "archive_depth" | "setup_done" | "prompt_log_depth" |
+  "context_budget" | "context_scan_depth" | "archive_depth" | "setup_done" |
+  "prompt_log_depth" |
   "turnstate_depth" | "promote_streak" | "rolling_summary_every" |
   "scene_break_every" |
   "offscene_known_limit" |

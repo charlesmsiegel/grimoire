@@ -30,7 +30,7 @@ const cfg = {
   data_dir: "/home/u/.grimoire",
   llm_timeout: "120", absorb_budget: "600", llm_call_budget: "300",
   llm_retries: "2", fallback_connection_id: "",
-  context_budget: "0", archive_depth: "3",
+  context_budget: "0", context_scan_depth: "8", archive_depth: "3",
   prompt_log_depth: "50", offscene_known_limit: "40",
   turnstate_depth: "0", promote_streak: "3", rolling_summary_every: "10",
   scene_break_every: "20", replay_fork_threshold: "10",
@@ -321,6 +321,15 @@ test("edits the context budget, recalled-scene cap and kept turn prompts", async
   save();
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
     { archive_depth: "5", prompt_log_depth: "0", offscene_known_limit: "12" }));
+});
+
+test("edits the context scan depth", async () => {
+  renderView();
+  await open(/^Context/);
+  expect(screen.getByLabelText(/context scan depth/i)).toHaveValue("8");
+  fireEvent.change(screen.getByLabelText(/context scan depth/i), { target: { value: "16" } });
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ context_scan_depth: "16" }));
 });
 
 test("saves the transient-state settings", async () => {

@@ -146,10 +146,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     # scene_substitutions.
     subs = {"{{user}}": ", ".join(player_names or ref_names)}
 
-    try:
-        depth = max(int(config.read_config().get("context_scan_depth", "8")), 0)
-    except (ValueError, TypeError):
-        depth = 8
+    depth = config.scan_depth()
     # depth 0 => no scan window (history[-0:] would be the WHOLE list, so guard it)
     recent_text = "\n".join(m["content"] for m in history[-depth:]) if depth else ""
     if wi_seed:  # opener: the prompt stands in for the (absent) recent history

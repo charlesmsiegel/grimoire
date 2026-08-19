@@ -36,6 +36,8 @@ def _public_config(cfg: dict[str, str]) -> dict:
             "fallback_connection_id": cfg.get("fallback_connection_id",
                                               store.config.DEFAULT_FALLBACK_CONNECTION_ID),
             "context_budget": cfg.get("context_budget", store.config.DEFAULT_CONTEXT_BUDGET),
+            "context_scan_depth": cfg.get("context_scan_depth",
+                                          store.config.DEFAULT_SCAN_DEPTH),
             "archive_depth": cfg.get("archive_depth", store.config.DEFAULT_ARCHIVE_DEPTH),
             "prompt_log_depth": cfg.get("prompt_log_depth",
                                         store.config.DEFAULT_PROMPT_LOG_DEPTH),
