@@ -250,14 +250,13 @@ export function CastPanel({
           <div className="role">In this scene</div>
           {cast.length === 0 && <div className="field-hint">No one cast yet.</div>}
           {cast.map((a) => {
-            const ver = a.kind === "characters"
-              ? roster.find((r) => r.kind === "characters" && r.id === a.id)?.version
-              : undefined;
+            const ver = roster.find((r) => r.kind === a.kind && r.id === a.id)?.version;
             return (
               <div className="cast-row" key={`${a.kind}/${a.id}`}>
                 {ver
                   ? <img className="row-avatar" alt={`${a.id} avatar`}
-                         src={api.campaignImageUrl(cid, a.id, ver, "avatar")}
+                         src={api.actorImageUrl({ kind: "campaign", id: cid },
+                                                    a.kind, a.id, ver, "avatar")}
                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
                   : null}
                 <span>{a.id}</span>

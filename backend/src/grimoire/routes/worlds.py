@@ -1,6 +1,7 @@
 """World-scoped routes: the world record itself, its bound mechanics module
-and sheets, tags, player characters, calendar, and the two import flows that
-populate a world wholesale — a lorebook, and a scenario card (#217).
+and sheets, tags, player characters (personas and their per-version images),
+calendar, and the two import flows that populate a world wholesale — a
+lorebook, and a scenario card (#217).
 
 Characters and greetings have their own modules; the generic
 ``/worlds/{wid}/{kind}`` entity surface lives in ``entities``.
@@ -20,8 +21,9 @@ from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from .common import (_bounded_call, _content_fields, _dump, _require_connection,
-                     _spooled_upload, _world_root_or_404, get_llm)
-from .models import (LorebookCommit, ModuleSetting, NameBody, PCCreate, PCUpdate,
+                     _serve_image, _spooled_upload, _upload_image_ext, _world_root_or_404,
+                     get_llm)
+from .models import (AvatarFocus, LorebookCommit, ModuleSetting, NameBody, PCCreate, PCUpdate,
                      PersonaVersionCreate, PersonaVersionUpdate, ScenarioProposal,
                      ScenarioUrlBody, SheetBody, SheetCreationBody)
 
@@ -408,6 +410,68 @@ def delete_pc_version(wid: str, pid: str, vid: str):
         raise HTTPException(status_code=404, detail="version not found")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
+
+
+# ---- world PC images (#219) — the same surface world characters have, keyed
+# on `pcs.ASSET_BASE` so `<world>/pcs/<pid>/assets/<vid>/` holds the files.
+# Deliberately under `/versions/{vid}/` rather than the entity kinds' flat
+# `/pcs/{pid}/images`: a PC's art belongs to the version it depicts, exactly as
+# a character's does, and the flat shape is already claimed by the generic
+# `/worlds/{wid}/{kind}/{eid}/images` routes.
+@router.get("/worlds/{wid}/pcs/{pid}/versions/{vid}/images")
+def list_world_pc_images(wid: str, pid: str, vid: str):
+    return store.assets.list_images(_world_root_or_404(wid), pid, vid,
+                                    base=store.pcs.ASSET_BASE)
+
+
+@router.get("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}")
+def get_world_pc_image(wid: str, pid: str, vid: str, name: str, request: Request):
+    return _serve_image(_world_root_or_404(wid), pid, vid, name,
+                        base=store.pcs.ASSET_BASE, request=request)
+
+
+@router.put("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}")
+async def put_world_pc_image(wid: str, pid: str, vid: str, name: str,
+                             file: UploadFile = File(...)):
+    root = _world_root_or_404(wid)
+    data = await file.read()
+    ext = _upload_image_ext(data)  # the bytes name the type, not `file.filename` (#321)
+    try:
+        stored = store.assets.put_image(root, pid, vid, name, data, ext,
+                                        base=store.pcs.ASSET_BASE)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"name": name, "ext": stored}
+
+
+@router.delete("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}")
+def delete_world_pc_image(wid: str, pid: str, vid: str, name: str):
+    store.assets.delete_image(_world_root_or_404(wid), pid, vid, name,
+                              base=store.pcs.ASSET_BASE)
+    return {"ok": True}
+
+
+@router.post("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}/promote")
+def promote_world_pc_image(wid: str, pid: str, vid: str, name: str):
+    try:
+        store.assets.promote_image(_world_root_or_404(wid), pid, vid, name,
+                                   base=store.pcs.ASSET_BASE)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="image not found")
+    except ValueError as exc:
+        # an externally-placed file whose extension we never accepted for upload
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
+
+
+@router.put("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/avatar/focus")
+def put_world_pc_avatar_focus(wid: str, pid: str, vid: str, body: AvatarFocus):
+    root = _world_root_or_404(wid)
+    if store.assets.image_path(root, pid, vid, store.assets.AVATAR,
+                               base=store.pcs.ASSET_BASE) is None:
+        raise HTTPException(status_code=404, detail="image not found")
+    store.assets.write_focus(root, pid, vid, body.focus, base=store.pcs.ASSET_BASE)
     return {"ok": True}
 
 

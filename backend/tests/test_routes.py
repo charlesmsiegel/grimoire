@@ -828,6 +828,238 @@ def test_avatar_focus_endpoint_round_trip(client):
     assert client.get(f"/api/worlds/{wid}/characters/{cid}").json()["versions"][0]["avatar_focus"] is None
 
 
+# ---- PC images (#219): the same surface characters have, one folder over ----
+def test_pc_image_routes(client):
+    """The world-side CRUD, mirroring test_character_image_routes -- a PC used
+    to have no image route at all, so every step here is new ground (#219)."""
+    wid = _world(client)
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    base = f"/api/worlds/{wid}/pcs/{pid}/versions/default/images"
+    # absent
+    assert client.get(base).json() == []
+    assert client.get(f"{base}/avatar").status_code == 404
+    # upload
+    png = _png_bytes()
+    r = client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(png), "image/png")})
+    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
+    listed = client.get(base).json()
+    assert [(i["name"], i["ext"]) for i in listed] == [("avatar", "png")] and listed[0]["v"]
+    got = client.get(f"{base}/avatar")
+    assert got.status_code == 200 and got.content == png
+    assert got.headers["content-type"].startswith("image/png")
+    # the bytes name the type, not the filename (#321), on this surface too
+    jpeg = _jpeg_bytes()
+    lying = client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(jpeg), "image/png")})
+    assert lying.json() == {"name": "avatar", "ext": "jpg"}
+    assert client.get(f"{base}/avatar").headers["content-type"] == "image/jpeg"
+    # bytes that are no image at all
+    bad = client.put(f"{base}/avatar",
+                     files={"file": ("a.png", io.BytesIO(b"<html>nope</html>"), "image/png")})
+    assert bad.status_code == 400 and bad.json()["detail"] == "unsupported image type"
+    # delete
+    assert client.delete(f"{base}/avatar").status_code == 200
+    assert client.get(f"{base}/avatar").status_code == 404
+
+
+def test_pc_images_land_beside_the_persona_not_under_characters(client):
+    """The base is `pcs`, so a PC and a character sharing an id keep separate
+    art -- the whole reason `assets` is base-parameterised."""
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    client.post(f"/api/worlds/{wid}/pcs", json={"name": "Mara"})
+    pc_png, char_png = _png_bytes(color=(1, 2, 3)), _png_bytes(color=(4, 5, 6))
+    client.put(f"/api/worlds/{wid}/pcs/mara/versions/default/images/avatar",
+               files={"file": ("a.png", io.BytesIO(pc_png), "image/png")})
+    client.put(f"/api/worlds/{wid}/characters/mara/versions/default/images/avatar",
+               files={"file": ("b.png", io.BytesIO(char_png), "image/png")})
+
+    assert client.get(f"/api/worlds/{wid}/pcs/mara/versions/default/images/avatar").content == pc_png
+    assert client.get(
+        f"/api/worlds/{wid}/characters/mara/versions/default/images/avatar").content == char_png
+    wroot = store.worlds.world_root(wid)
+    assert (wroot / "pcs" / "mara" / "assets" / "default").is_dir()
+
+
+def test_pc_images_are_per_version(client):
+    """A PC's art belongs to the version it depicts, which is why these routes
+    sit under /versions/{vid}/ rather than the entity kinds' flat shape."""
+    wid = _world(client)
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    vid = client.post(f"/api/worlds/{wid}/pcs/{pid}/versions",
+                      json={"name": "older", "persona": store.pcs.blank_persona("Winifred")}
+                      ).json()["version"]
+    young, older = _png_bytes(color=(1, 1, 1)), _png_bytes(color=(2, 2, 2))
+    client.put(f"/api/worlds/{wid}/pcs/{pid}/versions/default/images/avatar",
+               files={"file": ("a.png", io.BytesIO(young), "image/png")})
+    client.put(f"/api/worlds/{wid}/pcs/{pid}/versions/{vid}/images/avatar",
+               files={"file": ("b.png", io.BytesIO(older), "image/png")})
+
+    detail = client.get(f"/api/worlds/{wid}/pcs/{pid}").json()
+    assert {v["id"]: v["images"] for v in detail["versions"]} == {
+        "default": ["avatar"], vid: ["avatar"]}
+    assert client.get(f"/api/worlds/{wid}/pcs/{pid}/versions/default/images/avatar").content == young
+    assert client.get(f"/api/worlds/{wid}/pcs/{pid}/versions/{vid}/images/avatar").content == older
+
+
+def test_pc_list_reports_avatar_gallery_and_focus(client):
+    """The rail draws a portrait per row, so the summary carries the same
+    derived fields the character list does -- minus `localized_count`, which
+    only a localized card can produce."""
+    wid = _world(client)
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    assert client.get(f"/api/worlds/{wid}/pcs").json()[0]["has_avatar"] is False
+
+    base = f"/api/worlds/{wid}/pcs/{pid}/versions/default/images"
+    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    client.put(f"{base}/gallery_1",
+               files={"file": ("g.png", io.BytesIO(_png_bytes(color=(9, 9, 9))), "image/png")})
+    client.put(f"{base}/avatar/focus", json={"focus": 30})
+
+    row = client.get(f"/api/worlds/{wid}/pcs").json()[0]
+    assert (row["has_avatar"], row["gallery_count"], row["avatar_focus"]) == (True, 1, 30)
+    assert "localized_count" not in row
+
+
+def test_pc_image_promote_swaps_avatar_and_clears_focus(client):
+    wid = _world(client)
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    base = f"/api/worlds/{wid}/pcs/{pid}/versions/default/images"
+    old, new = _png_bytes(color=(1, 1, 1)), _png_bytes(color=(2, 2, 2))
+    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(old), "image/png")})
+    client.put(f"{base}/gallery_1", files={"file": ("g.png", io.BytesIO(new), "image/png")})
+    client.put(f"{base}/avatar/focus", json={"focus": 30})
+
+    assert client.post(f"{base}/gallery_1/promote").status_code == 200
+    assert client.get(f"{base}/avatar").content == new
+    assert client.get(f"{base}/gallery_1").content == old
+    # a new avatar is a new crop, so the old offset must not survive it
+    assert client.get(f"/api/worlds/{wid}/pcs/{pid}").json()["versions"][0]["avatar_focus"] is None
+    assert client.post(f"{base}/gallery_9/promote").status_code == 404
+
+
+def test_pc_image_promote_unsupported_type_400(client):
+    """An externally-placed file under an extension no upload could have
+    created is a bad request, not a 500 -- same as the character route (#253)."""
+    wid = _world(client)
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    d = store.worlds.world_root(wid) / "pcs" / pid / "assets" / "default"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "gallery_1.bmp").write_bytes(b"external")
+
+    r = client.post(f"/api/worlds/{wid}/pcs/{pid}/versions/default/images/gallery_1/promote")
+    assert r.status_code == 400
+    assert (d / "gallery_1.bmp").exists()  # nothing moved
+
+
+def test_pc_avatar_focus_endpoint_round_trip(client):
+    wid = _world(client)
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    base = f"/api/worlds/{wid}/pcs/{pid}/versions/default/images"
+    assert client.put(f"{base}/avatar/focus", json={"focus": 30}).status_code == 404
+    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    assert client.put(f"{base}/avatar/focus", json={"focus": 30}).json() == {"ok": True}
+    assert client.get(f"/api/worlds/{wid}/pcs/{pid}").json()["versions"][0]["avatar_focus"] == 30
+
+
+def test_campaign_pc_image_routes_isolated(client):
+    """The campaign's copy is a fork: it inherits the world's art until it
+    uploads its own, and its edits never reach back."""
+    wid, cid = _campaign(client)
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    world_png, camp_png = _png_bytes(color=(1, 2, 3)), _png_bytes(color=(4, 5, 6))
+    wbase = f"/api/worlds/{wid}/pcs/{pid}/versions/default/images"
+    cbase = f"/api/campaigns/{cid}/pcs/{pid}/versions/default/images"
+    client.put(f"{wbase}/avatar", files={"file": ("a.png", io.BytesIO(world_png), "image/png")})
+
+    # inherited before the campaign has any copy of its own
+    assert client.get(f"{cbase}/avatar").content == world_png
+    assert [i["name"] for i in client.get(cbase).json()] == ["avatar"]
+
+    r = client.put(f"{cbase}/avatar", files={"file": ("b.png", io.BytesIO(camp_png), "image/png")})
+    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
+    assert client.get(f"{cbase}/avatar").content == camp_png
+    assert client.get(f"{wbase}/avatar").content == world_png
+
+    # deleting tombstones, so the world's copy must not show back through
+    assert client.delete(f"{cbase}/avatar").status_code == 200
+    assert client.get(f"{cbase}/avatar").status_code == 404
+    assert client.get(cbase).json() == []
+    assert client.get(f"{wbase}/avatar").content == world_png
+
+
+def test_campaign_pc_detail_and_list_read_the_overlay_union(client):
+    """A thin campaign never copies the PC into the campaign root, so its
+    avatar is still the world's file. Reading the detail off `pc_root` alone
+    would report no images at all."""
+    wid, cid = _campaign(client)
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    client.put(f"/api/worlds/{wid}/pcs/{pid}/versions/default/images/avatar",
+               files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    assert not (store.campaigns.campaign_root(cid) / "pcs" / pid).exists()  # never materialized
+
+    assert client.get(f"/api/campaigns/{cid}/pcs/{pid}").json()["versions"][0]["images"] == ["avatar"]
+    assert client.get(f"/api/campaigns/{cid}/pcs").json()[0]["has_avatar"] is True
+
+
+def test_campaign_pc_avatar_focus_on_inherited_world_avatar(client):
+    """The existence gate has to check the overlay union: on a thin campaign
+    the only avatar there is belongs to the world."""
+    wid, cid = _campaign(client)
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    client.put(f"/api/worlds/{wid}/pcs/{pid}/versions/default/images/avatar",
+               files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+
+    base = f"/api/campaigns/{cid}/pcs/{pid}/versions/default/images"
+    assert client.put(f"{base}/avatar/focus", json={"focus": 40}).json() == {"ok": True}
+    assert client.get(f"/api/campaigns/{cid}/pcs/{pid}").json()["versions"][0]["avatar_focus"] == 40
+    # ...and the world's own focus is untouched by the campaign's crop
+    assert client.get(f"/api/worlds/{wid}/pcs/{pid}").json()["versions"][0]["avatar_focus"] is None
+
+
+def test_campaign_pc_avatar_focus_without_any_avatar_404(client):
+    wid, cid = _campaign(client)
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    r = client.put(f"/api/campaigns/{cid}/pcs/{pid}/versions/default/images/avatar/focus",
+                   json={"focus": 40})
+    assert r.status_code == 404
+
+
+def test_campaign_pc_image_promote_copies_up_before_swapping(client):
+    """Campaign-side promotion of two inherited images copies both up, so the
+    world's copies come through untouched."""
+    wid, cid = _campaign(client)
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    old, new = _png_bytes(color=(1, 1, 1)), _png_bytes(color=(2, 2, 2))
+    wbase = f"/api/worlds/{wid}/pcs/{pid}/versions/default/images"
+    client.put(f"{wbase}/avatar", files={"file": ("a.png", io.BytesIO(old), "image/png")})
+    client.put(f"{wbase}/gallery_1", files={"file": ("g.png", io.BytesIO(new), "image/png")})
+
+    cbase = f"/api/campaigns/{cid}/pcs/{pid}/versions/default/images"
+    assert client.post(f"{cbase}/gallery_1/promote").status_code == 200
+    assert client.get(f"{cbase}/avatar").content == new
+    assert client.get(f"{cbase}/gallery_1").content == old
+    assert client.get(f"{wbase}/avatar").content == old
+    assert client.get(f"{wbase}/gallery_1").content == new
+    assert client.post(f"{cbase}/gallery_9/promote").status_code == 404
+
+
+def test_campaign_pc_image_routes_404_for_an_unknown_campaign(client):
+    """Every campaign PC image route gates on the campaign existing, so a typo
+    in the slug is a 404 rather than an empty listing or a stray directory."""
+    for method, url in (
+        ("GET", "/api/campaigns/nope/pcs/w/versions/default/images"),
+        ("GET", "/api/campaigns/nope/pcs/w/versions/default/images/avatar"),
+        ("DELETE", "/api/campaigns/nope/pcs/w/versions/default/images/avatar"),
+        ("POST", "/api/campaigns/nope/pcs/w/versions/default/images/gallery_1/promote"),
+    ):
+        assert client.request(method, url).status_code == 404, url
+    assert client.put("/api/campaigns/nope/pcs/w/versions/default/images/avatar/focus",
+                      json={"focus": 10}).status_code == 404
+    assert client.put("/api/campaigns/nope/pcs/w/versions/default/images/avatar",
+                      files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}
+                      ).status_code == 404
+
+
 def test_entity_images_crud_promote_and_has_image(client):
     wid = _world(client)
     eid = client.post(f"/api/worlds/{wid}/locations", json={"name": "Warehouse Nine"}).json()["id"]

@@ -1,8 +1,8 @@
 """World bundles: a world directory zipped whole, importable as a new world (#54).
 
 The store layout *is* the exchange format. A world directory is already
-self-contained -- ``world.md``, the entity kind-folders, ``characters/`` with
-their per-version assets, ``greetings/``, ``pcs/``, ``sheets/``,
+self-contained -- ``world.md``, the entity kind-folders, ``characters/`` and
+``pcs/`` with their per-version assets, ``greetings/``, ``sheets/``,
 ``plotmap.json``, ``tags.md``, ``calendar.json`` -- so the export walks it and
 the import puts it back. Nothing enumerates the kinds, which is the point: a
 kind added next month rides along without touching this file.
@@ -24,8 +24,9 @@ apart forever. Anything outside it is refused rather than guessed at.
 That id is the one thing that does not travel: ``store/localize.py`` writes
 absolute serving URLs into card and greeting text --
 ``/api/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}`` and
-``/api/worlds/{wid}/greetings/{gid}/images/{name}`` -- so a world landing under
-a new id would render every localized image as a 404. Import rewrites that
+``/api/worlds/{wid}/greetings/{gid}/images/{name}`` -- and a PC persona can
+carry the matching ``/pcs/{pid}/versions/{vid}/images/{name}`` by hand, so a
+world landing under a new id would render every localized image as a 404. Import rewrites that
 prefix across the text records, and only the text records: an asset's bytes are
 copied verbatim.
 

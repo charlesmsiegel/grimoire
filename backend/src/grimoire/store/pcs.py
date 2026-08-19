@@ -3,6 +3,13 @@
 Mirrors characters.py but with a simpler payload:
   <root>/pcs/<pid>/pc.md          # frontmatter: name, tags (comma-joined), default_version
   <root>/pcs/<pid>/<vid>.md       # frontmatter: name, pronouns, summary ; body: description
+  <root>/pcs/<pid>/assets/<vid>/  # optional per-version images (#219)
+
+Images live in the same per-version asset folder characters use, keyed on
+``ASSET_BASE`` instead of "characters" -- `store.assets` was already
+base-parameterised for the entity kinds, so PCs needed no new primitive. As for
+characters, images are outside `dir_hash`/`snapshot`, so an avatar edit is
+invisible to sync and to `overlay.materialize_actor`; assets overlay per file.
 """
 
 from __future__ import annotations
@@ -11,11 +18,16 @@ import hashlib
 import shutil
 from pathlib import Path
 
-from . import atomic, statcache
+from . import assets, atomic, statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import safe_id, slugify, uniquify
 
 PERSONA_FIELDS = ("name", "pronouns", "summary", "birthdate")  # frontmatter scalars; description is the body
+
+#: The `store.assets` base a PC's images are stored under -- the literal name of
+#: the directory PCs already live in, so `<root>/pcs/<pid>/assets/<vid>/` sits
+#: beside the persona files exactly as a character's does.
+ASSET_BASE = "pcs"
 
 
 class PCNotFound(Exception):
@@ -141,8 +153,19 @@ def read_pc(root: Path, pid: str) -> dict:
     version_ids = _version_ids(root, pid)
     if not version_ids:
         raise PCNotFound(pid)   # see characters.read_character
-    versions = [{"id": v, "name": read_persona(root, pid, v)["name"], "persona": read_persona(root, pid, v)}
-                for v in version_ids]
+    # One read per version: this used to call `read_persona` twice for each one
+    # (name and persona), re-reading and re-parsing the same file to fill two
+    # keys of one dict.
+    versions = []
+    for v in version_ids:
+        persona = read_persona(root, pid, v)
+        versions.append({
+            "id": v, "name": persona["name"], "persona": persona,
+            # Same shape characters.read_character returns, so the editor's
+            # image handling is one code path for both actor kinds (#219).
+            "images": [i["name"] for i in assets.list_images(root, pid, v, ASSET_BASE)],
+            "avatar_focus": assets.read_focus(root, pid, v, ASSET_BASE),
+        })
     default = meta.get("default_version", "")
     return {"meta": {"id": pid, "name": meta.get("name", pid), "tags": _tags_of(meta),
                      "default_version": default if default in version_ids else version_ids[0]},
@@ -161,8 +184,17 @@ def list_pcs(root: Path) -> list[dict]:
             if not version_ids:
                 continue   # see read_pc: no addressable version, nothing to show
             default = meta.get("default_version", "")
+            default = default if default in version_ids else version_ids[0]
+            # The rail renders a portrait per row, so the summary carries the
+            # same derived image fields characters.list_characters does. No
+            # `localized_count`: only a character card's text is localized, so a
+            # PC has no `embed-` images to count.
+            names = [i["name"] for i in assets.list_images(root, pid, default, ASSET_BASE)]
             out.append({"id": pid, "name": meta.get("name", pid), "tags": _tags_of(meta),
-                        "default_version": default if default in version_ids else version_ids[0],
+                        "default_version": default,
+                        "has_avatar": assets.AVATAR in names,
+                        "avatar_focus": assets.read_focus(root, pid, default, ASSET_BASE),
+                        "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
                         "versions": [{"id": v, "name": read_persona(root, pid, v)["name"]}
                                      for v in version_ids]})
     return out

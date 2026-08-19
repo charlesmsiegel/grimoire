@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, type EntityScope, type ModuleDetail, type PCDetail, type PCSummary, type Persona, type VersionRef } from "../api/client";
+import { api, errorText, type EntityScope, type ModuleDetail, type PCDetail, type PCSummary, type Persona, type VersionRef } from "../api/client";
+import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import CreationWizard from "./CreationWizard";
 import { Field } from "./Field";
 import { OwnedLorePanel } from "./OwnedLorePanel";
+import { Portrait } from "./Portrait";
 import SheetPanel from "./SheetPanel";
 
 const BLANK: Persona = { name: "", pronouns: "", summary: "", birthdate: "", description: "" };
@@ -28,8 +30,18 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
   const [worldVersions, setWorldVersions] = useState<VersionRef[]>([]);
   const [importVid, setImportVid] = useState("");
   const [newTag, setNewTag] = useState("");
+  // The open version's images (#219). Held separately from `detail` rather than
+  // read off it: an upload has to refresh the shelf without re-selecting the PC,
+  // which would snap the form back to the default version.
+  const [images, setImages] = useState<{ name: string; v: string }[]>([]);
+  const [cropOpen, setCropOpen] = useState(false);
+  const shelfFileRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(() => api.listPCs(scope).then(setPCs), [scope.kind, scope.id]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const reloadImages = useCallback((pid: string, version: string) => {
+    if (!version) { setImages([]); return; }
+    api.listPCImages(scope, pid, version).then(setImages).catch(() => setImages([]));
+  }, [scope.kind, scope.id]);  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     reload();
     if (worldScope) api.listTags(wid).then(setTags);
@@ -44,6 +56,11 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
     setVid(v?.id ?? "");
     setPersona(v?.persona ?? BLANK);
     setMode("view");
+    setCropOpen(false);
+    // `readPC` already carries this version's image names, but not their
+    // cache-busting tokens, and a promote rewrites two files under stable
+    // URLs -- so the shelf is loaded from the listing that reports them.
+    reloadImages(pid, v?.id ?? "");
     if (!worldScope) {
       // token drops a slow earlier response so selecting A then B can't show A's lock on B
       const req = ++lockReq.current;
@@ -62,6 +79,8 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
     setVid(id);
     const v = detail?.versions.find((x) => x.id === id);
     if (v) setPersona(v.persona);
+    setCropOpen(false);
+    if (detail) reloadImages(detail.meta.id, id);   // art belongs to the version
   }
 
   async function newPC() {
@@ -81,8 +100,8 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
     try {
       await api.updatePCVersion(scope, detail.meta.id, vid, persona);
       await select(detail.meta.id, vid); // back to the read-only view
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -123,6 +142,84 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
     await saveTags(current.includes(tid) ? current.filter((t) => t !== tid) : [...current, tid]);
   }
 
+  // ---- images (#219): the primary image is the asset named "avatar" ----
+  // `?v=` names the exact content state, so these cache immutable; an upload or
+  // a promote refreshes the tokens through reloadImages/reload.
+  const hasAvatar = images.some((i) => i.name === "avatar");
+  const galleryNames = images
+    .map((i) => i.name)
+    .filter((n) => n.startsWith("gallery_"))
+    .sort((a, b) => Number(a.slice("gallery_".length)) - Number(b.slice("gallery_".length)));
+  const avatarFocus = detail?.versions.find((v) => v.id === vid)?.avatar_focus ?? null;
+  const imgSrc = (n: string) => {
+    const base = api.actorImageUrl(scope, "pcs", detail?.meta.id ?? "", vid, n);
+    const v = images.find((i) => i.name === n)?.v;
+    return v ? `${base}?v=${v}` : base;
+  };
+
+  /** Re-read the open version in place. `select()` would snap back to the
+   *  default version, which is the wrong answer after editing another one's art. */
+  async function refreshImages() {
+    if (!detail) return;
+    const d = await api.readPC(scope, detail.meta.id);
+    setDetail(d);              // picks up avatar_focus, which the listing has no room for
+    reloadImages(detail.meta.id, vid);
+    await reload();            // the rail's portrait comes from the summary
+  }
+
+  async function onShelfAdd(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !detail) return;
+    setError(null);
+    // First image becomes the portrait; after that they queue in the gallery,
+    // same rule the character and entity shelves use.
+    const next = hasAvatar
+      ? `gallery_${galleryNames.reduce((m, n) => Math.max(m, Number(n.slice("gallery_".length))), 0) + 1}`
+      : "avatar";
+    try {
+      await api.putPCImage(scope, detail.meta.id, vid, next, file);
+      await refreshImages();
+    } catch (err: unknown) {
+      setError(errorText(err));
+    } finally {
+      e.target.value = "";   // same file twice in a row must still fire onChange
+    }
+  }
+
+  async function promoteImage(name: string) {
+    if (!detail) return;
+    setError(null);
+    try {
+      await api.promotePCImage(scope, detail.meta.id, vid, name);
+      await refreshImages();
+    } catch (err: unknown) {
+      setError(errorText(err));
+    }
+  }
+
+  async function removeImage(name: string) {
+    if (!detail) return;
+    setError(null);
+    try {
+      await api.deletePCImage(scope, detail.meta.id, vid, name);
+      await refreshImages();
+    } catch (err: unknown) {
+      setError(errorText(err));
+    }
+  }
+
+  async function saveFocus(f: number) {
+    if (!detail) return;
+    setCropOpen(false);
+    setError(null);
+    try {
+      await api.setPCAvatarFocus(scope, detail.meta.id, vid, f);
+      await refreshImages();
+    } catch (err: unknown) {
+      setError(errorText(err));
+    }
+  }
+
   const versionName = (id: string | null) =>
     detail?.versions.find((v) => v.id === id)?.name ?? id ?? "";
 
@@ -132,8 +229,8 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
     try {
       await api.pickVersion(scope.id, "pcs", detail.meta.id, vid);
       await select(detail.meta.id, vid);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -143,8 +240,8 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
     try {
       await api.importVersion(scope.id, "pcs", detail.meta.id, importVid);
       await select(detail.meta.id, importVid);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -158,10 +255,19 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
         {pcs.map((p) => (
           <button
             key={p.id}
-            className={"row" + (detail?.meta.id === p.id ? " active" : "")}
+            className={"row pc-row" + (detail?.meta.id === p.id ? " active" : "")}
             onClick={() => select(p.id)}
           >
-            {p.name}
+            {/* aria-hidden: the row is a button named from its contents, and a
+                PC is picked by name -- a second reading of it as alt text is
+                noise. `Portrait` falls back to initials on its own. */}
+            <span className="pc-row-portrait" aria-hidden>
+              <Portrait name={p.name} focus={p.avatar_focus}
+                        src={p.has_avatar
+                          ? api.actorImageUrl(scope, "pcs", p.id, p.default_version, "avatar")
+                          : null} />
+            </span>
+            <span className="row-name">{p.name}</span>
           </button>
         ))}
       </div>
@@ -185,8 +291,50 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
           <div className="editor-empty">Select or create a PC.</div>
         ) : mode === "view" ? (
           <div className="detail-view">
+            {cropOpen && hasAvatar && (
+              <AvatarFocusPicker src={imgSrc("avatar")} initial={avatarFocus ?? 50}
+                                 onSave={saveFocus} onClose={() => setCropOpen(false)} />
+            )}
             <div className="detail-main">
-              <h3>{persona.name || detail.meta.name}</h3>
+              <div className="pc-head">
+                {hasAvatar ? (
+                  <button className="pc-head-art avatar-crop-btn" type="button"
+                          aria-label="Adjust avatar crop" title="Adjust avatar crop"
+                          onClick={() => setCropOpen(true)}>
+                    <Portrait src={imgSrc("avatar")} name={persona.name || detail.meta.name}
+                              focus={avatarFocus} />
+                  </button>
+                ) : (
+                  <span className="pc-head-art" aria-hidden>
+                    <Portrait src={null} name={persona.name || detail.meta.name} />
+                  </span>
+                )}
+                <h3>{persona.name || detail.meta.name}</h3>
+              </div>
+              <div className="section-label">Images</div>
+              <div className="images-shelf">
+                {hasAvatar ? (
+                  <figure className="shelf-tile avatar-tile">
+                    <a href={imgSrc("avatar")} target="_blank" rel="noreferrer">
+                      <img alt="avatar image" src={imgSrc("avatar")} />
+                    </a>
+                    <figcaption>avatar</figcaption>
+                    <button className="shelf-promote" onClick={() => removeImage("avatar")}>Remove</button>
+                  </figure>
+                ) : (
+                  <div className="shelf-tile shelf-empty">no avatar</div>
+                )}
+                {galleryNames.map((n) => (
+                  <div className="shelf-tile" key={n}>
+                    <a href={imgSrc(n)} target="_blank" rel="noreferrer"><img alt={n} src={imgSrc(n)} /></a>
+                    <button className="shelf-promote" onClick={() => promoteImage(n)}>Set as avatar</button>
+                    <button className="shelf-promote" onClick={() => removeImage(n)}>Remove</button>
+                  </div>
+                ))}
+                <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>
+                <input ref={shelfFileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+                       hidden aria-label="Add image" onChange={onShelfAdd} />
+              </div>
               <div className="detail-rendered">
                 <Markdown remarkPlugins={[remarkGfm]}>{persona.description}</Markdown>
               </div>

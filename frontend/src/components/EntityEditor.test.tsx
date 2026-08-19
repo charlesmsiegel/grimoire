@@ -32,7 +32,8 @@ vi.mock("../api/client", () => ({
     putEntityImage: vi.fn(),
     promoteEntityImage: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
-    actorImageUrl: (sc: { kind: string; id: string }, c: string, v: string, n: string) => `/img/${sc.id}/${c}/${v}/${n}`,
+    actorImageUrl: (sc: { kind: string; id: string }, k: string, a: string, v: string, n: string) =>
+      `/img/${sc.id}/${k}/${a}/${v}/${n}`,
     entityImageUrl: (_s: any, k: string, e: string, n: string) => `/img/${k}/${e}/${n}`,
     getSheet: vi.fn(),
     putSheet: vi.fn(),

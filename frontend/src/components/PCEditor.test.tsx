@@ -10,6 +10,10 @@ vi.mock("../api/client", async () => {
       listPCs: vi.fn(), listTags: vi.fn(), readPC: vi.fn(), createPC: vi.fn(),
       updatePC: vi.fn(), deletePC: vi.fn(), createPCVersion: vi.fn(), updatePCVersion: vi.fn(),
       getCalendarMonths: vi.fn(), putSheetCreation: vi.fn(), getSheet: vi.fn(),
+      listPCImages: vi.fn(), putPCImage: vi.fn(), deletePCImage: vi.fn(),
+      promotePCImage: vi.fn(), setPCAvatarFocus: vi.fn(),
+      actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string) =>
+        `/img/${sc.id}/${k}/${a}/${v}/${n}`,
     },
   };
 });
@@ -46,6 +50,11 @@ beforeEach(() => {
   (api.createPCVersion as any).mockResolvedValue({ version: "young" });
   (api.getCalendarMonths as any).mockResolvedValue({ months: GREG_MONTHS });
   (api.getSheet as any).mockResolvedValue({ sheet: null });
+  (api.listPCImages as any).mockResolvedValue([]);
+  (api.putPCImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
+  (api.deletePCImage as any).mockResolvedValue({ ok: true });
+  (api.promotePCImage as any).mockResolvedValue({ ok: true });
+  (api.setPCAvatarFocus as any).mockResolvedValue({ ok: true });
 });
 
 test("clicking a PC shows a read-only view; Edit reveals the form", async () => {
@@ -246,4 +255,130 @@ it("a wizard opened at world scope closes (not just its trigger) when the same i
   rerender(<PCEditor scope={{ kind: "campaign", id: "run" }} wid="w1" module={module} />);
   await waitFor(() => expect(screen.queryByText("New pc (with sheet)")).toBeNull()); // wizard closed
   expect(screen.getByText("Select or create a PC.")).toBeInTheDocument();        // plain view instead
+});
+
+// ---- per-version images (#219) ----
+const FILE = new File([new Uint8Array([1, 2, 3])], "art.png", { type: "image/png" });
+
+it("a PC with no images shows the initials fallback and an empty shelf", async () => {
+  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Elara"));
+  await screen.findByText("a wanderer");
+  expect(screen.getByText("no avatar")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Adjust avatar crop")).toBeNull();
+});
+
+it("the shelf renders the avatar and gallery, cache-busted by the listing's token", async () => {
+  (api.listPCImages as any).mockResolvedValue([
+    { name: "avatar", ext: "png", v: "a1" },
+    { name: "gallery_10", ext: "png", v: "g10" },
+    { name: "gallery_2", ext: "png", v: "g2" },
+  ]);
+  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Elara"));
+
+  const avatar = await screen.findByAltText("avatar image");
+  expect(avatar.getAttribute("src")).toBe("/img/w/pcs/elara/default/avatar?v=a1");
+  // numeric order, not lexicographic ("gallery_10" must not sort before "gallery_2")
+  const gallery = [screen.getByAltText("gallery_2"), screen.getByAltText("gallery_10")];
+  expect(gallery.map((g) => g.getAttribute("src"))).toEqual([
+    "/img/w/pcs/elara/default/gallery_2?v=g2",
+    "/img/w/pcs/elara/default/gallery_10?v=g10",
+  ]);
+});
+
+it("the first upload becomes the avatar; the next queues into the gallery", async () => {
+  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Elara"));
+  await screen.findByText("no avatar");
+
+  fireEvent.change(screen.getByLabelText("Add image"), { target: { files: [FILE] } });
+  await waitFor(() => expect(api.putPCImage).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "elara", "default", "avatar", FILE));
+
+  (api.listPCImages as any).mockResolvedValue([
+    { name: "avatar", ext: "png", v: "a1" }, { name: "gallery_3", ext: "png", v: "g3" },
+  ]);
+  fireEvent.click(screen.getByRole("button", { name: "Elara" }));   // re-select: shelf reloads
+  await screen.findByAltText("gallery_3");
+  fireEvent.change(screen.getByLabelText("Add image"), { target: { files: [FILE] } });
+  // next free slot is one past the HIGHEST gallery_N, not the count
+  await waitFor(() => expect(api.putPCImage).toHaveBeenLastCalledWith(
+    { kind: "world", id: "w" }, "elara", "default", "gallery_4", FILE));
+});
+
+it("a gallery image can be promoted to avatar, and either can be removed", async () => {
+  (api.listPCImages as any).mockResolvedValue([
+    { name: "avatar", ext: "png", v: "a1" }, { name: "gallery_1", ext: "png", v: "g1" },
+  ]);
+  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Elara"));
+
+  fireEvent.click(await screen.findByRole("button", { name: "Set as avatar" }));
+  await waitFor(() => expect(api.promotePCImage).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "elara", "default", "gallery_1"));
+
+  fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]);
+  await waitFor(() => expect(api.deletePCImage).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "elara", "default", "avatar"));
+});
+
+it("clicking the portrait opens the crop picker and saves a focus", async () => {
+  (api.listPCImages as any).mockResolvedValue([{ name: "avatar", ext: "png", v: "a1" }]);
+  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Elara"));
+
+  fireEvent.click(await screen.findByLabelText("Adjust avatar crop"));
+  const slider = await screen.findByLabelText("Crop position");
+  fireEvent.change(slider, { target: { value: "70" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setPCAvatarFocus).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "elara", "default", 70));
+});
+
+it("images follow the viewed version, not the PC", async () => {
+  (api.readPC as any).mockResolvedValue({
+    meta: { id: "elara", name: "Elara", tags: [], default_version: "default" },
+    versions: [
+      { id: "default", name: "default", persona: DETAIL.versions[0].persona },
+      { id: "older", name: "older", persona: { ...DETAIL.versions[0].persona, description: "grey now" } },
+    ],
+  });
+  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Elara"));
+  await waitFor(() => expect(api.listPCImages).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "elara", "default"));
+
+  fireEvent.change(screen.getAllByLabelText("Version")[0], { target: { value: "older" } });
+  await waitFor(() => expect(api.listPCImages).toHaveBeenLastCalledWith(
+    { kind: "world", id: "w" }, "elara", "older"));
+});
+
+it("the rail draws each PC's portrait from its summary, at its own crop", async () => {
+  (api.listPCs as any).mockResolvedValue([
+    { id: "elara", name: "Elara", tags: [], default_version: "v2", has_avatar: true,
+      avatar_focus: 20, versions: [] },
+    { id: "rook", name: "Rook", tags: [], default_version: "default", has_avatar: false,
+      avatar_focus: null, versions: [] },
+  ]);
+  const { container } = render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await screen.findByText("Rook");
+  const thumb = container.querySelector(".pc-row-portrait img") as HTMLImageElement;
+  expect(thumb.getAttribute("src")).toBe("/img/w/pcs/elara/v2/avatar");
+  expect(thumb.style.objectPosition).toBe("20% 20%");
+  // the one with no avatar falls back to initials rather than a broken img
+  expect(container.querySelectorAll(".pc-row-portrait img")).toHaveLength(1);
+  expect(container.querySelectorAll(".pc-row-portrait .portrait-initials")).toHaveLength(1);
+});
+
+it("campaign scope addresses the campaign's own copy of the art", async () => {
+  (api.listAppearances as any).mockResolvedValue([]);
+  (api.listPCImages as any).mockResolvedValue([{ name: "avatar", ext: "png", v: "a1" }]);
+  render(<PCEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Elara"));
+  const avatar = await screen.findByAltText("avatar image");
+  expect(avatar.getAttribute("src")).toBe("/img/run/pcs/elara/default/avatar?v=a1");
+  fireEvent.change(screen.getByLabelText("Add image"), { target: { files: [FILE] } });
+  await waitFor(() => expect(api.putPCImage).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, "elara", "default", "gallery_1", FILE));
 });

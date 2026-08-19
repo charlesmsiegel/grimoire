@@ -1332,6 +1332,22 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 }
 .loc-head h3 { margin: 4px 0 0; }
 
+/* PC rail rows + detail header portrait (#219). A person, not a place: square
+   art beside the name rather than the location card's 16:10 banner, so the rail
+   stays a list you can scan instead of a stack of postcards. */
+.row.pc-row { align-items: center; gap: 8px; }
+.pc-row-portrait .portrait, .pc-row-portrait .portrait-initials {
+  width: 28px; height: 28px; border: 1px solid var(--line); flex: none;
+  display: flex; align-items: center; justify-content: center; font-size: 11px;
+}
+.pc-head { display: flex; gap: 18px; align-items: flex-start; margin-bottom: 12px; }
+.pc-head-art { flex: none; }
+.pc-head-art .portrait, .pc-head-art .portrait-initials {
+  width: 160px; height: 160px; border: 1px solid var(--rule); box-shadow: var(--shadow-pop);
+  display: flex; align-items: center; justify-content: center; font-size: 34px;
+}
+.pc-head h3 { margin: 4px 0 0; }
+
 .char-card-badges { display: flex; gap: 6px; padding: 6px 14px 4px; }
 .char-card-tagline {
   font-family: var(--fb); font-style: italic; font-size: 12.5px; color: var(--muted);

@@ -355,6 +355,94 @@ def test_read_character_patches_images_from_union(monkeypatch, tmp_path):
     assert listed["tagline"] == "A hero of legend."
 
 
+def _pc_pair(monkeypatch, tmp_path):
+    """A world with one two-version PC + a thin campaign on it (see
+    `_actor_pair`, which this mirrors for the other actor kind)."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    pid, _ = pcs.create_pc(wroot, "Winifred", [])
+    pcs.create_version(wroot, pid, "Older", pcs.blank_persona("Winifred"))
+    cid = campaigns.create_campaign("C", wid)
+    return wroot, cid, pid
+
+
+def test_pc_images_union_campaign_wins_and_tombstones(monkeypatch, tmp_path):
+    """The asset overlay was already base-parameterised, so #219 needed no new
+    resolution rule -- but nothing had ever passed it `pcs`, so nothing proved
+    the rules hold there."""
+    wroot, cid, pid = _pc_pair(monkeypatch, tmp_path)
+    base = pcs.ASSET_BASE
+    assets.put_image(wroot, pid, "default", "avatar", PNG, "png", base)
+    assets.put_image(wroot, pid, "default", "gallery_1", PNG, "png", base)
+    assert {i["name"] for i in overlay.list_images(cid, pid, "default", base)} == {
+        "avatar", "gallery_1"}
+    assert overlay.image_root(cid, pid, "default", "avatar", base) == wroot
+
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(croot, pid, "default", "avatar", PNG + b"2", "png", base)
+    assert overlay.image_root(cid, pid, "default", "avatar", base) == croot
+
+    overlay.delete_image(cid, pid, "default", "gallery_1", base)
+    assert {i["name"] for i in overlay.list_images(cid, pid, "default", base)} == {"avatar"}
+    assert overlay.image_root(cid, pid, "default", "gallery_1", base) == croot   # 404, no fallthrough
+
+
+def test_read_pc_patches_images_from_union(monkeypatch, tmp_path):
+    """`materialize_actor` copies persona files and never assets, so a
+    materialized PC still wears the world's avatar -- reading the detail off
+    `pc_root` alone would report none."""
+    wroot, cid, pid = _pc_pair(monkeypatch, tmp_path)
+    assets.put_image(wroot, pid, "default", "avatar", PNG, "png", pcs.ASSET_BASE)
+    assets.write_focus(wroot, pid, "default", 70, pcs.ASSET_BASE)
+    overlay.materialize_actor(cid, "pcs", pid)   # personas in campaign, assets in world
+
+    detail = overlay.read_pc(cid, pid)
+    default = next(v for v in detail["versions"] if v["id"] == "default")
+    assert default["images"] == ["avatar"] and default["avatar_focus"] == 70
+    listed = next(p for p in overlay.list_pcs(cid) if p["id"] == pid)
+    assert (listed["has_avatar"], listed["avatar_focus"]) == (True, 70)
+
+
+def test_list_pcs_patches_an_inherited_pc_too(monkeypatch, tmp_path):
+    """The union has to be taken for inherited rows as well as materialized
+    ones -- `pcs.list_pcs` computed these fields against one root apiece, so a
+    thin campaign's rows would all have said `has_avatar: False`."""
+    wroot, cid, pid = _pc_pair(monkeypatch, tmp_path)
+    assets.put_image(wroot, pid, "default", "avatar", PNG, "png", pcs.ASSET_BASE)
+    assert not (campaigns.campaign_root(cid) / "pcs" / pid).exists()   # never materialized
+    assert next(p for p in overlay.list_pcs(cid) if p["id"] == pid)["has_avatar"] is True
+
+
+def test_pc_promote_copies_up_and_leaves_the_world_alone(monkeypatch, tmp_path):
+    wroot, cid, pid = _pc_pair(monkeypatch, tmp_path)
+    base = pcs.ASSET_BASE
+    assets.put_image(wroot, pid, "default", "avatar", PNG, "png", base)
+    assets.put_image(wroot, pid, "default", "gallery_1", PNG + b"2", "png", base)
+    overlay.promote_image(cid, pid, "default", "gallery_1", base)
+
+    croot = campaigns.campaign_root(cid)
+    assert assets.image_path(croot, pid, "default", "avatar", base).read_bytes() == PNG + b"2"
+    assert assets.image_path(croot, pid, "default", "gallery_1", base).read_bytes() == PNG
+    assert assets.image_path(wroot, pid, "default", "avatar", base).read_bytes() == PNG
+    assert assets.image_path(wroot, pid, "default", "gallery_1", base).read_bytes() == PNG + b"2"
+
+
+def test_a_detached_pc_does_not_inherit_a_strangers_image(monkeypatch, tmp_path):
+    """`_flat_ref("pcs", pid)` in `detached` governs PC assets too: once the
+    world PC is gone and a new one takes its id, the campaign's spared copy
+    must not start wearing the newcomer's art."""
+    wroot, cid, pid = _pc_pair(monkeypatch, tmp_path)
+    overlay.materialize_actor(cid, "pcs", pid)      # the campaign has its own copy
+    pcs.delete_pc(wroot, pid)
+    overlay.forget_world_record(wroot, "pcs", pid)  # spares the copy, detaches it
+    pcs.create_pc(wroot, "Winifred", [])            # a new PC lands on the same id
+    assets.put_image(wroot, pid, "default", "avatar", PNG + b"stranger", "png", pcs.ASSET_BASE)
+
+    assert overlay.list_images(cid, pid, "default", pcs.ASSET_BASE) == []
+    assert overlay.read_pc(cid, pid)["versions"][0]["images"] == []
+
+
 # ---- #247: materialization records the sync base before it commits the copy ----
 
 def _at_commit(monkeypatch, cid, target: Path, sibling_dir: Path = None, glob: str = None) -> dict:

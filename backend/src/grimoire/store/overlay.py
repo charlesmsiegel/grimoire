@@ -714,13 +714,26 @@ def list_characters(cid: str) -> list[dict]:
     return sorted([_patch_char_item(cid, c) for c in mine + inherited], key=lambda c: c["id"])
 
 
+def _patch_pc_item(cid: str, item: dict) -> dict:
+    """The PC counterpart of `_patch_char_item`: `pcs.list_pcs` computed these
+    against one root, but a thin campaign's PC can hold its images world-side,
+    so the derived fields have to come from the overlay union (#219)."""
+    names = [i["name"] for i in list_images(cid, item["id"], item["default_version"],
+                                            pcs.ASSET_BASE)]
+    return {**item,
+            "has_avatar": assets.AVATAR in names,
+            "avatar_focus": read_focus(cid, item["id"], item["default_version"],
+                                       pcs.ASSET_BASE),
+            "gallery_count": sum(1 for n in names if n.startswith("gallery_"))}
+
+
 def list_pcs(cid: str) -> list[dict]:
     mine = pcs.list_pcs(croot_of(cid))
     have = {p["id"] for p in mine}
     gone = deleted(cid)
     inherited = [p for p in pcs.list_pcs(wroot_of(cid))
                  if p["id"] not in have and _flat_ref("pcs", p["id"]) not in gone]
-    return sorted(mine + inherited, key=lambda p: p["id"])
+    return sorted([_patch_pc_item(cid, p) for p in mine + inherited], key=lambda p: p["id"])
 
 
 def character_refs(cid: str) -> list[str]:
@@ -825,6 +838,21 @@ def read_character(cid: str, char_id: str) -> dict:
     for v in detail["versions"]:
         v["images"] = [i["name"] for i in list_images(cid, char_id, v["id"])]
         v["avatar_focus"] = read_focus(cid, char_id, v["id"])
+    return detail
+
+
+def read_pc(cid: str, pid: str) -> dict:
+    """`pcs.read_pc` with its image fields re-derived from the union.
+
+    The persona files resolve whole-directory through `pc_root`, but assets
+    overlay per file, so a materialized PC can still be showing an avatar that
+    only the world has. Reading the detail off one root would hide it -- the
+    same reason `read_character` exists rather than callers using
+    `characters.read_character` directly (#219)."""
+    detail = pcs.read_pc(pc_root(cid, pid), pid)
+    for v in detail["versions"]:
+        v["images"] = [i["name"] for i in list_images(cid, pid, v["id"], pcs.ASSET_BASE)]
+        v["avatar_focus"] = read_focus(cid, pid, v["id"], pcs.ASSET_BASE)
     return detail
 
 

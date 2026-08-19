@@ -4,8 +4,8 @@ import type { Actor, Briefing, RosterEntry } from "../../api/client";
 
 vi.mock("../../api/client", () => ({
   api: {
-    campaignImageUrl: (cid: string, char: string, v: string, n: string) =>
-      `/api/campaigns/${cid}/characters/${char}/versions/${v}/images/${n}`,
+    actorImageUrl: (sc: { id: string }, kind: string, aid: string, v: string, n: string) =>
+      `/api/campaigns/${sc.id}/${kind}/${aid}/versions/${v}/images/${n}`,
   },
 }));
 
@@ -75,6 +75,19 @@ test("every actor is a tile that opens their dossier", () => {
   renderColumn();
   fireEvent.click(screen.getByText("Sister Aud"));
   expect(opened).toEqual(["characters/aud"]);
+});
+
+test("a PC's tile shows their portrait, not just initials", () => {
+  // Before #219 the tile hard-coded `kind === "characters"`, so the player --
+  // the one person on stage the reader is playing -- was the only one in the
+  // grid who never had a face.
+  renderColumn();
+  const pc = screen.getByText("Ferrant Wyle").closest(".cast-tile")!;
+  expect(pc.querySelector("img")!.getAttribute("src"))
+    .toBe("/api/campaigns/saltmarch/pcs/wyle/versions/v1/images/avatar");
+  const npc = screen.getByText("Sister Aud").closest(".cast-tile")!;
+  expect(npc.querySelector("img")!.getAttribute("src"))
+    .toBe("/api/campaigns/saltmarch/characters/aud/versions/v1/images/avatar");
 });
 
 test("a tile says where its actor stands", () => {

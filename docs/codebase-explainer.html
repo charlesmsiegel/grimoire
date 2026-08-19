@@ -861,13 +861,13 @@ flowchart TB
 
 <section id="images">
   <h2>Images &amp; Assets</h2>
-  <p><span class="filepath">store/assets.py</span> is a per-record image store — <code>&lt;kind&gt;/&lt;id&gt;/assets/&lt;version&gt;/&lt;name&gt;.&lt;ext&gt;</code> — shared by characters (per version), entities, and greetings (version <code>default</code>). Images are deliberately <em>not</em> hashed into sync.</p>
+  <p><span class="filepath">store/assets.py</span> is a per-record image store — <code>&lt;kind&gt;/&lt;id&gt;/assets/&lt;version&gt;/&lt;name&gt;.&lt;ext&gt;</code> — shared by characters and PCs (per version), entities, and greetings (version <code>default</code>). Images are deliberately <em>not</em> hashed into sync.</p>
   <div class="grid2">
     <div class="card">
       <h4>Slots &amp; operations</h4>
       <ul>
         <li><code>avatar</code> is the primary slot; <code>gallery_N</code> for the rest.</li>
-        <li><strong>Promote</strong> = a three-way rename swap (nothing lost) at both world and campaign scope.</li>
+        <li><strong>Promote</strong> = a swap (nothing lost) at both world and campaign scope: each side is republished in turn, not shuffled through a temp name. The old three-rename version left no avatar at all if it died mid-sequence (#253).</li>
         <li><strong>Crop focus</strong>: <code>focus.json</code> sidecar stores a 0–100 position along the avatar's long axis (the <code>AvatarFocusPicker</code>); any avatar write clears it.</li>
         <li><strong>Image subjects</strong>: <code>subjects.json</code> per greeting records which characters appear in each image — powering the "Appears in" gallery on character pages, copy-image-to-character, and the untagged-image tagging queue.</li>
       </ul>
@@ -994,7 +994,7 @@ flowchart TB
     <tr><td><span class="pill get">GET</span><span class="pill post">POST</span></td><td><code>/worlds</code></td><td>List / create worlds</td></tr>
     <tr><td><span class="pill get">GET</span><span class="pill put">PUT</span><span class="pill del">DEL</span></td><td><code>/worlds/{wid}</code></td><td>Read / rename / delete a world</td></tr>
     <tr><td><span class="pill get">GET</span></td><td><code>/worlds/{wid}/campaigns</code></td><td>Campaigns of a world + pending-sync counts</td></tr>
-    <tr><td colspan="3" class="tag">…plus full world-scoped CRUD for <code>characters</code> (versions, import json/png/charx, export, birthdate, tagline + generate, images + promote + focus, localize <span class="pill sse">SSE</span>, chub import/link/gallery <span class="pill sse">SSE</span>/lorebooks), <code>pcs</code>, <code>tags</code>, <code>greetings</code> (+ edges, image subjects, untagged queue), lorebook parse/import, and generic <code>{kind}</code> (lore/locations) with entity images.</td></tr>
+    <tr><td colspan="3" class="tag">…plus full world-scoped CRUD for <code>characters</code> (versions, import json/png/charx, export, birthdate, tagline + generate, images + promote + focus, localize <span class="pill sse">SSE</span>, chub import/link/gallery <span class="pill sse">SSE</span>/lorebooks), <code>pcs</code> (versions, images + promote + focus), <code>tags</code>, <code>greetings</code> (+ edges, image subjects, untagged queue), lorebook parse/import, and generic <code>{kind}</code> (lore/locations) with entity images.</td></tr>
   </table></div>
 
   <h4>Campaigns</h4>
@@ -1008,7 +1008,7 @@ flowchart TB
     <tr><td><span class="pill get">GET</span><span class="pill put">PUT</span></td><td><code>/campaigns/{cid}/calendar</code></td><td>Campaign calendar config</td></tr>
     <tr><td><span class="pill post">POST</span></td><td><code>/campaigns/{cid}/scene-suggestions</code></td><td>LLM premises + greeting ranking + next date</td></tr>
     <tr><td><span class="pill post">POST</span></td><td><code>…/{kind}/{aid}/pick-version</code> · <code>…/import-version</code></td><td>Lock an actor's version / swap it from the world</td></tr>
-    <tr><td colspan="3" class="tag">…plus campaign-scoped CRUD mirroring the world side: characters &amp; PCs (version create 409s when locked), greetings (+ edges, marks, <code>available?after=</code>), generic <code>{kind}</code> entities + images.</td></tr>
+    <tr><td colspan="3" class="tag">…plus campaign-scoped CRUD mirroring the world side: characters &amp; PCs (version create 409s when locked; both carry per-version images through the overlay), greetings (+ edges, marks, <code>available?after=</code>), generic <code>{kind}</code> entities + images.</td></tr>
   </table></div>
 
   <h4>Scenes &amp; Play</h4>

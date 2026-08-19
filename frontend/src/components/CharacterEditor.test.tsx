@@ -7,7 +7,8 @@ vi.mock("../api/client", async () => {
     ...actual,
     api: {
       listAppearances: vi.fn(), pickVersion: vi.fn(), importVersion: vi.fn(),
-      actorImageUrl: (sc: { id: string }, c: string, v: string, n: string) => `/img/${sc.id}/${c}/${v}/${n}`,
+      actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string) =>
+        `/img/${sc.id}/${k}/${a}/${v}/${n}`,
       listCharacters: vi.fn(), readCharacter: vi.fn(), createCharacter: vi.fn(),
       updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
       deleteCharacter: vi.fn(), importCharacter: vi.fn(), localizeImages: vi.fn(),
@@ -30,7 +31,7 @@ vi.mock("../api/client", async () => {
     },
   };
 });
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 
 const GREG_MONTHS = [
   { key: "01", name: "January", days: 31 },
@@ -415,6 +416,16 @@ test("focus prop opens that character at the given version", async () => {
   expect(active).toBeInTheDocument();
 });
 
+test("a focus link to a character that is gone shows the reason, not an unhandled rejection", async () => {
+  // `focusCharacter` is called from a mount effect, which cannot await it, so
+  // letting the read reject left the screen on the grid saying nothing and put
+  // an unhandled rejection on the console (health: floating_promise).
+  (api.readCharacter as any).mockRejectedValue(
+    new ApiError(404, "character not found"));
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" focus={{ cid: "gone", vid: "v1" }} />);
+  expect(await screen.findByText("character not found")).toBeInTheDocument();
+});
+
 test("import version posts importCharacter into the current character", async () => {
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
@@ -693,13 +704,13 @@ test("gallery images render as thumbnails, sorted numerically, opening full-size
   expect(thumbs).toHaveLength(3);
   // numeric order, not lexicographic ("gallery_10" must not sort before "gallery_2")
   expect(thumbs.map((t) => t.src)).toEqual([
-    "http://localhost:3000/img/w/seraphine/default/gallery_0?v=0",
-    "http://localhost:3000/img/w/seraphine/default/gallery_2?v=0",
-    "http://localhost:3000/img/w/seraphine/default/gallery_10?v=0",
+    "http://localhost:3000/img/w/characters/seraphine/default/gallery_0?v=0",
+    "http://localhost:3000/img/w/characters/seraphine/default/gallery_2?v=0",
+    "http://localhost:3000/img/w/characters/seraphine/default/gallery_10?v=0",
   ]);
   const links = thumbs.map((t) => t.closest("a"));
   expect(links.every((a) => a?.getAttribute("target") === "_blank")).toBe(true);
-  expect(links[0]).toHaveAttribute("href", "/img/w/seraphine/default/gallery_0?v=0");
+  expect(links[0]).toHaveAttribute("href", "/img/w/characters/seraphine/default/gallery_0?v=0");
 });
 
 test("no gallery section when a version has no gallery images", async () => {
@@ -959,7 +970,7 @@ test("campaign scope: hides world-only tooling and uses campaign image URLs", as
   expect(screen.queryByRole("button", { name: "Download from URL" })).toBeNull();
   expect(screen.queryByRole("button", { name: "+ New character" })).toBeNull();
   const img = container.querySelector("img.char-card-avatar")!;
-  expect(img.getAttribute("src")).toContain("/img/run/mara/");
+  expect(img.getAttribute("src")).toContain("/img/run/characters/mara/");
 });
 
 // A campaign inherits its world's whole character roster, most of which never

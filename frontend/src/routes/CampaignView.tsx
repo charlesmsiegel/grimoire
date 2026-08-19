@@ -3350,9 +3350,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   });
 
   function plateAvatar(run: Run): string | null {
-    if (!run.actor || run.actor.kind !== "characters") return null;
-    const ver = roster.find((r) => r.kind === "characters" && r.id === run.actor!.id)?.version;
-    return ver ? api.campaignImageUrl(cid, run.actor.id, ver, "avatar") : null;
+    if (!run.actor) return null;
+    // Either actor kind: a speaker plate used to fall back to initials for
+    // every PC, because PCs had no images to point at (#219).
+    const { kind, id } = run.actor;
+    const ver = roster.find((r) => r.kind === kind && r.id === id)?.version;
+    return ver ? api.actorImageUrl({ kind: "campaign", id: cid }, kind, id, ver, "avatar") : null;
   }
 
   const sceneTitle = scenes.find((s) => s.id === activeId)?.title ?? "";

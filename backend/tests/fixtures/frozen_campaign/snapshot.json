@@ -832,7 +832,10 @@
   ],
   "overlay.list_pcs[the-drowned-ledger]": [
     {
+      "avatar_focus": null,
       "default_version": "default",
+      "gallery_count": 0,
+      "has_avatar": false,
       "id": "winifred",
       "name": "Winifred",
       "tags": [

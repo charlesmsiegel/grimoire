@@ -31,7 +31,8 @@ vi.mock("../api/client", () => ({
     listUntaggedImages: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
     exportUrl: (w: string, c: string, v: string, f: string) => `/export/${w}/${c}/${v}/${f}`,
-    actorImageUrl: (sc: { id: string }, c: string, v: string, n: string) => `/img/${sc.id}/${c}/${v}/${n}`,
+    actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string) =>
+      `/img/${sc.id}/${k}/${a}/${v}/${n}`,
     listAppearances: vi.fn(), markGreeting: vi.fn(), pickVersion: vi.fn(), importVersion: vi.fn(),
     listModules: vi.fn(), setWorldModule: vi.fn(),
     getCampaignModule: vi.fn(), readModule: vi.fn(), getWorldSheetsIndex: vi.fn(), getSheet: vi.fn(),
