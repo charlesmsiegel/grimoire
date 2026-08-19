@@ -27,6 +27,10 @@ export function CalendarConfig({ scope, onConfig }: {
   const [providers, setProviders] = useState<{ id: string; name: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // A load that failed is not a load still running. Without the distinction
+  // "Loading calendar…" is what an unreachable store shows forever, and on the
+  // world Overview that is the first thing a new library puts on screen.
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -37,9 +41,10 @@ export function CalendarConfig({ scope, onConfig }: {
     setCfg(null);
     setSaved(false);
     setError(null);
+    setFailed(false);
     api.getCalendarConfig(scope)
       .then((c) => { if (live) { setCfg(c); onConfig?.(c); } })
-      .catch(() => { if (live) setCfg(null); });
+      .catch(() => { if (live) { setCfg(null); setFailed(true); } });
     api.getCalendarProviders().then((r) => setProviders(r.providers)).catch(() => setProviders([]));
     return () => { live = false; };
     // `onConfig` is deliberately not a dependency: callers pass an inline
@@ -48,7 +53,11 @@ export function CalendarConfig({ scope, onConfig }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope.kind, scope.id]);
 
-  if (!cfg) return <div className="field-hint">Loading calendar…</div>;
+  if (!cfg) {
+    return <div className="field-hint">
+      {failed ? "Could not load this calendar." : "Loading calendar…"}
+    </div>;
+  }
 
   function setPrimary(patch: Partial<Cfg["primary"]>) {
     setSaved(false);
@@ -98,32 +107,13 @@ export function CalendarConfig({ scope, onConfig }: {
           </select>
         </label>
       )}
-      {/* The campaign's one aging knob (#103), here because it is a fact about
-          how this campaign reckons time and this is where those live —
-          calendar.json holds it beside the calendars themselves. Empty means
-          "no opinion" and saves as 0, which the store answers with its own
-          default rather than a threshold that would call every record stale on
-          the day it was written. */}
-      <label>
-        Stale after
-        <input type="number" aria-label="Stale after days" min={1}
-               value={cfg.stale_after_days || ""}
-               onChange={(e) => {
-                 setSaved(false);
-                 setCfg({ ...cfg!, stale_after_days: parseInt(e.target.value, 10) || 0 });
-               }} />
-      </label>
-      <div className="field-hint">
-        Days a thread or commitment may go untouched before the ledger calls it stale.
-        {isWorld && " Campaigns started from this world begin with this threshold."}
-      </div>
-      {/* World scope only. `confirmed` means "a person chose this calendar", and
-          campaign-side that answer is given to the scene inspector's prompt —
-          a second control there would be two ways to say the same thing. World
-          -side there is no prompt to answer, and the flag is the whole point of
-          the world's copy: `create_campaign` writes it into every campaign
-          started from this world, so confirming here is what stops each of them
-          asking again. */}
+      {/* World scope only, and above the aging knob because it is the decision
+          the world Overview's checklist points at. `confirmed` means "a person
+          chose this calendar"; campaign-side that answer is given to the scene
+          inspector's prompt, and a second control there would be two ways to
+          say the same thing. World-side there is no prompt to answer, and
+          `create_campaign` copies the whole file — this flag included — into
+          every campaign started from this world. */}
       {isWorld && (
         <>
           <label>
@@ -139,6 +129,26 @@ export function CalendarConfig({ scope, onConfig }: {
           </div>
         </>
       )}
+      {/* The aging knob (#103), here because it is a fact about how the record
+          reckons time and this is where those live — calendar.json holds it
+          beside the calendars themselves. A world's copy is the default its
+          campaigns are created with, same as everything else in this file.
+          Empty means "no opinion" and saves as 0, which the store answers with
+          its own default rather than a threshold that would call every record
+          stale on the day it was written. */}
+      <label>
+        Stale after
+        <input type="number" aria-label="Stale after days" min={1}
+               value={cfg.stale_after_days || ""}
+               onChange={(e) => {
+                 setSaved(false);
+                 setCfg({ ...cfg!, stale_after_days: parseInt(e.target.value, 10) || 0 });
+               }} />
+      </label>
+      <div className="field-hint">
+        Days a thread or commitment may go untouched before the ledger calls it stale.
+        {isWorld && " Campaigns started from this world begin with this threshold."}
+      </div>
       {/* World-side this panel sits beside Mechanics, which has a Save of its
           own; "Save" twice in a row is ambiguous to anyone reading the page by
           its controls. The visible text stays "Save" and the name only extends

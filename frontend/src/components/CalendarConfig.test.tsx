@@ -104,12 +104,25 @@ test("the config it loads and the one it saves are both reported to its owner", 
     expect.objectContaining({ confirmed: true })));
 });
 
-test("a failed load reports nothing, so an owner cannot mistake it for unconfirmed", async () => {
+test("a failed load says so, rather than loading forever", async () => {
+  // It reports nothing either, so an owner deriving a checklist row from it
+  // cannot mistake a failed read for an unconfirmed calendar.
   (api.getCalendarConfig as any).mockRejectedValue(new Error("nope"));
   const onConfig = vi.fn();
   render(<CalendarConfig scope={{ kind: "world", id: "realm" }} onConfig={onConfig} />);
-  expect(await screen.findByText(/loading calendar/i)).toBeInTheDocument();
+  expect(await screen.findByText(/could not load this calendar/i)).toBeInTheDocument();
+  expect(screen.queryByText(/loading calendar/i)).toBeNull();
   expect(onConfig).not.toHaveBeenCalled();
+});
+
+test("the confirmed control comes before the aging threshold it outranks", async () => {
+  // It is the decision the world Overview's checklist points at; burying it
+  // under a number about stale threads puts the answer below the footnote.
+  render(<CalendarConfig scope={{ kind: "world", id: "realm" }} />);
+  const confirmed = await screen.findByLabelText("Confirmed");
+  const stale = screen.getByLabelText("Stale after days");
+  expect(confirmed.compareDocumentPosition(stale))
+    .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 });
 
 test("the world's save says what it saves — Mechanics has a Save beside it", async () => {
