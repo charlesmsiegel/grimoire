@@ -238,6 +238,10 @@ participate, and two different OS accounts sharing one store aren't covered —
 so it makes accidents survivable rather than making two-at-once a supported way
 to work.
 
+The exact promises behind that paragraph — what is atomic, what the locks
+cover, and what is deliberately not guaranteed — are written up in
+[`docs/store-guarantees.md`](docs/store-guarantees.md).
+
 ---
 
 ## Android app

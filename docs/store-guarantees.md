@@ -4,9 +4,9 @@ Grimoire's library is a tree of Markdown and JSON files under `store.home()`,
 written by a server that handles requests concurrently and may not be the only
 process holding that directory. Over #233, #234, #255 and #267 the store grew
 real crash-safety and real mutual exclusion — but the rules ended up spread
-across five modules and three AST-parsing tests, so the only way to find out
-what a caller may rely on was to read all eight. This page is that answer in
-one place.
+across a handful of `store/` modules and the AST-parsing tests that enforce
+them, so the only way to find out what a caller may rely on was to read every
+one. This page is that answer in one place.
 
 It is a description of what the code does today, not a wish list. Where a
 promise stops, the stopping point is stated: [What is **not**
@@ -49,7 +49,7 @@ The mechanism is write-to-temp, `fsync`, then `os.replace` onto the target —
 `os.replace` being the one operation a POSIX or Windows filesystem publishes as
 a unit.
 
-### The four primitives
+### The primitives
 
 | Primitive | For | Publishes by |
 |---|---|---|
@@ -324,18 +324,24 @@ or clobbered without leaving a copy, leave nothing on disk to find at all.
 
 ### So: is two-at-once supported?
 
-**Two processes on one machine, one user:** yes, for the writers in the lock
-domain — scene, sheet, proposal and module-pack writes exclude each other
-across processes, so the desktop app and a dev server can share a store without
-shredding a transcript. It makes accidents survivable; it is not a blanket
-guarantee, because the writers listed in `OUTSIDE_DOMAIN` and `UNREVIEWED` do
-not participate.
+**Two processes on one machine, one user:** yes — but "yes" means exactly the
+lock domain and nothing wider. A mutator in `DOMAIN_MODULES` is excluded across
+processes; one listed in `OUTSIDE_DOMAIN` or `UNREVIEWED` is not excluded at
+all, and both lists are real. So the honest summary is that the failure this
+protects against — two processes interleaving a read-modify-write of the same
+transcript — is closed, while a rename racing a `touch` is still open and
+documented as such in `store/locks.py`.
 
-**Two devices through a synced folder:** no. Sync clients resolve simultaneous
-edits by making conflict copies on their own schedule, and grimoire cannot
-merge those — one side's edit wins and the other becomes a stray file that
-`GET /api/store/conflicts` can, at best, point at afterwards. Let the sync
-settle before switching devices.
+**Two devices through a synced folder:** no, and nothing in this file changes
+that. Every mechanism above is machine-local by construction — the lock is an
+inode on one filesystem, the statcache watches one `mtime` — so the losing
+device's edit is gone before any of them is consulted. `GET
+/api/store/conflicts` is the only after-the-fact recourse, and only for the
+subset of cases the sync client marks in a filename.
+
+[`README.md`](../README.md) states this as user-facing advice, and it is the
+copy to edit if the wording needs to change; what belongs here is only the
+engineering reason it cannot be fixed at this layer.
 
 ---
 
