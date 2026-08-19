@@ -662,8 +662,10 @@ def test_copy_image_from_greeting_refuses_a_character_that_is_not_there(client):
 
 
 # One of the five generic entity kinds, standing in for the `{kind}` path
-# parameter the entity image routes spell instead of a literal segment.
-_GHOST_KIND = "locations"
+# parameter the entity image routes spell instead of a literal segment. Not a
+# ghost -- the records built under it below are real; it is the kind those
+# routes get driven with.
+_ENTITY_KIND = "locations"
 
 
 def _image_write_routes(client):
@@ -713,7 +715,7 @@ def _surface_seg(path: str) -> str:
     return path.split("/")[4]
 
 
-def _ghosted(path: str, scope_id: str, rid: str, vid: str, kind: str = _GHOST_KIND) -> str:
+def _ghosted(path: str, scope_id: str, rid: str, vid: str, kind: str = _ENTITY_KIND) -> str:
     """Fill a route pattern by position: segment 3 is the scope id, and what
     follows is either `<kind>/<id>` with the kind a literal (`characters`,
     `pcs`, `greetings`) or `{kind}/{id}` with the kind a parameter. Any
@@ -826,7 +828,7 @@ def test_every_image_write_route_refuses_an_id_that_names_nothing(client):
                       json={"name": "Opener", "character": chid, "version": "default"}).json()["id"]
     store.assets.put_image(store.worlds.world_root(wid), gid, "default",
                            "embed-abc123def456", b"art", "png", base="greetings")
-    eid = client.post(f"/api/worlds/{wid}/{_GHOST_KIND}", json={"name": "Saltmarch"}).json()["id"]
+    eid = client.post(f"/api/worlds/{wid}/{_ENTITY_KIND}", json={"name": "Saltmarch"}).json()["id"]
     real = {"characters": chid, "pcs": pid, "greetings": gid, "{kind}": eid}
 
     routes = _image_write_routes(client)
@@ -837,9 +839,9 @@ def test_every_image_write_route_refuses_an_id_that_names_nothing(client):
                          ("campaigns", "characters"), ("campaigns", "pcs"),
                          ("worlds", "greetings"),
                          ("worlds", "{kind}"), ("campaigns", "{kind}")}, seen
-    # 25 routes today (18 actor, 1 greeting, 6 entity). A floor on the whole
-    # surface rather than per group -- the greeting subjects route is a group
-    # of one -- to catch a filter that collapsed to almost nothing.
+    # A floor on the whole surface rather than per group -- the greeting
+    # subjects route is a group of one -- to catch a filter that collapsed to
+    # almost nothing. `_image_write_routes` says how many there are today.
     assert sum(seen.values()) >= 22, seen
 
     for method, path in routes:
@@ -847,9 +849,9 @@ def test_every_image_write_route_refuses_an_id_that_names_nothing(client):
         seg = _surface_seg(path)
         # No version half off the actor surface: an entity's images are keyed
         # on a fixed "default", so the record is the only id there is to ghost.
-        ghosts = [("nobody", "default", _GHOST_KIND)]
+        ghosts = [("nobody", "default", _ENTITY_KIND)]
         if "/versions/" in path:
-            ghosts.append((real[seg], "typo", _GHOST_KIND))
+            ghosts.append((real[seg], "typo", _ENTITY_KIND))
         for rid, vid, kind in ghosts:
             url = _ghosted(path, scope_id, rid, vid, kind)
             r = _write_request(client, method, url, gid)
@@ -859,7 +861,7 @@ def test_every_image_write_route_refuses_an_id_that_names_nothing(client):
     # and not one of those refusals left a directory behind
     for root in (store.worlds.world_root(wid), store.campaigns.campaign_root(cid)):
         for kind, rid in (("characters", chid), ("pcs", pid),
-                          ("greetings", gid), (_GHOST_KIND, eid)):
+                          ("greetings", gid), (_ENTITY_KIND, eid)):
             assert not (root / kind / "nobody").exists(), (root, kind)
             assert not (root / kind / rid / "assets" / "typo").exists(), (root, kind)
 
@@ -879,7 +881,7 @@ def test_every_entity_image_write_route_refuses_a_kind_that_has_no_entities(clie
     not, since nothing uploads a greeting image over HTTP.
     """
     wid, cid = _campaign(client)
-    eid = client.post(f"/api/worlds/{wid}/{_GHOST_KIND}", json={"name": "Saltmarch"}).json()["id"]
+    eid = client.post(f"/api/worlds/{wid}/{_ENTITY_KIND}", json={"name": "Saltmarch"}).json()["id"]
     gid = client.post(f"/api/worlds/{wid}/greetings",
                       json={"name": "Opener", "character": "sera", "version": "default"}).json()["id"]
 
