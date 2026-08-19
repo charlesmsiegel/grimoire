@@ -86,6 +86,24 @@ def test_parsing_an_uploaded_card_proposes_a_cast_and_writes_nothing(client, wid
     assert _counts(client, wid) == {"characters": 0, "lore": 0, "locations": 0, "greetings": 0}
 
 
+def test_a_parse_reaches_the_client_the_app_itself_holds(monkeypatch, tmp_path):
+    """Every other test here injects at `dependency_overrides`, which replaces
+    `get_llm` whole -- so none of them would notice if the real provider stopped
+    resolving. This one leaves `get_llm` in place and swaps what the app holds
+    (#215), which is the path a shipped server actually takes."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    app = create_app()
+    app.state.llm = FakeOpenRouterComplete(REPLY)
+    client = TestClient(app)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+
+    body = _upload(client, wid).json()
+
+    assert [c["name"] for c in body["characters"]] == ["Mara"]
+
+
 def test_a_parse_says_which_of_the_cast_the_world_already_has(client, wid):
     assert _upload(client, wid).json()["characters"][0]["exists"] is False
     client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})

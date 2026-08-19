@@ -91,6 +91,30 @@ def test_shutdown_closes_the_underlying_connection_pools(app):
     assert all(pool.is_closed for pool in pools)
 
 
+def test_every_closable_the_app_holds_is_closed_by_shutdown(app):
+    """`_lifespan` names the clients it closes, so a third one hung on
+    `app.state` later would leak in exactly the silence #215 was about. This is
+    the thing that notices: anything on the app with an `aclose` has to be
+    closed on the way out, or be given a reason not to be here.
+
+    Its blind spot, stated: a client that never reaches `app.state` at all --
+    a module-level singleton of the kind this issue removed, or the
+    `EmbeddingsClient` pair still living in `store/` -- is invisible from
+    here."""
+    # Starlette keeps `State`'s attributes in this dict.
+    closable = [name for name, value in app.state._state.items()
+                if hasattr(value, "aclose")]
+    assert closable, "nothing closable on app.state — has the wiring moved?"
+    for name in closable:
+        setattr(app.state, name, _Recorder())
+
+    with TestClient(app):
+        pass
+
+    leaked = [name for name in closable if getattr(app.state, name).closes != 1]
+    assert not leaked, f"app.state holds {leaked}, which shutdown never closes"
+
+
 def test_a_second_run_over_the_same_app_gets_a_working_pool(app):
     """Closing resets the lazy handle rather than leaving a closed client in
     it: an app served a second time builds a new pool instead of handing every
@@ -105,19 +129,24 @@ def test_a_second_run_over_the_same_app_gets_a_working_pool(app):
         assert not second.is_closed
 
 
-def test_one_failing_close_does_not_strand_the_other_pool(app, caplog):
-    """Shutdown cleanup that gives up halfway is the leak this change is about."""
+@pytest.mark.parametrize("broken", ["llm", "openai_compatible"])
+def test_one_failing_close_does_not_strand_the_other_pool(app, caplog, broken):
+    """Shutdown cleanup that gives up halfway is the leak this change is about.
+
+    Both arrangements, because guarding only the first close would pass the one
+    where the first client is the broken one and strand the pool in the other."""
     class _Broken:
         async def aclose(self):
             raise RuntimeError("the pool refused to close")
 
-    app.state.llm = _Broken()
-    app.state.openai_compatible = _Recorder()
+    other = "openai_compatible" if broken == "llm" else "llm"
+    setattr(app.state, broken, _Broken())
+    setattr(app.state, other, _Recorder())
 
     with TestClient(app):
         pass
 
-    assert app.state.openai_compatible.closes == 1
+    assert getattr(app.state, other).closes == 1
     assert "the pool refused to close" in caplog.text
 
 
