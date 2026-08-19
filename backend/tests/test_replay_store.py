@@ -69,8 +69,11 @@ def test_two_replays_at_once_in_one_campaign_are_refused(cid, sid):
     other = scenes.create_scene(cid, "The Long Quay")
     scenes.append_message(cid, other, "user", "hello")
     scenes.append_reply(cid, other, [{"speaker": None, "content": "answer"}])
-    with pytest.raises(replay.ReplayError):
+    with pytest.raises(replay.ReplayError) as refused:
         replay.begin(cid, other, 1)
+    # Named: one replay runs per campaign, so the reviewer has to be able to go
+    # to the one that is already open.
+    assert "Saltmarch" in str(refused.value)
     assert _contents(cid, other) == ["hello", "answer"]
 
 

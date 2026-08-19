@@ -258,8 +258,20 @@ def begin(cid: str, sid: str, index: int) -> dict:
     honestly rebuild.
     """
     with locks.campaign_lock(cid):
-        if read(cid).get("steps"):
-            raise ReplayError("a replay is already running in this campaign")
+        running = read(cid)
+        if running.get("steps"):
+            # Named, not merely reported. One replay runs per campaign, so a
+            # refusal here means the reviewer has a walk open somewhere else and
+            # has to go and finish or stop it -- and "somewhere else" is not a
+            # place they can be sent without its name. Falls back to the id when
+            # the scene will not read; the refusal is not worth failing over.
+            other = running.get("scene", "")
+            try:
+                label = scenes_read.read_scene_meta(cid, other).get("title") or other
+            except Exception:  # noqa: BLE001 -- a label, on a path that is already refusing
+                label = other
+            raise ReplayError(f"a replay is already running in “{label}” — finish or stop "
+                              "that one first")
         scene = scenes_read.read_scene(cid, sid)     # raises SceneNotFound
         messages = scene["messages"]
         if index < 1 or index >= len(messages):

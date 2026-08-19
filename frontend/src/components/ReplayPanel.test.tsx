@@ -228,3 +228,41 @@ test("a price taken for one post is not shown for another", async () => {
   await act(async () => {});
   expect(screen.queryByText("Replay 2 turns")).toBeNull();
 });
+
+test("the confirm and prompt do not run while the transcript is latched", async () => {
+  // Both are modal and synchronous: asked inside the guard, the write latch —
+  // which greys out the composer and the gutter for the whole app — would be
+  // held for as long as the reader looks at the dialog.
+  (api.getReplay as any).mockResolvedValue(SESSION);
+  let heldWhenAsked: number | null = null;
+  let held = 0;
+  const latch = () => { held += 1; return () => { held -= 1; }; };
+  vi.spyOn(window, "confirm").mockImplementation(() => { heldWhenAsked = held; return true; });
+  render(<ReplayPanel cid="c1" sid="s1" startAt={null} onStartHandled={noop}
+                      onChanged={noop} onForked={noop} latch={latch} />);
+  await act(async () => {});
+
+  fireEvent.click(screen.getByText("Stop"));
+  await waitFor(() => expect(api.cancelReplay).toHaveBeenCalled());
+  expect(heldWhenAsked).toBe(0);
+  expect(held).toBe(0);
+});
+
+test("a request that outlives the panel tells nobody its transcript moved", async () => {
+  // The reader switched scene mid-turn. `onChanged` refreshes the scene THIS
+  // panel was for, which by then is not the one they are looking at.
+  (api.getReplay as any).mockResolvedValue(SESSION);
+  const onChanged = vi.fn();
+  let land: () => void = () => {};
+  (api.replayTurn as any).mockReturnValue(new Promise<void>((res) => { land = res; }));
+  const { unmount } = render(
+    <ReplayPanel cid="c1" sid="s1" startAt={null} onStartHandled={noop}
+                 onChanged={onChanged} onForked={noop} />);
+  await act(async () => {});
+
+  fireEvent.click(screen.getByText("Replay next turn"));
+  await waitFor(() => expect(api.replayTurn).toHaveBeenCalled());
+  unmount();
+  await act(async () => { land(); });
+  expect(onChanged).not.toHaveBeenCalled();
+});
