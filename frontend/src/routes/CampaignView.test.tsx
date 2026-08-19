@@ -83,7 +83,8 @@ vi.mock("../api/client", async () => {
       getCasefile: vi.fn(),
       listAppearances: vi.fn(), listEntityImages: vi.fn(), listEntities: vi.fn(),
       getRollingSummary: vi.fn(), refreshRollingSummary: vi.fn(),
-      campaignImageUrl: (_c: string, char: string, v: string, n: string) => `/img/${char}/${v}/${n}`,
+      actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, n: string) =>
+        `/img/${k}/${a}/${v}/${n}`,
       entityImageUrl: () => "/loc-img",
     },
   };
@@ -441,6 +442,30 @@ test("plates mark PC speakers and show avatars from the roster", async () => {
   expect(stream.getByText("pc")).toBeInTheDocument();
   expect(stream.getAllByText("npc").length).toBeGreaterThan(0);
   expect(stream.getByAltText("Seraphine Vale portrait")).toBeInTheDocument();
+  // Yara is in the cast but not the roster, so there is no locked version to
+  // build a URL from -- initials, not a broken img.
+  expect(stream.queryByAltText("Yara portrait")).toBeNull();
+});
+
+
+test("a PC speaker's plate carries their portrait once the roster locks a version", async () => {
+  // `plateAvatar` used to return null for every non-character, so the player's
+  // own runs were the only ones in the transcript with no face on them (#219).
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCast as any).mockResolvedValue([
+    { kind: "pcs", id: "yara", role: "player", name: "Yara" },
+  ]);
+  (api.listAppearances as any).mockResolvedValue([
+    { kind: "pcs", id: "yara", version: "v2", role: "player", scenes: ["s1"] },
+  ]);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old" },
+    messages: [{ role: "user", content: "Hello.", speaker: "Yara" }],
+  });
+  renderCampaign();
+  const stream = within(await screen.findByTestId("stream"));
+  const portrait = await stream.findByAltText("Yara portrait");
+  expect(portrait.getAttribute("src")).toBe("/img/pcs/yara/v2/avatar");
 });
 
 /** A scene whose transcript has one post, spoken by a cast member. */

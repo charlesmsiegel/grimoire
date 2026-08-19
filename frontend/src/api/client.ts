@@ -32,6 +32,28 @@ export class ApiError extends Error {
   }
 }
 
+/** What to show the user for a failed call.
+ *
+ *  `catch (err: any)` followed by `err.detail ?? String(err)` is what this
+ *  replaces, at every call site that had it. The `any` bought nothing and cost
+ *  the compiler's check on everything else the handler touched; the behaviour
+ *  is deliberately identical, so this is a narrowing, not a rewrite.
+ *
+ *  It reads `detail` structurally rather than only off `ApiError`, and that is
+ *  the part that has to stay: `request` and `requestForm` do throw `ApiError`,
+ *  but a rejection can also arrive as a bare `{detail}` from a stream error
+ *  frame or a hand-built rejection, and those used to render their message.
+ *  An `instanceof` test alone would quietly turn every one of them into
+ *  "[object Object]" on screen. */
+export function errorText(err: unknown): string {
+  if (err instanceof ApiError) return err.detail;
+  if (typeof err === "object" && err !== null) {
+    const { detail } = err as { detail?: unknown };
+    if (typeof detail === "string" && detail) return detail;
+  }
+  return String(err);
+}
+
 async function requestRaw<T>(method: string, path: string, body?: unknown,
                              signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, {
@@ -394,10 +416,16 @@ export type ChubUnlinkedVersion = { character: string; character_name: string; v
 
 // PCs
 export type Persona = { name: string; pronouns: string; summary: string; description: string; birthdate?: string };
-export type PCSummary = { id: string; name: string; tags: string[]; default_version: string; versions: VersionRef[] };
+export type PCSummary = {
+  id: string; name: string; tags: string[]; default_version: string; versions: VersionRef[];
+  // Same derived image fields a CharacterSummary carries, bar `localized_count`
+  // — only a character card's text is localized, so a PC has no `embed-` images.
+  has_avatar?: boolean; avatar_focus?: number | null; gallery_count?: number;
+};
 export type PCDetail = {
   meta: { id: string; name: string; tags: string[]; default_version: string };
-  versions: { id: string; name: string; persona: Persona }[];
+  versions: { id: string; name: string; persona: Persona; images?: string[];
+              avatar_focus?: number | null }[];
 };
 
 // greetings & plot maps
@@ -668,7 +696,9 @@ export type Feeling = {
  *  `standing` / `knows` / `suspects` and `feels_toward` had no reader outside a
  *  staged review row until this existed. */
 export type Casefile = {
-  kind: string; id: string; name: string; version: string; role: string;
+  // The casefile route only ever answers for an actor, and its portrait URL
+  // keys on this, so it names the two actor kinds rather than any string.
+  kind: "characters" | "pcs"; id: string; name: string; version: string; role: string;
   /** The scenes she is cast in, oldest first, labelled — a scene id is a
    *  filename, and the column puts these in a sentence. */
   scenes: { id: string; title: string }[];
@@ -1562,8 +1592,6 @@ export const api = {
    *  and the route names the file, so this is an href for a `<a download>`. */
   exportUrl: (wid: string, cid: string, vid: string, format: CardFormat) =>
     `/api/worlds/${wid}/characters/${cid}/versions/${vid}/export?format=${format}`,
-  campaignImageUrl: (cid: string, char: string, vid: string, name: string) =>
-    `/api/campaigns/${cid}/characters/${char}/versions/${vid}/images/${name}`,
   putImage: (scope: EntityScope, cid: string, vid: string, name: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
@@ -1644,6 +1672,29 @@ export const api = {
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/pcs/${pid}/versions/${vid}`, { persona }),
   deletePCVersion: (scope: EntityScope, pid: string, vid: string) =>
     request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/pcs/${pid}/versions/${vid}`),
+  // PC images (#219) — the character calls one folder over. Kept as their own
+  // entries rather than folded into `putImage` & co. with a kind argument: the
+  // character helpers are called from a dozen places that have no PC in hand,
+  // and a required extra argument on all of them buys nothing here.
+  pcImageUrl: (scope: EntityScope, pid: string, vid: string, name: string) =>
+    `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/${name}`,
+  listPCImages: (scope: EntityScope, pid: string, vid: string) =>
+    request<{ name: string; ext: string; v: string }[]>(
+      "GET", `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images`),
+  putPCImage: (scope: EntityScope, pid: string, vid: string, name: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return requestForm<{ name: string; ext: string }>(
+      `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/${name}`, form, "PUT");
+  },
+  deletePCImage: (scope: EntityScope, pid: string, vid: string, name: string) =>
+    request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/${name}`),
+  promotePCImage: (scope: EntityScope, pid: string, vid: string, name: string) =>
+    request<{ ok: boolean }>("POST",
+      `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/${name}/promote`),
+  setPCAvatarFocus: (scope: EntityScope, pid: string, vid: string, focus: number) =>
+    request<{ ok: boolean }>("PUT",
+      `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/avatar/focus`, { focus }),
 
   // greetings & plot maps
   listGreetings: (scope: EntityScope) => request<Greeting[]>("GET", `${entityBase(scope)}/greetings`),
@@ -1681,8 +1732,15 @@ export const api = {
     request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/${kind}/${aid}/pick-version`, { version }),
   importVersion: (cid: string, kind: "characters" | "pcs", aid: string, version: string) =>
     request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/${kind}/${aid}/import-version`, { version }),
-  actorImageUrl: (scope: EntityScope, cid: string, vid: string, name: string) =>
-    `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/${name}`,
+  /** One actor's image, whichever kind it is: `kind` IS the asset base, so
+   *  characters and PCs address their art identically (#219). The single
+   *  builder for both — the character-only `actorImageUrl` and campaign-only
+   *  `campaignImageUrl` it replaced were the same URL twice over, and every
+   *  place that drew a portrait beside a name had "characters" written into
+   *  it, which is what left every PC showing initials. */
+  actorImageUrl: (scope: EntityScope, kind: "characters" | "pcs", aid: string,
+                  vid: string, name: string) =>
+    `${entityBase(scope)}/${kind}/${aid}/versions/${vid}/images/${name}`,
 
   // campaign cast & play
   listAppearances: (cid: string) => request<RosterEntry[]>("GET", `/api/campaigns/${cid}/appearances`),

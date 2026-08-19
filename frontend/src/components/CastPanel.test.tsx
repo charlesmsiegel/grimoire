@@ -12,7 +12,8 @@ vi.mock("../api/client", async () => {
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
       addToCast: vi.fn(),
       opener: vi.fn(), firstPost: vi.fn(), createGreeting: vi.fn(), listAppearances: vi.fn(),
-      campaignImageUrl: (c: string, ch: string, v: string, n: string) => `/cimg/${c}/${ch}/${v}/${n}`,
+      actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string) =>
+        `/cimg/${sc.id}/${k}/${a}/${v}/${n}`,
     },
   };
 });
@@ -56,7 +57,7 @@ test("character cast row shows the locked-version avatar", async () => {
   (api.getCast as any).mockResolvedValue([{ kind: "characters", id: "sera", role: "npc" }]);
   renderPanel();
   const img = await screen.findByAltText("sera avatar");
-  expect(img.getAttribute("src")).toContain("/cimg/c/sera/default/avatar");
+  expect(img.getAttribute("src")).toContain("/cimg/c/characters/sera/default/avatar");
 });
 
 test("initialPrompt seeds the opener prompt", async () => {

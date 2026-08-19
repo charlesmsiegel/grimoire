@@ -244,6 +244,37 @@ def test_a_portrait_that_cannot_be_named_leaves_the_actor_without_one(monkeypatc
     assert entry["portrait"] is None
 
 
+def test_a_pcs_portrait_is_packed_like_a_characters(monkeypatch, tmp_path):
+    """The appendix used to hard-code `"characters"` as the asset base and hand
+    every PC a `None` portrait -- so a player character was the one member of
+    the cast a book could never show (#219)."""
+    wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    assets.put_image(worlds.world_root(wid), "elara", "default", assets.AVATAR,
+                     _img(), "png", pcs.ASSET_BASE)
+
+    data = export.collect(cid)
+    portrait = next(e for e in data["appendix"] if e["name"] == "Elara")["portrait"]
+    assert portrait is not None and portrait.endswith(".png")
+    assert portrait.removeprefix("images/") in set(data["images"].by_path.values())
+    # ...and a character's still resolves against its own base, not the PC's
+    assert next(e for e in data["appendix"] if e["name"] == "Seraphine")["portrait"] is None
+
+
+def test_rewrite_images_maps_a_pc_image_url(monkeypatch, tmp_path):
+    """A PC's description can carry a localized image the same way a card's
+    can, so the export's URL matcher has to name `pcs` as well as
+    `characters`."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    pcs.create_pc(croot, "Elara", [])
+    assets.put_image(croot, "elara", "default", "embed-abc123", _img(), "png", pcs.ASSET_BASE)
+    images = export.Images()
+    out = export.rewrite_images(
+        f"![her](/api/campaigns/{cid}/pcs/elara/versions/default/images/embed-abc123)",
+        cid, images)
+    assert "![her](images/img-000.png)" in out
+
+
 def test_build_html_data_uri_mime_follows_the_bytes(monkeypatch, tmp_path):
     """The data URI carried the suffix's mime, which browsers survive by
     sniffing -- not a reason to write a wrong one (#321)."""

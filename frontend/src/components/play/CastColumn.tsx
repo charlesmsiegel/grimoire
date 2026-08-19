@@ -5,7 +5,9 @@ import { Portrait } from "../Portrait";
 export type CastState = "PLAYER" | "IN SCENE";
 
 export type CastTile = {
-  kind: string;
+  // Narrowed from `string`: `tiers` builds these straight off `Actor`, which is
+  // already the two actor kinds, and the tile's portrait URL keys on it (#219).
+  kind: "characters" | "pcs";
   id: string;
   name: string;
   version: string;
@@ -37,8 +39,9 @@ export function tiers(cast: Actor[], roster: RosterEntry[]): CastTile[] {
 function Tile(
   { cid, tile, onOpen }: { cid: string; tile: CastTile; onOpen: () => void },
 ) {
-  const src = tile.kind === "characters" && tile.version
-    ? api.campaignImageUrl(cid, tile.id, tile.version, "avatar")
+  const src = tile.version
+    ? api.actorImageUrl({ kind: "campaign", id: cid }, tile.kind, tile.id,
+                            tile.version, "avatar")
     : null;
   return (
     <div className="cast-tile">

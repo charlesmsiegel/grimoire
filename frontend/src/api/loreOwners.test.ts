@@ -4,8 +4,8 @@ import { loreOwnerOptions } from "./loreOwners";
 vi.mock("./client", () => ({
   api: {
     listCharacters: vi.fn(), listPCs: vi.fn(), listEntities: vi.fn(),
-    actorImageUrl: (sc: { kind: string; id: string }, c: string, v: string, n: string) =>
-      `/api/worlds/${sc.id}/characters/${c}/versions/${v}/images/${n}`,
+    actorImageUrl: (sc: { kind: string; id: string }, k: string, a: string, v: string, n: string) =>
+      `/api/worlds/${sc.id}/${k}/${a}/versions/${v}/images/${n}`,
     imageUrl: (w: string, c: string, v: string, n: string) =>
       `/api/worlds/${w}/characters/${c}/versions/${v}/images/${n}`,
   },
@@ -29,15 +29,23 @@ test("collects characters, pcs, locations as owner refs", async () => {
   expect(api.listEntities).toHaveBeenCalledWith({ kind: "world", id: "w" }, "locations");
 });
 
-test("characters with avatars get an avatar url; others get none", async () => {
+test("actors with avatars get an avatar url; others get none", async () => {
   (api.listCharacters as any).mockResolvedValue([
     { id: "maren", name: "Maren", default_version: "v1", has_avatar: true, versions: [] },
     { id: "hedde", name: "Hedde", default_version: "v1", has_avatar: false, versions: [] },
   ]);
-  (api.listPCs as any).mockResolvedValue([]);
+  // A PC resolves its own art under `pcs`, not the character folder (#219) --
+  // before PCs had images at all, every owner chip for one showed initials.
+  (api.listPCs as any).mockResolvedValue([
+    { id: "wren", name: "Wren", tags: [], default_version: "v2", has_avatar: true, versions: [] },
+    { id: "brack", name: "Brack", tags: [], default_version: "v1", has_avatar: false, versions: [] },
+  ]);
   (api.listEntities as any).mockResolvedValue([]);
   const opts = await loreOwnerOptions({ kind: "world", id: "w" });
   expect(opts.find((o) => o.ref === "characters:maren")?.avatar)
     .toBe("/api/worlds/w/characters/maren/versions/v1/images/avatar");
   expect(opts.find((o) => o.ref === "characters:hedde")?.avatar).toBeUndefined();
+  expect(opts.find((o) => o.ref === "pcs:wren")?.avatar)
+    .toBe("/api/worlds/w/pcs/wren/versions/v2/images/avatar");
+  expect(opts.find((o) => o.ref === "pcs:brack")?.avatar).toBeUndefined();
 });

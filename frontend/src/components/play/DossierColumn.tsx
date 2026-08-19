@@ -59,8 +59,8 @@ export default function DossierColumn(
   }
 
   const c = casefile;
-  const src = c.kind === "characters" && c.version
-    ? api.campaignImageUrl(cid, c.id, c.version, "avatar")
+  const src = c.version
+    ? api.actorImageUrl({ kind: "campaign", id: cid }, c.kind, c.id, c.version, "avatar")
     : null;
   // The dossier paragraph is written by a later absorb phase, which rests on no
   // transcript citation to weigh — so it is uncited by construction, and the

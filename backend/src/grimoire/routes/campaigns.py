@@ -1248,7 +1248,10 @@ def delete_campaign_character_version(cid: str, char: str, vid: str):
 def get_campaign_pc(cid: str, pid: str):
     _campaign_root_or_404(cid)
     try:
-        return store.pcs.read_pc(store.overlay.pc_root(cid, pid), pid)
+        # overlay.read_pc, not pcs.read_pc under pc_root: the persona files
+        # resolve whole-directory, but images overlay per file, so a
+        # materialized PC can still be wearing an avatar only the world has (#219)
+        return store.overlay.read_pc(cid, pid)
     except store.pcs.PCNotFound:
         raise HTTPException(status_code=404, detail="pc not found")
 
@@ -1308,6 +1311,75 @@ def delete_campaign_pc_version(cid: str, pid: str, vid: str):
         raise HTTPException(status_code=404, detail="version not found")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
+
+
+# ---- campaign PC images (#219) — the campaign-side half of the world routes
+# in `worlds.py`, resolved through the overlay exactly as the character image
+# routes above are: reads take the union, deletes tombstone, promotion copies
+# up first.
+@router.get("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images")
+def list_campaign_pc_images(cid: str, pid: str, vid: str):
+    _campaign_root_or_404(cid)
+    return store.overlay.list_images(cid, pid, vid, base=store.pcs.ASSET_BASE)
+
+
+@router.get("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/{name}")
+def get_campaign_pc_image(cid: str, pid: str, vid: str, name: str, request: Request):
+    _campaign_root_or_404(cid)
+    return _serve_image(
+        store.overlay.image_root(cid, pid, vid, name, base=store.pcs.ASSET_BASE),
+        pid, vid, name, base=store.pcs.ASSET_BASE, request=request)
+
+
+@router.put("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/{name}")
+async def put_campaign_pc_image(cid: str, pid: str, vid: str, name: str,
+                                file: UploadFile = File(...)):
+    root = _campaign_root_or_404(cid)
+    data = await file.read()
+    ext = _upload_image_ext(data)  # the bytes name the type, not `file.filename` (#321)
+    try:
+        stored = store.assets.put_image(root, pid, vid, name, data, ext,
+                                        base=store.pcs.ASSET_BASE)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"name": name, "ext": stored}
+
+
+@router.delete("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/{name}")
+def delete_campaign_pc_image(cid: str, pid: str, vid: str, name: str):
+    _campaign_root_or_404(cid)
+    # tombstone so a still-materialized world image doesn't show back through
+    # the overlaid read the moment the campaign's own copy is gone
+    store.overlay.delete_image(cid, pid, vid, name, base=store.pcs.ASSET_BASE)
+    return {"ok": True}
+
+
+@router.post("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/{name}/promote")
+def promote_campaign_pc_image(cid: str, pid: str, vid: str, name: str):
+    _campaign_root_or_404(cid)
+    try:
+        store.overlay.promote_image(cid, pid, vid, name, base=store.pcs.ASSET_BASE)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="image not found")
+    except ValueError as exc:
+        # an externally-placed file whose extension we never accepted for upload
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
+
+
+@router.put("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/avatar/focus")
+def put_campaign_pc_avatar_focus(cid: str, pid: str, vid: str, body: AvatarFocus):
+    root = _campaign_root_or_404(cid)
+    # a thin campaign may only have this avatar through the inherited world PC,
+    # so the existence gate checks the overlay union, not croot alone
+    names = {i["name"] for i in store.overlay.list_images(cid, pid, vid,
+                                                          base=store.pcs.ASSET_BASE)}
+    if store.assets.AVATAR not in names:
+        raise HTTPException(status_code=404, detail="image not found")
+    # the write always lands campaign-side; overlay.read_focus then finds this
+    # campaign focus.json and treats the campaign as authoritative going forward
+    store.assets.write_focus(root, pid, vid, body.focus, base=store.pcs.ASSET_BASE)
     return {"ok": True}
 
 

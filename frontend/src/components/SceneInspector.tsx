@@ -869,16 +869,17 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       <SideSection id="cast" title="Active characters" collapsed={!!collapsed.cast} onToggle={toggleSection}>
         {cast.length === 0 && <div className="field-hint">No one cast yet.</div>}
         {cast.map((a) => {
-          const ver = a.kind === "characters"
-            ? roster.find((r) => r.kind === "characters" && r.id === a.id)?.version
-            : undefined;
+          // The roster carries the locked version for either actor kind, and
+          // so does the image route, so a PC gets a portrait here too (#219).
+          const ver = roster.find((r) => r.kind === a.kind && r.id === a.id)?.version;
           const pc = a.role === "player";
           const ref = `${a.kind}:${a.id}`;
           return (
             <div className="inspector-row-item" key={`${a.kind}/${a.id}`}>
               <button className={"inspector-row" + (pc ? " pc" : "")}
                       onClick={() => setDrawer({ type: "actor", kind: a.kind, id: a.id })}>
-                <Portrait src={ver ? api.campaignImageUrl(cid, a.id, ver, "avatar") : null}
+                <Portrait src={ver ? api.actorImageUrl({ kind: "campaign", id: cid },
+                                                            a.kind, a.id, ver, "avatar") : null}
                           name={nameOf(a)} />
                 <span className="inspector-name">{nameOf(a)}</span>
                 <span className="role-chip">{pc ? "player" : "npc"}</span>

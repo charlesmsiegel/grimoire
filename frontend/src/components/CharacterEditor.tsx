@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Appearance, type Card, type CardFormat, type Casefile, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type ModuleDetail, type VersionRef } from "../api/client";
+import { api, errorText, type Appearance, type Card, type CardFormat, type Casefile, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type ModuleDetail, type VersionRef } from "../api/client";
 import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import CreationWizard from "./CreationWizard";
@@ -544,8 +544,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       const d = await api.readCharacter(scope, cid);
       if (!adopt(d, scope)) return;
       loadVersion(d, version);  // clears localizeMsg, so set the summary after it
-    } catch (err: any) {
-      finalMsg = `Localize failed: ${err.detail ?? String(err)}`;
+    } catch (err: unknown) {
+      finalMsg = `Localize failed: ${errorText(err)}`;
     } finally {
       setLocalizeProg(null);
       if (finalMsg) setLocalizeMsg(finalMsg);
@@ -706,8 +706,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       await api.pickVersion(scope.id, "characters", detail.meta.id, vid);
       await select(detail.meta.id);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -717,8 +717,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       await api.importVersion(scope.id, "characters", detail.meta.id, importVid);
       await select(detail.meta.id);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -787,8 +787,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await api.setCharacterVoiceAnchor(scope, detail.meta.id, voiceAnchor.trim());
       if (anchorReq.current !== req) return;
       anchorLoaded.current = voiceAnchor;   // in sync again: no longer a draft
-    } catch (err: any) {
-      if (anchorReq.current === req) setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      if (anchorReq.current === req) setError(errorText(err));
     } finally {
       if (anchorReq.current === req) setAnchorSaving(false);
     }
@@ -818,8 +818,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       }
       setVoiceAnchor(r.voice_anchor);
       setAnchorState("ready");
-    } catch (err: any) {
-      if (anchorReq.current === req) setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      if (anchorReq.current === req) setError(errorText(err));
     } finally {
       if (anchorReq.current === req) setAnchorBusy(false);
     }
@@ -829,8 +829,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     if (!detail) return;
     try {
       await api.setCharacterTagline(wid, detail.meta.id, tagline.trim());
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -840,8 +840,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       const r = await api.generateCharacterTagline(wid, detail.meta.id);
       setTagline(r.tagline);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     } finally {
       setTaglineBusy(false);
     }
@@ -852,8 +852,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     setBirthdate(value);
     try {
       await api.setCharacterBirthdate(wid, detail.meta.id, value);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -865,10 +865,24 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     return d;
   }
 
+  /** Open one character at a given version — the landing point for a
+   *  present-character link from a greeting or a scene.
+   *
+   *  It handles its own failure, and has to: the only caller is a mount effect,
+   *  which cannot await it, so an uncaught rejection here is an unhandled
+   *  rejection and the screen simply stays on the grid with nothing said. A
+   *  link that outlived its character (deleted world-side, or removed from this
+   *  campaign) is the ordinary way to get one, so the banner names it. */
   async function focusCharacter(cid: string, vid: string) {
     scrollShellToTop();
     setError(null);
-    const d = await api.readCharacter(scope, cid);
+    let d: CharacterDetail;
+    try {
+      d = await api.readCharacter(scope, cid);
+    } catch (err: unknown) {
+      setError(errorText(err));
+      return;
+    }
     if (!adopt(d, scope)) return;
     setBirthdate(d.meta.birthdate ?? "");
     loadVersion(d, d.versions.some((v) => v.id === vid) ? vid : d.meta.default_version);
@@ -917,8 +931,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await api.updateVersion(scope, detail.meta.id, vid, buildCard());
       await select(detail.meta.id);
       await reload();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -942,8 +956,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       loadVersion(d, version);
       await reload();
       await runLocalize(detail.meta.id, version);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     } finally {
       e.target.value = "";
     }
@@ -967,8 +981,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       const { created } = await api.importCharacterBook(wid, detail.meta.id, vid);
       setBookMsg(`Imported ${created.length} entr${created.length === 1 ? "y" : "ies"} to world lore`);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -981,8 +995,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await select(detail.meta.id);
       await reload();
       setAvatarBust((n) => n + 1);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     } finally {
       e.target.value = "";
     }
@@ -1012,8 +1026,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       await api.promoteImage(scope, detail.meta.id, vid, name);
       await refreshVersion();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -1023,8 +1037,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       await api.copyGreetingImage(scope, detail.meta.id, vid, { gid: a.gid, name: a.name, slot });
       await refreshVersion();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -1035,8 +1049,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       await api.setAvatarFocus(scope, detail.meta.id, vid, f);
       await refreshVersion();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -1050,8 +1064,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       await api.putImage(scope, detail.meta.id, vid, next, file);
       await refreshVersion();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     } finally {
       e.target.value = "";
     }
@@ -1073,8 +1087,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       try {
         const { character, version } = await api.importCharacter(wid, file, formatOf(file));
         imported.push({ cid: character, version });
-      } catch (err: any) {
-        failures.push(`${file.name}: ${err.detail ?? String(err)}`);
+      } catch (err: unknown) {
+        failures.push(`${file.name}: ${errorText(err)}`);
       }
     }
     e.target.value = "";
@@ -1106,8 +1120,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       let result: ChubImportResult;
       try {
         result = await api.importCharacterFromChub(wid, urls[i]);
-      } catch (err: any) {
-        failures.push(`${urls[i]}: ${err.detail ?? String(err)}`);
+      } catch (err: unknown) {
+        failures.push(`${urls[i]}: ${errorText(err)}`);
         continue;
       }
       gallery += result.gallery.stored;
@@ -1121,15 +1135,15 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
         await api.localizeImages(wid, result.character, result.version, (e) => {
           if (e.summary) localized += e.summary.localized;
         });
-      } catch (err: any) {
-        failures.push(`${name}: localize failed (${err.detail ?? String(err)})`);
+      } catch (err: unknown) {
+        failures.push(`${name}: localize failed (${errorText(err)})`);
       }
       setBulkUrl({ current: i + 1, total: urls.length, name, step: "importing lorebook" });
       try {
         const { created } = await api.importCharacterBook(wid, result.character, result.version);
         lore += created.length;
-      } catch (err: any) {
-        failures.push(`${name}: lorebook import failed (${err.detail ?? String(err)})`);
+      } catch (err: unknown) {
+        failures.push(`${name}: lorebook import failed (${errorText(err)})`);
       }
       added.push({ cid: result.character, name });
       await reload();  // the new card appears in the grid as it lands
@@ -1158,8 +1172,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await reload();
       setImportMsg(describeChubResult(result));
       await runLocalize(detail.meta.id, result.version);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -1177,8 +1191,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await reload();
       setImportMsg(describeChubResult(result));
       await runLocalize(detail.meta.id, result.version);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -1195,8 +1209,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       const d = await api.readCharacter(scope, detail.meta.id);
       if (!adopt(d, scope)) return;
       loadVersion(d, vid);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -1208,8 +1222,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       const d = await api.readCharacter(scope, detail.meta.id);
       if (!adopt(d, scope)) return;
       loadVersion(d, vid);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -1240,8 +1254,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       if (!adopt(d, scope)) return;
       loadVersion(d, vid);
       setAvatarBust((n) => n + 1); // bust the cache in case a re-download overwrote images in place
-    } catch (err: any) {
-      finalMsg = `Gallery download failed: ${err.detail ?? String(err)}`;
+    } catch (err: unknown) {
+      finalMsg = `Gallery download failed: ${errorText(err)}`;
     } finally {
       setGalleryProg(null);
       if (finalMsg) setImportMsg(finalMsg);
@@ -1260,8 +1274,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
           ? "No linked lorebooks found on chub.ai"
           : `${result.lorebooks_found} lorebook${result.lorebooks_found === 1 ? "" : "s"} (${n} ${n === 1 ? "entry" : "entries"}) added to world lore`,
       );
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -1270,13 +1284,13 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       const { versions } = await api.findChubUnlinked(wid);
       setUnlinkedVersions(versions);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
   const avatarSrc = (cid: string, version: string, bust = false) =>
-    api.actorImageUrl(scope, cid, version, "avatar") + (bust ? `?v=${avatarBust}` : "");
+    api.actorImageUrl(scope, "characters", cid, version, "avatar") + (bust ? `?v=${avatarBust}` : "");
 
   if (wizardOpen && module && worldScope) {
     return (
@@ -1727,7 +1741,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                       <div className="shelf-tile shelf-empty">no avatar</div>
                     )}
                     {galleryImages.map((imgName) => {
-                      const src = `${api.actorImageUrl(scope, detail.meta.id, vid, imgName)}?v=${avatarBust}`;
+                      const src = `${api.actorImageUrl(scope, "characters", detail.meta.id, vid, imgName)}?v=${avatarBust}`;
                       return (
                         <div className="shelf-tile" key={imgName}>
                           <a href={src} target="_blank" rel="noreferrer"><img alt={imgName} src={src} /></a>

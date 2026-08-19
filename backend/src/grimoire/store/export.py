@@ -28,7 +28,10 @@ from .paths import slugify
 # Localized app image URLs (see store.localize): every shape the app writes.
 _IMG_URL = re.compile(
     r"/api/(?:worlds|campaigns)/[^/\s]+/(?:"
-    r"characters/(?P<char>[^/\s]+)/versions/(?P<vid>[^/\s]+)"
+    # `actor` carries the base as well as matching the segment: characters and
+    # PCs address their images identically, differing only in the folder the
+    # bytes live under (#219).
+    r"(?P<actor>characters|pcs)/(?P<aid>[^/\s]+)/versions/(?P<vid>[^/\s]+)"
     r"|greetings/(?P<gid>[^/\s]+)"
     r"|(?P<kind>locations|lore)/(?P<eid>[^/\s]+)"
     r")/images/(?P<name>[^/\s?#]+)")
@@ -125,8 +128,8 @@ def _resolve_image(cid: str, m: re.Match) -> Path | None:
     """Map a localized app URL to a disk file through the campaign overlay:
     campaign tree first, then the campaign's world, with a campaign asset
     tombstone hiding an inherited image (greeting images only live world-side)."""
-    if m["char"]:
-        rid, vid, base = m["char"], m["vid"], "characters"
+    if m["actor"]:
+        rid, vid, base = m["aid"], m["vid"], m["actor"]
     elif m["gid"]:
         rid, vid, base = m["gid"], "default", "greetings"
     else:
@@ -230,8 +233,9 @@ def _appendix_entries(cid: str, aroot: Path, sids: list[str], images: Images, pr
         except (json.JSONDecodeError, characters.CharacterNotFound,
                 characters.VersionNotFound, pcs.PCNotFound, pcs.PCVersionNotFound):
             continue  # unreadable actor: skip the entry, never fail the export
-        portrait = (_avatar(cid, a["id"], a["version"], "characters", images, prefix)
-                    if a["kind"] == "characters" else None)
+        # `kind` IS the asset base for both actor kinds, so a PC's portrait
+        # packs like a character's rather than being dropped (#219).
+        portrait = _avatar(cid, a["id"], a["version"], a["kind"], images, prefix)
         entries.append({
             "kind": a["kind"], "id": a["id"], "name": name, "portrait": portrait,
             "role": "Player character" if a["role"] == "player" else None,

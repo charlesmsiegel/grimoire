@@ -4,8 +4,8 @@ import type { Casefile, Provenance } from "../../api/client";
 
 vi.mock("../../api/client", () => ({
   api: {
-    campaignImageUrl: (cid: string, char: string, v: string, n: string) =>
-      `/api/campaigns/${cid}/characters/${char}/versions/${v}/images/${n}`,
+    actorImageUrl: (sc: { id: string }, kind: string, aid: string, v: string, n: string) =>
+      `/api/campaigns/${sc.id}/${kind}/${aid}/versions/${v}/images/${n}`,
   },
 }));
 

@@ -21,7 +21,7 @@ vi.mock("../api/client", async () => {
       getRollingSummary: vi.fn(), refreshRollingSummary: vi.fn(),
       addToCast: vi.fn(), removeFromCast: vi.fn(),
       getPins: vi.fn(), setPin: vi.fn(), removePin: vi.fn(),
-      campaignImageUrl: () => "/img",
+      actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string) => `/img/${k}/${a}/${v}`,
       entityImageUrl: () => "/loc-img",
     },
   };
@@ -147,9 +147,23 @@ test("cast rows show portraits with roster versions and role chips", async () =>
   renderInspector();
   await screen.findByText("Seraphine");
   expect(screen.getByAltText("Seraphine portrait")).toBeInTheDocument(); // roster version found
-  expect(screen.getByText("Y")).toBeInTheDocument();                     // PC initials fallback
+  expect(screen.getByText("Y")).toBeInTheDocument();                     // no roster row: initials
   expect(screen.getByText("player", { selector: ".role-chip" })).toBeInTheDocument();
   expect(screen.getByText("npc", { selector: ".role-chip" })).toBeInTheDocument();
+});
+
+test("a PC in the roster gets a portrait like anyone else", async () => {
+  // The roster lookup used to be gated on `kind === "characters"`, so a PC fell
+  // back to initials even with a locked version to build a URL from (#219).
+  (api.getCast as any).mockResolvedValue([
+    { kind: "pcs", id: "yara", role: "player", name: "Yara" }]);
+  (api.listAppearances as any).mockResolvedValue([
+    { kind: "pcs", id: "yara", version: "v3", role: "player", scenes: ["s"] }]);
+  (api.listPCs as any).mockResolvedValue([
+    { id: "yara", name: "Yara", tags: [], default_version: "default", versions: [] }]);
+  renderInspector();
+  const portrait = await screen.findByAltText("yara portrait");
+  expect(portrait.getAttribute("src")).toBe("/img/pcs/yara/v3");
 });
 
 test("location with a primary image renders a clickable thumbnail", async () => {

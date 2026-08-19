@@ -19,7 +19,9 @@ export function RecordDrawer({ cid, sid, target, onClose }:
       api.getCastDetail(cid, sid, target.kind, target.id).then((d: CastDetail) => {
         setTitle(d.name);
         setBody(d.body);
-        if (d.kind === "characters") setAvatar(api.campaignImageUrl(cid, d.id, d.version, "avatar"));
+        // Either actor kind: `d.kind` is the asset base, so a PC's portrait
+        // resolves here exactly as a character's does (#219).
+        setAvatar(api.actorImageUrl({ kind: "campaign", id: cid }, d.kind, d.id, d.version, "avatar"));
       });
     } else {
       api.readEntity({ kind: "campaign", id: cid }, "locations", target.id).then((e) => {
