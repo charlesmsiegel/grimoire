@@ -21,6 +21,16 @@ function OfflineNote({ detail }: { detail: string }) {
   // raises this note too, when a model-catalog fetch cannot reach the
   // provider, and a link to the page you are reading is noise. Read from the
   // router rather than taken as a prop so no caller can forget it.
+  //
+  // Which puts a router hook on the offline branch only, and that is fine
+  // rather than a trap: at runtime every one of these hosts is under the one
+  // `BrowserRouter` in `main.tsx`, so there is no reachable render without a
+  // location. In tests there is, and a `Link` without a router throws --
+  // loudly, in the test that drives the offline path, which is the only place
+  // it can happen. Hoisting the hook into `ErrorNote` to fail on EVERY error
+  // instead was tried and reverted: it makes ~230 existing render sites in
+  // three suites need a `MemoryRouter` they otherwise have no use for, to
+  // guard a host that cannot exist.
   const here = useLocation().pathname === "/connections";
   return (
     <span>
