@@ -11,8 +11,8 @@ from fastapi.responses import Response, StreamingResponse
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from .common import (_bounded_call, _require_connection, _serve_image, _upload_image_ext,
-                     _world_char_version_or_404, _world_root_or_404, get_llm)
+from .common import (_bounded_call, _display_name_or_400, _require_connection, _serve_image,
+                     _upload_image_ext, _world_char_version_or_404, _world_root_or_404, get_llm)
 from .models import (AvatarFocus, CharacterBirthdate, CharacterCreate, ChubImportBody,
                      ChubSourceBody, DefaultVersion, NameBody, TaglineSave, VersionCreate, VersionUpdate,
                      VoiceAnchorSave)
@@ -62,9 +62,7 @@ def put_world_character_name(wid: str, cid: str, body: NameBody):
     """Rename the container (#13). The card's own `data.name` is saved with the
     card; this is the name the grid, the cast panel and the `meta.name` prompt
     sections read, and the two used to be unable to agree."""
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="name is required")
+    name = _display_name_or_400(body.name)
     try:
         store.characters.set_name(_world_root_or_404(wid), cid, name)
     except store.characters.CharacterNotFound:

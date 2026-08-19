@@ -5000,6 +5000,36 @@ def test_character_name_route_trims_and_rejects_blank(client):
     assert client.get(f"/api/worlds/{wid}/characters/{chid}").json()["meta"]["name"] == "Winifred"
 
 
+def test_character_name_route_rejects_a_name_frontmatter_cannot_store(client):
+    # `dump_frontmatter` writes one line per key and the parser reads them back
+    # one line at a time, so an interior newline stores a mangled name AND
+    # leaves a stray `key: value` line in the record. The input never comes
+    # from the text field the UI offers, so refusing is honest -- storing
+    # something that is not what was asked for is not.
+    wid = _world(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    r = client.put(f"/api/worlds/{wid}/characters/{chid}/name",
+                   json={"name": "Winifred\ndefault_version: nonexistent"})
+    assert r.status_code == 400
+    assert client.get(f"/api/worlds/{wid}/characters/{chid}").json()["meta"]["name"] == "Seraphine"
+
+
+def test_campaign_character_name_route_rejects_the_same(client):
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    r = client.put(f"/api/campaigns/{cid}/characters/{chid}/name", json={"name": "Wini\tfred"})
+    assert r.status_code == 400
+
+
+def test_character_name_route_keeps_accents_and_emoji(client):
+    # The guard is "one printable line", not "ASCII": a library is not English.
+    wid = _world(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    assert client.put(f"/api/worlds/{wid}/characters/{chid}/name",
+                      json={"name": "Wínifred ☾"}).status_code == 200
+    assert client.get(f"/api/worlds/{wid}/characters/{chid}").json()["meta"]["name"] == "Wínifred ☾"
+
+
 def test_character_name_route_unknown_character_is_404(client):
     wid = _world(client)
     r = client.put(f"/api/worlds/{wid}/characters/nobody/name", json={"name": "Winifred"})
