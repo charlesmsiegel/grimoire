@@ -162,7 +162,7 @@ _COMPARABLE: frozenset[str] = frozenset({
 #: contradicts a later scene there is the thread's state: this scene says
 #: `closed` where the scene after it left the thread `open`. An added beat is
 #: not a disagreement — beats accumulate.
-_STATUS_KINDS: dict[str, str] = {"plot": "plot", "commitment": "commitments"}
+_STATUS_KINDS: frozenset[str] = frozenset({"plot", "commitment"})
 
 
 def _changed(edit: dict, threads: dict, promises: dict) -> bool:
