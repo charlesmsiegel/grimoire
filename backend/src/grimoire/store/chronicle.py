@@ -87,7 +87,9 @@ def recent(cid: str, n: int) -> list[dict]:
     """The n highest-id (chronological-ish) records, ascending. n <= 0 -> [].
 
     `page` at offset zero, and `test_recent_is_page_at_offset_zero` holds the
-    two to that -- four callers read this one and none of them wants a window.
+    two to that. Kept as its own name because its callers inside this store
+    want the newest few records and nothing else -- an offset argument they
+    would all pass zero to is not clarity.
     """
     return page(cid, n)
 
