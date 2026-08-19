@@ -603,6 +603,10 @@ select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
 }
 .brief-status { color: var(--subtle); }
 .brief-status.alert { color: var(--alert); }
+/* The one column section whose rows are answerable: a cast-change candidate
+   carries its chips under the line it is asking about (#97). */
+.cast-changes .chips { margin-top: 8px; }
+.cast-changes .brief-meta { text-transform: none; }
 
 /* ---- the context column, dossier state ---- */
 .column-back {

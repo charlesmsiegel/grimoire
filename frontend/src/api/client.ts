@@ -491,6 +491,14 @@ export type Appearance = { gid: string; greeting_name: string; name: string; url
 
 // cast
 export type Actor = { kind: "characters" | "pcs"; id: string; role: "player" | "npc"; name: string };
+/** What the newest turn's prose suggests about the cast (#97, #98). Every
+ *  entry is a candidate the reader confirms or dismisses; nothing here has
+ *  been applied. */
+export type CastChanges = {
+  enter: { kind: string; id: string; name: string; mentioned_by: string[] }[];
+  leave: { kind: string; id: string; name: string; quote: string }[];
+  unknown: { name: string; mentioned_by: string[] }[];
+};
 export type RosterEntry = {
   kind: string; id: string; version: string; role: string; scenes: string[];
 };
@@ -1695,6 +1703,15 @@ export const api = {
     request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/cast`, body),
   removeFromCast: (cid: string, sid: string, kind: string, id: string) =>
     request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/scenes/${sid}/cast/${kind}/${id}`),
+  castChanges: (cid: string, sid: string) =>
+    request<CastChanges>("GET", `/api/campaigns/${cid}/scenes/${sid}/cast-changes`),
+  /** Create a character the prose invented and seat it, campaign-side (#98). */
+  createEmergentCast: (cid: string, sid: string, name: string) =>
+    request<{ character: string; version: string; name: string }>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/cast/emergent`, { name }),
+  dismissSuggestion: (cid: string, sid: string, character: string) =>
+    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/suggestions/dismiss`,
+                             { character }),
   availableGreetings: (cid: string, after?: string) =>
     request<Availability[]>("GET",
       `/api/campaigns/${cid}/greetings/available${after ? `?after=${encodeURIComponent(after)}` : ""}`),

@@ -3437,8 +3437,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                      onOpenActor={(kind, id) => setDrawer(
                        { type: "actor", kind: kind as "characters" | "pcs", id })}
                      onRemove={removeSelectedActor} busy={sceneLocked} />
-    : <CastColumn cid={cid} cast={cast} roster={roster} briefing={briefing}
-                  onOpen={openActor} />;
+    : <CastColumn cid={cid} sid={activeId ?? ""} posts={messages.length} refreshKey={ctxKey}
+                  cast={cast} roster={roster} briefing={briefing}
+                  onOpen={openActor}
+                  // A confirmed enter or leave writes a transition line into the
+                  // transcript as well as moving the cast, so the scene is
+                  // re-read whole rather than the cast alone.
+                  onCastChanged={() => { if (activeId) refreshAndAsk(activeId); }} />;
 
   /** Approve every proposal the transcript backs, and leave the ones it does
    *  not. The whole routing argument in one button: a cited row is one the

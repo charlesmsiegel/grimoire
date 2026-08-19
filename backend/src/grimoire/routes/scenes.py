@@ -19,8 +19,8 @@ from .common import (computes_only, _bounded_call, _campaign_root_or_404, _dump,
                      _require_connection, _require_scene, _response_body, _turn_override,
                      _write_response, get_llm)
 from .models import (Appear, AppearBatch, ChatTurn, ChronicleSave, Dismiss, EditMessage,
-                     NewScene, RegenerateBody, RenameScene, ResponseSettings, RetryBody,
-                     SceneDatetime, SceneIdeaCreate, SceneIdeaStatus, SceneIntent,
+                     EmergentCast, NewScene, RegenerateBody, RenameScene, ResponseSettings,
+                     RetryBody, SceneDatetime, SceneIdeaCreate, SceneIdeaStatus, SceneIntent,
                      SceneLocation)
 from .streaming import _chat_stream
 
@@ -2296,16 +2296,27 @@ def get_scene_cast(cid: str, sid: str):
     return store.appearances.scene_cast(cid, sid)
 
 
+def _cast_role(cid: str, sid: str, kind: str, role: str | None) -> str:
+    """The role a cast addition will take, or an HTTPException saying why not.
+
+    Split out of `_seat_cast_member` so a caller that CREATES the actor first
+    (the emergent route) can settle the role before writing anything: a 400
+    raised after the create would leave a character behind that nothing seats.
+    """
+    if kind not in store.appearances.ACTOR_KINDS:
+        raise HTTPException(status_code=404, detail="unknown actor kind")
+    resolved = "player" if kind == "pcs" else (role or "npc")
+    if resolved not in ("player", "npc"):
+        raise HTTPException(status_code=400, detail="role must be player or npc")
+    if resolved == "player" and store.scenes.is_pcless(cid, sid):
+        raise HTTPException(status_code=400, detail="cannot seat a player in an offscreen scene")
+    return resolved
+
+
 def _seat_cast_member(cid: str, sid: str, body: Appear) -> None:
     """Validate + resolve one cast addition and record it. Raises HTTPException
     (404 unknown, 400 bad role) or store.appearances.AppearError (already cast)."""
-    if body.kind not in store.appearances.ACTOR_KINDS:
-        raise HTTPException(status_code=404, detail="unknown actor kind")
-    role = "player" if body.kind == "pcs" else (body.role or "npc")
-    if role not in ("player", "npc"):
-        raise HTTPException(status_code=400, detail="role must be player or npc")
-    if role == "player" and store.scenes.is_pcless(cid, sid):
-        raise HTTPException(status_code=400, detail="cannot seat a player in an offscreen scene")
+    role = _cast_role(cid, sid, body.kind, body.role)
     version = body.version
     try:
         if version is None:
@@ -2362,6 +2373,45 @@ def post_scene_cast_batch(cid: str, sid: str, body: AppearBatch):
     return {"ok": True, "added": added, "skipped": skipped}
 
 
+@router.post("/campaigns/{cid}/scenes/{sid}/cast/emergent")
+def post_emergent_cast(cid: str, sid: str, body: EmergentCast):
+    """Create a character this campaign invented mid-play, and seat it (#98).
+
+    Campaign-scoped on purpose: the name came out of one scene's prose, so it
+    starts in the campaign's own overlay rather than the shared world library.
+    `overlay.create_character` allocates the id against the world's characters
+    and the campaign's tombstones as well as its own, so an emergent Seraphine
+    beside a world Seraphine gets a distinct id instead of shadowing her.
+    Promoting one into the library is #60's job, not this route's.
+
+    The seat goes through `_seat_cast_member`, so an emergent character locks
+    its version exactly as a library one does -- there is no second casting
+    path to keep in step.
+    """
+    _require_scene(cid, sid)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    # Role first, character second: every way this request can be refused has to
+    # be settled before the create, or a rejected seat leaves an unseated
+    # character in the campaign that nothing points at.
+    role = _cast_role(cid, sid, "characters", body.role)
+    char, version = store.overlay.create_character(cid, name)
+    _seat_cast_member(cid, sid, Appear(kind="characters", id=char, version=version, role=role))
+    return {"character": char, "version": version, "name": name}
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/cast-changes")
+def get_cast_changes(cid: str, sid: str):
+    """Enter/leave/unknown candidates read out of the newest turn's prose
+    (#97, #98). A GET the client issues once a turn has landed, rather than a
+    rider on the chat stream's `done` frame: detection is a read over the
+    persisted transcript, and hanging it off the stream would put it inside
+    the one code path where a failure costs the reply itself."""
+    _require_scene(cid, sid)
+    return store.appearances.cast_changes(cid, sid)
+
+
 @router.get("/campaigns/{cid}/scenes/{sid}/suggestions")
 def get_scene_suggestions(cid: str, sid: str):
     _require_scene(cid, sid)
@@ -2370,8 +2420,17 @@ def get_scene_suggestions(cid: str, sid: str):
 
 @router.post("/campaigns/{cid}/scenes/{sid}/suggestions/dismiss")
 def post_dismiss(cid: str, sid: str, body: Dismiss):
+    """Hide one suggestion for this scene, for good.
+
+    Slugified rather than stored verbatim, which is a no-op for the character
+    ids this has always taken (`create_character` allocates them by slugifying
+    the name, and slugify is idempotent) and is what lets an *unknown name*
+    from `cast_changes` be dismissed through the same route: the detector
+    filters its unknown bucket by the slug of each candidate, so "Winifred"
+    dismissed here stays dismissed under the id an emergent create would give
+    it (#98)."""
     _require_scene(cid, sid)
-    store.scenes.add_dismissed(cid, sid, body.character)
+    store.scenes.add_dismissed(cid, sid, store.paths.slugify(body.character))
     return {"ok": True}
 
 
