@@ -5,7 +5,7 @@ import {
   type CalendarConfig, type RosterEntry, type SceneDatetime,
   type CharacterSummary, type PCSummary, type Briefing, type BriefingRow,
   type PinRule, type PromptEntry, type PromptSnapshot,
-  type RollingSummary,
+  type RollingSummary, type SceneBreak,
 } from "../api/client";
 import { getModels, type Model } from "../api/models";
 import { ContextBreakdown, contextPercent } from "./ContextBreakdown";
@@ -203,6 +203,19 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // than clearing the shared one on every switch, because that banner is
   // written by four other handlers whose behaviour is not this PR's to change.
   const [rollingError, setRollingError] = useState<{ key: string; text: string } | null>(null);
+  // The scene-break detector (#84), stamped with its record for `rolling`'s
+  // reason and no lesser one: a proposal is prose ABOUT a story, so showing one
+  // campaign's under another's scene reads as fact rather than as lag. Kept
+  // separate from `rolling` rather than folded into one "scene state" object,
+  // because the two are read and written by different calls and a shared object
+  // would make either write clobber the other's half.
+  const [breakState, setBreakState] =
+    useState<{ key: string; data: SceneBreak } | undefined>();
+  // The record whose question is in flight, not a bare boolean — `rollingBusy`'s
+  // reason: the button belongs to a scene, and one scene's pending question
+  // must not disable another's.
+  const [breakBusy, setBreakBusy] = useState<string | null>(null);
+  const [breakError, setBreakError] = useState<{ key: string; text: string } | null>(null);
   // The stamp decides what may be RENDERED. This decides what may be STORED,
   // and one without the other is not enough — that took two review rounds:
   //
@@ -458,6 +471,18 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
         setRollingError((e) => (e?.key === key ? null : e));
       })
       .catch(() => { if (mine()) setRollingUnread(true); });
+    // Read beside the summary, on the same select and the same `refreshKey`
+    // bump. A failed read leaves whatever was there: unlike the summary there
+    // is no "may be behind" to say, because a standing proposal is about a
+    // prefix of the transcript and stays true about that prefix — what a failed
+    // read costs is a NEW proposal, which the next read or the next turn brings.
+    api.getSceneBreak(cid, sid)
+      .then((data) => {
+        if (!mine()) return;
+        setBreakState({ key, data });
+        setBreakError((e) => (e?.key === key ? null : e));
+      })
+      .catch(() => {});
     reloadWhen();
     reloadCfg();
   }, [cid, sid, refreshKey, reloadWhen, reloadCfg, reloadCast, reloadPins]);
@@ -682,7 +707,19 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   function askRolling(id: string = sid) {
     const key = `${cid}/${id}`;
     const ticket = ++writeTicket.current;
-    api.getRollingSummary(cid, id)
+    // The scene-break question rides the same read (#84): a location move and a
+    // time advance are two of the three signals it scores, and both land here
+    // rather than through `CampaignView`'s play-loop hook. Chained off the same
+    // `getRollingSummary` bound rather than reading a second time — one read,
+    // one boundary, so the two questions cannot be asked about different
+    // transcripts. Rejection swallowed, like the fold's: no transition should
+    // fail because a suggestion could not be written.
+    const bounded = api.getRollingSummary(cid, id);
+    bounded
+      .then((seen) => api.askSceneBreak(cid, id, false, seen.total))
+      .then((r) => { if (r.asked && currentKey.current === key) reloadBreak(id); })
+      .catch(() => {});
+    bounded
       .then((seen) => api.refreshRollingSummary(cid, id, false, seen.total))
       .then((data) => {
         if (currentKey.current !== key || !data.refreshed) return;
@@ -748,6 +785,60 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       // another record while this one is out, and clearing unconditionally
       // would free that one's button while its call is still running.
       setRollingBusy((busy) => (busy === key ? null : busy));
+    }
+  }
+
+  // Re-read after a question the panel did not itself ask. `id` is passed
+  // explicitly by `askRolling`'s one caller whose write RENAMES the scene, for
+  // the reason stated there: the id in the prop is already stale.
+  function reloadBreak(id: string) {
+    const key = `${cid}/${id}`;
+    api.getSceneBreak(cid, id)
+      .then((data) => { if (currentKey.current === key) setBreakState({ key, data }); })
+      .catch(() => {});
+  }
+
+  // The panel's own button: ask NOW, including when the automatic cadence is
+  // switched off. The server still declines to spend a call when nothing has
+  // happened since the last question, and says so in `asked`.
+  async function askBreakNow() {
+    const key = `${cid}/${sid}`;
+    setBreakError(null);
+    setBreakBusy(key);
+    try {
+      const data = await api.askSceneBreak(cid, sid, true);
+      // Guarded on the reader still being on this record, like every other
+      // post-await write here. Installed whether or not it `asked`: a refusal
+      // is still the server's reconciled view of the scene, and dropping it
+      // would leave the panel showing a score from before the last turn.
+      if (currentKey.current !== key) return;
+      setBreakState({ key, data });
+    } catch (err: any) {
+      // Reported, never destructive: a standing proposal is still the best
+      // thing anyone has, so a failed question leaves it exactly where it is.
+      if (currentKey.current !== key) return;
+      setBreakError({ key, text: err.detail ?? String(err) });
+    } finally {
+      setBreakBusy((busy) => (busy === key ? null : busy));
+    }
+  }
+
+  // "Not here." The watermark moves server-side, so the same posts cannot
+  // re-earn the same suggestion on the next turn — which is why this is a
+  // request rather than a local `setBreakState(undefined)`.
+  async function dismissBreak() {
+    const key = `${cid}/${sid}`;
+    setBreakError(null);
+    setBreakBusy(key);
+    try {
+      const data = await api.dismissSceneBreak(cid, sid);
+      if (currentKey.current !== key) return;
+      setBreakState({ key, data });
+    } catch (err: any) {
+      if (currentKey.current !== key) return;
+      setBreakError({ key, text: err.detail ?? String(err) });
+    } finally {
+      setBreakBusy((busy) => (busy === key ? null : busy));
     }
   }
 
@@ -863,6 +954,79 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
                   title={sceneLocked ? LOCKED_WHILE_GENERATING : undefined}>
             {rollingBusy === `${cid}/${sid}` ? "Summarizing…" : "Refresh now"}
           </button>
+        </div>
+      </SideSection>
+
+      {/* The scene-break detector (#84). Directly under "Scene so far", which
+          is the other thing this panel says about the scene being PLAYED — and
+          the two answer adjacent questions: what has happened, and whether
+          enough has. Nothing here ends or splits anything; the only actions are
+          asking and declining. */}
+      <SideSection id="scenebreak" title="Break here?" collapsed={!!collapsed.scenebreak}
+                   onToggle={toggleSection}>
+        {(() => {
+          // Only this campaign-and-scene's answer, `rolling`'s rule: another
+          // record's proposal is not an answer about this one.
+          const b = breakState?.key === `${cid}/${sid}` ? breakState.data : undefined;
+          if (b && b.every === 0) {
+            return (
+              <div className="field-hint">
+                Turned off — set “Scene-break check” in Configuration to switch it on.
+              </div>
+            );
+          }
+          if (b?.verdict === "yes") {
+            return (
+              <>
+                <div className="field-hint">{b.reason}</div>
+                {b.title && (
+                  <div className="field-hint">Next scene, perhaps: “{b.title}”</div>
+                )}
+              </>
+            );
+          }
+          if (b?.verdict === "no") {
+            return (
+              <>
+                <div className="field-hint">Not yet — the scene is still mid-beat.</div>
+                {b.reason && <div className="field-hint">{b.reason}</div>}
+              </>
+            );
+          }
+          // Nothing asked yet. The signals are shown even below the bar,
+          // because "what the detector can see" is the honest answer to a
+          // reader wondering why it has said nothing — and it is also what
+          // makes the Ask now button legible.
+          return (
+            <>
+              <div className="field-hint">
+                {b ? `Nothing to suggest yet — checked every ${b.every} posts.`
+                   : "Nothing to suggest yet."}
+              </div>
+              {b?.signals.map((sig) => (
+                <div className="field-hint" key={sig.kind}>{sig.detail}</div>
+              ))}
+            </>
+          );
+        })()}
+        {breakError?.key === `${cid}/${sid}` && (
+          <div className="banner">{breakError.text}</div>
+        )}
+        <div className="form-actions">
+          {/* Held while a turn is streaming into this scene, like the summary's
+              own button and the two date actions: a question asked over a
+              half-written turn is asking about a beat whose reply has not
+              arrived. */}
+          <button className="primary" onClick={askBreakNow}
+                  disabled={breakBusy === `${cid}/${sid}` || sceneLocked}
+                  title={sceneLocked ? LOCKED_WHILE_GENERATING : undefined}>
+            {breakBusy === `${cid}/${sid}` ? "Asking…" : "Ask now"}
+          </button>
+          {breakState?.key === `${cid}/${sid}` && breakState.data.verdict === "yes" && (
+            <button onClick={dismissBreak} disabled={breakBusy === `${cid}/${sid}`}>
+              Not here
+            </button>
+          )}
         </div>
       </SideSection>
 

@@ -31,8 +31,48 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined  # noqa: E402
 env = Environment(loader=FileSystemLoader(str(REPO / "templates")),
                   undefined=StrictUndefined)
 
-FAILURES: list[str] = []
-CHECKS = 0
+class Report:
+    """The running tally: how many comparisons were made, and which failed.
+
+    A class rather than two module-level names mutated through `global`, which
+    is what this was. The counter and the failure list only ever move together
+    -- every comparison bumps one and may append to the other -- so a reader
+    asking "what does a failed check do to the tally" had to find two `global`
+    statements in two functions to answer it. Owning both here also means the
+    epilogue reports out of one object rather than reaching for two module
+    variables it hopes nothing else wrote.
+    """
+
+    def __init__(self) -> None:
+        self.failures: list[str] = []
+        self.checks = 0
+
+    def compare(self, label: str, expected: str, actual: str) -> None:
+        """One byte-for-byte comparison, counted whether or not it passes."""
+        self.checks += 1
+        if expected == actual:
+            return
+        i = next((n for n, (a, b) in enumerate(zip(expected, actual)) if a != b),
+                 min(len(expected), len(actual)))
+        self.failures.append(
+            f"{label}: mismatch at char {i}\n"
+            f"  expected …{expected[max(0, i - 60):i + 60]!r}…\n"
+            f"  actual   …{actual[max(0, i - 60):i + 60]!r}…")
+
+    def note(self, label: str, message: str) -> None:
+        """A failure that is not a text mismatch -- a role shape that differs,
+        where comparing the contents would be comparing different things."""
+        self.checks += 1
+        self.failures.append(f"{label}: {message}")
+
+    def verdict(self) -> str:
+        return (f"all {self.checks} checks passed — builders and templates/ agree byte-for-byte"
+                if not self.failures else
+                f"{len(self.failures)}/{self.checks} checks FAILED\n\n"
+                + "\n\n".join(self.failures))
+
+
+REPORT = Report()
 
 
 def render(_template: str, **vars) -> str:
@@ -40,24 +80,13 @@ def render(_template: str, **vars) -> str:
 
 
 def check(label: str, expected: str, actual: str) -> None:
-    global CHECKS
-    CHECKS += 1
-    if expected == actual:
-        return
-    i = next((n for n, (a, b) in enumerate(zip(expected, actual)) if a != b),
-             min(len(expected), len(actual)))
-    FAILURES.append(
-        f"{label}: mismatch at char {i}\n"
-        f"  expected …{expected[max(0, i - 60):i + 60]!r}…\n"
-        f"  actual   …{actual[max(0, i - 60):i + 60]!r}…")
+    REPORT.compare(label, expected, actual)
 
 
 def check_messages(label: str, expected: list[dict], actual: list[dict]) -> None:
-    global CHECKS
     if [m["role"] for m in expected] != [m["role"] for m in actual]:
-        CHECKS += 1
-        FAILURES.append(f"{label}: role shape {[m['role'] for m in expected]} != "
-                        f"{[m['role'] for m in actual]}")
+        REPORT.note(label, f"role shape {[m['role'] for m in expected]} != "
+                           f"{[m['role'] for m in actual]}")
         return
     for n, (e, a) in enumerate(zip(expected, actual)):
         check(f"{label}[{n}] ({e['role']})", e["content"], a["content"])
@@ -66,8 +95,8 @@ def check_messages(label: str, expected: list[dict], actual: list[dict]) -> None
 # ---------------------------------------------------------------- pure checks
 
 from grimoire.store import (absorb, chronicle, context, dossiers, relationships,  # noqa: E402
-                            rolling_summary, scenario, suggest, taglines, voice_anchors,
-                            voice_drift)
+                            rolling_summary, scenario, scene_break, suggest, taglines,
+                            voice_anchors, voice_drift)
 
 card = {"name": "Seraphine Vale", "description": "Tall, sharp-eyed smuggler.",
         "personality": "Wry and wary.", "scenario": "Runs the night dock."}
@@ -164,6 +193,24 @@ for prior in ("", "Seraphine held the dock; the ledger was still missing."):
               exp[1]["content"],
               render("rolling_summary/user.j2", prior=prior, transcript=transcript,
                      facts=facts))
+
+# Every head combination, because the user template builds its head out of four
+# independently-optional parts and a scene with none of them must render no head
+# at all rather than an empty one -- and both signal states, since a forced
+# question can reach the model having crossed no threshold, which is the one
+# case that renders the reason list empty.
+BREAK_SIGNALS = [{"kind": "length", "weight": 2, "detail": "44 posts since this was last considered"},
+                 {"kind": "time", "weight": 2, "detail": "the clock advanced 15 hours — a long skip"}]
+for signals in ([], BREAK_SIGNALS):
+    for title in ("", "The Long Walk Back"):
+        for facts in (None, {"location": "", "date": "", "cast": []}, ROLLING_FACTS):
+            exp = scene_break.build_prompt(transcript, signals, facts, title)
+            check(f"scene break system (signals={bool(signals)})", exp[0]["content"],
+                  render("scene_break/system.j2"))
+            check(f"scene break user (signals={bool(signals)}, title={bool(title)}, "
+                  f"facts={bool(facts)})", exp[1]["content"],
+                  render("scene_break/user.j2", transcript=transcript, signals=signals,
+                         facts=facts, title=title))
 
 EMPTY_SNAP = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None,
               "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
@@ -903,8 +950,6 @@ check("fact lines", "\n".join(fstore.render_active(cid)),
 
 # ---------------------------------------------------------------------------
 
-if FAILURES:
-    print(f"{len(FAILURES)}/{CHECKS} checks FAILED\n")
-    print("\n\n".join(FAILURES))
+print(REPORT.verdict())
+if REPORT.failures:
     sys.exit(1)
-print(f"all {CHECKS} checks passed — builders and templates/ agree byte-for-byte")

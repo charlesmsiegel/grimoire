@@ -151,6 +151,32 @@ progress rather than one that ended. The reply is one line of prose —
 key and a multi-line value corrupts the file. Display-only: this summary is
 deliberately absent from `scene/sections/`.
 
+### `scene_break/` — POST /campaigns/{cid}/scenes/{sid}/scene-break
+The confirmation half of heuristic scene-break detection (#84). Mirrors
+`store/scene_break.py:build_prompt`. Messages: system, user.
+`user.j2` vars: `title` (the scene's own, so a proposed NEXT title is not a
+restatement of it), `facts` (`chronicle.scene_facts()`), `signals`
+(`scene_break.evaluate`'s `[{kind, weight, detail}]` — only `detail` is
+rendered), `transcript` (`snippets/transcript.j2`).
+
+`facts` carries the same weight here as in `rolling_summary/` and for the same
+reason: the first location and the first date are set silently, so on the
+scenes that never move the transcript states neither.
+
+`transcript` is the posts since the scene was last **considered**, not the whole
+scene — the question is whether the story has arrived somewhere since it was
+last asked, and re-sending three hundred posts to ask it would make the free
+half of the feature pointless. `signals` is empty on a forced question that
+crossed no threshold, and the template renders no reason list at all there
+rather than an empty one.
+
+The system prompt states outright that the signals are the reason for the
+question and never evidence for a yes: they are counts, and a count cannot see
+whether anything was settled. The reply is a JSON object
+(`{"break", "reason", "title"}`); an unreadable one parses as `break: false`
+with empty prose, because this runs automatically off the play loop. Nothing
+here ends or splits a scene — the answer is a suggestion in the inspector.
+
 ### `scene/` — the context builder (`store/context/`)
 Serves POST …/chat, …/retry, …/regenerate (via `build_messages` /
 `build_director_messages`) and …/opener (via `build_opener_messages`).

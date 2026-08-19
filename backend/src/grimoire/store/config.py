@@ -123,6 +123,15 @@ DEFAULT_PROMOTE_STREAK = "3"
 # Refresh button.
 DEFAULT_ROLLING_SUMMARY_EVERY = "10"
 
+# Posts between scene-break questions (#84). Only the CADENCE: a scene that has
+# produced this many posts is merely eligible to be asked about, and the
+# heuristic still has to reach `scene_break.THRESHOLD` before anything reaches a
+# provider -- so the real cost is well under one call per this many posts.
+# Twice the summary's cadence because the two answer questions of different
+# sizes: a summary is behind after ten posts, where a scene is rarely over
+# after ten. "0" turns the whole feature off, panel and all.
+DEFAULT_SCENE_BREAK_EVERY = "20"
+
 # Wall-clock ceiling on one one-shot generation route (#272). The idle bound
 # above cannot stop an upstream that dribbles a frame just inside it forever,
 # and a tagline / voice anchor / scene suggestion has no partial output worth
@@ -166,7 +175,7 @@ _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "llm_retries", "fallback_connection_id",
                 "prompt_log_depth",
                 "turnstate_depth", "promote_streak",
-                "rolling_summary_every", "llm_call_budget",
+                "rolling_summary_every", "scene_break_every", "llm_call_budget",
                 "offscene_known_limit",
                 "embeddings_connection_id", "embeddings_model",
                 "semantic_recall_depth", "semantic_recall_threshold",
@@ -198,6 +207,7 @@ def read_config() -> dict[str, str]:
                 "turnstate_depth": DEFAULT_TURNSTATE_DEPTH,
                 "promote_streak": DEFAULT_PROMOTE_STREAK,
                 "rolling_summary_every": DEFAULT_ROLLING_SUMMARY_EVERY,
+                "scene_break_every": DEFAULT_SCENE_BREAK_EVERY,
                 "llm_call_budget": DEFAULT_LLM_CALL_BUDGET,
                 "offscene_known_limit": DEFAULT_OFFSCENE_KNOWN_LIMIT,
                 "embeddings_connection_id": DEFAULT_EMBEDDINGS_CONNECTION_ID,
@@ -323,17 +333,34 @@ def promote_streak() -> int:
     the ledger's per-scene memory — the ceiling belongs where the retention
     limit is, not here."""
     return _count("promote_streak", DEFAULT_PROMOTE_STREAK)
-def rolling_summary_every() -> int:
-    """Posts between rolling-summary refreshes; 0 means off (#85).
 
-    Same failure posture as `_seconds` and deliberately not folded into it: a
-    malformed value falls back to the default rather than raising, because this
-    is read on the play path and a hand-edited config.md must not take a scene
-    down. What differs is the shape and what non-positive MEANS -- a count, not
-    a duration, and "0" here is a documented setting (the feature is off) rather
-    than "no bound". So a negative reads as 0, but an unparseable value reads as
-    the default: clearing the field in the UI is a mistake to recover from,
-    while typing 0 is an instruction to obey.
+
+def rolling_summary_every() -> int:
+    """Posts between rolling-summary refreshes; 0 means off (#85). See `_every`
+    for what a malformed value does, and why 0 and "junk" differ."""
+    return _every("rolling_summary_every", DEFAULT_ROLLING_SUMMARY_EVERY)
+
+
+def scene_break_every() -> int:
+    """Posts between scene-break questions; 0 means off (#84).
+
+    `rolling_summary_every`'s posture exactly, and it shares that function's
+    parser for it: same shape (a count), same meaning for 0 (a documented "the
+    feature is off" rather than "no bound"), and the same reason a malformed
+    value falls back to the default instead of raising -- this is read on the
+    play path, and a hand-edited config.md must not take a scene down.
+    """
+    return _every("scene_break_every", DEFAULT_SCENE_BREAK_EVERY)
+
+
+def _every(key: str, default: str) -> int:
+    """The two per-post cadences, parsed the one way (#84 joined #85 here).
+
+    Deliberately not folded into `_seconds`: what differs from a duration is
+    the shape and what non-positive MEANS -- a count, and "0" is an instruction
+    to obey (the feature is off) rather than "no bound". So a negative reads as
+    0, but an unparseable value reads as the default: clearing the field in the
+    UI is a mistake to recover from, while typing 0 is a choice.
 
     `int(float(...))`, so "10.0" -- which is what a numeric input can serialize
     to -- is 10 rather than a fallback. Non-finite values are rejected first:
@@ -341,13 +368,13 @@ def rolling_summary_every() -> int:
     it would land in neither branch below on merit.
     """
     try:
-        value = float(read_config().get("rolling_summary_every",
-                                        DEFAULT_ROLLING_SUMMARY_EVERY))
+        value = float(read_config().get(key, default))
     except (TypeError, ValueError):
-        return int(DEFAULT_ROLLING_SUMMARY_EVERY)
+        return int(default)
     if not math.isfinite(value):
-        return int(DEFAULT_ROLLING_SUMMARY_EVERY)
+        return int(default)
     return int(value) if value > 0 else 0
+
 
 def llm_call_budget() -> float:
     """Wall-clock seconds one non-streaming LLM call may take in total."""

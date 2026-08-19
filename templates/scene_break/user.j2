@@ -1,0 +1,32 @@
+{#- The confirmation call's one user message. Vars:
+      title — the scene's own title, so a proposed NEXT title is not a
+              restatement of the one already on screen. "" when untitled.
+      facts — dict from chronicle.scene_facts(): location (str), date (str),
+              cast ([str] of "<kind>/<id>" refs). In for the same reason
+              rolling_summary/user.j2 carries it: a scene's FIRST location and
+              FIRST date are set silently (scenes/moment.py), so on the scenes
+              that never move — the ordinary ones — the transcript says
+              neither.
+      signals — [{kind, weight, detail}] from scene_break.evaluate: the
+              deterministic reasons the question is being asked. Rendered as
+              `detail` alone; kind and weight are the scorer's bookkeeping and
+              mean nothing to a reader.
+      transcript — str (see snippets/transcript.j2): the posts since this scene
+              was last considered, NOT the whole scene. -#}
+{%- set head = [] -%}
+{%- if title -%}{%- set _ = head.append("Scene: " ~ title) -%}{%- endif -%}
+{%- if facts and facts.get("location") -%}{%- set _ = head.append("Location: " ~ facts.location) -%}{%- endif -%}
+{%- if facts and facts.get("date") -%}{%- set _ = head.append("Date: " ~ facts.date) -%}{%- endif -%}
+{%- if facts and facts.get("cast") -%}{%- set _ = head.append("Present: " ~ (facts.cast | join(", "))) -%}{%- endif -%}
+{%- if head -%}
+{{ head | join("\n") }}
+
+{% endif -%}
+{%- if signals -%}
+You are being asked because:
+{% for s in signals %}- {{ s.detail }}
+{% endfor %}
+{% endif -%}
+The scene since it was last considered:
+
+{{ transcript }}

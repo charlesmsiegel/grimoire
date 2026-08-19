@@ -109,6 +109,12 @@ CROSSING_PAIRS = [
      "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
     ("/api/campaigns/{cid}/scenes/{sid}/suggestions/dismiss",
      "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
+    # Same shape and the same decision as the dismissal above it (#84): only a
+    # scene whose id is literally "instantiate" could reach the crossing, and
+    # "scenes" is not an entity kind, so the instantiate pattern can never
+    # legitimately claim a URL under /scenes/.
+    ("/api/campaigns/{cid}/scenes/{sid}/scene-break/dismiss",
+     "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
     ("/api/campaigns/{cid}/sheets/{kind}/{eid}",
      "/api/campaigns/{cid}/{kind}/{eid}/images"),
     ("/api/campaigns/{cid}/sheets/{kind}/{eid}/creation",

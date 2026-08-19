@@ -1515,10 +1515,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // Re-read a scene after a write made OUTSIDE this component, then ask whether
   // its summary is now due, bounded by the length that re-read verified. The
   // catch is what makes the pair safe to fire without awaiting: a failed read is
-  // no boundary, and `askForRollingSummary` declines a negative one rather than
+  // no boundary, and `askAfterPost` declines a negative one rather than
   // falling back to an unbounded fold.
   async function refreshAndAsk(id: string) {
-    askForRollingSummary(id, await selectScene(id).catch(() => -1));
+    askAfterPost(id, await selectScene(id).catch(() => -1));
   }
 
   // A scene's id is its filename, so a rename mints a new one. `scene_refs.repoint`
@@ -1906,7 +1906,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // A function rather than a line inside `runStream`, because review caught
   // that generated turns are not the only writer: a manual dice roll and a
   // check both append narrator posts, so a mechanics-heavy stretch of play
-  // could cross the threshold repeatedly with nothing ever asking.
+  // could cross the threshold repeatedly with nothing ever asking. Named for
+  // the SIGNAL rather than for one of its consumers, since #84 joined #85 here
+  // and a name that promised only a summary would be a lie the next reader
+  // trips over.
   // `upto` is REQUIRED, and a negative one means "no boundary was read" — the
   // re-read that would have supplied it was retired by a newer select, or the
   // reader left. Review caught what the earlier `undefined` fallback did there:
@@ -1916,10 +1919,20 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // is an append, so it would stay out of the "current" summary until another
   // threshold. Skipping costs nothing: whatever superseded this read is itself
   // a transcript write and asks again with a boundary it actually verified.
-  function askForRollingSummary(id: string, upto: number) {
+  function askAfterPost(id: string, upto: number) {
     if (upto < 0) return;
     api.refreshRollingSummary(cid, id, false, upto)
       .then((r) => { if (r.refreshed && activeIdRef.current === id) setCtxKey((n) => n + 1); })
+      .catch(() => {});
+    // The scene-break question rides the same signal (#84) — every call site
+    // here is already "a post landed, at a boundary I verified", which is
+    // exactly when both gates want re-evaluating. Fired separately rather than
+    // chained, because neither answer is a precondition for the other and
+    // chaining would make a failed summary silently skip the break question.
+    // Not awaited and its rejection swallowed, for the summary's reason: no
+    // action should fail because a suggestion could not be written.
+    api.askSceneBreak(cid, id, false, upto)
+      .then((r) => { if (r.asked && activeIdRef.current === id) setCtxKey((n) => n + 1); })
       .catch(() => {});
   }
 
@@ -2195,9 +2208,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // request reaches the server, and a fold that swallowed that unanswered
       // post would keep the reply out of the summary until another threshold.
       // A `seen` of -1 is a read that was retired rather than one that saw an
-      // empty transcript, so it is no boundary at all; `askForRollingSummary`
+      // empty transcript, so it is no boundary at all; `askAfterPost`
       // declines it rather than falling back to an unbounded fold.
-      askForRollingSummary(id, seen);
+      askAfterPost(id, seen);
     }
     // Landed means the backend said so, not that the promise resolved.
     return finished && !errored;
@@ -2311,7 +2324,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // due, so the ask is what turns a summary the panel can only flag as stale
     // back into a correct one. Review caught that leaving it out meant the
     // stale flag sat there until some later *generated* turn asked.
-    askForRollingSummary(activeId, seen);   // #85
+    askAfterPost(activeId, seen);   // #85, #84
   }
 
   /** Cascade post-delete: this post and everything after it (#75).
@@ -2378,7 +2391,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // The stored fold covers a prefix that may no longer exist. The server
     // reports that as stale on its own (`at > total`, or a moved digest); this
     // is what turns the flag back into a correct summary.
-    askForRollingSummary(activeId, seen);   // #85
+    askAfterPost(activeId, seen);   // #85, #84
     // What the shortened transcript cannot show. Two distinct outcomes, and
     // reported as two clauses because conflating them would mislead:
     //
@@ -2580,7 +2593,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // the discarded take, flagged stale, until the next generated turn.
       // Scoped like every other write above, and skipped when neither re-read
       // produced a boundary.
-      if (stillHere()) askForRollingSummary(sid, seen);   // #85
+      if (stillHere()) askAfterPost(sid, seen);   // #85, #84
     } finally {
       releaseLatch();
     }
@@ -2604,7 +2617,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       const seen = await selectScene(activeId);
       // The length the re-read saw is this write's boundary, for the reason the
       // turn loop passes one: nothing holds the scene once this returns.
-      askForRollingSummary(activeId, seen);   // a roll is a post too (#85)
+      askAfterPost(activeId, seen);   // a roll is a post too (#85, #84)
     } catch (err: any) {
       setRollForm({ ...rollForm, error: err.detail ?? String(err) });
     } finally {
@@ -2656,7 +2669,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       await api.rollCheck(cid, activeId, body);
       setRollForm(null);
       const seen = await selectScene(activeId);
-      askForRollingSummary(activeId, seen);   // as is a check (#85)
+      askAfterPost(activeId, seen);   // as is a check (#85, #84)
     } catch (err: any) {
       setRollForm({ ...rollForm, error: err.detail ?? String(err) });
     } finally {

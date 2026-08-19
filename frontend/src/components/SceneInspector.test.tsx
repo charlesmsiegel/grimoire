@@ -19,6 +19,7 @@ vi.mock("../api/client", async () => {
       listAppearances: vi.fn(), listEntityImages: vi.fn(),
       listEntities: vi.fn(), setSceneLocation: vi.fn(), sceneBriefing: vi.fn(),
       getRollingSummary: vi.fn(), refreshRollingSummary: vi.fn(),
+      getSceneBreak: vi.fn(), askSceneBreak: vi.fn(), dismissSceneBreak: vi.fn(),
       addToCast: vi.fn(), removeFromCast: vi.fn(),
       getPins: vi.fn(), setPin: vi.fn(), removePin: vi.fn(),
       actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string) => `/img/${k}/${a}/${v}`,
@@ -97,6 +98,11 @@ beforeEach(() => {
   (api.refreshRollingSummary as any).mockResolvedValue({
     summary: "Refolded.", at: 4, total: 4, stale: false, every: 10, due: false,
     refreshed: true });
+  // The scene-break detector saying nothing (#84), so every suite that predates
+  // it renders the rail it always did.
+  (api.getSceneBreak as any).mockResolvedValue(NO_SCENE_BREAK);
+  (api.askSceneBreak as any).mockResolvedValue({ ...NO_SCENE_BREAK, asked: false });
+  (api.dismissSceneBreak as any).mockResolvedValue(NO_SCENE_BREAK);
   // No rules by default (#129), so every suite that predates pins renders the
   // rail it always did -- an empty section with its hint.
   (api.getPins as any).mockResolvedValue({ pins: [] });
@@ -113,12 +119,107 @@ function pinRow(over: Partial<any> = {}) {
   };
 }
 
+const NO_SCENE_BREAK = {
+  verdict: "" as const, reason: "", title: "",
+  posts: 0, score: 0, signals: [], every: 20, due: false,
+};
 const EMPTY_BRIEFING = {
   focus: [], plot: [], commitments: [], relationships: [], last_time: null };
 
 function renderInspector(onSceneChanged: () => void = () => {}) {
   render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={onSceneChanged} />);
 }
+
+// ---- the scene-break detector (#84) ----
+const BREAK_YES = {
+  ...NO_SCENE_BREAK, verdict: "yes" as const,
+  reason: "The ledger changed hands and both sides walked away.",
+  title: "The Long Walk Back", posts: 40, score: 3, due: false,
+};
+
+test("a confirmed break shows why, and what the next scene might be called", async () => {
+  (api.getSceneBreak as any).mockResolvedValue(BREAK_YES);
+  renderInspector();
+  await screen.findByText("The ledger changed hands and both sides walked away.");
+  await screen.findByText(/The Long Walk Back/);
+});
+
+test("the detector never ends the scene itself — the only actions are asking and declining", async () => {
+  (api.getSceneBreak as any).mockResolvedValue(BREAK_YES);
+  renderInspector();
+  await screen.findByText(/The Long Walk Back/);
+  // No control here writes the transcript or the scene's done flag; a reader
+  // finding one would be finding an auto-split, which this feature must not do.
+  expect(screen.queryByRole("button", { name: /end scene|split|start next/i })).toBeNull();
+  expect(screen.getByRole("button", { name: /not here/i })).toBeInTheDocument();
+});
+
+test("a model that said no is said differently from nothing having been asked", async () => {
+  (api.getSceneBreak as any).mockResolvedValue({
+    ...NO_SCENE_BREAK, verdict: "no", reason: "They are still mid-argument.", posts: 40 });
+  renderInspector();
+  await screen.findByText(/still mid-beat/i);
+  await screen.findByText("They are still mid-argument.");
+  // ...and declining is not offered against an answer there is nothing to decline.
+  expect(screen.queryByRole("button", { name: /not here/i })).toBeNull();
+});
+
+test("with nothing to suggest it says what it can see rather than nothing at all", async () => {
+  (api.getSceneBreak as any).mockResolvedValue({
+    ...NO_SCENE_BREAK, posts: 12, score: 1,
+    signals: [{ kind: "length", weight: 1, detail: "12 posts since this was last considered" }] });
+  renderInspector();
+  await screen.findByText(/Nothing to suggest yet/);
+  await screen.findByText("12 posts since this was last considered");
+});
+
+test("switched off, the panel says so instead of reporting a score of zero", async () => {
+  (api.getSceneBreak as any).mockResolvedValue({ ...NO_SCENE_BREAK, every: 0, posts: 400 });
+  renderInspector();
+  await screen.findByText(/Turned off/);
+});
+
+test("Ask now forces a question and installs whatever comes back", async () => {
+  (api.askSceneBreak as any).mockResolvedValue({ ...BREAK_YES, asked: true });
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /ask now/i }));
+  await waitFor(() => expect(api.askSceneBreak).toHaveBeenCalledWith("c", "s", true));
+  await screen.findByText("The ledger changed hands and both sides walked away.");
+});
+
+test("a failed question reports itself and never blanks a standing proposal", async () => {
+  (api.getSceneBreak as any).mockResolvedValue(BREAK_YES);
+  (api.askSceneBreak as any).mockRejectedValue({ detail: "OpenRouter key not set" });
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /ask now/i }));
+  await screen.findByText("OpenRouter key not set");
+  expect(screen.getByText("The ledger changed hands and both sides walked away."))
+    .toBeInTheDocument();
+});
+
+test("Not here goes to the server, because the watermark it moves lives there", async () => {
+  // A local dismissal would leave the same posts re-earning the same
+  // suggestion on the very next turn.
+  (api.getSceneBreak as any).mockResolvedValue(BREAK_YES);
+  (api.dismissSceneBreak as any).mockResolvedValue(NO_SCENE_BREAK);
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /not here/i }));
+  await waitFor(() => expect(api.dismissSceneBreak).toHaveBeenCalledWith("c", "s"));
+  await screen.findByText(/Nothing to suggest yet/);
+});
+
+test("switching scenes never shows the previous scene's proposal", async () => {
+  // A proposal is prose ABOUT a story, so showing one under another scene reads
+  // as fact rather than as lag — `rolling`'s rule, for a sharper reason.
+  (api.getSceneBreak as any).mockResolvedValueOnce(BREAK_YES);
+  const { rerender } = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await screen.findByText("The ledger changed hands and both sides walked away.");
+  (api.getSceneBreak as any).mockResolvedValue(NO_SCENE_BREAK);
+  rerender(<SceneInspector cid="c" sid="s2" refreshKey={0} onSceneChanged={() => {}} />);
+  await waitFor(() => expect(
+    screen.queryByText("The ledger changed hands and both sides walked away.")).toBeNull());
+});
 
 test("lists cast names and the location and a context section", async () => {
   renderInspector();

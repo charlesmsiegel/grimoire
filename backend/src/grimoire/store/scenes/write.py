@@ -10,7 +10,7 @@ in a single write — see `turns._set_turn_sizes`.
 
 from __future__ import annotations
 
-from .. import atomic, turnstate
+from .. import atomic, scene_break, turnstate
 from ..appearances import cast
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import now_iso, safe_id
@@ -601,6 +601,79 @@ def set_rolling_summary(cid: str, sid: str, summary: str, at: int, digest: str,
     meta["rolling_digest"] = digest
     meta["rolling_facts"] = facts
     atomic.write_text(p, dump_frontmatter(meta, body))
+
+
+@locking._serialized
+def set_scene_break(cid: str, sid: str, at: int, locs: int, times: int,
+                    verdict: str = "", reason: str = "", title: str = "") -> None:
+    """Record what a scene-break question covered, and what it answered (#84).
+
+    The watermark and the proposal go out in one write because they are only
+    meaningful together: the watermark says which posts, moves and clock
+    advances have already been considered, and the verdict is what was
+    concluded about exactly those. A reader that saw a new verdict against an
+    old watermark would show the answer to a question nobody asked.
+
+    Defaulting `verdict`/`reason`/`title` to empty is how a DISMISSAL is
+    written -- the counts move forward, the proposal is cleared -- so
+    `dismiss_scene_break` is this function with the counts read off the same
+    file, rather than a second way to write these six keys.
+
+    `reason` and `title` are collapsed to one line HERE, for
+    `set_rolling_summary`'s reason: `dump_frontmatter` writes one line per key
+    and `_quote` does not escape newlines, so a model reply containing one is
+    written as a second physical line and read back as junk -- or, if it begins
+    `---`, as the end of the frontmatter block, taking every key after it.
+    Scene-file corruption from a model reply is the store's to prevent, not a
+    caller's to remember.
+
+    `updated` is deliberately NOT stamped, for `set_rolling_summary`'s reason:
+    two readers treat that stamp as "when the transcript last changed", and a
+    background question is not the player writing anything.
+    """
+    p = paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        raise paths.SceneNotFound(sid)
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["break_at"] = str(max(0, at))
+    meta["break_locs"] = str(max(0, locs))
+    meta["break_times"] = str(max(0, times))
+    meta["break_verdict"] = verdict
+    meta["break_reason"] = " ".join(reason.split())
+    meta["break_title"] = " ".join(title.split())
+    atomic.write_text(p, dump_frontmatter(meta, body))
+
+
+@locking._serialized
+def dismiss_scene_break(cid: str, sid: str) -> dict:
+    """Retire a scene-break proposal, and start counting again from here (#84).
+
+    "Not here" is an answer about the scene as it stands, so the watermark
+    moves to the scene as it stands: the transcript's current length and both
+    histories' current move counts. That is what stops a dismissed suggestion
+    from being re-earned by the same posts on the very next evaluation, and it
+    is why dismissal is a mutator rather than a client-side flag.
+
+    The counts are read from the file this write already holds open under the
+    lock, NOT handed in by the caller. A caller that read them first would be
+    dismissing a scene it saw before the post that landed in between, leaving
+    that post outside both the retired question and the next one.
+
+    Returns the new watermark, so the route can answer with the state it wrote
+    instead of reading the file a third time.
+    """
+    p = paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        raise paths.SceneNotFound(sid)
+    scene = read.read_scene(cid, sid)
+    at = len(scene["messages"])
+    locs = scene_break.moves(read.get_location_history(cid, sid))
+    times = scene_break.moves(read.get_time_history(cid, sid))
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["break_at"], meta["break_locs"], meta["break_times"] = str(at), str(locs), str(times)
+    meta["break_verdict"] = meta["break_reason"] = meta["break_title"] = ""
+    atomic.write_text(p, dump_frontmatter(meta, body))
+    return {"at": at, "locs": locs, "times": times}
 
 
 @locking._serialized

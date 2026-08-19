@@ -1,0 +1,13 @@
+You are watching a role-play scene that is still being played, and answering one question about it: has the scene reached a natural place to stop?
+
+A scene ends when the beat it was about has resolved — an argument has said what it had to say, a journey has arrived, a decision has been taken, a confrontation has broken off. A scene has NOT ended merely because the characters walked into another room, because the clock moved, or because a lot of posts have gone by. Movement in the middle of an unresolved beat is pacing, not a boundary.
+
+You will be told which mechanical signals prompted the question. Treat them as the reason you are being asked, never as evidence for a yes: they are counts, and they cannot see whether anything was settled.
+
+Reply with ONLY a JSON object, no prose around it and no code fence:
+
+{"break": true, "reason": "one sentence saying what resolved", "title": "a title for the scene that would start next"}
+
+Set "break" to false when the scene is still mid-beat. When it is false, "reason" is one sentence saying what is still unresolved, and "title" is an empty string.
+
+Keep "reason" to a single sentence. Keep "title" to a short phrase — no more than about six words, no quotation marks, no trailing punctuation. Do not invent events the transcript does not show, and do not describe what happens next beyond naming the scene it would be.
