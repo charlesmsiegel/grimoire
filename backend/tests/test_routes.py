@@ -515,7 +515,7 @@ def test_character_image_writes_refuse_an_id_that_names_no_character_or_version(
     that does not exist is a typo worth reporting."""
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
-    png = {"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}
+    png = {"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}   # one upload's worth
 
     ghost_char = f"/api/worlds/{wid}/characters/nobody/versions/default/images"
     ghost_ver = f"/api/worlds/{wid}/characters/{cid}/versions/typo/images"
@@ -523,7 +523,7 @@ def test_character_image_writes_refuse_an_id_that_names_no_character_or_version(
         for method, url in (("DELETE", f"{base}/avatar"), ("POST", f"{base}/avatar/promote")):
             r = client.request(method, url)
             assert (r.status_code, r.json()["detail"]) == (404, detail), (method, url)
-        r = client.put(f"{base}/avatar",
+        r = client.put(f"{base}/avatar",   # a fresh stream each time: sending consumes it
                        files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
         assert (r.status_code, r.json()["detail"]) == (404, detail), base
         r = client.put(f"{base}/avatar/focus", json={"focus": 10})
@@ -639,9 +639,9 @@ def test_copy_image_from_greeting_refuses_a_character_that_is_not_there(client):
 def _actor_image_write_routes(client):
     """Every registered write route on the per-version actor image surface.
 
-    Enumerated from the app under test rather than listed here on purpose: the point is to
-    catch route number nineteen, added later by someone who did not read this
-    file. Nine handlers were hardened by hand for #360 and a tenth
+    Enumerated from the app under test rather than listed here on purpose: the
+    point is to catch route number nineteen, added later by someone who did not
+    read this file. Nine handlers were hardened by hand for #360 and a tenth
     (`routes/greetings.py`'s world-side copy-from-greeting) was only found by
     going looking -- a list maintained alongside the routes would have missed
     it exactly the way the issue's own list did.

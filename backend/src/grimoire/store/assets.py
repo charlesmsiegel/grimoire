@@ -455,17 +455,21 @@ def delete_version_images(root: Path, cid: str, vid: str, base: str = "character
     and `pcs.delete_pc`: the version it belongs to is already gone, so an upload
     racing this is writing art for a version that no longer exists either way.
 
-    A symlinked folder loses the link, never what it points at. `rmtree`
-    refuses a symlink outright (`OSError`), which would 500 the delete *after*
-    the record file is already unlinked; and a store on a synced folder is
-    exactly where someone points an asset directory at an art library living
-    somewhere else.
+    A linked folder loses the link, never what it points at. `rmtree` refuses
+    both a symlink and (since bpo-37834) a Windows junction rather than
+    following it, and this runs *after* the record file is already unlinked --
+    so letting that `OSError` out is a 500 with the version already gone. A
+    store on a synced folder is exactly where someone points an asset directory
+    at an art library living somewhere else.
     """
     if not (safe_id(cid) and safe_id(vid)):
         return
     d = _dir(root, cid, vid, base)
-    if d.is_symlink():
-        d.unlink()
+    if d.is_symlink() or getattr(d, "is_junction", bool)():   # is_junction: 3.12+
+        try:
+            d.unlink()          # POSIX: removes either kind of link
+        except OSError:
+            d.rmdir()           # Windows: a directory link goes the way a directory does
     elif d.is_dir():
         shutil.rmtree(d)
 
