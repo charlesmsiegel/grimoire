@@ -17,7 +17,11 @@ const scene = (id: string, title: string, date = "") => ({ id, title, date });
 
 const EMPTY = {
   plot: [], commitments: [], facts: [], retired: [], relationships: [], chronicle: [],
+  stale_after_days: 30,
 };
+
+/** Aging (#103) as the route returns it: computed at read time, never stored. */
+const ok = { state: "ok", days_since: 2, days_over: null, due_in: null };
 
 /** The screen's reason to exist, in data.
  *
@@ -339,4 +343,48 @@ test("the sections are offered to the palette", async () => {
   fireEvent.click(await screen.findByRole("option", { name: /commitments/i }));
   expect(await screen.findByRole("heading", { level: 1, name: "Commitments" }))
     .toBeInTheDocument();
+});
+
+test("an overdue commitment says how far past its deadline it is", async () => {
+  // The badge leads the note: "overdue by 12 days" is the reason to read the
+  // row, and a reader scanning for what has slipped should not have to reach
+  // the end of a beat to find it.
+  (api.campaignLedger as any).mockResolvedValue({
+    ...EMPTY,
+    commitments: [{ id: "the-debt", title: "Repay the moneylender", kind: "promise",
+                    status: "open", due: "3 Reaping", last_scene: "004",
+                    latest_beat: "Mara swore it.", scene: scene("004", "The Priory Door"),
+                    aging: { state: "overdue", days_since: 40, days_over: 12, due_in: null } }],
+  });
+  renderLedger();
+  fireEvent.click(await column().findByText("Commitments"));
+  expect(await screen.findByText(/OVERDUE BY 12 DAYS/)).toBeInTheDocument();
+  expect(screen.getByText(/Mara swore it\./)).toBeInTheDocument();
+});
+
+test("a thread nobody has touched is badged stale", async () => {
+  (api.campaignLedger as any).mockResolvedValue({
+    ...EMPTY,
+    plot: [{ id: "the-map", title: "The map", status: "open", last_scene: "004",
+             latest_beat: "", scene: scene("004", "The Priory Door"),
+             aging: { state: "stale", days_since: 45, days_over: null, due_in: null } }],
+  });
+  renderLedger();
+  fireEvent.click(await column().findByText("Threads"));
+  expect(await screen.findByText("STALE · 45 DAYS UNTOUCHED")).toBeInTheDocument();
+});
+
+test("a record inside the campaign's patience carries no badge", async () => {
+  // An unbadged row is also what "cannot tell" looks like — no clock, no dated
+  // scene — which is the honest rendering of an answer nothing supports.
+  (api.campaignLedger as any).mockResolvedValue({
+    ...EMPTY,
+    plot: [{ id: "the-map", title: "The map", status: "open", last_scene: "004",
+             latest_beat: "Mara found it.", scene: scene("004", "The Priory Door"),
+             aging: ok }],
+  });
+  renderLedger();
+  fireEvent.click(await column().findByText("Threads"));
+  expect(await screen.findByText("Mara found it.")).toBeInTheDocument();
+  expect(screen.queryByText(/STALE/)).not.toBeInTheDocument();
 });

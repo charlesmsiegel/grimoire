@@ -9,7 +9,8 @@ import { api } from "../api/client";
 beforeEach(() => {
   vi.clearAllMocks();
   (api.getCalendarConfig as any).mockResolvedValue({
-    primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null }, secondary: null });
+    primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
+    secondary: null, stale_after_days: 30 });
   (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
   (api.getCalendarProviders as any).mockResolvedValue({ providers: [
     { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" },
@@ -48,4 +49,16 @@ test("selecting a custom (user-authored) calendar hides both region and observan
   fireEvent.click(screen.getByRole("button", { name: /save/i }));
   await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith("run",
     expect.objectContaining({ primary: expect.objectContaining({ provider: "my-custom-calendar" }) })));
+});
+
+test("edits how long a record may go untouched before it is stale", async () => {
+  // The campaign's one aging knob (#103), saved with the rest of its time
+  // config — a client that dropped the field would reset it on every save.
+  render(<CalendarConfig cid="run" />);
+  const days = await screen.findByLabelText("Stale after days");
+  expect(days).toHaveValue(30);
+  fireEvent.change(days, { target: { value: "7" } });
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith("run",
+    expect.objectContaining({ stale_after_days: 7 })));
 });

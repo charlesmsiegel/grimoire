@@ -21,6 +21,7 @@ from .common import (computes_only, _bounded_call, _campaign_root_or_404, _conte
                      _dump, _require_connection, _response_body, get_llm,
                      _serve_image, _serve_image_file, _upload_image_ext, _write_response)
 from .models import (AdvanceTime, AvatarFocus, CalendarConfig, CampaignClimate, CopyFromGreeting,
+                     ScheduledEventCreate, ScheduledEventEdit,
                      DefaultVersion, ForkCampaign, GroupStateSave, NameBody, NewCampaign, PCCreate,
                      PCUpdate, PersonaVersionCreate, PersonaVersionUpdate, PickBody, PinRule,
                      RefList, ResponseSettings, VersionCreate, VersionUpdate,
@@ -137,7 +138,13 @@ def get_calendar_config(cid: str):
 def put_calendar_config(cid: str, body: CalendarConfig):
     if not store.campaigns.campaign_exists(cid):
         raise HTTPException(status_code=404, detail="campaign not found")
-    cfg = {"primary": body.primary, "secondary": body.secondary, "confirmed": body.confirmed}
+    # `stale_after_days` rides with the rest of the campaign's time config (#103).
+    # A client sending 0 -- or an older one not sending it at all -- means "no
+    # opinion", and the store answers that with its own default rather than
+    # storing a threshold that would call every record stale on the day it was
+    # written. That coercion lives in `calendars._stale_days`, once.
+    cfg = {"primary": body.primary, "secondary": body.secondary, "confirmed": body.confirmed,
+           "stale_after_days": body.stale_after_days}
     try:
         store.calendars.validate_calendar(cfg)
     except store.calendars.CalendarError as e:
@@ -215,6 +222,92 @@ def post_advance(cid: str, body: AdvanceTime):
     # at), and resolving the provider a second time re-imports and re-runs a
     # user-authored calendar plugin for a string we are already holding.
     return {"ok": True, **result, "friendly": result["digest"]["to_friendly"]}
+
+
+# ---- scheduled events (#101) ----
+#
+# Campaign-scoped and dated in the campaign's own calendar: a plot beat, a
+# coronation, the night a debt comes due. Declared here for the reason the clock
+# routes above are -- ``/campaigns/{cid}/{kind}`` would otherwise capture
+# ``events`` -- and ``test_route_order.py`` is what actually holds that.
+#
+# The fire stamp is not writable through this CRUD. It is the clock's to write
+# (``store.clock``), and the one way back is ``POST .../unfire``, which says so.
+
+
+def _event_provider(cid: str):
+    """The campaign's primary provider, or None. Only for labelling and order.
+
+    A campaign whose calendar will not load can still read and edit its events —
+    it simply gets them unlabelled and in id order rather than by date. Refusing
+    the list instead would hide the very rows whose dates the reader has to fix.
+    """
+    return store.calendars.primary_provider(store.campaigns.campaign_root(cid))
+
+
+@router.get("/campaigns/{cid}/events")
+def get_campaign_events(cid: str):
+    """Every scheduled event, soonest first, each with its fire stamp."""
+    _campaign_root_or_404(cid)
+    return {"events": store.events.list_events(cid, _event_provider(cid))}
+
+
+@router.post("/campaigns/{cid}/events")
+def post_campaign_event(cid: str, body: ScheduledEventCreate):
+    """File a new event. 400 on a date this campaign's calendar cannot read.
+
+    A date is required in substance rather than by the model: the sentence a
+    reader needs is the calendar's ("not a valid date in this calendar"), and a
+    422 about a missing field would replace it with a worse one.
+    """
+    _campaign_root_or_404(cid)
+    try:
+        eid = store.events.create(cid, body.name, body.date, body.note)
+    except store.calendars.CalendarError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except store.events.EventError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "id": eid}
+
+
+@router.put("/campaigns/{cid}/events/{eid}")
+def put_campaign_event(cid: str, eid: str, body: ScheduledEventEdit):
+    _campaign_root_or_404(cid)
+    try:
+        found = store.events.update(cid, eid, name=body.name, date=body.date,
+                                    note=body.note)
+    except store.calendars.CalendarError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except store.events.EventError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not found:
+        raise HTTPException(status_code=404, detail="event not found")
+    return {"ok": True}
+
+
+@router.post("/campaigns/{cid}/events/{eid}/unfire")
+def post_campaign_event_unfire(cid: str, eid: str):
+    """Take back a fire stamp — the reader's undo for an advance made by mistake."""
+    _campaign_root_or_404(cid)
+    try:
+        found = store.events.unfire(cid, eid)
+    except store.events.EventError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not found:
+        raise HTTPException(status_code=404, detail="event not found")
+    return {"ok": True}
+
+
+@router.delete("/campaigns/{cid}/events/{eid}")
+def delete_campaign_event(cid: str, eid: str):
+    _campaign_root_or_404(cid)
+    try:
+        found = store.events.delete(cid, eid)
+    except store.events.EventError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not found:
+        raise HTTPException(status_code=404, detail="event not found")
+    return {"ok": True}
 
 
 @router.get("/campaigns/{cid}/calendar/months")
@@ -633,9 +726,11 @@ def _ledger_text(value, fallback: str = "") -> str:
 
     Module level rather than nested in `get_ledger` because the relationships
     projection below needs the same rule, and two copies of it is two places
-    for one of them to stop being applied.
+    for one of them to stop being applied. That argument holds one level up as
+    well, which is why the body is now `store.fieldtext.text`: nine modules had
+    written these three lines out, this one included.
     """
-    return value.strip() if isinstance(value, str) else fallback
+    return store.fieldtext.text(value, fallback)
 
 
 def _ledger_relationships(cid: str) -> list[dict]:
@@ -768,8 +863,14 @@ def get_ledger(cid: str):
     is dated twice and both dates are the point of it.
 
     Contradictions are the section this view is named for and are absent until
-    #111 gives them a record; commitment aging (overdue/stale) is #103's, which
-    reads the `due` and `last_scene` this already returns.
+    #111 gives them a record.
+
+    Every plot and commitment row carries an `aging` block (#103): `overdue`
+    once a parseable `due` is behind the campaign's clock, `stale` once nothing
+    has moved the record for longer than this campaign's `stale_after_days`.
+    Computed at read time and never stored — see `store.aging`, which argues
+    that — so a corrected clock or an edited scene date changes the answer on
+    the next read rather than leaving a stamp nothing recomputes.
     """
     _campaign_root_or_404(cid)
 
@@ -812,6 +913,12 @@ def get_ledger(cid: str):
         # resolves a name per actor off the cards, so a broken card empties this
         # section rather than 500ing the view around it.
         bonds = _tolerant(lambda: _ledger_relationships(cid))
+        # Read under the lock with everything else, so the moment the rows are
+        # aged against is the same present the rows were read in. It is a read
+        # of one small file, and it does no calendar work -- which is why the
+        # provider resolution that `aging.prepare` does waits until the lock is
+        # released, the cut every other calendar caller in this app makes.
+        clock_now = store.clock.now(cid)
     # Unparseable is not the only way that file can be wrong. `read_chronicle`
     # is a bare `json.loads`, so a chronicle.json holding `[]` -- valid JSON of
     # the wrong shape -- returns a list and raises nothing, and the `.get` below
@@ -851,6 +958,16 @@ def get_ledger(cid: str):
                 "last_scene": _txt(t.get("last_scene")),
                 "latest_beat": _txt(t.get("latest_beat"))}
                for t in open_threads if isinstance(t, dict)]
+    # One context for both lists (#103), so a thread and a commitment last moved
+    # by the same scene cannot report different ages. `_tolerant` around it for
+    # the reason every other read here has one: the aging pass resolves a
+    # calendar provider, and a campaign whose provider is a broken plugin should
+    # lose its badges, not its ledger.
+    aged = _tolerant(lambda: [store.aging.prepare(cid, clock_now)])
+    ctx = aged[0] if aged else None
+    if ctx is not None:
+        threads = store.aging.annotate(ctx, threads)
+        owed = store.aging.annotate(ctx, owed)
     # Derived from `chron` rather than `chronicle.recent`, which sorts on the raw
     # `id` of every record: one list-valued id makes that comparison raise and
     # `_tolerant` empties the entire recent-facts section, losing every good fact
@@ -859,6 +976,11 @@ def get_ledger(cid: str):
     recent = sorted((r for r in chron.values() if isinstance(r, dict)),
                     key=lambda r: _txt(r.get("id")))[-LEDGER_RECENT:]
     return {
+        # `stale_after` beside the rows rather than inside each one: it is a
+        # property of the campaign, and a panel that says "40 days untouched"
+        # needs to be able to say what this campaign calls stale.
+        "stale_after_days": ctx["stale_after"] if ctx is not None
+        else store.calendars.STALE_AFTER_DAYS,
         "plot": [{**t, "scene": _scene(t["last_scene"])} for t in threads],
         "commitments": [{**c, "scene": _scene(c["last_scene"])} for c in owed],
         # The fact ledger (#114). `facts.active` normalizes its own rows, like

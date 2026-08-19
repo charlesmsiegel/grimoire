@@ -103,7 +103,7 @@ def test_setting_a_scene_date_moves_the_clock_forward(client):
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime", json={"datetime": "2026-06-01"})
-    assert r.json()["clock"] == {"moved": True, "now": "2026-06-01"}
+    assert r.json()["clock"] == {"moved": True, "now": "2026-06-01", "fired": []}
     assert client.get(f"/api/campaigns/{cid}/clock").json()["now"] == "2026-06-01"
 
 
@@ -112,7 +112,7 @@ def test_a_flashback_scene_does_not_drag_the_clock_back(client):
     client.post(f"/api/campaigns/{cid}/advance", json={"to": "2026-06-01", "reason": "the present"})
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime", json={"datetime": "2025-01-01"})
-    assert r.json()["clock"] == {"moved": False, "now": "2026-06-01"}
+    assert r.json()["clock"] == {"moved": False, "now": "2026-06-01", "fired": []}
     assert client.get(f"/api/campaigns/{cid}/clock").json()["now"] == "2026-06-01"
 
 

@@ -23,6 +23,14 @@ direction can tell us.
 transcript line a time change produces ("*Time passes…*"); an advance is
 campaign state plus a digest in the response, never a post.
 
+One write does ride along, and it is bookkeeping rather than narrative: a
+forward move stamps the scheduled events it crossed as fired (#101). That stamp
+is the record of the clock having reached a day, so the module that moves the
+clock is the only place it can be written -- and it is deterministic, which is
+why it needs no review step. Firing is forward-only, and a preview fires
+nothing: `digest` is read-only, so what a preview lists is exactly what
+confirming it will fire.
+
 The digest is deterministic — holidays, birthdays and open threads read off the
 fixed-day axis and the campaign's own files, with no model in the loop. A prose
 "meanwhile" summary is deliberately not here (#100's option C); it would need a
@@ -41,7 +49,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import atomic, birthdays, calendars, chronicle, locks, plot
+from . import aging, atomic, birthdays, calendars, chronicle, commitments, events, locks, plot
 from .appearances import cast as appearances_cast
 from .campaigns import paths as campaigns_paths
 from .paths import now_iso
@@ -413,16 +421,61 @@ def digest(cid: str, provider, from_native: str, to_native: str) -> dict:
         threads = plot.open_threads(cid)
     except Exception:  # noqa: BLE001 — garbled plot.json
         threads = []
+    try:
+        owed = commitments.open_commitments(cid)
+    except Exception:  # noqa: BLE001 — garbled commitments.json
+        owed = []
+
+    # Aged against the moment the move LANDS on, not the one it leaves (#103).
+    # That is what lets a preview answer the question a reader actually has
+    # before confirming a month-long skip: what will be overdue on the far side
+    # of it. `prepare` reads the chronicle and the calendar config once for both
+    # lists, so the two cannot answer to different presents.
+    ctx = aging.prepare(cid, to_native)
+    threads, owed = aging.annotate(ctx, threads), aging.annotate(ctx, owed)
+
+    # Scheduled events (#101). Computed even when `truncated`, unlike holidays
+    # and birthdays: those are a per-day scan through a provider and a thirty-
+    # year skip is a thousand rows nobody reads, while these are a handful of
+    # dated rows out of one file the campaign wrote by hand. A plot beat set for
+    # 1500 years hence is exactly the thing a long skip must not silently walk
+    # past -- and `advance` fires precisely this list, so dropping a row here
+    # would leave it unfired forever.
+    crossed_events = events.crossed(cid, provider, lo, hi) if hi > lo else []
 
     return {"from": from_native or "", "to": to_native,
             "from_friendly": from_friendly, "to_friendly": to_friendly,
             "elapsed_days": elapsed, "backward": elapsed < 0,
             "holidays": holidays, "birthdays": crossed_birthdays,
+            "events": crossed_events,
             # Uncapped, unlike the two crossing lists: this is the campaign's
             # own open ledger (the same list `/ledger` renders in full), so
             # trimming it here would quietly under-report what the skip leaves
             # owed. `truncated` therefore means the crossings alone.
-            "open_threads": threads, "truncated": truncated}
+            "open_threads": threads, "commitments": owed,
+            # Two counts and the threshold behind them, so the panel can say
+            # "3 overdue" without every consumer re-implementing the filter,
+            # and can say what "stale" means in this campaign's days.
+            "aging": {**aging.summary(threads + owed),
+                      "stale_after": ctx["stale_after"]},
+            "truncated": truncated}
+
+
+def _fire(cid: str, rows: list[dict], target: str) -> list[dict]:
+    """Stamp the events a move just crossed. Returns the rows that took it.
+
+    Takes the rows the caller already computed rather than a span, so the
+    digest's list and the file's stamps cannot disagree about which events the
+    move reached — see `events.fire`, which says the same thing from its side.
+
+    Returns the subset that was actually stamped, which is the honest answer
+    when a concurrent advance got there first: those events fired, but not
+    because of this move.
+    """
+    if not rows:
+        return []
+    stamped = set(events.fire(cid, [r["id"] for r in rows], target))
+    return [r for r in rows if r["id"] in stamped]
 
 
 def preview(cid: str, to: str | None = None, days: int | None = None) -> dict:
@@ -447,11 +500,17 @@ def advance(cid: str, to: str | None = None, days: int | None = None,
     start, target = _resolve(provider, cid, to, days)
     computed = digest(cid, provider, start, target)
     if target == start:
-        return {"moved": False, "now": start, "digest": computed}
+        return {"moved": False, "now": start, "digest": computed, "fired": []}
     with locks.campaign_lock(cid):
         _commit(cid, target, {"from": start, "to": target,
                               "reason": _reason(reason), "at": now_iso()})
-    return {"moved": True, "now": target, "digest": computed}
+    # After the clock has landed, never before: an event stamped by a move that
+    # then failed to commit would be a fired event in a campaign whose present
+    # never reached it. Forward moves only (#101) -- a backward move is a
+    # correction, and un-firing on the way back would erase the only record that
+    # the story already played the event.
+    fired = _fire(cid, computed["events"], target) if computed["elapsed_days"] > 0 else []
+    return {"moved": True, "now": target, "digest": computed, "fired": fired}
 
 
 def observe(cid: str, native: str, reason: str) -> dict:
@@ -477,20 +536,46 @@ def observe(cid: str, native: str, reason: str) -> dict:
         # `now(cid)`, not `read(cid)["now"]`: every other exit from this function
         # reports the resolved moment, and a campaign whose calendar will not load
         # has not thereby lost the date its chronicle records.
-        return {"moved": False, "now": now(cid)}
+        return {"moved": False, "now": now(cid), "fired": []}
     current = _current(provider, cid)   # canonical, so the log reads consistently
     try:
         canonical = calendars.normalize(provider, native)
         stamp = _stamp(provider, canonical)
     except calendars.CalendarError:
-        return {"moved": False, "now": current}
+        return {"moved": False, "now": current, "fired": []}
     if current:
         try:
             if _stamp(provider, current) >= stamp:
-                return {"moved": False, "now": current}
+                return {"moved": False, "now": current, "fired": []}
         except calendars.CalendarError:
             pass   # an unreadable present is no reason to refuse a readable moment
     with locks.campaign_lock(cid):
         _commit(cid, canonical, {"from": current, "to": canonical,
                                  "reason": _reason(reason), "at": now_iso()})
-    return {"moved": True, "now": canonical}
+    # Scenes move the clock too, and most campaigns move it no other way: an
+    # event that only `POST /advance` could fire would sit unfired through the
+    # very session it was scheduled for. Same forward-only rule, and the same
+    # order -- the scene's date is already written and the clock has already
+    # landed, so a stamp that cannot be taken costs a stamp and nothing else.
+    #
+    # From the moment being LEFT, exclusive, so a campaign taking its first
+    # dated scene fires nothing: there is no span behind it, only a present.
+    return {"moved": True, "now": canonical,
+            "fired": _fire(cid, _crossing(cid, provider, current, stamp[0]), canonical)}
+
+
+def _crossing(cid: str, provider, from_native: str, to_fixed: int) -> list[dict]:
+    """The events `(from_native, to_fixed]` contains, for a mover with no digest.
+
+    `advance` hands `_fire` the list its digest already computed; `observe` has
+    no digest to take one from, so it asks here. A `from` this calendar cannot
+    read leaves no span — the same answer as no `from` at all, and the same one
+    `digest` gives for an unreadable stored moment.
+    """
+    if not from_native:
+        return []
+    try:
+        from_fixed = calendars.fixed_of(provider, from_native)
+    except calendars.CalendarError:
+        return []
+    return events.crossed(cid, provider, from_fixed, to_fixed) if to_fixed > from_fixed else []

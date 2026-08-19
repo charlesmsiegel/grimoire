@@ -212,10 +212,15 @@ for signals in ([], BREAK_SIGNALS):
                   render("scene_break/user.j2", transcript=transcript, signals=signals,
                          facts=facts, title=title))
 
-EMPTY_SNAP = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None,
+EMPTY_SNAP = {"now": "", "friendly": "", "holidays_today": [], "events_today": [],
+              "upcoming": None,
               "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
               "available_locations": []}
 FULL_SNAP = {"now": "2026-07-05", "friendly": "July 5, 2026", "holidays_today": ["Founding Day"],
+             # A campaign-scheduled event (#101) beside the calendar's holiday:
+             # the snapshot merges the two, so a fixture with only holidays
+             # would leave the merged half of the line unrendered here.
+             "events_today": ["The Envoy arrives"],
              "upcoming": {"name": "The Regatta", "in_days": 3},
              "birthdays": [{"name": "Hero", "age": 26, "when": "today"},
                            {"name": "Mora", "age": 51, "when": "in 2 days"}],
@@ -307,7 +312,8 @@ assert 'prompts.render("scene/roll_declined.j2")' in routes_src, \
 from grimoire.store import appearances as ap  # noqa: E402
 from grimoire.store import (audit, calendars, campaigns, characters, checks,  # noqa: E402
                             commitments, config,
-                            dossiers as dstore, entities, facts as fstore, groupstate,
+                            dossiers as dstore, entities, events, facts as fstore,
+                            groupstate,
                             length_drift, lengths, modules, pcs,
                             playstate, plot, response_presets, scenes, sheets, styles,
                             taglines as tstore, turnstate, voice_anchors as vastore,
@@ -648,9 +654,16 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
     time_history = scenes.get_time_history(cid, scene_id)
     if time_history:
         facts = calendars.today_facts(calendars.read_calendar(croot), time_history[-1])
+        # Mirrors context.world_state._today_data, scheduled events included:
+        # that function merges the campaign's own dated events into the same two
+        # fields, so a mirror that skipped them would render a different Today
+        # block for any campaign that has one.
+        scheduled = events.day_facts(cid, croot, time_history[-1])
         today = {"friendly": facts["friendly"], "weekday": facts["weekday"],
                  "secondary_friendly": facts["secondary_friendly"],
-                 "holidays_today": facts["holidays_today"], "upcoming": facts["upcoming"],
+                 "holidays_today": facts["holidays_today"],
+                 "events_today": scheduled["events_today"],
+                 "upcoming": events.sooner(facts["upcoming"], scheduled["upcoming"]),
                  "cast": context.cast_datetime_facts(cid, scene_id, time_history[-1])}
 
     # Mirrors context._weather_data. Derived rather than fixtured: a constant

@@ -30,7 +30,7 @@ import {
   type SceneIdea, type SceneIdeaDraft, type SceneIntentResult, type SceneLocation,
   type SceneBreak, type SceneBreakAnswer,
   type SceneMeta, type ScenePage, type SceneSuggestion, type SceneUsage,
-  type SceneWeather, type SearchMode,
+  type SceneWeather, type ScheduledEvent, type SearchMode,
   type SearchResult, type Sheet, type SheetCoverage, type SheetExpected, type StagedEdit,
   type StoreConflicts, type Style, type StyleDetail, type StyleDraft, type Suggestion,
   type Timeline, type TimelineEvent, type WeatherOverrideBody, type WeatherRangeBody,
@@ -818,8 +818,30 @@ export const api = {
   previewAdvance: (cid: string, body: AdvanceRequest) =>
     request<{ digest: AdvanceDigest }>("POST", `/api/campaigns/${cid}/advance/preview`, body),
   advanceTime: (cid: string, body: AdvanceRequest) =>
-    request<{ ok: boolean; moved: boolean; now: string; friendly: string; digest: AdvanceDigest }>(
+    /** `fired` is the subset of `digest.events` this move actually stamped —
+     *  empty for a backward correction, which reports what it un-lived without
+     *  un-firing it. */
+    request<{ ok: boolean; moved: boolean; now: string; friendly: string;
+              digest: AdvanceDigest; fired: ScheduledEvent[] }>(
       "POST", `/api/campaigns/${cid}/advance`, body),
+
+  // ---- scheduled events (#101) ----
+  campaignEvents: (cid: string) =>
+    // `fresh`: the clock fires events, so a cached list would show a campaign
+    // its own past as still upcoming.
+    request<{ events: ScheduledEvent[] }>("GET", `/api/campaigns/${cid}/events`,
+                                          undefined, { fresh: true }),
+  createCampaignEvent: (cid: string, body: { name: string; date: string; note?: string }) =>
+    request<{ ok: boolean; id: string }>("POST", `/api/campaigns/${cid}/events`, body),
+  /** Every field is optional: what is not sent keeps the stored value. */
+  updateCampaignEvent: (cid: string, eid: string,
+                        body: { name?: string; date?: string; note?: string }) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/events/${eid}`, body),
+  /** Take back a fire stamp — the undo for an advance made by mistake. */
+  unfireCampaignEvent: (cid: string, eid: string) =>
+    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/events/${eid}/unfire`),
+  deleteCampaignEvent: (cid: string, eid: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/events/${eid}`),
 
   // ---- weather (#45, #195) and climates (#40) ----
   getSceneWeather: (cid: string, sid: string, opts?: { location?: string; native?: string }) => {

@@ -968,6 +968,21 @@ def test_today_block_present_when_dated(monkeypatch, tmp_path):
     assert "Christmas Day" in today
 
 
+def test_today_block_carries_scheduled_events(monkeypatch, tmp_path):
+    """The campaign's own dated events (#101) land in the same block as the
+    calendar's holidays: to the model reading it, both are "what today is"."""
+    from grimoire.store import events
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    events.create(cid, "The envoy arrives", "2026-12-25")
+    events.create(cid, "The Regatta", "2026-12-28")
+    sid = scenes.set_datetime(cid, sid, "2026-12-25")["id"]  # first date set renames the scene
+    today = next(s["text"] for s in context.context_sections(cid, sid) if s["label"] == "Today")
+    assert "Scheduled today: The envoy arrives." in today
+    # The nearer of the next holiday and the next event, through one merge rule
+    # (`events.sooner`) the suggestion snapshot shares.
+    assert "Upcoming: The Regatta in 3 days." in today
+
+
 def test_no_today_block_when_undated(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     assert "Today" not in [s["label"] for s in context.context_sections(cid, sid)]

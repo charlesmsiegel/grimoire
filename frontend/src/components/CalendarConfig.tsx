@@ -60,6 +60,24 @@ export function CalendarConfig({ cid }: { cid: string }) {
           </select>
         </label>
       )}
+      {/* The campaign's one aging knob (#103), here because it is a fact about
+          how this campaign reckons time and this is where those live —
+          calendar.json holds it beside the calendars themselves. Empty means
+          "no opinion" and saves as 0, which the store answers with its own
+          default rather than a threshold that would call every record stale on
+          the day it was written. */}
+      <label>
+        Stale after
+        <input type="number" aria-label="Stale after days" min={1}
+               value={cfg.stale_after_days || ""}
+               onChange={(e) => {
+                 setSaved(false);
+                 setCfg({ ...cfg!, stale_after_days: parseInt(e.target.value, 10) || 0 });
+               }} />
+      </label>
+      <div className="field-hint">
+        Days a thread or commitment may go untouched before the ledger calls it stale.
+      </div>
       <button className="primary" onClick={save}>Save</button>
       {saved && <span className="field-hint">Saved.</span>}
     </div>

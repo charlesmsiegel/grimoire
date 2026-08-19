@@ -92,6 +92,9 @@ def test_build_snapshot_dormancy_counts_scenes_since_last_advance(monkeypatch, t
 
 def test_build_prompt_includes_signals():
     snap = {"now": "2026-01-01", "friendly": "Jan 1", "holidays_today": ["New Year"],
+            # A campaign-scheduled event (#101) beside the calendar's holiday:
+            # the prompt line carries both, from two different sources.
+            "events_today": ["The envoy arrives"],
             "upcoming": {"name": "Festival", "in_days": 5},
             "birthdays": [{"name": "Ann", "age": 30, "when": "today"}],
             "story_so_far": [{"one_line": "They met at the keep.", "location": "The Keep", "date": "2026-01-01"}],
@@ -111,13 +114,16 @@ def test_build_prompt_includes_signals():
     assert "Ann" in user and "a healer" in user
     assert "Doran" in user and "Not yet appeared" in user
     assert "The Keep" in user and "New Year" in user and "today" in user
+    # Both halves of the date line: the calendar's holiday and the campaign's
+    # own scheduled event (#101), which reach it from different files.
+    assert "Scheduled today: The envoy arrives." in user
     assert "They met at the keep." in user
     assert "Appeared earlier, now offstage:" in user and "Mira" in user
     assert "Kit (the player character)" in user
 
 
 def test_standard_instruction_enforces_presence_and_gender():
-    snap = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None, "birthdays": [],
+    snap = {"now": "", "friendly": "", "holidays_today": [], "events_today": [], "upcoming": None, "birthdays": [],
             "story_so_far": [], "open_threads": [], "cast": [], "available_locations": []}
     system = suggest.build_prompt(snap)[0]["content"]
     assert "Never assume a character is present" in system
@@ -125,7 +131,7 @@ def test_standard_instruction_enforces_presence_and_gender():
 
 
 def test_offscreen_instruction_keeps_presence_discipline():
-    snap = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None, "birthdays": [],
+    snap = {"now": "", "friendly": "", "holidays_today": [], "events_today": [], "upcoming": None, "birthdays": [],
             "story_so_far": [], "open_threads": [], "cast": [], "available_locations": []}
     system = suggest.build_prompt(snap, offscreen=True)[0]["content"]
     assert "OFFSCREEN" in system
@@ -249,7 +255,7 @@ def test_parse_greeting_picks_validates_dedupes_and_keeps_order(monkeypatch, tmp
 
 # ---- suggested dates (per-suggestion "date" + top-level "next_date") ----
 def test_build_prompt_requests_dates_only_with_a_current_date():
-    snap = {"now": "2026-01-01", "friendly": "Jan 1", "holidays_today": [], "upcoming": None,
+    snap = {"now": "2026-01-01", "friendly": "Jan 1", "holidays_today": [], "events_today": [], "upcoming": None,
             "birthdays": [], "open_threads": [], "story_so_far": [],
             "cast": [], "available_locations": []}
     assert "next_date" in suggest.build_prompt(snap)[0]["content"]
@@ -339,7 +345,7 @@ def test_parse_intent_treats_a_non_string_field_as_missing(monkeypatch, tmp_path
 
 # ---- direction (#316) ----
 def test_direction_reaches_the_prompt():
-    snap = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None,
+    snap = {"now": "", "friendly": "", "holidays_today": [], "events_today": [], "upcoming": None,
             "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
             "available_locations": []}
     msgs = suggest.build_prompt(snap, None, direction="something at sea")
@@ -348,7 +354,7 @@ def test_direction_reaches_the_prompt():
 
 
 def test_no_direction_omits_the_direction_block():
-    snap = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None,
+    snap = {"now": "", "friendly": "", "holidays_today": [], "events_today": [], "upcoming": None,
             "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
             "available_locations": []}
     msgs = suggest.build_prompt(snap, None, direction="")
@@ -357,7 +363,7 @@ def test_no_direction_omits_the_direction_block():
 
 
 def test_direction_is_truncated_to_the_limit():
-    snap = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None,
+    snap = {"now": "", "friendly": "", "holidays_today": [], "events_today": [], "upcoming": None,
             "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
             "available_locations": []}
     msgs = suggest.build_prompt(snap, None, direction="x" * 900)

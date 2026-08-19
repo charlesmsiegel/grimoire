@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 from .. import prompts
-from . import atomic
+from . import atomic, fieldtext
 from .campaigns import paths as campaigns_paths
 
 STATUSES = ("open", "advanced", "closed")
@@ -152,8 +152,12 @@ def _field(value, fallback: str = "") -> str:
     ledger route carried a local copy of it for this module because this
     projection did not coerce, and that copy is now belt-and-braces rather than
     the only guard.
+
+    The rule itself lives in `fieldtext.text`, which nine modules had grown a
+    private copy of; this name stays because every call site in here reads
+    better for it, and because it is what the reasoning above is about.
     """
-    return value.strip() if isinstance(value, str) else fallback
+    return fieldtext.text(value, fallback)
 
 
 def open_threads(cid: str) -> list[dict]:

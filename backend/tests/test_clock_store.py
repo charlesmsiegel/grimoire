@@ -343,7 +343,9 @@ def test_observe_moves_the_clock_forward(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     clock.advance(cid, to="2026-05-01", reason="start")
     out = clock.observe(cid, "2026-05-09", "scene 002")
-    assert out == {"moved": True, "now": "2026-05-09"}
+    # `fired` is the scheduled events this move crossed (#101) — none here,
+    # and empty rather than absent so every caller can read one shape.
+    assert out == {"moved": True, "now": "2026-05-09", "fired": []}
     row = clock.read(cid)["log"][-1]
     assert (row["from"], row["to"], row["reason"]) == ("2026-05-01", "2026-05-09", "scene 002")
     assert row["at"]   # stamped, not merely present — an unstamped row cannot be ordered
@@ -352,7 +354,8 @@ def test_observe_moves_the_clock_forward(monkeypatch, tmp_path):
 def test_observe_never_moves_the_clock_backward(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     clock.advance(cid, to="2026-05-01", reason="start")
-    assert clock.observe(cid, "2026-04-01", "a flashback") == {"moved": False, "now": "2026-05-01"}
+    assert clock.observe(cid, "2026-04-01", "a flashback") == {
+        "moved": False, "now": "2026-05-01", "fired": []}
     assert len(clock.read(cid)["log"]) == 1
 
 

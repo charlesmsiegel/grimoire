@@ -1,6 +1,9 @@
 {#- The in-world date block. Vars: today (None, or a dict with:
       friendly, weekday, secondary_friendly (str, may be ""),
-      holidays_today ([str]), upcoming ({name, in_days} | None),
+      holidays_today ([str]), events_today ([str] — this campaign's own
+      scheduled events falling today, #101),
+      upcoming ({name, in_days} | None — the sooner of the next holiday and the
+      next scheduled event),
       cast ([{name, age, birthday_today}] — in-scene actors with birthdates)). -#}
 {%- if today -%}
 {%- set lines = [] -%}
@@ -10,6 +13,7 @@
 {%- set _ = lines.append("It is " ~ today.friendly ~ " (" ~ today.weekday ~ ").") -%}
 {%- endif -%}
 {%- if today.holidays_today -%}{%- set _ = lines.append("Holidays today: " ~ (today.holidays_today | join(", ")) ~ ".") -%}{%- endif -%}
+{%- if today.events_today -%}{%- set _ = lines.append("Scheduled today: " ~ (today.events_today | join(", ")) ~ ".") -%}{%- endif -%}
 {%- if today.upcoming -%}{%- set _ = lines.append("Upcoming: " ~ today.upcoming.name ~ " in " ~ today.upcoming.in_days ~ " days.") -%}{%- endif -%}
 {%- if today.cast -%}
 {%- set bits = [] -%}
