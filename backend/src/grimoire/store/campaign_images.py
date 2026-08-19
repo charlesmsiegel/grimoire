@@ -64,9 +64,7 @@ DIRNAME = "images"
 #: allocation happens.
 MAX_BYTES = 25 * 1024 * 1024
 
-#: The 413 text, shared with the route that also re-checks the bytes it got
-#: (``size`` is Optional in the ASGI contract, so a client that omits it must
-#: not buy an unbounded read).
+#: The 413 text, shared by the route's pre-read check and ``validate_size``.
 TOO_LARGE = "image is too large (max 25 MB)"
 
 #: Characters an addressable name may not contain. Every one of them breaks the
@@ -90,6 +88,26 @@ TOO_LARGE = "image is too large (max 25 MB)"
 #: not English, and a name in any script survives a URL and a markdown link
 #: unharmed. What cannot survive is punctuation the surrounding syntax owns.
 UNADDRESSABLE = frozenset("()<>#?%\"'`\\") | frozenset(" \t\n\r\v\f")
+
+
+class ImageTooLarge(Exception):
+    """The upload is bigger than `MAX_BYTES` (HTTP 413)."""
+
+
+def validate_size(data: bytes) -> None:
+    """Re-check the bytes actually received.
+
+    The check that *matters* is the route's, from ``UploadFile.size``, before
+    ``read()`` materializes the body as one `bytes` object -- that allocation is
+    the whole thing ``MAX_BYTES`` exists to bound, and a cap enforced only after
+    reading protects nothing. This is the belt to those braces, and it earns its
+    place because ``size`` is Optional in the ASGI contract: a client, or a
+    future transport, that leaves it None would otherwise buy an unbounded read.
+    Two checks, one answer -- the split ``store.covers`` already makes, and here
+    rather than inline in the route so both halves are reachable from a test.
+    """
+    if len(data) > MAX_BYTES:
+        raise ImageTooLarge(TOO_LARGE)
 
 
 def addressable(name: str) -> bool:
@@ -144,6 +162,23 @@ def image_path(cid: str, name: str) -> Path | None:
     not about what the picker offers.
     """
     return assets.path_in(images_dir(cid), name, supported_only=True)
+
+
+def image_version(cid: str, name: str) -> str:
+    """Cache-busting token for `name`'s current bytes, "" when there is none.
+
+    Swallows `OSError` for the reason ``covers.cover_version`` does: this
+    resolves a path and then stats it, and the file can go between the two --
+    a sync client, another device. A missing token costs one revalidation; a
+    500 would cost the caller the answer to a write that already landed.
+    """
+    p = image_path(cid, name)
+    if p is None:
+        return ""
+    try:
+        return assets.image_version(p)
+    except OSError:
+        return ""
 
 
 def put_image(cid: str, name: str, data: bytes, ext: str) -> str:

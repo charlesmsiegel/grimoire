@@ -1016,14 +1016,23 @@ def test_campaign_library_refuses_a_name_no_post_could_link_to(client, name):
     assert not (store.campaigns.campaign_root(cid) / "assets" / "images").exists()
 
 
-def test_campaign_library_refuses_an_oversized_upload(client, monkeypatch):
-    """The 413 comes from `UploadFile.size`, before `read()` materializes the
-    whole body as one `bytes` object -- that allocation is what the cap exists
-    to bound on Android."""
+def test_campaign_library_oversized_upload_is_rejected_before_it_is_read(client, monkeypatch):
+    """The 413 must land without `read()` ever materializing the body.
+
+    That allocation is the whole reason `MAX_BYTES` exists (the Android/Chaquopy
+    memory profile), so a cap enforced only after reading protects nothing —
+    which is why this proves the read did not happen rather than merely that the
+    status was 413. `validate_size` covers the other half, where `UploadFile.size`
+    is absent; `test_campaign_images_store.py` reaches that one."""
     _wid, cid = _campaign(client)
-    monkeypatch.setattr(store.campaign_images, "MAX_BYTES", 8)
+
+    async def _no(self, *a, **k):
+        raise AssertionError("the body was read before the size was checked")
+    monkeypatch.setattr("starlette.datastructures.UploadFile.read", _no)
+
+    huge = b"\x89PNG" + b"\0" * store.campaign_images.MAX_BYTES
     r = client.put(f"/api/campaigns/{cid}/images/map",
-                   files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+                   files={"file": ("a.png", io.BytesIO(huge), "image/png")})
     assert r.status_code == 413 and r.json()["detail"] == store.campaign_images.TOO_LARGE
     assert not (store.campaigns.campaign_root(cid) / "assets" / "images").exists()
 

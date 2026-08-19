@@ -1814,10 +1814,11 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .image-picker-tile img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
 .image-picker-tile span { font-size: 11px; font-family: var(--fm); overflow-wrap: anywhere; }
 .image-picker-remove { position: absolute; top: 2px; right: 2px; padding: 0 5px; line-height: 1.4; }
-/* A <label> wrapping a hidden <input type="file">: the file control cannot be
-   styled, and a label is what lets a keyboard reach it. */
-.image-picker-add { cursor: pointer; padding: 6px 12px; }
-.image-picker-add input { display: none; }
+/* The Add row is a label over a plain file input (see PostImagePicker.tsx for
+   why it is not a styled label over a hidden one), so it stacks rather than
+   sitting in the button row. */
+.image-picker .form-actions { flex-wrap: wrap; align-items: center; }
+.image-picker-backdrop:focus { outline: none; }
 
 .chooser-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 30; }
 .chooser { background: var(--panel); border: 1px solid var(--muted); padding: 20px; width: min(560px, 92vw); max-height: 80vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }

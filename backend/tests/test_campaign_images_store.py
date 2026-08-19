@@ -137,6 +137,29 @@ def test_a_file_that_is_not_ours_is_neither_listed_nor_swept(cid):
     assert campaign_images.image_path(cid, "map") is None
 
 
+def test_the_byte_cap_is_re_checked_on_what_was_actually_received(cid, monkeypatch):
+    """The route refuses an oversized upload from `UploadFile.size` before it
+    reads the body — but `size` is Optional in the ASGI contract, so a client
+    that omits it would otherwise buy an unbounded read. This is the belt."""
+    monkeypatch.setattr(campaign_images, "MAX_BYTES", 8)
+    campaign_images.validate_size(b"12345678")            # exactly at the cap
+    with pytest.raises(campaign_images.ImageTooLarge) as exc:
+        campaign_images.validate_size(b"123456789")
+    assert str(exc.value) == campaign_images.TOO_LARGE
+
+
+def test_a_version_token_survives_the_file_going_away(cid, monkeypatch):
+    """`image_version` resolves a path and then stats it, and a synced store can
+    lose the file between the two. A write that already landed must not answer
+    500 because its cache token could not be read."""
+    assert campaign_images.image_version(cid, "map") == ""      # nothing stored
+    campaign_images.put_image(cid, "map", _png(), "png")
+    assert campaign_images.image_version(cid, "map") != ""
+    monkeypatch.setattr(assets, "image_version",
+                        lambda p: (_ for _ in ()).throw(OSError("gone")))
+    assert campaign_images.image_version(cid, "map") == ""
+
+
 def test_delete_confirms_the_removal(cid, monkeypatch):
     """`assets.delete_in` swallows a failed unlink by design; here the unlink IS
     the operation, so a Remove that removed nothing must not answer OK."""

@@ -953,3 +953,30 @@ test("getCalendarMonths asks the scope's own calendar for its months", async () 
   expect(fetchMock).toHaveBeenLastCalledWith(
     "/api/worlds/realm/calendar/months?year=5786", expect.objectContaining({ method: "GET" }));
 });
+
+test("the campaign image library's four URLs are the four routes that serve it", async () => {
+  // Worth pinning harder than most: `campaignImageUrl`'s output is not merely
+  // fetched, it is WRITTEN INTO A POST and saved (#376). A wrong template here
+  // does not fail a request — it files a permanently broken reference into a
+  // transcript, and every export that reads it degrades the image to alt text.
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  expect(api.campaignImageUrl("run", "coastline")).toBe("/api/campaigns/run/images/coastline");
+  expect(api.campaignImageUrl("run", "coastline", { w: 160 }))
+    .toBe("/api/campaigns/run/images/coastline?w=160");
+  expect(api.campaignImageUrl("run", "coastline", { v: "a1" }))
+    .toBe("/api/campaigns/run/images/coastline?v=a1");
+
+  await api.listCampaignImages("run");
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/campaigns/run/images", expect.objectContaining({ method: "GET" }));
+
+  await api.putCampaignImage("run", "coastline", new File(["x"], "c.png"));
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/campaigns/run/images/coastline", expect.objectContaining({ method: "PUT" }));
+
+  await api.deleteCampaignImage("run", "coastline");
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/campaigns/run/images/coastline", expect.objectContaining({ method: "DELETE" }));
+});

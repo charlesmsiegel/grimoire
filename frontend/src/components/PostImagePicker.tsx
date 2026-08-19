@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { CampaignImage } from "../api/types";
 
@@ -45,6 +45,17 @@ export function freeName(base: string, taken: string[]): string {
  *  seeing nothing: a plain-text export, and a model sent the transcript as text,
  *  get the alt text and only the alt text. */
 export function insertion(name: string, url: string): string {
+  // A BARE url, with no `?v=` token, even though the picker has one in hand and
+  // uses it for the thumbnails. A `?v=` URL is answered `immutable, max-age=1y`,
+  // and this one is about to be written into a transcript that outlives every
+  // cache: replacing the image under the same name would then leave the post
+  // pinned to bytes that are gone for a year. Bare revalidates, which an ETag
+  // answers with a 304.
+  //
+  // Neither half needs escaping. `]` would close the alt text and `)` the
+  // destination, and a name can contain neither: `assets._addressable_name`
+  // refuses the glob metacharacters (`[`, `]`) and
+  // `store.campaign_images.addressable` the rest of the link punctuation.
   return `![${name}](${url})`;
 }
 
@@ -61,6 +72,11 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
   // Bumped after every upload and removal so the effect below re-reads the
   // library rather than this component keeping a second, divergent copy of it.
   const [revision, setRevision] = useState(0);
+  const backdrop = useRef<HTMLDivElement>(null);
+  // Focus the backdrop ONCE, on mount, so Escape has somewhere to land. As a
+  // ref callback this would re-run on every render and pull focus back off
+  // whatever the reader had just tabbed to.
+  useEffect(() => { backdrop.current?.focus(); }, []);
 
   const isLibrary = target.kind === "campaign";
   // One dependency for "which images is this picker showing", so switching to a
@@ -129,6 +145,13 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
   }
 
   async function remove(name: string) {
+    // Confirmed, unlike the cover's Remove: a cover is referenced by nothing,
+    // and one of these can already be linked from forty posts, which would then
+    // render as broken images with no way back but re-uploading under the very
+    // same name. Same posture the cut and the fork take.
+    if (!window.confirm(
+      `Remove "${name}" from this campaign? Posts that already link to it will `
+      + "show a broken image.")) return;
     setBusy(true);
     setError(null);
     try {
@@ -143,8 +166,13 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
 
   const empty = groups !== null && groups.every((g) => g.images.length === 0);
   return (
+    // Escape closes, handled on the backdrop rather than on `document`: the
+    // backdrop covers the page and takes focus on mount, so a keystroke aimed
+    // at whatever is behind the picker can never reach this.
     <div className="image-picker-backdrop" role="dialog"
          aria-label={`Insert an image — ${target.name}`}
+         tabIndex={-1} ref={backdrop}
+         onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
          onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="image-picker">
         <h3>Insert an image</h3>
@@ -162,7 +190,10 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
               : `Nothing stored for ${target.name} yet — art is added in the library editor.`}
           </p>
         )}
-        {(groups ?? []).map((g) => (
+        {/* An empty group is dropped rather than rendered as a heading over
+            nothing — which is what the library's single group would be before
+            the first upload, under the hint that already says so. */}
+        {(groups ?? []).filter((g) => g.images.length > 0).map((g) => (
           <div className="side-section" key={g.key}>
             <h4>{g.label}</h4>
             <div className="image-picker-grid">
@@ -187,12 +218,19 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
         ))}
         <div className="form-actions">
           {isLibrary && (
-            <label className="btn-chrome image-picker-add">
-              {busy ? "Working…" : "Add image…"}
-              <input type="file" accept="image/*" aria-label="Add a campaign image"
-                     disabled={busy}
+            // A plain, visible file input with a label, the way `CampaignCover`
+            // does it. A `display: none` input inside a styled label looks
+            // tidier and is unreachable by keyboard, which is worse than tidy.
+            // `accept` lists what the store will actually keep rather than
+            // `image/*`, which offers AVIF and BMP the server refuses.
+            <>
+              <label className="field-hint" htmlFor="campaign-library-file">
+                {busy ? "Working…" : "Add an image"}
+              </label>
+              <input id="campaign-library-file" type="file" disabled={busy}
+                     accept="image/png,image/jpeg,image/gif,image/webp"
                      onChange={(e) => { void upload(e.target.files?.[0]); e.target.value = ""; }} />
-            </label>
+            </>
           )}
           <button className="subtle" type="button" onClick={onClose}>Cancel</button>
         </div>
