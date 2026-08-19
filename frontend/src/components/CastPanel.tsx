@@ -11,12 +11,13 @@ import { SuggestedCast } from "./SuggestedCast";
  *  opener to start it with.
  *
  *  Each row owns its own load/save (`SceneSettingField`, `SceneDateField`,
- *  `SuggestedCast`, `OpenerComposer`); what stays here is the state two of them
- *  share — the cast, and the actor the picker has selected, which is also the
- *  character an opener can be saved against. Everything those rows fail at
- *  reports through the one banner below, so the panel has a single place to
- *  look. `SuggestedCast` is the exception and keeps its own: it renders in the
- *  inspector too, which has no banner of this one's to borrow. */
+ *  `SuggestedCast`, `OpenerComposer`); what stays here is the state they share —
+ *  the cast, and the character list the picker and the opener block both draw
+ *  from (each choosing from it independently: an opener names its own greeting
+ *  target, #12). Everything those rows fail at reports through the one banner
+ *  below, so the panel has a single place to look. `SuggestedCast` is the
+ *  exception and keeps its own: it renders in the inspector too, which has no
+ *  banner of this one's to borrow. */
 export function CastPanel({
   cid, sid, ready, onSeeded, onSceneRenamed, initialPrompt, pcless, sceneLocked,
   onRenaming,
@@ -61,7 +62,6 @@ export function CastPanel({
   }, [cid]);
 
   const options = kind === "characters" ? chars : pcs;
-  const selected = kind === "characters" ? chars.find((c) => c.id === actorId) ?? null : null;
   const nameOf = useCallback(
     (id: string) => chars.find((c) => c.id === id)?.name ?? id, [chars]);
 
@@ -123,7 +123,7 @@ export function CastPanel({
         <SuggestedCast cid={cid} sid={sid} cast={cast} nameOf={nameOf} onCast={reloadCast} />
 
         <OpenerComposer cid={cid} sid={sid} ready={ready} initialPrompt={initialPrompt}
-                        character={selected} onSeeded={onSeeded} onError={setError} />
+                        characters={chars} onSeeded={onSeeded} onError={setError} />
       </div>
     </details>
   );
