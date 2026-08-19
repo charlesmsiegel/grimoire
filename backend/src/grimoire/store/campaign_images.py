@@ -114,17 +114,20 @@ def addressable(name: str) -> bool:
     """Can a post link to this image?
 
     The rule ``put_image`` gates on and ``list_images`` filters by, and they
-    must be the same rule: #373's lesson was a token that named a file the
-    server would not serve, and offering a picker tile whose insert renders as
-    broken markdown is that bug wearing a different hat. Both ends ask this, so
-    a name the library accepts is a name the library will offer, and vice versa.
+    have to be the SAME rule, including the half this module does not own:
+    #373's lesson was a token that named a file the server would not serve, and
+    offering a picker tile whose insert 404s -- or renders as broken markdown --
+    is that bug wearing a different hat.
 
-    ``assets`` still owns the filesystem half (``safe_id``, no ``.``, no glob
-    metacharacter, ``promote-tmp`` reserved); this is only the URL half on top.
-    A name that passes here can still be refused by ``put_in``, which raises the
-    same ``ValueError`` this does -- one answer, one status, either way.
+    So it is a conjunction, not just the URL half. ``assets.storable`` is what
+    ``put_in`` will write under and ``path_in`` will resolve back (``safe_id``,
+    no ``.``, no glob metacharacter, ``promote-tmp`` reserved); ``UNADDRESSABLE``
+    is what a link can carry. Dropping the first half is not hypothetical: this
+    directory is one a sync client writes into, ``assets.list_in`` shows a
+    ``promote-tmp.png`` deliberately (it is crash residue worth seeing in a
+    per-version folder), and here that is simply a file nothing can ever serve.
     """
-    return bool(name) and not any(c in UNADDRESSABLE for c in name)
+    return assets.storable(name) and not any(c in UNADDRESSABLE for c in name)
 
 
 def images_dir(cid: str) -> Path:

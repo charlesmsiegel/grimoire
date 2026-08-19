@@ -310,6 +310,22 @@ test("picking an image opens the post for editing with the reference appended", 
     "The room is cold.\n\n![coastline](/api/campaigns/run/images/coastline)"));
 });
 
+test("a post carrying an image reference renders it as an image", async () => {
+  // The end of the whole round trip, and the one claim neither the picker's
+  // tests nor the backend's can make: the transcript's own `RenderedMarkdown`
+  // (react-markdown + remarkGfm, with the comment and quote rehype plugins)
+  // turns the reference the picker wrote into an <img> pointing at the route
+  // that serves it. If a plugin ever swallowed image nodes, this fails here
+  // rather than in a campaign.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "assistant",
+      content: "The coast.\n\n![coastline](/api/campaigns/run/images/coastline)" }] });
+  renderCampaign();
+  const img = await within(await screen.findByTestId("stream")).findByAltText("coastline");
+  expect(img.getAttribute("src")).toBe("/api/campaigns/run/images/coastline");
+});
+
 test("a dice-roll line is offered no image button, for the reason it is offered no Edit", async () => {
   // Its text has to stay in lockstep with an immutable rolls.json entry, and an
   // insert rewrites the post.
