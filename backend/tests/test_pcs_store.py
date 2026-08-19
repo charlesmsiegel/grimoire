@@ -135,10 +135,11 @@ def test_version_named_like_the_meta_file_does_not_land_on_it(tmp_path):
     assert pcs.create_version(tmp_path, pid, "pc", pcs.blank_persona("Rook")) not in ("pc", vid)
 
 
-def test_version_name_survives_a_slug_with_nothing_in_it(tmp_path):
-    """The other end of the same argument: `slugify` answers "untitled" rather
-    than "", so an unslugifiable version name names a file instead of the
-    directory itself."""
-    pid, vid = pcs.create_pc(tmp_path, "Rook", [], "!!!")
+@pytest.mark.parametrize("version_name", ["", "!!!"])
+def test_version_name_survives_a_slug_with_nothing_in_it(tmp_path, version_name):
+    """The other end of the same argument, and the one a form sends: `slugify`
+    answers "untitled" rather than "", so a version name with nothing to slug
+    names a file instead of the PC's directory itself."""
+    pid, vid = pcs.create_pc(tmp_path, "Rook", [], version_name)
     assert vid == "untitled"
     assert pcs.read_persona(tmp_path, pid, vid)["name"] == "Rook"

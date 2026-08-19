@@ -63,19 +63,19 @@ def _version_path(root: Path, pid: str, vid: str) -> Path:
 
 
 def _new_version_id(root: Path, pid: str, version_name: str) -> str:
-    """A version id nothing under `pid` is using -- `pc.md` included.
+    """A version id nothing under `pid` is using -- the meta file included.
 
     A version's file and the container's meta share one directory and one
     extension, so `version_name="PC"` slugs onto `pc.md`: `create_pc` wrote the
     persona there and then wrote the meta over it, leaving a PC that answered
-    201 and 404 in the same breath (`_version_ids` skips `pc.md`, so `read_pc`
+    200 and 404 in the same breath (`_version_ids` skips `pc.md`, so `read_pc`
     saw no versions) while holding the name's slug against every later PC.
     `create_version` never had the bug -- by then `pc.md` exists, so its own
     existence check already stepped around it -- and now both allocate ids
     through the one function that knows why (#14)."""
     def taken(vid: str) -> bool:
         p = _version_path(root, pid, vid)
-        return p.name == _META_NAME or p.exists()
+        return p == _meta_path(root, pid) or p.exists()
     return uniquify(slugify(version_name), taken)
 
 
@@ -206,7 +206,7 @@ def list_pcs(root: Path) -> list[dict]:
     d = _pcs_dir(root)
     if d.exists():
         for pd in sorted(p for p in d.iterdir()
-                         if p.is_dir() and (p / "pc.md").exists() and safe_id(p.name)):
+                         if p.is_dir() and (p / _META_NAME).exists() and safe_id(p.name)):
             pid = pd.name
             meta = _read_meta(root, pid)
             version_ids = _version_ids(root, pid)
@@ -315,7 +315,7 @@ def dir_hash(root: Path, pid: str) -> str | None:
 def pc_count(root: Path) -> int:
     d = _pcs_dir(root)
     return sum(1 for p in d.iterdir()
-               if p.is_dir() and (p / "pc.md").exists() and safe_id(p.name)) if d.exists() else 0
+               if p.is_dir() and (p / _META_NAME).exists() and safe_id(p.name)) if d.exists() else 0
 
 
 def pc_refs(root: Path) -> list[str]:
@@ -323,4 +323,4 @@ def pc_refs(root: Path) -> list[str]:
     if not d.exists():
         return []
     return sorted(p.name for p in d.iterdir()
-                  if p.is_dir() and (p / "pc.md").exists() and safe_id(p.name))
+                  if p.is_dir() and (p / _META_NAME).exists() and safe_id(p.name))
