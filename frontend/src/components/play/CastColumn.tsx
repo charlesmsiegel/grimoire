@@ -64,13 +64,14 @@ function Tile(
  *  closed. Continuity is the thing this app is *for*, so it sits beside the
  *  transcript permanently and nothing has to be reopened to check it. */
 export default function CastColumn(
-  { cid, sid, posts, refreshKey, cast, roster, briefing, onOpen, onCastChanged }: {
+  { cid, sid, hasPosts, refreshKey, cast, roster, briefing, onOpen, onCastChanged }: {
     cid: string;
     /** The open scene, or "" when none is. The cast-change scan is per scene. */
     sid: string;
-    /** Posts in the open scene's window, and the parent's scene-read counter:
-     *  between them, whether the cast-change scan runs and when it re-runs. */
-    posts: number;
+    /** Whether the open scene has any posts, and the parent's scene-read
+     *  counter: between them, whether the cast-change scan runs and when it
+     *  re-runs. */
+    hasPosts: boolean;
     refreshKey: number;
     cast: Actor[];
     roster: RosterEntry[];
@@ -98,7 +99,7 @@ export default function CastColumn(
       )}
 
       {/* Directly under the grid: what the last turn says the grid should be. */}
-      {sid && <CastChanges cid={cid} sid={sid} posts={posts} refreshKey={refreshKey}
+      {sid && <CastChanges cid={cid} sid={sid} hasPosts={hasPosts} refreshKey={refreshKey}
                            onChanged={onCastChanged} />}
 
       <div className="column-section">

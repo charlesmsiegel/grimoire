@@ -2297,7 +2297,7 @@ def get_scene_cast(cid: str, sid: str):
 
 
 def _cast_role(cid: str, sid: str, kind: str, role: str | None) -> str:
-    """The role a cast addition will take, or an HTTPException saying why not.
+    """The role a cast addition will take. Raises HTTPException saying why not.
 
     Split out of `_seat_cast_member` so a caller that CREATES the actor first
     (the emergent route) can settle the role before writing anything: a 400
@@ -2397,7 +2397,17 @@ def post_emergent_cast(cid: str, sid: str, body: EmergentCast):
     # character in the campaign that nothing points at.
     role = _cast_role(cid, sid, "characters", body.role)
     char, version = store.overlay.create_character(cid, name)
-    _seat_cast_member(cid, sid, Appear(kind="characters", id=char, version=version, role=role))
+    try:
+        _seat_cast_member(cid, sid, Appear(kind="characters", id=char, version=version, role=role))
+    except store.appearances.AppearError as exc:
+        # Not unreachable, though it takes a deleted character to get here: a
+        # campaign-side delete deliberately does NOT sweep `appearances.json`
+        # (overlay.forget_everywhere names it as out of scope), while
+        # `create_character` allocates ids against the filesystem and the
+        # tombstones only. So a re-used slug can meet its own stale record and
+        # be refused for the role or version that record still holds. 409 says
+        # that; letting it out says 500.
+        raise HTTPException(status_code=409, detail=str(exc))
     return {"character": char, "version": version, "name": name}
 
 

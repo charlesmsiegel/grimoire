@@ -3437,7 +3437,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                      onOpenActor={(kind, id) => setDrawer(
                        { type: "actor", kind: kind as "characters" | "pcs", id })}
                      onRemove={removeSelectedActor} busy={sceneLocked} />
-    : <CastColumn cid={cid} sid={activeId ?? ""} posts={messages.length} refreshKey={ctxKey}
+    : <CastColumn cid={cid} sid={activeId ?? ""} hasPosts={messages.length > 0} refreshKey={ctxKey}
                   cast={cast} roster={roster} briefing={briefing}
                   onOpen={openActor}
                   // A confirmed enter or leave writes a transition line into the

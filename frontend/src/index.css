@@ -606,7 +606,12 @@ select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
 /* The one column section whose rows are answerable: a cast-change candidate
    carries its chips under the line it is asking about (#97). */
 .cast-changes .chips { margin-top: 8px; }
-.cast-changes .brief-meta { text-transform: none; }
+/* The sentence the detector read, quoted back. Prose, not a meta label, so it
+   keeps its own case and wraps like the body text it came from. */
+.cast-quote {
+  font-family: var(--fb); font-weight: 300; font-size: 12px; line-height: 1.5;
+  color: var(--muted); margin-top: 3px; overflow-wrap: anywhere;
+}
 
 /* ---- the context column, dossier state ---- */
 .column-back {
