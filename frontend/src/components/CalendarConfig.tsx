@@ -29,10 +29,23 @@ export function CalendarConfig({ scope, onConfig }: {
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
+    let live = true;
+    // Blanked first, so the form never shows one record's calendar under
+    // another record's Save button: `save` posts to the CURRENT scope, so
+    // pressing it in that window would write the record you left into the one
+    // you are looking at. "Loading calendar…" has no Save to press.
+    setCfg(null);
+    setSaved(false);
+    setError(null);
     api.getCalendarConfig(scope)
-      .then((c) => { setCfg(c); onConfig?.(c); })
-      .catch(() => setCfg(null));
+      .then((c) => { if (live) { setCfg(c); onConfig?.(c); } })
+      .catch(() => { if (live) setCfg(null); });
     api.getCalendarProviders().then((r) => setProviders(r.providers)).catch(() => setProviders([]));
+    return () => { live = false; };
+    // `onConfig` is deliberately not a dependency: callers pass an inline
+    // lambda, and re-running this on every render of the parent would refetch
+    // forever. The scope is the only thing that decides what to load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope.kind, scope.id]);
 
   if (!cfg) return <div className="field-hint">Loading calendar…</div>;

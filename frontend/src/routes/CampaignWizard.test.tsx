@@ -274,3 +274,26 @@ test("a world with an unreadable calendar leaves the picker on its own default",
   await screen.findByText("Realm");
   expect(screen.getByLabelText("Calendar")).toHaveValue("gregorian");
 });
+
+test("switching worlds mid-flight keeps the world you landed on", async () => {
+  // The seed is a controlled input the reader will commit. A slower answer for
+  // the world they left must not overwrite the one they are looking at.
+  (api.listWorlds as any).mockResolvedValue([
+    { id: "w1", name: "Realm", created: "", updated: "", counts: {} },
+    { id: "w2", name: "Saltmarch", created: "", updated: "", counts: {} },
+  ]);
+  let releaseFirst: (v: unknown) => void = () => {};
+  const slow = new Promise((res) => { releaseFirst = res; });
+  (api.getCalendarConfig as any).mockImplementation((scope: { id: string }) =>
+    scope.id === "w1" ? slow : Promise.resolve({
+      primary: { provider: "gregorian", region: "GB", custom_holidays: [], anchor: null },
+      secondary: null, confirmed: true, stale_after_days: 30 }));
+  renderWizard();
+  await screen.findByText("Realm");
+  fireEvent.change(screen.getByLabelText("World"), { target: { value: "w2" } });
+  await waitFor(() => expect(screen.getByLabelText("Holidays region")).toHaveValue("GB"));
+  releaseFirst({ primary: { provider: "hebrew", region: "IL", custom_holidays: [], anchor: null },
+                 secondary: null, confirmed: true, stale_after_days: 30 });
+  await waitFor(() => expect(screen.getByLabelText("Calendar")).toHaveValue("gregorian"));
+  expect(screen.getByLabelText("Holidays region")).toHaveValue("GB");
+});
