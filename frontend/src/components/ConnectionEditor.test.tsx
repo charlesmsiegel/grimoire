@@ -1,7 +1,12 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { ConnectionEditor } from "./ConnectionEditor";
 
-vi.mock("../api/client", () => ({
+// `ApiError` is the real class: the offline branch reads `kind` off the
+// rejection, so a hand-rolled stand-in would prove nothing about what the
+// client throws.
+vi.mock("../api/client", async () => ({
+  ...(await vi.importActual<typeof import("../api/client")>("../api/client")),
   api: {
     listConnections: vi.fn(), readConnection: vi.fn(), createConnection: vi.fn(),
     updateConnection: vi.fn(), deleteConnection: vi.fn(), refreshConnectionModels: vi.fn(),
@@ -9,7 +14,7 @@ vi.mock("../api/client", () => ({
   },
 }));
 vi.mock("../api/models", () => ({ getModels: vi.fn(), priceLabel: () => "", contextLabel: () => "" }));
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import { getModels } from "../api/models";
 
 const OPENROUTER = { id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "", model: "anthropic/claude-opus-4.1", post_process: "none", key_set: true, rev: "r1" };
@@ -141,4 +146,36 @@ test("deleting a connection removes it", async () => {
   fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
   await waitFor(() => expect(api.deleteConnection).toHaveBeenCalledWith("zai-glm"));
   window.confirm = original;
+});
+
+test("a model fetch that cannot reach the provider says so, without a link back here", async () => {
+  // Offline, the catalog fetch is the first thing that fails on this page. The
+  // note is the same one the scene view raises (#210) minus its Connections
+  // link, which would point at the page the reader is already reading.
+  (api.refreshConnectionModels as any).mockRejectedValue(
+    new ApiError(502, "connection refused", "network"));
+  render(<MemoryRouter initialEntries={["/connections"]}><ConnectionEditor /></MemoryRouter>);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("z.ai GLM"));
+  fireEvent.click(await screen.findByRole("button", { name: /refresh models/i }));
+  await screen.findByText(/Couldn.t reach the model provider/);
+  expect(screen.getByText(/connection refused/)).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: /Connections/ })).toBeNull();
+});
+
+test("an unreachable model catalog degrades the picker instead of blocking config", async () => {
+  // Offline, the OpenRouter catalog is fetched straight from the browser and
+  // fails; a connection that already names a model must stay editable and
+  // saveable anyway (#210).
+  (getModels as any).mockRejectedValue(new Error("Failed to fetch"));
+  render(<MemoryRouter initialEntries={["/connections"]}><ConnectionEditor /></MemoryRouter>);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("OpenRouter"));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  expect(await screen.findByText(/couldn.t load model list — type a model id/)).toBeInTheDocument();
+  const model = screen.getByDisplayValue("anthropic/claude-opus-4.1");
+  fireEvent.change(model, { target: { value: "qwen3:8b" } });
+  fireEvent.click(screen.getByRole("button", { name: /save connection/i }));
+  await waitFor(() => expect(api.updateConnection).toHaveBeenCalledWith(
+    "openrouter", expect.objectContaining({ model: "qwen3:8b" })));
 });

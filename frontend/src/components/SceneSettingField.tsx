@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type EntitySummary, type SceneLocation } from "../api/client";
-import { errMsg } from "./errMsg";
 
 /** The scene's "Setting" row: where it is now, and a picker that moves it.
  *  Split out of `CastPanel`, which was carrying five of these inline. */
@@ -9,7 +8,8 @@ export function SceneSettingField({ cid, sid, onMoved, onError }: {
   sid: string;
   /** A move appends a transition line, so the host refreshes the stream. */
   onMoved: () => void;
-  onError: (msg: string | null) => void;
+  /** Raw, not stringified — see `OpenerComposer` (#210). */
+  onError: (err: unknown) => void;
 }) {
   const [locations, setLocations] = useState<EntitySummary[]>([]);
   const [setting, setSetting] = useState<SceneLocation | null>(null);
@@ -35,7 +35,7 @@ export function SceneSettingField({ cid, sid, onMoved, onError }: {
       await reload();
       onMoved();
     } catch (err: any) {
-      onError(errMsg(err));
+      onError(err);
     }
   }
 

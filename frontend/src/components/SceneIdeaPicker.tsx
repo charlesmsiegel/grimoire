@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Availability, type SceneIdea, type SceneIdeaDraft,
          type SceneSuggestion } from "../api/client";
 import { errMsg } from "./errMsg";
+import { ErrorNote } from "./ErrorNote";
 import { customDraft, greetingDraft, savedDraft, suggestionDraft,
          type SceneDraft } from "./sceneDraft";
 import type { SceneSuggestionsState } from "./useSceneSuggestions";
@@ -58,12 +59,14 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
   const [saving, setSaving] = useState(false);
   const [typed, setTyped] = useState("");
   const [inferring, setInferring] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Raw, so a generation the model could not be reached for reads as the
+  // offline recovery rather than as a socket error (#210).
+  const [error, setError] = useState<unknown>(null);
 
   useEffect(() => {
     api.availableGreetings(cid, afterSid ?? undefined)
       .then((all) => setGreetings(all.filter((g) => g.available && !!g.pcless === pcless)))
-      .catch((err) => { setGreetings([]); setError(errMsg(err)); });
+      .catch((err) => { setGreetings([]); setError(err); });
   }, [cid, afterSid, pcless]);
 
   // `used` entries are deliberately not shown: they became scenes, and those
@@ -84,7 +87,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
       // A ledger that will not load must not cost the reader the rest of the
       // picker: greetings, generated cards and their own typed idea all still
       // work without it.
-      .catch((err) => { setSaved([]); setError(errMsg(err)); });
+      .catch((err) => { setSaved([]); setError(err); });
   }, [cid, pcless]);
   useEffect(loadSaved, [loadSaved]);
 
@@ -109,7 +112,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
     setSaving(true);
     api.saveSceneIdea(cid, { ...idea, pcless })
       .then(() => { done?.(); loadSaved(); })
-      .catch((err) => setError(errMsg(err)))
+      .catch((err) => setError(err))
       .finally(() => setSaving(false));
   }
 
@@ -117,7 +120,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
     setError(null);
     api.setSceneIdeaStatus(cid, lid, status)
       .then(loadSaved)
-      .catch((err) => setError(errMsg(err)));
+      .catch((err) => setError(err));
   }
 
   // 4 slots: 2 greetings + 2 generated; greetings grow to 4 when nothing will generate
@@ -162,6 +165,12 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
     } catch (err: any) {
       // A miss must leave a usable form, never a dead end — and the warning
       // travels with the draft, because this pane is about to unmount.
+      //
+      // Text, not the rejection, and so no offline note (#210): this is the
+      // one LLM call here whose failure does not stop the reader. They get the
+      // form they asked for either way, and telling someone mid-flow to go to
+      // another page would be advice against what they are already doing. The
+      // banner above says it for every call that DOES stop.
       onPicked(customDraft(text, null, latestDate.current, pcless),
                `${errMsg(err)} — continuing without inferred details.`);
     } finally {
@@ -181,7 +190,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
   const shown = error ?? genError;
   return (
     <>
-      {shown && <div className="banner">{shown}</div>}
+      {shown != null && <div className="banner"><ErrorNote err={shown} /></div>}
 
       <div className="picker">
         <input type="text" aria-label="Direction" className="grow"

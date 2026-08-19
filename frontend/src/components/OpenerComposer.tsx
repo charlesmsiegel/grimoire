@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type CharacterSummary } from "../api/client";
-import { errMsg } from "./errMsg";
 
 /** The "Generate an opener" block: stream a first post for an empty scene,
  *  then adopt it or keep it as a greeting. Split out of `CastPanel`. */
@@ -19,7 +18,9 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
   /** NAVIGATES in the host (`selectScene(activeId)`), so it is only ever called
    *  for the scene this block is still showing. See `live`. */
   onSeeded: () => void;
-  onError: (msg: string | null) => void;
+  /** Raw, not stringified: the panel above renders it, and `kind` is what
+   *  tells it the model could not be reached at all (#210). */
+  onError: (err: unknown) => void;
 }) {
   const [prompt, setPrompt] = useState("");
   const [opener, setOpener] = useState("");
@@ -67,11 +68,11 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
           acc += e.delta;
           setOpener(acc);
         } else if (e.error) {
-          onError(e.error.detail);
+          onError(e.error);
         }
       });
-    } catch (err: any) {
-      onError(errMsg(err));
+    } catch (err: unknown) {
+      onError(err);
     } finally {
       setBusy(false);
       // The backend records an `opener` prompt snapshot for this attempt, and
@@ -97,8 +98,8 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
       await api.firstPost(cid, sid, opener);
       setOpener("");
       onSeeded(); // the adopted opener now shows as the scene's first post
-    } catch (err: any) {
-      onError(errMsg(err));
+    } catch (err: unknown) {
+      onError(err);
     }
   }
 
@@ -113,10 +114,10 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
         name, character: target.id, version, body: opener,
       });
       setOpener("");
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Clearing the preview on a failed save would throw away the only copy
       // of a generation that cost a call, so the text stays put.
-      onError(errMsg(err));
+      onError(err);
     }
   }
 

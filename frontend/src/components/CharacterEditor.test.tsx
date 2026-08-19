@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { CharacterEditor } from "./CharacterEditor";
 
 vi.mock("../api/client", async () => {
@@ -1635,6 +1636,18 @@ test("Generate previews a voice anchor without persisting it (#59)", async () =>
   await waitFor(() => expect((screen.getByLabelText("Voice anchor") as HTMLTextAreaElement).value)
     .toBe("Clipped. Never uses contractions."));
   expect(api.setCharacterVoiceAnchor).not.toHaveBeenCalled();
+});
+
+test("a Generate the model could not be reached for offers the recovery (#210)", async () => {
+  (api.generateCharacterVoiceAnchor as any)
+    .mockRejectedValue(new ApiError(502, "connection refused", "network"));
+  render(<MemoryRouter><CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" /></MemoryRouter>);
+  await openEditForm();
+  await screen.findByLabelText("Voice anchor");
+  const actions = screen.getByText("Save voice anchor").closest(".form-actions") as HTMLElement;
+  fireEvent.click(within(actions).getByText("Generate"));
+  await screen.findByText(/Couldn.t reach the model provider/);
+  expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
 });
 
 test("saving the card version does not discard an anchor draft (#59)", async () => {

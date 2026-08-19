@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type LLMConnection, type LLMConnectionDetail } from "../api/client";
 import { getModels, type Model } from "../api/models";
 import { BLANK_CONNECTION, ConnectionForm } from "./ConnectionForm";
+import { ErrorNote } from "./ErrorNote";
 
 export function ConnectionEditor() {
   const [connections, setConnections] = useState<LLMConnection[]>([]);
@@ -11,7 +12,9 @@ export function ConnectionEditor() {
   const [form, setForm] = useState(BLANK_CONNECTION);
   const [mode, setMode] = useState<"view" | "edit">("edit");
   const [key, setKey] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  // Raw: fetching a model catalog goes out to the provider, so this banner
+  // is one of the places being offline shows up (#210).
+  const [error, setError] = useState<unknown>(null);
   const [orModels, setOrModels] = useState<Model[]>([]);
   const [orError, setOrError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -61,8 +64,8 @@ export function ConnectionEditor() {
         await reload();
         await select(newId);
       }
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(err);
     }
   }
 
@@ -78,6 +81,16 @@ export function ConnectionEditor() {
     setActiveId(next.active_connection_id);
   }
 
+  /** Fetch this connection's model catalog from its provider.
+   *
+   *  A failure here is reported and nothing else: the connection is NOT marked
+   *  unreachable, and the cached list it already has stays exactly where it is
+   *  (#210). One refused catalog fetch is not a standing verdict on an
+   *  endpoint — it can be a proxy, a cold local server, or the reader having
+   *  clicked while their laptop's wifi was reassociating — and a rail badge
+   *  saying "unreachable" would outlive the condition with nothing to clear
+   *  it. "Is this endpoint up" is a poll with its own lifecycle, which is
+   *  #146; this stays a per-call failure. */
   async function refreshModels() {
     if (!id) return;
     const forId = id;
@@ -93,8 +106,8 @@ export function ConnectionEditor() {
       setDetail((d) => (d && d.id === forId && d.rev === result.rev
         ? { ...d, models: result.models, fetched_at: result.fetched_at }
         : d));
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(err);
     } finally {
       setRefreshing(false);
     }
@@ -116,7 +129,7 @@ export function ConnectionEditor() {
       </div>
 
       <div className="editor-body">
-        {error && <div className="banner">{error}</div>}
+        {error != null && <div className="banner"><ErrorNote err={error} /></div>}
         {mode === "view" && id && detail ? (
           <div className="detail-view">
             <div className="detail-main">

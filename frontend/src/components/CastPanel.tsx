@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type Actor, type CharacterSummary, type PCSummary, type RosterEntry } from "../api/client";
-import { errMsg } from "./errMsg";
+import { ErrorNote } from "./ErrorNote";
 import { OpenerComposer } from "./OpenerComposer";
 import { SceneCastList } from "./SceneCastList";
 import { SceneDateField } from "./SceneDateField";
@@ -42,7 +42,10 @@ export function CastPanel({
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [pcs, setPCs] = useState<PCSummary[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  // The raw rejection: the fields below hand theirs up untouched so the
+  // banner can tell "the model could not be reached" from anything else
+  // (#210). `ErrorNote` renders the plain detail for every other kind.
+  const [error, setError] = useState<unknown>(null);
 
   const [kind, setKind] = useState<"characters" | "pcs">("characters");
   const [actorId, setActorId] = useState("");
@@ -75,8 +78,8 @@ export function CastPanel({
       });
       setActorId("");
       await reloadCast();
-    } catch (err: any) {
-      setError(errMsg(err));
+    } catch (err: unknown) {
+      setError(err);
     }
   }
 
@@ -84,7 +87,7 @@ export function CastPanel({
     <details className="cast-panel" open>
       <summary>Cast &amp; scene setup</summary>
       <div className="panel-body">
-        {error && <div className="banner">{error}</div>}
+        {error != null && <div className="banner"><ErrorNote err={error} /></div>}
 
         <SceneSettingField cid={cid} sid={sid} onMoved={onSeeded} onError={setError} />
 

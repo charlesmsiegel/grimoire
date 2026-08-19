@@ -1,11 +1,14 @@
 import { useState } from "react";
 import { api } from "../api/client";
+import { ErrorNote } from "./ErrorNote";
 
 export function TaglinePrompt({ wid, cid, name, onClose, onSaved }:
   { wid: string; cid: string; name: string; onClose: () => void; onSaved?: (text: string) => void }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // The raw rejection, not its text: `kind` is what says the model could
+  // not be reached at all, and stringifying here would throw it away (#210).
+  const [error, setError] = useState<unknown>(null);
 
   async function generate() {
     setBusy(true);
@@ -13,8 +16,8 @@ export function TaglinePrompt({ wid, cid, name, onClose, onSaved }:
     try {
       const { tagline } = await api.generateCharacterTagline(wid, cid);
       setText(tagline);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(err);
     } finally {
       setBusy(false);
     }
@@ -24,8 +27,8 @@ export function TaglinePrompt({ wid, cid, name, onClose, onSaved }:
     if (text.trim()) {
       try {
         await api.setCharacterTagline(wid, cid, text.trim());
-      } catch (err: any) {
-        setError(err.detail ?? String(err));
+      } catch (err: unknown) {
+        setError(err);
         return;
       }
       onSaved?.(text.trim());
@@ -42,7 +45,7 @@ export function TaglinePrompt({ wid, cid, name, onClose, onSaved }:
         </p>
         <textarea aria-label="Tagline" value={text} rows={2}
                   onChange={(e) => setText(e.target.value)} />
-        {error && <div className="banner">{error}</div>}
+        {error != null && <div className="banner"><ErrorNote err={error} /></div>}
         <div className="form-actions">
           <button className="subtle" type="button" disabled={busy} onClick={generate}>
             {busy ? "Generating…" : "Generate"}

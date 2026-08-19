@@ -14,6 +14,7 @@ import { Portrait } from "./Portrait";
 import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import { ClockPanel } from "./ClockPanel";
+import { ErrorNote } from "./ErrorNote";
 import { EventsPanel } from "./EventsPanel";
 import { WeatherWidget } from "./WeatherWidget";
 import { ResponsePresetPicker } from "./ResponsePresetPicker";
@@ -206,7 +207,8 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // one scene sat as a banner over the next indefinitely. Its own state, rather
   // than clearing the shared one on every switch, because that banner is
   // written by four other handlers whose behaviour is not this PR's to change.
-  const [rollingError, setRollingError] = useState<{ key: string; text: string } | null>(null);
+  const [rollingError, setRollingError] =
+    useState<{ key: string; err: unknown } | null>(null);
   // The scene-break detector (#84), stamped with its record for `rolling`'s
   // reason and no lesser one: a proposal is prose ABOUT a story, so showing one
   // campaign's under another's scene reads as fact rather than as lag. Kept
@@ -243,7 +245,8 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // belongs. Ordering it here as well would be machinery for a race this panel
   // cannot produce.
   const breakSeq = useRef(0);
-  const [breakError, setBreakError] = useState<{ key: string; text: string } | null>(null);
+  const [breakError, setBreakError] =
+    useState<{ key: string; err: unknown } | null>(null);
   // The stamp decides what may be RENDERED. This decides what may be STORED,
   // and one without the other is not enough — that took two review rounds:
   //
@@ -814,7 +817,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       if (currentKey.current !== key) return;
       // Reported, never destructive: the summary already on screen is still the
       // best thing anyone has, so a failed refold leaves it exactly where it is.
-      setRollingError({ key, text: err.detail ?? String(err) });
+      setRollingError({ key, err });
     } finally {
       // Only if it is still ours. The reader can leave and start a refold on
       // another record while this one is out, and clearing unconditionally
@@ -863,7 +866,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       // Reported, never destructive: a standing proposal is still the best
       // thing anyone has, so a failed question leaves it exactly where it is.
       if (currentKey.current !== key) return;
-      setBreakError({ key, text: err.detail ?? String(err) });
+      setBreakError({ key, err });
     } finally {
       setBreakBusy((busy) => (busy === key ? null : busy));
     }
@@ -884,7 +887,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       setBreakUnread(false);
     } catch (err: any) {
       if (currentKey.current !== key) return;
-      setBreakError({ key, text: err.detail ?? String(err) });
+      setBreakError({ key, err });
     } finally {
       setBreakBusy((busy) => (busy === key ? null : busy));
     }
@@ -988,7 +991,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           );
         })()}
         {rollingError?.key === `${cid}/${sid}` && (
-          <div className="banner">{rollingError.text}</div>
+          <div className="banner"><ErrorNote err={rollingError.err} /></div>
         )}
         <div className="form-actions">
           {/* Held while a turn is streaming into this scene, like the two date
@@ -1081,7 +1084,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           );
         })()}
         {breakError?.key === `${cid}/${sid}` && (
-          <div className="banner">{breakError.text}</div>
+          <div className="banner"><ErrorNote err={breakError.err} /></div>
         )}
         <div className="form-actions">
           {/* Held while a turn is streaming into this scene, like the summary's
