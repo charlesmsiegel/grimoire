@@ -1564,6 +1564,41 @@ def test_character_book_import_route(client):
     assert any(e["id"] == created[0]["id"] for e in client.get(f"/api/worlds/{wid}/lore").json())
 
 
+def test_character_book_importable_count_excludes_what_the_import_skips(client):
+    """The version payload's `importable_lore` is what the import will actually
+    commit, not the raw entry count -- `from_character_book` drops disabled and
+    blank entries, and a button counting the raw list promises entries that
+    never arrive (#16)."""
+    wid = _world(client)
+    card = {"spec": "chara_card_v3", "spec_version": "3.0", "data": {
+        "name": "Sera",
+        "character_book": {"entries": [
+            {"keys": ["pact"], "content": "the salt pact", "name": "Pact"},
+            {"keys": ["tide"], "content": "the tide table", "name": "Tide", "enabled": False},
+            {"keys": ["gate"], "content": "   ", "name": "Gate"},
+            {"keys": ["reeve"], "content": "the reeve's debt", "name": "Reeve", "disable": True},
+        ]},
+        "extensions": {},
+    }}
+    cid = client.post(f"/api/worlds/{wid}/characters",
+                      json={"name": "Sera", "card": card}).json()["character"]
+
+    detail = client.get(f"/api/worlds/{wid}/characters/{cid}").json()
+    version = next(v for v in detail["versions"] if v["id"] == "default")
+    assert len(version["card"]["data"]["character_book"]["entries"]) == 4   # raw
+    assert version["importable_lore"] == 1                                 # committable
+
+    created = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/lorebook/import").json()["created"]
+    assert len(created) == version["importable_lore"]
+
+
+def test_character_book_importable_count_is_zero_without_a_book(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    detail = client.get(f"/api/worlds/{wid}/characters/{cid}").json()
+    assert all(v["importable_lore"] == 0 for v in detail["versions"])
+
+
 def test_character_book_import_empty(client):
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]

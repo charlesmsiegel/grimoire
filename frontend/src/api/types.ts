@@ -315,7 +315,12 @@ export type CharacterSummary = {
 export type CharacterDetail = {
   meta: { id: string; name: string; default_version: string; birthdate?: string };
   versions: { id: string; name: string; card: Card; images?: string[];
-              avatar_focus?: number | null; chub_source?: string; is_chub?: boolean }[];
+              avatar_focus?: number | null; chub_source?: string; is_chub?: boolean;
+              /** Embedded-lorebook entries the import would actually commit —
+               *  server-side, through the same normalization the import runs,
+               *  so it excludes the disabled and blank entries `character_book`
+               *  can carry. Never count `card.data.character_book.entries`. */
+              importable_lore?: number }[];
 };
 export type ChubImportResult = {
   character: string;
