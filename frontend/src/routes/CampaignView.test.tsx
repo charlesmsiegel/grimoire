@@ -1763,6 +1763,12 @@ test("Stop after the done frame is a finished turn, not a cancellation", async (
     });
   renderCampaign();
   const picker = await screen.findByLabelText("Response length");
+  // Waited for, like the picker tests above: the <select> renders as soon as
+  // `listScenes` names the scene, but its OPTIONS arrive on the
+  // `listResponsePresets` chain. Selecting a value the list does not carry yet
+  // leaves the native select on "" and reports that back as a CLEARED override,
+  // so the test would go green having exercised nothing.
+  await screen.findByRole("option", { name: "Terse" });
   fireEvent.change(picker, { target: { value: "terse" } });
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
@@ -1903,6 +1909,7 @@ test("a body that ends before the done frame is an interrupted turn", async () =
     });
   renderCampaign();
   const picker = await screen.findByLabelText("Response length");
+  await screen.findByRole("option", { name: "Terse" });
   fireEvent.change(picker, { target: { value: "terse" } });
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
@@ -1944,6 +1951,7 @@ test("cancelling keeps a one-shot response override for the retry", async () => 
   (api.chat as any).mockImplementation(hangingChat());
   renderCampaign();
   const picker = await screen.findByLabelText("Response length");
+  await screen.findByRole("option", { name: "Terse" });
   fireEvent.change(picker, { target: { value: "terse" } });
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "and then?" } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
@@ -2010,6 +2018,7 @@ test("regenerate carries a pending override", async () => {
   renderCampaign();
   await screen.findByText("old reply");
   const picker = await screen.findByLabelText("Response length");
+  await screen.findByRole("option", { name: "Terse" });
   fireEvent.change(picker, { target: { value: "terse" } });
   fireEvent.click(await screen.findByTitle("Reroll"));
   fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i })); // empty guidance = plain reroll
@@ -5333,6 +5342,7 @@ test("the one-shot badge is announced with the response picker", async () => {
   (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
   renderCampaign();
   const picker = await screen.findByLabelText("Response length");
+  await screen.findByRole("option", { name: "Terse" });
   expect(picker).not.toHaveAttribute("aria-describedby");
   fireEvent.change(picker, { target: { value: "terse" } });
   expect(picker).toHaveAccessibleDescription(/next reply only/i);
