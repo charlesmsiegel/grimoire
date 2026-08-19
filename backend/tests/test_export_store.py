@@ -5,6 +5,8 @@ import io
 import json
 import zipfile
 
+import pytest
+
 from grimoire.store import (appearances, assets, campaign_images, campaigns, characters,
                             chronicle, covers, entities, export, pcs, scenes, worlds)
 
@@ -77,6 +79,24 @@ def test_rewrite_images_packs_a_campaign_library_image(monkeypatch, tmp_path):
     # missing degrades to alt text, like every other shape
     assert export.rewrite_images(
         f"![gone](/api/campaigns/{cid}/images/nope)", cid, images) == "gone"
+
+
+@pytest.mark.parametrize("name", ["coastline", "The-Inn_2", "海岸線", "a&b", "a,b;c", "a+b=c"])
+def test_every_name_the_library_accepts_is_a_url_the_export_can_read_back(monkeypatch, tmp_path, name):
+    """The two ends of one rule, checked against each other.
+
+    `campaign_images.addressable` decides what may be stored; `export._IMG_URL`
+    decides what can be resolved back out of a post. They are written in
+    different files in different notations, and a name the first accepts and the
+    second cannot match is a book that silently drops the image -- so the
+    interesting cases are the ones neither author would think to try.
+    """
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    assert campaign_images.addressable(name)
+    campaign_images.put_image(cid, name, _img(), "png")
+    images = export.Images()
+    out = export.rewrite_images(f"![{name}](/api/campaigns/{cid}/images/{name})", cid, images)
+    assert out == f"![{name}](images/img-000.png)", name
 
 
 def test_a_forked_campaigns_book_carries_its_own_library_copy(monkeypatch, tmp_path):

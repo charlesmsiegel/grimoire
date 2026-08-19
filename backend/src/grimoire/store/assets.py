@@ -52,6 +52,22 @@ def _safe_name(name: str) -> bool:
     return _addressable_name(name) and name.casefold() != _PROMOTE_TMP
 
 
+def storable(name: str) -> bool:
+    """Is `name` one this module will both store under and resolve back?
+
+    The public form of `_safe_name`, for a store that has to FILTER A LISTING by
+    what a write and a read will accept. `list_in` cannot apply this itself: it
+    filters on `_addressable_name` because a stranded `promote-tmp` is shown on
+    purpose there, so recovery failing is visible rather than silent (#253).
+    That exception is a per-version folder's, and a flat directory built on
+    `put_in`/`path_in` has no promotion to strand -- so `promote-tmp.png` there
+    is an ordinary file this module will nonetheless refuse to serve, and a
+    listing that offered it would hand its caller a name the server answers 404
+    to. Which is #373 exactly.
+    """
+    return _safe_name(name)
+
+
 def _norm_ext(ext: str) -> str:
     ext = ext.lstrip(".").lower()
     return ext if ext in _EXTS else ""

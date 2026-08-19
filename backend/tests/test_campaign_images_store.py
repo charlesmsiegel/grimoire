@@ -118,6 +118,25 @@ def test_the_listing_hides_a_dropped_file_the_picker_could_not_insert(cid):
     assert (d / "holiday snap.png").exists()
 
 
+@pytest.mark.parametrize("name", ["promote-tmp", "Promote-TMP", "map.2", "map*", "a/b"])
+def test_a_name_this_store_would_not_serve_back_is_refused_and_hidden(cid, name):
+    """The gate is a conjunction, and the half `assets` owns is the one easy to
+    drop. `assets.list_in` shows a stranded `promote-tmp` on purpose -- in a
+    per-version folder it is crash residue worth seeing -- but `put_in` and
+    `path_in` both refuse the name, so in this flat directory it is a file the
+    server answers 404 to. Offering it would be #373 with a new hat on."""
+    assert not campaign_images.addressable(name)
+    with pytest.raises(ValueError):
+        campaign_images.put_image(cid, name, _png(), "png")
+
+    d = campaigns.campaign_root(cid) / "assets" / "images"
+    d.mkdir(parents=True, exist_ok=True)
+    if "/" not in name:                        # a path separator names no file here
+        (d / f"{name}.png").write_bytes(_png())
+        assert [i["name"] for i in campaign_images.list_images(cid)] == []
+        assert campaign_images.image_path(cid, name) is None    # and would not serve
+
+
 def test_a_file_that_is_not_ours_is_neither_listed_nor_swept(cid):
     """`supported_only`, the same call `store.covers` makes: a `notes.txt` beside
     the art must not win resolution, must not be listed, and must survive a
