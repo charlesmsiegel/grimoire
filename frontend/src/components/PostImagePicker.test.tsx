@@ -54,6 +54,13 @@ test("a name already taken gets the first free suffix", () => {
   expect(freeName("map", ["map", "map-2", "map-3"])).toBe("map-4");
 });
 
+test("the inserted url carries no cache token", () => {
+  // A `?v=` URL is answered `immutable, max-age=1y`, and this one is written
+  // into a transcript that outlives every cache: replacing the image under the
+  // same name would leave the post pinned to bytes that are gone for a year.
+  expect(insertion("coastline", "/api/campaigns/run/images/coastline")).not.toMatch(/[?&]v=/);
+});
+
 test("the alt text defaults to the image's name, not to nothing", () => {
   // A plain-text export and a text-only reader see the alt text and nothing
   // else, so an empty one reads as though there were no image at all.
@@ -82,7 +89,7 @@ test("an empty library says so, and an upload lands under a name from the file",
   expect(await screen.findByText(/no campaign images yet/i)).toBeTruthy();
 
   (api.listCampaignImages as any).mockResolvedValue([{ name: "Coast-at-Dusk", ext: "png", v: "z" }]);
-  fireEvent.change(screen.getByLabelText(/add a campaign image/i),
+  fireEvent.change(screen.getByLabelText(/add an image/i),
                    { target: { files: [file("Coast at Dusk.png")] } });
   await waitFor(() => expect(api.putCampaignImage)
     .toHaveBeenCalledWith("run", "Coast-at-Dusk", expect.any(File)));
@@ -95,7 +102,7 @@ test("an upload whose name is taken does not overwrite the image already there",
   render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
                           onInsert={() => {}} onClose={() => {}} />);
   await screen.findByRole("button", { name: "Insert coastline" });
-  fireEvent.change(screen.getByLabelText(/add a campaign image/i),
+  fireEvent.change(screen.getByLabelText(/add an image/i),
                    { target: { files: [file("coastline.png")] } });
   await waitFor(() => expect(api.putCampaignImage)
     .toHaveBeenCalledWith("run", "coastline-2", expect.any(File)));
@@ -106,16 +113,47 @@ test("a rejected upload shows the server's reason", async () => {
   render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
                           onInsert={() => {}} onClose={() => {}} />);
   await screen.findByRole("button", { name: "Insert coastline" });
-  fireEvent.change(screen.getByLabelText(/add a campaign image/i),
+  fireEvent.change(screen.getByLabelText(/add an image/i),
                    { target: { files: [file("notes.png")] } });
   expect(await screen.findByText("unsupported image type")).toBeTruthy();
 });
 
-test("a library image can be removed from the picker", async () => {
+test("removing a library image is confirmed first, and names what it costs", async () => {
+  // One of these can already be linked from forty posts, which a cover never is.
+  const ok = vi.spyOn(window, "confirm").mockReturnValue(true);
   render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
                           onInsert={() => {}} onClose={() => {}} />);
   fireEvent.click(await screen.findByRole("button", { name: "Remove coastline" }));
+  expect(ok.mock.calls[0][0]).toMatch(/coastline[\s\S]*broken image/i);
   await waitFor(() => expect(api.deleteCampaignImage).toHaveBeenCalledWith("run", "coastline"));
+});
+
+test("declining the removal removes nothing", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(false);
+  render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
+                          onInsert={() => {}} onClose={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Remove coastline" }));
+  expect(api.deleteCampaignImage).not.toHaveBeenCalled();
+});
+
+test("Escape closes the picker", async () => {
+  const onClose = vi.fn();
+  render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
+                          onInsert={() => {}} onClose={onClose} />);
+  fireEvent.keyDown(await screen.findByRole("dialog"), { key: "Escape" });
+  expect(onClose).toHaveBeenCalled();
+});
+
+test("the file input is a real, focusable control rather than a styled label", async () => {
+  // A `display: none` input inside a label looks tidier and is unreachable by
+  // keyboard. It also has to offer only what the server will store: `image/*`
+  // would offer AVIF and BMP, which the upload refuses.
+  render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
+                          onInsert={() => {}} onClose={() => {}} />);
+  const input = await screen.findByLabelText(/add an image/i) as HTMLInputElement;
+  expect(input.type).toBe("file");
+  expect(input.accept).toBe("image/png,image/jpeg,image/gif,image/webp");
+  expect(getComputedStyle(input).display).not.toBe("none");
 });
 
 // ---- an actor's picker -----------------------------------------------------
@@ -145,7 +183,7 @@ test("a PC post reads the PC, not the character, surface", async () => {
   expect(api.readPC).toHaveBeenCalledWith({ kind: "campaign", id: "run" }, "mara");
   expect(api.readCharacter).not.toHaveBeenCalled();
   // no Add and no Remove: only the campaign's own library is managed from here
-  expect(screen.queryByLabelText(/add a campaign image/i)).toBeNull();
+  expect(screen.queryByLabelText(/add an image/i)).toBeNull();
   expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull();
 });
 

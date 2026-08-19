@@ -2774,8 +2774,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  so it can never land mid-sentence, and the textarea it lands in is right
    *  there to move it. */
   function insertImage(index: number, markdown: string) {
-    const post = messages[index - firstIndex];
     setPicking(null);
+    // The same two conditions `saveEdit` refuses on, and for its reasons.
+    // `transcriptIsActive`: the picker is a modal that outlives a background
+    // refresh, and `index` addresses the transcript ON SCREEN — if the refresh
+    // has installed another scene's posts under it, this would open an
+    // unrelated message for editing with an image already pasted into it.
+    // `rolling`: the button that opened the picker is disabled while a turn is
+    // in flight, so the picker must not be a way around that.
+    if (!transcriptIsActive || rolling) return;
+    const post = messages[index - firstIndex];
     if (!post) return;   // scrolled out of the loaded window; nothing to edit
     const current = (editing?.index === index ? editing.text : post.content).trimEnd();
     setEditing({ index, text: current ? `${current}\n\n${markdown}` : markdown });
