@@ -4,15 +4,18 @@ import { errMsg } from "./errMsg";
 
 /** The "Generate an opener" block: stream a first post for an empty scene,
  *  then adopt it or keep it as a greeting. Split out of `CastPanel`. */
-export function OpenerComposer({ cid, sid, ready, initialPrompt, character, onSeeded, onError }: {
+export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onSeeded, onError }: {
   cid: string;
   sid: string;
   /** An LLM connection is configured; without one there is nothing to call. */
   ready: boolean;
   initialPrompt?: string;
-  /** The character the panel's picker has selected, if any — the only one an
-   *  opener can be saved against as a greeting. */
-  character: CharacterSummary | null;
+  /** Every character an opener could be saved against. Which one it IS saved
+   *  against is this block's own state, not the panel's add-to-scene selection:
+   *  those are unrelated choices, and sharing them meant staging a PC disabled
+   *  saving outright, while restaging an actor silently re-targeted the save
+   *  (#12). Greetings attach to characters only, so PCs are not offered. */
+  characters: CharacterSummary[];
   /** NAVIGATES in the host (`selectScene(activeId)`), so it is only ever called
    *  for the scene this block is still showing. See `live`. */
   onSeeded: () => void;
@@ -21,6 +24,19 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, character, onSe
   const [prompt, setPrompt] = useState("");
   const [opener, setOpener] = useState("");
   const [busy, setBusy] = useState(false);
+  const [charId, setCharId] = useState("");
+  const [versionPick, setVersionPick] = useState("");
+
+  const target = characters.find((c) => c.id === charId) ?? null;
+  // The version to post: the explicit pick while the target still offers it,
+  // its default otherwise — no pick yet, or the pick belongs to the character
+  // picked before this one. That last case is not only cosmetic: this block
+  // outlives a campaign switch, and `create_greeting` writes the version it is
+  // given without checking, so a pick carried into a campaign whose copy of the
+  // character lacks that version would bake a dangling ref into the greeting.
+  const version = target?.versions.some((v) => v.id === versionPick)
+    ? versionPick
+    : target?.default_version ?? "";
 
   // seed from the chooser's premise; reset on scene switch so a prior
   // scene's premise never lingers in another scene's opener box
@@ -87,14 +103,14 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, character, onSe
   }
 
   async function saveAsGreeting() {
-    if (!opener.trim() || !character) return;
+    if (!opener.trim() || !target) return;
     const name = window.prompt("Name this greeting?", "Opener")?.trim();
     if (!name) return;
     onError(null);
     try {
       // an opener saved as a greeting belongs to the campaign, not the world baseline
       await api.createGreeting({ kind: "campaign", id: cid }, {
-        name, character: character.id, version: character.default_version, body: opener,
+        name, character: target.id, version, body: opener,
       });
       setOpener("");
     } catch (err: any) {
@@ -118,10 +134,26 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, character, onSe
       {opener && (
         <>
           <div className="opener-preview">{opener}</div>
+          <div className="picker">
+            <select aria-label="Greeting character" value={charId}
+                    onChange={(e) => { setCharId(e.target.value); setVersionPick(""); }}>
+              <option value="">— save as whose greeting? —</option>
+              {characters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            {/* A picked character always has versions to offer: the store skips
+                version-less characters when it lists them, and reports a
+                `default_version` drawn from the list it emits. */}
+            {target && (
+              <select aria-label="Greeting version" value={version}
+                      onChange={(e) => setVersionPick(e.target.value)}>
+                {target.versions.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            )}
+          </div>
           <div className="form-actions">
             <button className="primary" onClick={useOpener} disabled={busy}>Use</button>
-            <button className="subtle" onClick={saveAsGreeting} disabled={!character}
-                    title={character ? "" : "Pick a character above to attach the saved greeting"}>
+            <button className="subtle" onClick={saveAsGreeting} disabled={!target}
+                    title={target ? "" : "Pick a character to attach the saved greeting to"}>
               Save as greeting
             </button>
           </div>

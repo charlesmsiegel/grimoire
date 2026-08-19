@@ -125,6 +125,11 @@ cd grimoire
 scripts\windows\install.ps1
 ```
 
+The installer checks your Python and Node versions before it starts, and
+finishes by printing the directory your library will live in — see
+[Where your data lives](#where-your-data-lives) to move it somewhere else
+before the first run. Nothing is written there until you actually use the app.
+
 ---
 
 ## Run
@@ -185,6 +190,10 @@ resolved by `store.home()` in this order:
 2. the path you choose on the **Config** page (recorded in the bootstrap
    pointer `~/.grimoire.json`), then
 3. the default `~/.grimoire`.
+
+`scripts/unix/install.sh` and `scripts\windows\install.ps1` print the resolved
+path when they finish; to ask again later, run `python -m grimoire.where` from
+the backend venv.
 
 Because the whole library is just files, you can back it up, version it, or
 **point the data directory at a synced folder (Dropbox, iCloud, etc.) to share

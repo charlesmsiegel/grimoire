@@ -39,7 +39,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   (api.getCast as any).mockResolvedValue([{ kind: "pcs", id: "elara", role: "player" }]);
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "c", world: "w" }, body: "" });
-  (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine", default_version: "default", versions: [] }]);
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default",
+      versions: [{ id: "default", name: "Default" }, { id: "winter", name: "Winter" }] },
+  ]);
   (api.listCampaignPCs as any).mockResolvedValue([{ id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] }]);
   (api.listEntities as any).mockResolvedValue([]);
   (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });
@@ -132,13 +135,109 @@ test("generating an opener streams into the preview and can be saved as a greeti
   fireEvent.click(screen.getByRole("button", { name: /generate/i }));
   await screen.findByText("Mist rolls in.");
   // pick a character so the opener can be saved as that character's greeting
-  fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "seraphine" } });
+  fireEvent.change(screen.getByLabelText("Greeting character"), { target: { value: "seraphine" } });
   fireEvent.click(screen.getByRole("button", { name: /save as greeting/i }));
   await waitFor(() =>
     expect(api.createGreeting).toHaveBeenCalledWith({ kind: "campaign", id: "c" }, expect.objectContaining({
       character: "seraphine", version: "default", body: "Mist rolls in.",
     })),
   );
+});
+
+async function renderWithOpener(text = "Mist rolls in.") {
+  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
+    onEvent({ delta: text });
+  });
+  vi.spyOn(window, "prompt").mockReturnValue("Opener");
+  renderPanel();
+  await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
+  fireEvent.change(screen.getByLabelText("Opener prompt"), { target: { value: "A foggy harbor" } });
+  fireEvent.click(screen.getByRole("button", { name: /generate/i }));
+  await screen.findByText(text);
+}
+
+test("staging a PC for the scene does not block saving the opener as a greeting", async () => {
+  // The save target used to BE the add-to-scene selection, so picking a PC
+  // there disabled saving outright — with no way back but restaging (#12).
+  await renderWithOpener();
+  fireEvent.change(screen.getByLabelText("Actor kind"), { target: { value: "pcs" } });
+  fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "elara" } });
+
+  fireEvent.change(screen.getByLabelText("Greeting character"), { target: { value: "seraphine" } });
+  const save = screen.getByRole("button", { name: /save as greeting/i });
+  expect(save).not.toBeDisabled();
+  fireEvent.click(save);
+  await waitFor(() =>
+    expect(api.createGreeting).toHaveBeenCalledWith({ kind: "campaign", id: "c" }, expect.objectContaining({
+      character: "seraphine", version: "default", body: "Mist rolls in.",
+    })),
+  );
+});
+
+test("restaging the add-to-scene actor leaves the greeting's target alone", async () => {
+  // The two pickers are unrelated choices: staging someone else for the scene
+  // used to silently re-target which character the opener was saved under.
+  await renderWithOpener();
+  fireEvent.change(screen.getByLabelText("Greeting character"), { target: { value: "seraphine" } });
+  fireEvent.change(screen.getByLabelText("Actor kind"), { target: { value: "pcs" } });
+  fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "elara" } });
+
+  expect(screen.getByLabelText("Greeting character")).toHaveValue("seraphine");
+  fireEvent.click(screen.getByRole("button", { name: /save as greeting/i }));
+  await waitFor(() =>
+    expect(api.createGreeting).toHaveBeenCalledWith({ kind: "campaign", id: "c" }, expect.objectContaining({
+      character: "seraphine", version: "default",
+    })),
+  );
+});
+
+test("the opener can be attached to a non-default version", async () => {
+  await renderWithOpener();
+  fireEvent.change(screen.getByLabelText("Greeting character"), { target: { value: "seraphine" } });
+  // the version select defaults to the character's default_version...
+  expect(screen.getByLabelText("Greeting version")).toHaveValue("default");
+  // ...and any other version of that character is reachable
+  fireEvent.change(screen.getByLabelText("Greeting version"), { target: { value: "winter" } });
+  fireEvent.click(screen.getByRole("button", { name: /save as greeting/i }));
+  await waitFor(() =>
+    expect(api.createGreeting).toHaveBeenCalledWith({ kind: "campaign", id: "c" }, expect.objectContaining({
+      character: "seraphine", version: "winter",
+    })),
+  );
+});
+
+test("switching the greeting character drops the previous one's version pick", async () => {
+  // Both carry a "winter" — version ids are per-character slugs, and era-style
+  // variants run parallel across a roster, so the stale pick RESOLVES against
+  // the new character instead of falling away. Only clearing it on the switch
+  // gets the reader the default they were promised.
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default",
+      versions: [{ id: "default", name: "Default" }, { id: "winter", name: "Winter" }] },
+    { id: "mara", name: "Mara", default_version: "default",
+      versions: [{ id: "default", name: "Default" }, { id: "winter", name: "Winter" }] },
+  ]);
+  await renderWithOpener();
+  fireEvent.change(screen.getByLabelText("Greeting character"), { target: { value: "seraphine" } });
+  fireEvent.change(screen.getByLabelText("Greeting version"), { target: { value: "winter" } });
+  fireEvent.change(screen.getByLabelText("Greeting character"), { target: { value: "mara" } });
+
+  expect(screen.getByLabelText("Greeting version")).toHaveValue("default");
+  fireEvent.click(screen.getByRole("button", { name: /save as greeting/i }));
+  await waitFor(() =>
+    expect(api.createGreeting).toHaveBeenCalledWith({ kind: "campaign", id: "c" }, expect.objectContaining({
+      character: "mara", version: "default",
+    })),
+  );
+});
+
+test("with no greeting character picked, saving is disabled and says why", async () => {
+  await renderWithOpener();
+  const save = screen.getByRole("button", { name: /save as greeting/i });
+  expect(save).toBeDisabled();
+  expect(save.getAttribute("title")).toMatch(/pick a character/i);
+  // and no version to choose until there is a character to choose it from
+  expect(screen.queryByLabelText("Greeting version")).toBeNull();
 });
 
 test("a failed greeting save says so and keeps the opener", async () => {
@@ -154,7 +253,7 @@ test("a failed greeting save says so and keeps the opener", async () => {
   fireEvent.change(screen.getByLabelText("Opener prompt"), { target: { value: "A foggy harbor" } });
   fireEvent.click(screen.getByRole("button", { name: /generate/i }));
   await screen.findByText("Mist rolls in.");
-  fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "seraphine" } });
+  fireEvent.change(screen.getByLabelText("Greeting character"), { target: { value: "seraphine" } });
   fireEvent.click(screen.getByRole("button", { name: /save as greeting/i }));
 
   expect(await screen.findByText("name taken")).toBeInTheDocument();

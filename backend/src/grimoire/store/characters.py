@@ -177,6 +177,16 @@ def _version_chub_source(card: dict) -> str:
     return (card.get("data", {}).get("extensions") or {}).get("chub_source", "")
 
 
+def _importable_lore(card: dict) -> int:
+    """How many embedded-lorebook entries the import would actually commit.
+
+    Counted through the same rule the import route normalizes by, not off the
+    raw `entries` list: normalization drops disabled and blank-content entries,
+    so a UI counting the raw list offers to import entries that never arrive --
+    and cards from ST routinely carry disabled ones (#16)."""
+    return lorebook.importable_count(card.get("data", {}).get("character_book"))
+
+
 def _addressable_default(stored: str, version_ids: list[str]) -> str:
     """The default version to report, given the versions callers can actually
     reach.
@@ -218,6 +228,7 @@ def read_character(root: Path, cid: str) -> dict:
             "avatar_focus": assets.read_focus(root, cid, vid),
             "chub_source": chub_source,
             "is_chub": bool(chub_source) and chub.parse_full_path(chub_source) is not None,
+            "importable_lore": _importable_lore(card),
         })
     return {
         "meta": {"id": cid, "name": meta.get("name", cid),

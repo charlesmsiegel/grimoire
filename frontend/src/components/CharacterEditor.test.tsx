@@ -57,7 +57,9 @@ const CARD = {
 };
 const DETAIL = {
   meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
-  versions: [{ id: "default", name: "default", card: CARD, images: ["avatar"] }],
+  // `importable_lore` is the server's count of what the embedded-lore import
+  // would actually commit -- CARD's one entry is enabled and non-blank, so 1.
+  versions: [{ id: "default", name: "default", card: CARD, images: ["avatar"], importable_lore: 1 }],
 };
 
 beforeEach(() => {
@@ -209,6 +211,79 @@ test("imports an embedded character_book and shows the result", async () => {
   fireEvent.click(screen.getByRole("button", { name: /import .* lore/i }));
   await waitFor(() => expect(api.importCharacterBook).toHaveBeenCalledWith("w", "seraphine", "default"));
   await screen.findByText(/imported 1/i);
+});
+
+// Re-importing an unchanged book is a no-op by design (`lorebook.commit`
+// drops entries already in world lore), and "Imported 0 entries" reads as a
+// failure of the thing that in fact worked.
+test("re-importing an already-imported book says so instead of reporting zero", async () => {
+  (api.importCharacterBook as any).mockResolvedValue({ created: [] });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  fireEvent.click(screen.getByRole("button", { name: /import .* lore/i }));
+  await screen.findByText(/already in world lore/i);
+  expect(screen.queryByText(/imported 0/i)).toBeNull();
+});
+
+// The import posts no card -- the route commits whatever character_book is
+// stored for the version. It does not write the card back (unlike localize),
+// so unsaved edits survive it; what they do is make the click act on a version
+// of the book the editor is no longer showing. Blocked until saved, so the
+// entries committed are the ones the user is looking at (#16).
+test("the embedded-lore import is blocked while the form has unsaved edits", async () => {
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  const button = screen.getByRole("button", { name: /import .* lore/i });
+  expect(button).not.toBeDisabled();
+
+  fireEvent.change(screen.getByLabelText("Description"), { target: { value: "keeper of the salt ledgers" } });
+
+  expect(button).toBeDisabled();
+  expect(screen.getByText(/save your changes before importing embedded lore/i)).toBeInTheDocument();
+  fireEvent.click(button);
+  expect(api.importCharacterBook).not.toHaveBeenCalled();
+});
+
+// `character_book.entries` is the raw list; the import commits it normalized,
+// which drops disabled and blank entries. Counting the raw list offers an
+// import of 4 that lands 1, so the label takes the server's count instead --
+// down to the singular (#16).
+test("the embedded-lore count is the server's importable count, not the raw entry list", async () => {
+  const fourRawOneImportable = {
+    ...CARD,
+    data: { ...CARD.data, character_book: { entries: [
+      { keys: ["pact"], content: "the salt pact" },
+      { keys: ["tide"], content: "the tide table", enabled: false },
+      { keys: ["gate"], content: "   " },
+      { keys: ["reeve"], content: "the reeve's debt", disable: true },
+    ] } },
+  };
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", card: fourRawOneImportable, images: ["avatar"], importable_lore: 1 }],
+  });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  await screen.findByRole("button", { name: /^import 1 embedded lore entry to world$/i });
+  expect(screen.queryByRole("button", { name: /import 4 /i })).toBeNull();
+});
+
+// A version whose card offers nothing importable shows no button at all, and
+// the count is per-version -- switching versions re-reads it.
+test("the embedded-lore button follows the selected version and vanishes when it offers nothing", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [
+      { id: "default", name: "default", card: CARD, images: ["avatar"], importable_lore: 2 },
+      { id: "young", name: "young", card: CARD, images: [], importable_lore: 0 },
+    ],
+  });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  await screen.findByRole("button", { name: /^import 2 embedded lore entries to world$/i });
+
+  fireEvent.change(screen.getByLabelText("Version"), { target: { value: "young" } });
+  await waitFor(() => expect(screen.queryByRole("button", { name: /import .* lore/i })).toBeNull());
 });
 
 test("editing the birthdate persists it on the character", async () => {

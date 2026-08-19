@@ -32,6 +32,63 @@ def _tok(ref: str) -> str:
     return f"{kind}:{aid}"
 
 
+#: Beyond this many months, the month list is dropped rather than trimmed. A
+#: truncated vocabulary reads as a complete one and would teach a model that
+#: the months it was not shown do not exist -- worse than the example alone.
+#: Every real calendar is far under it (Gregorian 12, Hebrew 13 in a leap year).
+NOTATION_MONTH_LIMIT = 24
+
+
+def _notation(primary: dict, now: str) -> dict:
+    """How THIS campaign's calendar writes a date, for the prompt to quote.
+
+    `{"example": "5786-Kislev-25", "months": ["Tishrei", ...]}`, or blanks.
+
+    Every prompt shows the moment as `friendly` ("25 Kislev 5786"), and the two
+    that ask for a date back used to say "in the same notation as the current
+    date" -- which no model can do for a notation it has never been shown, since
+    `friendly` is not one `date_normalizer` reads back. Gregorian only ever
+    survived that on luck: its native form is ISO-8601, which is what a model
+    writes into JSON unprompted. Hebrew, and every hand-written plugin, lost
+    the date silently. This is what those prompts quote instead.
+
+    Built from the `CalendarProvider` contract alone -- `format` for the
+    canonical spelling, `months(year)` for the keys `<year>-<key>-<day>` is
+    composed from -- so a plugin author gets this by implementing nothing.
+
+    Takes the primary calendar BLOCK rather than the campaign root, so the one
+    `read_calendar` the caller already does serves this too -- resolving it here
+    would parse calendar.json a second time in the same snapshot.
+
+    Tolerant exactly as far as the `today_facts` call beside it: an unloadable
+    provider or a missing key costs the notation hint and nothing else, while a
+    `describe` that is not a mapping at all is left to fail, because that breaks
+    every date in the app and is not this function's to hide (the rule
+    `clock._holidays` states, and `calendars.resolve` follows).
+
+    Scoped to the year of `now`. A suggestion that skips far enough to cross
+    into a year with DIFFERENT months (Hebrew leap years carry Adar I and Adar
+    II in place of Adar) is listing the wrong set -- accepted because the
+    crossing needs a half-year skip, `hebrew.parse` folds a plain Adar onto the
+    observance month anyway, and `resolve` still recognises the friendly form.
+    """
+    blank = {"example": "", "months": []}
+    try:
+        provider = calendars.get_provider(primary)
+        fixed = calendars.fixed_of(provider, now)
+        example = provider.format(fixed)
+    except (calendars.CalendarError, KeyError, ValueError, OverflowError, OSError):
+        return blank
+    try:
+        # Separately, so the two halves fail apart: the example is the half that
+        # actually teaches the notation, and a calendar that will not enumerate
+        # its months should not take it down too.
+        months = [str(m["key"]) for m in provider.months(provider.describe(fixed)["year"])]
+    except (calendars.CalendarError, KeyError, ValueError, OverflowError, OSError):
+        months = []
+    return {"example": example, "months": months if len(months) <= NOTATION_MONTH_LIMIT else []}
+
+
 def build_snapshot(cid: str, offscreen: bool = False) -> dict:
     croot = campaigns_paths.campaign_root(cid)    # calendar.json is campaign-local
     aroot = appearances_paths.locked_actor_root(cid)    # roster actors are locked, so campaign-side
@@ -73,9 +130,12 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
 
     friendly, holidays_today, upcoming = "", [], None
     events_today: list[str] = []
+    notation = {"example": "", "months": []}
     if now:
+        cal_cfg = calendars.read_calendar(croot)
+        notation = _notation(cal_cfg["primary"], now)
         try:
-            facts = calendars.today_facts(calendars.read_calendar(croot), now)
+            facts = calendars.today_facts(cal_cfg, now)
             friendly, holidays_today, upcoming = facts["friendly"], facts["holidays_today"], facts["upcoming"]
         except (calendars.CalendarError, KeyError):
             pass
@@ -129,7 +189,8 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
     available_locations = [{"id": e["id"], "name": e.get("name", e["id"])}
                            for e in overlay.list_entities(cid, "locations")]
 
-    return {"now": now, "friendly": friendly, "holidays_today": holidays_today,
+    return {"now": now, "friendly": friendly, "notation": notation,
+            "holidays_today": holidays_today,
             "events_today": events_today,
             "upcoming": upcoming, "birthdays": birthdays.upcoming(cid, now, roster),
             "story_so_far": story_so_far, "open_threads": open_threads,
@@ -207,17 +268,46 @@ def valid_ids(cid: str):
     return char_ids, player_tokens, loc_ids
 
 
-def date_normalizer(cid: str):
-    """Canonical native date or "" — a suggested date is only a hint, so never raise."""
+def date_normalizer(cid: str, tolerant: bool = False):
+    """Canonical native date or "" — a suggested date is only a hint, so never raise.
+
+    `tolerant=True` goes through `calendars.resolve`, which also accepts a date
+    written the way the PROMPT displays one ("25 Kislev 5786"). Only the
+    calendar's own renderings are added, so even then this is as strict about
+    what a date MEANS as `normalize` was: a wider set of spellings, not a looser
+    reading. `resolve` needs an anchor to search around, and the campaign clock
+    is what "the moment this reply is about" means everywhere else in this
+    module. It is read once per normalizer rather than per row, for the reason
+    `ref_validator` resolves its id sets once: one reply can carry four dates.
+
+    Off by default, and the callers divide cleanly. Model TEXT is tolerant
+    (`parse_output`, `parse_next_date`, `parse_intent`) -- that is the whole
+    point. Stored RECORDS are not (`ref_validator`): their dates were
+    canonicalized on write, so one that no longer parses means the campaign
+    changed calendars under it, and re-reading a Gregorian date through a Hebrew
+    string matcher would invent a moment nobody wrote. It is also the path that
+    could least afford it -- the ledger has no cap, it is revalidated on every
+    read, and a fuzzy miss costs a whole window scan per row.
+    """
     provider = calendars.primary_provider(campaigns_paths.campaign_root(cid))
     if provider is None:
         return lambda _s: ""
+    if not tolerant:
+        def strict(s: str) -> str:
+            if not s:
+                return ""
+            try:
+                return calendars.normalize(provider, s)
+            except calendars.CalendarError:
+                return ""
+        return strict
+    anchor = clock.now(cid)
 
     def norm(s: str) -> str:
         if not s:
             return ""
         try:
-            return calendars.normalize(provider, s)
+            return calendars.resolve(provider, s, anchor)
         except calendars.CalendarError:
             return ""
     return norm
@@ -318,7 +408,7 @@ def parse_output(text: str, cid: str, offscreen: bool = False) -> list[dict]:
     if not isinstance(suggestions, list):
         return []
     char_ids, player_tokens, loc_ids = valid_ids(cid)
-    norm = date_normalizer(cid)
+    norm = date_normalizer(cid, tolerant=True)
 
     out: list[dict] = []
     for e in suggestions:
@@ -372,7 +462,7 @@ def parse_intent(reply: str, cid: str, offscreen: bool = False) -> dict:
             if isinstance(raw_cast, list) else [])
     loc = _str_field(parsed.get("location", ""))
     return {"title": _str_field(parsed.get("title", "")),
-            "date": date_normalizer(cid)(_str_field(parsed.get("date", ""))),
+            "date": date_normalizer(cid, tolerant=True)(_str_field(parsed.get("date", ""))),
             "location": loc if loc in loc_ids else "",
             "cast": cast}
 
@@ -381,7 +471,7 @@ def parse_next_date(text: str, cid: str) -> str:
     """The model's general next-scene date estimate, validated; "" when absent/bad."""
     parsed = _extract_json(text)
     raw = parsed.get("next_date", "") if isinstance(parsed, dict) else ""
-    return date_normalizer(cid)(str(raw).strip())
+    return date_normalizer(cid, tolerant=True)(str(raw).strip())
 
 
 def parse_greeting_picks(text: str, allowed: set[str]) -> list[str]:

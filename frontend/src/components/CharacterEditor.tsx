@@ -579,17 +579,25 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     );
   }
 
-  const bookCount = card?.data.character_book?.entries?.length ?? 0;
   // localize reads/writes the server-stored card, so running it with unsaved
   // editor changes would discard them — guard the button when the form is dirty.
   // Compare through buildCard()'s normalization (it always rewrites
   // alternate_greetings) so an unedited card isn't flagged as dirty.
-  const storedCard = detail?.versions.find((v) => v.id === vid)?.card;
+  const storedVersion = detail?.versions.find((v) => v.id === vid);
+  const storedCard = storedVersion?.card;
   const normalizedStored = storedCard && {
     ...storedCard,
     data: { ...storedCard.data, alternate_greetings: (storedCard.data.alternate_greetings ?? []).filter((g) => g.trim() !== "") },
   };
   const dirty = !!(card && normalizedStored && JSON.stringify(buildCard()) !== JSON.stringify(normalizedStored));
+  // The import posts no card: the route commits whatever character_book is on
+  // disk for this version, normalized. So the count is a fact about the stored
+  // version, and it comes from the payload that describes it — not from the
+  // live editor card (which is the editor's state, not disk's, and would
+  // follow a book edit the import ignores) and not from a `.entries.length`
+  // taken here, which counts the disabled and blank entries normalization
+  // drops: offer 4, land 1 (#16).
+  const bookCount = storedVersion?.importable_lore ?? 0;
 
   function localizeControls(blocked: boolean, blockedHint?: string) {
     if (!detail) return null;
@@ -980,7 +988,12 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     setBookMsg(null);
     try {
       const { created } = await api.importCharacterBook(wid, detail.meta.id, vid);
-      setBookMsg(`Imported ${created.length} entr${created.length === 1 ? "y" : "ies"} to world lore`);
+      // `lorebook.commit` drops entries already in world lore, so a second
+      // click on an unchanged book legitimately creates nothing. "Imported 0
+      // entries" reads as a failure; say what actually happened instead.
+      setBookMsg(created.length === 0
+        ? "Already in world lore — nothing new to import"
+        : `Imported ${created.length} entr${created.length === 1 ? "y" : "ies"} to world lore`);
     } catch (err: unknown) {
       setError(errorText(err));
     }
@@ -1949,9 +1962,12 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
 
           {worldScope && bookCount > 0 && (
             <div className="book-import">
-              <button className="subtle" type="button" onClick={importBook}>
+              <button className="subtle" type="button" disabled={dirty} onClick={importBook}>
                 Import {bookCount} embedded lore {bookCount === 1 ? "entry" : "entries"} to world
               </button>
+              {/* The import reads the stored card, so while the form is dirty the
+                  entries it would commit are not the ones the editor is showing. */}
+              {dirty && <span className="field-hint">Save your changes before importing embedded lore</span>}
               {bookMsg && <span className="field-hint">{bookMsg}</span>}
             </div>
           )}

@@ -112,6 +112,13 @@ first if you think one should be skipped.
 ## Working notes
 
 - Backend tests isolate the store via `monkeypatch.setenv("GRIMOIRE_HOME", tmp_path)`.
+- Nothing creates the store until the first API call that needs it, so the
+  installers end by printing where it will land — `python -m grimoire.where`,
+  which asks `store.paths` rather than assuming `~/.grimoire` (wrong wherever
+  `GRIMOIRE_HOME` or the bootstrap pointer already names somewhere else).
+  `scripts/unix/install.sh` and `scripts/windows/install.ps1` also check the
+  Python and Node floors up front, and `test_install_scripts.py` holds those
+  floors to `requires-python` and `engines.node`.
 - **Run the gate with `make check`** — the same targets `.github/workflows/ci.yml`
   runs, so a CI failure reproduces locally with one command. Individually:
   `make check-py` (pytest), `check-web` (npm ci + typecheck + vitest under
@@ -121,8 +128,13 @@ first if you think one should be skipped.
   pydantic 1.10, no `desktop` extra — in a throwaway venv). `make check-apk`
   is excluded from `check` because it needs `make android-bootstrap` first.
   - In a **worktree**, pass `PY` explicitly: the default points at
-    `backend/.venv`, which only the main checkout has, e.g.
-    `make check-py PY=C:/Users/<you>/github/grimoire/backend/.venv/Scripts/python.exe`.
+    `backend/.venv`, which only the main checkout has — e.g.
+    `make check-py PY=~/github/grimoire/backend/.venv/bin/python` on macOS/Linux,
+    `make check-py PY=C:/Users/<you>/github/grimoire/backend/.venv/Scripts/python.exe`
+    on Windows. The venv's interpreter lives under `bin/` on macOS/Linux and
+    `Scripts/` on Windows; every command in this file, in `README.md` and in the
+    frozen-campaign README spells out both forms, and `test_install_scripts.py`
+    fails on a new one that names only one.
   - `check-py` sets `PYTHONPATH` to this tree's `backend/src` on purpose:
     `backend/.venv` holds an editable install whose `.pth` points at whichever
     checkout created it, so a bare `pytest` inside a worktree silently tests the
@@ -145,8 +157,10 @@ first if you think one should be skipped.
   value is being old. `snapshot.json` (the expected output of the read-only
   sweep) *is* regenerated deliberately, when a template or render moved on
   purpose and the new text was reviewed — `cd backend && PYTHONPATH=src
-  .venv/bin/python -m tests.fixtures.frozen_campaign.sweep`, committed with the
-  change that moved it. See that directory's README.
+  .venv/bin/python -m tests.fixtures.frozen_campaign.sweep` (on Windows:
+  `cd backend; $env:PYTHONPATH="src"; .venv\Scripts\python.exe -m
+  tests.fixtures.frozen_campaign.sweep`), committed with the change that moved
+  it. See that directory's README.
 - **Faking the LLM**: use `backend/tests/llm_fakes.py`, injected at
   `app.dependency_overrides[routes.get_llm]` — never write another inline fake.
   Scripted turns (`FakeOpenRouter`, `FakeOpenRouterComplete`, …) answer by call

@@ -1,6 +1,7 @@
 import json
 
-from grimoire.store import (appearances, campaigns, characters, chronicle, entities,
+from grimoire.store import (appearances, calendars, campaigns, characters, chronicle, clock,
+                            entities,
                             plot, scenes, suggest, taglines, worlds)
 
 
@@ -91,7 +92,8 @@ def test_build_snapshot_dormancy_counts_scenes_since_last_advance(monkeypatch, t
 
 
 def test_build_prompt_includes_signals():
-    snap = {"now": "2026-01-01", "friendly": "Jan 1", "holidays_today": ["New Year"],
+    snap = {"now": "2026-01-01", "friendly": "Jan 1",
+            "notation": {"example": "", "months": []}, "holidays_today": ["New Year"],
             # A campaign-scheduled event (#101) beside the calendar's holiday:
             # the prompt line carries both, from two different sources.
             "events_today": ["The envoy arrives"],
@@ -123,7 +125,8 @@ def test_build_prompt_includes_signals():
 
 
 def test_standard_instruction_enforces_presence_and_gender():
-    snap = {"now": "", "friendly": "", "holidays_today": [], "events_today": [], "upcoming": None, "birthdays": [],
+    snap = {"now": "", "friendly": "",
+            "notation": {"example": "", "months": []}, "holidays_today": [], "events_today": [], "upcoming": None, "birthdays": [],
             "story_so_far": [], "open_threads": [], "cast": [], "available_locations": []}
     system = suggest.build_prompt(snap)[0]["content"]
     assert "Never assume a character is present" in system
@@ -131,7 +134,8 @@ def test_standard_instruction_enforces_presence_and_gender():
 
 
 def test_offscreen_instruction_keeps_presence_discipline():
-    snap = {"now": "", "friendly": "", "holidays_today": [], "events_today": [], "upcoming": None, "birthdays": [],
+    snap = {"now": "", "friendly": "",
+            "notation": {"example": "", "months": []}, "holidays_today": [], "events_today": [], "upcoming": None, "birthdays": [],
             "story_so_far": [], "open_threads": [], "cast": [], "available_locations": []}
     system = suggest.build_prompt(snap, offscreen=True)[0]["content"]
     assert "OFFSCREEN" in system
@@ -255,7 +259,8 @@ def test_parse_greeting_picks_validates_dedupes_and_keeps_order(monkeypatch, tmp
 
 # ---- suggested dates (per-suggestion "date" + top-level "next_date") ----
 def test_build_prompt_requests_dates_only_with_a_current_date():
-    snap = {"now": "2026-01-01", "friendly": "Jan 1", "holidays_today": [], "events_today": [], "upcoming": None,
+    snap = {"now": "2026-01-01", "friendly": "Jan 1",
+            "notation": {"example": "", "months": []}, "holidays_today": [], "events_today": [], "upcoming": None,
             "birthdays": [], "open_threads": [], "story_so_far": [],
             "cast": [], "available_locations": []}
     assert "next_date" in suggest.build_prompt(snap)[0]["content"]
@@ -345,7 +350,8 @@ def test_parse_intent_treats_a_non_string_field_as_missing(monkeypatch, tmp_path
 
 # ---- direction (#316) ----
 def test_direction_reaches_the_prompt():
-    snap = {"now": "", "friendly": "", "holidays_today": [], "events_today": [], "upcoming": None,
+    snap = {"now": "", "friendly": "",
+            "notation": {"example": "", "months": []}, "holidays_today": [], "events_today": [], "upcoming": None,
             "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
             "available_locations": []}
     msgs = suggest.build_prompt(snap, None, direction="something at sea")
@@ -354,7 +360,8 @@ def test_direction_reaches_the_prompt():
 
 
 def test_no_direction_omits_the_direction_block():
-    snap = {"now": "", "friendly": "", "holidays_today": [], "events_today": [], "upcoming": None,
+    snap = {"now": "", "friendly": "",
+            "notation": {"example": "", "months": []}, "holidays_today": [], "events_today": [], "upcoming": None,
             "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
             "available_locations": []}
     msgs = suggest.build_prompt(snap, None, direction="")
@@ -363,9 +370,199 @@ def test_no_direction_omits_the_direction_block():
 
 
 def test_direction_is_truncated_to_the_limit():
-    snap = {"now": "", "friendly": "", "holidays_today": [], "events_today": [], "upcoming": None,
+    snap = {"now": "", "friendly": "",
+            "notation": {"example": "", "months": []}, "holidays_today": [], "events_today": [], "upcoming": None,
             "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
             "available_locations": []}
     msgs = suggest.build_prompt(snap, None, direction="x" * 900)
     assert ("x" * suggest.DIRECTION_LIMIT) in msgs[1]["content"]
     assert ("x" * (suggest.DIRECTION_LIMIT + 1)) not in msgs[1]["content"]
+
+
+# ---- calendar notation: the prompt must show a form the parser accepts ----
+def _hebrew_campaign(monkeypatch, tmp_path, now="5786-Kislev-25"):
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    cfg = calendars.read_calendar(croot)
+    cfg["primary"] = {"provider": "hebrew", "region": "", "custom_holidays": [], "anchor": None}
+    calendars.write_calendar(croot, cfg)
+    clock.advance(cid, to=now, reason="setup")
+    return cid
+
+
+def test_snapshot_carries_the_calendars_own_notation(monkeypatch, tmp_path):
+    """Not the friendly form: `example` is what `date_normalizer` accepts."""
+    snap = suggest.build_snapshot(_hebrew_campaign(monkeypatch, tmp_path))
+    assert snap["friendly"] == "25 Kislev 5786"
+    assert snap["notation"]["example"] == "5786-Kislev-25"
+    assert snap["notation"]["months"][:3] == ["Tishrei", "Cheshvan", "Kislev"]
+
+
+def test_snapshot_notation_follows_whatever_calendar_is_configured(monkeypatch, tmp_path):
+    """Provider contract only — no calendar is named in the builder."""
+    cid = _campaign(monkeypatch, tmp_path)     # gregorian by default
+    clock.advance(cid, to="2026-06-29", reason="setup")
+    notation = suggest.build_snapshot(cid)["notation"]
+    assert notation["example"] == "2026-06-29"
+    assert notation["months"][:2] == ["01", "02"]
+
+
+def test_snapshot_notation_is_blank_without_a_current_date(monkeypatch, tmp_path):
+    snap = suggest.build_snapshot(_campaign(monkeypatch, tmp_path))
+    assert snap["notation"] == {"example": "", "months": []}
+
+
+def test_prompt_shows_the_native_form_beside_the_friendly_one(monkeypatch, tmp_path):
+    snap = suggest.build_snapshot(_hebrew_campaign(monkeypatch, tmp_path))
+    prompt = "\n".join(m["content"] for m in suggest.build_prompt(snap))
+    assert "25 Kislev 5786" in prompt        # still readable
+    assert "5786-Kislev-25" in prompt        # and now writable
+    assert "Adar" in prompt                  # this year's month keys are listed
+
+
+def test_parse_output_accepts_a_date_written_the_way_the_prompt_displays_it(
+        monkeypatch, tmp_path):
+    """The Hebrew-calendar miss: a model echoing `friendly` used to lose its date."""
+    cid = _hebrew_campaign(monkeypatch, tmp_path)
+    text = ('{"suggestions": [{"title": "A", "premise": "P", "cast": [], '
+            '"location": "", "date": "2 Tevet 5786"}], "next_date": "2 Tevet 5786"}')
+    assert suggest.parse_output(text, cid)[0]["date"] == "5786-Tevet-02"
+    assert suggest.parse_next_date(text, cid) == "5786-Tevet-02"
+
+
+def test_parse_output_still_drops_a_date_no_calendar_could_render(monkeypatch, tmp_path):
+    cid = _hebrew_campaign(monkeypatch, tmp_path)
+    text = ('{"suggestions": [{"title": "A", "premise": "P", "cast": [], '
+            '"location": "", "date": "sometime next winter"}]}')
+    assert suggest.parse_output(text, cid)[0]["date"] == ""
+
+
+def test_parse_intent_accepts_the_friendly_form_too(monkeypatch, tmp_path):
+    cid = _hebrew_campaign(monkeypatch, tmp_path)
+    assert suggest.parse_intent('{"date": "2 Tevet 5786"}', cid)["date"] == "5786-Tevet-02"
+
+
+def test_stored_records_are_held_to_the_strict_notation(monkeypatch, tmp_path):
+    """Tolerance is for MODEL TEXT, not for the ledger.
+
+    `ref_validator` re-checks records this campaign already wrote, on every
+    read of them. Two reasons it stays strict. Correctness: a stored date is
+    canonical by construction, so one that no longer parses means the campaign
+    changed calendars under it -- and a Gregorian date re-read through a Hebrew
+    string matcher is not a date this campaign meant. Cost: the ledger is
+    unbounded, and a fuzzy miss walks the whole window, so a calendar switch
+    would otherwise buy a full scan per idea on every read."""
+    cid = _hebrew_campaign(monkeypatch, tmp_path)
+    assert suggest.valid_refs(cid, [], "", "5786-Tevet-02")["date"] == "5786-Tevet-02"
+    assert suggest.valid_refs(cid, [], "", "2 Tevet 5786")["date"] == ""
+    # ...while the model-output parsers stay tolerant
+    assert suggest.parse_intent('{"date": "2 Tevet 5786"}', cid)["date"] == "5786-Tevet-02"
+
+
+# A user-authored calendar, which is what "any calendar will work" has to mean:
+# `_notation` is built from the CalendarProvider contract alone, so a plugin
+# gets the format lesson by implementing nothing extra. Deliberately wide --
+# more months than the notation hint will list.
+_WIDE_PROVIDER_SRC = '''
+from grimoire.store.calendars.base import CalendarError, CalendarProvider, register
+
+MONTHS = [f"M{n:02d}" for n in range(1, 41)]      # 40 months of 10 days
+
+class _WideProvider(CalendarProvider):
+    def __init__(self, config):
+        self.custom_holidays = []
+
+    def parse(self, native):
+        try:
+            y, m, d = str(native).split("-")
+            return int(y) * 400 + MONTHS.index(m) * 10 + int(d) - 1
+        except (ValueError, IndexError) as e:
+            raise CalendarError(f"bad wide date: {native!r}") from e
+
+    def format(self, fixed):
+        y, rest = divmod(fixed, 400)
+        m, d = divmod(rest, 10)
+        return f"{y}-{MONTHS[m]}-{d + 1:02d}"
+
+    def describe(self, fixed):
+        y, rest = divmod(fixed, 400)
+        m, d = divmod(rest, 10)
+        return {"year": y, "month": m + 1, "month_name": MONTHS[m], "day": d + 1,
+                "weekday_name": "Oneday", "weekday_index": 0,
+                "friendly": f"{d + 1} {MONTHS[m]} {y}"}
+
+    def holidays(self, start_fixed, end_fixed):
+        return []
+
+    def months(self, year):
+        return [{"key": k, "name": k, "days": 10} for k in MONTHS]
+
+register("wide-test-calendar", _WideProvider, "Wide Test Calendar")
+'''
+
+
+def _wide_campaign(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    plugins = tmp_path / "calendars"
+    plugins.mkdir(exist_ok=True)
+    (plugins / "wide_test.py").write_text(_WIDE_PROVIDER_SRC, encoding="utf-8")
+    croot = campaigns.campaign_root(cid)
+    cfg = calendars.read_calendar(croot)
+    cfg["primary"] = {"provider": "wide-test-calendar", "region": "",
+                      "custom_holidays": [], "anchor": None}
+    calendars.write_calendar(croot, cfg)
+    clock.advance(cid, to="5-M03-07", reason="setup")
+    return cid
+
+
+def test_a_plugin_calendar_gets_the_notation_hint_too(monkeypatch, tmp_path):
+    snap = suggest.build_snapshot(_wide_campaign(monkeypatch, tmp_path))
+    assert snap["notation"]["example"] == "5-M03-07"
+    assert "5-M03-07" in "\n".join(m["content"] for m in suggest.build_prompt(snap))
+
+
+def test_an_unlistably_wide_month_set_is_dropped_rather_than_trimmed(monkeypatch, tmp_path):
+    """A trimmed list reads as a complete one, and would teach the model that
+    the months it was not shown do not exist. The example alone is honest."""
+    snap = suggest.build_snapshot(_wide_campaign(monkeypatch, tmp_path))
+    assert snap["notation"]["months"] == []
+    prompt = "\n".join(m["content"] for m in suggest.build_prompt(snap))
+    assert "M01" not in prompt and "months, in order" not in prompt
+
+
+def test_a_plugin_calendars_own_friendly_form_resolves_too(monkeypatch, tmp_path):
+    """The tolerant parser is contract-only as well: no calendar is named in it."""
+    cid = _wide_campaign(monkeypatch, tmp_path)
+    text = ('{"suggestions": [{"title": "A", "premise": "P", "cast": [], '
+            '"location": "", "date": "9 M03 5"}]}')
+    assert suggest.parse_output(text, cid)[0]["date"] == "5-M03-09"
+
+
+_NO_MONTHS_SRC = _WIDE_PROVIDER_SRC.replace(
+    'register("wide-test-calendar", _WideProvider, "Wide Test Calendar")',
+    '''
+class _NoMonthsProvider(_WideProvider):
+    def months(self, year):
+        raise CalendarError("this calendar will not enumerate its months")
+
+register("wide-test-calendar", _WideProvider, "Wide Test Calendar")
+register("no-months-test-calendar", _NoMonthsProvider, "No Months Test Calendar")
+''')
+
+
+def test_a_broken_months_costs_the_month_list_and_not_the_example(monkeypatch, tmp_path):
+    """The two halves of the hint are independent. The example is the half that
+    actually teaches the notation, so a provider that will not enumerate its
+    months must not take it down with them."""
+    cid = _campaign(monkeypatch, tmp_path)
+    plugins = tmp_path / "calendars"
+    plugins.mkdir(exist_ok=True)
+    (plugins / "no_months_test.py").write_text(_NO_MONTHS_SRC, encoding="utf-8")
+    croot = campaigns.campaign_root(cid)
+    cfg = calendars.read_calendar(croot)
+    cfg["primary"] = {"provider": "no-months-test-calendar", "region": "",
+                      "custom_holidays": [], "anchor": None}
+    calendars.write_calendar(croot, cfg)
+    clock.advance(cid, to="5-M03-07", reason="setup")
+
+    assert suggest.build_snapshot(cid)["notation"] == {"example": "5-M03-07", "months": []}
