@@ -8309,10 +8309,14 @@ def test_get_changes_tolerates_garbled_chronicle(client):
 #
 # The contract these tests pin, on all three routes: omitting both parameters
 # returns exactly what the route returned before, and a page is a slice of that
-# same listing rather than a differently-ordered one. So every assertion below
-# is written against the route's OWN unpaged answer -- a test that hard-coded an
-# expected order would pass while the page came back sorted differently, which
-# is the failure worth catching.
+# same listing rather than a differently-ordered one.
+#
+# `/scenes` and `/changes` are asserted against the route's OWN unpaged answer,
+# because their order is the thing under test -- hard-coding an expected order
+# would let a page that came back sorted differently pass. `/chronicle` names
+# its ids outright instead: its listing is seeded here rather than produced by
+# play, and its default is only 50 rows of a 60-row file, so the unpaged answer
+# is not the whole listing and cannot serve as the yardstick.
 
 
 def _seeded_chronicle(client, n: int) -> str:
@@ -8328,6 +8332,26 @@ def _seeded_chronicle(client, n: int) -> str:
     rows = {f"s{i:03d}": {"id": f"s{i:03d}", "one_line": f"beat {i}"} for i in range(n)}
     (store.campaigns.campaign_root(cid) / "chronicle.json").write_text(
         json.dumps(rows), encoding="utf-8")
+    return cid
+
+
+def _three_lore_changes(client) -> str:
+    """A campaign with three lore records, each carrying a one-field change.
+
+    Named so they sort in this order under `(kind, name)`, which is what the
+    route orders by -- three rows is the fewest that can tell a page from a
+    prefix and from a suffix at the same time.
+    """
+    _, cid = _campaign(client)
+    croot = store.campaigns.campaign_root(cid)
+    for name in ("Ashfall", "Brinepact", "Cinderwrit"):
+        store.entities.create_entity(croot, "lore", name, body="old body")
+        eid = name.lower()
+        store.absorb.apply_edits(cid, [{"id": f"lore:{eid}", "kind": "lore",
+                                        "target": {"kind": "lore", "id": eid},
+                                        "label": f"{name} — lore", "field": "body",
+                                        "before": "old body", "after": "old body\nnew line",
+                                        "authored": False}], "s1")
     return cid
 
 
@@ -8380,16 +8404,7 @@ def test_get_chronicle_offset_walks_back_from_the_newest_record(client):
 
 
 def test_get_changes_pages_the_listing_it_already_returns(client):
-    _, cid = _campaign(client)
-    croot = store.campaigns.campaign_root(cid)
-    for name in ("Ashfall", "Brinepact", "Cinderwrit"):
-        store.entities.create_entity(croot, "lore", name, body="old body")
-        eid = name.lower()
-        store.absorb.apply_edits(cid, [{"id": f"lore:{eid}", "kind": "lore",
-                                        "target": {"kind": "lore", "id": eid},
-                                        "label": f"{name} — lore", "field": "body",
-                                        "before": "old body", "after": "old body\nnew line",
-                                        "authored": False}], "s1")
+    cid = _three_lore_changes(client)
     full = client.get(f"/api/campaigns/{cid}/changes").json()
     assert [r["name"] for r in full] == ["Ashfall", "Brinepact", "Cinderwrit"]
 
@@ -8412,16 +8427,7 @@ def test_get_changes_renders_a_diff_only_for_the_page_it_sends(client, monkeypat
     the one that fails, which is what makes the placement a decision rather than
     an accident.
     """
-    _, cid = _campaign(client)
-    croot = store.campaigns.campaign_root(cid)
-    for name in ("Ashfall", "Brinepact", "Cinderwrit"):
-        store.entities.create_entity(croot, "lore", name, body="old body")
-        eid = name.lower()
-        store.absorb.apply_edits(cid, [{"id": f"lore:{eid}", "kind": "lore",
-                                        "target": {"kind": "lore", "id": eid},
-                                        "label": f"{name} — lore", "field": "body",
-                                        "before": "old body", "after": "old body\nnew line",
-                                        "authored": False}], "s1")
+    cid = _three_lore_changes(client)
 
     rendered = []
     real = store.changes.line_diff
