@@ -1193,6 +1193,31 @@ def post_campaign_pc(cid: str, body: PCCreate):
     return {"pc": pid, "version": vid}
 
 
+def _campaign_char_version_or_404(cid: str, char: str, vid: str):
+    """The campaign root, once `char`/`vid` are known to name a real character
+    version.
+
+    Resolved through `overlay.char_root`, not the campaign root: on a thin
+    campaign the character's card files are still the world's, so a croot-only
+    check would 404 every inherited character -- which is all of them. The root
+    this *returns* is always the campaign's, because that is where a write has
+    to land. A character the campaign has tombstoned resolves to the campaign
+    root, where there is no `character.md`, so it is refused for the same
+    reason a typo is; so is a version `pick_version` purged.
+
+    Why gate at all -- and why the reads on this surface are left ungated
+    here too -- see `common._world_char_version_or_404` (#360).
+    """
+    root = _campaign_root_or_404(cid)
+    try:
+        store.characters.require_version(store.overlay.char_root(cid, char), char, vid)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    return root
+
+
 @router.get("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}")
 def get_campaign_image(cid: str, char: str, vid: str, name: str, request: Request):
     _campaign_root_or_404(cid)
@@ -1201,7 +1226,7 @@ def get_campaign_image(cid: str, char: str, vid: str, name: str, request: Reques
 
 @router.put("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}")
 async def put_campaign_image(cid: str, char: str, vid: str, name: str, file: UploadFile = File(...)):
-    root = _campaign_root_or_404(cid)
+    root = _campaign_char_version_or_404(cid, char, vid)
     data = await file.read()
     ext = _upload_image_ext(data)  # the bytes name the type, not `file.filename` (#321)
     try:
@@ -1213,7 +1238,7 @@ async def put_campaign_image(cid: str, char: str, vid: str, name: str, file: Upl
 
 @router.delete("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}")
 def delete_campaign_image(cid: str, char: str, vid: str, name: str):
-    _campaign_root_or_404(cid)
+    _campaign_char_version_or_404(cid, char, vid)
     # tombstone so a still-materialized world image doesn't show back through
     # the overlaid read the moment the campaign's own copy is gone (get_campaign_image).
     store.overlay.delete_image(cid, char, vid, name)
@@ -1222,7 +1247,7 @@ def delete_campaign_image(cid: str, char: str, vid: str, name: str):
 
 @router.post("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}/promote")
 def promote_campaign_image(cid: str, char: str, vid: str, name: str):
-    _campaign_root_or_404(cid)
+    _campaign_char_version_or_404(cid, char, vid)
     try:
         store.overlay.promote_image(cid, char, vid, name)
     except FileNotFoundError:
@@ -1235,7 +1260,7 @@ def promote_campaign_image(cid: str, char: str, vid: str, name: str):
 
 @router.put("/campaigns/{cid}/characters/{char}/versions/{vid}/images/avatar/focus")
 def put_campaign_avatar_focus(cid: str, char: str, vid: str, body: AvatarFocus):
-    root = _campaign_root_or_404(cid)
+    root = _campaign_char_version_or_404(cid, char, vid)
     # a thin campaign may only have this avatar through the inherited world
     # character, so the existence gate must check the overlay union, not croot alone
     names = {i["name"] for i in store.overlay.list_images(cid, char, vid)}
@@ -1249,7 +1274,7 @@ def put_campaign_avatar_focus(cid: str, char: str, vid: str, body: AvatarFocus):
 
 @router.post("/campaigns/{cid}/characters/{char}/versions/{vid}/images/copy-from-greeting")
 def post_copy_campaign_image_from_greeting(cid: str, char: str, vid: str, body: CopyFromGreeting):
-    root = _campaign_root_or_404(cid)
+    root = _campaign_char_version_or_404(cid, char, vid)
     # the source greeting image may still be inherited (unmaterialized) in a thin
     # campaign; resolve its root through the overlay so the copy still finds it,
     # while the destination character write always targets the campaign root

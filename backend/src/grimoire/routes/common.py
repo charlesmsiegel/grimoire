@@ -464,6 +464,31 @@ def _world_root_or_404(wid: str):
     return store.worlds.world_root(wid)
 
 
+def _world_char_version_or_404(wid: str, cid: str, vid: str):
+    """The world root, once `cid`/`vid` are known to name a real character version.
+
+    Every *write* on the character image surface goes through this (#360).
+    `assets.put_image` creates the directory it writes into, so an unchecked id
+    turned a typo into `characters/<typo>/assets/<vid>/avatar.png`: bytes no
+    listing shows (`list_characters` needs `character.md`, `read_character`
+    only reports images for versions it can resolve) and no delete route can
+    name, reported to the caller as a successful upload.
+
+    The reads are deliberately left ungated, which is the one place this
+    departs from `worlds._world_pc_version_or_404`: they create nothing, they
+    already answer "no image" for an id that names nothing, and
+    `GET .../images/avatar` is hit once per portrait per rendered grid.
+    """
+    root = _world_root_or_404(wid)
+    try:
+        store.characters.require_version(root, cid, vid)   # two stats, no read
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    return root
+
+
 def _campaign_root_or_404(cid: str):
     try:
         store.campaigns.ensure_campaign_slim(cid)  # lazy slim of pre-overlay campaigns

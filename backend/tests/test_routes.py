@@ -503,6 +503,134 @@ def test_character_image_routes(client):
     assert client.get(f"{base}/avatar").status_code == 404
 
 
+def test_character_image_writes_refuse_an_id_that_names_no_character_or_version(client):
+    """#360: `put_image` creates the directory it writes into, so an unchecked
+    id turned a typo into `characters/<typo>/assets/<vid>/avatar.png` -- a
+    folder `list_characters` never shows (it needs `character.md`) and
+    `read_character` never reaches, so the bytes were orphaned on disk forever
+    while the caller was told the upload worked. Every write on this surface is
+    now gated on the character *and* the version, delete included: removing an
+    image that is already gone is idempotent, but removing one from a character
+    that does not exist is a typo worth reporting."""
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    png = {"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}
+
+    ghost_char = f"/api/worlds/{wid}/characters/nobody/versions/default/images"
+    ghost_ver = f"/api/worlds/{wid}/characters/{cid}/versions/typo/images"
+    for base, detail in ((ghost_char, "character not found"), (ghost_ver, "version not found")):
+        for method, url in (("DELETE", f"{base}/avatar"), ("POST", f"{base}/avatar/promote")):
+            r = client.request(method, url)
+            assert (r.status_code, r.json()["detail"]) == (404, detail), (method, url)
+        r = client.put(f"{base}/avatar",
+                       files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+        assert (r.status_code, r.json()["detail"]) == (404, detail), base
+        r = client.put(f"{base}/avatar/focus", json={"focus": 10})
+        assert (r.status_code, r.json()["detail"]) == (404, detail), base
+
+    # and nothing was created on the way to those 404s
+    wroot = store.worlds.world_root(wid)
+    assert not (wroot / "characters" / "nobody").exists()
+    assert not (wroot / "characters" / cid / "assets" / "typo").exists()
+    # the real version still works, so the gate is not just refusing everything
+    assert client.put(f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar",
+                      files=png).status_code == 200
+
+
+def test_character_image_reads_are_left_ungated(client):
+    """Deliberately narrower than the PC surface: only the writes create
+    anything, so only the writes are gated. A read of a character that isn't
+    there already answers "no image" without touching the disk, and gating it
+    would put two extra stats on `GET .../images/avatar`, which a rendered
+    grid hits once per portrait."""
+    wid = _world(client)
+    assert client.get(f"/api/worlds/{wid}/characters/nobody/versions/default/images").json() == []
+    assert client.get(
+        f"/api/worlds/{wid}/characters/nobody/versions/default/images/avatar").status_code == 404
+
+
+def test_campaign_character_image_writes_gate_on_the_inherited_character(client):
+    """The gate resolves through `overlay.char_root`. A croot-only check would
+    404 every character a thin campaign has not materialized -- which is all of
+    them."""
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    croot = store.campaigns.campaign_root(cid)
+    assert not (croot / "characters" / chid).exists()   # never materialized
+
+    base = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"
+    assert client.put(f"{base}/avatar",
+                      files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}
+                      ).status_code == 200            # inherited character resolves
+
+    ghost = f"/api/campaigns/{cid}/characters/nobody/versions/default/images"
+    r = client.put(f"{ghost}/avatar",
+                   files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    assert (r.status_code, r.json()["detail"]) == (404, "character not found")
+    assert not (croot / "characters" / "nobody").exists()
+
+    # A character this campaign has DELETED resolves to the campaign root, where
+    # there is no character.md -- so the gate refuses it for the same reason it
+    # refuses a typo, and art cannot be filed against a record the campaign disowned.
+    store.overlay.add_deleted(cid, f"characters/{chid}")
+    assert client.get(f"/api/campaigns/{cid}/characters").json() == []
+    r = client.put(f"{base}/avatar",
+                   files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    assert (r.status_code, r.json()["detail"]) == (404, "character not found")
+
+
+def test_a_purged_character_version_cannot_be_given_campaign_art(client):
+    """Picking a version removes the siblings from the campaign, so a request
+    still aimed at one of them names a version this campaign no longer has.
+    Without the gate the upload lands in `assets/<purged-vid>/`, which nothing
+    in the campaign can ever render, list or delete."""
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    older = client.post(f"/api/worlds/{wid}/characters/{chid}/versions",
+                        json={"name": "Older",
+                              "card": store.characters.blank_card("Sera")}).json()["version"]
+    assert client.post(f"/api/campaigns/{cid}/characters/{chid}/pick-version",
+                       json={"version": "default"}).status_code == 200
+    assert [v["id"] for v in
+            client.get(f"/api/campaigns/{cid}/characters/{chid}").json()["versions"]] == ["default"]
+
+    r = client.put(f"/api/campaigns/{cid}/characters/{chid}/versions/{older}/images/avatar",
+                   files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    assert (r.status_code, r.json()["detail"]) == (404, "version not found")
+    assert not (store.campaigns.campaign_root(cid) / "characters" / chid / "assets" / older).exists()
+    # the world still has that version, and it can still be given art there
+    assert client.put(f"/api/worlds/{wid}/characters/{chid}/versions/{older}/images/avatar",
+                      files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}
+                      ).status_code == 200
+
+
+def test_copy_image_from_greeting_refuses_a_character_that_is_not_there(client):
+    """The copy writes through `assets.put_image` like every other write on this
+    surface, so it takes the same gate in both scopes: a typo'd destination
+    would otherwise file the greeting's art under a character no listing can
+    reach. The world-side route lives in `routes/greetings.py`, which is why it
+    is easy to miss when the other eight are hardened."""
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Opener", "character": chid, "version": "default"}).json()["id"]
+    store.assets.put_image(store.worlds.world_root(wid), gid, "default",
+                           "embed-abc123def456", b"art", "png", base="greetings")
+    body = {"gid": gid, "name": "embed-abc123def456", "slot": "avatar"}
+
+    for scope in (f"/api/worlds/{wid}", f"/api/campaigns/{cid}"):
+        r = client.post(f"{scope}/characters/nobody/versions/default/images/copy-from-greeting",
+                        json=body)
+        assert (r.status_code, r.json()["detail"]) == (404, "character not found"), scope
+        r = client.post(f"{scope}/characters/{chid}/versions/typo/images/copy-from-greeting",
+                        json=body)
+        assert (r.status_code, r.json()["detail"]) == (404, "version not found"), scope
+
+    for root in (store.worlds.world_root(wid), store.campaigns.campaign_root(cid)):
+        assert not (root / "characters" / "nobody").exists()
+        assert not (root / "characters" / chid / "assets" / "typo").exists()
+
+
 def test_image_upload_stores_the_extension_the_bytes_are(client):
     """#321: the stored extension used to come from the client's filename, so a
     JPEG uploaded as `avatar.png` was stored as `.png` and then declared
