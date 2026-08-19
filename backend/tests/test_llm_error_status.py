@@ -253,6 +253,21 @@ def test_a_rate_limited_route_passes_the_providers_window_on(client):
     assert r.headers["retry-after"] == "13"
 
 
+def test_a_cross_origin_caller_can_read_the_retry_after(client):
+    """CORS hides every response header but a safelisted handful, and
+    `Retry-After` is not one of them. The app's own frontend is same-origin via
+    vite's proxy, so nothing here would have noticed."""
+    _wid, cid = _fixtures(client)
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FailingOpenRouter([], "rate_limit", "slow down", retry_after=12.4)
+
+    r = client.post(f"/api/campaigns/{cid}/scene-suggestions",
+                    headers={"Origin": "http://localhost:5173"})
+
+    assert r.status_code == 429 and r.headers["retry-after"] == "13"
+    assert "Retry-After" in r.headers["access-control-expose-headers"]
+
+
 def test_a_rate_limit_with_no_window_sends_no_retry_after(client):
     _wid, cid = _fixtures(client)
     client.app.dependency_overrides[routes.get_llm] = \
