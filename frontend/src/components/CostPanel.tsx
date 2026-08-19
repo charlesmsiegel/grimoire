@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type CampaignBudget, type SceneUsage, type UsageTurn } from "../api/client";
 
 /** What this scene's turns cost, and where the campaign stands against its
@@ -41,9 +41,19 @@ export function CostPanel({ cid, sid, refreshKey }: {
    *  successful save is what puts the stored value back into it. */
   const seededFrom = useRef<string | null>(null);
 
-  const reload = useCallback(() => {
-    api.getSceneUsage(cid, sid).then(setUsage).catch(() => setUsage(null));
+  // Guarded on the reader still being here, the rule every read in this rail
+  // follows (`SceneInspector`'s `mine()`): the inspector stays mounted across a
+  // scene switch, so a read issued for the scene they just left settles after
+  // the new one's and would put its cost under the new scene's name. A ledger
+  // scan is slower than most reads here, which makes that ordering likely
+  // rather than theoretical.
+  useEffect(() => {
+    let live = true;
+    api.getSceneUsage(cid, sid)
+      .then((u) => { if (live) setUsage(u); })
+      .catch(() => { if (live) setUsage(null); });
     api.getCampaignBudget(cid).then((b) => {
+      if (!live) return;
       setBudget(b);
       if (seededFrom.current === cid) return;
       seededFrom.current = cid;
@@ -53,9 +63,9 @@ export function CostPanel({ cid, sid, refreshKey }: {
       // the number back.
       setLimit(b.level === "off" ? "" : String(b.limit_usd));
       setPeriod(b.period);
-    }).catch(() => setBudget(null));
-  }, [cid, sid]);
-  useEffect(() => { reload(); }, [reload, refreshKey]);
+    }).catch(() => { if (live) setBudget(null); });
+    return () => { live = false; };
+  }, [cid, sid, refreshKey]);
 
   async function saveBudget(next: number | null) {
     setError(null);
@@ -77,10 +87,14 @@ export function CostPanel({ cid, sid, refreshKey }: {
 
   return (
     <div className="cost-panel">
-      {totals && (
+      {/* `calls > 0`, not merely "the read landed": a scene that has generated
+          nothing would otherwise head its own empty list with "$0.00 · 0 turns",
+          which is both noise and the one figure this panel must not print
+          casually. The line below says the same thing in words. */}
+      {totals && totals.calls > 0 && (
         <>
           <div className="ctx-tokens">
-            {money(totals.cost_usd)} · {totals.calls} {totals.calls === 1 ? "turn" : "turns"}
+            {bucketPrice(totals)} · {totals.calls} {totals.calls === 1 ? "turn" : "turns"}
             {" · "}{totals.total_tokens.toLocaleString()} tok
           </div>
           {/* Both of these are the same warning in different words: the number
@@ -104,7 +118,7 @@ export function CostPanel({ cid, sid, refreshKey }: {
         <div className="cost-tasks">
           {usage.by_task.map((b) => (
             <span className="chip on" key={b.key}>
-              {b.key} {b.calls} · {money(b.cost_usd)}
+              {b.key} {b.calls} · {bucketPrice(b)}
             </span>
           ))}
         </div>
@@ -116,7 +130,12 @@ export function CostPanel({ cid, sid, refreshKey }: {
           {usage.turns.length === 0 && (
             <div className="field-hint">Nothing metered in this scene yet.</div>
           )}
-          {usage.turns.map((t) => <TurnRow turn={t} key={`${t.ts}-${t.task}-${t.model}`} />)}
+          {/* Keyed by position, not by content. Absorb runs its phases at once
+              now, so two rows genuinely can share a stamp, a task and a model —
+              and a duplicate key silently mis-renders one of them. The list is
+              deterministically sorted, so the index is stable for a given
+              answer, and every answer replaces the whole list anyway. */}
+          {usage.turns.map((t, i) => <TurnRow turn={t} key={`${t.ts}-${i}`} />)}
           {usage.truncated && (
             <div className="field-hint">
               Showing the most recent {usage.listed}. The totals above cover all of them.
@@ -125,7 +144,9 @@ export function CostPanel({ cid, sid, refreshKey }: {
         </>
       )}
 
-      <div className="ctx-caption">Campaign budget</div>
+      {/* Gated on the read having landed. A caption with nothing under it reads
+          as a budget of nothing rather than as a lookup that failed. */}
+      {budget && <div className="ctx-caption">Campaign budget</div>}
       {budget && budget.level !== "off" && !editing && (
         <>
           <div className="ctx-bar">
@@ -176,9 +197,12 @@ export function CostPanel({ cid, sid, refreshKey }: {
             {/* Disabled rather than 400'd: the store reads anything it cannot
                 make a positive number of dollars out of as "no budget", so a
                 live button here would silently clear one instead of setting it. */}
+            {/* A cent, not merely positive. The store keeps budgets to the
+                cent and reads anything below one as "no budget", so a live
+                button here would answer "Set budget" by silently clearing it. */}
             <button className="primary" onClick={() => saveBudget(typed)}
-                    disabled={busy || !(typed > 0)}
-                    title={typed > 0 ? undefined : "A budget is a positive amount"}>
+                    disabled={busy || !(typed >= 0.01)}
+                    title={typed >= 0.01 ? undefined : "A budget is at least one cent"}>
               Set budget
             </button>
             {editing && <button onClick={() => setEditing(false)} disabled={busy}>Cancel</button>}
@@ -220,11 +244,29 @@ function TurnRow({ turn }: { turn: UsageTurn }) {
   );
 }
 
+/** What a bucket of calls cost, or that nobody priced them.
+ *
+ *  A bucket whose calls were ALL unpriced sums to 0.0, and rendering that as
+ *  `$0.00` is the one claim this panel exists not to make — every
+ *  OpenAI-compatible endpoint reports no price today, so a whole scene of them
+ *  would read as free. A bucket with even one priced call keeps its figure; the
+ *  note under the totals is what says the figure is a floor. */
+function bucketPrice(bucket: { cost_usd: number; priced_calls: number;
+                               unpriced_calls: number }): string {
+  return bucket.priced_calls === 0 && bucket.unpriced_calls > 0
+    ? "unpriced" : money(bucket.cost_usd);
+}
+
 /** A dollar figure at the precision it is actually worth reading at. A cheap
  *  model's turn costs $0.0042, and `toFixed(2)` renders every one of them as
  *  $0.00 — a whole scene of "free" turns adding up to a bill. */
 export function money(usd: number): string {
-  if (usd >= 0.01 || usd === 0) return `$${usd.toFixed(2)}`;
+  // Grouped, like the token counts beside it: an ungrouped $1000.00 next to a
+  // 1,880 tok is two number systems in one line.
+  if (usd >= 0.01 || usd === 0) {
+    return `$${usd.toLocaleString(undefined, { minimumFractionDigits: 2,
+                                               maximumFractionDigits: 2 })}`;
+  }
   return usd >= 0.0001 ? `$${usd.toFixed(4)}` : "<$0.0001";
 }
 

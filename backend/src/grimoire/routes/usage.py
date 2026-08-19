@@ -111,6 +111,11 @@ def put_campaign_budget(cid: str, body: BudgetBody):
     setting a budget is the surface that has to render the result of setting it,
     and a second round trip to find out whether the campaign is already over the
     number just typed is a round trip for nothing.
+
+    **A PUT is the whole budget, not a patch.** A body carrying only
+    `budget_period` clears the limit, because a period with no limit beside it
+    describes nothing — the two are written and cleared together
+    (`campaigns.lifecycle.BUDGET_KEYS`). Send both, or send neither to clear.
     """
     try:
         store.campaigns.set_campaign_budget(cid, body.budget_usd or 0,
