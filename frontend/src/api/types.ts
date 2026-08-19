@@ -595,6 +595,50 @@ export type PromptLayoutSection = {
 export type PromptLayout = { enabled: boolean; sections: PromptLayoutSection[] };
 /** `total_tokens` counts kept sections only — what was actually sent.
  *  `budget_tokens` is 0 when no budget is configured (nothing is dropped). */
+/** One bucket of the usage ledger (#152) — a window, a model, a task, a scene.
+ *  `cost_usd` is money a provider charged; `estimated_usd` is what
+ *  subscription-billed calls would have cost and did not, so the two are never
+ *  added together. `unpriced_calls` is what neither covers: a total is only the
+ *  whole story when that is zero. The cache pair is a slice *of*
+ *  `prompt_tokens` (#148) and is deliberately absent from `total_tokens`. */
+export type UsageBucket = {
+  calls: number; errors: number;
+  prompt_tokens: number; completion_tokens: number; total_tokens: number;
+  cache_read_tokens: number; cache_write_tokens: number;
+  cost_usd: number; estimated_usd: number;
+  priced_calls: number; unpriced_calls: number; duration_ms: number;
+};
+/** A bucket with the thing it buckets — a task name, a model, a day. */
+export type UsageBreakdown = UsageBucket & { key: string };
+/** One metered call (#153). `cost_usd` is **null, not 0**, when the provider
+ *  priced nothing: no OpenAI-compatible endpoint reports a price today, and
+ *  rendering those turns as free is the one thing this view must not do. */
+export type UsageTurn = {
+  ts: string; task: string; model: string; connection: string;
+  status: string; error: string; attempts: number;
+  prompt_tokens: number; completion_tokens: number; total_tokens: number;
+  cache_read_tokens: number; cache_write_tokens: number;
+  cost_usd: number | null; cost_basis: string; duration_ms: number;
+};
+/** What one scene's turns cost. `since`/`until` is the window actually scanned
+ *  — the scene's own lifetime, clamped by the server — and `truncated` says the
+ *  `turns` list was cut, which never moves `totals`. */
+export type SceneUsage = {
+  campaign: string; scene: string; since: string; until: string; generated_at: string;
+  totals: UsageBucket; by_task: UsageBreakdown[];
+  turns: UsageTurn[]; listed: number; truncated: boolean;
+};
+/** Where a campaign stands against its budget (#153). `level: "off"` is a
+ *  campaign that has set none, and carries no spend fields at all — the server
+ *  does not scan for a number nobody asked for, so reading `spent_usd` as 0
+ *  there would be reading a figure that was never measured. */
+export type CampaignBudget = {
+  limit_usd: number; period: "monthly" | "total";
+  level: "off" | "ok" | "warn" | "over"; warn_fraction: number;
+  since?: string; until?: string;
+  spent_usd?: number; estimated_usd?: number;
+  unpriced_calls?: number; calls?: number; fraction?: number;
+};
 export type SceneContext = {
   model: string; total_tokens: number; dropped_tokens: number;
   budget_tokens: number; sections: ContextSection[];

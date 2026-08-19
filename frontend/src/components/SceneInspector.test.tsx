@@ -23,6 +23,10 @@ vi.mock("../api/client", async () => {
       addToCast: vi.fn(), removeFromCast: vi.fn(),
       getSuggestions: vi.fn(), dismissSuggestion: vi.fn(),
       getPins: vi.fn(), setPin: vi.fn(), removePin: vi.fn(),
+      // The Cost section (#153). Resolved to an empty ledger and no budget
+      // so it renders its quiet state: these suites assert on the rest of
+      // the inspector, not on the bill.
+      getSceneUsage: vi.fn(), getCampaignBudget: vi.fn(), setCampaignBudget: vi.fn(),
       actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string) => `/img/${k}/${a}/${v}`,
       entityImageUrl: () => "/loc-img",
     },
@@ -56,6 +60,15 @@ beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
   (api.getCast as any).mockResolvedValue([{ kind: "characters", id: "seraphine", role: "npc" }]);
+  (api.getSceneUsage as any).mockResolvedValue({
+    campaign: "c", scene: "s", since: "2026-08-01", until: "2026-08-14",
+    generated_at: "2026-08-14T12:00:00Z",
+    totals: { calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0,
+              cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: 0, estimated_usd: 0,
+              priced_calls: 0, unpriced_calls: 0, duration_ms: 0 },
+    by_task: [], turns: [], listed: 0, truncated: false });
+  (api.getCampaignBudget as any).mockResolvedValue(
+    { limit_usd: 0, period: "monthly", level: "off", warn_fraction: 0.8 });
   (api.addToCast as any).mockResolvedValue({ ok: true });
   (api.getSuggestions as any).mockResolvedValue([]);
   (api.dismissSuggestion as any).mockResolvedValue({ ok: true });
@@ -559,6 +572,18 @@ test("the Campaign clock section is shut until asked for, then mounts the panel"
   fireEvent.click(screen.getByRole("button", { name: /campaign clock/i }));
   expect(await screen.findByText(/Now: 1 May 2026/)).toBeInTheDocument();
   expect(api.getCampaignClock).toHaveBeenCalledWith("c");
+});
+
+test("the Cost section is shut until asked for, then mounts the breakdown", async () => {
+  // Sibling to Context (#153) and collapsed for the same reason the clock is:
+  // cost is a question a reader comes to ask, and a shut section must not spend
+  // a ledger scan per scene open answering one nobody asked.
+  renderInspector();
+  await screen.findByText("Active characters");
+  expect(api.getSceneUsage).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: /^cost$/i }));
+  expect(await screen.findByText("Nothing metered in this scene yet.")).toBeInTheDocument();
+  expect(api.getSceneUsage).toHaveBeenCalledWith("c", "s");
 });
 
 test("the Context section header still shows the percentage badge and collapses as a whole", async () => {

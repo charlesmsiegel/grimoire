@@ -82,6 +82,18 @@ from . import atomic, paths
 #: kind it understands instead of assuming every row is a chat completion.
 KIND_LLM = "llm"
 
+#: A row saying one scene id became another (#153). Not a call, and every
+#: rollup skips it -- see `_is_call`. A scene's id is its filename stem, so the
+#: first date set on a scene renames it and every store holding that id has to
+#: follow (`store.scene_refs`). This ledger cannot follow the way the others do:
+#: they rewrite a JSON file under the campaign lock, and rewriting a month file
+#: would race the unlocked `O_APPEND` writes that are the whole reason `record`
+#: never blocks a turn. So the rename is APPENDED like everything else, and the
+#: read side walks the trail (`_aliases`) instead. That also keeps the file what
+#: it claims to be: a log of what happened, in the order it happened, that
+#: nothing rewrites after the fact.
+KIND_RENAME = "rename"
+
 #: Longest window ``summary`` will scan, in days. A rollup is one HTTP request
 #: doing unbounded file reads, so the bound is on the query rather than on
 #: trust: a year is past any question this view answers, and refusing more
@@ -218,15 +230,7 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
             row["error"] = error
         if attempts and attempts != 1:
             row["attempts"] = int(attempts)
-        path = month_path(ts)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # `allow_nan=False` is the load-bearing argument. The default writes an
-        # infinite float as the bare token `Infinity` and reads it back happily,
-        # so a Python-only round trip never notices -- while every other JSON
-        # reader rejects the line, and a ledger nothing else can parse is not a
-        # ledger. Refusing at the encoder costs one row instead of a month.
-        atomic.append_line(path, json.dumps(row, allow_nan=False))
-        return row
+        return _append(row, ts)
     except (OSError, TypeError, ValueError):
         # All three, and each is a real escape from a function whose whole
         # contract is that it cannot fail a turn. OSError is the write. A field
@@ -235,6 +239,47 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
         # is the sort of thing only a test finds. ValueError covers `allow_nan`
         # and every `int()`/`float()` above it.
         return None
+
+
+def _append(row: dict, ts: str) -> dict:
+    """Write one row to its month file. Raises -- every caller is inside the
+    guard `record` documents, and sharing this is what keeps a second writer
+    from quietly acquiring different failure semantics."""
+    path = month_path(ts)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # `allow_nan=False` is the load-bearing argument. The default writes an
+    # infinite float as the bare token `Infinity` and reads it back happily,
+    # so a Python-only round trip never notices -- while every other JSON
+    # reader rejects the line, and a ledger nothing else can parse is not a
+    # ledger. Refusing at the encoder costs one row instead of a month.
+    atomic.append_line(path, json.dumps(row, allow_nan=False))
+    return row
+
+
+def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
+    """Record that scene ids were renamed, so the per-scene view can follow.
+
+    `store.scene_refs.repoint`'s sixteenth store, and the only one that does not
+    rewrite what it holds -- see `KIND_RENAME` for why an append-only ledger
+    must not, and `_aliases` for how the read side follows the trail instead.
+
+    Never raises, like `record`: this runs inside a rename that has already
+    moved the scene file, and failing it would leave the campaign half-renamed
+    over a bookkeeping row. A lost trail costs the old turns' cost history, not
+    the scene.
+
+    Takes no lock, for `record`'s reason: each line is a single `O_APPEND`
+    write, never a read-modify-write.
+    """
+    ts = _now()
+    for old, new in mapping.items():
+        if not (isinstance(old, str) and isinstance(new, str)) or old == new:
+            continue
+        try:
+            _append({"ts": ts, "kind": KIND_RENAME, "campaign": cid,
+                     "scene": new, "was": old}, ts)
+        except (OSError, TypeError, ValueError):
+            continue
 
 
 class Meter:
@@ -402,6 +447,14 @@ def _window_files(since: str, until: str) -> list[Path]:
     return months
 
 
+def _is_call(row: dict) -> bool:
+    """True for a row that represents a generation, i.e. everything a rollup is
+    allowed to count. Today the only other kind is `KIND_RENAME`, which carries
+    a campaign and a scene and would otherwise land in every bucket keyed on
+    either -- a free call, in a task named "unknown"."""
+    return row.get("kind") != KIND_RENAME
+
+
 def _add(bucket: dict, row: dict) -> None:
     """Fold one row into a bucket. Reads defensively — a row is a line from a
     file a human can edit, so a string where a number belongs must cost that
@@ -505,7 +558,7 @@ def summary(days: int = 30, campaign: str = "") -> dict:
     by_campaign: dict[str, dict] = {}
 
     for row in _read_rows(since, until):
-        if campaign and row.get("campaign") != campaign:
+        if not _is_call(row) or (campaign and row.get("campaign") != campaign):
             continue
         _add(totals, row)
         ts = row["ts"]
@@ -537,3 +590,283 @@ def _label(value: object) -> str:
     and a dict reaching the frontend as a key would take the panel down the way
     `prompt_log`'s validation exists to prevent."""
     return value if isinstance(value, str) and value else "unknown"
+
+
+# ---- one scene's turns ----
+#: How many rows `scene_usage` lists, newest first. The cap is on the RESPONSE,
+#: not on the scan: the totals beside the list are summed over every row in the
+#: window, so a scene played for a week still reports its true cost and only its
+#: list is short. `truncated` says when that happened, because a list that
+#: silently stops is a list somebody reads as complete.
+SCENE_TURNS = 200
+
+
+def _valid_day(text: object) -> str:
+    """``YYYY-MM-DD`` if that is what this is, else ``""``.
+
+    Parsed rather than pattern-matched, for the reason `campaigns.read` gives
+    about stamps: a regex accepts ``2026-13-45``, and `date.fromisoformat` on
+    that is a ValueError one call further on, inside a report that must not
+    fail because a scene's frontmatter was hand-edited.
+    """
+    if not isinstance(text, str):
+        return ""
+    try:
+        return date.fromisoformat(text[:10]).isoformat()
+    except ValueError:
+        return ""
+
+
+#: How far back a scan reaches when the caller supplies no usable start date --
+#: the same default window every other read here takes.
+_DEFAULT_DAYS = 30
+
+
+def _scan_since(since: object, until: str) -> str:
+    """Where a scan asked to start at ``since`` actually starts.
+
+    ``since`` is a caller's date — the scene's own ``created`` stamp, for the
+    panel asking what one scene cost — so it decides the window, and the window
+    is the one cost this module bounds. Three clamps, each for a real value a
+    campaign.md or a scene's frontmatter can hold:
+
+    - absent or unparseable falls back to `_DEFAULT_DAYS`, which is what every
+      other read here defaults to;
+    - further back than `MAX_DAYS` is clamped to it, so a scene created two
+      years ago costs the same read as one created last month;
+    - *after* today — a scene stamped in the future by a wrong clock or a hand
+      edit — scans today alone rather than producing an empty window that
+      `_window_files` would walk backwards.
+    """
+    day = _valid_day(since)
+    floor = (date.fromisoformat(until) - timedelta(days=MAX_DAYS - 1)).isoformat()
+    if not day:
+        return (date.fromisoformat(until) - timedelta(days=_DEFAULT_DAYS - 1)).isoformat()
+    return min(max(day, floor), until)
+
+
+def _turn(row: dict) -> dict:
+    """One ledger row as the per-turn view sees it.
+
+    Projected, never passed through. A row is a line in a file a human can edit,
+    and handing the frontend whatever it holds is how a dict where a model name
+    belongs takes a panel down — the judgement `_label` already makes for bucket
+    keys. Counts come back through `_int` so the numbers a view sums are
+    numbers, and `cost_usd` stays **None rather than 0.0** when the provider
+    priced nothing, so a turn nobody costed reads as unpriced instead of free.
+    """
+    prompt = _int(row.get("prompt_tokens"))
+    completion = _int(row.get("completion_tokens"))
+    return {
+        "ts": _label(row.get("ts")), "task": _label(row.get("task")),
+        "model": _label(row.get("model")), "connection": _label(row.get("connection")),
+        "status": _label(row.get("status")),
+        "error": row.get("error") if isinstance(row.get("error"), str) else "",
+        # `_int` floors a hand-edited negative to 0, and a call that happened
+        # was attempted at least once -- the field is only written when it is
+        # more than one (`record`), so absent means exactly one too.
+        "attempts": _int(row.get("attempts")) or 1,
+        "prompt_tokens": prompt, "completion_tokens": completion,
+        # Same rule as `_add`: the cache pair is a slice OF the prompt (#148),
+        # so it sits beside the total and never inside it.
+        "total_tokens": prompt + completion,
+        "cache_read_tokens": _int(row.get("cache_read_tokens")),
+        "cache_write_tokens": _int(row.get("cache_write_tokens")),
+        "cost_usd": _float(row.get("cost_usd")),
+        "cost_basis": _label(row.get("cost_basis")) if row.get("cost_basis") else "",
+        "duration_ms": _int(row.get("duration_ms")),
+    }
+
+
+#: How far `_aliases` will follow a rename trail before giving up. A scene is
+#: renamed once or twice in its life (the first date set, an edited title), so
+#: any real chain is short -- and this is a file a human can edit, where
+#: ``a -> b -> a`` is one typo away from looping forever inside a report.
+_MAX_RENAMES = 64
+
+
+def _aliases(campaign: str, scene: str, since: str, until: str) -> set[str]:
+    """Every id this scene's rows can be filed under, `scene` included.
+
+    A scene's id is its filename stem, so setting a date on it renames it
+    (`scenes.moment`) -- and that happens to most scenes, usually a turn or two
+    in. The rows already written carry the id the scene had then. Without this,
+    the panel that asks what a scene cost would answer with the spend since its
+    last rename and call it the scene's, which is the quiet kind of wrong this
+    whole module is trying not to be.
+
+    A second pass over the window rather than a bigger first one: renames are
+    rare, so this collects only `KIND_RENAME` rows and stays constant-memory,
+    where folding it into the main scan would mean holding every row of the
+    campaign to find out which ones belonged.
+    """
+    forward: dict[str, str] = {}
+    for row in _read_rows(since, until):
+        if row.get("kind") != KIND_RENAME or row.get("campaign") != campaign:
+            continue
+        old, new = row.get("was"), row.get("scene")
+        if isinstance(old, str) and isinstance(new, str) and old and new and old != new:
+            # Last writer wins: a scene renamed twice files two rows for the
+            # same `was` only if it was renamed BACK and away again, and the
+            # later hop is the one that is still true.
+            forward[old] = new
+    if not forward:
+        return {scene}
+    ids = {scene}
+    for old in forward:
+        cursor, seen = old, 0
+        while cursor in forward and seen < _MAX_RENAMES:
+            cursor = forward[cursor]
+            seen += 1
+            if cursor == scene:
+                ids.add(old)
+                break
+    return ids
+
+
+def scene_usage(campaign: str, scene: str, *, since: str = "",
+                limit: int = SCENE_TURNS) -> dict:
+    """What one scene's calls cost, per turn and in total (#153).
+
+    The ledger is home-scoped and has no index, so "this scene" is a filter over
+    a scanned window rather than a lookup. ``since`` is what keeps that scan
+    honest *and* cheap: hand it the scene's own ``created`` date and the window
+    is exactly the scene's lifetime — no arbitrary 30 days that would report
+    $0.00 for a scene played last spring, and no year-long scan for one started
+    this morning. See `_scan_since` for what an absent or impossible one does.
+
+    ``turns`` is newest first and capped at ``limit``; ``totals`` and ``by_task``
+    are summed over the whole window regardless, so the numbers do not change
+    when the list is cut. A campaign or scene id that never appears answers with
+    zeroes — a scene that has generated nothing has spent nothing, which is an
+    answer, and the route above is what distinguishes it from a typo.
+    """
+    until = _today()
+    start = _scan_since(since, until)
+    ids = _aliases(campaign, scene, start, until)
+    totals = dict(_ZERO)
+    by_task: dict[str, dict] = {}
+    turns: list[dict] = []
+    for row in _read_rows(start, until):
+        if not _is_call(row) or row.get("campaign") != campaign:
+            continue
+        if row.get("scene") not in ids:
+            continue
+        _add(totals, row)
+        _add(by_task.setdefault(_label(row.get("task")), dict(_ZERO)), row)
+        turns.append(_turn(row))
+    # Sorted, not reversed. Rows are appended in completion order and two
+    # concurrent calls interleave, so file order is *nearly* chronological and
+    # reversing it would put a slow turn that finished late above a fast one
+    # that started after it. A stable sort on the stamp says what the reader
+    # means by "newest".
+    turns.sort(key=lambda turn: turn["ts"], reverse=True)
+    limit = max(0, int(limit))
+    return {"campaign": campaign, "scene": scene, "since": start, "until": until,
+            "generated_at": _now(), "totals": _rounded(totals),
+            "by_task": _ranked(by_task),
+            "turns": turns[:limit], "listed": min(len(turns), limit),
+            "truncated": len(turns) > limit}
+
+
+# ---- budgets ----
+#: The share of a budget at which the warning starts. A budget that only speaks
+#: once it has already been broken is a receipt, not a warning -- the point is to
+#: be told while the session can still be ended.
+WARN_FRACTION = 0.8
+
+#: The two periods a campaign budget can be declared over. `MONTHLY` is the
+#: current UTC calendar month, which is how providers themselves bill; `TOTAL`
+#: is what the campaign has cost over the ledger's whole scannable history.
+MONTHLY, TOTAL = "monthly", "total"
+PERIODS = (MONTHLY, TOTAL)
+
+#: What `budget` reports. `OFF` is a campaign with no budget set, and is
+#: deliberately not `OK`: "you are within your budget" and "you have not asked
+#: for one" are different answers, and a banner that fires on the second is a
+#: banner people turn off.
+OFF, OK, WARN, OVER = "off", "ok", "warn", "over"
+
+
+def normalize_period(period: object) -> str:
+    """A period this module understands. Anything else is `MONTHLY`, which is
+    the safer default of the two: a month's cap read as an all-time one would
+    fire the warning for spend the user had already accepted."""
+    return period if isinstance(period, str) and period in PERIODS else MONTHLY
+
+
+def normalize_limit(limit: object) -> float:
+    """A budget as a positive number of dollars, or 0.0 for "no budget".
+
+    Takes a string as readily as a number: campaign frontmatter is
+    string-scalar (`store.frontmatter`), so the stored value arrives here as
+    ``"12.5"`` and a hand edit can make it ``"twelve"``. Zero, negative,
+    infinite and unparseable all mean the same thing — there is no budget —
+    because the alternative is a campaign pinned permanently to `OVER` by a
+    typo, warning about every call it ever makes.
+    """
+    if isinstance(limit, str):
+        try:
+            limit = float(limit.strip() or 0)
+        except ValueError:
+            return 0.0
+    value = _float(limit)
+    return value if value is not None and value > 0 else 0.0
+
+
+def period_window(period: str, until: str = "") -> tuple[str, str]:
+    """The ``[since, until]`` a period covers, both ``YYYY-MM-DD``.
+
+    `TOTAL` is `MAX_DAYS` back rather than genuinely all time, and that bound is
+    the same one `summary` takes: this store answers windows, and a query whose
+    cost grows with the library's age is the thing `_window_files` exists to
+    avoid. A campaign older than a year reports the last year of its spend, and
+    the window comes back in the payload so the view can say so.
+    """
+    until = _valid_day(until) or _today()
+    if normalize_period(period) == TOTAL:
+        return (date.fromisoformat(until) - timedelta(days=MAX_DAYS - 1)).isoformat(), until
+    return until[:8] + "01", until
+
+
+def budget(campaign: str, limit_usd: object, period: object = "") -> dict:
+    """Where a campaign stands against its budget (#153).
+
+    ``limit_usd`` and ``period`` come straight off ``campaign.md``'s
+    frontmatter, unparsed — normalizing them is this function's job, because it
+    is the only place that knows what an unusable one has to mean (see
+    `normalize_limit`).
+
+    **A campaign with no budget is not scanned at all.** It reports
+    ``{"level": "off"}`` and no spend fields, rather than a zero: nobody asked
+    what this campaign cost, and a `spent_usd: 0.0` in the payload is a number a
+    view will render as a fact. That also keeps the common case — most campaigns
+    never set a budget — free of a file scan on every campaign load.
+
+    Only ``cost_usd`` counts against the cap. Subscription-billed calls
+    (``estimated_usd``) are reported beside it and never summed in, for the
+    reason the module docstring gives: charging a budget for money nobody paid
+    would have a Claude Agent user hitting their cap on their first evening.
+    ``unpriced_calls`` is what says the figure is a floor.
+    """
+    limit = normalize_limit(limit_usd)
+    period = normalize_period(period)
+    if not limit:
+        return {"limit_usd": 0.0, "period": period, "level": OFF,
+                "warn_fraction": WARN_FRACTION}
+    since, until = period_window(period)
+    totals = dict(_ZERO)
+    for row in _read_rows(since, until):
+        if not _is_call(row) or row.get("campaign") != campaign:
+            continue
+        _add(totals, row)
+    spent = round(totals["cost_usd"], _CENTS)
+    fraction = spent / limit
+    level = OVER if spent >= limit else WARN if fraction >= WARN_FRACTION else OK
+    return {"limit_usd": limit, "period": period, "since": since, "until": until,
+            "spent_usd": spent, "estimated_usd": round(totals["estimated_usd"], _CENTS),
+            "unpriced_calls": totals["unpriced_calls"], "calls": totals["calls"],
+            # Rounded like the money it is derived from, and for the same
+            # reason: 0.7999999999999999 renders as 79.99999999999999%.
+            "fraction": round(fraction, 4), "level": level,
+            "warn_fraction": WARN_FRACTION}

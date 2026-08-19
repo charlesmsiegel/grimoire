@@ -8,6 +8,7 @@ import {
   type Actor, type AdvanceDigest, type AdvanceRequest, type Appearance, type Availability,
   type BackupList, type BackupRun, type Briefing, type CalendarConfig, type CalendarMonth,
   type CalendarScope, type CampaignClock, type CampaignMeta, type CampaignModule, type Card,
+  type CampaignBudget,
   type CardFormat, type CascadeReport, type Casefile, type CastChanges, type CastDetail,
   type ForkReport,
   type CharacterDetail,
@@ -28,7 +29,8 @@ import {
   type SceneAlternates, type SceneCheckActor, type SceneContext, type SceneDatetime,
   type SceneIdea, type SceneIdeaDraft, type SceneIntentResult, type SceneLocation,
   type SceneBreak, type SceneBreakAnswer,
-  type SceneMeta, type ScenePage, type SceneSuggestion, type SceneWeather, type SearchMode,
+  type SceneMeta, type ScenePage, type SceneSuggestion, type SceneUsage,
+  type SceneWeather, type SearchMode,
   type SearchResult, type Sheet, type SheetCoverage, type SheetExpected, type StagedEdit,
   type StoreConflicts, type Style, type StyleDetail, type StyleDraft, type Suggestion,
   type Timeline, type TimelineEvent, type WeatherOverrideBody, type WeatherRangeBody,
@@ -914,6 +916,16 @@ export const api = {
   setSceneResponse: (cid: string, sid: string, patch: Partial<ResponseFields>) =>
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/response`, patch),
 
+  // Cost (#153). `fresh` on both: a turn that just landed is exactly what makes
+  // a reader open the Cost section, and a cached read issued before it would
+  // show the spend from before the turn they are asking about.
+  getSceneUsage: (cid: string, sid: string) =>
+    request<SceneUsage>("GET", `/api/campaigns/${cid}/scenes/${sid}/usage`,
+                        undefined, { fresh: true }),
+  getCampaignBudget: (cid: string) =>
+    request<CampaignBudget>("GET", `/api/campaigns/${cid}/budget`, undefined, { fresh: true }),
+  setCampaignBudget: (cid: string, body: { budget_usd: number | null; budget_period?: string }) =>
+    request<CampaignBudget>("PUT", `/api/campaigns/${cid}/budget`, body),
   getSceneContext: (cid: string, sid: string) =>
     request<SceneContext>("GET", `/api/campaigns/${cid}/scenes/${sid}/context`),
   // Pins are campaign-scoped with the scene as a parameter: one read returns

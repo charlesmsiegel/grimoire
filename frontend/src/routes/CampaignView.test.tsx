@@ -90,6 +90,8 @@ vi.mock("../api/client", async () => {
       listAppearances: vi.fn(), listEntityImages: vi.fn(), listEntities: vi.fn(),
       getRollingSummary: vi.fn(), refreshRollingSummary: vi.fn(),
       getSceneBreak: vi.fn(), askSceneBreak: vi.fn(), dismissSceneBreak: vi.fn(),
+      // Cost (#153): the page's budget banner, and the inspector's Cost section.
+      getCampaignBudget: vi.fn(), setCampaignBudget: vi.fn(), getSceneUsage: vi.fn(),
       actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, n: string) =>
         `/img/${k}/${a}/${v}/${n}`,
       entityImageUrl: () => "/loc-img",
@@ -238,6 +240,17 @@ beforeEach(() => {
   (api.listAppearances as any).mockResolvedValue([]);
   (api.listEntityImages as any).mockResolvedValue([]);
   (api.listEntities as any).mockResolvedValue([]);
+  // No budget, so the banner is absent and these suites keep asserting on the
+  // page they were written against. The tests that want one set it themselves.
+  (api.getCampaignBudget as any).mockResolvedValue(
+    { limit_usd: 0, period: "monthly", level: "off", warn_fraction: 0.8 });
+  (api.getSceneUsage as any).mockResolvedValue({
+    campaign: "run", scene: "s1", since: "", until: "", generated_at: "",
+    totals: { calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0,
+              total_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
+              cost_usd: 0, estimated_usd: 0, priced_calls: 0, unpriced_calls: 0,
+              duration_ms: 0 },
+    by_task: [], turns: [], listed: 0, truncated: false });
   (getModels as any).mockResolvedValue([]);
   (api.absorbScene as any).mockResolvedValue({
     one_line: "They met.", summary: "A met B.", keywords: ["salt"],
@@ -8037,4 +8050,64 @@ test("the scene bar opens the incoming-changes review, and closes it again", asy
 
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(screen.queryByRole("heading", { name: "Incoming world changes" })).toBeNull();
+});
+
+// ---- the campaign budget banner (#153) ----
+const OVER_BUDGET = {
+  limit_usd: 10, period: "monthly", level: "over", warn_fraction: 0.8,
+  since: "2026-08-01", until: "2026-08-14", spent_usd: 12.5, estimated_usd: 0,
+  unpriced_calls: 0, calls: 40, fraction: 1.25,
+};
+
+test("a campaign past its budget says so above the scene", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCampaignBudget as any).mockResolvedValue(OVER_BUDGET);
+  renderCampaign();
+
+  expect(await screen.findByText(/Over budget: \$12\.50 of \$10\.00 spent this month/))
+    .toBeInTheDocument();
+});
+
+test("a campaign approaching its budget is warned before it is broken", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCampaignBudget as any).mockResolvedValue(
+    { ...OVER_BUDGET, level: "warn", spent_usd: 8.5, fraction: 0.85 });
+  renderCampaign();
+
+  expect(await screen.findByText(/Approaching budget: \$8\.50 of \$10\.00/)).toBeInTheDocument();
+});
+
+test("a campaign with no budget gets no banner", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  await screen.findByText("Run One");
+
+  expect(screen.queryByText(/budget/i)).not.toBeInTheDocument();
+});
+
+test("dismissing the warning does not swallow the one that says it is gone", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCampaignBudget as any).mockResolvedValue(
+    { ...OVER_BUDGET, level: "warn", spent_usd: 8.5, fraction: 0.85 });
+  renderCampaign();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
+  expect(screen.queryByText(/Approaching budget/)).not.toBeInTheDocument();
+
+  // The same campaign, now past the cap after one more turn: a different fact,
+  // so it is said again. A turn is what re-reads the budget -- the banner is
+  // keyed on the same bump the inspector's panels are, not on a timer.
+  (api.getCampaignBudget as any).mockResolvedValue(OVER_BUDGET);
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
+  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  expect(await screen.findByText(/Over budget/)).toBeInTheDocument();
+});
+
+test("a budget lookup that fails leaves no banner and no error over the scene", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCampaignBudget as any).mockRejectedValue(new Error("nope"));
+  renderCampaign();
+  await screen.findByText("Run One");
+
+  expect(screen.queryByText(/budget/i)).not.toBeInTheDocument();
 });

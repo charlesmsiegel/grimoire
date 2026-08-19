@@ -460,3 +460,320 @@ def test_a_hand_edited_cache_count_costs_that_field_and_not_the_report(home, mon
 
     assert totals["calls"] == 1
     assert totals["cache_read_tokens"] == 0 and totals["cache_write_tokens"] == 0
+
+
+# ---- one scene's turns (#153) ----
+def test_scene_usage_lists_only_that_scenes_calls(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", scene="001-arrival",
+          prompt_tokens=100, completion_tokens=20, cost_usd=0.01)
+    _seed("2026-08-14", campaign="saltmarch", scene="002-departure",
+          prompt_tokens=999, cost_usd=9.0)
+    _seed("2026-08-14", campaign="realm", scene="001-arrival",
+          prompt_tokens=888, cost_usd=8.0)
+
+    out = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")
+    assert out["totals"]["calls"] == 1
+    assert out["totals"]["total_tokens"] == 120
+    assert out["totals"]["cost_usd"] == 0.01
+    assert [turn["prompt_tokens"] for turn in out["turns"]] == [100]
+
+
+def test_scene_usage_breaks_the_scene_down_by_task(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    for task, cost in (("chat", 0.01), ("chat", 0.02), ("retry", 0.05)):
+        _seed("2026-08-14", task=task, campaign="saltmarch", scene="001-arrival",
+              cost_usd=cost)
+
+    out = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")
+    assert [(b["key"], b["calls"], b["cost_usd"]) for b in out["by_task"]] == [
+        ("chat", 2, 0.03), ("retry", 1, 0.05)]
+
+
+def test_scene_turns_come_back_newest_first_whatever_order_they_landed_in(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    # A slow turn that finished after a fast one started files its row later,
+    # so file order is not turn order. Sorting on the stamp is what fixes it.
+    for stamp in ("2026-08-14T10:00:00Z", "2026-08-14T09:00:00Z", "2026-08-14T11:00:00Z"):
+        usage.record(task="chat", campaign="saltmarch", scene="001-arrival", ts=stamp,
+                     prompt_tokens=1)
+
+    out = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")
+    assert [turn["ts"] for turn in out["turns"]] == [
+        "2026-08-14T11:00:00Z", "2026-08-14T10:00:00Z", "2026-08-14T09:00:00Z"]
+
+
+def test_a_long_scenes_list_is_cut_but_its_totals_are_not(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    for _ in range(5):
+        _seed("2026-08-14", campaign="saltmarch", scene="001-arrival",
+              prompt_tokens=10, cost_usd=0.01)
+
+    out = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01", limit=2)
+    assert len(out["turns"]) == 2
+    assert out["listed"] == 2
+    assert out["truncated"] is True
+    assert out["totals"]["calls"] == 5, "the numbers must not move when the list is cut"
+    assert out["totals"]["prompt_tokens"] == 50
+
+
+def test_a_scene_turn_the_provider_never_priced_is_unpriced_not_free(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", scene="001-arrival", prompt_tokens=10)
+
+    turn, = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")["turns"]
+    assert turn["cost_usd"] is None, "$0.00 would be a claim the provider never made"
+
+
+def test_a_scenes_window_starts_at_the_date_it_was_created(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-06-02", campaign="saltmarch", scene="001-arrival", cost_usd=0.5)
+    _seed("2026-08-14", campaign="saltmarch", scene="001-arrival", cost_usd=0.25)
+
+    # The default 30-day window would miss June entirely and report a scene
+    # played all summer as having cost a quarter.
+    out = usage.scene_usage("saltmarch", "001-arrival", since="2026-06-01T09:00:00Z")
+    assert out["since"] == "2026-06-01"
+    assert out["totals"]["cost_usd"] == 0.75
+
+
+def test_a_scene_with_no_usable_created_stamp_falls_back_to_the_default_window(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    out = usage.scene_usage("saltmarch", "001-arrival", since="not a date")
+    assert out["since"] == "2026-07-16"
+
+
+def test_a_scene_stamped_in_the_future_scans_today_rather_than_nothing(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", scene="001-arrival", cost_usd=0.25)
+
+    out = usage.scene_usage("saltmarch", "001-arrival", since="2027-01-01")
+    assert out["since"] == "2026-08-14"
+    assert out["totals"]["cost_usd"] == 0.25
+
+
+def test_a_scenes_scan_cannot_be_widened_past_the_ledgers_own_bound(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    out = usage.scene_usage("saltmarch", "001-arrival", since="2019-01-01")
+    assert out["since"] == "2025-08-14", "MAX_DAYS back, not the date asked for"
+
+
+def test_a_scene_that_has_generated_nothing_reports_zeroes(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    out = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")
+    assert out["turns"] == []
+    assert out["totals"]["calls"] == 0
+    assert out["totals"]["cost_usd"] == 0.0
+
+
+def test_a_scene_turn_keeps_the_cache_split_out_of_its_token_total(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", scene="001-arrival",
+          prompt_tokens=1000, completion_tokens=50,
+          cache_read_tokens=900, cache_write_tokens=100)
+
+    turn, = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")["turns"]
+    assert turn["total_tokens"] == 1050, "a cached prefix must not be counted twice"
+    assert turn["cache_read_tokens"] == 900
+    assert turn["cache_write_tokens"] == 100
+
+
+def test_a_hand_edited_turn_row_cannot_take_the_panel_down(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    path = home / "usage" / "2026-08.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "ts": "2026-08-14T10:00:00Z", "campaign": "saltmarch", "scene": "001-arrival",
+        "task": {"nested": "dict"}, "model": None, "prompt_tokens": "lots",
+        "attempts": -4, "error": 17}) + "\n", encoding="utf-8")
+
+    turn, = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")["turns"]
+    assert turn["task"] == "unknown"
+    assert turn["model"] == "unknown"
+    assert turn["prompt_tokens"] == 0
+    assert turn["attempts"] == 1
+    assert turn["error"] == ""
+
+
+# ---- budgets (#153) ----
+def test_a_campaign_with_no_budget_is_not_measured_at_all(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", cost_usd=5.0)
+
+    out = usage.budget("saltmarch", None)
+    assert out["level"] == "off"
+    assert "spent_usd" not in out, "nobody asked what this campaign cost"
+
+
+def test_a_budget_reports_the_campaigns_share_of_it(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", cost_usd=2.0)
+    _seed("2026-08-14", campaign="realm", cost_usd=90.0)
+
+    out = usage.budget("saltmarch", "10.00")
+    assert out["spent_usd"] == 2.0
+    assert out["fraction"] == 0.2
+    assert out["level"] == "ok"
+    assert out["limit_usd"] == 10.0
+
+
+def test_the_warning_starts_before_the_budget_is_broken(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", cost_usd=8.0)
+
+    assert usage.budget("saltmarch", 10)["level"] == "warn"
+
+
+def test_spending_the_whole_budget_is_over_not_merely_warned(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", cost_usd=10.0)
+
+    assert usage.budget("saltmarch", 10)["level"] == "over"
+
+
+def test_a_monthly_budget_starts_again_on_the_first(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-07-31", campaign="saltmarch", cost_usd=40.0)
+    _seed("2026-08-01", campaign="saltmarch", cost_usd=1.0)
+
+    out = usage.budget("saltmarch", 10, "monthly")
+    assert out["since"] == "2026-08-01"
+    assert out["spent_usd"] == 1.0
+    assert out["level"] == "ok", "last month's spend is last month's problem"
+
+
+def test_a_total_budget_counts_the_months_before_this_one(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-07-31", campaign="saltmarch", cost_usd=40.0)
+    _seed("2026-08-01", campaign="saltmarch", cost_usd=1.0)
+
+    out = usage.budget("saltmarch", 10, "total")
+    assert out["spent_usd"] == 41.0
+    assert out["level"] == "over"
+
+
+def test_a_total_budget_still_scans_no_further_than_the_ledger_ever_does(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    assert usage.budget("saltmarch", 10, "total")["since"] == "2025-08-14"
+
+
+def test_subscription_billed_dollars_are_reported_but_never_charged(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", cost_usd=50.0, cost_basis="equivalent")
+    _seed("2026-08-14", campaign="saltmarch", cost_usd=1.0, cost_basis="billed")
+
+    out = usage.budget("saltmarch", 10)
+    assert out["spent_usd"] == 1.0, "a budget is money paid, not money saved"
+    assert out["estimated_usd"] == 50.0
+    assert out["level"] == "ok"
+
+
+def test_a_budget_says_how_much_of_the_period_carries_no_price(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", cost_usd=1.0)
+    _seed("2026-08-14", campaign="saltmarch", prompt_tokens=5)
+
+    out = usage.budget("saltmarch", 10)
+    assert out["unpriced_calls"] == 1, "the spend figure is a floor, and says so"
+    assert out["calls"] == 2
+
+
+@pytest.mark.parametrize("stored", ["twelve", "", "-4", "0", None, float("inf"), {}])
+def test_a_budget_nobody_can_read_is_no_budget_rather_than_a_broken_one(home, stored):
+    assert usage.budget("saltmarch", stored)["level"] == "off"
+
+
+def test_an_unknown_period_is_read_as_the_monthly_one(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    out = usage.budget("saltmarch", 10, "fortnightly")
+    assert out["period"] == "monthly"
+    assert out["since"] == "2026-08-01"
+
+
+# ---- a renamed scene keeps its cost (#153) ----
+def _pin(monkeypatch, day: str) -> None:
+    """Freeze both clocks the ledger reads. `_seed` stamps its own rows, but a
+    rename stamps itself from `_now`, and a rename dated by the real wall clock
+    falls outside a window pinned to a made-up day."""
+    monkeypatch.setattr(usage, "_today", lambda: day)
+    monkeypatch.setattr(usage, "_now", lambda: f"{day}T12:00:00Z")
+
+
+def test_a_renamed_scene_still_reports_what_it_spent_before_the_rename(home, monkeypatch):
+    """Setting a date on a scene renames its file, which happens to most scenes
+    a turn or two in. Without the trail, the panel reports the spend since the
+    rename and calls it the scene's."""
+    _pin(monkeypatch, "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", scene="001--arrival", cost_usd=0.25)
+    usage.repoint_scenes("saltmarch", {"001--arrival": "001--2026-08-14--arrival"})
+    _seed("2026-08-14", campaign="saltmarch", scene="001--2026-08-14--arrival", cost_usd=0.75)
+
+    out = usage.scene_usage("saltmarch", "001--2026-08-14--arrival", since="2026-08-01")
+    assert out["totals"]["cost_usd"] == 1.0
+    assert out["totals"]["calls"] == 2
+
+
+def test_a_rename_is_appended_rather_than_rewriting_what_was_already_filed(home):
+    usage.record(task="chat", campaign="saltmarch", scene="001--arrival",
+                 cost_usd=0.25, ts="2026-08-14T10:00:00Z")
+    usage.repoint_scenes("saltmarch", {"001--arrival": "001--dated"})
+
+    call, rename = _rows(home)
+    assert call["scene"] == "001--arrival", "an append-only ledger rewrites nothing"
+    assert rename == {"ts": rename["ts"], "kind": "rename", "campaign": "saltmarch",
+                      "scene": "001--dated", "was": "001--arrival"}
+
+
+def test_a_rename_row_is_not_a_call_anybody_was_charged_for(home, monkeypatch):
+    _pin(monkeypatch, "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", scene="001--arrival", cost_usd=0.25)
+    usage.repoint_scenes("saltmarch", {"001--arrival": "001--dated"})
+
+    assert usage.summary(days=30)["totals"]["calls"] == 1
+    assert [b["key"] for b in usage.summary(days=30)["by_task"]] == ["chat"]
+    assert usage.budget("saltmarch", 10)["calls"] == 1
+    assert usage.scene_usage("saltmarch", "001--dated", since="2026-08-01")["totals"]["calls"] == 1
+
+
+def test_a_chain_of_renames_is_followed_all_the_way_back(home, monkeypatch):
+    _pin(monkeypatch, "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", scene="a", cost_usd=0.1)
+    usage.repoint_scenes("saltmarch", {"a": "b"})
+    _seed("2026-08-14", campaign="saltmarch", scene="b", cost_usd=0.2)
+    usage.repoint_scenes("saltmarch", {"b": "c"})
+    _seed("2026-08-14", campaign="saltmarch", scene="c", cost_usd=0.3)
+
+    assert usage.scene_usage("saltmarch", "c", since="2026-08-01")["totals"]["cost_usd"] == 0.6
+
+
+def test_another_campaigns_rename_cannot_pull_its_scene_into_this_one(home, monkeypatch):
+    _pin(monkeypatch, "2026-08-14")
+    _seed("2026-08-14", campaign="realm", scene="a", cost_usd=9.0)
+    usage.repoint_scenes("realm", {"a": "c"})
+    _seed("2026-08-14", campaign="saltmarch", scene="c", cost_usd=0.3)
+
+    assert usage.scene_usage("saltmarch", "c", since="2026-08-01")["totals"]["cost_usd"] == 0.3
+
+
+def test_a_rename_trail_that_loops_cannot_hang_the_report(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    path = home / "usage" / "2026-08.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text("\n".join(json.dumps(row) for row in [
+        {"ts": "2026-08-14T10:00:00Z", "kind": "rename", "campaign": "c",
+         "scene": "b", "was": "a"},
+        {"ts": "2026-08-14T10:00:01Z", "kind": "rename", "campaign": "c",
+         "scene": "a", "was": "b"},
+    ]) + "\n", encoding="utf-8")
+
+    assert usage.scene_usage("c", "a", since="2026-08-01")["totals"]["calls"] == 0
+
+
+def test_a_rename_nothing_can_be_written_for_does_not_fail_the_rename(home, monkeypatch):
+    monkeypatch.setattr(usage.paths, "home", lambda: home / "nope" / "\0bad")
+    usage.repoint_scenes("saltmarch", {"a": "b"})   # must not raise
+
+
+def test_a_rename_to_the_same_id_files_nothing(home):
+    usage.repoint_scenes("saltmarch", {"a": "a"})
+    assert not (home / "usage").exists()
