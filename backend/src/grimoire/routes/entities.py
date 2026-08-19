@@ -280,6 +280,11 @@ def _campaign_entity_or_404(cid: str, kind: str, eid: str):
     return root
 
 
+# `root` on both of these comes from `_world_entity_or_404` /
+# `_campaign_entity_or_404`, which is where the kind and the id are checked --
+# not here, and not in `assets` either. A handler that reaches these with a
+# bare root files art under an id or a kind that names nothing; the two
+# enumerating guards in `tests/test_routes.py` are what hold that.
 async def _entity_image_put(root, kind: str, eid: str, name: str, file: UploadFile):
     data = await file.read()
     ext = _upload_image_ext(data)  # the bytes name the type, not `file.filename` (#321)
