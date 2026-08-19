@@ -74,7 +74,7 @@ test("a world's calendar is read and saved against the world, not a campaign", a
     { kind: "world", id: "realm" }, expect.objectContaining({ confirmed: false })));
 });
 
-test("confirming a world's calendar is what campaigns created from it inherit", async () => {
+test("the Confirmed checkbox is what sets the flag world-side", async () => {
   // World-side there is no scene inspector to answer, so the flag needs a
   // control of its own — and it is the whole point of the world's copy: it is
   // what `create_campaign` writes into every campaign started from this world.
