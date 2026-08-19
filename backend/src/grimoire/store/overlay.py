@@ -694,9 +694,14 @@ def dematerialize_actor(cid: str, kind: str, aid: str) -> None:
 
 
 def _patch_char_item(cid: str, item: dict) -> dict:
-    names = [i["name"] for i in list_images(cid, item["id"], item["default_version"])]
+    images = list_images(cid, item["id"], item["default_version"])
+    names = [i["name"] for i in images]
     return {**item,
             "has_avatar": assets.AVATAR in names,
+            # From the union, like every other field here: a campaign row whose
+            # avatar lives world-side would otherwise carry the campaign root's
+            # token for a file it does not have, and `?v=` caches immutable.
+            "avatar_v": next((i["v"] for i in images if i["name"] == assets.AVATAR), None),
             "avatar_focus": read_focus(cid, item["id"], item["default_version"]),
             "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
             "localized_count": sum(1 for n in names if n.startswith("embed-")),
@@ -842,7 +847,9 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
 def read_character(cid: str, char_id: str) -> dict:
     detail = characters.read_character(char_root(cid, char_id), char_id)
     for v in detail["versions"]:
-        v["images"] = [i["name"] for i in list_images(cid, char_id, v["id"])]
+        images = list_images(cid, char_id, v["id"])
+        v["images"] = [i["name"] for i in images]
+        v["image_v"] = {i["name"]: i["v"] for i in images}
         v["avatar_focus"] = read_focus(cid, char_id, v["id"])
     return detail
 

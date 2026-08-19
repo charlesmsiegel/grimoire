@@ -309,12 +309,17 @@ export type CardFormat = "json" | "png" | "charx";
 export type VersionRef = { id: string; name: string };
 export type CharacterSummary = {
   id: string; name: string; default_version: string; has_avatar?: boolean;
+  /** Cache token for the avatar's current bytes. Spent as `?v=`, which the
+   *  server answers immutable — so it must name the BYTES, never a counter. */
+  avatar_v?: string | null;
   avatar_focus?: number | null; gallery_count?: number; localized_count?: number;
   greeting_count?: number; tagline?: string; versions: VersionRef[];
 };
 export type CharacterDetail = {
   meta: { id: string; name: string; default_version: string; birthdate?: string };
   versions: { id: string; name: string; card: Card; images?: string[];
+              /** Per-image cache token, keyed by the names in `images`. */
+              image_v?: Record<string, string>;
               avatar_focus?: number | null; chub_source?: string; is_chub?: boolean;
               /** Embedded-lorebook entries the import would actually commit —
                *  server-side, through the same normalization the import runs,

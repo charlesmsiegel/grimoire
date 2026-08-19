@@ -115,6 +115,21 @@ def set_default_version(root: Path, cid: str, vid: str) -> None:
     atomic.write_text(_meta_path(root, cid), dump_frontmatter(meta, ""))
 
 
+def set_name(root: Path, cid: str, name: str) -> None:
+    """The container's display name -- what the grid, the cast panel and every
+    `meta.name` prompt section read (#13).
+
+    The id deliberately does NOT move with it: every reference in the store is
+    by id (manifest refs, appearance records, greetings, relationships), and
+    re-slugging the directory would strand all of them. A renamed character
+    keeps the slug it was created under, visible only in URLs.
+    """
+    _require_char(root, cid)
+    meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
+    meta["name"] = name
+    atomic.write_text(_meta_path(root, cid), dump_frontmatter(meta, ""))
+
+
 def set_birthdate(root: Path, cid: str, birthdate: str) -> None:
     _require_char(root, cid)
     meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
@@ -217,6 +232,7 @@ def read_character(root: Path, cid: str) -> dict:
     versions = []
     for vid in version_ids:
         card = read_card(root, cid, vid)
+        version_images = assets.list_images(root, cid, vid)
         chub_source = _version_chub_source(card)
         if not chub_source and vid == default_version:
             chub_source = legacy_chub_source
@@ -224,7 +240,8 @@ def read_character(root: Path, cid: str) -> dict:
             "id": vid,
             "name": _version_label(card, vid),
             "card": card,
-            "images": [i["name"] for i in assets.list_images(root, cid, vid)],
+            "images": [i["name"] for i in version_images],
+            "image_v": {i["name"]: i["v"] for i in version_images},
             "avatar_focus": assets.read_focus(root, cid, vid),
             "chub_source": chub_source,
             "is_chub": bool(chub_source) and chub.parse_full_path(chub_source) is not None,
@@ -277,7 +294,8 @@ def list_characters(root: Path) -> list[dict]:
             if not version_ids:
                 continue   # see read_character: no addressable card, nothing to show
             default = _addressable_default(meta.get("default_version", ""), version_ids)
-            names = [i["name"] for i in assets.list_images(root, cid, default)]
+            images = assets.list_images(root, cid, default)
+            names = [i["name"] for i in images]
             try:
                 greeting_count = _card_summary(root, cid, default)["greeting_count"]
             except VersionNotFound:
@@ -287,6 +305,10 @@ def list_characters(root: Path) -> list[dict]:
                 "name": meta.get("name", cid),
                 "default_version": default,
                 "has_avatar": assets.AVATAR in names,
+                # Names the avatar's current BYTES: the grid tile spends it as
+                # `?v=`, which `routes.common._serve_image_file` serves
+                # immutable. A token that outlives the bytes pins a stale tile.
+                "avatar_v": next((i["v"] for i in images if i["name"] == assets.AVATAR), None),
                 "avatar_focus": assets.read_focus(root, cid, default),
                 "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
                 "localized_count": sum(1 for n in names if n.startswith("embed-")),

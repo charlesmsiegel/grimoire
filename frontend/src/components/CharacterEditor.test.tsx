@@ -15,7 +15,7 @@ vi.mock("../api/client", async () => {
       putImage: vi.fn(), deleteImage: vi.fn(), promoteImage: vi.fn(), setAvatarFocus: vi.fn(),
       importCharacterBook: vi.fn(),
       importCharacterFromChub: vi.fn(),
-      setCharacterBirthdate: vi.fn(), getCalendarMonths: vi.fn(),
+      setCharacterName: vi.fn(), setCharacterBirthdate: vi.fn(), getCalendarMonths: vi.fn(),
       setCharacterChubSource: vi.fn(), clearCharacterChubSource: vi.fn(),
       downloadCharacterChubGallery: vi.fn(), downloadCharacterChubLorebooks: vi.fn(),
       findChubUnlinked: vi.fn(),
@@ -68,6 +68,7 @@ beforeEach(() => {
   (api.readCharacter as any).mockResolvedValue(DETAIL);
   (api.createCharacter as any).mockResolvedValue({ character: "rook", version: "default" });
   (api.updateVersion as any).mockResolvedValue({ ok: true });
+  (api.setCharacterName as any).mockResolvedValue({ ok: true });
   (api.importCharacter as any).mockResolvedValue({ character: "imp", version: "default" });
   (api.localizeImages as any).mockImplementation((_w: string, _c: string, _v: string, cb: (e: any) => void) => {
     cb?.({ summary: { total: 1, localized: 1, skipped: 0, failed: 0, capped: false } });
@@ -361,6 +362,163 @@ test("editing creator and tags saves them", async () => {
     expect(card.data.creator).toBe("anon");
     expect(card.data.tags).toEqual(["fantasy", "oc"]);
   });
+});
+
+test("saving a renamed card renames the character, so the grid tile follows", async () => {
+  // #13: the tile and every meta-name prompt section read the CONTAINER name,
+  // which saving the card never touched -- the two could diverge forever.
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Winifred" } });
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Winifred", default_version: "default", has_avatar: false, versions: [] },
+  ]);
+  fireEvent.click(screen.getByRole("button", { name: /save version/i }));
+  await waitFor(() => expect(api.setCharacterName).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "seraphine", "Winifred"));
+  fireEvent.click(screen.getByRole("button", { name: /all characters/i }));
+  expect(await screen.findByText("Winifred")).toBeInTheDocument();
+});
+
+test("saving an unchanged name does not call the rename", async () => {
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  fireEvent.change(screen.getByLabelText("Description"), { target: { value: "cold keeper" } });
+  fireEvent.click(screen.getByRole("button", { name: /save version/i }));
+  await waitFor(() => expect(api.updateVersion).toHaveBeenCalled());
+  expect(api.setCharacterName).not.toHaveBeenCalled();
+});
+
+test("a blank name is saved on the card but never renames the character", async () => {
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "   " } });
+  fireEvent.click(screen.getByRole("button", { name: /save version/i }));
+  await waitFor(() => expect(api.updateVersion).toHaveBeenCalled());
+  expect(api.setCharacterName).not.toHaveBeenCalled();
+});
+
+test("renaming a non-default version's card leaves the character name alone", async () => {
+  // Each version card carries its own `data.name` -- that is the version rail's
+  // label. Renaming the whole character from a variant would be the surprise.
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [
+      { id: "default", name: "Seraphine", card: CARD, images: [] },
+      { id: "older", name: "Seraphine (young)", card: CARD, images: [] },
+    ],
+  });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  fireEvent.click(await screen.findByRole("button", { name: "Seraphine (young)" }));
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Winifred" } });
+  fireEvent.click(screen.getByRole("button", { name: /save version/i }));
+  await waitFor(() => expect(api.updateVersion).toHaveBeenCalled());
+  expect(api.setCharacterName).not.toHaveBeenCalled();
+});
+
+test("grid tiles cache-bust avatars on the stored token, not a session counter", async () => {
+  // A `?v=` URL is served immutable for a year, so the token has to name the
+  // bytes. A counter that resets to 0 on reload pins the pre-upload avatar.
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", has_avatar: true,
+      avatar_v: "17ab-2c", versions: [] },
+  ]);
+  const { container } = render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await screen.findByText("Seraphine");
+  const tile = container.querySelector<HTMLImageElement>(".char-card img")!;
+  expect(tile.getAttribute("src")).toBe("/img/w/characters/seraphine/default/avatar?v=17ab-2c");
+});
+
+test("a tile with no stored token asks for a bare, revalidating URL", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", has_avatar: true,
+      avatar_v: null, versions: [] },
+  ]);
+  const { container } = render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await screen.findByText("Seraphine");
+  const tile = container.querySelector<HTMLImageElement>(".char-card img")!;
+  expect(tile.getAttribute("src")).toBe("/img/w/characters/seraphine/default/avatar");
+});
+
+test("the open character's shelf cache-busts each image on its own token", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{
+      id: "default", name: "default", card: CARD, images: ["avatar", "gallery_0"],
+      image_v: { avatar: "aa-1", gallery_0: "bb-2" },
+    }],
+  });
+  const { container } = render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openDetail();
+  await openTab(/^art/i);
+  await screen.findByText("Images");
+  const shelf = Array.from(container.querySelectorAll<HTMLImageElement>(".images-shelf img"));
+  expect(shelf.map((i) => i.getAttribute("src"))).toEqual([
+    "/img/w/characters/seraphine/default/avatar?v=aa-1",
+    "/img/w/characters/seraphine/default/gallery_0?v=bb-2",
+  ]);
+});
+
+test("promoting a gallery image re-reads the tokens, so the avatar is not the old one", async () => {
+  // Promotion swaps the bytes UNDER a stable name, which is the case the
+  // session counter existed for. The re-read has to carry the new token or the
+  // immutable cache keeps serving the pre-promotion avatar.
+  const version = (v: string) => ({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{
+      id: "default", name: "default", card: CARD, images: ["avatar", "gallery_0"],
+      image_v: { avatar: v, gallery_0: "bb-2" },
+    }],
+  });
+  (api.readCharacter as any).mockResolvedValue(version("before-1"));
+  (api.promoteImage as any).mockResolvedValue({ ok: true });
+  const { container } = render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openDetail();
+  await openTab(/^art/i);
+  await screen.findByText("Images");
+  const avatarOf = () =>
+    container.querySelector<HTMLImageElement>(".avatar-tile img")!.getAttribute("src");
+  expect(avatarOf()).toBe("/img/w/characters/seraphine/default/avatar?v=before-1");
+
+  (api.readCharacter as any).mockResolvedValue(version("after-2"));
+  fireEvent.click(screen.getByRole("button", { name: /set as avatar/i }));
+  await waitFor(() =>
+    expect(avatarOf()).toBe("/img/w/characters/seraphine/default/avatar?v=after-2"));
+});
+
+test("saving an unrelated edit never renames a character whose card already differed", async () => {
+  // Divergence predates this change (old cards, an import with an explicit
+  // name, a chub re-download). Converging it silently on a Description edit
+  // would rename her across the grid, the cast panel and every prompt section
+  // without the user touching the Name field -- and there is no undo.
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{
+      id: "default", name: "Seraphine the Bold", images: [],
+      card: { ...CARD, data: { ...CARD.data, name: "Seraphine the Bold" } },
+    }],
+  });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  fireEvent.change(screen.getByLabelText("Description"), { target: { value: "cold keeper" } });
+  fireEvent.click(screen.getByRole("button", { name: /save version/i }));
+  await waitFor(() => expect(api.updateVersion).toHaveBeenCalled());
+  expect(api.setCharacterName).not.toHaveBeenCalled();
+});
+
+test("a name typed with stray whitespace is stored trimmed on both sides", async () => {
+  // The card keeps `data.name` verbatim as the version rail's label, so an
+  // untrimmed card name against a trimmed container name is a divergence that
+  // never converges -- the very thing this is meant to end.
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "  Winifred  " } });
+  fireEvent.click(screen.getByRole("button", { name: /save version/i }));
+  await waitFor(() => expect(api.setCharacterName).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "seraphine", "Winifred"));
+  expect((api.updateVersion as any).mock.calls[0][3].data.name).toBe("Winifred");
 });
 
 test("clicking a card shows read-only details, then Edit opens the form", async () => {
@@ -779,13 +937,13 @@ test("gallery images render as thumbnails, sorted numerically, opening full-size
   expect(thumbs).toHaveLength(3);
   // numeric order, not lexicographic ("gallery_10" must not sort before "gallery_2")
   expect(thumbs.map((t) => t.src)).toEqual([
-    "http://localhost:3000/img/w/characters/seraphine/default/gallery_0?v=0",
-    "http://localhost:3000/img/w/characters/seraphine/default/gallery_2?v=0",
-    "http://localhost:3000/img/w/characters/seraphine/default/gallery_10?v=0",
+    "http://localhost:3000/img/w/characters/seraphine/default/gallery_0",
+    "http://localhost:3000/img/w/characters/seraphine/default/gallery_2",
+    "http://localhost:3000/img/w/characters/seraphine/default/gallery_10",
   ]);
   const links = thumbs.map((t) => t.closest("a"));
   expect(links.every((a) => a?.getAttribute("target") === "_blank")).toBe(true);
-  expect(links[0]).toHaveAttribute("href", "/img/w/characters/seraphine/default/gallery_0?v=0");
+  expect(links[0]).toHaveAttribute("href", "/img/w/characters/seraphine/default/gallery_0");
 });
 
 test("no gallery section when a version has no gallery images", async () => {
