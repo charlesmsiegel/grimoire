@@ -16,7 +16,7 @@ def isolate(monkeypatch, tmp_path):
     """Point the bootstrap pointer at a temp file and clear the env override."""
     monkeypatch.delenv("GRIMOIRE_HOME", raising=False)
     pointer = tmp_path / "pointer" / ".grimoire.json"
-    monkeypatch.setattr(paths, "_pointer_path", lambda: pointer)
+    monkeypatch.setattr(paths, "pointer_path", lambda: pointer)
     monkeypatch.setattr(paths, "DEFAULT_HOME", tmp_path / "default")
     return pointer
 

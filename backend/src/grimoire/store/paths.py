@@ -14,12 +14,16 @@ from . import atomic, failsoft
 DEFAULT_HOME = Path.home() / ".grimoire"  # paths-ok: this IS the resolver's default root
 
 
-def _pointer_path() -> Path:
+def pointer_path() -> Path:
     """Fixed location of the bootstrap pointer that records the data dir.
 
     This must live *outside* the data dir itself — the data dir is what it
     points at, so it cannot also store the pointer (chicken/egg). It sits
     beside the default store as a sibling dotfile.
+
+    Public because `grimoire.where` names this file to the user: the installers
+    print where the library will land and how to repoint it before first run,
+    and the path they name has to be the one this module actually reads.
     """
     return Path.home() / ".grimoire.json"  # paths-ok: the bootstrap pointer cannot live inside the directory it names
 
@@ -34,7 +38,7 @@ def _read_pointer() -> dict:
     symptom anyone can trace to this file, so `failsoft` logs it.
     """
     return failsoft.read_json(
-        _pointer_path(), dict,
+        pointer_path(), dict,
         "its data_dir is ignored -- the store falls back to $GRIMOIRE_HOME if "
         f"set, else {DEFAULT_HOME}") or {}
 
@@ -74,7 +78,7 @@ def set_data_dir(path: str | Path | None) -> Path:
     directory (and its ``worlds``/``campaigns`` subtrees) is created if missing.
     Raises ``ValueError`` if the target exists but is not a directory.
     """
-    pointer = _pointer_path()
+    pointer = pointer_path()
     data = _read_pointer()
 
     if not path or not str(path).strip():

@@ -2,8 +2,21 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-command -v python3 >/dev/null || { echo "Python 3.11+ not found"; exit 1; }
-command -v node >/dev/null || { echo "Node 18+ not found"; exit 1; }
+# Floors, kept in step with backend/pyproject.toml's `requires-python` and
+# frontend/package.json's `engines.node` by tests/test_install_scripts.py.
+# Checked here, before the venv exists: `python3 -m venv` succeeds on a python
+# far too old for the dependency set, and the failure then surfaces several
+# minutes later inside `pip install` as a wheel that has no build for this
+# interpreter -- an error naming a package rather than the actual cause.
+PY_MIN="3.11"
+NODE_MIN="18"
+
+command -v python3 >/dev/null || { echo "Python $PY_MIN+ not found on PATH"; exit 1; }
+python3 -c "import sys; raise SystemExit(0 if sys.version_info >= tuple(int(n) for n in '$PY_MIN'.split('.')) else 1)" \
+  || { echo "Python $PY_MIN+ required; found $(python3 -V 2>&1)"; exit 1; }
+command -v node >/dev/null || { echo "Node $NODE_MIN+ not found on PATH"; exit 1; }
+node -e "process.exit(parseInt(process.versions.node, 10) >= $NODE_MIN ? 0 : 1)" \
+  || { echo "Node $NODE_MIN+ required; found $(node -v)"; exit 1; }
 
 echo "Installing backend…"
 cd "$ROOT/backend"
@@ -36,4 +49,10 @@ Categories=Utility;"
   chmod +x "$DESKTOP/grimoire.desktop"
 fi
 
+# The store is made lazily by the first API call, so nothing above created it.
+# Ask the resolver where it will land, rather than printing a `~/.grimoire`
+# that GRIMOIRE_HOME or the bootstrap pointer may already have overridden.
+echo
+"$ROOT/backend/.venv/bin/python" -m grimoire.where
+echo
 echo "Done. Run with: $RUN"
