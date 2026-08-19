@@ -39,9 +39,11 @@ vi.mock("../components/CalendarConfig", () => ({ CalendarConfig: () => <div data
 // its own that drives the real thing. What CampaignView owns is which post the
 // gutter hands it, so that is all the stub reports.
 vi.mock("../components/ReplayPanel", () => ({
-  ReplayPanel: ({ startAt, onStartHandled }: any) => (
+  ReplayPanel: ({ startAt, onStartHandled, onForked, onChanged }: any) => (
     <div data-testid="replay-panel" data-start-at={startAt ?? ""}>
       <button onClick={() => onStartHandled()}>stub-replay-close</button>
+      <button onClick={() => onForked("forked")}>stub-replay-forked</button>
+      <button onClick={() => onChanged()}>stub-replay-changed</button>
     </div>
   ),
 }));
@@ -933,6 +935,65 @@ test("the gutter hands the panel the post AFTER the one clicked", async () => {
   await waitFor(() =>
     expect(screen.getByTestId("replay-panel").getAttribute("data-start-at")).toBe("1"));
   expect(api.startReplay).not.toHaveBeenCalled();
+});
+
+test("forking lands in the same scene of the copy, with the ask still standing", async () => {
+  // A fork copies the scenes wholesale, so the id is there — and the reader
+  // asked to replay one particular post, not to be dropped at a front door.
+  //
+  // The fork's rail is ordered so the two answers differ: dropped at the
+  // campaign, the reader is redirected to the copy's most recent scene (s2),
+  // which is not the one they were replaying.
+  (api.listScenes as any).mockResolvedValue(TWO_SCENES);
+  (api.getScene as any).mockImplementation(async (_c: string, sid: string) => ({
+    meta: { id: sid }, messages: [{ role: "user", content: `hi from ${sid}` },
+                                  { role: "assistant", content: `a reply in ${sid}` }],
+  }));
+  renderCampaign();
+  await screen.findByText("a reply in s1");
+  fireEvent.click(screen.getByLabelText("Replay the turns after message 1"));
+  await waitFor(() =>
+    expect(screen.getByTestId("replay-panel").getAttribute("data-start-at")).toBe("1"));
+
+  (api.listScenes as any).mockResolvedValue(
+    [...TWO_SCENES].sort((a, b) => (a.id < b.id ? 1 : -1)));   // s2 first in the copy
+  fireEvent.click(screen.getByText("stub-replay-forked"));
+  await waitFor(() =>
+    expect(screen.getByTestId("here").textContent).toBe("/campaigns/forked/scenes/s1"));
+  // ... and the post they asked about is still the one the panel is holding.
+  expect(screen.getByTestId("replay-panel").getAttribute("data-start-at")).toBe("1");
+});
+
+test("a replay step asks for a fresh rolling summary", async () => {
+  // The stored fold covers a prefix the walk has just cut, regenerated or put
+  // back, so its digest no longer describes the transcript (#85).
+  twoPostScene();
+  renderCampaign();
+  await screen.findByText("a reply");
+  (api.getRollingSummary as any).mockClear?.();
+
+  fireEvent.click(screen.getByText("stub-replay-changed"));
+  await waitFor(() => expect((api.listScenes as any).mock.calls.length).toBeGreaterThan(1));
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalled());
+});
+
+test("the asked-for post does not follow the reader into another scene", async () => {
+  // An index means nothing in another scene: carried across, it would price —
+  // and cut — whatever post happens to sit there.
+  (api.listScenes as any).mockResolvedValue(TWO_SCENES);
+  (api.getScene as any).mockImplementation(async (_c: string, sid: string) => ({
+    meta: { id: sid }, messages: [{ role: "user", content: `hi from ${sid}` },
+                                  { role: "assistant", content: `a reply in ${sid}` }],
+  }));
+  renderCampaign();
+  await screen.findByText("a reply in s1");
+  fireEvent.click(screen.getByLabelText("Replay the turns after message 1"));
+  await waitFor(() =>
+    expect(screen.getByTestId("replay-panel").getAttribute("data-start-at")).toBe("1"));
+
+  await openScene(/The Saltmarch Gate/);
+  await screen.findByText("a reply in s2");
+  expect(screen.getByTestId("replay-panel").getAttribute("data-start-at")).toBe("");
 });
 
 test("a manual dice roll's transcript line has no Edit control", async () => {

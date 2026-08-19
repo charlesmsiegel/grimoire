@@ -332,3 +332,15 @@ def test_cancelling_cleans_up_after_its_own_cut(cid, sid):
     replay.cancel(cid)
     assert [i for i, _ in turnstate.entries(cid, sid)] == []
     assert _contents(cid, sid) == ["player one", "reply one", "player two", "reply two"]
+
+
+def test_restoring_fences_a_review_opened_mid_walk(cid, sid):
+    """The cut un-absorbs the scene, so a review CAN be opened while the walk is
+    running — and its token would still be valid over a transcript the restore
+    is about to replace."""
+    from grimoire.store import commits
+    replay.begin(cid, sid, 1)
+    before = commits.scene_epoch(cid, sid)
+    scenes.append_reply(cid, sid, [{"speaker": None, "content": "a take nobody kept"}])
+    replay.cancel(cid)
+    assert commits.scene_epoch(cid, sid) > before

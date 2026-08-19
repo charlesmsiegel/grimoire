@@ -58,7 +58,7 @@ import json
 import logging
 from pathlib import Path
 
-from . import alternates, atomic, cascade, config, locks, turnstate
+from . import alternates, atomic, cascade, commits, config, locks, turnstate
 from .campaigns import paths as campaigns_paths
 from .paths import now_iso
 from .scenes import paths as scenes_paths, read as scenes_read, \
@@ -413,6 +413,11 @@ def cancel(cid: str, restore: bool = True) -> dict:
             mark = int(rec.get("mark", 0))
             landed = len(scenes_read.read_scene(cid, sid)["messages"])
             if mark < landed:
+                # Ahead of the truncation, like every other fence in this store:
+                # the scene is un-absorbed for the walk's duration, so a review
+                # CAN be opened mid-replay, and its token would still be valid
+                # over a transcript this is about to replace.
+                commits.retire_scene(cid, sid)
                 scenes_write.delete_from(cid, sid, mark)
                 # The two sidecars that key off post positions, cleaned exactly
                 # as `cascade.delete_from` cleans them after ITS cut -- a raw

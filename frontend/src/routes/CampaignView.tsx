@@ -4297,11 +4297,23 @@ export default function CampaignView({ ready }: { ready: boolean }) {
             <ReplayPanel key={activeId} cid={cid} sid={activeId} startAt={replayAt}
                          disabled={busy || rolling}
                          onStartHandled={() => setReplayAt(null)}
-                         onForked={(forked) => navigate(`/campaigns/${encodeURIComponent(forked)}`)}
-                         onChanged={() => {
+                         // Into the SAME scene in the copy, not the campaign's
+                         // front door: a fork copies the scenes wholesale, so
+                         // this id is there, and the reader asked to replay one
+                         // particular post. `replayAt` is deliberately left
+                         // standing — the scene did not change, so the dialog
+                         // they were looking at is waiting for them in the copy.
+                         onForked={(forked) => navigate(sceneUrl(forked, activeId))}
+                         onChanged={async () => {
                            void loadScenes();
-                           void selectScene(activeId);
+                           const seen = await selectScene(activeId);
                            setCtxKey((k) => k + 1);
+                           // Same reason the cut asks (#85): the stored fold
+                           // covers a prefix a replay has just cut, regenerated
+                           // or put back, so its digest no longer describes the
+                           // transcript. Nothing else turns the stale flag back
+                           // into a correct summary.
+                           askForRollingSummary(activeId, seen);
                          }} />
           )}
           {activeDone ? (
