@@ -109,6 +109,50 @@ def test_from_character_book_normalizes():
     assert lorebook.from_character_book(None) == []
 
 
+# Every book shape the two paths have to agree on -- both ST schemas, the
+# containers `_entries_container` accepts, and each reason `_importable` drops
+# an entry. Reused by the equivalence test below so a new shape is covered by
+# both at once.
+# One entry survives; every other carries a different reason to be dropped.
+EVERY_DROP_REASON = {"entries": [
+    {"keys": ["a"], "content": "kept"},
+    {"keys": ["b"], "content": "off", "enabled": False},
+    {"keys": ["c"], "content": "   "},                               # blank
+    {"keys": ["d"], "content": "gone", "disable": True},
+    {"keys": ["e"], "content": None},                                # non-str content
+    {"keys": ["f"]},                                                 # no content at all
+]}
+BOOK_SHAPES = [
+    None,
+    {},
+    {"entries": []},
+    {"entries": {}},
+    "not a book",
+    {"entries": "not entries"},
+    {"entries": [None, 3, "x"]},                                     # non-dict entries
+    {"entries": [{"keys": ["a"], "content": "kept"}]},
+    EVERY_DROP_REASON,
+    {"0": {"key": ["a"], "content": "kept"},                         # bare dict container
+     "1": {"key": ["b"], "content": "off", "disable": True}},
+    [{"keys": ["a"], "content": "kept"}],                            # bare list container
+]
+
+
+@pytest.mark.parametrize("book", BOOK_SHAPES)
+def test_importable_count_matches_what_normalize_yields(book):
+    """`importable_count` exists to skip building the entries, so nothing forces
+    the two to agree except this. They share `_importable`; if a future edit
+    inlines the rule back into one of them, this is what fails."""
+    assert lorebook.importable_count(book) == len(lorebook.from_character_book(book))
+
+
+def test_importable_count_drops_exactly_what_the_import_drops():
+    """Pins the number itself, not just that the two paths agree -- an
+    `_importable` that dropped everything would satisfy the equivalence."""
+    assert lorebook.importable_count(EVERY_DROP_REASON) == 1
+    assert [e["body"] for e in lorebook.from_character_book(EVERY_DROP_REASON)] == ["kept"]
+
+
 def test_commit_accepts_new_kind_categories(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     from grimoire.store import lorebook

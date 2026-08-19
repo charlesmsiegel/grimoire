@@ -1596,7 +1596,7 @@ def test_character_book_importable_count_is_zero_without_a_book(client):
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
     detail = client.get(f"/api/worlds/{wid}/characters/{cid}").json()
-    assert all(v["importable_lore"] == 0 for v in detail["versions"])
+    assert [v["importable_lore"] for v in detail["versions"]] == [0]
 
 
 def test_character_book_import_empty(client):

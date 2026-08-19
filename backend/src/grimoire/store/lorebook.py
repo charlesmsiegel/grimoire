@@ -32,15 +32,23 @@ def _entries_container(book):
     return []
 
 
+def _importable(e) -> bool:
+    """Whether `_normalize` would yield an entry for this one: the single
+    definition of "this entry survives import", so a count can be taken
+    without building the entries (see `importable_count`)."""
+    if not isinstance(e, dict):
+        return False
+    enabled = e.get("enabled", True) and not e.get("disable", False)
+    content = e.get("content", "")
+    return bool(enabled and isinstance(content, str) and content.strip())
+
+
 def _normalize(book) -> list[dict]:
     out: list[dict] = []
     for e in _entries_container(book):
-        if not isinstance(e, dict):
+        if not _importable(e):
             continue
-        enabled = e.get("enabled", True) and not e.get("disable", False)
-        content = e.get("content", "")
-        if not enabled or not isinstance(content, str) or not content.strip():
-            continue
+        content = e["content"]                      # _importable proved it non-blank
         keys = e.get("keys") or e.get("key") or []
         keys = [str(k) for k in keys if str(k).strip()]
         name = e.get("comment") or e.get("name") or (keys[0] if keys else "Imported entry")
@@ -69,6 +77,18 @@ def parse(data: bytes, fmt: str) -> list[dict]:
 def from_character_book(book) -> list[dict]:
     """Normalize a card's embedded character_book into commit-ready entries."""
     return _normalize(book or {})
+
+
+def importable_count(book) -> int:
+    """`len(from_character_book(book))` without building the entries.
+
+    `read_character` reports this per version and it is called per actor in
+    loops that only want `["meta"]` (rosters, birthdays, cast assembly), so
+    the count must not allocate a normalized copy of every lorebook in the
+    world. Shares `_importable` with `_normalize` rather than restating the
+    rule -- `test_importable_count_matches_what_normalize_yields` fails if
+    the two ever part company."""
+    return sum(1 for e in _entries_container(book or {}) if _importable(e))
 
 
 def _existing_signatures(root: Path, kind: str) -> set[tuple[str, str, str]]:

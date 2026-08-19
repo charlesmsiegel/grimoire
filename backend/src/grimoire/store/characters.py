@@ -172,11 +172,11 @@ def _version_chub_source(card: dict) -> str:
 def _importable_lore(card: dict) -> int:
     """How many embedded-lorebook entries the import would actually commit.
 
-    Counted through the same `from_character_book` the import route runs, not
-    off the raw `entries` list: normalization drops disabled and blank-content
-    entries, so a UI counting the raw list offers to import entries that never
-    arrive -- and cards from ST routinely carry disabled ones (#16)."""
-    return len(lorebook.from_character_book(card.get("data", {}).get("character_book")))
+    Counted through the same rule the import route normalizes by, not off the
+    raw `entries` list: normalization drops disabled and blank-content entries,
+    so a UI counting the raw list offers to import entries that never arrive --
+    and cards from ST routinely carry disabled ones (#16)."""
+    return lorebook.importable_count(card.get("data", {}).get("character_book"))
 
 
 def _addressable_default(stored: str, version_ids: list[str]) -> str:
