@@ -41,6 +41,57 @@ def test_read_falls_through_to_world_when_not_materialized(monkeypatch, tmp_path
     assert overlay.read_entity(cid, "lore", eid)["body"] == "world text"
 
 
+def test_entity_root_resolves_the_layer_a_read_would_answer_from(monkeypatch, tmp_path):
+    """The gate the campaign entity image writes take (#373) has to agree with
+    `read_entity` about which layer holds the record, or it 404s every entity a
+    thin campaign has not materialized -- which is all of them."""
+    _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+
+    _thin(cid, "lore", eid)
+    assert overlay.entity_root(cid, "lore", eid) == wroot        # inherited
+    overlay.materialize_entity(cid, "lore", eid)
+    assert overlay.entity_root(cid, "lore", eid) == croot        # own copy wins
+
+    # campaign-local invention: the world knows nothing about it
+    mine = overlay.create_entity(cid, "lore", "The Ledger", "campaign text")
+    assert overlay.entity_root(cid, "lore", mine) == croot
+
+    # a record this campaign never had resolves to the world, where the
+    # caller's read raises its usual NotFound
+    assert overlay.entity_root(cid, "lore", "nobody") == wroot
+
+
+def test_a_tombstoned_entity_resolves_to_the_campaign_that_disowned_it(monkeypatch, tmp_path):
+    """A tombstone has to beat the world's surviving copy here the same way it
+    beats it in `read_entity` -- otherwise the gate says yes and art gets filed
+    against a record the campaign cannot list, read or delete."""
+    _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    _thin(cid, "lore", eid)
+    overlay.delete_entity(cid, "lore", eid)
+    assert f"lore/{eid}" in overlay.deleted(cid)
+    assert entities.read_entity(wroot, "lore", eid)["body"] == "world text"   # world still has it
+
+    croot = campaigns.campaign_root(cid)
+    assert overlay.entity_root(cid, "lore", eid) == croot
+    with pytest.raises(entities.EntityNotFound):
+        entities.require_entity(overlay.entity_root(cid, "lore", eid), "lore", eid)
+
+
+def test_a_detached_entity_resolves_to_its_own_copy_not_the_slug_s_next_owner(monkeypatch, tmp_path):
+    """A spared copy stops sharing an identity with whatever claims the slug
+    next. `entity_root` follows the copy, so a write lands on the campaign's
+    own record rather than being authorized by a stranger's."""
+    _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    overlay.materialize_entity(cid, "lore", eid)
+    entities.delete_entity(wroot, "lore", eid)
+    overlay.forget_world_record(wroot, "lore", eid)
+    assert f"lore/{eid}" in overlay.detached(cid)
+
+    entities.create_entity(wroot, "lore", "The Sword", "a stranger's text")   # same slug
+    assert overlay.entity_root(cid, "lore", eid) == campaigns.campaign_root(cid)
+
+
 def test_materialized_copy_shadows_world(monkeypatch, tmp_path):
     _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)
     overlay.materialize_entity(cid, "lore", eid)   # campaign gets its own copy

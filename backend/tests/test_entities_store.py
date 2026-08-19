@@ -306,3 +306,26 @@ def test_a_gm_only_body_is_still_measured(tmp_path: Path):
     # ...and marking it public again does not move the number
     entities.update_entity(tmp_path, "lore", eid, secrecy=entities.PUBLIC)
     assert entities.read_entity(tmp_path, "lore", eid)["tokens"] == got["tokens"]
+
+
+def test_require_entity_answers_from_a_stat_and_names_what_is_wrong(tmp_path: Path):
+    """The gate the entity image writes take per request (#373). It has to
+    distinguish the two failures the routes report differently -- an unknown
+    kind is not a missing record -- and it must not read the file, because the
+    read it would replace costs a frontmatter parse and a token encode."""
+    eid = entities.create_entity(tmp_path, "locations", "Saltmarch", "Low tide, high walls.")
+    assert entities.require_entity(tmp_path, "locations", eid) == tmp_path / "locations" / f"{eid}.md"
+
+    with pytest.raises(entities.EntityNotFound):
+        entities.require_entity(tmp_path, "locations", "nobody")
+    with pytest.raises(entities.UnknownKind):
+        entities.require_entity(tmp_path, "potions", eid)
+    # an id the resolvers refuse is refused here too, rather than resolving a
+    # path outside the kind directory and reporting it as real
+    with pytest.raises(entities.EntityNotFound):
+        entities.require_entity(tmp_path, "locations", "../locations/" + eid)
+
+    # and a deleted record stops satisfying it
+    entities.delete_entity(tmp_path, "locations", eid)
+    with pytest.raises(entities.EntityNotFound):
+        entities.require_entity(tmp_path, "locations", eid)
