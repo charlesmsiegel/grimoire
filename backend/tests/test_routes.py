@@ -24,10 +24,6 @@ from tests.llm_fakes import (  # the shared gateway fakes (#204)
     QuietThenAnswers, StallingOpenRouter, from_entries)
 
 
-# an id no record has, for the routes that must refuse one
-_GHOST_ID = "nobody"
-
-
 def _world(client, name="W"):
     return client.post("/api/worlds", json={"name": name}).json()["id"]
 
@@ -751,7 +747,13 @@ def test_every_actor_image_write_route_refuses_an_unknown_actor_or_version(clien
     A route whose body this test cannot guess fails here with a 422 rather than
     a 404 -- deliberately. Teaching it the new shape is a smaller price than
     the guard quietly skipping the route it was added to cover.
+
+    The refusal has to come from a *gate*, which is why the detail is checked
+    and not just the status: a URL this test builds wrongly matches no route at
+    all, and Starlette answers that with its own 404 -- a guard that accepted
+    any 404 would pass hardest when its URLs were most wrong.
     """
+    gated = {"character not found", "pc not found", "version not found"}
     wid, cid = _campaign(client)
     chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
     pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
@@ -770,16 +772,17 @@ def test_every_actor_image_write_route_refuses_an_unknown_actor_or_version(clien
     for method, path in routes:
         scope_id = wid if path.startswith("/api/worlds") else cid
         kind = path.split("/")[4]
-        for actor, vid in ((_GHOST_ID, "default"), (real[kind], _GHOST_ID)):
+        for actor, vid in (("nobody", "default"), (real[kind], "typo")):
             url = _ghosted(path, scope_id, actor, vid)
             r = _write_request(client, method, url, gid)
-            assert r.status_code == 404, (method, url, r.status_code, r.text)
+            assert r.status_code == 404 and r.json().get("detail") in gated, \
+                (method, url, r.status_code, r.text)
 
     # and not one of those refusals left a directory behind
     for root in (store.worlds.world_root(wid), store.campaigns.campaign_root(cid)):
         for kind, aid in (("characters", chid), ("pcs", pid)):
-            assert not (root / kind / _GHOST_ID).exists(), (root, kind)
-            assert not (root / kind / aid / "assets" / _GHOST_ID).exists(), (root, kind)
+            assert not (root / kind / "nobody").exists(), (root, kind)
+            assert not (root / kind / aid / "assets" / "typo").exists(), (root, kind)
 
 
 def test_image_upload_stores_the_extension_the_bytes_are(client):
