@@ -238,8 +238,8 @@ class EmbeddingsClient:
         # client: one is stored, the rest are dropped without ever being
         # closed, leaking a connection pool per race. Measured at 8 clients for
         # 8 threads. The async provider clients have no equivalent problem --
-        # they are built once at import and only ever touched from the loop
-        # thread.
+        # they are built once per app (#215) and only ever touched from the
+        # loop thread.
         self._lock = threading.Lock()
 
     def _verify(self) -> ssl.SSLContext:

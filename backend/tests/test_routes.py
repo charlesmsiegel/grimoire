@@ -2640,8 +2640,8 @@ class TransientProvider:
 def _real_facade(client, provider, **kw):
     """The real facade over a fake provider — real, so the retry and the
     fallback under test are the shipped code and not a fake's idea of them.
-    `common._llm`'s own resolvers are re-created here so the test controls
-    them."""
+    The resolvers `common.build_llm` wires up are re-created here so the test
+    controls them."""
     client.app.dependency_overrides[routes.get_llm] = lambda: LLMClient(
         openrouter=provider, claude=provider, openai_compatible=provider,
         timeout=120, retries=store.config.llm_retries,
@@ -2736,13 +2736,16 @@ def test_with_no_fallback_configured_an_exhausted_connection_is_just_an_error(cl
     assert provider.models == ["primary"]
 
 
-def test_the_shipped_client_carries_the_retry_and_fallback_resolvers():
+def test_the_shipped_client_carries_the_retry_and_fallback_resolvers(client):
     """The settings are read through resolvers so a Configuration-page change
     lands without a restart — and so `llm.py` never imports the store. A client
     built with the numbers baked in would satisfy every test above and still
-    ignore the user."""
-    assert routes.common._llm._retries is store.config.llm_retries
-    assert routes.common._llm._fallback is routes.common._fallback_connection
+    ignore the user.
+
+    Read off the app rather than a module global: the client the routes get is
+    the one `create_app` built and hung on `app.state` (#215)."""
+    assert client.app.state.llm._retries is store.config.llm_retries
+    assert client.app.state.llm._fallback is routes.common._fallback_connection
 
 
 async def test_a_failed_turn_does_not_roll_back_once_a_newer_turn_claimed(monkeypatch, tmp_path):

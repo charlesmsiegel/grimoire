@@ -137,5 +137,9 @@ class OpenRouterClient:
         return "".join([chunk async for chunk in self.stream(messages, model, key, usage)])
 
     async def aclose(self) -> None:
+        # Reset, not just close: `_client()` is lazy, so leaving the closed
+        # client in place would hand it back to the next caller (and every
+        # request through it raises). `EmbeddingsClient.close` does the same.
         if self._owns and self._http is not None:
             await self._http.aclose()
+            self._http = None
