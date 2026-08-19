@@ -280,6 +280,13 @@ def create_app() -> FastAPI:
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
         allow_methods=["*"],
         allow_headers=["*"],
+        # `Retry-After` is not one of CORS's safelisted response headers, so a
+        # caller on one of the origins above cannot read it unless it is named
+        # here -- and it is the only thing that makes a 429 actionable (#213).
+        # The app's own frontend reaches the API through vite's `/api` proxy and
+        # so is same-origin, which is exactly why this would otherwise stay
+        # broken unnoticed for whoever does call across.
+        expose_headers=["Retry-After"],
     )
 
     app.add_middleware(_CampaignActivityStamp)
