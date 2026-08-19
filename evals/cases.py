@@ -620,12 +620,14 @@ CASES: tuple[Case, ...] = (
              # lead says nothing, so `turns.lead_carries` short-circuits and
              # only `lead_speaks` is reported.
              Recording("monologue", ("turns.lead_speaks",)),
-             # The lead does speak, and first — but is out-talked by the hog,
-             # which is a different failure and must be reported as one.
+             # The reply a block count cannot see, and the reason "carries" is
+             # measured in words: the nomination is answered with one obliging
+             # half-line and the hog takes the floor back in the very next
+             # block. One block each — 1-1, and green, on any count of blocks.
              Recording("out-talked", ("turns.lead_carries",)),
-             # The mirror image: everyone answers, in sequence. The lead leads
-             # and carries as many blocks as anyone, so this isolates the
-             # "do not give every character a turn" half on its own.
+             # The mirror image: everyone answers, in sequence. The lead still
+             # out-words all of them, so this isolates the "do not give every
+             # character a turn" half on its own.
              Recording("chorus", ("turns.some_stay_quiet",)))),
     Case(id="owned-lore",
          hypothesis="lore owned by an absent character stays out of both the "
