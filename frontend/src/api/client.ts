@@ -11,7 +11,8 @@ export * from "./types";
 import {
   type Actor, type AdvanceDigest, type AdvanceRequest, type Appearance, type Availability,
   type BackupList, type BackupRun, type Briefing, type CalendarConfig, type CalendarMonth,
-  type CalendarScope, type CampaignClock, type CampaignMeta, type CampaignModule, type Card,
+  type CalendarScope, type CampaignClock, type CampaignImage, type CampaignMeta,
+  type CampaignModule, type Card,
   type CampaignBudget,
   type CardFormat, type CascadeReport, type Casefile, type CastChanges, type CastDetail,
   type ForkReport,
@@ -622,6 +623,30 @@ export const api = {
   },
   deleteCampaignCover: (cid: string) =>
     request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/cover`),
+
+  // ---- the campaign's own image library (#376) ----
+  /** Images that belong to the campaign and to none of its records — what a
+   *  narrator post has to draw on, since "Grimoire" is not an actor with a
+   *  version to hold art. `name` goes into the URL raw: the server accepts
+   *  only names that survive one (`store.campaign_images.addressable`), which
+   *  is the same rule its listing filters by, so a name this builder is ever
+   *  handed is already URL- and markdown-safe. */
+  campaignImageUrl: (cid: string, name: string, opts?: { w?: number; v?: string }) => {
+    const q = new URLSearchParams();
+    if (opts?.w) q.set("w", String(opts.w));
+    if (opts?.v) q.set("v", opts.v);
+    const qs = q.toString();
+    return `/api/campaigns/${cid}/images/${name}${qs ? `?${qs}` : ""}`;
+  },
+  listCampaignImages: (cid: string) =>
+    request<CampaignImage[]>("GET", `/api/campaigns/${cid}/images`),
+  putCampaignImage: (cid: string, name: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return requestForm<CampaignImage>(`/api/campaigns/${cid}/images/${name}`, form, "PUT");
+  },
+  deleteCampaignImage: (cid: string, name: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/images/${name}`),
   putEntityImage: (scope: EntityScope, kind: EntityKind, eid: string, name: string, file: File) => {
     const form = new FormData();
     form.append("file", file);

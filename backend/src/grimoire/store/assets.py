@@ -361,26 +361,30 @@ def image_path(root: Path, cid: str, vid: str, name: str, base: str = "character
     return p
 
 
-def list_images(root: Path, cid: str, vid: str, base: str = "characters") -> list[dict]:
-    if not (safe_id(cid) and safe_id(vid)):
-        return []
-    d = _dir(root, cid, vid, base)
+def list_in(d: Path) -> list[dict]:
+    """One entry per logical image in directory `d`, newest sibling winning.
+
+    The directory-level half of `list_images`, split out so a flat directory
+    built on `path_in`/`put_in`/`delete_in` -- the campaign image library
+    (`store.campaign_images`) -- enumerates by the very same rule the
+    per-version folders do, rather than by a second copy of it that agrees
+    right up until one of the two is fixed. What stays behind in `list_images`
+    is only what a version has and a flat directory does not: ids to check,
+    and a stranded promotion to repair.
+
+    ONE ENTRY PER LOGICAL IMAGE, not per file. Two files can share a stem:
+    `put_in` writes the new extension before dropping the old one, and
+    `path_in` self-heals an unlink that never happened, so the state is
+    reachable and can persist. Listing both double-counts galleries, hands the
+    frontend two tiles under one key, and lets a caller read a cache token off
+    the sibling the server will not serve -- which a `?v=` URL, answered
+    `immutable, max-age=1y`, then pins for a year.
+
+    Newest wins, the same rule and the same tie-break `path_in` resolves by,
+    so the entry always describes the bytes the serve route returns.
+    """
     if not d.exists():
         return []
-    # The "asset directory scan" the recovery in #253 was asked for: a temp the
-    # old promotion stranded gets a reachable name before the listing is built,
-    # so it shows up in the editor instead of staying invisible forever.
-    _heal_stranded_promotion(d)
-    # ONE ENTRY PER LOGICAL IMAGE, not per file. Two files can share a stem:
-    # `put_in` writes the new extension before dropping the old one, and
-    # `path_in` self-heals an unlink that never happened, so the state is
-    # reachable and can persist. Listing both double-counts galleries, hands
-    # the frontend two tiles under one key, and lets a caller read a cache
-    # token off the sibling the server will not serve -- which a `?v=` URL,
-    # answered `immutable, max-age=1y`, then pins for a year.
-    #
-    # Newest wins, the same rule and the same tie-break `path_in` resolves by,
-    # so the entry always describes the bytes the serve route returns.
     best: dict[str, Path] = {}
     for p in sorted(d.iterdir()):
         # filter on addressability, not just the extension: a name image_path
@@ -401,6 +405,19 @@ def list_images(root: Path, cid: str, vid: str, base: str = "characters") -> lis
         except OSError:
             continue   # vanished mid-scan; a listing must not fail over one file
     return out
+
+
+def list_images(root: Path, cid: str, vid: str, base: str = "characters") -> list[dict]:
+    if not (safe_id(cid) and safe_id(vid)):
+        return []
+    d = _dir(root, cid, vid, base)
+    if not d.exists():
+        return []
+    # The "asset directory scan" the recovery in #253 was asked for: a temp the
+    # old promotion stranded gets a reachable name before the listing is built,
+    # so it shows up in the editor instead of staying invisible forever.
+    _heal_stranded_promotion(d)
+    return list_in(d)
 
 
 def image_version(p: Path) -> str:

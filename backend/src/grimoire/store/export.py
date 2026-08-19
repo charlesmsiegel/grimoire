@@ -18,23 +18,34 @@ from pathlib import Path
 import markdown as _md_lib
 from markupsafe import escape
 
-from . import (assets, calendars, chronicle, characters, covers, entities, fetch, overlay,
-               pcs, worlds)
+from . import (assets, calendars, campaign_images, chronicle, characters, covers, entities,
+               fetch, overlay, pcs, worlds)
 from .appearances import cast as appearances_cast, paths as appearances_paths
 from .scenes import read as scenes_read, serialize as scenes_serialize
 from .campaigns import paths as campaigns_paths, read as campaigns_read
 from .paths import slugify
 
 # Localized app image URLs (see store.localize): every shape the app writes.
+# EVERY shape -- a URL missing from here is not a rendering bug, it is a book
+# shipped with the image silently degraded to its alt text, which is why the
+# campaign library below had to land in the same commit as the routes that
+# serve it (#376).
 _IMG_URL = re.compile(
-    r"/api/(?:worlds|campaigns)/[^/\s]+/(?:"
+    r"/api/(?:"
+    # The campaign's own image library: campaign-scoped, and the one shape with
+    # no record between the scope and `/images/` -- so it is spelled out as its
+    # own alternative rather than as an empty branch below, which would also
+    # have matched a `/api/worlds/<wid>/images/<name>` the app never writes.
+    r"campaigns/[^/\s]+/(?P<lib>images)"
+    r"|(?:worlds|campaigns)/[^/\s]+/(?:"
     # `actor` carries the base as well as matching the segment: characters and
     # PCs address their images identically, differing only in the folder the
     # bytes live under (#219).
     r"(?P<actor>characters|pcs)/(?P<aid>[^/\s]+)/versions/(?P<vid>[^/\s]+)"
     r"|greetings/(?P<gid>[^/\s]+)"
     r"|(?P<kind>locations|lore)/(?P<eid>[^/\s]+)"
-    r")/images/(?P<name>[^/\s?#]+)")
+    r")/images"
+    r")/(?P<name>[^/\s?#]+)")
 
 _MD_IMG = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<url>[^)\s]+)(?:\s+\"[^\"]*\")?\)")
 
@@ -125,9 +136,19 @@ class Images:
 
 
 def _resolve_image(cid: str, m: re.Match) -> Path | None:
-    """Map a localized app URL to a disk file through the campaign overlay:
-    campaign tree first, then the campaign's world, with a campaign asset
-    tombstone hiding an inherited image (greeting images only live world-side)."""
+    """Map a localized app URL to a disk file.
+
+    Record images resolve through the campaign overlay: campaign tree first,
+    then the campaign's world, with a campaign asset tombstone hiding an
+    inherited image (greeting images only live world-side). The campaign's own
+    library resolves campaign-side and only there -- it inherits nothing."""
+    if m["lib"]:
+        # No overlay: the campaign library is campaign-local and inherits
+        # nothing (`store.campaign_images`). Resolved against the campaign being
+        # EXPORTED, not against the id written in the URL -- which is what makes
+        # a forked campaign's book carry the fork's own copy of the image rather
+        # than reaching back into the campaign it branched from.
+        return campaign_images.image_path(cid, m["name"])
     if m["actor"]:
         rid, vid, base = m["aid"], m["vid"], m["actor"]
     elif m["gid"]:

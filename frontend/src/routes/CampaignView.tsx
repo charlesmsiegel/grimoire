@@ -17,6 +17,7 @@ import { errorText } from "../api/errors";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import { CastPanel } from "../components/CastPanel";
 import { NewSceneChooser } from "../components/NewSceneChooser";
+import { PostImagePicker, type PickerTarget } from "../components/PostImagePicker";
 import { ChangesPanel } from "../components/ChangesPanel";
 import { ReplayPanel } from "../components/ReplayPanel";
 import { IncomingReview } from "../components/IncomingReview";
@@ -397,6 +398,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [budget, setBudget] = useState<CampaignBudget | null>(null);
   const [budgetSeen, setBudgetSeen] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
+  /** The post an image is being picked for (#376). Holds the index and who
+   *  spoke it, because the picker is scoped by the speaker: an actor post
+   *  offers that actor's art, a narrator post the campaign's own library. */
+  const [picking, setPicking] = useState<{ index: number; target: PickerTarget } | null>(null);
   const [rerollPrompt, setRerollPrompt] = useState<string | null>(null); // null = popover closed
   // Every variant of the generation reroll targets, refreshed by selectScene
   // (which every mutating path already funnels through). `active` is null when
@@ -2743,6 +2748,39 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     return ver ? api.actorImageUrl({ kind: "campaign", id: cid }, kind, id, ver, "avatar") : null;
   }
 
+  /** Whose images the picker offers for a post in `run` (#376).
+   *
+   *  The speaker decides: an actor post offers that actor's art at the version
+   *  the roster has locked — the version that spoke, and the same one
+   *  `plateAvatar` draws the portrait from — and a narrator post offers the
+   *  campaign's own library, because "Grimoire" is nobody and has no record to
+   *  hang art off. An actor the roster cannot place gets the library too: that
+   *  is the one scope that is always there, and an empty picker would be worse
+   *  than a general one. */
+  function pickerTarget(run: Run): PickerTarget {
+    const ver = run.actor
+      && roster.find((r) => r.kind === run.actor!.kind && r.id === run.actor!.id)?.version;
+    return run.actor && ver
+      ? { kind: run.actor.kind, id: run.actor.id, version: ver, name: run.speaker }
+      : { kind: "campaign", name: run.speaker };
+  }
+
+  /** Put one image reference into the post, by opening it for editing with the
+   *  markdown already in the buffer.
+   *
+   *  Which is what keeps this off any new persistence path: the existing Save
+   *  — and Retcon, and Cancel — is the save, with exactly the semantics it has
+   *  always had. Appended after a blank line rather than spliced at a cursor,
+   *  so it can never land mid-sentence, and the textarea it lands in is right
+   *  there to move it. */
+  function insertImage(index: number, markdown: string) {
+    const post = messages[index - firstIndex];
+    setPicking(null);
+    if (!post) return;   // scrolled out of the loaded window; nothing to edit
+    const current = (editing?.index === index ? editing.text : post.content).trimEnd();
+    setEditing({ index, text: current ? `${current}\n\n${markdown}` : markdown });
+  }
+
   const sceneTitle = scenes.find((s) => s.id === activeId)?.title ?? "";
   /** The scene the open review was absorbed FROM, which is not necessarily the
    *  one selected: a review survives a scene switch, and `saveAbsorb` already
@@ -3151,6 +3189,18 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                                     disabled={rolling}
                                     onClick={() => setEditing({ index, text: m.content })}>✎</button>
                           )}
+                          {/* Refused on a dice-roll line for the same reason
+                              Edit is: this rewrites the post, and that line's
+                              text must stay in lockstep with an immutable
+                              rolls.json entry. Everything else about it is
+                              Edit — it opens the very same buffer, with the
+                              reference already in it (#376). */}
+                          {m.speaker !== ROLL_SPEAKER && transcriptIsActive && (
+                            <button className="msg-edit" title="Insert an image"
+                                    aria-label={`Insert an image into message ${index + 1}`}
+                                    disabled={rolling}
+                                    onClick={() => setPicking({ index, target: pickerTarget(run) })}>🖼</button>
+                          )}
                           {/* Offered on a dice-roll line too, where Edit is not:
                               that line is refused because its text must stay in
                               lockstep with an immutable rolls.json entry, and a
@@ -3497,6 +3547,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         {chooserOpen && (
           <NewSceneChooser cid={cid} afterSid={activeId} ready={ready}
                            onClose={closeChooser} onCreated={sceneCreated} />
+        )}
+        {picking && (
+          <PostImagePicker cid={cid} target={picking.target}
+                           onInsert={(md) => insertImage(picking.index, md)}
+                           onClose={() => setPicking(null)} />
         )}
       </div>
       {/* A SIBLING of the workspace, not a child of it. `.shell.review

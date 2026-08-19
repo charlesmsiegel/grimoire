@@ -1797,6 +1797,28 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .tagline-modal h3 { font-family: var(--fd); margin: 0 0 6px; }
 .tagline-modal textarea { width: 100%; }
 
+/* Per-post image picker (#376): opened from a post's gutter, scoped by who
+   spoke it. Sized off the chooser above rather than the tagline modal — this
+   holds a grid, not a sentence — and scrolls internally so a character with
+   forty gallery images cannot push Cancel off the screen. */
+.image-picker-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 30; }
+.image-picker { background: var(--panel); border: 1px solid var(--muted); padding: 20px; width: min(640px, 92vw); max-height: 80vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.image-picker h3 { font-family: var(--fd); margin: 0 0 6px; }
+.image-picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+/* The tile is a button with the remove control positioned over it: nesting a
+   second <button> inside the first is invalid HTML, and a click on it would
+   insert the image it was meant to delete. */
+.image-picker-tile { position: relative; }
+.image-picker-tile > button:first-child { width: 100%; display: flex; flex-direction: column; gap: 4px; align-items: stretch; padding: 6px; background: transparent; border: 1px solid var(--muted); color: inherit; cursor: pointer; text-align: left; }
+.image-picker-tile > button:first-child:hover { border-color: var(--accent); }
+.image-picker-tile img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+.image-picker-tile span { font-size: 11px; font-family: var(--fm); overflow-wrap: anywhere; }
+.image-picker-remove { position: absolute; top: 2px; right: 2px; padding: 0 5px; line-height: 1.4; }
+/* A <label> wrapping a hidden <input type="file">: the file control cannot be
+   styled, and a label is what lets a keyboard reach it. */
+.image-picker-add { cursor: pointer; padding: 6px 12px; }
+.image-picker-add input { display: none; }
+
 .chooser-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 30; }
 .chooser { background: var(--panel); border: 1px solid var(--muted); padding: 20px; width: min(560px, 92vw); max-height: 80vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 .chooser h3 { font-family: var(--fd); margin: 0 0 6px; }

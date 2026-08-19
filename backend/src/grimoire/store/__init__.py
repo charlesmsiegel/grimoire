@@ -26,7 +26,7 @@ do ``from grimoire.store import x``, which is the whole reason that test exists.
 from __future__ import annotations
 
 from . import (
-    absorb, aging, alternates, appearances, assets, atomic, audit, backups, birthdays, briefing, campaign_climate, campaigns, cards, cascade, casefile, changes, characters, checks, chronicle, clock, commitments, commits,
+    absorb, aging, alternates, appearances, assets, atomic, audit, backups, birthdays, briefing, campaign_climate, campaign_images, campaigns, cards, cascade, casefile, changes, characters, checks, chronicle, clock, commitments, commits,
     chub, climates, config, context, covers, dice, dossiers, embed_space, entities, entity_schema, epub, events, export, external, facts, fence, fetch, fieldtext, fork, greetings, groupstate,
     image_subjects, journal, length_drift, lengths, llm_connections, localize, locks, lorebook, migrations, module_edit, modules, overlay, pcs, playing,
     pins, playstate, plot, prompt_log, proposals, provenance, relationships, replay, retcon, response_presets, rolling_summary, rolls, scenario, scene_break, scene_ideas, scene_ids, scene_refs, scenes, search, semsearch, sheets,
@@ -103,6 +103,10 @@ __all__ = [
     "ziputil",
     "campaigns",
     "campaign_climate",
+    # The campaign's own image library (#376) -- a deliberate addition to the
+    # facade, not a leak: `routes.campaigns` and `store.export` both reach it
+    # through `store.campaign_images`, the way they reach `store.covers`.
+    "campaign_images",
     "CampaignNotFound",
     "changes",
     "chronicle",

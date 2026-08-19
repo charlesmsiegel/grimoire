@@ -125,4 +125,18 @@ export const componentStubs = {
   }),
   ResponsePresetPicker: () =>
     ({ ResponsePresetPicker: () => <div data-testid="response-preset-picker" /> }),
+  // Same reason as the rest: the picker makes its own API calls and is driven
+  // for real by `PostImagePicker.test.tsx`. What CampaignView owns is WHO the
+  // picker is opened for and what an insert does to the post, so that is all
+  // the stub reports back (#376).
+  PostImagePicker: () => ({
+    PostImagePicker: ({ target, onInsert, onClose }: any) => (
+      <div data-testid="image-picker" data-target={JSON.stringify(target)}>
+        <button onClick={() => onInsert("![coastline](/api/campaigns/run/images/coastline)")}>
+          stub-insert
+        </button>
+        <button onClick={() => onClose()}>stub-picker-close</button>
+      </div>
+    ),
+  }),
 };
