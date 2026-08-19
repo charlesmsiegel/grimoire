@@ -139,7 +139,10 @@ def test_version_named_like_the_meta_file_does_not_land_on_it(tmp_path):
 def test_version_name_survives_a_slug_with_nothing_in_it(tmp_path, version_name):
     """The other end of the same argument, and the one a form sends: `slugify`
     answers "untitled" rather than "", so a version name with nothing to slug
-    names a file instead of the PC's directory itself."""
+    still names an addressable file. An empty id would write `<pid>/.md`, whose
+    stem is `.md` -- listed by `_version_ids` (the glob matches it and `safe_id`
+    allows it) and resolving right back to `.md.md`, so every read of the
+    version the listing offers would 404."""
     pid, vid = pcs.create_pc(tmp_path, "Rook", [], version_name)
     assert vid == "untitled"
     assert pcs.read_persona(tmp_path, pid, vid)["name"] == "Rook"

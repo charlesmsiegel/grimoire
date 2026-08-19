@@ -12901,7 +12901,8 @@ def test_creating_a_pc_with_any_version_name_leaves_one_the_reader_can_open(clie
     """`version_name` reaches both PC create routes from the request body, and
     the world route's caller is now typed to send it (#14). Whatever it says,
     what comes back has to be a PC the very next GET can read -- `PC` used to
-    slug onto the container's own `pc.md` and produce a 201 whose id 404s."""
+    slug onto the container's own `pc.md`, so this same 200 handed back an id
+    that 404s."""
     wid, cid = _campaign(client)
     for url in (f"/api/worlds/{wid}/pcs", f"/api/campaigns/{cid}/pcs"):
         made = client.post(url, json={"name": "Winifred", "version_name": "PC"})
