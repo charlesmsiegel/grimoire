@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, type Suggestion } from "../api/client";
+import { api, type Actor, type Suggestion } from "../api/client";
 import { errMsg } from "./errMsg";
 
 /** One shared empty list, so a scan that finds nothing lands as the same value
@@ -18,16 +18,21 @@ const NONE: Suggestion[] = [];
  *  Accept is deliberately the ordinary cast-add path (`api.addToCast` with no
  *  version), which is what locks the character's default version on first
  *  appearance — a suggestion must not become a second way to seat someone. */
-export function SuggestedCast({ cid, sid, nameOf, refreshKey, onCast }: {
+export function SuggestedCast({ cid, sid, cast, nameOf, onCast }: {
   cid: string;
   sid: string;
+  /** Who is in the scene. Both the reload key and the on/off switch, because
+   *  the scan's only moving input is this list: it reads these characters'
+   *  cards and nothing else — not the transcript. So it is re-run when the
+   *  cast's *identity* changes (not its length: a swap keeps that) and never
+   *  run at all for an empty one, which can name nobody. Keying on a
+   *  per-turn refresh instead would spend a request per turn to be told the
+   *  same thing. */
+  cast: Actor[];
   /** Resolves the `mentioned_by` character ids the scan returns to names. The
    *  host already holds the campaign's character list; this component does not
    *  refetch it. Falls back to the id. */
   nameOf?: (id: string) => string;
-  /** Bumped by the host when the scene's messages change: the scan reads the
-   *  cards of who is *currently* cast, so it goes stale as the scene moves. */
-  refreshKey?: number;
   /** A character was just seated — the host reloads its own cast list. */
   onCast?: () => void;
 }) {
@@ -55,7 +60,12 @@ export function SuggestedCast({ cid, sid, nameOf, refreshKey, onCast }: {
     }
   }, [cid, sid]);
 
-  useEffect(() => { setError(null); reload(); }, [reload, refreshKey]);
+  const castKey = cast.map((a) => `${a.kind}/${a.id}`).sort().join("|");
+  useEffect(() => {
+    setError(null);
+    if (!castKey) { setSuggestions(NONE); return; }
+    reload();
+  }, [reload, castKey]);
 
   async function act(s: Suggestion, run: () => Promise<unknown>) {
     if (pending) return;
@@ -91,11 +101,16 @@ export function SuggestedCast({ cid, sid, nameOf, refreshKey, onCast }: {
           <span className="role">
             mentioned by {s.mentioned_by.map((id) => nameOf?.(id) ?? id).join(", ")}
           </span>
-          {/* Labelled, not just glyph-and-name: the panel above already has an
-              "Add", so the accessible name has to say who each one seats. */}
+          {/* Labelled, because the panel above already has an "Add": the
+              accessible name has to say who each one seats. One action at a
+              time across the strip — two writes racing would each reload
+              against the other's half-applied result — but the row being acted
+              on says so, rather than every button greying out with no clue
+              which one was hit. */}
           <span className="row-actions">
             <button className="primary" aria-label={`Add ${s.name} to the scene`}
-                    disabled={!!pending} onClick={() => accept(s)}>Add</button>
+                    disabled={!!pending} onClick={() => accept(s)}>
+              {pending === s.character ? "…" : "Add"}</button>
             <button className="subtle" aria-label={`Dismiss ${s.name}`}
                     disabled={!!pending} onClick={() => dismiss(s)}>Dismiss</button>
           </span>
