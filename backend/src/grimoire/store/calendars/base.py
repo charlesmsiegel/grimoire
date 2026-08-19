@@ -167,6 +167,97 @@ def normalize(provider: CalendarProvider, native: str) -> str:
     return canonical
 
 
+#: How far either side of an anchor `resolve` will look for a day this calendar
+#: renders the way the caller wrote it. A year and a bit: far enough for any
+#: "next scene" a suggestion proposes (and for the season-away ones), short
+#: enough that the scan stays bounded work on a path that only runs after a
+#: parse has already failed.
+RESOLVE_WINDOW_DAYS = 400
+
+
+def _loose(text: str) -> str:
+    """Case, spacing and comma-insensitive, for comparing two renderings of a date."""
+    return " ".join(text.replace(",", " ").split()).casefold()
+
+
+def resolve(provider: CalendarProvider, native: str, near: str = "") -> str:
+    """Canonical native date, accepting any form THIS calendar renders.
+
+    `normalize` first; failing that, look for a day near `near` whose own
+    `format` or `describe(...)["friendly"]` matches what the caller wrote.
+
+    Exists because every prompt shows a date as `friendly` ("25 Kislev 5786")
+    and no prompt can make a model spell one back in a notation it has never
+    seen. Gregorian survived that on luck alone -- its native form is ISO-8601,
+    which is what a model writes into JSON unprompted -- and every other
+    calendar, Hebrew and hand-written plugins alike, lost the date silently.
+    The templates now show the native form too; this is the half that does not
+    depend on the model reading them.
+
+    Calendar-agnostic by construction, and deliberately not a date *parser*: the
+    only strings it adds are ones the provider itself produced, so a plugin
+    gets the same tolerance as a built-in without implementing anything, and
+    nothing can be accepted that the calendar would not have written.
+
+    Anchored rather than open-ended for two reasons: a scan needs a bound, and
+    "2 Tevet" is only unambiguous near a year. No `near`, or one this calendar
+    cannot read, means no window -- `CalendarError`, exactly as before.
+    """
+    date_str, time_str = split_native(native)
+    try:
+        return normalize(provider, native)
+    except CalendarError:
+        pass
+    wanted = _loose(date_str)
+    if not wanted or not near:
+        raise CalendarError(f"bad date: {native!r}")
+    try:
+        anchor = fixed_of(provider, near)
+    except CalendarError as e:
+        raise CalendarError(f"bad date: {native!r}") from e
+    for offset in range(0, RESOLVE_WINDOW_DAYS + 1):
+        # Outward from the anchor, and FORWARD first at each distance: the
+        # caller is dating the next scene, and where a calendar renders two days
+        # the same way the later one is the likelier read. Ordered explicitly
+        # rather than left to a set, whose iteration order is a hash detail --
+        # the same question must not get two answers.
+        for fixed in ((anchor,) if offset == 0 else (anchor + offset, anchor - offset)):
+            try:
+                canonical = provider.format(fixed)
+            except (CalendarError, ValueError, OverflowError, OSError):
+                continue   # a day outside this calendar's own range is simply not the answer
+            # `describe` only where `format` has already missed, and unguarded:
+            # a provider whose `describe` cannot be read is broken everywhere
+            # (`friendly`, `today_facts`), and swallowing it here would hide
+            # that behind a dropped date -- once per day of the window, silently.
+            if _loose(canonical) != wanted and _loose(provider.describe(fixed)["friendly"]) != wanted:
+                continue
+            if time_str is None:
+                return canonical
+            minutes = minutes_of(native)   # validates the range, raises CalendarError
+            return f"{canonical}T{minutes // 60:02d}:{minutes % 60:02d}"
+    raise CalendarError(f"bad date: {native!r}")
+    try:
+        anchor = fixed_of(provider, near)
+    except CalendarError as e:
+        raise CalendarError(f"bad date: {native!r}") from e
+    # Outward from the anchor, nearest day first: where two days could be
+    # written the same way, the one closest to the campaign's present is the
+    # one that was meant -- and the common case (days or weeks ahead) stops
+    # the scan early rather than walking the whole window.
+    for offset in range(0, RESOLVE_WINDOW_DAYS + 1):
+        for fixed in ({anchor + offset, anchor - offset} if offset else {anchor}):
+            try:
+                canonical = provider.format(fixed)
+                if _loose(canonical) == wanted:
+                    return canonical
+                if _loose(provider.describe(fixed)["friendly"]) == wanted:
+                    return canonical
+            except (CalendarError, KeyError, TypeError, ValueError, OverflowError, OSError):
+                continue   # a day outside this calendar's own range is simply not the answer
+    raise CalendarError(f"bad date: {native!r}")
+
+
 def friendly(provider: CalendarProvider, native: str) -> str:
     return provider.describe(fixed_of(provider, native))["friendly"]
 

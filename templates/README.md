@@ -104,6 +104,16 @@ Vars (both files take the same set):
 addenda begin with a **leading space** — they continue the instruction
 sentence-style; keep it when editing.
 
+`instruction/date_notation.j2` is a **shared** partial, and the one file here
+included from outside its own family: `date_addendum.j2` and
+`scene_intent/system.j2` both end with it. It spells out how the campaign's
+calendar writes a date (`s.notation.example`, plus `s.notation.months` when the
+set is small enough to list), which every prompt asking for a `date` needs and
+none can get from `s.friendly` — that is the human form, not one
+`suggest.date_normalizer` reads back. Edit it for both callers or neither: two
+prompts teaching different notations for one campaign is the bug it exists to
+prevent. It renders nothing when the calendar could not be resolved.
+
 ### `absorb/` — POST /campaigns/{cid}/scenes/{sid}/absorb
 Mirrors `store/absorb.py:build_prompt`. Messages: system, user.
 `user.j2` vars: `facts` (`chronicle.scene_facts()`), `state_snapshot`

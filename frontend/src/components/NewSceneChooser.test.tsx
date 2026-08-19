@@ -10,6 +10,7 @@ vi.mock("../api/client", () => ({
     deleteScene: vi.fn(), listEntities: vi.fn(), listCharacters: vi.fn(),
     listCampaignPCs: vi.fn(), listAppearances: vi.fn(),
     listSceneIdeas: vi.fn(), saveSceneIdea: vi.fn(), setSceneIdeaStatus: vi.fn(),
+    getCampaignClock: vi.fn(),   // SceneConfirmForm's date-fill button
   },
 }));
 vi.mock("./CalendarDatePicker", () => ({
@@ -21,6 +22,7 @@ import { api } from "../api/client";
 beforeEach(() => {
   vi.clearAllMocks();
   (api.listAppearances as any).mockResolvedValue([]);
+  (api.getCampaignClock as any).mockResolvedValue({ now: "", friendly: "", log: [] });
   (api.availableGreetings as any).mockResolvedValue(
     [{ id: "reck", name: "Reckoning", available: true, reasons: [], unlocked: true }]);
   (api.sceneSuggestions as any).mockResolvedValue(

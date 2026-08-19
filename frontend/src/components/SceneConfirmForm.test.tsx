@@ -2,14 +2,19 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import { SceneConfirmForm } from "./SceneConfirmForm";
 import type { SceneDraft } from "./sceneDraft";
 
-vi.mock("../api/client", () => ({
-  api: {
+// Partial mock, the shape ClockPanel/CastPanel use: the module's pure helpers
+// (`splitNativeDate`, which this form uses to drop a time of day) stay real, so
+// a test can never pass against a reimplementation of one.
+vi.mock("../api/client", async () => {
+  const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
+  return { ...actual, api: {
     createScene: vi.fn(), addCastBatch: vi.fn(), setSceneLocation: vi.fn(),
     setSceneDatetime: vi.fn(), startFromGreeting: vi.fn(), renameScene: vi.fn(),
     deleteScene: vi.fn(), listEntities: vi.fn(), listCharacters: vi.fn(),
     listCampaignPCs: vi.fn(), listAppearances: vi.fn(), setSceneIdeaStatus: vi.fn(),
-  },
-}));
+    getCampaignClock: vi.fn(),
+  } };
+});
 vi.mock("./CalendarDatePicker", () => ({
   CalendarDatePicker: ({ value, onChange, ariaLabel, disabled }: any) =>
     <input aria-label={ariaLabel} value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)} />,
@@ -39,6 +44,8 @@ beforeEach(() => {
   (api.listEntities as any).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
   (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
   (api.setSceneIdeaStatus as any).mockResolvedValue({ ok: true });
+  (api.getCampaignClock as any).mockResolvedValue(
+    { now: "5786-Kislev-25", friendly: "25 Kislev 5786", log: [] });
   (api.listCampaignPCs as any).mockResolvedValue([]);
   (api.listAppearances as any).mockResolvedValue([]);
 });
@@ -520,4 +527,67 @@ test("a failed mark-used keeps the scene and says the idea is still on the list"
   expect(onCreated).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: /continue to scene/i }));
   expect(onCreated).toHaveBeenCalledWith("s9-dated", "A debt-collector arrives.");
+});
+
+// ---- the "Last scene's date" fill button ----
+
+test("the fill button puts the campaign's date in the form and writes nothing", async () => {
+  const draft = { ...GEN, date: "" };
+  renderForm(draft);
+  const button = await screen.findByRole("button", { name: /last scene's date/i });
+  expect(screen.getByLabelText("Scene date")).toHaveValue("");
+
+  fireEvent.click(button);
+
+  expect(screen.getByLabelText("Scene date")).toHaveValue("5786-Kislev-25");
+  // a FILL, not an apply: the scene's date is only written by Create
+  expect(api.setSceneDatetime).not.toHaveBeenCalled();
+  expect(api.createScene).not.toHaveBeenCalled();
+});
+
+test("the fill button names the date it will fill in", async () => {
+  renderForm({ ...GEN, date: "" });
+  const button = await screen.findByRole("button", { name: /last scene's date/i });
+  expect(button).toHaveAttribute("title", expect.stringContaining("25 Kislev 5786"));
+});
+
+test("the fill button drops a time of day — the form takes a date", async () => {
+  (api.getCampaignClock as any).mockResolvedValue(
+    { now: "5786-Kislev-25T21:30", friendly: "25 Kislev 5786", log: [] });
+  renderForm({ ...GEN, date: "" });
+  fireEvent.click(await screen.findByRole("button", { name: /last scene's date/i }));
+  expect(screen.getByLabelText("Scene date")).toHaveValue("5786-Kislev-25");
+});
+
+test("no fill button on a campaign that has no date yet", async () => {
+  (api.getCampaignClock as any).mockResolvedValue({ now: "", friendly: "", log: [] });
+  renderForm({ ...GEN, date: "" });
+  await screen.findByDisplayValue("The creditor");
+  expect(screen.queryByRole("button", { name: /last scene's date/i })).toBeNull();
+});
+
+test("a failed clock read costs the button, not the form", async () => {
+  (api.getCampaignClock as any).mockRejectedValue(new Error("nope"));
+  renderForm({ ...GEN, date: "" });
+  await screen.findByDisplayValue("The creditor");
+  expect(screen.queryByRole("button", { name: /last scene's date/i })).toBeNull();
+});
+
+test("the fill overrides a date already in the form", async () => {
+  renderForm(GEN);   // draft carries 2026-03-04
+  fireEvent.click(await screen.findByRole("button", { name: /last scene's date/i }));
+  expect(screen.getByLabelText("Scene date")).toHaveValue("5786-Kislev-25");
+});
+
+test("the button names the native date when the calendar cannot render a friendly one", async () => {
+  // `GET /clock` answers friendly: "" for a calendar it cannot load — the
+  // moment is still real and still worth offering.
+  (api.getCampaignClock as any).mockResolvedValue(
+    { now: "5786-Kislev-25", friendly: "", log: [] });
+  renderForm({ ...GEN, date: "" });
+  const button = await screen.findByRole("button", { name: /last scene's date/i });
+  expect(button).toHaveAttribute("title", expect.stringContaining("5786-Kislev-25"));
+
+  fireEvent.click(button);
+  expect(screen.getByLabelText("Scene date")).toHaveValue("5786-Kislev-25");
 });

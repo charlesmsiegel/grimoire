@@ -1,0 +1,11 @@
+{#- How this campaign's calendar spells a date, so the model can write one back.
+
+    Vars: s (the snapshot; reads s.notation only). Renders NOTHING when the
+    calendar could not be resolved, so a campaign with a broken or unloadable
+    calendar simply asks for a date without a format lesson.
+
+    Shared by scene_suggestions/instruction/date_addendum.j2 and
+    scene_intent/system.j2: both ask for a "date" field, both parse it through
+    suggest.date_normalizer, and the two must not drift into teaching different
+    notations for the same campaign. -#}
+{%- if s.notation.example %} Write dates the way this campaign's calendar writes them — year, month and day joined by hyphens, exactly like "{{ s.notation.example }}". Do not use any other date format.{% if s.notation.months %} This year's months, in order, are: {{ s.notation.months | join(", ") }}; spell the month exactly as listed.{% endif %}{% endif -%}

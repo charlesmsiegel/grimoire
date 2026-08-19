@@ -212,11 +212,20 @@ for signals in ([], BREAK_SIGNALS):
                   render("scene_break/user.j2", transcript=transcript, signals=signals,
                          facts=facts, title=title))
 
-EMPTY_SNAP = {"now": "", "friendly": "", "holidays_today": [], "events_today": [],
+EMPTY_SNAP = {"now": "", "friendly": "",
+              "notation": {"example": "", "months": []},
+              "holidays_today": [], "events_today": [],
               "upcoming": None,
               "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
               "available_locations": []}
-FULL_SNAP = {"now": "2026-07-05", "friendly": "July 5, 2026", "holidays_today": ["Founding Day"],
+FULL_SNAP = {"now": "2026-07-05", "friendly": "July 5, 2026",
+             # A non-Gregorian notation on purpose: the format lesson exists
+             # because `friendly` is not a form the parser reads back, and a
+             # fixture whose example matched ISO-8601 would render the same
+             # whether or not the lesson was wired up at all.
+             "notation": {"example": "1492-Mirtul-05",
+                          "months": ["Hammer", "Alturiak", "Ches", "Mirtul"]},
+             "holidays_today": ["Founding Day"],
              # A campaign-scheduled event (#101) beside the calendar's holiday:
              # the snapshot merges the two, so a fixture with only holidays
              # would leave the merged half of the line unrendered here.

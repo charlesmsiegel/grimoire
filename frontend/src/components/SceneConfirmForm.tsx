@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, type CharacterSummary, type EntitySummary, type PCSummary,
+import { api, splitNativeDate, type CharacterSummary, type EntitySummary, type PCSummary,
          type RosterEntry } from "../api/client";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import { errMsg } from "./errMsg";
@@ -71,6 +71,16 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
   const [pcs, setPCs] = useState<PCSummary[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [addId, setAddId] = useState("");
+  // The campaign's current moment, offered as a one-click fill (never applied
+  // on its own). `date` is where the story left off, `friendly` how to say so.
+  const [clock, setClock] = useState<{ date: string; friendly: string } | null>(null);
+  // Bumped on every fill, and used as the picker's `key`. The picker
+  // deliberately DROPS an external value while its fields are half-filled, so
+  // an in-progress edit is never stomped -- but a click on this button is the
+  // one external change that is the user's own explicit request, and must win.
+  // Remounting re-seeds it from `value` without teaching that component a
+  // second, weaker notion of what an external change means.
+  const [fillNonce, setFillNonce] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // set when the scene exists but a later, non-fatal step failed: the user
@@ -96,6 +106,12 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
           return "";
         });
       });
+    // A campaign with no date yet, and a read that fails, both mean "nothing to
+    // offer": the button simply does not render. It is a convenience over a
+    // date the user can always pick by hand, so it never gets a banner.
+    api.getCampaignClock(cid)
+      .then((c) => setClock(c.now ? { date: splitNativeDate(c.now).date, friendly: c.friendly } : null))
+      .catch(() => setClock(null));
     api.listCharacters({ kind: "campaign", id: cid }).then(setChars).catch(() => setChars([]));
     api.listCampaignPCs(cid).then(setPCs).catch(() => setPCs([]));
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
@@ -309,8 +325,20 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
              onChange={(e) => setTitle(e.target.value)} />
 
       <div className="role">When</div>
-      <CalendarDatePicker scope={{ kind: "campaign", id: cid }} value={date} disabled={locked}
-                          onChange={setDate} ariaLabel="Scene date" />
+      <div className="picker">
+        <CalendarDatePicker key={fillNonce} scope={{ kind: "campaign", id: cid }} value={date}
+                            disabled={locked} onChange={setDate} ariaLabel="Scene date" />
+        {clock ? (
+          /* Fills the fields above and nothing else -- the scene's date is
+             written by Create (step 4), and moving time afterwards stays the
+             scene's own "When" row and POST /advance. */
+          <button className="subtle" disabled={locked}
+                  title={`Fill the date fields with ${clock.friendly || clock.date}`}
+                  onClick={() => { setDate(clock.date); setFillNonce((n) => n + 1); }}>
+            Last scene's date
+          </button>
+        ) : null}
+      </div>
 
       <div className="role">Where</div>
       <select aria-label="Location" value={location} disabled={locked}

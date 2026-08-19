@@ -1,6 +1,8 @@
 import pytest
 
-from grimoire.store.calendars import CalendarError, get_provider, normalize, fixed_of, minutes_of, split_native
+from grimoire.store.calendars import (CalendarError, CalendarProvider, get_provider, normalize,
+                                       resolve, fixed_of,
+                                       minutes_of, split_native)
 
 
 def greg(region="US", custom=None, anchor=None):
@@ -252,3 +254,122 @@ def test_today_facts_with_hebrew_primary():
     facts = today_facts(heb_cfg, "5786-Kislev-25")
     assert facts["friendly"] == "25 Kislev 5786"
     assert any("Chanuka" in n for n in facts["holidays_today"])
+
+
+# ---- resolve(): accept any form the calendar itself renders ----
+
+def heb():
+    return {"provider": "hebrew", "region": "", "custom_holidays": [], "anchor": None}
+
+
+def test_resolve_passes_canonical_dates_straight_through():
+    """No window scan when the native form already parses — `near` is irrelevant."""
+    p = get_provider(greg())
+    assert resolve(p, "2026-06-29") == "2026-06-29"
+    assert resolve(p, "2026-06-29T14:30") == "2026-06-29T14:30"
+
+
+def test_resolve_accepts_the_friendly_form_the_prompt_displays():
+    """The exact miss behind #hebrew-date-suggestions: prompts show `friendly`,
+    so that is what a model echoes back."""
+    p = get_provider(heb())
+    assert resolve(p, "2 Tevet 5786", near="5786-Kislev-25") == "5786-Tevet-02"
+    g = get_provider(greg())
+    assert resolve(g, "29 June 2026", near="2026-06-01") == "2026-06-29"
+
+
+def test_resolve_is_forgiving_about_case_spacing_and_commas():
+    p = get_provider(heb())
+    for written in ("2  tevet 5786", "2 TEVET 5786,", " 2 Tevet, 5786 "):
+        assert resolve(p, written, near="5786-Kislev-25") == "5786-Tevet-02"
+
+
+def test_resolve_refuses_a_date_outside_the_window():
+    """Bounded by construction: a match ten years out is not searched for."""
+    p = get_provider(heb())
+    with pytest.raises(CalendarError):
+        resolve(p, "2 Tevet 5796", near="5786-Kislev-25")
+
+
+def test_resolve_refuses_text_the_calendar_never_renders():
+    p = get_provider(heb())
+    for junk in ("next Tuesday", "", "2 Smarch 5786"):
+        with pytest.raises(CalendarError):
+            resolve(p, junk, near="5786-Kislev-25")
+
+
+def test_resolve_without_an_anchor_is_normalize_only():
+    """No `near` means no window to scan, so the friendly form stays unreadable."""
+    p = get_provider(heb())
+    with pytest.raises(CalendarError):
+        resolve(p, "2 Tevet 5786")
+
+
+def test_resolve_ignores_an_anchor_this_calendar_cannot_read():
+    """A garbled stored moment must not turn a bad date into a 500."""
+    p = get_provider(heb())
+    with pytest.raises(CalendarError):
+        resolve(p, "2 Tevet 5786", near="not-a-date")
+
+
+class _AmbiguousProvider(CalendarProvider):
+    """A calendar whose `friendly` repeats every ten days, so a window scan can
+    match on both sides of its anchor at once. Contrived, but a plugin is free
+    to render anything, and `resolve` must still answer the same day every time."""
+
+    def __init__(self, config=None):
+        self.custom_holidays = []
+
+    def parse(self, native):
+        try:
+            return int(native)
+        except ValueError as e:                      # the contract `normalize` relies on
+            raise CalendarError(f"bad date: {native!r}") from e
+
+    def format(self, fixed):
+        return str(fixed)
+
+    def describe(self, fixed):
+        return {"year": fixed, "month": 1, "month_name": "M", "day": 1,
+                "weekday_name": "D", "weekday_index": 0, "friendly": f"day {fixed % 10}"}
+
+    def holidays(self, start_fixed, end_fixed):
+        return []
+
+    def months(self, year):
+        return [{"key": "01", "name": "M", "days": 1}]
+
+
+def test_resolve_picks_the_forward_day_when_both_sides_match():
+    """Deterministic, and forward: the caller is dating the NEXT scene."""
+    p = _AmbiguousProvider()
+    assert resolve(p, "day 5", near="1000") == "1005"   # 1005 and 995 both render "day 5"
+    for _ in range(5):                                  # never hash-order dependent
+        assert resolve(p, "day 5", near="1000") == "1005"
+
+
+def test_resolve_keeps_a_time_of_day_through_the_fallback():
+    """`normalize` carries the time; the tolerant path must not quietly drop it."""
+    p = get_provider(heb())
+    assert resolve(p, "2 Tevet 5786T21:30", near="5786-Kislev-25") == "5786-Tevet-02T21:30"
+    assert resolve(p, "2 Tevet 5786T9:05", near="5786-Kislev-25") == "5786-Tevet-02T09:05"
+
+
+def test_resolve_still_rejects_an_out_of_range_time():
+    p = get_provider(heb())
+    with pytest.raises(CalendarError):
+        resolve(p, "2 Tevet 5786T25:00", near="5786-Kislev-25")
+
+
+class _BrokenDescribeProvider(_AmbiguousProvider):
+    def describe(self, fixed):
+        return "not a mapping"
+
+
+def test_resolve_does_not_swallow_a_provider_whose_describe_is_broken():
+    """The rule `clock._holidays` states: row DATA is validated, a provider's
+    method CONTRACT is not. A `describe` that cannot be read fails here the way
+    it already fails in `friendly` and `today_facts`, rather than 800 times in
+    silence."""
+    with pytest.raises(TypeError):
+        resolve(_BrokenDescribeProvider(), "day 5", near="1000")
