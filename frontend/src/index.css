@@ -988,7 +988,11 @@ button.primary { background: var(--accent); color: var(--on-accent); border: 1px
 .tab.active { color: var(--ink); border-bottom-color: var(--accent); }
 
 .field { margin: 12px 0; }
-.field label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px; }
+.field label,
+/* A caption over a group of controls is not a label -- it owns no single
+   input, so `jsx-a11y/label-has-associated-control` is right to refuse it
+   the tag. Same look, no false promise to a screen reader. */
+.field .field-caption { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px; }
 /* `password` and `number` are here because the API-key field is one: matching
    only [type="text"] left it at the browser's intrinsic ~185px, which is wider
    than the whole column on a phone and scrolled /connections sideways. */

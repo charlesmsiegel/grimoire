@@ -485,7 +485,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                     {hasPrimary ? (
                       <figure className="shelf-tile avatar-tile">
                         <a href={imgSrc("avatar")} target="_blank" rel="noreferrer">
-                          <img alt="primary image" src={imgSrc("avatar")} />
+                          <img alt="primary" src={imgSrc("avatar")} />
                         </a>
                         <figcaption>primary</figcaption>
                       </figure>

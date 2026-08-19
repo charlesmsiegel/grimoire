@@ -14,7 +14,7 @@ test("holds a partial event until its terminator arrives", () => {
   let buf = "";
   buf = parseSSEChunk(buf, 'data: {"delta": "Hel', (e) => events.push(e));
   expect(events).toEqual([]);
-  buf = parseSSEChunk(buf, 'lo"}\n\n', (e) => events.push(e));
+  parseSSEChunk(buf, 'lo"}\n\n', (e) => events.push(e));
   expect(events).toEqual([{ delta: "Hello" }]);
 });
 

@@ -21,7 +21,10 @@ import { api } from "./api/client";
 
 const campaignMounts: string[] = [];
 vi.mock("./routes/CampaignView", () => ({
-  default: () => {
+  // Named, and capitalized, so `react-hooks/rules-of-hooks` can see that the
+  // hooks below sit inside a component. An anonymous arrow assigned to
+  // `default` is a component to vitest and an ordinary function to eslint.
+  default: function CampaignViewStub() {
     // Mount-only deps on purpose: this must record one entry per *mount*, so
     // a test can tell a remount (fresh state) from a re-render with a new
     // param (stale state kept). Keyed on [cid] it would fire either way and
@@ -44,7 +47,7 @@ vi.mock("./routes/CampaignWizard", () => ({
 // Stands in for the real wizard's exit: report completion, then leave for "/",
 // which is exactly what SetupWizard.finish() does.
 vi.mock("./routes/SetupWizard", () => ({
-  default: ({ onDone }: any) => {
+  default: function SetupWizardStub({ onDone }: any) {
     const navigate = useNavigate();
     return (
       <div data-testid="setup-wizard">

@@ -277,7 +277,7 @@ it("the shelf renders the avatar and gallery, cache-busted by the listing's toke
   render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Elara"));
 
-  const avatar = await screen.findByAltText("avatar image");
+  const avatar = await screen.findByAltText("avatar");
   expect(avatar.getAttribute("src")).toBe("/img/w/pcs/elara/default/avatar?v=a1");
   // numeric order, not lexicographic ("gallery_10" must not sort before "gallery_2")
   const gallery = [screen.getByAltText("gallery_2"), screen.getByAltText("gallery_10")];
@@ -407,7 +407,7 @@ it("campaign scope addresses the campaign's own copy of the art", async () => {
   (api.listPCImages as any).mockResolvedValue([{ name: "avatar", ext: "png", v: "a1" }]);
   render(<PCEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
   fireEvent.click(await screen.findByText("Elara"));
-  const avatar = await screen.findByAltText("avatar image");
+  const avatar = await screen.findByAltText("avatar");
   expect(avatar.getAttribute("src")).toBe("/img/run/pcs/elara/default/avatar?v=a1");
   fireEvent.change(screen.getByLabelText("Add image"), { target: { files: [FILE] } });
   await waitFor(() => expect(api.putPCImage).toHaveBeenCalledWith(

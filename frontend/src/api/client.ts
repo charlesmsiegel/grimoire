@@ -139,8 +139,7 @@ function request<T>(method: string, path: string, body?: unknown,
   // the same path -- an unconditional delete evicts that live entry, so the
   // callers after it each issue their own request instead of joining it. On
   // /api/campaigns that is a full scan of every campaign's scenes per caller.
-  let p: Promise<T>;
-  p = requestRaw<T>(method, path, body).finally(() => {
+  const p: Promise<T> = requestRaw<T>(method, path, body).finally(() => {
     if (inflightGets.get(path) === p) inflightGets.delete(path);
   });
   inflightGets.set(path, p);

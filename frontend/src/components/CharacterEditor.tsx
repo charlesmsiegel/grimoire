@@ -437,7 +437,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       // separately from "still loading" so the grid can wait for one and not
       // the other.
       .catch(() => { if (rosterReq.current === req) setRosterFailed(true); });
-  }, [scope.kind, scope.id, resetSignal]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scope.kind, scope.id, resetSignal]);
 
   // re-clicking the Characters tab (resetSignal bumps) returns to the grid.
   // This is a close like `backToGrid`'s, so it owes the character it closes the
@@ -448,7 +448,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     setMode("grid");
     setDetail(null);
     setCard(null);
-  }, [resetSignal]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [resetSignal]);
 
   // arrived via a present-character link: open that character at the given version
   useEffect(() => {
@@ -1785,7 +1785,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                     {hasAvatar ? (
                       <figure className="shelf-tile avatar-tile">
                         <a href={avatarSrc(detail.meta.id, vid, imageTokens.avatar)} target="_blank" rel="noreferrer">
-                          <img alt="avatar image" src={avatarSrc(detail.meta.id, vid, imageTokens.avatar)} />
+                          <img alt="avatar" src={avatarSrc(detail.meta.id, vid, imageTokens.avatar)} />
                         </a>
                         <figcaption>avatar</figcaption>
                       </figure>
