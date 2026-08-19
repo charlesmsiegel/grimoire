@@ -61,6 +61,7 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
 
   useEffect(() => {
     if (!world) return;
+    let live = true;
     api.listTags(world).then((m) => setWorldTags(Object.values(m))).catch(() => setWorldTags([]));
     setPickedPC(null); // a pick belongs to one world
     api.listPCs({ kind: "world", id: world }).then(setWorldPCs).catch(() => setWorldPCs([]));
@@ -72,9 +73,17 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
     // noticed and re-picked. Still a picker: the world is the default here, not
     // a constraint. A world whose calendar cannot be read leaves the current
     // selection alone rather than resetting it to something nobody chose.
+    // Guarded, unlike the list fills above it: this one writes a control the
+    // reader will commit, so a slower answer for a world they have already left
+    // would silently change what the new campaign is created with.
     api.getCalendarConfig({ kind: "world", id: world })
-      .then((cfg) => { setCalendar(cfg.primary.provider); setRegion(cfg.primary.region); })
+      .then((cfg) => {
+        if (!live) return;
+        setCalendar(cfg.primary.provider);
+        setRegion(cfg.primary.region);
+      })
       .catch(() => {});
+    return () => { live = false; };
   }, [world]);
 
   function addTag() {

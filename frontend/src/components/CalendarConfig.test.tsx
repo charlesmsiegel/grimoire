@@ -116,3 +116,19 @@ test("the world's save says what it saves — Mechanics has a Save beside it", a
   render(<CalendarConfig scope={{ kind: "world", id: "realm" }} />);
   expect(await screen.findByRole("button", { name: "Save calendar" })).toBeInTheDocument();
 });
+
+test("a scope change hides the form until the new scope's calendar has landed", async () => {
+  // Otherwise the panel shows one record's calendar under another record's
+  // Save: pressing it in that window writes the world you left into the world
+  // you are looking at.
+  (api.getCalendarConfig as any).mockImplementation((scope: { id: string }) =>
+    scope.id === "realm"
+      ? Promise.resolve({ primary: { provider: "hebrew", region: "IL", custom_holidays: [], anchor: null },
+                          secondary: null, confirmed: true, stale_after_days: 30 })
+      : new Promise(() => {}));                    // never lands
+  const { rerender } = render(<CalendarConfig scope={{ kind: "world", id: "realm" }} />);
+  expect(await screen.findByLabelText("Calendar")).toHaveValue("hebrew");
+  rerender(<CalendarConfig scope={{ kind: "world", id: "saltmarch" }} />);
+  expect(await screen.findByText(/loading calendar/i)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /save/i })).toBeNull();
+});
