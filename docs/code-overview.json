@@ -1,0 +1,90 @@
+{
+  "schema": "code-overview/1",
+  "generated": "2026-08-18",
+  "packages": [
+    {
+      "name": "grimoire-store",
+      "roots": [
+        "backend/src/grimoire/store"
+      ],
+      "docs": "backend/src/grimoire/store/docs",
+      "language": "python",
+      "doctor": "python-code-doctor"
+    },
+    {
+      "name": "grimoire-api",
+      "roots": [
+        "backend/src/grimoire/routes",
+        "backend/src/grimoire/main.py",
+        "backend/src/grimoire/__init__.py"
+      ],
+      "docs": "backend/src/grimoire/routes/docs",
+      "language": "python",
+      "doctor": "python-code-doctor"
+    },
+    {
+      "name": "grimoire-llm",
+      "roots": [
+        "backend/src/grimoire/llm.py",
+        "backend/src/grimoire/llm_errors.py",
+        "backend/src/grimoire/llm_usage.py",
+        "backend/src/grimoire/openrouter.py",
+        "backend/src/grimoire/openai_compatible.py",
+        "backend/src/grimoire/claude_agent.py",
+        "backend/src/grimoire/embeddings.py",
+        "backend/src/grimoire/prompts.py",
+        "templates"
+      ],
+      "docs": "backend/src/grimoire/docs",
+      "language": "python",
+      "doctor": "python-code-doctor"
+    },
+    {
+      "name": "backend-tests",
+      "roots": [
+        "backend/tests"
+      ],
+      "docs": "backend/tests/docs",
+      "language": "python",
+      "doctor": "python-code-doctor"
+    },
+    {
+      "name": "frontend",
+      "roots": [
+        "frontend/src"
+      ],
+      "docs": "frontend/docs",
+      "language": "typescript",
+      "doctor": "typescript-code-doctor"
+    },
+    {
+      "name": "evals",
+      "roots": [
+        "evals"
+      ],
+      "docs": "evals/docs",
+      "language": "python",
+      "doctor": "python-code-doctor"
+    },
+    {
+      "name": "scripts",
+      "roots": [
+        "scripts",
+        "backend/scripts",
+        ".claude/skills/populate-world-content/scripts/populate_world_content.py"
+      ],
+      "docs": "scripts/docs",
+      "language": "python",
+      "doctor": "python-code-doctor"
+    },
+    {
+      "name": "android",
+      "roots": [
+        "android"
+      ],
+      "docs": "android/docs",
+      "language": "kotlin",
+      "doctor": ""
+    }
+  ]
+}

@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>grimoire-llm — Codebase Atlas</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Design tokens are code-visualization's, verbatim. The three document types in
+   a code overview sit next to each other in one nav bar; sharing the palette is
+   what makes them read as one artifact rather than three tools' output. */
+:root{
+  --bg:#0d1420; --bg-grid:rgba(120,160,220,0.05); --surface:#141d2e; --surface-2:#1a2538;
+  --border:rgba(150,180,230,0.14); --border-strong:rgba(150,180,230,0.30);
+  --text:#dbe4f3; --text-dim:#8fa1bd; --text-faint:#5f7191;
+  --accent:#5aa7e8; --accent-dim:rgba(90,167,232,0.14);
+  --good:#59c98f; --good-dim:rgba(89,201,143,0.14);
+  --warn:#e0b25a; --warn-dim:rgba(224,178,90,0.14);
+  --bad:#e06a6a; --bad-dim:rgba(224,106,106,0.15);
+  --violet:#a08fd8;
+  --heat-lo:#27405e; --heat-hi:#e0703f;
+  --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:'IBM Plex Sans',system-ui,-apple-system,sans-serif;
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#f3f5f9; --bg-grid:rgba(40,70,120,0.055); --surface:#ffffff; --surface-2:#eef1f7;
+    --border:rgba(30,55,95,0.14); --border-strong:rgba(30,55,95,0.30);
+    --text:#1d2838; --text-dim:#51617a; --text-faint:#8593a8;
+    --accent:#1f6fbd; --accent-dim:rgba(31,111,189,0.10);
+    --good:#1f8f5c; --good-dim:rgba(31,143,92,0.10);
+    --warn:#a87418; --warn-dim:rgba(168,116,24,0.12);
+    --bad:#bd3f3f; --bad-dim:rgba(189,63,63,0.10);
+    --violet:#6a55b0;
+    --heat-lo:#c9d8ec; --heat-hi:#cf5a26;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  font-family:var(--sans); background:var(--bg); color:var(--text);
+  background-image:linear-gradient(var(--bg-grid) 1px,transparent 1px),linear-gradient(90deg,var(--bg-grid) 1px,transparent 1px);
+  background-size:32px 32px; line-height:1.55; font-size:15px;
+}
+header.doc{padding:34px 28px 0; max-width:1280px; margin:0 auto}
+.doc-label{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);display:flex;align-items:center;gap:8px}
+.doc-label::before{content:"";width:8px;height:8px;background:var(--accent);border-radius:2px;display:inline-block}
+h1.doc-title{font-size:30px;font-weight:700;letter-spacing:-.02em;margin-top:8px}
+.doc-sub{color:var(--text-dim);margin-top:6px;max-width:900px}
+.doc-meta{font-family:var(--mono);font-size:12px;color:var(--text-faint);margin-top:10px}
+main{max-width:1280px;margin:0 auto;padding:26px 28px 80px}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+
+/* ---------- tabs: code-visualization's contract, so one shell serves all four
+   documents. code-overview forces this template on assemble.py and on
+   build_measurement.py, so the markup those two emit has to fit here. ------- */
+nav.tabs{
+  display:flex;gap:2px;flex-wrap:wrap;max-width:1280px;margin:18px auto 0;
+  padding:0 28px;border-bottom:1px solid var(--border);
+}
+/* summary.html is untabbed and leaves TABS_NAV empty; without this the bar
+   renders as a stray rule under the header. */
+nav.tabs:empty{display:none;border:none}
+nav.tabs button{
+  background:none;border:none;border-bottom:2px solid transparent;color:var(--text-dim);
+  font-family:var(--sans);font-size:14px;padding:9px 14px;cursor:pointer;
+}
+nav.tabs button:hover{color:var(--text)}
+nav.tabs button[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+nav.tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+section.panel{display:none}
+section.panel.active{display:block}
+
+/* ---------- content primitives (shared with code-visualization) ---------- */
+h2{font-size:21px;font-weight:600;letter-spacing:-.01em;margin:30px 0 10px}
+h2:first-child{margin-top:0}
+h3{font-size:16px;font-weight:600;margin:22px 0 8px}
+p{margin:8px 0;max-width:940px;color:var(--text)}
+ul,ol{margin:8px 0 8px 22px;max-width:940px}
+li{margin:4px 0}
+a{color:var(--accent)}
+.dim{color:var(--text-dim)} .faint{color:var(--text-faint)}
+code,.mono{font-family:var(--mono);font-size:.92em}
+p code,li code,td code{background:var(--surface-2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;overflow-wrap:anywhere}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin:12px 0}
+.grid{display:grid;gap:14px;margin:12px 0}
+.grid.cols-2{grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}
+.grid.cols-3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.grid>*{min-width:0}
+.kpis{display:flex;flex-wrap:wrap;gap:12px;margin:12px 0}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 18px;min-width:130px}
+.kpi .n{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.kpi .l{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim);margin-top:2px}
+.kpi.warn .n{color:var(--warn)} .kpi.bad .n{color:var(--bad)} .kpi.good .n{color:var(--good)} .kpi.accent .n{color:var(--accent)}
+.badge{display:inline-block;font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--border);vertical-align:1px;white-space:nowrap}
+.badge.good{color:var(--good);background:var(--good-dim);border-color:transparent}
+.badge.warn{color:var(--warn);background:var(--warn-dim);border-color:transparent}
+.badge.bad{color:var(--bad);background:var(--bad-dim);border-color:transparent}
+.badge.accent{color:var(--accent);background:var(--accent-dim);border-color:transparent}
+.badge.neutral{color:var(--text-dim);background:var(--surface-2);border-color:transparent}
+.callout{border-left:3px solid var(--accent);background:var(--accent-dim);border-radius:0 8px 8px 0;padding:12px 16px;margin:12px 0;max-width:940px}
+.callout.warn{border-color:var(--warn);background:var(--warn-dim)}
+.callout.bad{border-color:var(--bad);background:var(--bad-dim)}
+.callout.good{border-color:var(--good);background:var(--good-dim)}
+details{border:1px solid var(--border);border-radius:8px;margin:10px 0;background:var(--surface)}
+details summary{cursor:pointer;padding:10px 16px;font-weight:500;color:var(--text-dim)}
+details[open] summary{border-bottom:1px solid var(--border);color:var(--text)}
+details .body{padding:12px 16px}
+.tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:10px;margin:12px 0;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+thead th{background:var(--surface-2);text-align:left;font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);padding:9px 14px;border-bottom:1px solid var(--border-strong);white-space:nowrap}
+tbody td{padding:8px 14px;border-bottom:1px solid var(--border);vertical-align:top;overflow-wrap:anywhere}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:nth-child(even){background:color-mix(in srgb,var(--surface-2) 45%,transparent)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:12.5px;white-space:nowrap}
+.bar{position:relative;background:var(--surface-2);border-radius:4px;height:14px;min-width:120px;overflow:hidden}
+.bar>i{position:absolute;inset:0 auto 0 0;background:var(--accent);border-radius:4px}
+.bar.warn>i{background:var(--warn)} .bar.bad>i{background:var(--bad)} .bar.good>i{background:var(--good)}
+
+/* ---------- grade components ---------- */
+/* Grade colour is bound to the band, not to the score, so the letter and the
+   colour can never disagree — the two are read together at a glance. */
+.g-a{--grade:var(--good)} .g-b{--grade:var(--accent)} .g-c{--grade:var(--warn)}
+.g-d{--grade:var(--bad)} .g-f{--grade:var(--bad)} .g-none{--grade:var(--text-faint)}
+.gradecard{display:flex;flex-wrap:wrap;align-items:center;gap:26px;background:var(--surface);border:1px solid var(--border-strong);border-radius:12px;padding:22px 26px;margin:16px 0;background-image:linear-gradient(110deg,color-mix(in srgb,var(--grade) 12%,transparent),transparent 55%)}
+.gradecard .letter{font-size:64px;font-weight:700;line-height:1;letter-spacing:-.04em;color:var(--grade);font-variant-numeric:tabular-nums;min-width:96px}
+.gradecard .score{font-family:var(--mono);font-size:13px;color:var(--text-dim);margin-top:6px}
+.gradecard .what{flex:1 1 260px;min-width:0}
+.gradecard .what h2{margin:0 0 4px;font-size:19px}
+.catrow{display:grid;grid-template-columns:minmax(140px,1.4fr) minmax(90px,2fr) 54px 46px;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid var(--border)}
+.catrow:last-child{border-bottom:none}
+.catrow .cname{font-size:13.5px;overflow-wrap:anywhere}
+.catrow .cname small{display:block;font-family:var(--mono);font-size:10.5px;color:var(--text-faint);letter-spacing:.04em}
+.catrow .cscore{font-family:var(--mono);font-size:12.5px;text-align:right;color:var(--text-dim);font-variant-numeric:tabular-nums}
+.catrow .cgrade{font-family:var(--mono);font-weight:600;text-align:right;color:var(--grade)}
+.catrow .bar>i{background:var(--grade)}
+.catrow.ungraded .cname,.catrow.ungraded .cscore{color:var(--text-faint)}
+@media(max-width:560px){.catrow{grid-template-columns:1fr 54px 46px}.catrow .bar{grid-column:1/-1}}
+.doclinks{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));margin:16px 0}
+.doclink{display:block;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px;text-decoration:none;color:var(--text)}
+.doclink:hover{border-color:var(--accent);background:var(--accent-dim)}
+.doclink .k{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent)}
+.doclink .t{font-size:16px;font-weight:600;margin-top:4px}
+.doclink .d{color:var(--text-dim);font-size:13px;margin-top:4px}
+.doclink[aria-disabled="true"]{opacity:.5;pointer-events:none}
+.sev-high{color:var(--bad)} .sev-medium{color:var(--warn)} .sev-low{color:var(--text-dim)}
+/* The type token and the category name are short and identify the row; letting
+   them wrap mid-word to buy width for a long description makes the table harder
+   to scan, not easier. The description column is the one that should give. */
+td code.ftype{white-space:nowrap;overflow-wrap:normal}
+td.cat{white-space:nowrap}
+/* A file:line split across two lines is not a citation anyone can copy. The
+   wrapper scrolls if a path is genuinely too deep for the viewport. */
+td code.floc{white-space:nowrap;overflow-wrap:normal}
+footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-faint);font-family:var(--mono);font-size:11.5px}
+footer.doc a{color:var(--text-dim)}
+@media(max-width:720px){header.doc,main,nav.tabs,footer.doc{padding-left:16px;padding-right:16px} h1.doc-title{font-size:24px} .gradecard .letter{font-size:48px;min-width:72px}}
+</style>
+</head>
+<body>
+<header class="doc">
+  <div class="doc-label">CODEBASE ATLAS</div>
+  <h1 class="doc-title">grimoire-llm — Codebase Atlas</h1>
+  <p class="doc-sub">The model boundary: one facade, three providers, and all the prompt text</p>
+  <div class="doc-meta">generated 2026-08-18 · a63cb05f5 · 8 modules + 102 templates, 1,518 LOC</div>
+</header>
+<!-- code-overview:nav --><style>
+.co-nav{position:sticky;top:0;z-index:60;max-width:1280px;margin:0 auto;padding:10px 28px;
+  font-family:var(--mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:12px;
+  background:color-mix(in srgb,var(--bg,#0d1420) 92%,transparent);
+  border-bottom:1px solid var(--border,rgba(150,180,230,0.14));
+  backdrop-filter:blur(8px);display:flex;flex-direction:column;gap:6px}
+.co-nav .co-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;min-width:0}
+.co-nav a{color:var(--text-dim,#8fa1bd);text-decoration:none;padding:3px 9px;border-radius:999px;
+  border:1px solid transparent;white-space:nowrap}
+.co-nav a:hover{color:var(--accent,#1f6fbd);background:var(--accent-dim,rgba(31,111,189,0.10))}
+.co-nav a[aria-current]{color:var(--accent,#1f6fbd);
+  border-color:var(--accent,#1f6fbd);background:var(--accent-dim,rgba(31,111,189,0.10))}
+.co-nav .co-here{color:var(--text,#dbe4f3);font-weight:600;padding:3px 0}
+.co-nav .co-lbl{color:var(--text-faint,#5f7191);letter-spacing:.08em;text-transform:uppercase;
+  font-size:10.5px;padding-right:2px}
+.co-nav .co-sep{color:var(--text-faint,#5f7191);opacity:.6}
+@media(max-width:720px){.co-nav{padding-left:16px;padding-right:16px}}
+</style><nav class="co-nav" aria-label="code overview"><div class="co-row"><a href="../../../../docs/codemap.html">⌂ Overall Code Map</a><span class="co-sep">/</span><span class="co-here">grimoire-llm</span></div><div class="co-row"><span class="co-lbl">grimoire-llm</span><a href="summary.html">Summary</a><a href="#" aria-current="page">Code Map</a><a href="health.html">Health</a><a href="measurement.html">Measurement</a><a href="theory.html">Theory</a></div><div class="co-row"><span class="co-lbl">Other packages · Code Map</span><a href="../store/docs/codemap.html">grimoire-store</a><a href="../routes/docs/codemap.html">grimoire-api</a><a href="../../../tests/docs/codemap.html">backend-tests</a><a href="../../../../frontend/docs/codemap.html">frontend</a><a href="../../../../evals/docs/codemap.html">evals</a><a href="../../../../scripts/docs/codemap.html">scripts</a><a href="../../../../android/docs/codemap.html">android</a></div></nav><!-- /code-overview:nav -->
+<!--DOC_NAV-->
+<nav class="tabs" role="tablist"><button role="tab" data-tab="overview" aria-selected="true" aria-controls="overview">Overview</button>
+<button role="tab" data-tab="inventory" aria-selected="false" aria-controls="inventory">Inventory</button>
+<button role="tab" data-tab="dependencies" aria-selected="false" aria-controls="dependencies">Dependencies</button>
+<button role="tab" data-tab="hotspots" aria-selected="false" aria-controls="hotspots">Hotspots</button></nav>
+<main><section class="panel active" id="overview" role="tabpanel">
+
+<div class="card hero">
+  <h2>The model boundary: one facade, three providers, and all the prompt text</h2>
+  <p>This package is the seam between grimoire and any language model &mdash; 1,518 lines of Python plus
+  the 102 files in <code>templates</code>, which is why it is defined as a package spanning two
+  directories. It is small, and it is the only part of the backend where an external service can fail.</p>
+  <p>Its organizing idea: <strong>no prompt string exists in code.</strong>
+  <code>backend/src/grimoire/prompts.py</code> renders every string sent to a model from
+  <code>templates</code> through Jinja with <code>StrictUndefined</code>, so a template that references
+  a variable nobody passes raises instead of quietly rendering nothing.</p>
+</div>
+
+<div class="kpis">
+  <div class="kpi"><div class="n">3</div><div class="l">providers behind one facade</div></div>
+  <div class="kpi"><div class="n">1.5k</div><div class="l">lines of Python</div></div>
+  <div class="kpi"><div class="n">102</div><div class="l">template files</div></div>
+  <div class="kpi warn"><div class="n">15s</div><div class="l">stream heartbeat</div></div>
+</div>
+
+<h2>The modules</h2>
+<div class="tbl-wrap"><table class="sortable">
+<tr><th>File</th><th class="num">Lines</th><th>Role</th></tr>
+<tr><td><code>backend/src/grimoire/llm.py</code></td><td class="num">491</td><td>The provider-agnostic dispatch facade. Owns the retry policy, the 120s default timeout, and the heartbeat that keeps a silent model distinguishable from a dead connection.</td></tr>
+<tr><td><code>backend/src/grimoire/embeddings.py</code></td><td class="num">355</td><td>Embedding calls for semantic recall.</td></tr>
+<tr><td><code>backend/src/grimoire/openai_compatible.py</code></td><td class="num">185</td><td>Any OpenAI-shaped endpoint, including self-hosted ones.</td></tr>
+<tr><td><code>backend/src/grimoire/claude_agent.py</code></td><td class="num">150</td><td>The Claude Agent SDK provider, authenticating through the host's own Claude Code session rather than an API key.</td></tr>
+<tr><td><code>backend/src/grimoire/openrouter.py</code></td><td class="num">&mdash;</td><td>OpenRouter over raw <code>httpx</code>, with normalized errors.</td></tr>
+<tr><td><code>backend/src/grimoire/llm_errors.py</code>, <code>backend/src/grimoire/llm_usage.py</code></td><td class="num">&mdash;</td><td>The shared error type and token/cost accounting.</td></tr>
+<tr><td><code>backend/src/grimoire/prompts.py</code></td><td class="num">&mdash;</td><td>The only bridge to <code>templates</code>.</td></tr>
+</table></div>
+
+<div class="callout good">
+  <strong>An optional dependency handled properly.</strong>
+  <code>backend/src/grimoire/claude_agent.py</code> imports the Claude Agent SDK inside a
+  <code>try</code> that catches <code>ImportError</code> <em>and</em> a broken install separately, binds
+  the exception targets to empty tuples rather than <code>None</code> (because
+  <code>except None</code> raises while <code>except ()</code> simply never matches), and defers the
+  failure to <code>stream()</code>. It has to: the SDK lives in an extra Android does not install, and
+  <code>backend/src/grimoire/llm.py</code> imports this class at module scope, so an exception escaping here would stop the
+  app from starting.
+</div>
+
+<div class="callout warn">
+  <strong>The LLM Ops tab is empty, and that is a detector limitation.</strong> The analyzer finds call
+  sites by vendor SDK method name; grimoire calls OpenRouter over raw <code>httpx</code> and reaches
+  Claude through the Agent SDK's <code>query</code>, so it reports zero call sites for the package
+  whose entire job is calling models. Read <code>backend/src/grimoire/llm.py</code> directly instead.
+</div>
+
+<div class="callout">
+  <strong>Scope of this atlas.</strong> The analyzers were scoped to
+  <code>backend/src/grimoire</code> with <code>routes</code>, <code>store</code> and
+  <code>assets</code> excluded, which is the only way to isolate these top-level modules. That means
+  <code>backend/src/grimoire/main.py</code> appears in the tabs here although it is graded under
+  <em>grimoire-api</em>, and <code>templates</code> does not appear at all, because it is a sibling
+  directory. Its 102 files are counted in this package's roots for grading and theory.
+</div>
+
+<p class="dim">Package size is 1,518 lines of code, so this atlas carries the automated tabs plus
+this overview.</p>
+
+</section>
+<section class="panel" id="inventory" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi accent"><div class="n">10</div><div class="l">source files</div></div>
+  <div class="kpi"><div class="n">1,751</div><div class="l">lines of code</div></div>
+  <div class="kpi"><div class="n">1</div><div class="l">languages</div></div>
+  <div class="kpi warn"><div class="n">0%</div><div class="l">test code share</div></div>
+</div>
+
+<h2>Languages</h2>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>Language</th><th class="num">LOC</th><th class="num">Files</th><th>Share</th><th class="num">%</th></tr></thead>
+<tbody><tr><td>Python</td><td class='num'>1,751</td><td class='num'>10</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>100.0%</td></tr></tbody></table></div>
+
+
+<h2>Top-level directories</h2>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>Directory</th><th class="num">LOC</th><th>Share</th></tr></thead>
+<tbody><tr><td><code>(root)/</code></td><td class='num'>1,751</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr></tbody></table></div>
+
+<div class="grid cols-2">
+<div>
+<h2>Largest files</h2>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">LOC</th><th>Size</th><th class="num">Branches</th></tr></thead>
+<tbody><tr><td><code>llm.py</code></td><td class='num'>491</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>82</td></tr>
+<tr><td><code>embeddings.py</code></td><td class='num'>355</td><td><div class="bar "><i style="width:72.3%"></i></div></td><td class='num'>54</td></tr>
+<tr><td><code>main.py</code></td><td class='num'>232</td><td><div class="bar "><i style="width:47.3%"></i></div></td><td class='num'>29</td></tr>
+<tr><td><code>openai_compatible.py</code></td><td class='num'>185</td><td><div class="bar "><i style="width:37.7%"></i></div></td><td class='num'>39</td></tr>
+<tr><td><code>claude_agent.py</code></td><td class='num'>150</td><td><div class="bar "><i style="width:30.5%"></i></div></td><td class='num'>34</td></tr>
+<tr><td><code>llm_usage.py</code></td><td class='num'>143</td><td><div class="bar "><i style="width:29.1%"></i></div></td><td class='num'>31</td></tr>
+<tr><td><code>openrouter.py</code></td><td class='num'>121</td><td><div class="bar "><i style="width:24.6%"></i></div></td><td class='num'>20</td></tr>
+<tr><td><code>llm_errors.py</code></td><td class='num'>48</td><td><div class="bar "><i style="width:9.8%"></i></div></td><td class='num'>4</td></tr>
+<tr><td><code>prompts.py</code></td><td class='num'>25</td><td><div class="bar "><i style="width:5.1%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>__init__.py</code></td><td class='num'>1</td><td><div class="bar "><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr></tbody></table></div>
+</div>
+<div>
+<h2>Most branch-heavy files</h2>
+<p class="dim">Branch count ≈ decision points (if/for/while/case/catch/&amp;&amp;/||). A rough cyclomatic-complexity proxy.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">Branches</th><th>Heat</th><th class="num">LOC</th><th class="num">Max depth</th></tr></thead>
+<tbody><tr><td><code>llm.py</code></td><td class='num'>82</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>491</td><td class='num'>9</td></tr>
+<tr><td><code>embeddings.py</code></td><td class='num'>54</td><td><div class="bar warn"><i style="width:65.9%"></i></div></td><td class='num'>355</td><td class='num'>9</td></tr>
+<tr><td><code>openai_compatible.py</code></td><td class='num'>39</td><td><div class="bar warn"><i style="width:47.6%"></i></div></td><td class='num'>185</td><td class='num'>11</td></tr>
+<tr><td><code>claude_agent.py</code></td><td class='num'>34</td><td><div class="bar warn"><i style="width:41.5%"></i></div></td><td class='num'>150</td><td class='num'>8</td></tr>
+<tr><td><code>llm_usage.py</code></td><td class='num'>31</td><td><div class="bar warn"><i style="width:37.8%"></i></div></td><td class='num'>143</td><td class='num'>10</td></tr>
+<tr><td><code>main.py</code></td><td class='num'>29</td><td><div class="bar warn"><i style="width:35.4%"></i></div></td><td class='num'>232</td><td class='num'>8</td></tr>
+<tr><td><code>openrouter.py</code></td><td class='num'>20</td><td><div class="bar warn"><i style="width:24.4%"></i></div></td><td class='num'>121</td><td class='num'>10</td></tr>
+<tr><td><code>llm_errors.py</code></td><td class='num'>4</td><td><div class="bar warn"><i style="width:4.9%"></i></div></td><td class='num'>48</td><td class='num'>2</td></tr>
+<tr><td><code>prompts.py</code></td><td class='num'>2</td><td><div class="bar warn"><i style="width:2.4%"></i></div></td><td class='num'>25</td><td class='num'>5</td></tr>
+<tr><td><code>__init__.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>1</td><td class='num'>0</td></tr></tbody></table></div>
+</div>
+</div>
+
+
+</section>
+<section class="panel" id="dependencies" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi accent"><div class="n">1</div><div class="l">modules</div></div>
+  <div class="kpi"><div class="n">8</div><div class="l">file-level imports</div></div>
+  <div class="kpi"><div class="n">0</div><div class="l">runtime loads</div></div>
+  <div class="kpi good"><div class="n">0</div><div class="l">cycles</div></div>
+  <div class="kpi"><div class="n">1</div><div class="l">top-level arm</div></div>
+</div>
+
+<div class="callout good"><b>No module-level dependency cycles detected.</b> The import graph is a DAG at this grouping level.</div>
+<h2>Module dependency graph</h2>
+<p class="dim">Node area = lines of code · solid arrows = imports, dashed = runtime loads (a rendered template, a prompt read off disk) · drag nodes, Ctrl/⌘-scroll to zoom, hover to isolate a neighborhood.</p>
+<div class="viz" data-render="forcegraph" style="height:620px"></div>
+<script type="application/json">{"nodes":[{"id":"","label":"(root)","group":"(root)","size":1751,"fanIn":0,"fanOut":0,"meta":"(repo root) \u00b7 10 files"}],"links":[],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span>"}</script>
+
+<div class="grid cols-2">
+<div>
+<h2>Highest fan-in (most depended-on)</h2>
+<p class="dim">Changes here ripple widely — review with extra care.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">Fan-in</th><th></th><th class="num">Fan-out</th></tr></thead>
+<tbody><tr><td><code>llm_errors.py</code></td><td class='num'>5</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>openrouter.py</code></td><td class='num'>1</td><td><div class="bar "><i style="width:20.0%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>openai_compatible.py</code></td><td class='num'>1</td><td><div class="bar "><i style="width:20.0%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>claude_agent.py</code></td><td class='num'>1</td><td><div class="bar "><i style="width:20.0%"></i></div></td><td class='num'>1</td></tr></tbody></table></div>
+</div>
+<div>
+<h2>Highest fan-out (most dependencies)</h2>
+<p class="dim">High fan-out can indicate orchestrators — or god modules doing too much.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">Fan-out</th><th></th><th class="num">Fan-in</th></tr></thead>
+<tbody><tr><td><code>llm.py</code></td><td class='num'>4</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>claude_agent.py</code></td><td class='num'>1</td><td><div class="bar warn"><i style="width:25.0%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>embeddings.py</code></td><td class='num'>1</td><td><div class="bar warn"><i style="width:25.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>openai_compatible.py</code></td><td class='num'>1</td><td><div class="bar warn"><i style="width:25.0%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>openrouter.py</code></td><td class='num'>1</td><td><div class="bar warn"><i style="width:25.0%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>__init__.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>llm_errors.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>5</td></tr>
+<tr><td><code>llm_usage.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>main.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>prompts.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr></tbody></table></div>
+</div>
+</div>
+
+
+
+</section>
+<section class="panel" id="hotspots" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi accent"><div class="n">1,529</div><div class="l">commits (24 months ago)</div></div>
+  <div class="kpi"><div class="n">10</div><div class="l">files touched</div></div>
+  <div class="kpi warn"><div class="n">main.py</div><div class="l">top hotspot</div></div>
+</div>
+<div class="callout"><b>How to read this:</b> files that are both <i>complex</i> and <i>frequently changed</i> are where defects concentrate — complexity makes mistakes likely, churn gives them opportunities. Prioritize refactoring and review attention here, not on complex-but-stable code.</div>
+
+
+<h2>Churn × size map</h2>
+<p class="dim">Area = lines of code · color = commit count since 24 months ago · hover for details.</p>
+<div class="viz" data-render="treemap" style="height:540px"></div>
+<script type="application/json">{"items":[{"name":"main.py","value":232,"metric":111,"meta":"29 branches \u00b7 2 authors"},{"name":"llm.py","value":491,"metric":12,"meta":"82 branches \u00b7 2 authors"},{"name":"openai_compatible.py","value":185,"metric":8,"meta":"39 branches \u00b7 2 authors"},{"name":"claude_agent.py","value":150,"metric":9,"meta":"34 branches \u00b7 2 authors"},{"name":"openrouter.py","value":121,"metric":9,"meta":"20 branches \u00b7 2 authors"},{"name":"llm_usage.py","value":143,"metric":3,"meta":"31 branches \u00b7 1 authors"},{"name":"embeddings.py","value":355,"metric":1,"meta":"54 branches \u00b7 1 authors"},{"name":"prompts.py","value":25,"metric":4,"meta":"2 branches \u00b7 2 authors"},{"name":"llm_errors.py","value":48,"metric":2,"meta":"4 branches \u00b7 2 authors"},{"name":"__init__.py","value":1,"metric":4,"meta":"0 branches \u00b7 2 authors"}],"valueLabel":"LOC","metricLabel":"commits","metricMax":111}</script>
+
+<h2>Hotspot ranking</h2>
+<p class="dim">Score = commits × (branch points + 1). Tests excluded.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">Commits</th><th class="num">Branches</th><th class="num">LOC</th><th class="num">Authors</th><th class="num">Hotspot score</th></tr></thead>
+<tbody><tr><td><code>main.py</code></td><td class='num'>111</td><td class='num'>29</td><td class='num'>232</td><td class='num'>2</td><td class='num' data-sort='3330'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>llm.py</code></td><td class='num'>12</td><td class='num'>82</td><td class='num'>491</td><td class='num'>2</td><td class='num' data-sort='996'><div class="bar bad"><i style="width:29.9%"></i></div></td></tr>
+<tr><td><code>openai_compatible.py</code></td><td class='num'>8</td><td class='num'>39</td><td class='num'>185</td><td class='num'>2</td><td class='num' data-sort='320'><div class="bar bad"><i style="width:9.6%"></i></div></td></tr>
+<tr><td><code>claude_agent.py</code></td><td class='num'>9</td><td class='num'>34</td><td class='num'>150</td><td class='num'>2</td><td class='num' data-sort='315'><div class="bar bad"><i style="width:9.5%"></i></div></td></tr>
+<tr><td><code>openrouter.py</code></td><td class='num'>9</td><td class='num'>20</td><td class='num'>121</td><td class='num'>2</td><td class='num' data-sort='189'><div class="bar bad"><i style="width:5.7%"></i></div></td></tr>
+<tr><td><code>llm_usage.py</code></td><td class='num'>3</td><td class='num'>31</td><td class='num'>143</td><td class='num'>1</td><td class='num' data-sort='96'><div class="bar bad"><i style="width:2.9%"></i></div></td></tr>
+<tr><td><code>embeddings.py</code></td><td class='num'>1</td><td class='num'>54</td><td class='num'>355</td><td class='num'>1</td><td class='num' data-sort='55'><div class="bar bad"><i style="width:1.7%"></i></div></td></tr>
+<tr><td><code>prompts.py</code></td><td class='num'>4</td><td class='num'>2</td><td class='num'>25</td><td class='num'>2</td><td class='num' data-sort='12'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>llm_errors.py</code></td><td class='num'>2</td><td class='num'>4</td><td class='num'>48</td><td class='num'>2</td><td class='num' data-sort='10'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>__init__.py</code></td><td class='num'>4</td><td class='num'>0</td><td class='num'>1</td><td class='num'>2</td><td class='num' data-sort='4'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr></tbody></table></div>
+
+
+
+</section><!--DOC_BODY--></main>
+<footer class="doc">Generated by code-visualization for the grimoire code-overview set. Automated tabs are script-generated; judgment tabs were authored from code reading and their citations verified against a63cb05f5.</footer>
+<script>
+(function(){
+  const btns=[...document.querySelectorAll('nav.tabs button')];
+  function activate(id){
+    document.querySelectorAll('section.panel').forEach(p=>p.classList.toggle('active',p.id===id));
+    btns.forEach(b=>b.setAttribute('aria-selected',b.dataset.tab===id?'true':'false'));
+    window.dispatchEvent(new CustomEvent('tab:shown',{detail:{id}}));
+  }
+  btns.forEach(b=>b.addEventListener('click',()=>activate(b.dataset.tab)));
+})();
+</script>
+</body>
+</html>

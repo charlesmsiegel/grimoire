@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>grimoire-store — Codebase Atlas</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Design tokens are code-visualization's, verbatim. The three document types in
+   a code overview sit next to each other in one nav bar; sharing the palette is
+   what makes them read as one artifact rather than three tools' output. */
+:root{
+  --bg:#0d1420; --bg-grid:rgba(120,160,220,0.05); --surface:#141d2e; --surface-2:#1a2538;
+  --border:rgba(150,180,230,0.14); --border-strong:rgba(150,180,230,0.30);
+  --text:#dbe4f3; --text-dim:#8fa1bd; --text-faint:#5f7191;
+  --accent:#5aa7e8; --accent-dim:rgba(90,167,232,0.14);
+  --good:#59c98f; --good-dim:rgba(89,201,143,0.14);
+  --warn:#e0b25a; --warn-dim:rgba(224,178,90,0.14);
+  --bad:#e06a6a; --bad-dim:rgba(224,106,106,0.15);
+  --violet:#a08fd8;
+  --heat-lo:#27405e; --heat-hi:#e0703f;
+  --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:'IBM Plex Sans',system-ui,-apple-system,sans-serif;
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#f3f5f9; --bg-grid:rgba(40,70,120,0.055); --surface:#ffffff; --surface-2:#eef1f7;
+    --border:rgba(30,55,95,0.14); --border-strong:rgba(30,55,95,0.30);
+    --text:#1d2838; --text-dim:#51617a; --text-faint:#8593a8;
+    --accent:#1f6fbd; --accent-dim:rgba(31,111,189,0.10);
+    --good:#1f8f5c; --good-dim:rgba(31,143,92,0.10);
+    --warn:#a87418; --warn-dim:rgba(168,116,24,0.12);
+    --bad:#bd3f3f; --bad-dim:rgba(189,63,63,0.10);
+    --violet:#6a55b0;
+    --heat-lo:#c9d8ec; --heat-hi:#cf5a26;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  font-family:var(--sans); background:var(--bg); color:var(--text);
+  background-image:linear-gradient(var(--bg-grid) 1px,transparent 1px),linear-gradient(90deg,var(--bg-grid) 1px,transparent 1px);
+  background-size:32px 32px; line-height:1.55; font-size:15px;
+}
+header.doc{padding:34px 28px 0; max-width:1280px; margin:0 auto}
+.doc-label{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);display:flex;align-items:center;gap:8px}
+.doc-label::before{content:"";width:8px;height:8px;background:var(--accent);border-radius:2px;display:inline-block}
+h1.doc-title{font-size:30px;font-weight:700;letter-spacing:-.02em;margin-top:8px}
+.doc-sub{color:var(--text-dim);margin-top:6px;max-width:900px}
+.doc-meta{font-family:var(--mono);font-size:12px;color:var(--text-faint);margin-top:10px}
+main{max-width:1280px;margin:0 auto;padding:26px 28px 80px}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+
+/* ---------- tabs: code-visualization's contract, so one shell serves all four
+   documents. code-overview forces this template on assemble.py and on
+   build_measurement.py, so the markup those two emit has to fit here. ------- */
+nav.tabs{
+  display:flex;gap:2px;flex-wrap:wrap;max-width:1280px;margin:18px auto 0;
+  padding:0 28px;border-bottom:1px solid var(--border);
+}
+/* summary.html is untabbed and leaves TABS_NAV empty; without this the bar
+   renders as a stray rule under the header. */
+nav.tabs:empty{display:none;border:none}
+nav.tabs button{
+  background:none;border:none;border-bottom:2px solid transparent;color:var(--text-dim);
+  font-family:var(--sans);font-size:14px;padding:9px 14px;cursor:pointer;
+}
+nav.tabs button:hover{color:var(--text)}
+nav.tabs button[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+nav.tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+section.panel{display:none}
+section.panel.active{display:block}
+
+/* ---------- content primitives (shared with code-visualization) ---------- */
+h2{font-size:21px;font-weight:600;letter-spacing:-.01em;margin:30px 0 10px}
+h2:first-child{margin-top:0}
+h3{font-size:16px;font-weight:600;margin:22px 0 8px}
+p{margin:8px 0;max-width:940px;color:var(--text)}
+ul,ol{margin:8px 0 8px 22px;max-width:940px}
+li{margin:4px 0}
+a{color:var(--accent)}
+.dim{color:var(--text-dim)} .faint{color:var(--text-faint)}
+code,.mono{font-family:var(--mono);font-size:.92em}
+p code,li code,td code{background:var(--surface-2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;overflow-wrap:anywhere}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin:12px 0}
+.grid{display:grid;gap:14px;margin:12px 0}
+.grid.cols-2{grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}
+.grid.cols-3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.grid>*{min-width:0}
+.kpis{display:flex;flex-wrap:wrap;gap:12px;margin:12px 0}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 18px;min-width:130px}
+.kpi .n{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.kpi .l{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim);margin-top:2px}
+.kpi.warn .n{color:var(--warn)} .kpi.bad .n{color:var(--bad)} .kpi.good .n{color:var(--good)} .kpi.accent .n{color:var(--accent)}
+.badge{display:inline-block;font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--border);vertical-align:1px;white-space:nowrap}
+.badge.good{color:var(--good);background:var(--good-dim);border-color:transparent}
+.badge.warn{color:var(--warn);background:var(--warn-dim);border-color:transparent}
+.badge.bad{color:var(--bad);background:var(--bad-dim);border-color:transparent}
+.badge.accent{color:var(--accent);background:var(--accent-dim);border-color:transparent}
+.badge.neutral{color:var(--text-dim);background:var(--surface-2);border-color:transparent}
+.callout{border-left:3px solid var(--accent);background:var(--accent-dim);border-radius:0 8px 8px 0;padding:12px 16px;margin:12px 0;max-width:940px}
+.callout.warn{border-color:var(--warn);background:var(--warn-dim)}
+.callout.bad{border-color:var(--bad);background:var(--bad-dim)}
+.callout.good{border-color:var(--good);background:var(--good-dim)}
+details{border:1px solid var(--border);border-radius:8px;margin:10px 0;background:var(--surface)}
+details summary{cursor:pointer;padding:10px 16px;font-weight:500;color:var(--text-dim)}
+details[open] summary{border-bottom:1px solid var(--border);color:var(--text)}
+details .body{padding:12px 16px}
+.tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:10px;margin:12px 0;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+thead th{background:var(--surface-2);text-align:left;font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);padding:9px 14px;border-bottom:1px solid var(--border-strong);white-space:nowrap}
+tbody td{padding:8px 14px;border-bottom:1px solid var(--border);vertical-align:top;overflow-wrap:anywhere}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:nth-child(even){background:color-mix(in srgb,var(--surface-2) 45%,transparent)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:12.5px;white-space:nowrap}
+.bar{position:relative;background:var(--surface-2);border-radius:4px;height:14px;min-width:120px;overflow:hidden}
+.bar>i{position:absolute;inset:0 auto 0 0;background:var(--accent);border-radius:4px}
+.bar.warn>i{background:var(--warn)} .bar.bad>i{background:var(--bad)} .bar.good>i{background:var(--good)}
+
+/* ---------- grade components ---------- */
+/* Grade colour is bound to the band, not to the score, so the letter and the
+   colour can never disagree — the two are read together at a glance. */
+.g-a{--grade:var(--good)} .g-b{--grade:var(--accent)} .g-c{--grade:var(--warn)}
+.g-d{--grade:var(--bad)} .g-f{--grade:var(--bad)} .g-none{--grade:var(--text-faint)}
+.gradecard{display:flex;flex-wrap:wrap;align-items:center;gap:26px;background:var(--surface);border:1px solid var(--border-strong);border-radius:12px;padding:22px 26px;margin:16px 0;background-image:linear-gradient(110deg,color-mix(in srgb,var(--grade) 12%,transparent),transparent 55%)}
+.gradecard .letter{font-size:64px;font-weight:700;line-height:1;letter-spacing:-.04em;color:var(--grade);font-variant-numeric:tabular-nums;min-width:96px}
+.gradecard .score{font-family:var(--mono);font-size:13px;color:var(--text-dim);margin-top:6px}
+.gradecard .what{flex:1 1 260px;min-width:0}
+.gradecard .what h2{margin:0 0 4px;font-size:19px}
+.catrow{display:grid;grid-template-columns:minmax(140px,1.4fr) minmax(90px,2fr) 54px 46px;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid var(--border)}
+.catrow:last-child{border-bottom:none}
+.catrow .cname{font-size:13.5px;overflow-wrap:anywhere}
+.catrow .cname small{display:block;font-family:var(--mono);font-size:10.5px;color:var(--text-faint);letter-spacing:.04em}
+.catrow .cscore{font-family:var(--mono);font-size:12.5px;text-align:right;color:var(--text-dim);font-variant-numeric:tabular-nums}
+.catrow .cgrade{font-family:var(--mono);font-weight:600;text-align:right;color:var(--grade)}
+.catrow .bar>i{background:var(--grade)}
+.catrow.ungraded .cname,.catrow.ungraded .cscore{color:var(--text-faint)}
+@media(max-width:560px){.catrow{grid-template-columns:1fr 54px 46px}.catrow .bar{grid-column:1/-1}}
+.doclinks{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));margin:16px 0}
+.doclink{display:block;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px;text-decoration:none;color:var(--text)}
+.doclink:hover{border-color:var(--accent);background:var(--accent-dim)}
+.doclink .k{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent)}
+.doclink .t{font-size:16px;font-weight:600;margin-top:4px}
+.doclink .d{color:var(--text-dim);font-size:13px;margin-top:4px}
+.doclink[aria-disabled="true"]{opacity:.5;pointer-events:none}
+.sev-high{color:var(--bad)} .sev-medium{color:var(--warn)} .sev-low{color:var(--text-dim)}
+/* The type token and the category name are short and identify the row; letting
+   them wrap mid-word to buy width for a long description makes the table harder
+   to scan, not easier. The description column is the one that should give. */
+td code.ftype{white-space:nowrap;overflow-wrap:normal}
+td.cat{white-space:nowrap}
+/* A file:line split across two lines is not a citation anyone can copy. The
+   wrapper scrolls if a path is genuinely too deep for the viewport. */
+td code.floc{white-space:nowrap;overflow-wrap:normal}
+footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-faint);font-family:var(--mono);font-size:11.5px}
+footer.doc a{color:var(--text-dim)}
+@media(max-width:720px){header.doc,main,nav.tabs,footer.doc{padding-left:16px;padding-right:16px} h1.doc-title{font-size:24px} .gradecard .letter{font-size:48px;min-width:72px}}
+</style>
+</head>
+<body>
+<header class="doc">
+  <div class="doc-label">CODEBASE ATLAS</div>
+  <h1 class="doc-title">grimoire-store — Codebase Atlas</h1>
+  <p class="doc-sub">The filesystem-as-database layer: 172 modules over Markdown and JSON</p>
+  <div class="doc-meta">generated 2026-08-18 · a63cb05f5 · 200 files, 33,200 LOC</div>
+</header>
+<!-- code-overview:nav --><style>
+.co-nav{position:sticky;top:0;z-index:60;max-width:1280px;margin:0 auto;padding:10px 28px;
+  font-family:var(--mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:12px;
+  background:color-mix(in srgb,var(--bg,#0d1420) 92%,transparent);
+  border-bottom:1px solid var(--border,rgba(150,180,230,0.14));
+  backdrop-filter:blur(8px);display:flex;flex-direction:column;gap:6px}
+.co-nav .co-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;min-width:0}
+.co-nav a{color:var(--text-dim,#8fa1bd);text-decoration:none;padding:3px 9px;border-radius:999px;
+  border:1px solid transparent;white-space:nowrap}
+.co-nav a:hover{color:var(--accent,#1f6fbd);background:var(--accent-dim,rgba(31,111,189,0.10))}
+.co-nav a[aria-current]{color:var(--accent,#1f6fbd);
+  border-color:var(--accent,#1f6fbd);background:var(--accent-dim,rgba(31,111,189,0.10))}
+.co-nav .co-here{color:var(--text,#dbe4f3);font-weight:600;padding:3px 0}
+.co-nav .co-lbl{color:var(--text-faint,#5f7191);letter-spacing:.08em;text-transform:uppercase;
+  font-size:10.5px;padding-right:2px}
+.co-nav .co-sep{color:var(--text-faint,#5f7191);opacity:.6}
+@media(max-width:720px){.co-nav{padding-left:16px;padding-right:16px}}
+</style><nav class="co-nav" aria-label="code overview"><div class="co-row"><a href="../../../../../docs/codemap.html">⌂ Overall Code Map</a><span class="co-sep">/</span><span class="co-here">grimoire-store</span></div><div class="co-row"><span class="co-lbl">grimoire-store</span><a href="summary.html">Summary</a><a href="#" aria-current="page">Code Map</a><a href="health.html">Health</a><a href="measurement.html">Measurement</a><a href="theory.html">Theory</a></div><div class="co-row"><span class="co-lbl">Other packages · Code Map</span><a href="../../routes/docs/codemap.html">grimoire-api</a><a href="../../docs/codemap.html">grimoire-llm</a><a href="../../../../tests/docs/codemap.html">backend-tests</a><a href="../../../../../frontend/docs/codemap.html">frontend</a><a href="../../../../../evals/docs/codemap.html">evals</a><a href="../../../../../scripts/docs/codemap.html">scripts</a><a href="../../../../../android/docs/codemap.html">android</a></div></nav><!-- /code-overview:nav -->
+<!--DOC_NAV-->
+<nav class="tabs" role="tablist"><button role="tab" data-tab="overview" aria-selected="true" aria-controls="overview">Overview</button>
+<button role="tab" data-tab="inventory" aria-selected="false" aria-controls="inventory">Inventory</button>
+<button role="tab" data-tab="dependencies" aria-selected="false" aria-controls="dependencies">Dependencies</button>
+<button role="tab" data-tab="hotspots" aria-selected="false" aria-controls="hotspots">Hotspots</button>
+<button role="tab" data-tab="invariants" aria-selected="false" aria-controls="invariants">Invariants &amp; Risks</button></nav>
+<main><section class="panel active" id="overview" role="tabpanel">
+
+<div class="card hero">
+  <h2>The database, written by hand</h2>
+  <p><code>backend/src/grimoire/store</code> is a filesystem-as-database layer: 172 Python modules,
+  33,200 lines, implementing over a directory of Markdown and JSON everything a database would
+  otherwise provide &mdash; atomic writes, locking, inheritance, migrations, tombstones, backups and
+  search. It is the largest package in the repository, larger than the entire frontend.</p>
+  <p>Its shape is a wide facade over a mostly-flat set of record modules. Roughly 84 modules sit
+  directly at the top level (one per record kind or concern) with 14 subpackages for the concepts
+  that grew past one file &mdash; <code>context</code>, <code>absorb</code>, <code>scenes</code>,
+  <code>modules</code>, <code>campaigns</code>, <code>weather</code>, <code>sheets</code>. There is
+  no ORM, no repository abstraction, and no service layer between it and the routes.</p>
+</div>
+
+<div class="kpis">
+  <div class="kpi"><div class="n">172</div><div class="l">modules</div></div>
+  <div class="kpi"><div class="n">33.2k</div><div class="l">lines of Python</div></div>
+  <div class="kpi good"><div class="n">0</div><div class="l">import cycles</div></div>
+  <div class="kpi accent"><div class="n">398/401</div><div class="l">first-party imports resolved</div></div>
+</div>
+
+<h2>The four modules that define the package</h2>
+<div class="tbl-wrap"><table class="sortable">
+<tr><th>Module</th><th>Why it matters</th></tr>
+<tr><td><code>backend/src/grimoire/store/paths.py:47</code></td>
+    <td><code>home()</code> &mdash; the resolution rule for the whole store: <code>GRIMOIRE_HOME</code>, then a bootstrap pointer, then the default. Every path in the package descends from it.</td></tr>
+<tr><td><code>backend/src/grimoire/store/atomic.py</code></td>
+    <td>The only write path. Temp file, fsync, <code>os.replace</code>, with Windows sharing-violation retries. Its header is explicit about the guarantees it does <em>not</em> make.</td></tr>
+<tr><td><code>backend/src/grimoire/store/locks.py</code></td>
+    <td>The campaign lock domain, declared as three data structures rather than prose, with a 30s timeout at <code>backend/src/grimoire/store/locks.py:323</code>.</td></tr>
+<tr><td><code>backend/src/grimoire/store/overlay.py</code></td>
+    <td>Copy-on-write campaign-over-world resolution &mdash; 964 lines, 172 branches, and the package's top hotspot.</td></tr>
+</table></div>
+
+<h2>Reading order</h2>
+<ol>
+  <li><code>backend/src/grimoire/store/paths.py</code> &mdash; where the data lives.</li>
+  <li><code>backend/src/grimoire/store/atomic.py</code> &mdash; how a record is written.</li>
+  <li><code>backend/src/grimoire/store/overlay.py</code> &mdash; how a record is <em>found</em>. The
+      hardest idea in the package: campaign copies shadow world originals, with two distinct kinds of
+      absence (tombstoned and detached) and two different overlay rules (whole-directory for actors,
+      per-file for everything else).</li>
+  <li><code>backend/src/grimoire/store/locks.py</code> &mdash; what may run at the same time.</li>
+  <li><code>backend/src/grimoire/store/context</code> &mdash; the prompt-assembly subpackage. Start at
+      <code>backend/src/grimoire/store/context/assemble.py</code>, which holds the section catalog,
+      then <code>backend/src/grimoire/store/context/world_state.py</code> (the package's third
+      hotspot, 1,089 lines).</li>
+  <li><code>backend/src/grimoire/store/absorb</code> &mdash; turning a played scene into proposed state
+      edits. <code>backend/src/grimoire/store/absorb/materializer.py</code> and
+      <code>backend/src/grimoire/store/absorb/apply.py</code> are the two halves.</li>
+  <li><span class="dim">Skip unless you need them:</span> the per-kind record modules
+      (<code>birthdays</code>, <code>taglines</code>, <code>thumbs</code>, &hellip;). They are small,
+      similar, and mostly obvious once the four modules above are understood.</li>
+</ol>
+
+<h2>Internal structure</h2>
+<div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+flowchart TD
+  F["__init__.py - the facade"] --> R["~84 flat record modules"]
+  F --> SUB["14 subpackages"]
+  R --> P["paths.py - home()"]
+  R --> A["atomic.py - the only writer"]
+  R --> O["overlay.py - campaign over world"]
+  SUB --> CTX["context/ - prompt assembly"]
+  SUB --> ABS["absorb/ - scene to state edits"]
+  SUB --> SC["scenes/ - transcripts, serialized"]
+  O --> P
+  A --> P
+  SC --> L["locks.py - campaign mutex"]
+  ABS --> L
+</pre></div></div>
+
+<div class="callout">
+  <strong>Why the top level is flat.</strong> The package resists a layered structure because its unit
+  of organization is the <em>record kind</em>, not the operation: each kind gets a module owning its
+  read, its write and its path. The four cross-cutting modules above are the exception, and they are
+  precisely the ones with guard tests attached. Whether that is the right theory for a package this
+  size is the question the Theory page takes up.
+</div>
+
+<div class="callout warn">
+  <strong>Scope of this atlas.</strong> The Dependencies tab was built over
+  <code>backend/src/grimoire/store</code> alone, so the three unresolved first-party imports are
+  references upward to <code>prompts</code> and <code>llm_errors</code>, which live outside this root.
+  The repository atlas resolves them. Judgment tabs here cover Boundaries and Invariants; Critical
+  Flows and the Glossary are written once, at repository scope.
+</div>
+
+</section>
+<section class="panel" id="inventory" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi accent"><div class="n">200</div><div class="l">source files</div></div>
+  <div class="kpi"><div class="n">33,870</div><div class="l">lines of code</div></div>
+  <div class="kpi"><div class="n">1</div><div class="l">languages</div></div>
+  <div class="kpi warn"><div class="n">0%</div><div class="l">test code share</div></div>
+</div>
+
+<h2>Languages</h2>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>Language</th><th class="num">LOC</th><th class="num">Files</th><th>Share</th><th class="num">%</th></tr></thead>
+<tbody><tr><td>Python</td><td class='num'>33,200</td><td class='num'>172</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>98.0%</td></tr>
+<tr><td>JSON</td><td class='num'>609</td><td class='num'>16</td><td><div class="bar "><i style="width:1.8%"></i></div></td><td class='num'>1.8%</td></tr>
+<tr><td>Markdown</td><td class='num'>61</td><td class='num'>12</td><td><div class="bar "><i style="width:1.5%"></i></div></td><td class='num'>0.2%</td></tr></tbody></table></div>
+
+
+<h2>Top-level directories</h2>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>Directory</th><th class="num">LOC</th><th>Share</th></tr></thead>
+<tbody><tr><td><code>(root)/</code></td><td class='num'>18,963</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>context/</code></td><td class='num'>3,268</td><td><div class="bar "><i style="width:17.2%"></i></div></td></tr>
+<tr><td><code>absorb/</code></td><td class='num'>2,827</td><td><div class="bar "><i style="width:14.9%"></i></div></td></tr>
+<tr><td><code>scenes/</code></td><td class='num'>1,513</td><td><div class="bar "><i style="width:8.0%"></i></div></td></tr>
+<tr><td><code>module_edit/</code></td><td class='num'>1,235</td><td><div class="bar "><i style="width:6.5%"></i></div></td></tr>
+<tr><td><code>modules/</code></td><td class='num'>1,156</td><td><div class="bar "><i style="width:6.1%"></i></div></td></tr>
+<tr><td><code>weather/</code></td><td class='num'>976</td><td><div class="bar "><i style="width:5.1%"></i></div></td></tr>
+<tr><td><code>sheets/</code></td><td class='num'>777</td><td><div class="bar "><i style="width:4.1%"></i></div></td></tr>
+<tr><td><code>campaigns/</code></td><td class='num'>746</td><td><div class="bar "><i style="width:3.9%"></i></div></td></tr>
+<tr><td><code>climates/</code></td><td class='num'>586</td><td><div class="bar "><i style="width:3.1%"></i></div></td></tr>
+<tr><td><code>calendars/</code></td><td class='num'>507</td><td><div class="bar "><i style="width:2.7%"></i></div></td></tr>
+<tr><td><code>appearances/</code></td><td class='num'>389</td><td><div class="bar "><i style="width:2.1%"></i></div></td></tr>
+<tr><td><code>audit/</code></td><td class='num'>387</td><td><div class="bar "><i style="width:2.0%"></i></div></td></tr>
+<tr><td><code>builtin_modules/</code></td><td class='num'>346</td><td><div class="bar "><i style="width:1.8%"></i></div></td></tr></tbody></table></div>
+
+<div class="grid cols-2">
+<div>
+<h2>Largest files</h2>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">LOC</th><th>Size</th><th class="num">Branches</th></tr></thead>
+<tbody><tr><td><code>context/world_state.py</code></td><td class='num'>1,089</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>186</td></tr>
+<tr><td><code>overlay.py</code></td><td class='num'>964</td><td><div class="bar "><i style="width:88.5%"></i></div></td><td class='num'>172</td></tr>
+<tr><td><code>absorb/apply.py</code></td><td class='num'>748</td><td><div class="bar "><i style="width:68.7%"></i></div></td><td class='num'>97</td></tr>
+<tr><td><code>absorb/materializer.py</code></td><td class='num'>716</td><td><div class="bar "><i style="width:65.7%"></i></div></td><td class='num'>137</td></tr>
+<tr><td><code>characters.py</code></td><td class='num'>679</td><td><div class="bar "><i style="width:62.4%"></i></div></td><td class='num'>148</td></tr>
+<tr><td><code>context/assemble.py</code></td><td class='num'>675</td><td><div class="bar "><i style="width:62.0%"></i></div></td><td class='num'>94</td></tr>
+<tr><td><code>search.py</code></td><td class='num'>613</td><td><div class="bar "><i style="width:56.3%"></i></div></td><td class='num'>146</td></tr>
+<tr><td><code>weather/overrides.py</code></td><td class='num'>605</td><td><div class="bar "><i style="width:55.6%"></i></div></td><td class='num'>144</td></tr>
+<tr><td><code>locks.py</code></td><td class='num'>572</td><td><div class="bar "><i style="width:52.5%"></i></div></td><td class='num'>52</td></tr>
+<tr><td><code>alternates.py</code></td><td class='num'>548</td><td><div class="bar "><i style="width:50.3%"></i></div></td><td class='num'>83</td></tr>
+<tr><td><code>scenes/write.py</code></td><td class='num'>545</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>89</td></tr>
+<tr><td><code>turnstate.py</code></td><td class='num'>530</td><td><div class="bar "><i style="width:48.7%"></i></div></td><td class='num'>102</td></tr>
+<tr><td><code>usage.py</code></td><td class='num'>462</td><td><div class="bar "><i style="width:42.4%"></i></div></td><td class='num'>47</td></tr>
+<tr><td><code>undo.py</code></td><td class='num'>438</td><td><div class="bar "><i style="width:40.2%"></i></div></td><td class='num'>92</td></tr>
+<tr><td><code>assets.py</code></td><td class='num'>427</td><td><div class="bar "><i style="width:39.2%"></i></div></td><td class='num'>82</td></tr>
+<tr><td><code>export.py</code></td><td class='num'>421</td><td><div class="bar "><i style="width:38.7%"></i></div></td><td class='num'>97</td></tr>
+<tr><td><code>absorb/conflicts.py</code></td><td class='num'>421</td><td><div class="bar "><i style="width:38.7%"></i></div></td><td class='num'>89</td></tr>
+<tr><td><code>clock.py</code></td><td class='num'>412</td><td><div class="bar "><i style="width:37.8%"></i></div></td><td class='num'>64</td></tr>
+<tr><td><code>absorb/routing.py</code></td><td class='num'>410</td><td><div class="bar "><i style="width:37.6%"></i></div></td><td class='num'>56</td></tr>
+<tr><td><code>prompt_log.py</code></td><td class='num'>408</td><td><div class="bar "><i style="width:37.5%"></i></div></td><td class='num'>70</td></tr></tbody></table></div>
+</div>
+<div>
+<h2>Most branch-heavy files</h2>
+<p class="dim">Branch count ≈ decision points (if/for/while/case/catch/&amp;&amp;/||). A rough cyclomatic-complexity proxy.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">Branches</th><th>Heat</th><th class="num">LOC</th><th class="num">Max depth</th></tr></thead>
+<tbody><tr><td><code>context/world_state.py</code></td><td class='num'>186</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>1,089</td><td class='num'>12</td></tr>
+<tr><td><code>overlay.py</code></td><td class='num'>172</td><td><div class="bar warn"><i style="width:92.5%"></i></div></td><td class='num'>964</td><td class='num'>9</td></tr>
+<tr><td><code>characters.py</code></td><td class='num'>148</td><td><div class="bar warn"><i style="width:79.6%"></i></div></td><td class='num'>679</td><td class='num'>7</td></tr>
+<tr><td><code>search.py</code></td><td class='num'>146</td><td><div class="bar warn"><i style="width:78.5%"></i></div></td><td class='num'>613</td><td class='num'>11</td></tr>
+<tr><td><code>weather/overrides.py</code></td><td class='num'>144</td><td><div class="bar warn"><i style="width:77.4%"></i></div></td><td class='num'>605</td><td class='num'>9</td></tr>
+<tr><td><code>absorb/materializer.py</code></td><td class='num'>137</td><td><div class="bar warn"><i style="width:73.7%"></i></div></td><td class='num'>716</td><td class='num'>10</td></tr>
+<tr><td><code>modules/validate.py</code></td><td class='num'>130</td><td><div class="bar warn"><i style="width:69.9%"></i></div></td><td class='num'>365</td><td class='num'>6</td></tr>
+<tr><td><code>module_edit/renaming.py</code></td><td class='num'>119</td><td><div class="bar warn"><i style="width:64.0%"></i></div></td><td class='num'>293</td><td class='num'>9</td></tr>
+<tr><td><code>modules/display.py</code></td><td class='num'>110</td><td><div class="bar warn"><i style="width:59.1%"></i></div></td><td class='num'>335</td><td class='num'>10</td></tr>
+<tr><td><code>turnstate.py</code></td><td class='num'>102</td><td><div class="bar warn"><i style="width:54.8%"></i></div></td><td class='num'>530</td><td class='num'>9</td></tr>
+<tr><td><code>export.py</code></td><td class='num'>97</td><td><div class="bar warn"><i style="width:52.2%"></i></div></td><td class='num'>421</td><td class='num'>7</td></tr>
+<tr><td><code>absorb/apply.py</code></td><td class='num'>97</td><td><div class="bar warn"><i style="width:52.2%"></i></div></td><td class='num'>748</td><td class='num'>11</td></tr>
+<tr><td><code>context/assemble.py</code></td><td class='num'>94</td><td><div class="bar warn"><i style="width:50.5%"></i></div></td><td class='num'>675</td><td class='num'>12</td></tr>
+<tr><td><code>undo.py</code></td><td class='num'>92</td><td><div class="bar warn"><i style="width:49.5%"></i></div></td><td class='num'>438</td><td class='num'>9</td></tr>
+<tr><td><code>absorb/conflicts.py</code></td><td class='num'>89</td><td><div class="bar warn"><i style="width:47.8%"></i></div></td><td class='num'>421</td><td class='num'>12</td></tr>
+<tr><td><code>scenes/write.py</code></td><td class='num'>89</td><td><div class="bar warn"><i style="width:47.8%"></i></div></td><td class='num'>545</td><td class='num'>6</td></tr>
+<tr><td><code>module_edit/migrate.py</code></td><td class='num'>87</td><td><div class="bar warn"><i style="width:46.8%"></i></div></td><td class='num'>354</td><td class='num'>8</td></tr>
+<tr><td><code>alternates.py</code></td><td class='num'>83</td><td><div class="bar warn"><i style="width:44.6%"></i></div></td><td class='num'>548</td><td class='num'>8</td></tr>
+<tr><td><code>assets.py</code></td><td class='num'>82</td><td><div class="bar warn"><i style="width:44.1%"></i></div></td><td class='num'>427</td><td class='num'>8</td></tr>
+<tr><td><code>suggest.py</code></td><td class='num'>81</td><td><div class="bar warn"><i style="width:43.5%"></i></div></td><td class='num'>320</td><td class='num'>6</td></tr></tbody></table></div>
+</div>
+</div>
+
+
+</section>
+<section class="panel" id="dependencies" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi accent"><div class="n">14</div><div class="l">modules</div></div>
+  <div class="kpi"><div class="n">689</div><div class="l">file-level imports</div></div>
+  <div class="kpi"><div class="n">0</div><div class="l">runtime loads</div></div>
+  <div class="kpi bad"><div class="n">1</div><div class="l">cycles</div></div>
+  <div class="kpi"><div class="n">14</div><div class="l">top-level arms</div></div>
+</div>
+
+<div class="callout bad"><b>1 module-level dependency cycle detected</b> — modules that import each other directly or transitively. Cycles make modules impossible to understand or test in isolation.<ul style="margin-top:8px"><li><span class='badge bad'>cycle 1</span> <code></code> ⇄ <code>absorb</code> ⇄ <code>appearances</code> ⇄ <code>audit</code> ⇄ <code>campaigns</code> ⇄ <code>context</code> ⇄ <code>modules</code> ⇄ <code>scenes</code> ⇄ <code>sheets</code> ⇄ <code>worlds</code></li></ul></div><details><summary>File-level import cycles: 5 strongly-connected groups</summary><div class="body"><p class="dim">Files that (transitively) import each other. In Python these often include type-annotation or lazy in-function imports — less harmful than top-level cycles, but each one still couples the files' lifecycles. Worth explaining case-by-case in the Boundaries tab.</p><ul><li><span class='badge warn'>group 1</span> <code>appearances/__init__.py</code> ⇄ <code>appearances/cast.py</code> ⇄ <code>appearances/paths.py</code> ⇄ <code>appearances/transitions.py</code> ⇄ <code>appearances/versions.py</code> ⇄ <code>audit/__init__.py</code> ⇄ <code>audit/apply.py</code> ⇄ <code>audit/baselines.py</code> <span class='dim'>… 28 more</span></li><li><span class='badge warn'>group 2</span> <code>context/__init__.py</code> ⇄ <code>context/archive.py</code> ⇄ <code>context/assemble.py</code> ⇄ <code>context/macros.py</code> ⇄ <code>context/world_state.py</code></li><li><span class='badge warn'>group 3</span> <code>absorb/__init__.py</code> ⇄ <code>absorb/apply.py</code> ⇄ <code>absorb/materializer.py</code> ⇄ <code>absorb/weather.py</code></li><li><span class='badge warn'>group 4</span> <code>module_edit/__init__.py</code> ⇄ <code>module_edit/packs.py</code></li><li><span class='badge warn'>group 5</span> <code>weather/__init__.py</code> ⇄ <code>weather/overrides.py</code></li></ul></div></details>
+<h2>Module dependency graph</h2>
+<p class="dim">Node area = lines of code · solid arrows = imports, dashed = runtime loads (a rendered template, a prompt read off disk) · drag nodes, Ctrl/⌘-scroll to zoom, hover to isolate a neighborhood.</p>
+<div class="viz" data-render="forcegraph" style="height:620px"></div>
+<script type="application/json">{"nodes":[{"id":"","label":"(root)","group":"cycle","size":18963,"fanIn":12,"fanOut":9,"meta":"(repo root) \u00b7 84 files \u00b7 in dependency cycle #1"},{"id":"absorb","label":"absorb","group":"cycle","size":2827,"fanIn":1,"fanOut":6,"meta":"absorb \u00b7 9 files \u00b7 in dependency cycle #1"},{"id":"appearances","label":"appearances","group":"cycle","size":389,"fanIn":6,"fanOut":3,"meta":"appearances \u00b7 5 files \u00b7 in dependency cycle #1"},{"id":"audit","label":"audit","group":"cycle","size":387,"fanIn":3,"fanOut":5,"meta":"audit \u00b7 4 files \u00b7 in dependency cycle #1"},{"id":"calendars","label":"calendars","group":"calendars","size":507,"fanIn":1,"fanOut":1,"meta":"calendars \u00b7 6 files"},{"id":"campaigns","label":"campaigns","group":"cycle","size":746,"fanIn":11,"fanOut":4,"meta":"campaigns \u00b7 4 files \u00b7 in dependency cycle #1"},{"id":"climates","label":"climates","group":"climates","size":262,"fanIn":0,"fanOut":1,"meta":"climates \u00b7 2 files"},{"id":"context","label":"context","group":"cycle","size":3268,"fanIn":1,"fanOut":6,"meta":"context \u00b7 12 files \u00b7 in dependency cycle #1"},{"id":"module_edit","label":"module_edit","group":"module_edit","size":1235,"fanIn":0,"fanOut":5,"meta":"module_edit \u00b7 9 files"},{"id":"modules","label":"modules","group":"cycle","size":1156,"fanIn":5,"fanOut":3,"meta":"modules \u00b7 8 files \u00b7 in dependency cycle #1"},{"id":"scenes","label":"scenes","group":"cycle","size":1513,"fanIn":7,"fanOut":4,"meta":"scenes \u00b7 9 files \u00b7 in dependency cycle #1"},{"id":"sheets","label":"sheets","group":"cycle","size":777,"fanIn":5,"fanOut":4,"meta":"sheets \u00b7 9 files \u00b7 in dependency cycle #1"},{"id":"weather","label":"weather","group":"weather","size":976,"fanIn":0,"fanOut":4,"meta":"weather \u00b7 7 files"},{"id":"worlds","label":"worlds","group":"cycle","size":194,"fanIn":5,"fanOut":2,"meta":"worlds \u00b7 4 files \u00b7 in dependency cycle #1"}],"links":[{"source":"","target":"absorb","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"","target":"appearances","weight":41,"imports":41,"loads":0,"kind":"import","cycle":true},{"source":"","target":"audit","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"","target":"campaigns","weight":61,"imports":61,"loads":0,"kind":"import","cycle":true},{"source":"","target":"context","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"","target":"modules","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"","target":"scenes","weight":40,"imports":40,"loads":0,"kind":"import","cycle":true},{"source":"","target":"sheets","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"","target":"worlds","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"absorb","target":"","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"absorb","target":"appearances","weight":16,"imports":16,"loads":0,"kind":"import","cycle":true},{"source":"absorb","target":"audit","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"absorb","target":"campaigns","weight":10,"imports":10,"loads":0,"kind":"import","cycle":true},{"source":"absorb","target":"scenes","weight":11,"imports":11,"loads":0,"kind":"import","cycle":true},{"source":"absorb","target":"sheets","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"appearances","target":"","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"appearances","target":"campaigns","weight":7,"imports":7,"loads":0,"kind":"import","cycle":true},{"source":"appearances","target":"scenes","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"audit","target":"appearances","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"audit","target":"campaigns","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"audit","target":"modules","weight":12,"imports":12,"loads":0,"kind":"import","cycle":true},{"source":"audit","target":"scenes","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"audit","target":"sheets","weight":11,"imports":11,"loads":0,"kind":"import","cycle":true},{"source":"calendars","target":"","weight":1,"imports":1,"loads":0,"kind":"import","cycle":false},{"source":"campaigns","target":"","weight":6,"imports":6,"loads":0,"kind":"import","cycle":true},{"source":"campaigns","target":"appearances","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"campaigns","target":"scenes","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"campaigns","target":"worlds","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"climates","target":"","weight":1,"imports":1,"loads":0,"kind":"import","cycle":false},{"source":"context","target":"","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"context","target":"appearances","weight":15,"imports":15,"loads":0,"kind":"import","cycle":true},{"source":"context","target":"campaigns","weight":7,"imports":7,"loads":0,"kind":"import","cycle":true},{"source":"context","target":"modules","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"context","target":"scenes","weight":13,"imports":13,"loads":0,"kind":"import","cycle":true},{"source":"context","target":"sheets","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"module_edit","target":"","weight":6,"imports":6,"loads":0,"kind":"import","cycle":false},{"source":"module_edit","target":"campaigns","weight":5,"imports":5,"loads":0,"kind":"import","cycle":false},{"source":"module_edit","target":"modules","weight":15,"imports":15,"loads":0,"kind":"import","cycle":false},{"source":"module_edit","target":"sheets","weight":2,"imports":2,"loads":0,"kind":"import","cycle":false},{"source":"module_edit","target":"worlds","weight":3,"imports":3,"loads":0,"kind":"import","cycle":false},{"source":"modules","target":"","weight":7,"imports":7,"loads":0,"kind":"import","cycle":true},{"source":"modules","target":"campaigns","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"modules","target":"worlds","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"scenes","target":"","weight":11,"imports":11,"loads":0,"kind":"import","cycle":true},{"source":"scenes","target":"appearances","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"scenes","target":"audit","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"scenes","target":"campaigns","weight":6,"imports":6,"loads":0,"kind":"import","cycle":true},{"source":"sheets","target":"","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"sheets","target":"campaigns","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"sheets","target":"modules","weight":22,"imports":22,"loads":0,"kind":"import","cycle":true},{"source":"sheets","target":"worlds","weight":8,"imports":8,"loads":0,"kind":"import","cycle":true},{"source":"weather","target":"","weight":1,"imports":1,"loads":0,"kind":"import","cycle":false},{"source":"weather","target":"calendars","weight":1,"imports":1,"loads":0,"kind":"import","cycle":false},{"source":"weather","target":"campaigns","weight":4,"imports":4,"loads":0,"kind":"import","cycle":false},{"source":"weather","target":"scenes","weight":2,"imports":2,"loads":0,"kind":"import","cycle":false},{"source":"worlds","target":"","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"worlds","target":"campaigns","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true}],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span>"}</script>
+
+<div class="grid cols-2">
+<div>
+<h2>Highest fan-in (most depended-on)</h2>
+<p class="dim">Changes here ripple widely — review with extra care.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">Fan-in</th><th></th><th class="num">Fan-out</th></tr></thead>
+<tbody><tr><td><code>paths.py</code></td><td class='num'>56</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>campaigns/__init__.py</code></td><td class='num'>53</td><td><div class="bar "><i style="width:94.6%"></i></div></td><td class='num'>3</td></tr>
+<tr><td><code>campaigns/paths.py</code></td><td class='num'>49</td><td><div class="bar "><i style="width:87.5%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>frontmatter.py</code></td><td class='num'>35</td><td><div class="bar "><i style="width:62.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>scenes/__init__.py</code></td><td class='num'>34</td><td><div class="bar "><i style="width:60.7%"></i></div></td><td class='num'>8</td></tr>
+<tr><td><code>appearances/__init__.py</code></td><td class='num'>32</td><td><div class="bar "><i style="width:57.1%"></i></div></td><td class='num'>4</td></tr>
+<tr><td><code>scenes/read.py</code></td><td class='num'>25</td><td><div class="bar "><i style="width:44.6%"></i></div></td><td class='num'>7</td></tr>
+<tr><td><code>appearances/paths.py</code></td><td class='num'>23</td><td><div class="bar "><i style="width:41.1%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>appearances/cast.py</code></td><td class='num'>19</td><td><div class="bar "><i style="width:33.9%"></i></div></td><td class='num'>3</td></tr>
+<tr><td><code>modules/__init__.py</code></td><td class='num'>18</td><td><div class="bar "><i style="width:32.1%"></i></div></td><td class='num'>7</td></tr>
+<tr><td><code>modules/pack.py</code></td><td class='num'>18</td><td><div class="bar "><i style="width:32.1%"></i></div></td><td class='num'>6</td></tr>
+<tr><td><code>scenes/serialize.py</code></td><td class='num'>15</td><td><div class="bar "><i style="width:26.8%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>appearances/versions.py</code></td><td class='num'>15</td><td><div class="bar "><i style="width:26.8%"></i></div></td><td class='num'>6</td></tr>
+<tr><td><code>campaigns/read.py</code></td><td class='num'>15</td><td><div class="bar "><i style="width:26.8%"></i></div></td><td class='num'>6</td></tr>
+<tr><td><code>worlds/__init__.py</code></td><td class='num'>13</td><td><div class="bar "><i style="width:23.2%"></i></div></td><td class='num'>3</td></tr></tbody></table></div>
+</div>
+<div>
+<h2>Highest fan-out (most dependencies)</h2>
+<p class="dim">High fan-out can indicate orchestrators — or god modules doing too much.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">Fan-out</th><th></th><th class="num">Fan-in</th></tr></thead>
+<tbody><tr><td><code>__init__.py</code></td><td class='num'>23</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>context/assemble.py</code></td><td class='num'>20</td><td><div class="bar warn"><i style="width:87.0%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>absorb/apply.py</code></td><td class='num'>17</td><td><div class="bar warn"><i style="width:73.9%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>absorb/materializer.py</code></td><td class='num'>14</td><td><div class="bar warn"><i style="width:60.9%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>module_edit/migrate.py</code></td><td class='num'>14</td><td><div class="bar warn"><i style="width:60.9%"></i></div></td><td class='num'>4</td></tr>
+<tr><td><code>audit/apply.py</code></td><td class='num'>13</td><td><div class="bar warn"><i style="width:56.5%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>audit/prompt.py</code></td><td class='num'>13</td><td><div class="bar warn"><i style="width:56.5%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>playing.py</code></td><td class='num'>12</td><td><div class="bar warn"><i style="width:52.2%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>context/__init__.py</code></td><td class='num'>12</td><td><div class="bar warn"><i style="width:52.2%"></i></div></td><td class='num'>5</td></tr>
+<tr><td><code>sheets/creation.py</code></td><td class='num'>12</td><td><div class="bar warn"><i style="width:52.2%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>appearances/transitions.py</code></td><td class='num'>11</td><td><div class="bar warn"><i style="width:47.8%"></i></div></td><td class='num'>4</td></tr>
+<tr><td><code>campaigns/lifecycle.py</code></td><td class='num'>11</td><td><div class="bar warn"><i style="width:47.8%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>module_edit/renaming.py</code></td><td class='num'>11</td><td><div class="bar warn"><i style="width:47.8%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>scenes/lifecycle.py</code></td><td class='num'>11</td><td><div class="bar warn"><i style="width:47.8%"></i></div></td><td class='num'>3</td></tr>
+<tr><td><code>checks.py</code></td><td class='num'>10</td><td><div class="bar warn"><i style="width:43.5%"></i></div></td><td class='num'>0</td></tr></tbody></table></div>
+</div>
+</div>
+
+
+
+</section>
+<section class="panel" id="hotspots" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi accent"><div class="n">666</div><div class="l">commits (24 months ago)</div></div>
+  <div class="kpi"><div class="n">172</div><div class="l">files touched</div></div>
+  <div class="kpi warn"><div class="n">overlay.py</div><div class="l">top hotspot</div></div>
+</div>
+<div class="callout"><b>How to read this:</b> files that are both <i>complex</i> and <i>frequently changed</i> are where defects concentrate — complexity makes mistakes likely, churn gives them opportunities. Prioritize refactoring and review attention here, not on complex-but-stable code.</div>
+
+
+<h2>Churn × size map</h2>
+<p class="dim">Area = lines of code · color = commit count since 24 months ago · hover for details.</p>
+<div class="viz" data-render="treemap" style="height:540px"></div>
+<script type="application/json">{"items":[{"name":"overlay.py","value":964,"metric":43,"meta":"172 branches \u00b7 2 authors"},{"name":"characters.py","value":679,"metric":43,"meta":"148 branches \u00b7 2 authors"},{"name":"context/world_state.py","value":1089,"metric":27,"meta":"186 branches \u00b7 2 authors"},{"name":"absorb/materializer.py","value":716,"metric":18,"meta":"137 branches \u00b7 1 authors"},{"name":"context/assemble.py","value":675,"metric":23,"meta":"94 branches \u00b7 2 authors"},{"name":"suggest.py","value":320,"metric":24,"meta":"81 branches \u00b7 2 authors"},{"name":"locks.py","value":572,"metric":37,"meta":"52 branches \u00b7 2 authors"},{"name":"absorb/apply.py","value":748,"metric":19,"meta":"97 branches \u00b7 1 authors"},{"name":"assets.py","value":427,"metric":18,"meta":"82 branches \u00b7 1 authors"},{"name":"weather/overrides.py","value":605,"metric":10,"meta":"144 branches \u00b7 2 authors"},{"name":"greetings.py","value":252,"metric":20,"meta":"65 branches \u00b7 2 authors"},{"name":"export.py","value":421,"metric":12,"meta":"97 branches \u00b7 2 authors"},{"name":"scenes/write.py","value":545,"metric":13,"meta":"89 branches \u00b7 2 authors"},{"name":"playing.py","value":216,"metric":25,"meta":"42 branches \u00b7 2 authors"},{"name":"response_presets.py","value":372,"metric":14,"meta":"71 branches \u00b7 2 authors"},{"name":"sync.py","value":220,"metric":16,"meta":"55 branches \u00b7 2 authors"},{"name":"turnstate.py","value":530,"metric":8,"meta":"102 branches \u00b7 1 authors"},{"name":"checks.py","value":210,"metric":11,"meta":"73 branches \u00b7 2 authors"},{"name":"config.py","value":382,"metric":28,"meta":"28 branches \u00b7 2 authors"},{"name":"entities.py","value":216,"metric":19,"meta":"38 branches \u00b7 2 authors"},{"name":"search.py","value":613,"metric":5,"meta":"146 branches \u00b7 1 authors"},{"name":"campaigns/lifecycle.py","value":347,"metric":11,"meta":"64 branches \u00b7 1 authors"},{"name":"pcs.py","value":193,"metric":15,"meta":"42 branches \u00b7 1 authors"},{"name":"prompt_log.py","value":408,"metric":9,"meta":"70 branches \u00b7 1 authors"},{"name":"absorb/conflicts.py","value":421,"metric":7,"meta":"89 branches \u00b7 1 authors"},{"name":"proposals.py","value":319,"metric":16,"meta":"37 branches \u00b7 2 authors"},{"name":"cards.py","value":310,"metric":10,"meta":"59 branches \u00b7 1 authors"},{"name":"migrations.py","value":164,"metric":13,"meta":"40 branches \u00b7 2 authors"},{"name":"scenes/serialize.py","value":255,"metric":9,"meta":"54 branches \u00b7 1 authors"},{"name":"plot.py","value":161,"metric":12,"meta":"38 branches \u00b7 2 authors"},{"name":"epub.py","value":143,"metric":16,"meta":"27 branches \u00b7 2 authors"},{"name":"localize.py","value":253,"metric":7,"meta":"61 branches \u00b7 1 authors"},{"name":"absorb/routing.py","value":410,"metric":7,"meta":"56 branches \u00b7 1 authors"},{"name":"commits.py","value":304,"metric":8,"meta":"48 branches \u00b7 2 authors"},{"name":"context/cast.py","value":298,"metric":7,"meta":"55 branches \u00b7 1 authors"},{"name":"clock.py","value":412,"metric":5,"meta":"64 branches \u00b7 1 authors"},{"name":"campaigns/read.py","value":320,"metric":8,"meta":"39 branches \u00b7 1 authors"},{"name":"backups.py","value":353,"metric":4,"meta":"74 branches \u00b7 1 authors"},{"name":"calendars/base.py","value":171,"metric":9,"meta":"32 branches \u00b7 2 authors"},{"name":"scenario.py","value":358,"metric":4,"meta":"73 branches \u00b7 1 authors"},{"name":"facts.py","value":338,"metric":5,"meta":"58 branches \u00b7 1 authors"},{"name":"usage.py","value":462,"metric":6,"meta":"47 branches \u00b7 1 authors"},{"name":"pins.py","value":321,"metric":4,"meta":"69 branches \u00b7 1 authors"},{"name":"semsearch.py","value":346,"metric":5,"meta":"55 branches \u00b7 1 authors"},{"name":"undo.py","value":438,"metric":3,"meta":"92 branches \u00b7 1 authors"},{"name":"chronicle.py","value":107,"metric":16,"meta":"16 branches \u00b7 2 authors"},{"name":"fetch.py","value":188,"metric":7,"meta":"37 branches \u00b7 2 authors"},{"name":"paths.py","value":172,"metric":11,"meta":"23 branches \u00b7 2 authors"},{"name":"alternates.py","value":548,"metric":3,"meta":"83 branches \u00b7 1 authors"},{"name":"image_subjects.py","value":125,"metric":7,"meta":"34 branches \u00b7 1 authors"},{"name":"proclock.py","value":236,"metric":6,"meta":"37 branches \u00b7 1 authors"},{"name":"atomic.py","value":243,"metric":7,"meta":"30 branches \u00b7 2 authors"},{"name":"scenes/read.py","value":161,"metric":7,"meta":"27 branches \u00b7 2 authors"},{"name":"scenes/lifecycle.py","value":202,"metric":10,"meta":"18 branches \u00b7 1 authors"},{"name":"absorb/parse.py","value":254,"metric":4,"meta":"46 branches \u00b7 1 authors"},{"name":"commitments.py","value":234,"metric":4,"meta":"44 branches \u00b7 1 authors"},{"name":"rolls.py","value":105,"metric":8,"meta":"21 branches \u00b7 2 authors"},{"name":"llm_connections.py","value":198,"metric":5,"meta":"34 branches \u00b7 2 authors"},{"name":"changes.py","value":82,"metric":7,"meta":"23 branches \u00b7 2 authors"},{"name":"dice.py","value":136,"metric":4,"meta":"41 branches \u00b7 2 authors"},{"name":"briefing.py","value":226,"metric":3,"meta":"53 branches \u00b7 1 authors"},{"name":"context/semantic.py","value":294,"metric":3,"meta":"53 branches \u00b7 2 authors"},{"name":"context/pack.py","value":183,"metric":7,"meta":"22 branches \u00b7 2 authors"},{"name":"expressions.py","value":107,"metric":4,"meta":"39 branches \u00b7 1 authors"},{"name":"weather/__init__.py","value":134,"metric":7,"meta":"21 branches \u00b7 1 authors"},{"name":"provenance.py","value":173,"metric":4,"meta":"37 branches \u00b7 2 authors"},{"name":"styles.py","value":131,"metric":7,"meta":"20 branches \u00b7 1 authors"},{"name":"__init__.py","value":170,"metric":73,"meta":"1 branches \u00b7 2 authors"},{"name":"relationships.py","value":104,"metric":8,"meta":"16 branches \u00b7 2 authors"},{"name":"context/layout.py","value":198,"metric":4,"meta":"32 branches \u00b7 1 authors"},{"name":"modules/validate.py","value":365,"metric":1,"meta":"130 branches \u00b7 1 authors"},{"name":"sheets/writer.py","value":169,"metric":3,"meta":"41 branches \u00b7 1 authors"},{"name":"world_bundle.py","value":280,"metric":3,"meta":"40 branches \u00b7 1 authors"},{"name":"playstate.py","value":92,"metric":6,"meta":"19 branches \u00b7 2 authors"},{"name":"module_edit/renaming.py","value":293,"metric":1,"meta":"119 branches \u00b7 1 authors"},{"name":"voice_drift.py","value":300,"metric":4,"meta":"28 branches \u00b7 1 authors"},{"name":"calendars/hebrew.py","value":135,"metric":3,"meta":"37 branches \u00b7 1 authors"},{"name":"modules/display.py","value":335,"metric":1,"meta":"110 branches \u00b7 1 authors"},{"name":"calendars/config.py","value":63,"metric":9,"meta":"11 branches \u00b7 2 authors"},{"name":"absorb/snapshots.py","value":106,"metric":7,"meta":"14 branches \u00b7 1 authors"}],"valueLabel":"LOC","metricLabel":"commits","metricMax":73}</script>
+
+<h2>Hotspot ranking</h2>
+<p class="dim">Score = commits × (branch points + 1). Tests excluded. 28 frequently-changed non-code file(s) (config/SQL/proto/docs) are not ranked here — top: builtin_modules/pool-basic/sheets.json (4), builtin_modules/d20-basic/sheets.json (3), builtin_modules/d20-basic/checks.json (2).</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">Commits</th><th class="num">Branches</th><th class="num">LOC</th><th class="num">Authors</th><th class="num">Hotspot score</th></tr></thead>
+<tbody><tr><td><code>overlay.py</code></td><td class='num'>43</td><td class='num'>172</td><td class='num'>964</td><td class='num'>2</td><td class='num' data-sort='7439'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>characters.py</code></td><td class='num'>43</td><td class='num'>148</td><td class='num'>679</td><td class='num'>2</td><td class='num' data-sort='6407'><div class="bar bad"><i style="width:86.1%"></i></div></td></tr>
+<tr><td><code>context/world_state.py</code></td><td class='num'>27</td><td class='num'>186</td><td class='num'>1,089</td><td class='num'>2</td><td class='num' data-sort='5049'><div class="bar bad"><i style="width:67.9%"></i></div></td></tr>
+<tr><td><code>absorb/materializer.py</code></td><td class='num'>18</td><td class='num'>137</td><td class='num'>716</td><td class='num'>1</td><td class='num' data-sort='2484'><div class="bar bad"><i style="width:33.4%"></i></div></td></tr>
+<tr><td><code>context/assemble.py</code></td><td class='num'>23</td><td class='num'>94</td><td class='num'>675</td><td class='num'>2</td><td class='num' data-sort='2185'><div class="bar bad"><i style="width:29.4%"></i></div></td></tr>
+<tr><td><code>suggest.py</code></td><td class='num'>24</td><td class='num'>81</td><td class='num'>320</td><td class='num'>2</td><td class='num' data-sort='1968'><div class="bar bad"><i style="width:26.5%"></i></div></td></tr>
+<tr><td><code>locks.py</code></td><td class='num'>37</td><td class='num'>52</td><td class='num'>572</td><td class='num'>2</td><td class='num' data-sort='1961'><div class="bar bad"><i style="width:26.4%"></i></div></td></tr>
+<tr><td><code>absorb/apply.py</code></td><td class='num'>19</td><td class='num'>97</td><td class='num'>748</td><td class='num'>1</td><td class='num' data-sort='1862'><div class="bar bad"><i style="width:25.0%"></i></div></td></tr>
+<tr><td><code>assets.py</code></td><td class='num'>18</td><td class='num'>82</td><td class='num'>427</td><td class='num'>1</td><td class='num' data-sort='1494'><div class="bar bad"><i style="width:20.1%"></i></div></td></tr>
+<tr><td><code>weather/overrides.py</code></td><td class='num'>10</td><td class='num'>144</td><td class='num'>605</td><td class='num'>2</td><td class='num' data-sort='1450'><div class="bar bad"><i style="width:19.5%"></i></div></td></tr>
+<tr><td><code>greetings.py</code></td><td class='num'>20</td><td class='num'>65</td><td class='num'>252</td><td class='num'>2</td><td class='num' data-sort='1320'><div class="bar bad"><i style="width:17.7%"></i></div></td></tr>
+<tr><td><code>export.py</code></td><td class='num'>12</td><td class='num'>97</td><td class='num'>421</td><td class='num'>2</td><td class='num' data-sort='1176'><div class="bar bad"><i style="width:15.8%"></i></div></td></tr>
+<tr><td><code>scenes/write.py</code></td><td class='num'>13</td><td class='num'>89</td><td class='num'>545</td><td class='num'>2</td><td class='num' data-sort='1170'><div class="bar bad"><i style="width:15.7%"></i></div></td></tr>
+<tr><td><code>playing.py</code></td><td class='num'>25</td><td class='num'>42</td><td class='num'>216</td><td class='num'>2</td><td class='num' data-sort='1075'><div class="bar bad"><i style="width:14.5%"></i></div></td></tr>
+<tr><td><code>response_presets.py</code></td><td class='num'>14</td><td class='num'>71</td><td class='num'>372</td><td class='num'>2</td><td class='num' data-sort='1008'><div class="bar bad"><i style="width:13.6%"></i></div></td></tr>
+<tr><td><code>sync.py</code></td><td class='num'>16</td><td class='num'>55</td><td class='num'>220</td><td class='num'>2</td><td class='num' data-sort='896'><div class="bar bad"><i style="width:12.0%"></i></div></td></tr>
+<tr><td><code>turnstate.py</code></td><td class='num'>8</td><td class='num'>102</td><td class='num'>530</td><td class='num'>1</td><td class='num' data-sort='824'><div class="bar bad"><i style="width:11.1%"></i></div></td></tr>
+<tr><td><code>checks.py</code></td><td class='num'>11</td><td class='num'>73</td><td class='num'>210</td><td class='num'>2</td><td class='num' data-sort='814'><div class="bar bad"><i style="width:10.9%"></i></div></td></tr>
+<tr><td><code>config.py</code></td><td class='num'>28</td><td class='num'>28</td><td class='num'>382</td><td class='num'>2</td><td class='num' data-sort='812'><div class="bar bad"><i style="width:10.9%"></i></div></td></tr>
+<tr><td><code>entities.py</code></td><td class='num'>19</td><td class='num'>38</td><td class='num'>216</td><td class='num'>2</td><td class='num' data-sort='741'><div class="bar bad"><i style="width:10.0%"></i></div></td></tr>
+<tr><td><code>search.py</code></td><td class='num'>5</td><td class='num'>146</td><td class='num'>613</td><td class='num'>1</td><td class='num' data-sort='735'><div class="bar bad"><i style="width:9.9%"></i></div></td></tr>
+<tr><td><code>campaigns/lifecycle.py</code></td><td class='num'>11</td><td class='num'>64</td><td class='num'>347</td><td class='num'>1</td><td class='num' data-sort='715'><div class="bar bad"><i style="width:9.6%"></i></div></td></tr>
+<tr><td><code>pcs.py</code></td><td class='num'>15</td><td class='num'>42</td><td class='num'>193</td><td class='num'>1</td><td class='num' data-sort='645'><div class="bar bad"><i style="width:8.7%"></i></div></td></tr>
+<tr><td><code>prompt_log.py</code></td><td class='num'>9</td><td class='num'>70</td><td class='num'>408</td><td class='num'>1</td><td class='num' data-sort='639'><div class="bar bad"><i style="width:8.6%"></i></div></td></tr>
+<tr><td><code>absorb/conflicts.py</code></td><td class='num'>7</td><td class='num'>89</td><td class='num'>421</td><td class='num'>1</td><td class='num' data-sort='630'><div class="bar bad"><i style="width:8.5%"></i></div></td></tr></tbody></table></div>
+
+
+
+</section>
+<section class="panel" id="invariants" role="tabpanel">
+
+<div class="card hero">
+  <h2>Four rules hold this package together, and all four are enforced by tests</h2>
+  <p>This package would be dangerous if its rules were conventions, because it has no type system
+  standing between a caller and a corrupted transcript. Instead each rule is compiled into a test
+  that parses the package's own AST and fails the build, with an explicit escape hatch that must
+  carry a stated reason.</p>
+</div>
+
+<h2>The enforced rules</h2>
+<div class="tbl-wrap"><table class="sortable">
+<tr><th>Rule</th><th>Guard</th><th>Escape hatch</th><th>Verdict</th></tr>
+<tr><td>Every record write goes through <code>atomic</code></td><td><code>backend/tests/test_atomic_guard.py</code></td><td><code>atomic-ok</code></td><td><span class="badge good">enforced</span></td></tr>
+<tr><td>No inheritable record is read off a raw campaign root</td><td><code>backend/tests/test_overlay_guard.py</code></td><td><code>overlay-ok</code></td><td><span class="badge good">enforced</span></td></tr>
+<tr><td>Filesystem access goes through the resolvers</td><td><code>backend/tests/test_paths_guard.py</code>, <code>backend/tests/test_path_guard_store.py</code></td><td><code>paths-ok</code></td><td><span class="badge good">enforced</span></td></tr>
+<tr><td>Campaign-scoped mutators take <code>campaign_lock(cid)</code></td><td><code>backend/tests/test_lock_domain_guard.py</code></td><td><code>lock-domain-ok</code></td><td><span class="badge warn">enforced, with a backlog</span></td></tr>
+<tr><td>Only <code>hold_all</code> may hold two campaign locks</td><td><code>backend/tests/test_lock_order_guard.py</code></td><td><code>lock-order-ok</code></td><td><span class="badge good">enforced</span></td></tr>
+<tr><td>Module graph acyclic; imports at module scope; cross-package imports bind submodules</td><td><code>backend/tests/test_import_guard.py</code></td><td><code>import-ok</code></td><td><span class="badge good">enforced</span></td></tr>
+</table></div>
+<div class="callout good">
+  <strong>The escape hatches are designed not to be cheap.</strong> A marker with no reason fails
+  deliberately, and each guard caps how many may exist. That converts "I'll add a suppression" from a
+  one-character edit into a reviewable claim.
+</div>
+
+<h2>Risk ranking</h2>
+<div class="callout warn">
+  <strong>1. <code>backend/src/grimoire/store/overlay.py</code> is the package's hotspot and its hardest idea at the same time.</strong>
+  964 lines, 172 branches, 43 commits in 24 months, hotspot score 7,439 &mdash; the highest in the package.
+  It encodes four states (campaign copy, tombstoned, detached, inherited) and two different overlay
+  rules, and the guard that protects it can only check that <em>other</em> modules do not bypass it;
+  nothing checks the resolution logic inside it beyond ordinary tests.
+</div>
+<div class="callout warn">
+  <strong>2. <code>UNREVIEWED</code> is a list of campaign mutators nobody has confirmed.</strong>
+  <code>backend/src/grimoire/store/locks.py:298</code>. The guard permits it to shrink but not grow,
+  which is the right shape for a backlog &mdash; but its entries are by construction the exact bug class
+  the lock domain exists to prevent, and the module header records that <code>rolls</code> really was
+  outside the domain until it joined.
+</div>
+<div class="callout warn">
+  <strong>3. Complexity concentrates in the absorb pipeline.</strong>
+  <code>backend/src/grimoire/store/absorb/apply.py:83</code> trips four separate high-severity
+  detectors at once (cyclomatic, cognitive, nesting depth and function length), and
+  <code>backend/src/grimoire/store/absorb/apply.py:594</code> two more. Absorb is the step that writes
+  model-proposed edits into the user's world, so it is a poor place for a function nobody can hold in
+  their head.
+</div>
+<div class="callout warn">
+  <strong>4. Search is O(corpus) per query, by choice.</strong>
+  <code>backend/src/grimoire/store/search.py</code> walks every file on every query, with extraction
+  memoized on <code>(path, mtime, size)</code>. The docstring argues this is right at "hundreds of
+  files, one user, local disk" &mdash; a defensible trade that is also an undocumented scaling limit for
+  a library that grows by one scene per session forever.
+</div>
+<div class="callout">
+  <strong>5. 58 swallowed exceptions.</strong> The ones I read are individually argued in docstrings
+  and correct (a lost activity stamp must not fail a completed write; one malformed preset must not
+  abort a registry scan). But 58 is enough that "it's always argued" is a claim about the package
+  nobody has verified in one pass.
+</div>
+
+<h2>What the Health grade over-counts here</h2>
+<div class="callout">
+  <p>184 of this package's 1,394 findings are <code>unused_import</code>, and essentially all of them
+  are <code>from __future__ import annotations</code> &mdash; whose effect is on the compiler, so no
+  detector can see it used &mdash; plus the deliberate re-exports at
+  <code>backend/src/grimoire/store/__init__.py:21</code>, which is what a facade module is <em>for</em>.
+  None of the 184 is a defect. Excluding them, the package's high-severity findings drop from 289 to
+  105, and those are dominated by complexity metrics rather than correctness claims.</p>
+</div>
+
+</section><!--DOC_BODY--></main>
+<footer class="doc">Generated by code-visualization for the grimoire code-overview set. Automated tabs are script-generated; judgment tabs were authored from code reading and their citations verified against a63cb05f5.</footer>
+<script>
+(function(){
+  const btns=[...document.querySelectorAll('nav.tabs button')];
+  function activate(id){
+    document.querySelectorAll('section.panel').forEach(p=>p.classList.toggle('active',p.id===id));
+    btns.forEach(b=>b.setAttribute('aria-selected',b.dataset.tab===id?'true':'false'));
+    window.dispatchEvent(new CustomEvent('tab:shown',{detail:{id}}));
+  }
+  btns.forEach(b=>b.addEventListener('click',()=>activate(b.dataset.tab)));
+})();
+</script>
+</body>
+</html>

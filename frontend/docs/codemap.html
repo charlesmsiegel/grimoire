@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>frontend — Codebase Atlas</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Design tokens are code-visualization's, verbatim. The three document types in
+   a code overview sit next to each other in one nav bar; sharing the palette is
+   what makes them read as one artifact rather than three tools' output. */
+:root{
+  --bg:#0d1420; --bg-grid:rgba(120,160,220,0.05); --surface:#141d2e; --surface-2:#1a2538;
+  --border:rgba(150,180,230,0.14); --border-strong:rgba(150,180,230,0.30);
+  --text:#dbe4f3; --text-dim:#8fa1bd; --text-faint:#5f7191;
+  --accent:#5aa7e8; --accent-dim:rgba(90,167,232,0.14);
+  --good:#59c98f; --good-dim:rgba(89,201,143,0.14);
+  --warn:#e0b25a; --warn-dim:rgba(224,178,90,0.14);
+  --bad:#e06a6a; --bad-dim:rgba(224,106,106,0.15);
+  --violet:#a08fd8;
+  --heat-lo:#27405e; --heat-hi:#e0703f;
+  --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:'IBM Plex Sans',system-ui,-apple-system,sans-serif;
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#f3f5f9; --bg-grid:rgba(40,70,120,0.055); --surface:#ffffff; --surface-2:#eef1f7;
+    --border:rgba(30,55,95,0.14); --border-strong:rgba(30,55,95,0.30);
+    --text:#1d2838; --text-dim:#51617a; --text-faint:#8593a8;
+    --accent:#1f6fbd; --accent-dim:rgba(31,111,189,0.10);
+    --good:#1f8f5c; --good-dim:rgba(31,143,92,0.10);
+    --warn:#a87418; --warn-dim:rgba(168,116,24,0.12);
+    --bad:#bd3f3f; --bad-dim:rgba(189,63,63,0.10);
+    --violet:#6a55b0;
+    --heat-lo:#c9d8ec; --heat-hi:#cf5a26;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  font-family:var(--sans); background:var(--bg); color:var(--text);
+  background-image:linear-gradient(var(--bg-grid) 1px,transparent 1px),linear-gradient(90deg,var(--bg-grid) 1px,transparent 1px);
+  background-size:32px 32px; line-height:1.55; font-size:15px;
+}
+header.doc{padding:34px 28px 0; max-width:1280px; margin:0 auto}
+.doc-label{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);display:flex;align-items:center;gap:8px}
+.doc-label::before{content:"";width:8px;height:8px;background:var(--accent);border-radius:2px;display:inline-block}
+h1.doc-title{font-size:30px;font-weight:700;letter-spacing:-.02em;margin-top:8px}
+.doc-sub{color:var(--text-dim);margin-top:6px;max-width:900px}
+.doc-meta{font-family:var(--mono);font-size:12px;color:var(--text-faint);margin-top:10px}
+main{max-width:1280px;margin:0 auto;padding:26px 28px 80px}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+
+/* ---------- tabs: code-visualization's contract, so one shell serves all four
+   documents. code-overview forces this template on assemble.py and on
+   build_measurement.py, so the markup those two emit has to fit here. ------- */
+nav.tabs{
+  display:flex;gap:2px;flex-wrap:wrap;max-width:1280px;margin:18px auto 0;
+  padding:0 28px;border-bottom:1px solid var(--border);
+}
+/* summary.html is untabbed and leaves TABS_NAV empty; without this the bar
+   renders as a stray rule under the header. */
+nav.tabs:empty{display:none;border:none}
+nav.tabs button{
+  background:none;border:none;border-bottom:2px solid transparent;color:var(--text-dim);
+  font-family:var(--sans);font-size:14px;padding:9px 14px;cursor:pointer;
+}
+nav.tabs button:hover{color:var(--text)}
+nav.tabs button[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+nav.tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+section.panel{display:none}
+section.panel.active{display:block}
+
+/* ---------- content primitives (shared with code-visualization) ---------- */
+h2{font-size:21px;font-weight:600;letter-spacing:-.01em;margin:30px 0 10px}
+h2:first-child{margin-top:0}
+h3{font-size:16px;font-weight:600;margin:22px 0 8px}
+p{margin:8px 0;max-width:940px;color:var(--text)}
+ul,ol{margin:8px 0 8px 22px;max-width:940px}
+li{margin:4px 0}
+a{color:var(--accent)}
+.dim{color:var(--text-dim)} .faint{color:var(--text-faint)}
+code,.mono{font-family:var(--mono);font-size:.92em}
+p code,li code,td code{background:var(--surface-2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;overflow-wrap:anywhere}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin:12px 0}
+.grid{display:grid;gap:14px;margin:12px 0}
+.grid.cols-2{grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}
+.grid.cols-3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.grid>*{min-width:0}
+.kpis{display:flex;flex-wrap:wrap;gap:12px;margin:12px 0}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 18px;min-width:130px}
+.kpi .n{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.kpi .l{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim);margin-top:2px}
+.kpi.warn .n{color:var(--warn)} .kpi.bad .n{color:var(--bad)} .kpi.good .n{color:var(--good)} .kpi.accent .n{color:var(--accent)}
+.badge{display:inline-block;font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--border);vertical-align:1px;white-space:nowrap}
+.badge.good{color:var(--good);background:var(--good-dim);border-color:transparent}
+.badge.warn{color:var(--warn);background:var(--warn-dim);border-color:transparent}
+.badge.bad{color:var(--bad);background:var(--bad-dim);border-color:transparent}
+.badge.accent{color:var(--accent);background:var(--accent-dim);border-color:transparent}
+.badge.neutral{color:var(--text-dim);background:var(--surface-2);border-color:transparent}
+.callout{border-left:3px solid var(--accent);background:var(--accent-dim);border-radius:0 8px 8px 0;padding:12px 16px;margin:12px 0;max-width:940px}
+.callout.warn{border-color:var(--warn);background:var(--warn-dim)}
+.callout.bad{border-color:var(--bad);background:var(--bad-dim)}
+.callout.good{border-color:var(--good);background:var(--good-dim)}
+details{border:1px solid var(--border);border-radius:8px;margin:10px 0;background:var(--surface)}
+details summary{cursor:pointer;padding:10px 16px;font-weight:500;color:var(--text-dim)}
+details[open] summary{border-bottom:1px solid var(--border);color:var(--text)}
+details .body{padding:12px 16px}
+.tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:10px;margin:12px 0;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+thead th{background:var(--surface-2);text-align:left;font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);padding:9px 14px;border-bottom:1px solid var(--border-strong);white-space:nowrap}
+tbody td{padding:8px 14px;border-bottom:1px solid var(--border);vertical-align:top;overflow-wrap:anywhere}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:nth-child(even){background:color-mix(in srgb,var(--surface-2) 45%,transparent)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:12.5px;white-space:nowrap}
+.bar{position:relative;background:var(--surface-2);border-radius:4px;height:14px;min-width:120px;overflow:hidden}
+.bar>i{position:absolute;inset:0 auto 0 0;background:var(--accent);border-radius:4px}
+.bar.warn>i{background:var(--warn)} .bar.bad>i{background:var(--bad)} .bar.good>i{background:var(--good)}
+
+/* ---------- grade components ---------- */
+/* Grade colour is bound to the band, not to the score, so the letter and the
+   colour can never disagree — the two are read together at a glance. */
+.g-a{--grade:var(--good)} .g-b{--grade:var(--accent)} .g-c{--grade:var(--warn)}
+.g-d{--grade:var(--bad)} .g-f{--grade:var(--bad)} .g-none{--grade:var(--text-faint)}
+.gradecard{display:flex;flex-wrap:wrap;align-items:center;gap:26px;background:var(--surface);border:1px solid var(--border-strong);border-radius:12px;padding:22px 26px;margin:16px 0;background-image:linear-gradient(110deg,color-mix(in srgb,var(--grade) 12%,transparent),transparent 55%)}
+.gradecard .letter{font-size:64px;font-weight:700;line-height:1;letter-spacing:-.04em;color:var(--grade);font-variant-numeric:tabular-nums;min-width:96px}
+.gradecard .score{font-family:var(--mono);font-size:13px;color:var(--text-dim);margin-top:6px}
+.gradecard .what{flex:1 1 260px;min-width:0}
+.gradecard .what h2{margin:0 0 4px;font-size:19px}
+.catrow{display:grid;grid-template-columns:minmax(140px,1.4fr) minmax(90px,2fr) 54px 46px;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid var(--border)}
+.catrow:last-child{border-bottom:none}
+.catrow .cname{font-size:13.5px;overflow-wrap:anywhere}
+.catrow .cname small{display:block;font-family:var(--mono);font-size:10.5px;color:var(--text-faint);letter-spacing:.04em}
+.catrow .cscore{font-family:var(--mono);font-size:12.5px;text-align:right;color:var(--text-dim);font-variant-numeric:tabular-nums}
+.catrow .cgrade{font-family:var(--mono);font-weight:600;text-align:right;color:var(--grade)}
+.catrow .bar>i{background:var(--grade)}
+.catrow.ungraded .cname,.catrow.ungraded .cscore{color:var(--text-faint)}
+@media(max-width:560px){.catrow{grid-template-columns:1fr 54px 46px}.catrow .bar{grid-column:1/-1}}
+.doclinks{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));margin:16px 0}
+.doclink{display:block;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px;text-decoration:none;color:var(--text)}
+.doclink:hover{border-color:var(--accent);background:var(--accent-dim)}
+.doclink .k{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent)}
+.doclink .t{font-size:16px;font-weight:600;margin-top:4px}
+.doclink .d{color:var(--text-dim);font-size:13px;margin-top:4px}
+.doclink[aria-disabled="true"]{opacity:.5;pointer-events:none}
+.sev-high{color:var(--bad)} .sev-medium{color:var(--warn)} .sev-low{color:var(--text-dim)}
+/* The type token and the category name are short and identify the row; letting
+   them wrap mid-word to buy width for a long description makes the table harder
+   to scan, not easier. The description column is the one that should give. */
+td code.ftype{white-space:nowrap;overflow-wrap:normal}
+td.cat{white-space:nowrap}
+/* A file:line split across two lines is not a citation anyone can copy. The
+   wrapper scrolls if a path is genuinely too deep for the viewport. */
+td code.floc{white-space:nowrap;overflow-wrap:normal}
+footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-faint);font-family:var(--mono);font-size:11.5px}
+footer.doc a{color:var(--text-dim)}
+@media(max-width:720px){header.doc,main,nav.tabs,footer.doc{padding-left:16px;padding-right:16px} h1.doc-title{font-size:24px} .gradecard .letter{font-size:48px;min-width:72px}}
+</style>
+</head>
+<body>
+<header class="doc">
+  <div class="doc-label">CODEBASE ATLAS</div>
+  <h1 class="doc-title">frontend — Codebase Atlas</h1>
+  <p class="doc-sub">A React SPA with measured coverage and one 3,985-line component</p>
+  <div class="doc-meta">generated 2026-08-18 · a63cb05f5 · 194 files, 49,145 LOC</div>
+</header>
+<!-- code-overview:nav --><style>
+.co-nav{position:sticky;top:0;z-index:60;max-width:1280px;margin:0 auto;padding:10px 28px;
+  font-family:var(--mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:12px;
+  background:color-mix(in srgb,var(--bg,#0d1420) 92%,transparent);
+  border-bottom:1px solid var(--border,rgba(150,180,230,0.14));
+  backdrop-filter:blur(8px);display:flex;flex-direction:column;gap:6px}
+.co-nav .co-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;min-width:0}
+.co-nav a{color:var(--text-dim,#8fa1bd);text-decoration:none;padding:3px 9px;border-radius:999px;
+  border:1px solid transparent;white-space:nowrap}
+.co-nav a:hover{color:var(--accent,#1f6fbd);background:var(--accent-dim,rgba(31,111,189,0.10))}
+.co-nav a[aria-current]{color:var(--accent,#1f6fbd);
+  border-color:var(--accent,#1f6fbd);background:var(--accent-dim,rgba(31,111,189,0.10))}
+.co-nav .co-here{color:var(--text,#dbe4f3);font-weight:600;padding:3px 0}
+.co-nav .co-lbl{color:var(--text-faint,#5f7191);letter-spacing:.08em;text-transform:uppercase;
+  font-size:10.5px;padding-right:2px}
+.co-nav .co-sep{color:var(--text-faint,#5f7191);opacity:.6}
+@media(max-width:720px){.co-nav{padding-left:16px;padding-right:16px}}
+</style><nav class="co-nav" aria-label="code overview"><div class="co-row"><a href="../../docs/codemap.html">⌂ Overall Code Map</a><span class="co-sep">/</span><span class="co-here">frontend</span></div><div class="co-row"><span class="co-lbl">frontend</span><a href="summary.html">Summary</a><a href="#" aria-current="page">Code Map</a><a href="health.html">Health</a><a href="measurement.html">Measurement</a><a href="theory.html">Theory</a></div><div class="co-row"><span class="co-lbl">Other packages · Code Map</span><a href="../../backend/src/grimoire/store/docs/codemap.html">grimoire-store</a><a href="../../backend/src/grimoire/routes/docs/codemap.html">grimoire-api</a><a href="../../backend/src/grimoire/docs/codemap.html">grimoire-llm</a><a href="../../backend/tests/docs/codemap.html">backend-tests</a><a href="../../evals/docs/codemap.html">evals</a><a href="../../scripts/docs/codemap.html">scripts</a><a href="../../android/docs/codemap.html">android</a></div></nav><!-- /code-overview:nav -->
+<!--DOC_NAV-->
+<nav class="tabs" role="tablist"><button role="tab" data-tab="overview" aria-selected="true" aria-controls="overview">Overview</button>
+<button role="tab" data-tab="inventory" aria-selected="false" aria-controls="inventory">Inventory</button>
+<button role="tab" data-tab="dependencies" aria-selected="false" aria-controls="dependencies">Dependencies</button>
+<button role="tab" data-tab="hotspots" aria-selected="false" aria-controls="hotspots">Hotspots</button>
+<button role="tab" data-tab="invariants" aria-selected="false" aria-controls="invariants">Invariants &amp; Risks</button>
+<button role="tab" data-tab="coverage" aria-selected="false" aria-controls="coverage">Coverage</button>
+<button role="tab" data-tab="llm-ops" aria-selected="false" aria-controls="llm-ops">LLM Ops</button></nav>
+<main><section class="panel active" id="overview" role="tabpanel">
+
+<div class="card hero">
+  <h2>A conventional React SPA with one enormous exception</h2>
+  <p><code>frontend/src</code> is 194 files and 49,145 lines of TypeScript &mdash; a Vite + React
+  + react-router single-page app, tested with vitest and Testing Library, with about half its lines in
+  co-located <em>.test.tsx</em> files. It talks to the backend through exactly one module,
+  <code>frontend/src/api/client.ts</code>, and it is disciplined: the repository documents a
+  list/detail page pattern and the record-editing screens follow it.</p>
+  <p>The exception is <code>frontend/src/routes/CampaignView.tsx</code>: a single function component
+  that opens at line 251 and closes at line 4236. It is the play screen, the top hotspot in the whole
+  repository by a factor of three, and the one place where the package's structure is not conventional
+  at all.</p>
+</div>
+
+<div class="kpis">
+  <div class="kpi"><div class="n">194</div><div class="l">files, 49.1k lines</div></div>
+  <div class="kpi accent"><div class="n">49.2%</div><div class="l">of lines are tests</div></div>
+  <div class="kpi good"><div class="n">85.8%</div><div class="l">line coverage, measured</div></div>
+  <div class="kpi bad"><div class="n">3,985</div><div class="l">lines in one component</div></div>
+</div>
+
+<h2>Structure</h2>
+<div class="tbl-wrap"><table class="sortable">
+<tr><th>Directory</th><th class="num">Files</th><th class="num">Lines</th><th>Role</th></tr>
+<tr><td><code>frontend/src/components</code></td><td class="num">127</td><td class="num">24,972</td><td>Editors, pickers, panels. The list/detail pattern lives here.</td></tr>
+<tr><td><code>frontend/src/routes</code></td><td class="num">32</td><td class="num">18,684</td><td>One screen per top-level view.</td></tr>
+<tr><td><code>frontend/src/api</code></td><td class="num">8</td><td class="num">3,088</td><td>The whole backend surface: <code>frontend/src/api/client.ts</code>, SSE parsing in <code>frontend/src/api/stream.ts</code>, model metadata, lore-owner helpers.</td></tr>
+<tr><td><code>frontend/src/components/play</code></td><td class="num">8</td><td class="num">890</td><td>Play-screen pieces that <em>have</em> been extracted.</td></tr>
+<tr><td><code>frontend/src/theme</code>, <code>frontend/src/markdown</code></td><td class="num">7</td><td class="num">465</td><td>Theming and two remark plugins.</td></tr>
+</table></div>
+
+<h2>Reading order</h2>
+<ol>
+  <li><code>frontend/src/api/client.ts</code> &mdash; the contract with the backend, and the most-changed
+      file in the package (170 commits). Note the two notify helpers at the top: campaign and config
+      mutations announce themselves so the persistent sidebar cannot show stale rows.</li>
+  <li><code>frontend/src/App.tsx</code> &mdash; routing and the persistent shell.</li>
+  <li><code>frontend/src/components/EntityEditor.tsx</code> or
+      <code>frontend/src/components/GreetingEditor.tsx</code> &mdash; the canonical list/detail page:
+      a sticky rail, a read-only detail view, and an explicit Edit step. Every record screen is
+      supposed to look like this.</li>
+  <li><code>frontend/src/api/stream.ts</code> &mdash; SSE parsing, where a scene turn arrives.</li>
+  <li><code>frontend/src/routes/CampaignView.tsx</code> &mdash; last, and budget time for it.</li>
+</ol>
+
+<h2>The list/detail pattern</h2>
+<div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+flowchart LR
+  N["+ New ..."] -->|"opens the form directly"| E["mode = edit"]
+  R["click a row"] -->|"loads the record"| V["mode = view (read-only)"]
+  V -->|"Edit button in the sidebar"| E
+  E -->|"Save - re-select the record"| V
+  E -->|"Cancel"| V
+</pre></div></div>
+<p class="dim">Records are never editable by default; the read-only view renders the body as Markdown
+and puts related-record links in the sidebar as clickable chips. Documented in the repository's
+conventions and implemented in <code>frontend/src/components/EntityEditor.tsx</code>.</p>
+
+<h2>Testing and coverage</h2>
+<p>The suite is 83 test files and 1,533 tests. Coverage is genuinely measured &mdash; 82.4% of statements,
+78.1% of branches, 75.5% of functions, 85.8% of lines, over 108 measured files &mdash; and the
+configuration in <code>frontend/vite.config.ts</code> is unusually careful about why: it pins the
+<strong>istanbul</strong> provider rather than v8 (with a measured note that v8 reported 47 of 68
+files as 100% covered when no test imported them) and sets <code>all: true</code> so an untested
+module counts as 0% instead of vanishing from the report.</p>
+
+<div class="callout bad">
+  <strong>One test in this suite fails outside UTC.</strong>
+  <code>frontend/src/routes/CampaignsView.test.tsx:56</code> builds a timestamp with
+  <code>toISOString()</code> and strips the trailing <code>Z</code>, then expects "last played 2 days
+  ago". <code>frontend/src/routes/CampaignsView.tsx:11</code> parses a zone-less stamp as
+  <em>local</em> time, so the elapsed interval shifts by the machine's UTC offset. Verified: 1 failed
+  / 1,532 passed in local time, 83 files / 0 failed under <code>TZ=UTC</code>. CI runs
+  <code>ubuntu-24.04</code>, so it is green there and has been all along.
+</div>
+
+</section>
+<section class="panel" id="inventory" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi accent"><div class="n">200</div><div class="l">source files</div></div>
+  <div class="kpi"><div class="n">57,520</div><div class="l">lines of code</div></div>
+  <div class="kpi"><div class="n">1</div><div class="l">languages</div></div>
+  <div class="kpi good"><div class="n">49%</div><div class="l">test code share</div></div>
+</div>
+
+<h2>Languages</h2>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>Language</th><th class="num">LOC</th><th class="num">Files</th><th>Share</th><th class="num">%</th></tr></thead>
+<tbody><tr><td>TypeScript</td><td class='num'>49,196</td><td class='num'>195</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>85.5%</td></tr>
+<tr><td>JSON</td><td class='num'>5,558</td><td class='num'>3</td><td><div class="bar "><i style="width:11.3%"></i></div></td><td class='num'>9.7%</td></tr>
+<tr><td>CSS</td><td class='num'>2,753</td><td class='num'>1</td><td><div class="bar "><i style="width:5.6%"></i></div></td><td class='num'>4.8%</td></tr>
+<tr><td>HTML</td><td class='num'>13</td><td class='num'>1</td><td><div class="bar "><i style="width:1.5%"></i></div></td><td class='num'>0.0%</td></tr></tbody></table></div>
+<p class="dim">Coverage: 6 file(s) in unrecognized languages are not counted above (.png (4), .tsbuildinfo (1), .ico (1)).</p>
+
+<h2>Top-level directories</h2>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>Directory</th><th class="num">LOC</th><th>Share</th></tr></thead>
+<tbody><tr><td><code>src/</code></td><td class='num'>51,898</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>(root)/</code></td><td class='num'>5,622</td><td><div class="bar "><i style="width:10.8%"></i></div></td></tr></tbody></table></div>
+
+<div class="grid cols-2">
+<div>
+<h2>Largest files</h2>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">LOC</th><th>Size</th><th class="num">Branches</th></tr></thead>
+<tbody><tr><td><code>src/routes/CampaignView.test.tsx</code> <span class="badge neutral">test</span></td><td class='num'>7,076</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>214</td></tr>
+<tr><td><code>src/routes/CampaignView.tsx</code></td><td class='num'>4,119</td><td><div class="bar "><i style="width:58.2%"></i></div></td><td class='num'>695</td></tr>
+<tr><td><code>src/api/client.ts</code></td><td class='num'>2,036</td><td><div class="bar "><i style="width:28.8%"></i></div></td><td class='num'>86</td></tr>
+<tr><td><code>src/components/CharacterEditor.tsx</code></td><td class='num'>1,838</td><td><div class="bar "><i style="width:26.0%"></i></div></td><td class='num'>435</td></tr>
+<tr><td><code>src/components/CharacterEditor.test.tsx</code> <span class="badge neutral">test</span></td><td class='num'>1,789</td><td><div class="bar "><i style="width:25.3%"></i></div></td><td class='num'>30</td></tr>
+<tr><td><code>src/components/SceneInspector.test.tsx</code> <span class="badge neutral">test</span></td><td class='num'>1,223</td><td><div class="bar "><i style="width:17.3%"></i></div></td><td class='num'>21</td></tr>
+<tr><td><code>src/components/SceneInspector.tsx</code></td><td class='num'>1,077</td><td><div class="bar "><i style="width:15.2%"></i></div></td><td class='num'>209</td></tr>
+<tr><td><code>src/routes/ConfigView.tsx</code></td><td class='num'>839</td><td><div class="bar "><i style="width:11.9%"></i></div></td><td class='num'>130</td></tr>
+<tr><td><code>src/components/EntityEditor.test.tsx</code> <span class="badge neutral">test</span></td><td class='num'>742</td><td><div class="bar "><i style="width:10.5%"></i></div></td><td class='num'>18</td></tr>
+<tr><td><code>src/api/client.test.ts</code> <span class="badge neutral">test</span></td><td class='num'>740</td><td><div class="bar "><i style="width:10.5%"></i></div></td><td class='num'>5</td></tr>
+<tr><td><code>src/components/moduleEditShared.test.tsx</code> <span class="badge neutral">test</span></td><td class='num'>714</td><td><div class="bar "><i style="width:10.1%"></i></div></td><td class='num'>128</td></tr>
+<tr><td><code>src/components/ModuleSchemaEditor.tsx</code></td><td class='num'>662</td><td><div class="bar "><i style="width:9.4%"></i></div></td><td class='num'>139</td></tr>
+<tr><td><code>src/components/GreetingEditor.test.tsx</code> <span class="badge neutral">test</span></td><td class='num'>624</td><td><div class="bar "><i style="width:8.8%"></i></div></td><td class='num'>9</td></tr>
+<tr><td><code>src/components/EntityEditor.tsx</code></td><td class='num'>623</td><td><div class="bar "><i style="width:8.8%"></i></div></td><td class='num'>117</td></tr>
+<tr><td><code>src/routes/ConfigView.test.tsx</code> <span class="badge neutral">test</span></td><td class='num'>584</td><td><div class="bar "><i style="width:8.3%"></i></div></td><td class='num'>18</td></tr>
+<tr><td><code>src/components/ModuleRulesEditor.tsx</code></td><td class='num'>499</td><td><div class="bar "><i style="width:7.1%"></i></div></td><td class='num'>112</td></tr>
+<tr><td><code>src/components/GreetingEditor.tsx</code></td><td class='num'>476</td><td><div class="bar "><i style="width:6.7%"></i></div></td><td class='num'>111</td></tr>
+<tr><td><code>src/components/SceneConfirmForm.test.tsx</code> <span class="badge neutral">test</span></td><td class='num'>471</td><td><div class="bar "><i style="width:6.7%"></i></div></td><td class='num'>6</td></tr>
+<tr><td><code>src/components/SheetEditor.test.tsx</code> <span class="badge neutral">test</span></td><td class='num'>455</td><td><div class="bar "><i style="width:6.4%"></i></div></td><td class='num'>6</td></tr>
+<tr><td><code>src/routes/SearchView.tsx</code></td><td class='num'>420</td><td><div class="bar "><i style="width:5.9%"></i></div></td><td class='num'>88</td></tr></tbody></table></div>
+</div>
+<div>
+<h2>Most branch-heavy files</h2>
+<p class="dim">Branch count ≈ decision points (if/for/while/case/catch/&amp;&amp;/||). A rough cyclomatic-complexity proxy.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">Branches</th><th>Heat</th><th class="num">LOC</th><th class="num">Max depth</th></tr></thead>
+<tbody><tr><td><code>src/routes/CampaignView.tsx</code></td><td class='num'>695</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>4,119</td><td class='num'>12</td></tr>
+<tr><td><code>src/components/CharacterEditor.tsx</code></td><td class='num'>435</td><td><div class="bar warn"><i style="width:62.6%"></i></div></td><td class='num'>1,838</td><td class='num'>9</td></tr>
+<tr><td><code>src/routes/CampaignView.test.tsx</code> <span class="badge neutral">test</span></td><td class='num'>214</td><td><div class="bar warn"><i style="width:30.8%"></i></div></td><td class='num'>7,076</td><td class='num'>11</td></tr>
+<tr><td><code>src/components/SceneInspector.tsx</code></td><td class='num'>209</td><td><div class="bar warn"><i style="width:30.1%"></i></div></td><td class='num'>1,077</td><td class='num'>11</td></tr>
+<tr><td><code>src/components/ModuleSchemaEditor.tsx</code></td><td class='num'>139</td><td><div class="bar warn"><i style="width:20.0%"></i></div></td><td class='num'>662</td><td class='num'>9</td></tr>
+<tr><td><code>src/routes/ConfigView.tsx</code></td><td class='num'>130</td><td><div class="bar warn"><i style="width:18.7%"></i></div></td><td class='num'>839</td><td class='num'>7</td></tr>
+<tr><td><code>src/components/moduleEditShared.test.tsx</code> <span class="badge neutral">test</span></td><td class='num'>128</td><td><div class="bar warn"><i style="width:18.4%"></i></div></td><td class='num'>714</td><td class='num'>8</td></tr>
+<tr><td><code>src/components/EntityEditor.tsx</code></td><td class='num'>117</td><td><div class="bar warn"><i style="width:16.8%"></i></div></td><td class='num'>623</td><td class='num'>9</td></tr>
+<tr><td><code>src/components/ModuleRulesEditor.tsx</code></td><td class='num'>112</td><td><div class="bar warn"><i style="width:16.1%"></i></div></td><td class='num'>499</td><td class='num'>9</td></tr>
+<tr><td><code>src/components/GreetingEditor.tsx</code></td><td class='num'>111</td><td><div class="bar warn"><i style="width:16.0%"></i></div></td><td class='num'>476</td><td class='num'>9</td></tr>
+<tr><td><code>src/routes/ResponsePresetsView.tsx</code></td><td class='num'>94</td><td><div class="bar warn"><i style="width:13.5%"></i></div></td><td class='num'>384</td><td class='num'>7</td></tr>
+<tr><td><code>src/routes/SearchView.tsx</code></td><td class='num'>88</td><td><div class="bar warn"><i style="width:12.7%"></i></div></td><td class='num'>420</td><td class='num'>6</td></tr>
+<tr><td><code>src/api/client.ts</code></td><td class='num'>86</td><td><div class="bar warn"><i style="width:12.4%"></i></div></td><td class='num'>2,036</td><td class='num'>8</td></tr>
+<tr><td><code>src/routes/WorldView.tsx</code></td><td class='num'>80</td><td><div class="bar warn"><i style="width:11.5%"></i></div></td><td class='num'>396</td><td class='num'>10</td></tr>
+<tr><td><code>src/components/PCEditor.tsx</code></td><td class='num'>77</td><td><div class="bar warn"><i style="width:11.1%"></i></div></td><td class='num'>330</td><td class='num'>8</td></tr>
+<tr><td><code>src/components/CastPanel.tsx</code></td><td class='num'>70</td><td><div class="bar warn"><i style="width:10.1%"></i></div></td><td class='num'>300</td><td class='num'>8</td></tr>
+<tr><td><code>src/routes/CampaignWizard.tsx</code></td><td class='num'>69</td><td><div class="bar warn"><i style="width:9.9%"></i></div></td><td class='num'>366</td><td class='num'>10</td></tr>
+<tr><td><code>src/components/SceneConfirmForm.tsx</code></td><td class='num'>67</td><td><div class="bar warn"><i style="width:9.6%"></i></div></td><td class='num'>377</td><td class='num'>9</td></tr>
+<tr><td><code>src/routes/LedgerView.tsx</code></td><td class='num'>66</td><td><div class="bar warn"><i style="width:9.5%"></i></div></td><td class='num'>338</td><td class='num'>6</td></tr>
+<tr><td><code>src/routes/SetupWizard.tsx</code></td><td class='num'>65</td><td><div class="bar warn"><i style="width:9.4%"></i></div></td><td class='num'>393</td><td class='num'>7</td></tr></tbody></table></div>
+</div>
+</div>
+
+
+</section>
+<section class="panel" id="dependencies" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi accent"><div class="n">10</div><div class="l">modules</div></div>
+  <div class="kpi"><div class="n">447</div><div class="l">file-level imports</div></div>
+  <div class="kpi"><div class="n">87</div><div class="l">runtime loads</div></div>
+  <div class="kpi bad"><div class="n">1</div><div class="l">cycles</div></div>
+  <div class="kpi"><div class="n">8</div><div class="l">top-level arms</div></div>
+</div>
+
+<div class="callout bad"><b>1 module-level dependency cycle detected</b> — modules that import each other directly or transitively. Cycles make modules impossible to understand or test in isolation.<ul style="margin-top:8px"><li><span class='badge bad'>cycle 1</span> <code>src</code> ⇄ <code>src/api</code> ⇄ <code>src/components</code> ⇄ <code>src/components/play</code> ⇄ <code>src/routes</code> ⇄ <code>src/theme</code> ⇄ <code>src/theme/themes</code></li></ul></div>
+<h2>Module dependency graph</h2>
+<p class="dim">Node area = lines of code · solid arrows = imports, dashed = runtime loads (a rendered template, a prompt read off disk) · drag nodes, Ctrl/⌘-scroll to zoom, hover to isolate a neighborhood.</p>
+<div class="viz" data-render="forcegraph" style="height:620px"></div>
+<script type="application/json">{"nodes":[{"id":"","label":"(root)","group":"(root)","size":51,"fanIn":0,"fanOut":5,"meta":"(repo root) \u00b7 1 files"},{"id":"public","label":"public","group":"public","size":0,"fanIn":3,"fanOut":0,"meta":"public \u00b7 2 files"},{"id":"src","label":"src","group":"cycle","size":3535,"fanIn":4,"fanOut":5,"meta":"src \u00b7 9 files \u00b7 in dependency cycle #1"},{"id":"src/api","label":"api","group":"cycle","size":3088,"fanIn":5,"fanOut":1,"meta":"src/api \u00b7 8 files \u00b7 in dependency cycle #1"},{"id":"src/components","label":"components","group":"cycle","size":24972,"fanIn":4,"fanOut":5,"meta":"src/components \u00b7 127 files \u00b7 in dependency cycle #1"},{"id":"src/components/play","label":"play","group":"cycle","size":890,"fanIn":1,"fanOut":2,"meta":"src/components/play \u00b7 8 files \u00b7 in dependency cycle #1"},{"id":"src/markdown","label":"markdown","group":"markdown","size":302,"fanIn":1,"fanOut":0,"meta":"src/markdown \u00b7 4 files"},{"id":"src/routes","label":"routes","group":"cycle","size":18684,"fanIn":2,"fanOut":7,"meta":"src/routes \u00b7 32 files \u00b7 in dependency cycle #1"},{"id":"src/theme","label":"theme","group":"cycle","size":163,"fanIn":4,"fanOut":1,"meta":"src/theme \u00b7 3 files \u00b7 in dependency cycle #1"},{"id":"src/theme/themes","label":"themes","group":"cycle","size":264,"fanIn":4,"fanOut":2,"meta":"src/theme/themes \u00b7 4 files \u00b7 in dependency cycle #1"}],"links":[{"source":"","target":"public","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"","target":"src","weight":3,"imports":0,"loads":3,"kind":"resource","cycle":false},{"source":"","target":"src/api","weight":8,"imports":0,"loads":8,"kind":"resource","cycle":false},{"source":"","target":"src/components","weight":31,"imports":0,"loads":31,"kind":"resource","cycle":false},{"source":"","target":"src/theme","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"src","target":"src/api","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"src","target":"src/components","weight":6,"imports":6,"loads":0,"kind":"import","cycle":true},{"source":"src","target":"src/routes","weight":16,"imports":16,"loads":0,"kind":"import","cycle":true},{"source":"src","target":"src/theme","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"src","target":"src/theme/themes","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"src/api","target":"src","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"src/components","target":"public","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"src/components","target":"src","weight":5,"imports":3,"loads":2,"kind":"mixed","cycle":true},{"source":"src/components","target":"src/api","weight":114,"imports":105,"loads":9,"kind":"mixed","cycle":true},{"source":"src/components","target":"src/routes","weight":3,"imports":2,"loads":1,"kind":"mixed","cycle":true},{"source":"src/components","target":"src/theme/themes","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"src/components/play","target":"src/api","weight":7,"imports":7,"loads":0,"kind":"import","cycle":true},{"source":"src/components/play","target":"src/components","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"src/routes","target":"public","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"src/routes","target":"src/api","weight":32,"imports":32,"loads":0,"kind":"import","cycle":true},{"source":"src/routes","target":"src/components","weight":69,"imports":68,"loads":1,"kind":"mixed","cycle":true},{"source":"src/routes","target":"src/components/play","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"src/routes","target":"src/markdown","weight":2,"imports":2,"loads":0,"kind":"import","cycle":false},{"source":"src/routes","target":"src/theme","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"src/routes","target":"src/theme/themes","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"src/theme","target":"src/theme/themes","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"src/theme/themes","target":"src","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":true},{"source":"src/theme/themes","target":"src/theme","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true}],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span><span><i class=\"sw\" style=\"background:var(--text-faint)\"><\/i>dashed edges = runtime load<\/span>"}</script>
+
+<div class="grid cols-2">
+<div>
+<h2>Highest fan-in (most depended-on)</h2>
+<p class="dim">Changes here ripple widely — review with extra care.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">Fan-in</th><th></th><th class="num">Fan-out</th></tr></thead>
+<tbody><tr><td><code>src/api/client.ts</code></td><td class='num'>137</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>3</td></tr>
+<tr><td><code>src/api/models.ts</code></td><td class='num'>15</td><td><div class="bar "><i style="width:10.9%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>src/components/Field.tsx</code></td><td class='num'>13</td><td><div class="bar "><i style="width:9.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>src/components/palette.tsx</code></td><td class='num'>12</td><td><div class="bar "><i style="width:8.8%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>src/components/PageShell.tsx</code></td><td class='num'>12</td><td><div class="bar "><i style="width:8.8%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>src/components/CalendarDatePicker.tsx</code></td><td class='num'>9</td><td><div class="bar "><i style="width:6.6%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>src/components/focus.tsx</code></td><td class='num'>8</td><td><div class="bar "><i style="width:5.8%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>src/api/stream.ts</code></td><td class='num'>8</td><td><div class="bar "><i style="width:5.8%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>src/components/ShellStatus.tsx</code></td><td class='num'>7</td><td><div class="bar "><i style="width:5.1%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>src/index.css</code></td><td class='num'>6</td><td><div class="bar "><i style="width:4.4%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>src/components/Portrait.tsx</code></td><td class='num'>6</td><td><div class="bar "><i style="width:4.4%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>src/components/moduleEditShared.tsx</code></td><td class='num'>6</td><td><div class="bar "><i style="width:4.4%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>src/components/sceneDraft.ts</code></td><td class='num'>6</td><td><div class="bar "><i style="width:4.4%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>src/components/LibraryPage.tsx</code></td><td class='num'>6</td><td><div class="bar "><i style="width:4.4%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>src/components/CommandPalette.tsx</code></td><td class='num'>5</td><td><div class="bar "><i style="width:3.6%"></i></div></td><td class='num'>1</td></tr></tbody></table></div>
+</div>
+<div>
+<h2>Highest fan-out (most dependencies)</h2>
+<p class="dim">High fan-out can indicate orchestrators — or god modules doing too much.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">Fan-out</th><th></th><th class="num">Fan-in</th></tr></thead>
+<tbody><tr><td><code>vite.config.ts</code></td><td class='num'>42</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>src/components/moduleEditShared.test.tsx</code></td><td class='num'>34</td><td><div class="bar warn"><i style="width:81.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>src/App.tsx</code></td><td class='num'>26</td><td><div class="bar warn"><i style="width:61.9%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>src/routes/CampaignView.tsx</code></td><td class='num'>23</td><td><div class="bar warn"><i style="width:54.8%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>src/components/CharacterEditor.tsx</code></td><td class='num'>12</td><td><div class="bar warn"><i style="width:28.6%"></i></div></td><td class='num'>4</td></tr>
+<tr><td><code>src/routes/WorldView.tsx</code></td><td class='num'>12</td><td><div class="bar warn"><i style="width:28.6%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>src/routes/ConfigView.tsx</code></td><td class='num'>11</td><td><div class="bar warn"><i style="width:26.2%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>src/components/SceneInspector.tsx</code></td><td class='num'>10</td><td><div class="bar warn"><i style="width:23.8%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>src/components/EntityEditor.tsx</code></td><td class='num'>9</td><td><div class="bar warn"><i style="width:21.4%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>src/routes/CampaignView.test.tsx</code></td><td class='num'>8</td><td><div class="bar warn"><i style="width:19.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>src/routes/SetupWizard.tsx</code></td><td class='num'>8</td><td><div class="bar warn"><i style="width:19.0%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>src/components/ModuleEditor.tsx</code></td><td class='num'>7</td><td><div class="bar warn"><i style="width:16.7%"></i></div></td><td class='num'>3</td></tr>
+<tr><td><code>src/components/GreetingEditor.tsx</code></td><td class='num'>6</td><td><div class="bar warn"><i style="width:14.3%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>src/components/PCEditor.tsx</code></td><td class='num'>6</td><td><div class="bar warn"><i style="width:14.3%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>src/routes/TimelineView.tsx</code></td><td class='num'>5</td><td><div class="bar warn"><i style="width:11.9%"></i></div></td><td class='num'>2</td></tr></tbody></table></div>
+</div>
+</div>
+
+<h2>Runtime resources</h2>
+<p class="dim">Files loaded rather than imported — templates, prompts, schemas, embedded data — and the
+code that names them. Resource edges are found textually: a quoted path is an edge only when it resolves to a file that exists. Paths assembled entirely at runtime (no literal segment) are invisible, and a resolved string is evidence of a reference, not proof the file is loaded on every code path. 4 computed path(s) and 0 file(s) hit the reporting cap.</p>
+<div class="callout warn"><b>3 assets nothing references</b> — same file type, same directories as the loaded ones, but no code path names them. Either dead weight or loaded by a computed path this analysis cannot see.<p style="margin-top:8px"><code>public/grimoire-256.png</code> <code>public/grimoire-32.png</code> <code>public/grimoire-512.png</code></p></div>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>Asset</th><th class="num">Loaders</th><th>Loaded at</th></tr></thead>
+<tbody><tr><td><code>src/index.css</code></td><td class='num'>6</td><td><code>src/components/PageShell.tsx:6</code> <code>src/components/moduleEditShared.test.tsx:451</code> <code>src/main.tsx:15</code> <code>src/pickerLayout.test.ts:8</code> <code>src/theme/themes/dark.ts:5</code> <code>src/theme/themes/light.ts:11</code></td></tr>
+<tr><td><code>src/api/client.ts</code></td><td class='num'>3</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>src/components/sceneDraft.ts:7</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>public/grimoire-128.png</code></td><td class='num'>2</td><td><code>src/components/AppHeader.tsx:29</code> <code>src/routes/SetupWizard.tsx:247</code></td></tr>
+<tr><td><code>src/api/client.test.ts</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/api/loreOwners.test.ts</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/api/loreOwners.ts</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/api/models.test.ts</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/api/models.ts</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/api/stream.test.ts</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/api/stream.ts</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/components/AppHeader.tsx</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/components/AppPaletteSource.tsx</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/components/AvatarFocusPicker.tsx</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/components/BackupsPanel.test.tsx</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/components/BackupsPanel.tsx</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/components/CalendarConfig.test.tsx</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/components/CalendarConfig.tsx</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/components/CalendarDatePicker.test.tsx</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/components/CalendarDatePicker.tsx</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/components/CampaignCover.test.tsx</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/components/CampaignCover.tsx</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/components/CastPanel.test.tsx</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/components/CastPanel.tsx</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/components/ChangesPanel.test.tsx</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr>
+<tr><td><code>src/components/ChangesPanel.tsx</code></td><td class='num'>2</td><td><code>src/components/moduleEditShared.test.tsx:23</code> <code>vite.config.ts:33</code></td></tr></tbody></table></div>
+
+
+
+</section>
+<section class="panel" id="hotspots" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi accent"><div class="n">924</div><div class="l">commits (24 months ago)</div></div>
+  <div class="kpi"><div class="n">195</div><div class="l">files touched</div></div>
+  <div class="kpi warn"><div class="n">CampaignView.tsx</div><div class="l">top hotspot</div></div>
+</div>
+<div class="callout"><b>How to read this:</b> files that are both <i>complex</i> and <i>frequently changed</i> are where defects concentrate — complexity makes mistakes likely, churn gives them opportunities. Prioritize refactoring and review attention here, not on complex-but-stable code.</div>
+
+
+<h2>Churn × size map</h2>
+<p class="dim">Area = lines of code · color = commit count since 24 months ago · hover for details.</p>
+<div class="viz" data-render="treemap" style="height:540px"></div>
+<script type="application/json">{"items":[{"name":"src/routes/CampaignView.tsx","value":4119,"metric":155,"meta":"695 branches \u00b7 2 authors"},{"name":"src/components/CharacterEditor.tsx","value":1838,"metric":74,"meta":"435 branches \u00b7 2 authors"},{"name":"src/api/client.ts","value":2036,"metric":170,"meta":"86 branches \u00b7 2 authors"},{"name":"src/components/SceneInspector.tsx","value":1077,"metric":51,"meta":"209 branches \u00b7 2 authors"},{"name":"src/routes/ConfigView.tsx","value":839,"metric":30,"meta":"130 branches \u00b7 2 authors"},{"name":"src/components/EntityEditor.tsx","value":623,"metric":27,"meta":"117 branches \u00b7 2 authors"},{"name":"src/components/GreetingEditor.tsx","value":476,"metric":18,"meta":"111 branches \u00b7 2 authors"},{"name":"src/routes/WorldView.tsx","value":396,"metric":24,"meta":"80 branches \u00b7 2 authors"},{"name":"src/components/CastPanel.tsx","value":300,"metric":24,"meta":"70 branches \u00b7 2 authors"},{"name":"src/components/PCEditor.tsx","value":330,"metric":11,"meta":"77 branches \u00b7 1 authors"},{"name":"src/components/ModuleSchemaEditor.tsx","value":662,"metric":6,"meta":"139 branches \u00b7 1 authors"},{"name":"src/routes/CampaignWizard.tsx","value":366,"metric":12,"meta":"69 branches \u00b7 2 authors"},{"name":"src/App.tsx","value":199,"metric":45,"meta":"17 branches \u00b7 2 authors"},{"name":"src/components/SceneConfirmForm.tsx","value":377,"metric":11,"meta":"67 branches \u00b7 2 authors"},{"name":"src/routes/CampaignsView.tsx","value":186,"metric":21,"meta":"33 branches \u00b7 2 authors"},{"name":"src/routes/SearchView.tsx","value":420,"metric":8,"meta":"88 branches \u00b7 1 authors"},{"name":"src/components/ModuleRulesEditor.tsx","value":499,"metric":6,"meta":"112 branches \u00b7 1 authors"},{"name":"src/components/SheetEditor.tsx","value":244,"metric":10,"meta":"62 branches \u00b7 1 authors"},{"name":"src/routes/SetupWizard.tsx","value":393,"metric":8,"meta":"65 branches \u00b7 1 authors"},{"name":"src/routes/ResponsePresetsView.tsx","value":384,"metric":5,"meta":"94 branches \u00b7 2 authors"},{"name":"src/components/ClimateEditor.tsx","value":366,"metric":6,"meta":"64 branches \u00b7 2 authors"},{"name":"src/components/SceneIdeaPicker.tsx","value":275,"metric":6,"meta":"56 branches \u00b7 2 authors"},{"name":"src/routes/ModulesView.tsx","value":217,"metric":6,"meta":"48 branches \u00b7 2 authors"},{"name":"src/components/ModuleContentEditor.tsx","value":377,"metric":4,"meta":"59 branches \u00b7 1 authors"},{"name":"src/components/ScenarioImport.tsx","value":347,"metric":4,"meta":"58 branches \u00b7 1 authors"},{"name":"src/components/WeatherWidget.tsx","value":249,"metric":5,"meta":"45 branches \u00b7 1 authors"},{"name":"src/routes/WorldsView.tsx","value":131,"metric":9,"meta":"24 branches \u00b7 2 authors"},{"name":"src/components/SheetWidgets.tsx","value":277,"metric":3,"meta":"62 branches \u00b7 1 authors"},{"name":"src/components/ChangesPanel.tsx","value":214,"metric":4,"meta":"41 branches \u00b7 2 authors"},{"name":"src/components/ModuleEditor.tsx","value":85,"metric":9,"meta":"16 branches \u00b7 1 authors"},{"name":"src/components/NewSceneChooser.tsx","value":164,"metric":16,"meta":"8 branches \u00b7 2 authors"},{"name":"src/routes/TimelineView.tsx","value":283,"metric":2,"meta":"65 branches \u00b7 1 authors"},{"name":"src/components/CalendarDatePicker.tsx","value":83,"metric":5,"meta":"25 branches \u00b7 1 authors"},{"name":"src/components/ModuleDisplayEditor.tsx","value":221,"metric":2,"meta":"64 branches \u00b7 1 authors"},{"name":"src/components/ResponsePresetPicker.tsx","value":179,"metric":4,"meta":"31 branches \u00b7 1 authors"},{"name":"src/components/ConnectionEditor.tsx","value":177,"metric":3,"meta":"41 branches \u00b7 2 authors"},{"name":"src/components/SheetPanel.tsx","value":103,"metric":4,"meta":"25 branches \u00b7 1 authors"},{"name":"src/components/ClockPanel.tsx","value":201,"metric":3,"meta":"33 branches \u00b7 1 authors"},{"name":"src/api/models.ts","value":62,"metric":5,"meta":"18 branches \u00b7 1 authors"},{"name":"src/components/RollProposal.tsx","value":123,"metric":3,"meta":"26 branches \u00b7 2 authors"},{"name":"src/components/EditableRow.tsx","value":103,"metric":5,"meta":"15 branches \u00b7 2 authors"},{"name":"src/components/MechanicsConfig.tsx","value":96,"metric":4,"meta":"18 branches \u00b7 1 authors"},{"name":"src/routes/ModelCombobox.tsx","value":83,"metric":5,"meta":"14 branches \u00b7 1 authors"},{"name":"src/components/SheetLayout.tsx","value":128,"metric":2,"meta":"35 branches \u00b7 1 authors"},{"name":"src/routes/LedgerView.tsx","value":338,"metric":1,"meta":"66 branches \u00b7 1 authors"},{"name":"src/components/CreationWizard.tsx","value":161,"metric":2,"meta":"28 branches \u00b7 1 authors"},{"name":"src/components/StorageLocation.tsx","value":98,"metric":4,"meta":"13 branches \u00b7 1 authors"},{"name":"src/components/WorldMechanics.tsx","value":84,"metric":3,"meta":"17 branches \u00b7 1 authors"},{"name":"src/components/StyleGuideEditor.tsx","value":150,"metric":2,"meta":"25 branches \u00b7 1 authors"},{"name":"src/api/stream.ts","value":73,"metric":7,"meta":"6 branches \u00b7 2 authors"},{"name":"src/components/ContextBreakdown.tsx","value":78,"metric":3,"meta":"15 branches \u00b7 1 authors"},{"name":"src/components/LorebookImport.tsx","value":100,"metric":3,"meta":"15 branches \u00b7 1 authors"},{"name":"src/components/CampaignCover.tsx","value":105,"metric":2,"meta":"22 branches \u00b7 1 authors"},{"name":"src/components/BackupsPanel.tsx","value":117,"metric":2,"meta":"21 branches \u00b7 1 authors"},{"name":"src/components/useSceneSuggestions.ts","value":56,"metric":3,"meta":"13 branches \u00b7 1 authors"},{"name":"src/components/sceneDraft.ts","value":83,"metric":4,"meta":"9 branches \u00b7 2 authors"},{"name":"src/components/AppPaletteSource.tsx","value":87,"metric":3,"meta":"12 branches \u00b7 1 authors"},{"name":"src/components/CalendarConfig.tsx","value":60,"metric":3,"meta":"12 branches \u00b7 1 authors"},{"name":"src/components/WorldOverview.tsx","value":73,"metric":3,"meta":"12 branches \u00b7 1 authors"},{"name":"src/components/HtmlNote.tsx","value":60,"metric":4,"meta":"7 branches \u00b7 1 authors"},{"name":"src/markdown/quotePlugin.ts","value":73,"metric":2,"meta":"15 branches \u00b7 1 authors"},{"name":"src/components/CommandPalette.tsx","value":176,"metric":1,"meta":"29 branches \u00b7 1 authors"},{"name":"src/components/play/CitedRow.tsx","value":128,"metric":1,"meta":"28 branches \u00b7 1 authors"},{"name":"src/components/PageShell.tsx","value":133,"metric":2,"meta":"12 branches \u00b7 1 authors"},{"name":"src/components/play/DossierColumn.tsx","value":163,"metric":1,"meta":"23 branches \u00b7 1 authors"},{"name":"src/theme/themes/index.ts","value":39,"metric":3,"meta":"7 branches \u00b7 2 authors"},{"name":"src/components/AppHeader.tsx","value":71,"metric":2,"meta":"10 branches \u00b7 1 authors"},{"name":"src/test-setup.ts","value":24,"metric":5,"meta":"3 branches \u00b7 1 authors"},{"name":"src/components/TaglinePrompt.tsx","value":52,"metric":2,"meta":"9 branches \u00b7 1 authors"},{"name":"vite.config.ts","value":51,"metric":9,"meta":"1 branches \u00b7 2 authors"},{"name":"src/components/PromptLayoutEditor.tsx","value":83,"metric":2,"meta":"7 branches \u00b7 1 authors"},{"name":"src/components/play/Conditions.tsx","value":58,"metric":1,"meta":"15 branches \u00b7 1 authors"},{"name":"src/components/GreetingMarkdown.tsx","value":44,"metric":2,"meta":"6 branches \u00b7 1 authors"},{"name":"src/components/play/CastColumn.tsx","value":123,"metric":1,"meta":"13 branches \u00b7 1 authors"},{"name":"src/theme/ThemeProvider.tsx","value":66,"metric":2,"meta":"6 branches \u00b7 2 authors"},{"name":"src/markdown/commentPlugin.ts","value":84,"metric":1,"meta":"12 branches \u00b7 1 authors"},{"name":"src/components/StoreConflictNotice.tsx","value":88,"metric":1,"meta":"11 branches \u00b7 1 authors"},{"name":"src/components/TaggingQueue.tsx","value":71,"metric":1,"meta":"10 branches \u00b7 1 authors"},{"name":"src/components/ConnectionForm.tsx","value":139,"metric":1,"meta":"9 branches \u00b7 1 authors"},{"name":"src/components/Portrait.tsx","value":16,"metric":2,"meta":"4 branches \u00b7 1 authors"}],"valueLabel":"LOC","metricLabel":"commits","metricMax":170}</script>
+
+<h2>Hotspot ranking</h2>
+<p class="dim">Score = commits × (branch points + 1). Tests excluded. 10 frequently-changed non-code file(s) (config/SQL/proto/docs) are not ranked here — top: src/index.css (204), package.json (16), package-lock.json (7).</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">Commits</th><th class="num">Branches</th><th class="num">LOC</th><th class="num">Authors</th><th class="num">Hotspot score</th></tr></thead>
+<tbody><tr><td><code>src/routes/CampaignView.tsx</code></td><td class='num'>155</td><td class='num'>695</td><td class='num'>4,119</td><td class='num'>2</td><td class='num' data-sort='107880'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>src/components/CharacterEditor.tsx</code></td><td class='num'>74</td><td class='num'>435</td><td class='num'>1,838</td><td class='num'>2</td><td class='num' data-sort='32264'><div class="bar bad"><i style="width:29.9%"></i></div></td></tr>
+<tr><td><code>src/api/client.ts</code></td><td class='num'>170</td><td class='num'>86</td><td class='num'>2,036</td><td class='num'>2</td><td class='num' data-sort='14790'><div class="bar bad"><i style="width:13.7%"></i></div></td></tr>
+<tr><td><code>src/components/SceneInspector.tsx</code></td><td class='num'>51</td><td class='num'>209</td><td class='num'>1,077</td><td class='num'>2</td><td class='num' data-sort='10710'><div class="bar bad"><i style="width:9.9%"></i></div></td></tr>
+<tr><td><code>src/routes/ConfigView.tsx</code></td><td class='num'>30</td><td class='num'>130</td><td class='num'>839</td><td class='num'>2</td><td class='num' data-sort='3930'><div class="bar bad"><i style="width:3.6%"></i></div></td></tr>
+<tr><td><code>src/components/EntityEditor.tsx</code></td><td class='num'>27</td><td class='num'>117</td><td class='num'>623</td><td class='num'>2</td><td class='num' data-sort='3186'><div class="bar bad"><i style="width:3.0%"></i></div></td></tr>
+<tr><td><code>src/components/GreetingEditor.tsx</code></td><td class='num'>18</td><td class='num'>111</td><td class='num'>476</td><td class='num'>2</td><td class='num' data-sort='2016'><div class="bar bad"><i style="width:1.9%"></i></div></td></tr>
+<tr><td><code>src/routes/WorldView.tsx</code></td><td class='num'>24</td><td class='num'>80</td><td class='num'>396</td><td class='num'>2</td><td class='num' data-sort='1944'><div class="bar bad"><i style="width:1.8%"></i></div></td></tr>
+<tr><td><code>src/components/CastPanel.tsx</code></td><td class='num'>24</td><td class='num'>70</td><td class='num'>300</td><td class='num'>2</td><td class='num' data-sort='1704'><div class="bar bad"><i style="width:1.6%"></i></div></td></tr>
+<tr><td><code>src/components/PCEditor.tsx</code></td><td class='num'>11</td><td class='num'>77</td><td class='num'>330</td><td class='num'>1</td><td class='num' data-sort='858'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>src/components/ModuleSchemaEditor.tsx</code></td><td class='num'>6</td><td class='num'>139</td><td class='num'>662</td><td class='num'>1</td><td class='num' data-sort='840'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>src/routes/CampaignWizard.tsx</code></td><td class='num'>12</td><td class='num'>69</td><td class='num'>366</td><td class='num'>2</td><td class='num' data-sort='840'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>src/App.tsx</code></td><td class='num'>45</td><td class='num'>17</td><td class='num'>199</td><td class='num'>2</td><td class='num' data-sort='810'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>src/components/SceneConfirmForm.tsx</code></td><td class='num'>11</td><td class='num'>67</td><td class='num'>377</td><td class='num'>2</td><td class='num' data-sort='748'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>src/routes/CampaignsView.tsx</code></td><td class='num'>21</td><td class='num'>33</td><td class='num'>186</td><td class='num'>2</td><td class='num' data-sort='714'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>src/routes/SearchView.tsx</code></td><td class='num'>8</td><td class='num'>88</td><td class='num'>420</td><td class='num'>1</td><td class='num' data-sort='712'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>src/components/ModuleRulesEditor.tsx</code></td><td class='num'>6</td><td class='num'>112</td><td class='num'>499</td><td class='num'>1</td><td class='num' data-sort='678'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>src/components/SheetEditor.tsx</code></td><td class='num'>10</td><td class='num'>62</td><td class='num'>244</td><td class='num'>1</td><td class='num' data-sort='630'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>src/routes/SetupWizard.tsx</code></td><td class='num'>8</td><td class='num'>65</td><td class='num'>393</td><td class='num'>1</td><td class='num' data-sort='528'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>src/routes/ResponsePresetsView.tsx</code></td><td class='num'>5</td><td class='num'>94</td><td class='num'>384</td><td class='num'>2</td><td class='num' data-sort='475'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>src/components/ClimateEditor.tsx</code></td><td class='num'>6</td><td class='num'>64</td><td class='num'>366</td><td class='num'>2</td><td class='num' data-sort='390'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>src/components/SceneIdeaPicker.tsx</code></td><td class='num'>6</td><td class='num'>56</td><td class='num'>275</td><td class='num'>2</td><td class='num' data-sort='342'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>src/routes/ModulesView.tsx</code></td><td class='num'>6</td><td class='num'>48</td><td class='num'>217</td><td class='num'>2</td><td class='num' data-sort='294'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>src/components/ModuleContentEditor.tsx</code></td><td class='num'>4</td><td class='num'>59</td><td class='num'>377</td><td class='num'>1</td><td class='num' data-sort='240'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>src/components/ScenarioImport.tsx</code></td><td class='num'>4</td><td class='num'>58</td><td class='num'>347</td><td class='num'>1</td><td class='num' data-sort='236'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr></tbody></table></div>
+
+
+
+</section>
+<section class="panel" id="invariants" role="tabpanel">
+
+<div class="card hero">
+  <h2>One component is the package's whole risk profile</h2>
+  <p>Strip <code>frontend/src/routes/CampaignView.tsx</code> out and this is a well-tested, strictly
+  typed, conventionally structured React app with measured coverage and a documented page pattern.
+  Leave it in and the package has a 3,985-line component holding 28 pieces of state, absorbing every
+  new play feature, at a churn rate nothing else approaches.</p>
+</div>
+
+<h2>Invariants</h2>
+<div class="tbl-wrap"><table class="sortable">
+<tr><th>Invariant</th><th>Where enforced</th><th>Verdict</th></tr>
+<tr><td>All backend access goes through one client module</td><td>convention only &mdash; <code>frontend/src/api/client.ts</code> is the sole holder of <code>fetch</code> for the API</td><td><span class="badge warn">by convention</span></td></tr>
+<tr><td>A campaign mutation refreshes the persistent sidebar</td><td><code>frontend/src/api/client.ts</code> wraps the three campaign mutators in a notifier, so no view can forget</td><td><span class="badge good">structural</span></td></tr>
+<tr><td>A failed request never blanks the rail</td><td>same wrapper &mdash; a rejected request never reaches the notifier</td><td><span class="badge good">structural</span></td></tr>
+<tr><td>Record screens follow the list/detail pattern</td><td>documented convention plus per-screen tests</td><td><span class="badge warn">partially</span> &mdash; tested per screen, not enforced across them</td></tr>
+<tr><td>Types are checked</td><td><code>frontend/tsconfig.json</code> sets <code>strict: true</code></td><td><span class="badge good">enforced</span>, with 242 local opt-outs in production code</td></tr>
+<tr><td>An untested module shows as 0%, not 100%</td><td><code>frontend/vite.config.ts</code> &mdash; istanbul provider plus <code>all: true</code></td><td><span class="badge good">enforced, and argued</span></td></tr>
+<tr><td>Timestamps from the backend are UTC</td><td>nowhere &mdash; <code>frontend/src/routes/CampaignsView.tsx:11</code> falls back to local-time parsing</td><td><span class="badge bad">assumed</span></td></tr>
+</table></div>
+
+<h2>Risk ranking</h2>
+<div class="callout bad">
+  <strong>1. <code>frontend/src/routes/CampaignView.tsx</code>.</strong> The component opens at line
+  251 and closes at line 4236: 28 <code>useState</code> calls, 7 <code>useEffect</code> calls, 64 hooks
+  in total, 695 branches in the file. Churn 155 over 24 months and a hotspot score of 107,880 &mdash; the
+  next file scores 32,264. It simultaneously owns transcript paging, streaming, staged-edit review,
+  the cast and dossier columns, roll proposals and alternates. Its test file
+  (<code>frontend/src/routes/CampaignView.test.tsx</code>, 7,076 lines) is the largest file in the
+  frontend, which is the honest signal of how much behaviour is trapped in one component. Note that
+  <code>frontend/src/components/play</code> exists and holds 890 lines of extracted pieces &mdash; the
+  decomposition has started and stalled.
+</div>
+<div class="callout bad">
+  <strong>2. A timezone-dependent test that CI structurally cannot catch.</strong>
+  <code>frontend/src/routes/CampaignsView.test.tsx:56</code> fails on any machine west of UTC and
+  passes on <code>ubuntu-24.04</code>. The underlying code at
+  <code>frontend/src/routes/CampaignsView.tsx:11</code> parses a zone-less stamp as local time; real
+  backend stamps carry a <code>Z</code> so production is correct today, but the fallback is a latent
+  off-by-one-timezone in a user-visible string. Cheapest fix is the fixture; the durable fix is to
+  make the parser reject or normalize a zone-less stamp.
+</div>
+<div class="callout warn">
+  <strong>3. 21 floating promises and 14 swallowed rejections.</strong> Calls like
+  <code>frontend/src/components/CharacterEditor.tsx:448</code>,
+  <code>frontend/src/components/CharacterEditor.tsx:654</code> and
+  <code>frontend/src/components/EntityEditor.tsx:144</code> start async work nothing awaits, and
+  <code>.catch(() =&gt; {})</code> patterns at
+  <code>frontend/src/components/GreetingEditor.tsx:50</code> and
+  <code>frontend/src/components/ResponsePresetPicker.tsx:116</code> discard the error and report
+  success. In a local app with no error reporting, a silently-dropped save is invisible until the user
+  notices the data is gone.
+</div>
+<div class="callout warn">
+  <strong>4. Seven empty catch blocks, one of them on the streaming path.</strong>
+  <code>frontend/src/api/stream.ts:72</code> is the one worth reading first: the SSE parser is where a
+  scene turn arrives, and it is the one artifact the backend cannot regenerate.
+</div>
+<div class="callout">
+  <strong>5. 80 weak-assertion-only tests.</strong> Tests whose only assertion is existence or
+  truthiness. Against 1,533 tests that is a small fraction, but they concentrate the risk that
+  coverage numbers overstate what is actually verified &mdash; a line can execute under a test that
+  asserts nothing about it.
+</div>
+
+<h2>What the Health grade over-counts here</h2>
+<div class="callout">
+  <p><strong>The 2,060 <code>as any</code> findings are 99.8% test mocks.</strong> Splitting them by
+  file, 2,055 are inside <em>.test.tsx</em> files &mdash; the
+  <code>(api.thing as any).mockResolvedValue(...)</code> idiom that vitest's typing makes near-unavoidable
+  &mdash; and exactly <strong>5</strong> are in production code:
+  <code>frontend/src/components/ModuleDisplayEditor.tsx</code> (3),
+  <code>frontend/src/components/EntityEditor.tsx</code> and
+  <code>frontend/src/components/SheetWidgets.tsx</code>. Since <code>as_any</code> is 56% of this
+  package's 3,674 findings, the Health grade for this package is dominated by a test idiom rather
+  than by anything about the shipped code.</p>
+  <p>The single security finding here,
+  <code>frontend/src/components/EntityEditor.tsx:68</code>, is a false positive: <code>secret</code>
+  is a key in a lore-secrecy enum, not a credential.</p>
+</div>
+
+</section>
+<section class="panel" id="coverage" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi good"><div class="n">86%</div><div class="l">line coverage (measured files)</div></div>
+  <div class="kpi"><div class="n">108</div><div class="l">files measured</div></div>
+  <div class="kpi warn"><div class="n">4</div><div class="l">source files not measured</div></div>
+</div>
+<div class="callout"><b>Source:</b> <code>frontend\coverage\lcov.info</code> (lcov). This tab renders an existing artifact — it did not run the tests. Coverage says which lines executed under test, not that their behavior was asserted; pair it with the Invariants tab before trusting a green file.</div>
+
+<h2>Uncovered complexity map</h2>
+<p class="dim">Area = lines of code · color = % uncovered · the large, hot blocks are the untested complexity.</p>
+<div class="viz" data-render="treemap" style="height:520px"></div>
+<script type="application/json">{"items":[{"name":"src/components/CharacterEditor.tsx","value":1838,"metric":14.5,"meta":"86% covered \u00b7 435 branches"},{"name":"src/api/client.ts","value":2036,"metric":65.4,"meta":"35% covered \u00b7 86 branches"},{"name":"src/components/ModuleSchemaEditor.tsx","value":662,"metric":35.1,"meta":"65% covered \u00b7 139 branches"},{"name":"src/routes/CampaignView.tsx","value":4119,"metric":6.2,"meta":"94% covered \u00b7 695 branches"},{"name":"src/components/ModuleRulesEditor.tsx","value":499,"metric":28.6,"meta":"71% covered \u00b7 112 branches"},{"name":"src/routes/ResponsePresetsView.tsx","value":384,"metric":28.7,"meta":"71% covered \u00b7 94 branches"},{"name":"src/routes/CampaignWizard.tsx","value":366,"metric":30.6,"meta":"69% covered \u00b7 69 branches"},{"name":"src/components/PCEditor.tsx","value":330,"metric":23.8,"meta":"76% covered \u00b7 77 branches"},{"name":"src/routes/WorldView.tsx","value":396,"metric":22.7,"meta":"77% covered \u00b7 80 branches"},{"name":"src/components/GreetingEditor.tsx","value":476,"metric":15.4,"meta":"85% covered \u00b7 111 branches"},{"name":"src/components/ModuleContentEditor.tsx","value":377,"metric":24.1,"meta":"76% covered \u00b7 59 branches"},{"name":"src/components/EntityEditor.tsx","value":623,"metric":11.8,"meta":"88% covered \u00b7 117 branches"},{"name":"src/components/ModuleDisplayEditor.tsx","value":221,"metric":21.1,"meta":"79% covered \u00b7 64 branches"},{"name":"src/routes/ModulesView.tsx","value":217,"metric":25.8,"meta":"74% covered \u00b7 48 branches"},{"name":"src/components/SceneInspector.tsx","value":1077,"metric":5.3,"meta":"95% covered \u00b7 209 branches"},{"name":"src/components/ClimateEditor.tsx","value":366,"metric":15.0,"meta":"85% covered \u00b7 64 branches"},{"name":"src/components/SheetEditor.tsx","value":244,"metric":12.9,"meta":"87% covered \u00b7 62 branches"},{"name":"src/components/CastPanel.tsx","value":300,"metric":8.4,"meta":"92% covered \u00b7 70 branches"},{"name":"src/components/StyleGuideEditor.tsx","value":150,"metric":21.8,"meta":"78% covered \u00b7 25 branches"},{"name":"src/routes/ConfigView.tsx","value":839,"metric":4.1,"meta":"96% covered \u00b7 130 branches"},{"name":"src/components/ScenarioImport.tsx","value":347,"metric":8.9,"meta":"91% covered \u00b7 58 branches"},{"name":"src/components/ConnectionEditor.tsx","value":177,"metric":12.3,"meta":"88% covered \u00b7 41 branches"},{"name":"src/routes/SetupWizard.tsx","value":393,"metric":7.0,"meta":"93% covered \u00b7 65 branches"},{"name":"src/components/ResponsePresetPicker.tsx","value":179,"metric":13.1,"meta":"87% covered \u00b7 31 branches"},{"name":"src/components/AvatarFocusPicker.tsx","value":54,"metric":50.0,"meta":"50% covered \u00b7 8 branches"},{"name":"src/components/SheetWidgets.tsx","value":277,"metric":6.0,"meta":"94% covered \u00b7 62 branches"},{"name":"src/components/ModuleEditor.tsx","value":85,"metric":22.7,"meta":"77% covered \u00b7 16 branches"},{"name":"src/routes/TimelineView.tsx","value":283,"metric":4.5,"meta":"96% covered \u00b7 65 branches"},{"name":"src/components/SceneIdeaPicker.tsx","value":275,"metric":4.9,"meta":"95% covered \u00b7 56 branches"},{"name":"src/components/ConnectionForm.tsx","value":139,"metric":29.4,"meta":"71% covered \u00b7 9 branches"},{"name":"src/components/SheetPanel.tsx","value":103,"metric":9.1,"meta":"91% covered \u00b7 25 branches"},{"name":"src/components/LorebookImport.tsx","value":100,"metric":12.5,"meta":"88% covered \u00b7 15 branches"},{"name":"src/components/play/CitedRow.tsx","value":128,"metric":6.9,"meta":"93% covered \u00b7 28 branches"},{"name":"src/components/StorageLocation.tsx","value":98,"metric":12.0,"meta":"88% covered \u00b7 13 branches"},{"name":"src/components/play/DossierColumn.tsx","value":163,"metric":7.1,"meta":"93% covered \u00b7 23 branches"},{"name":"src/components/TaglinePrompt.tsx","value":52,"metric":15.8,"meta":"84% covered \u00b7 9 branches"},{"name":"src/components/RollProposal.tsx","value":123,"metric":5.1,"meta":"95% covered \u00b7 26 branches"},{"name":"src/routes/WorldsView.tsx","value":131,"metric":5.6,"meta":"94% covered \u00b7 24 branches"},{"name":"src/components/SceneConfirmForm.tsx","value":377,"metric":1.8,"meta":"98% covered \u00b7 67 branches"},{"name":"src/components/CalendarDatePicker.tsx","value":83,"metric":4.5,"meta":"96% covered \u00b7 25 branches"},{"name":"src/components/WorldMechanics.tsx","value":84,"metric":6.2,"meta":"94% covered \u00b7 17 branches"},{"name":"src/components/CommandPalette.tsx","value":176,"metric":3.4,"meta":"97% covered \u00b7 29 branches"},{"name":"src/components/CreationWizard.tsx","value":161,"metric":3.4,"meta":"97% covered \u00b7 28 branches"},{"name":"src/components/EditableRow.tsx","value":103,"metric":5.9,"meta":"94% covered \u00b7 15 branches"},{"name":"src/components/RecordDrawer.tsx","value":41,"metric":31.2,"meta":"69% covered \u00b7 3 branches"},{"name":"src/routes/SearchView.tsx","value":420,"metric":1.0,"meta":"99% covered \u00b7 88 branches"},{"name":"src/components/ClockPanel.tsx","value":201,"metric":2.2,"meta":"98% covered \u00b7 33 branches"},{"name":"src/components/ShellStatus.tsx","value":56,"metric":23.5,"meta":"76% covered \u00b7 3 branches"},{"name":"src/routes/CampaignsView.tsx","value":186,"metric":2.2,"meta":"98% covered \u00b7 33 branches"},{"name":"src/routes/ModelCombobox.tsx","value":83,"metric":5.3,"meta":"95% covered \u00b7 14 branches"},{"name":"src/librarySections.ts","value":63,"metric":30.0,"meta":"70% covered \u00b7 2 branches"},{"name":"src/api/models.ts","value":62,"metric":3.4,"meta":"97% covered \u00b7 18 branches"},{"name":"src/components/TaggingQueue.tsx","value":71,"metric":6.5,"meta":"94% covered \u00b7 10 branches"},{"name":"src/App.tsx","value":199,"metric":3.1,"meta":"97% covered \u00b7 17 branches"},{"name":"src/components/CalendarConfig.tsx","value":60,"metric":4.5,"meta":"96% covered \u00b7 12 branches"},{"name":"src/components/CampaignCover.tsx","value":105,"metric":2.3,"meta":"98% covered \u00b7 22 branches"},{"name":"src/components/HtmlNote.tsx","value":60,"metric":7.7,"meta":"92% covered \u00b7 7 branches"},{"name":"src/components/WeatherWidget.tsx","value":249,"metric":1.1,"meta":"99% covered \u00b7 45 branches"},{"name":"src/components/SubjectsPopover.tsx","value":37,"metric":7.7,"meta":"92% covered \u00b7 5 branches"},{"name":"src/components/moduleEditShared.tsx","value":109,"metric":4.3,"meta":"96% covered \u00b7 9 branches"},{"name":"src/markdown/quotePlugin.ts","value":73,"metric":2.6,"meta":"97% covered \u00b7 15 branches"},{"name":"src/theme/ThemeProvider.tsx","value":66,"metric":6.5,"meta":"94% covered \u00b7 6 branches"},{"name":"src/components/GroupStatePanel.tsx","value":59,"metric":5.3,"meta":"95% covered \u00b7 2 branches"},{"name":"src/appEvents.ts","value":32,"metric":0.0,"meta":"100% covered \u00b7 1 branches"},{"name":"src/shellScroll.ts","value":16,"metric":0.0,"meta":"100% covered \u00b7 1 branches"},{"name":"src/api/loreOwners.ts","value":18,"metric":0.0,"meta":"100% covered \u00b7 1 branches"},{"name":"src/api/stream.ts","value":73,"metric":0.0,"meta":"100% covered \u00b7 6 branches"},{"name":"src/components/AppHeader.tsx","value":71,"metric":0.0,"meta":"100% covered \u00b7 10 branches"},{"name":"src/components/AppPaletteSource.tsx","value":87,"metric":0.0,"meta":"100% covered \u00b7 12 branches"},{"name":"src/components/BackupsPanel.tsx","value":117,"metric":0.0,"meta":"100% covered \u00b7 21 branches"},{"name":"src/components/ChangesPanel.tsx","value":214,"metric":0.0,"meta":"100% covered \u00b7 41 branches"},{"name":"src/components/ContextBreakdown.tsx","value":78,"metric":0.0,"meta":"100% covered \u00b7 15 branches"},{"name":"src/components/ContextBudgetBar.tsx","value":90,"metric":0.0,"meta":"100% covered \u00b7 8 branches"},{"name":"src/components/Field.tsx","value":14,"metric":0.0,"meta":"100% covered \u00b7 2 branches"},{"name":"src/components/GreetingMarkdown.tsx","value":44,"metric":0.0,"meta":"100% covered \u00b7 6 branches"},{"name":"src/components/LibraryColumn.tsx","value":52,"metric":0.0,"meta":"100% covered \u00b7 7 branches"},{"name":"src/components/LibraryPage.tsx","value":18,"metric":0.0,"meta":"100% covered \u00b7 0 branches"},{"name":"src/components/MechanicsConfig.tsx","value":96,"metric":0.0,"meta":"100% covered \u00b7 18 branches"},{"name":"src/components/NewSceneChooser.tsx","value":164,"metric":0.0,"meta":"100% covered \u00b7 8 branches"},{"name":"src/components/OwnedLorePanel.tsx","value":31,"metric":0.0,"meta":"100% covered \u00b7 2 branches"}],"valueLabel":"LOC","metricLabel":"% uncovered","metricMax":100}</script>
+<h2>Highest-risk files — complex and untested</h2>
+<p class="dim">Risk = branch points × uncovered share. Tests excluded from the ranking.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">Coverage</th><th class="num">Lines</th><th class="num">Branches</th><th class="num">Untested complexity</th></tr></thead>
+<tbody><tr><td><code>src/components/CharacterEditor.tsx</code></td><td class='num'>86%</td><td class='num'>553/647</td><td class='num'>435</td><td class='num' data-sort='63.1'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>src/api/client.ts</code></td><td class='num'>35%</td><td class='num'>126/364</td><td class='num'>86</td><td class='num' data-sort='56.2'><div class="bar bad"><i style="width:89.1%"></i></div></td></tr>
+<tr><td><code>src/components/ModuleSchemaEditor.tsx</code></td><td class='num'>65%</td><td class='num'>168/259</td><td class='num'>139</td><td class='num' data-sort='48.8'><div class="bar bad"><i style="width:77.3%"></i></div></td></tr>
+<tr><td><code>src/routes/CampaignView.tsx</code></td><td class='num'>94%</td><td class='num'>899/958</td><td class='num'>695</td><td class='num' data-sort='43.1'><div class="bar bad"><i style="width:68.3%"></i></div></td></tr>
+<tr><td><code>src/components/ModuleRulesEditor.tsx</code></td><td class='num'>71%</td><td class='num'>142/199</td><td class='num'>112</td><td class='num' data-sort='32.0'><div class="bar bad"><i style="width:50.7%"></i></div></td></tr>
+<tr><td><code>src/routes/ResponsePresetsView.tsx</code></td><td class='num'>71%</td><td class='num'>87/122</td><td class='num'>94</td><td class='num' data-sort='27.0'><div class="bar bad"><i style="width:42.8%"></i></div></td></tr>
+<tr><td><code>src/routes/CampaignWizard.tsx</code></td><td class='num'>69%</td><td class='num'>84/121</td><td class='num'>69</td><td class='num' data-sort='21.1'><div class="bar bad"><i style="width:33.4%"></i></div></td></tr>
+<tr><td><code>src/components/PCEditor.tsx</code></td><td class='num'>76%</td><td class='num'>93/122</td><td class='num'>77</td><td class='num' data-sort='18.3'><div class="bar bad"><i style="width:29.0%"></i></div></td></tr>
+<tr><td><code>src/routes/WorldView.tsx</code></td><td class='num'>77%</td><td class='num'>102/132</td><td class='num'>80</td><td class='num' data-sort='18.2'><div class="bar bad"><i style="width:28.8%"></i></div></td></tr>
+<tr><td><code>src/components/GreetingEditor.tsx</code></td><td class='num'>85%</td><td class='num'>143/169</td><td class='num'>111</td><td class='num' data-sort='17.1'><div class="bar bad"><i style="width:27.1%"></i></div></td></tr>
+<tr><td><code>src/components/ModuleContentEditor.tsx</code></td><td class='num'>76%</td><td class='num'>101/133</td><td class='num'>59</td><td class='num' data-sort='14.2'><div class="bar bad"><i style="width:22.5%"></i></div></td></tr>
+<tr><td><code>src/components/EntityEditor.tsx</code></td><td class='num'>88%</td><td class='num'>194/220</td><td class='num'>117</td><td class='num' data-sort='13.8'><div class="bar bad"><i style="width:21.9%"></i></div></td></tr>
+<tr><td><code>src/components/ModuleDisplayEditor.tsx</code></td><td class='num'>79%</td><td class='num'>60/76</td><td class='num'>64</td><td class='num' data-sort='13.5'><div class="bar bad"><i style="width:21.4%"></i></div></td></tr>
+<tr><td><code>src/routes/ModulesView.tsx</code></td><td class='num'>74%</td><td class='num'>46/62</td><td class='num'>48</td><td class='num' data-sort='12.4'><div class="bar bad"><i style="width:19.7%"></i></div></td></tr>
+<tr><td><code>src/components/SceneInspector.tsx</code></td><td class='num'>95%</td><td class='num'>287/303</td><td class='num'>209</td><td class='num' data-sort='11.1'><div class="bar bad"><i style="width:17.6%"></i></div></td></tr>
+<tr><td><code>src/components/ClimateEditor.tsx</code></td><td class='num'>85%</td><td class='num'>102/120</td><td class='num'>64</td><td class='num' data-sort='9.6'><div class="bar bad"><i style="width:15.2%"></i></div></td></tr>
+<tr><td><code>src/components/SheetEditor.tsx</code></td><td class='num'>87%</td><td class='num'>101/116</td><td class='num'>62</td><td class='num' data-sort='8.0'><div class="bar bad"><i style="width:12.7%"></i></div></td></tr>
+<tr><td><code>src/components/CastPanel.tsx</code></td><td class='num'>92%</td><td class='num'>98/107</td><td class='num'>70</td><td class='num' data-sort='5.9'><div class="bar bad"><i style="width:9.4%"></i></div></td></tr>
+<tr><td><code>src/components/StyleGuideEditor.tsx</code></td><td class='num'>78%</td><td class='num'>43/55</td><td class='num'>25</td><td class='num' data-sort='5.4'><div class="bar bad"><i style="width:8.6%"></i></div></td></tr>
+<tr><td><code>src/routes/ConfigView.tsx</code></td><td class='num'>96%</td><td class='num'>141/147</td><td class='num'>130</td><td class='num' data-sort='5.3'><div class="bar bad"><i style="width:8.4%"></i></div></td></tr>
+<tr><td><code>src/components/ScenarioImport.tsx</code></td><td class='num'>91%</td><td class='num'>92/101</td><td class='num'>58</td><td class='num' data-sort='5.2'><div class="bar bad"><i style="width:8.2%"></i></div></td></tr>
+<tr><td><code>src/components/ConnectionEditor.tsx</code></td><td class='num'>88%</td><td class='num'>57/65</td><td class='num'>41</td><td class='num' data-sort='5.0'><div class="bar bad"><i style="width:7.9%"></i></div></td></tr>
+<tr><td><code>src/routes/SetupWizard.tsx</code></td><td class='num'>93%</td><td class='num'>93/100</td><td class='num'>65</td><td class='num' data-sort='4.5'><div class="bar bad"><i style="width:7.1%"></i></div></td></tr>
+<tr><td><code>src/components/ResponsePresetPicker.tsx</code></td><td class='num'>87%</td><td class='num'>53/61</td><td class='num'>31</td><td class='num' data-sort='4.1'><div class="bar bad"><i style="width:6.5%"></i></div></td></tr>
+<tr><td><code>src/components/AvatarFocusPicker.tsx</code></td><td class='num'>50%</td><td class='num'>9/18</td><td class='num'>8</td><td class='num' data-sort='4.0'><div class="bar bad"><i style="width:6.3%"></i></div></td></tr></tbody></table></div>
+<details><summary>4 source file(s) absent from the coverage report</summary><div class='body'><p class='dim'>Never imported by any test, excluded from the run, or added after the artifact was generated — 0% is the safe assumption.</p><ul><li><code>src/test-setup.ts</code> <span class='dim'>(3 branches, 24 LOC)</span></li><li><code>vite.config.ts</code> <span class='dim'>(1 branches, 51 LOC)</span></li><li><code>src/main.tsx</code> <span class='dim'>(0 branches, 22 LOC)</span></li><li><code>src/theme/types.ts</code> <span class='dim'>(0 branches, 11 LOC)</span></li></ul></div></details>
+
+
+</section>
+<section class="panel" id="llm-ops" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi accent"><div class="n">0</div><div class="l">call sites</div></div>
+  <div class="kpi"><div class="n">0</div><div class="l">providers</div></div>
+  <div class="kpi"><div class="n">7</div><div class="l">distinct models</div></div>
+  <div class="kpi"><div class="n">0</div><div class="l">prompt files</div></div>
+  <div class="kpi good"><div class="n">0</div><div class="l">gaps</div></div>
+</div>
+<div class="callout"><b>How this was found.</b> LLM call sites are found textually by SDK method name: a call made through your own wrapper, by an unrecognized client, or with a model id read from config at runtime will be missed, and a detected parameter is evidence it is passed somewhere in the call, not that it holds on every path.</div>
+
+<h2>Call sites</h2>
+<p class="dim">Where this codebase talks to a model, with the parameters each call passes.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>Site</th><th>Provider</th><th>API</th><th>Model</th><th>Parameters passed</th></tr></thead>
+<tbody></tbody></table></div>
+
+<h2>Models in use</h2>
+<p class="dim">Every string in the codebase that names a deployed model, and where it is written.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>Model</th><th class="num">Mentions</th><th>Written at</th></tr></thead>
+<tbody><tr><td><code>claude-fable-5</code></td><td class='num'>1</td><td><code>src/components/ConnectionForm.tsx:140</code></td></tr>
+<tr><td><code>claude-haiku-4-5</code></td><td class='num'>1</td><td><code>src/components/ConnectionForm.tsx:146</code></td></tr>
+<tr><td><code>claude-opus-4-6</code></td><td class='num'>1</td><td><code>src/components/ConnectionForm.tsx:143</code></td></tr>
+<tr><td><code>claude-opus-4-7</code></td><td class='num'>1</td><td><code>src/components/ConnectionForm.tsx:142</code></td></tr>
+<tr><td><code>claude-opus-4-8</code></td><td class='num'>1</td><td><code>src/components/ConnectionForm.tsx:141</code></td></tr>
+<tr><td><code>claude-sonnet-4-6</code></td><td class='num'>1</td><td><code>src/components/ConnectionForm.tsx:145</code></td></tr>
+<tr><td><code>claude-sonnet-5</code></td><td class='num'>1</td><td><code>src/components/ConnectionForm.tsx:144</code></td></tr></tbody></table></div>
+
+
+
+
+</section><!--DOC_BODY--></main>
+<footer class="doc">Generated by code-visualization for the grimoire code-overview set. Automated tabs are script-generated; judgment tabs were authored from code reading and their citations verified against a63cb05f5.</footer>
+<script>
+(function(){
+  const btns=[...document.querySelectorAll('nav.tabs button')];
+  function activate(id){
+    document.querySelectorAll('section.panel').forEach(p=>p.classList.toggle('active',p.id===id));
+    btns.forEach(b=>b.setAttribute('aria-selected',b.dataset.tab===id?'true':'false'));
+    window.dispatchEvent(new CustomEvent('tab:shown',{detail:{id}}));
+  }
+  btns.forEach(b=>b.addEventListener('click',()=>activate(b.dataset.tab)));
+})();
+</script>
+</body>
+</html>
