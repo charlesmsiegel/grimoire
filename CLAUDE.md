@@ -169,6 +169,19 @@ first if you think one should be skipped.
     the **istanbul** provider and `all: true` are load-bearing there, and the
     comments say why — do not switch to the v8 provider, which reports a file
     no test imports as 100% covered rather than 0%.
+  - **Shared test scaffolding goes in `frontend/src/testkit/`**, which that
+    coverage config excludes. Two suites drive the campaign play view — the
+    play loop (`routes/CampaignView.test.tsx`) and the end-of-scene review
+    (`components/review/SceneReview.test.tsx`) — against one set of mocks:
+    `testkit/campaignMocks.tsx` holds the `vi.mock` factories and
+    `testkit/campaignHarness.tsx` the fixtures, per-test defaults and render
+    helpers. Both halves are needed because a `vi.mock` factory is hoisted
+    above every import and can close over nothing, so a suite reaches its
+    factory through a dynamic `import()` — and a factory module that itself
+    imported the mocked `api` would deadlock on the module waiting for it.
+    Left in `src/routes/` instead, scaffolding lands in the coverage
+    denominator the paragraph above exists to keep honest, and a helper only
+    one suite uses belongs in that suite, not in the shared half.
 - **The frozen campaign** (`backend/tests/fixtures/frozen_campaign/`) is a whole
   store tree checked in as a fixture — the only store in the repo that today's
   code did not write, which is the only way to catch a change that breaks
