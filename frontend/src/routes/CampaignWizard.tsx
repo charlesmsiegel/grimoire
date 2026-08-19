@@ -4,6 +4,7 @@ import {
   api, type Availability, type ModuleSummary, type PCSummary, type Persona, type WorldMeta,
 } from "../api/client";
 import type { ChatEvent } from "../api/stream";
+import { ErrorNote } from "../components/ErrorNote";
 import { PlainShell } from "../components/PageShell";
 
 type LocationDraft = { name: string; body: string; keys: string };
@@ -13,7 +14,10 @@ const STEPS = ["Backdrop", "Character", "Locations", "Opening"];
 export default function CampaignWizard({ ready }: { ready: boolean }) {
   const navigate = useNavigate();
   const [step, setStep] = useState(1);
-  const [error, setError] = useState<string | null>(null);
+  // Raw: the wizard generates an opener, which is a provider call, and this
+  // is the first-run path -- the likeliest place for someone to meet an
+  // unreachable model with no idea a local one would work (#210).
+  const [error, setError] = useState<unknown>(null);
 
   // step 1
   const [worlds, setWorlds] = useState<WorldMeta[]>([]);
@@ -99,8 +103,8 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
       setCommitted({ cid, sid });
       api.availableGreetings(cid).then(setAvail).catch(() => setAvail([]));
       setStep(4);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(err);
     } finally {
       setBusy(false);
     }
@@ -112,8 +116,8 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
     try {
       await api.startFromGreeting(committed.cid, committed.sid, gid);
       navigate(`/campaigns/${committed.cid}`);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(err);
     }
   }
 
@@ -126,10 +130,10 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
     try {
       await api.opener(committed.cid, committed.sid, prompt, (e: ChatEvent) => {
         if (e.delta) { acc += e.delta; setOpener(acc); }
-        else if (e.error) setError(e.error.detail);
+        else if (e.error) setError(e.error);
       });
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(err);
     } finally {
       setBusy(false);
     }
@@ -158,7 +162,9 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
           })}
         </ol>
 
-        {error && <div className="banner error-banner">{error}</div>}
+        {error != null && (
+          <div className="banner error-banner"><ErrorNote err={error} /></div>
+        )}
 
         {step === 1 && (
           <div className="wizard-body">

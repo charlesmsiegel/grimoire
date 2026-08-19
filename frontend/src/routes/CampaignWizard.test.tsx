@@ -52,10 +52,10 @@ beforeEach(() => {
   ]);
 });
 
-function renderWizard() {
+function renderWizard(ready = false) {
   render(
     <MemoryRouter>
-      <CampaignWizard ready={false} />
+      <CampaignWizard ready={ready} />
     </MemoryRouter>,
   );
 }
@@ -228,4 +228,22 @@ test("the chosen climate is passed to createCampaign", async () => {
   fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
   await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith(
     "Run One", "w1", "US", "gregorian", undefined, "high-desert"));
+});
+
+test("a first-run opener the model could not be reached for offers the recovery", async () => {
+  // The likeliest place to meet an unreachable model is the wizard that just
+  // asked you to configure one (#210) -- and it dropped the kind out of the
+  // stream frame, so it read as a bare socket error.
+  (api.opener as any).mockImplementation(
+    async (_c: string, _s: string, _p: string, on: any) => {
+      on({ error: { detail: "connection refused", kind: "network" } });
+    });
+  renderWizard(true);
+  await fillBackdropAndPC();
+  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  await screen.findByRole("heading", { name: /opening/i });
+  fireEvent.change(screen.getByLabelText(/opener prompt/i), { target: { value: "A foggy harbor" } });
+  fireEvent.click(screen.getByRole("button", { name: /^generate$/i }));
+  await screen.findByText(/Couldn.t reach the model provider/);
+  expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
 });

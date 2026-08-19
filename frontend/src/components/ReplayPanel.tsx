@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api, type ReplayPreview, type ReplaySession } from "../api/client";
 import type { ChatEvent } from "../api/stream";
+import { ErrorNote } from "./ErrorNote";
 
 /** The retcon replay's own surface (#79/#80).
  *
@@ -50,7 +51,12 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
   // post -- it is simply not rendered.
   const [preview, setPreview] = useState<{ at: number; data: ReplayPreview } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  // The rejection or the stream frame itself where there is one, so a
+  // replay the model could not be reached for says so rather than showing a
+  // bare socket error (#210) -- a replay re-runs model turns, so it fails
+  // offline exactly like the composer does. The invented fallbacks below
+  // stay strings; `ErrorNote` renders one unchanged.
+  const [error, setError] = useState<unknown>(null);
   // Whether a replayed reply is waiting on a verdict. The SESSION's answer, not
   // a flag this component sets when it runs a turn: a reload, or a second tab,
   // would lose that flag and offer "Replay next turn" for a turn already run —
@@ -102,7 +108,7 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
        .then((p) => { if (live) setPreview({ at: startAt, data: p }); })
        .catch((err: unknown) => {
          if (!live) return;
-         setError(err instanceof ApiError ? err.detail : "that post could not be priced");
+         setError(err instanceof ApiError ? err : "that post could not be priced");
          handled.current();
        });
     return () => { live = false; };
@@ -110,7 +116,7 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
 
   async function guard(fn: () => Promise<void>) {
     setBusy(true);
-    setError("");
+    setError(null);
     // Held across the whole request, not just the write inside it: what the
     // latch keeps out is a second generation into this scene, and that window
     // is the request.
@@ -122,7 +128,7 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
       // scene mid-turn unmounts this panel while its request is still open, and
       // the request is the server's to finish either way.
       if (alive.current) {
-        setError(err instanceof ApiError ? err.detail : "that step could not be taken");
+        setError(err instanceof ApiError ? err : "that step could not be taken");
       }
     } finally {
       release?.();
@@ -169,8 +175,10 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
    *  failed turn as a finished one, and offers Accept for a reply that was
    *  never written. */
   async function streamed(run: (onEvent: (e: ChatEvent) => void) => Promise<void>) {
-    let failed = "";
-    await run((e) => { if (e.error) failed = e.error.detail; });
+    // The frame whole, not its `detail`: the kind rides on it, and this is the
+    // path a replay takes when the provider is unreachable (#210).
+    let failed: ChatEvent["error"] = undefined;
+    await run((e) => { if (e.error) failed = e.error; });
     if (failed && alive.current) setError(failed);
   }
 
@@ -233,7 +241,7 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
                 campaign exactly as it is and replays in the copy.
               </p>
             )}
-            {error && <p className="field-hint">{error}</p>}
+            {error != null && <p className="field-hint"><ErrorNote err={error} /></p>}
             <div className="form-actions">
               <button className="subtle" onClick={onStartHandled}>Cancel</button>
               <button className={priced.fork ? "primary" : "subtle"} disabled={busy}
@@ -273,7 +281,7 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
             {ran ? "Keep this reply and move on, or run it again."
                  : "Run the next turn against the history as it now reads."}
           </p>
-          {error && <p className="field-hint">{error}</p>}
+          {error != null && <p className="field-hint"><ErrorNote err={error} /></p>}
           <div className="form-actions">
             <button className="subtle" disabled={busy} onClick={stop}>Stop</button>
             {ran && (
