@@ -5,7 +5,13 @@ answering two questions: **what should be done next**, and **what should stop
 being tracked**.
 
 Headline: **close 26, re-scope 4, file 2 new** — leaving ~100 open, of which 11
-are a credible "do next" list. The three parked epics (plugins, imagegen,
+are a credible "do next" list.
+
+> **Status, 19 Aug 2026.** The plugin epic (6) and the imagegen generation set
+> (10) have been closed as `not planned`. The replacement work is filed as
+> **#376** (insert an image into a post) and **#377** (send those images to the
+> model when it accepts them). The remaining recommendations in this document
+> — inventory, the done-already pair, the re-scopes — are still recommendations. The three parked epics (plugins, imagegen,
 inventory) are 24 of the 126, and none of them survives contact with the
 current codebase in the shape it was filed in.
 
@@ -59,7 +65,7 @@ fresh, small issue against a working precedent — not this six-issue epic built
 around a host that no longer has a job.
 
 **Recommended:** close all six as `not planned`, citing #141 and
-`llm_connections.py`.
+`llm_connections.py`. — **Done, 19 Aug 2026.**
 
 ---
 
@@ -77,7 +83,7 @@ serving.
 That split is the whole triage: **the handling substrate is worth building on;
 the generation epic on top of it is not.**
 
-### Close as `not planned` (9)
+### Close as `not planned` (9) — **done, 19 Aug 2026**
 
 #172 (generate from context), #173 (pluggable backends), #174 (queue), #175
 (re-roll / img2img), #177 (per-character seed), #179 (auto-illustration
@@ -85,7 +91,7 @@ policy), #181 (extract expressions from prose), #159 (cost per generated
 image), #202 (image presets — its style-guides half shipped as `store/styles.py`
 + `StyleGuidesView`; its remaining half is blocked on #172).
 
-### Close, with a note (1)
+### Close, with a note (1) — **done, 19 Aug 2026**
 
 #178 (auto-generate an export cover) — `store/covers.py` already gives a
 campaign a cover and `epub.py` already makes it the book's first page. What is
@@ -110,7 +116,7 @@ no automatic driver for *which* expression to show, so it would need manual or
 per-post selection. Keep re-scoped, or close — but decide it on its own merits,
 not as part of the epic.
 
-### File the replacement: "Put an image into a post"
+### File the replacement: #376 and #377 — **filed, 19 Aug 2026**
 
 **Today there is no way to get an image into a scene post at all.** Confirmed:
 
@@ -126,9 +132,10 @@ would render today** — nothing can produce the URL.
 
 So the feature is small and almost entirely reuse:
 
-1. Scene-scoped assets. `assets.put_image(croot, sid, "default", name, base="scenes")`
-   already works — #172's own body worked this out and noted `list_scenes` only
-   reads `*.md`, so the sibling `assets/` folder is harmless.
+1. A place to put images that belong to no character or greeting. This document
+   first sketched *scene*-scoped assets; #376 lands it as a **campaign**-scoped
+   store instead (`<campaign>/assets/images/`, on the `covers.py` precedent),
+   which is the better shape — see the note on `scene_refs` below.
 2. `PUT/GET/DELETE /campaigns/{cid}/scenes/{sid}/images/{name}`, mirroring the
    six existing image surfaces.
 3. Paste / drop / file-picker in the composer and the edit-post textarea, which
@@ -146,8 +153,10 @@ Three things to get right, all of which have precedent to copy:
   enumerates the URL shapes the app writes. A new scene-image shape must be
   added there or exports will silently ship a book with broken images.
 - `store/scene_refs.py:repoint` bulk-renumbers scene ids across every store that
-  persists them (four today). A scene-keyed asset folder is a fifth, or fork /
-  undo / retcon will orphan it.
+  persists them (four today). A scene-keyed asset folder would be a fifth, or
+  fork / undo / retcon would orphan it. **#376's campaign-scoped store sidesteps
+  this entirely** — the images do not hang off a scene id, so there is nothing to
+  repoint. This is the reason to prefer it over the scene-scoped sketch above.
 - Write the existence gate in from the start — see §5, #373. A new image write
   surface is exactly where that bug class comes from.
 
@@ -280,10 +289,11 @@ privacy), #123–#125 (narrative extras), #142/#143 (per-task model routing),
 
 | Action | Issues | Count |
 |---|---|---|
-| Close — plugin epic superseded by `llm_connections` | #182, #183, #184, #185, #186, #206 | 6 |
-| Close — imagegen generation | #159, #172, #173, #174, #175, #177, #178, #179, #181, #202 | 10 |
+| **Closed** — plugin epic superseded by `llm_connections` | #182, #183, #184, #185, #186, #206 | 6 |
+| **Closed** — imagegen generation | #159, #172, #173, #174, #175, #177, #178, #179, #181, #202 | 10 |
 | Close — inventory sub-issues | #168, #169, #170, #171 | 4 |
 | Close — done or tracked elsewhere | #24, #201 | 2 |
 | Re-scope | #176+#200 → one Images view; #167 → one spike; #180 → decide | 4 |
-| File | "Put an image into a post"; "Break up CampaignView.tsx" | 2 |
+| **Filed** | **#376** (insert an image into a post), **#377** (send images to the model) | 2 |
+| File | "Break up CampaignView.tsx" | 1 |
 | Do next | #373, #213, #14, #82, #11, #210, #223, #1, #216 | 9 |
