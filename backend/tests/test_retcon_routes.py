@@ -9,6 +9,7 @@ forking leaves the original alone.
 """
 
 import importlib
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -298,3 +299,81 @@ def test_a_fork_is_not_a_campaign_until_it_carries_its_own_name(client, scene):
     assert mid_copy and all(seen == ["Run"] for seen in mid_copy)
     assert sorted(c["name"] for c in store.campaigns.list_campaigns()) == ["Run", "Run (retcon)"]
     assert store.campaigns.read_campaign(fork)["meta"]["parent"] == cid
+
+
+# --- the whole point, end to end -------------------------------------------
+
+
+def test_a_re_absorbed_retcon_badges_what_the_later_scene_answered(client):
+    """Retcon an old scene, absorb it again, and the review says which of its
+    findings a scene played after it has already answered differently.
+
+    The three pieces are tested apart above; this is the claim they add up to,
+    and the one thing none of them proves — that the badge survives the round
+    trip through `materialize`'s real staged rows.
+    """
+    from tests.llm_fakes import FakeOpenRouterComplete
+    from grimoire import routes
+
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    client.post(f"/api/worlds/{wid}/characters",
+                json={"name": "Seraphine", "version_name": "main"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+
+    def scene(title):
+        sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": title}).json()["id"]
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                    json={"kind": "characters", "id": "seraphine", "version": "main",
+                          "role": "npc"})
+        return sid
+
+    def absorb_and_save(sid, state):
+        client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+            json.dumps({"one_line": "They spoke.", "summary": "A long night.",
+                        "keywords": [], "timeline_events": [],
+                        "character_state_edits": [{"id": "seraphine", "current_state": state}]}))
+        body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+        client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": body["one_line"], "summary": body["summary"],
+                         "keywords": [], "timeline_events": [], "edits": body["edits"],
+                         "commit_token": body["commit_token"]})
+        return body
+
+    first = scene("Saltmarch")
+    store.scenes.append_message(cid, first, "user", "She swore the pact.")
+    later = scene("The Long Quay")
+    store.scenes.append_message(cid, later, "user", "She broke it.")
+
+    absorb_and_save(first, "Loyal.")
+    absorb_and_save(later, "Faithless now.")
+
+    # The retcon: the first scene did not go that way after all.
+    r = client.post(f"/api/campaigns/{cid}/scenes/{first}/messages/0/retcon",
+                    json={"content": "She refused the pact."})
+    assert r.status_code == 200 and r.json()["later"] == [later]
+
+    # ... and the re-extraction disagrees with what the later scene recorded.
+    # `changes`, not `citation`: this extraction quotes nobody, so no provenance
+    # row was written for it and the coarser attribution is the one that can
+    # answer — which is the order those sources are consulted in.
+    review = absorb_and_save(first, "Wary of everyone.")
+    assert [(c["id"], c["scene"], c["source"]) for c in review["contradictions"]] == [
+        ("character_state:seraphine", later, "changes")]
+
+
+def test_the_ordinary_end_of_scene_review_badges_nothing(client):
+    """Absorbing the newest scene has no later scene to disagree with, which is
+    why the pass is unconditional rather than a mode the caller asks for."""
+    from tests.llm_fakes import FakeOpenRouterComplete
+    from grimoire import routes
+
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We entered the crypt.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "They entered.", "summary": "The party entered.",'
+        ' "keywords": [], "timeline_events": []}')
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["contradictions"] == []
