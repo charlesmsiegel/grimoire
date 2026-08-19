@@ -11,6 +11,7 @@ by image edits.
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
@@ -438,6 +439,27 @@ def delete_image(root: Path, cid: str, vid: str, name: str, base: str = "charact
     delete_in(_dir(root, cid, vid, base), name)
     if name == AVATAR:
         clear_focus(root, cid, vid, base)
+
+
+def delete_version_images(root: Path, cid: str, vid: str, base: str = "characters") -> None:
+    """Drop the whole per-version asset folder, sidecar and all.
+
+    For the deletion of a *version*, not of an image: once the version file is
+    gone nothing can address `assets/<vid>/` again -- no listing enumerates it
+    (both list endpoints walk the version ids that exist) and, since the image
+    routes started refusing an id that names no version (#360), no delete route
+    can name it either. Leaving it behind is how a record deletion quietly
+    manufactures the orphaned bytes that issue is about.
+
+    Unlocked, like the whole-record `shutil.rmtree` in `characters.delete_character`
+    and `pcs.delete_pc`: the version it belongs to is already gone, so an upload
+    racing this is writing art for a version that no longer exists either way.
+    """
+    if not (safe_id(cid) and safe_id(vid)):
+        return
+    d = _dir(root, cid, vid, base)
+    if d.is_dir():
+        shutil.rmtree(d)
 
 
 def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "characters") -> None:

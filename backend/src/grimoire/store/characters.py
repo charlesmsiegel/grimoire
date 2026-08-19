@@ -303,6 +303,8 @@ def delete_version(root: Path, cid: str, vid: str) -> None:
     if len(_version_ids(root, cid)) == 1:
         raise ValueError("cannot delete the last version of a character")
     p.unlink()
+    # the card was the only thing that made this version's art addressable (#360)
+    assets.delete_version_images(root, cid, vid)
     meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
     if meta.get("default_version") == vid:
         meta["default_version"] = _version_ids(root, cid)[0]
