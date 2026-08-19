@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -48,6 +49,12 @@ def _campaign(client, name="Run"):
 
 def _scene(client, cid, title="S"):
     return client.post(f"/api/campaigns/{cid}/scenes", json={"title": title}).json()["id"]
+
+
+def _restamp(text: str, stamp: str) -> str:
+    """A scene file with its `created` frontmatter moved to `stamp`."""
+    return "\n".join(f"created: {stamp}" if line.startswith("created:") else line
+                      for line in text.splitlines()) + "\n"
 
 
 def _use(app, fake):
@@ -353,3 +360,141 @@ def test_a_turn_with_no_caching_leaves_the_rollups_cache_columns_at_zero(client,
     assert "cache_read_tokens" not in row      # absent per row: nobody said
     totals = client.get("/api/usage/summary").json()["totals"]
     assert totals["cache_read_tokens"] == 0    # present per bucket: nothing cached
+
+
+# ---- the per-scene breakdown and the budget (#153) ----
+def test_the_scene_endpoint_reports_that_scenes_turns(client, home):
+    _use(client.app, FakeOpenRouter(["ok"], usage=USAGE))
+    _, cid = _campaign(client)
+    one, two = _scene(client, cid, "One"), _scene(client, cid, "Two")
+    client.post(f"/api/campaigns/{cid}/scenes/{one}/chat", json={"content": "hi"})
+    client.post(f"/api/campaigns/{cid}/scenes/{two}/chat", json={"content": "hi"})
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{one}/usage").json()
+    assert body["scene"] == one
+    assert body["totals"]["calls"] == 1
+    assert body["totals"]["cost_usd"] == 0.0042
+    turn, = body["turns"]
+    assert turn["task"] == "chat"
+    assert turn["model"] == "realm/opus"
+    assert turn["total_tokens"] == 940
+    assert [b["key"] for b in body["by_task"]] == ["chat"]
+
+
+def test_the_scene_window_is_the_scenes_own_lifetime(client, home):
+    """A scene played months ago must not report $0.00 because the default
+    rollup window only reaches back thirty days."""
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+    meta = home / "campaigns" / cid / "scenes" / f"{sid}.md"
+    # Sixty days back: outside the 30-day window every other rollup defaults
+    # to, and well inside the ledger's own MAX_DAYS bound.
+    old = (date.fromisoformat(store.usage._today()) - timedelta(days=60)).isoformat()
+    meta.write_text(_restamp(meta.read_text(encoding="utf-8"), f"{old}T09:00:00Z"),
+                    encoding="utf-8")
+    store.usage.record(task="chat", campaign=cid, scene=sid, cost_usd=1.25,
+                       ts=f"{old}T10:00:00Z")
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/usage").json()
+    assert body["since"] == old
+    assert body["totals"]["cost_usd"] == 1.25
+
+
+def test_the_scene_endpoint_404s_for_a_scene_that_does_not_exist(client):
+    _, cid = _campaign(client)
+    assert client.get(f"/api/campaigns/{cid}/scenes/nope/usage").status_code == 404
+    assert client.get("/api/campaigns/nope/scenes/nope/usage").status_code == 404
+
+
+def test_a_campaign_starts_with_no_budget(client):
+    _, cid = _campaign(client)
+    assert client.get(f"/api/campaigns/{cid}/budget").json()["level"] == "off"
+
+
+def test_setting_a_budget_answers_with_where_it_leaves_the_campaign(client, home):
+    _use(client.app, FakeOpenRouter(["ok"], usage=USAGE))
+    _, cid = _campaign(client)
+    client.post(f"/api/campaigns/{cid}/scenes/{_scene(client, cid)}/chat",
+                json={"content": "hi"})
+
+    body = client.put(f"/api/campaigns/{cid}/budget",
+                      json={"budget_usd": 10, "budget_period": "monthly"}).json()
+    assert body["limit_usd"] == 10.0
+    assert body["spent_usd"] == 0.0042
+    assert body["level"] == "ok"
+    assert client.get(f"/api/campaigns/{cid}/budget").json()["limit_usd"] == 10.0
+
+
+def test_a_budget_is_stored_on_the_campaign_not_in_the_ledger(client, home):
+    _, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/budget", json={"budget_usd": 12.5})
+
+    meta = (home / "campaigns" / cid / "campaign.md").read_text(encoding="utf-8")
+    assert "budget_usd: 12.50" in meta
+    assert "budget_period: monthly" in meta
+
+
+def test_clearing_a_budget_removes_it_rather_than_zeroing_it(client, home):
+    _, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/budget", json={"budget_usd": 12.5})
+
+    assert client.put(f"/api/campaigns/{cid}/budget",
+                      json={"budget_usd": None}).json()["level"] == "off"
+    meta = (home / "campaigns" / cid / "campaign.md").read_text(encoding="utf-8")
+    assert "budget_usd" not in meta
+    assert "budget_period" not in meta
+
+
+def test_a_campaign_over_its_budget_says_so(client, home):
+    _, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/budget", json={"budget_usd": 1})
+    store.usage.record(task="chat", campaign=cid, cost_usd=1.4)
+
+    body = client.get(f"/api/campaigns/{cid}/budget").json()
+    assert body["level"] == "over"
+    assert body["fraction"] > 1
+
+
+def test_a_budget_smaller_than_a_cent_is_no_budget_at_all(client, home):
+    """The file holds dollars to the cent, so a third of one would be written
+    as 0.00 and read straight back as "none" -- a campaign whose settings say
+    it is capped and whose behaviour says it is not."""
+    _, cid = _campaign(client)
+    assert client.put(f"/api/campaigns/{cid}/budget",
+                      json={"budget_usd": 0.001}).json()["level"] == "off"
+    assert "budget_usd" not in (home / "campaigns" / cid / "campaign.md").read_text(
+        encoding="utf-8")
+
+
+def test_the_budget_endpoints_404_for_a_campaign_that_does_not_exist(client):
+    assert client.get("/api/campaigns/nope/budget").status_code == 404
+    assert client.put("/api/campaigns/nope/budget",
+                      json={"budget_usd": 5}).status_code == 404
+
+
+def test_another_campaigns_spend_is_not_charged_to_this_budget(client, home):
+    _use(client.app, FakeOpenRouter(["ok"], usage=USAGE))
+    _, one = _campaign(client, "One")
+    _, two = _campaign(client, "Two")
+    client.put(f"/api/campaigns/{one}/budget", json={"budget_usd": 0.05})
+    client.post(f"/api/campaigns/{two}/scenes/{_scene(client, two)}/chat",
+                json={"content": "hi"})
+
+    assert client.get(f"/api/campaigns/{one}/budget").json()["level"] == "ok"
+
+
+def test_a_renamed_scene_keeps_the_cost_it_ran_up_under_its_old_id(client, home):
+    """The end-to-end shape of the ledger's place in `scene_refs.repoint`: a
+    real rename through the real route, and the scene's spend still there."""
+    _use(client.app, FakeOpenRouter(["ok"], usage=USAGE))
+    _, cid = _campaign(client)
+    sid = _scene(client, cid, "Untitled")
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
+
+    renamed = client.put(f"/api/campaigns/{cid}/scenes/{sid}",
+                         json={"title": "The Tideflats"}).json()["id"]
+    assert renamed != sid, "the rename has to actually move the file"
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{renamed}/usage").json()
+    assert body["totals"]["calls"] == 1
+    assert body["totals"]["cost_usd"] == 0.0042

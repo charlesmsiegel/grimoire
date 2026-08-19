@@ -16,5 +16,6 @@ from .read import (  # noqa: F401
 )
 from .lifecycle import (  # noqa: F401
     _prune_duplicate_files, _tombstone_deleted_copied_assets, create_campaign,
-    delete_campaign, ensure_campaign_slim, rename_campaign, set_campaign_response,
+    delete_campaign, ensure_campaign_slim, rename_campaign, set_campaign_budget,
+    set_campaign_response,
 )

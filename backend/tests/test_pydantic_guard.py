@@ -194,3 +194,26 @@ def test_the_package_uses_no_v2_pydantic_api():
     assert scan(probe + "\n_x = _m.model_dump()\n"), \
         "the scanner found nothing in real module source -- it is not wired correctly"
     assert not exempted, f"unexpected exemptions appeared: {exempted}"
+
+
+def test_a_mutable_field_default_is_per_instance_on_whichever_pydantic_is_installed():
+    """The health report's `mutable_class_attribute` finding, checked rather
+    than argued with (`routes/models.py`).
+
+    A bare `= []` on a plain class really is shared between instances, and the
+    report is right to flag the shape; pydantic is the reason it does not bite
+    here, and pydantic is an install-time choice this project deliberately
+    leaves open. So the claim is pinned against the pydantic that is actually
+    installed -- which is 1.10 under `make check-pydantic1` and 2.x everywhere
+    else -- and the day either line stops copying defaults, this fails instead
+    of eight request bodies quietly sharing a list across requests.
+    """
+    from grimoire.routes import models
+
+    first, second = models.StyleCreate(name="a"), models.StyleCreate(name="b")
+    first.tags.append("leaked")
+    assert second.tags == [], "a mutable default must not be shared between bodies"
+
+    layout = models.PromptLayoutUpdate()
+    layout.sections.append(models.PromptLayoutSection(id="x", label="X"))
+    assert models.PromptLayoutUpdate().sections == []

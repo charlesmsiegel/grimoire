@@ -8,6 +8,7 @@ import {
   type SceneDatetime, type StagedEdit, type ProposalRecord, type SceneCheckActor,
   type ResponsePresetSummary, type ResponseOverride, type ResponseBundle,
   type Briefing, type Casefile, type Provenance, type SceneLocation, type SceneWeather,
+  type CampaignBudget,
 } from "../api/client";
 import { isAbortError, type ChatEvent } from "../api/stream";
 import { forkNotes } from "../components/forkNotes";
@@ -19,6 +20,7 @@ import { IncomingReview } from "../components/IncomingReview";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CampaignCover";
 import { SceneInspector } from "../components/SceneInspector";
+import { money } from "../components/CostPanel";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
 import { initialsOf, Portrait } from "../components/Portrait";
@@ -464,6 +466,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const fail = (e: any, retryable = true, from?: string) =>
     setError({ text: e?.detail ?? String(e), retryable, from });
   const [ctxKey, setCtxKey] = useState(0);
+  // The campaign's budget, and the level the reader has already been told about
+  // (#153). Held as a level rather than a boolean so dismissing the 80% warning
+  // does not also swallow the one that says the budget is gone: crossing into
+  // `over` is a different fact, and it gets said again.
+  const [budget, setBudget] = useState<CampaignBudget | null>(null);
+  const [budgetSeen, setBudgetSeen] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   const [rerollPrompt, setRerollPrompt] = useState<string | null>(null); // null = popover closed
   // Every variant of the generation reroll targets, refreshed by selectScene
@@ -1389,6 +1397,28 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // `ctxKey` bumps on every successful absorb save, which is exactly when
     // every file behind this panel was rewritten.
   }, [cid, activeId, selectedActor, ctxKey]);
+
+  // Where this campaign stands against its budget (#153). Re-read on `ctxKey`,
+  // which bumps once a turn -- the moment the number can have moved -- rather
+  // than on a timer, so a campaign with no budget costs one request per scene
+  // and the server does not even scan the ledger for it (`level: "off"`).
+  //
+  // Every rejection is swallowed to a cleared banner, the rule this whole view
+  // follows: a budget lookup that failed is not a reason to put an error over a
+  // turn that landed, and the Cost section in the inspector is where a reader
+  // who actually wants the figure goes.
+  useEffect(() => {
+    let live = true;
+    api.getCampaignBudget(cid)
+      .then((b) => { if (live) setBudget(b); })
+      .catch(() => { if (live) setBudget(null); });
+    return () => { live = false; };
+  }, [cid, ctxKey]);
+
+  // A dismissal belongs to the campaign it was made in, and to the level it was
+  // made at. Switching campaigns without this carried "I have seen it" onto a
+  // different budget entirely.
+  useEffect(() => { setBudgetSeen(null); }, [cid]);
 
   async function removeSelectedActor() {
     if (!selectedActor || !activeId) return;
@@ -3642,15 +3672,44 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               End scene one mis-click from discarding every proposal already
               judged. The transcript is still on screen, as the third pane
               below: read-only, and there to check a quote against. */}
-          {/* Both banners sit ABOVE that split, and are the only things that do.
-              They are the page's, not the scene's: `error` is deliberately
-              global and tagged with `from` because a review outlives a scene
-              switch, and a scoped retry that fails inside the review reports
-              through it — so hiding it during a review would swallow the
-              failure of the one button the review offers. */}
+          {/* All three banners sit ABOVE that split, and are the only things
+              that do. They are the page's, not the scene's: `error` is
+              deliberately global and tagged with `from` because a review
+              outlives a scene switch, and a scoped retry that fails inside the
+              review reports through it — so hiding it during a review would
+              swallow the failure of the one button the review offers. The
+              budget (#153) is the page's for a plainer reason: it is the
+              campaign's, and a review spends nothing of its own. */}
           {!ready && (
             <div className="banner">
               No LLM connection ready. <Link to="/config">Set one up in Config</Link>.
+            </div>
+          )}
+          {/* The only one of the three a reader can dismiss: the other two
+              describe something broken, while this one describes a decision
+              they may well have made on purpose. Dismissing is per level, so
+              spending past the cap says so again after the 80% warning was
+              waved off. Below the connection notice and above the error, which
+              is the order they matter in: nothing can be spent without a
+              connection, and a turn that just failed outranks a running total. */}
+          {budget && (budget.level === "warn" || budget.level === "over")
+            && budgetSeen !== budget.level && (
+            <div className="banner error-banner" role="alert">
+              <span>
+                {budget.level === "over" ? "Over budget: " : "Approaching budget: "}
+                {money(budget.spent_usd ?? 0)} of {money(budget.limit_usd)} spent{" "}
+                {budget.period === "total" ? "in total" : "this month"}
+                {/* The figure is a floor whenever this is non-zero, and a
+                    banner that hid that would be understating the very number
+                    it exists to raise. */}
+                {(budget.unpriced_calls ?? 0) > 0
+                  && ` — ${budget.unpriced_calls} unpriced `
+                     + `${budget.unpriced_calls === 1 ? "call" : "calls"} not counted`}
+                .
+              </span>
+              <button className="retry" onClick={() => setBudgetSeen(budget.level)}>
+                Dismiss
+              </button>
             </div>
           )}
           {error && (

@@ -10,7 +10,9 @@ plain class or a dataclass: pydantic copies it per instance, so one request
 mutating its own ``tags`` cannot reach the next. The health report flags these
 as ``mutable_class_attribute`` and proposes ``Field(default_factory=...)``,
 which is exactly what the paragraph above forbids — so the finding stays open
-by decision, not oversight.
+by decision, not oversight. ``test_pydantic_guard`` pins the copying against
+whichever pydantic is installed, so the decision rests on a checked claim
+rather than on this paragraph.
 """
 
 from __future__ import annotations
@@ -139,6 +141,20 @@ class RegenerateBody(BaseModel):
 
 class RetryBody(BaseModel):
     response: ResponseSettings | None = None
+
+
+class BudgetBody(BaseModel):
+    """A campaign's cost budget (#153).
+
+    `budget_usd` is nullable, and null is how a budget is CLEARED -- distinct
+    from the 0 a form would send for "no budget yet", though the store reads
+    both the same way. `budget_period` is a plain string rather than an enum so
+    an unknown one is normalized by `store.usage.normalize_period` alongside
+    every hand-edited value it already has to survive, instead of 422-ing a
+    request the store can answer.
+    """
+    budget_usd: float | None = None
+    budget_period: str | None = None
 
 
 class NameBody(BaseModel):

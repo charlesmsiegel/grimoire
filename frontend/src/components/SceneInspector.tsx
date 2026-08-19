@@ -9,6 +9,7 @@ import {
 } from "../api/client";
 import { getModels, type Model } from "../api/models";
 import { ContextBreakdown, contextPercent } from "./ContextBreakdown";
+import { CostPanel } from "./CostPanel";
 import { Portrait } from "./Portrait";
 import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
 import { CalendarDatePicker } from "./CalendarDatePicker";
@@ -1346,6 +1347,16 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           </div>
         )}
         {shown && <ContextBreakdown ctx={shown} models={models} />}
+      </SideSection>
+
+      {/* Directly under Context, and that adjacency is the point (#153): the
+          section above is what grimoire COMPOSED, measured by a local
+          tokenizer; this is what the provider said it charged for sending it.
+          Collapsed by default — cost is a question a reader comes to ask, not
+          one worth pushing the scene's own state down the rail for. */}
+      <SideSection id="cost" title="Cost" collapsed={collapsed.cost ?? true}
+                   onToggle={toggleSection}>
+        <CostPanel cid={cid} sid={sid} refreshKey={refreshKey} />
       </SideSection>
 
       <SideSection id="turns" title="Turn history" collapsed={!!collapsed.turns} onToggle={toggleSection}>

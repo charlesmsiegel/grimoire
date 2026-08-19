@@ -1,17 +1,20 @@
-"""Cost and token rollups over the usage ledger (#152).
+"""Cost and token rollups over the usage ledger (#152), and what a campaign is
+allowed to spend (#153).
 
-Two reads over the same `store.usage.summary`: one library-wide, one scoped to
-a campaign. Both are pure reads — nothing here writes, and a rollup that has
-never had a call to count answers with zeroes rather than a 404, because "you
-have spent nothing yet" is an answer.
+Three reads over the same ledger — library-wide, one campaign, one scene — and
+the campaign budget that turns the second into a warning. Every rollup here is
+a pure read, and one that has never had a call to count answers with zeroes
+rather than a 404, because "you have spent nothing yet" is an answer. The one
+write is the budget itself, which is campaign metadata like a rename.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from .. import store
-from .common import _campaign_root_or_404
+from .common import _campaign_root_or_404, _require_scene
+from .models import BudgetBody
 
 router = APIRouter()
 
@@ -64,3 +67,55 @@ def get_campaign_usage(cid: str, days: int = _DAYS):
     """
     _campaign_root_or_404(cid)
     return store.usage.summary(days=days, campaign=cid)
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/usage")
+def get_scene_usage(cid: str, sid: str):
+    """What this scene's turns cost, one row each, newest first (#153).
+
+    The window is the **scene's own lifetime**, not a fixed number of days: the
+    ledger has no index, so "this scene" is a filter over a scan, and scanning
+    the last 30 days would report $0.00 for a scene played in the spring while
+    scanning a year would make every panel open pay for a library's whole
+    history. The scene's `created` stamp is the one bound that is neither —
+    `store.usage.scene_usage` clamps it at both ends, and the window it settled
+    on comes back as `since`/`until` so the view can say what it covers.
+
+    `turns` is capped (`truncated` says when), while `totals` and `by_task` are
+    summed over every row in the window — so a long scene's numbers do not
+    change when its list is cut.
+    """
+    scene = _require_scene(cid, sid)
+    return store.usage.scene_usage(cid, sid, since=scene["meta"].get("created", ""))
+
+
+@router.get("/campaigns/{cid}/budget")
+def get_campaign_budget(cid: str):
+    """This campaign's budget and where it stands against it (#153).
+
+    404s on a campaign that does not exist, like the rollup above and for the
+    same reason. A campaign that has set no budget answers `{"level": "off"}`
+    with no spend figures at all — see `store.usage.budget` for why an unasked
+    question gets no number rather than a zero.
+    """
+    _campaign_root_or_404(cid)
+    meta = store.campaigns.read_campaign(cid)["meta"]
+    return store.usage.budget(cid, meta.get("budget_usd"), meta.get("budget_period"))
+
+
+@router.put("/campaigns/{cid}/budget")
+def put_campaign_budget(cid: str, body: BudgetBody):
+    """Set or clear the budget, and answer with where that leaves the campaign.
+
+    Returns the same shape as the GET rather than `{"ok": true}`: the caller
+    setting a budget is the surface that has to render the result of setting it,
+    and a second round trip to find out whether the campaign is already over the
+    number just typed is a round trip for nothing.
+    """
+    try:
+        store.campaigns.set_campaign_budget(cid, body.budget_usd or 0,
+                                            body.budget_period or "")
+    except store.campaigns.CampaignNotFound:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    meta = store.campaigns.read_campaign(cid)["meta"]
+    return store.usage.budget(cid, meta.get("budget_usd"), meta.get("budget_period"))

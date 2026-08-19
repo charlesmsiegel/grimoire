@@ -1634,6 +1634,23 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .ctx-label { flex: 1; font-size: 14px; }
 .ctx-meta { font-family: var(--fm); font-size: 10px; color: var(--muted); }
 .ctx-mini { height: 4px; background: var(--track); margin: 2px 0 6px; }
+/* Cost (#153). Deliberately built out of the Context section's own bar, rows
+   and meta type: the two sit next to each other in the same rail answering the
+   same question from opposite ends, and a second visual language for "here is a
+   breakdown" would only say they were unrelated. What is new here is the fill
+   colour, which is the one thing a budget adds -- a bar that changes meaning
+   when it fills. */
+/* One rule for both levels, not two the same: `warn` and `over` differ in
+   how FULL the bar is, which the bar itself already says. Colouring them
+   apart would need a third token the palette does not have, and inventing
+   one to distinguish 80% from 100% of the same bar is a distinction the
+   width is making better. */
+.cost-panel .ctx-bar-fill.warn, .cost-panel .ctx-bar-fill.over { background: var(--alert); }
+.cost-tasks { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.cost-turn > summary { gap: 6px; }
+.cost-turn.failed .ctx-label { color: var(--muted); text-decoration: line-through; }
+.cost-turn-body { padding: 0 0 8px; }
+.cost-turn-body .field-hint { margin-top: 2px; }
 .ctx-mini > div { height: 100%; background: var(--accent); }
 .ctx-text {
   white-space: pre-wrap; word-break: break-word; max-height: 150px; overflow-y: auto;

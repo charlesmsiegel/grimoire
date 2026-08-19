@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 
 from .. import (assets, atomic, calendars, campaign_climate, characters, climates,
-                entities, greetings, locks, modules, overlay, pcs, sheets)
+                entities, greetings, locks, modules, overlay, pcs, sheets, usage)
 from ..appearances import paths as appearances_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import ensure_home, now_iso, slugify, uniquify
@@ -365,6 +365,53 @@ def set_campaign_response(cid: str, fields: dict) -> None:
     # advances the field that says when the metadata last changed, the way
     # rename_campaign does. Leaving it out made `updated` untrue about its own
     # file, not merely incomplete about the campaign.
+    meta["updated"] = now_iso()
+    atomic.write_text(mp, dump_frontmatter(meta, body))
+
+
+#: The two campaign.md keys a cost budget occupies (#153). Named together
+#: because they are written and cleared together: a period with no limit beside
+#: it describes nothing, and a reader would have to invent a default for it.
+BUDGET_KEYS = ("budget_usd", "budget_period")
+
+
+def set_campaign_budget(cid: str, budget_usd: float | str, period: str = "") -> None:
+    """Set -- or clear -- what this campaign is allowed to spend (#153).
+
+    The same read-modify-write on the campaign's frontmatter as
+    `rename_campaign` above, and the same unlocked known gap, recorded for both
+    in `store.locks.OUTSIDE_DOMAIN`.
+
+    **Clearing removes the keys rather than writing a zero.** Frontmatter is
+    string-scalar, so a cleared budget stored as ``budget_usd: 0`` is a value
+    every later reader has to be told means "none"; an absent key already means
+    that everywhere, including to a build that predates the field. Anything
+    `usage.normalize_limit` will not read as a positive number of dollars --
+    and anything under a cent -- clears it, so the write side and the read side
+    agree by construction: they are the one function.
+
+    Written to the cent, and never in exponent form. `str(1e-05)` is ``1e-05``,
+    which round-trips through Python and through nothing else a person might
+    open this file with; a budget is a figure somebody typed, and two decimals
+    is what they typed it in.
+    """
+    mp = paths.campaign_meta_path(cid)
+    if not mp.exists():
+        raise paths.CampaignNotFound(cid)
+    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    # Rounded BEFORE the test, so the value written and the value that decided
+    # to write it are the same one. Rounding afterwards stores "0.00" for a
+    # third of a cent -- a budget the read side sees as none, leaving a campaign
+    # whose file says it has one and whose behaviour says it has not.
+    limit = round(usage.normalize_limit(budget_usd), 2)
+    if limit >= 0.01:
+        meta["budget_usd"] = f"{limit:.2f}"
+        meta["budget_period"] = usage.normalize_period(period)
+    else:
+        for key in BUDGET_KEYS:
+            meta.pop(key, None)
+    # A campaign-metadata write, so it advances the field that says when the
+    # metadata last changed -- the reason spelled out in `set_campaign_response`.
     meta["updated"] = now_iso()
     atomic.write_text(mp, dump_frontmatter(meta, body))
 

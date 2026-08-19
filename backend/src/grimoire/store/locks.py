@@ -261,21 +261,24 @@ OUTSIDE_DOMAIN: dict[str, str] = {
     # landed in. Nothing was reassessed and nothing changed hands.
     "store.campaigns.lifecycle": (
         "Known gap, not a considered exclusion -- recorded here so it stops "
-        "being invisible. `rename_campaign` and `set_campaign_response` each "
-        "read-modify-write the campaign meta file, so two concurrent ones lose "
+        "being invisible. `rename_campaign`, `set_campaign_response` and "
+        "`set_campaign_budget` each read-modify-write the campaign meta file, "
+        "so two concurrent ones lose "
         "an edit (a rename dropped by a `touch` that read the older "
         "frontmatter -- see `store.campaigns.read`). `delete_campaign` rmtrees "
         "a tree that a lock holder may be writing under -- "
         "`module_edit._campaign_locks` already records 'campaign deletion "
         "takes no lock at all' as a known limit of its all-campaign hold. "
         "`ensure_campaign_slim` rewrites that same meta file and is unlocked "
-        "for the same reason as the two above. Fixing these is a concurrency "
+        "for the same reason as the frontmatter writers above. Fixing these "
+        "is a concurrency "
         "change that needs its own review, which is why this guard classifies "
         "them rather than closing them."
     ),
     "store.campaigns.read": (
         "`touch` read-modify-writes the campaign meta file unlocked, so it can "
-        "drop a concurrent `rename_campaign` or `set_campaign_response` by "
+        "drop a concurrent `rename_campaign`, `set_campaign_response` or "
+        "`set_campaign_budget` by "
         "publishing frontmatter it read before that edit landed. It runs from "
         "`appearances` on every actor change (`transitions.appear`, "
         "`versions.pick_version`, `versions.import_version`), which is what "
