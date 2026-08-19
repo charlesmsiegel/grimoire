@@ -8367,6 +8367,12 @@ def test_get_chronicle_offset_walks_back_from_the_newest_record(client):
     assert page(limit=5, offset=60) == []   # walked past the oldest record
     assert page(limit=5, offset=58) == ["s000", "s001"]  # partial page at the far end
 
+    # `offset` ALONE slides the default-sized window back -- it does not turn
+    # the route into "everything after a skip". The one combination whose
+    # meaning is not obvious from the other two, so it is pinned here.
+    assert page(offset=10) == [f"s{i:03d}" for i in range(0, 50)]
+    assert page(offset=0) == page()   # an explicit zero is the same as omitting it
+
 
 def test_get_changes_pages_the_listing_it_already_returns(client):
     _, cid = _campaign(client)

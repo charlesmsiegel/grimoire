@@ -484,17 +484,25 @@ def _page_window(limit: int | None, offset: int | None) -> tuple[int | None, int
     adopts this returns exactly what it returned before to every caller that
     sends neither -- which is what lets these land without touching `client.ts`.
 
-    Shared rather than repeated so the routes that take a page cannot drift into
-    separate dialects of it. The rule, on all of them: `offset` skips that many
-    items from the front of the order the route documents, and `limit` caps how
-    many follow. `GET /campaigns/{cid}/chronicle` is the one whose documented
-    order is not the order it prints -- see that route.
+    What this shares between the routes is the RANGE CHECK and its wording, not
+    the meaning of `offset`: it sees two integers and nothing about the listing
+    they will be applied to. Two of the three routes read `offset` as "skip that
+    many from the front of what I print"; `GET /campaigns/{cid}/chronicle`,
+    whose window was already anchored at the newest end, reads it as "skip that
+    many of the newest". A helper cannot close that gap -- only the route
+    docstrings can, and each says which it is.
 
-    Checked BEFORE the route looks for its campaign, matching
-    `GET /campaigns/{cid}/scenes/{sid}`. FastAPI validates the query TYPES ahead
-    of the handler, so `?limit=abc` is a 422 whatever the campaign is; a
-    hand-written range check that deferred to the 404 would make `limit=abc` and
-    `limit=0` answer differently for the same request.
+    Hand-checked rather than `Query(ge=1)`, which would be shorter and would put
+    the bound in the OpenAPI schema: FastAPI answers a violated `ge` with a 422
+    and its own error body, and `GET /campaigns/{cid}/scenes/{sid}` -- the
+    windowed route these follow -- already answers 400 with this wording. One
+    inconsistency was on offer either way; this is the one a client sees.
+
+    Checked BEFORE the route looks for its campaign, matching that same route.
+    FastAPI validates the query TYPES ahead of the handler, so `?limit=abc` is a
+    422 whatever the campaign is; a hand-written range check that deferred to
+    the 404 would make `limit=abc` and `limit=0` answer differently for the same
+    request.
     """
     if limit is not None and limit < 1:
         raise HTTPException(status_code=400, detail="limit must be at least 1")
@@ -506,11 +514,10 @@ def _page_window(limit: int | None, offset: int | None) -> tuple[int | None, int
 def _page_of(rows: list, limit: int | None, offset: int) -> list:
     """`rows` narrowed to the window `_page_window` returned. `limit` None: no cap.
 
-    Deliberately takes the built list rather than a callback that could build
-    less: these listings are sorted before they are paged, so every row has to
-    exist before any row can be dropped. What a page bounds is the RESPONSE --
-    and, where the per-row work outlives the sort (`GET /changes` renders a diff
-    per field), whatever the route does after this call.
+    Takes the built list, because every one of these listings is sorted before
+    it is paged and a sort has to see every row. What a page bounds is the
+    response -- and, where per-row work outlives the sort (`GET /changes`
+    renders a diff per field), whatever the route does after this call.
     """
     return rows[offset:] if limit is None else rows[offset:offset + limit]
 
