@@ -286,9 +286,11 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(HTTPException)
     async def http_exc_handler(request: Request, exc: HTTPException):
-        if isinstance(exc.detail, dict):
-            return JSONResponse(status_code=exc.status_code, content=exc.detail)
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        # `headers` is forwarded rather than dropped: it is how a 429 carries the
+        # provider's own `Retry-After` (#213), and a normalizer that silently ate
+        # response headers would make every future one arrive nowhere.
+        content = exc.detail if isinstance(exc.detail, dict) else {"detail": exc.detail}
+        return JSONResponse(status_code=exc.status_code, content=content, headers=exc.headers)
 
     @app.exception_handler(locks.StoreBusy)
     async def store_busy_handler(request: Request, exc: locks.StoreBusy):

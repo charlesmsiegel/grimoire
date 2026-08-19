@@ -762,6 +762,37 @@ async def test_a_single_route_failure_is_re_raised_untouched():
     assert exc.value is original
 
 
+async def test_a_retried_route_does_not_report_a_fallback_nobody_configured():
+    """The synthesized "and the fallback failed too" message is for the case
+    where a SECOND connection was actually tried. A route that simply retried
+    raises a different exception object each attempt, which is not the same
+    question — and answering it that way told users with no fallback that their
+    fallback had failed."""
+    provider = RouteRecorder(failing={"primary"})
+    client = _retry_client(provider, retries=2, fallback=lambda: None)
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream([], _route("a", "primary"))]
+    assert "fallback" not in exc.value.detail
+    assert provider.models == ["primary", "primary", "primary"]
+
+
+async def test_the_primarys_retry_after_survives_a_failed_fallback():
+    """The window travels with the kind, which is the primary's (#213): it
+    reaches the caller as the `Retry-After` of a 429, and the fallback's window
+    would name a connection the user is not using."""
+    async def stream(messages, model="", *args, **kwargs):
+        raise LLMError("rate_limit" if model == "primary" else "network",
+                       f"{model} down", 90.0 if model == "primary" else 5.0)
+        yield  # unreachable; it is what makes this an async generator
+
+    provider = RouteRecorder(failing={"primary", "backup"})
+    provider.stream = stream
+    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream([], _route("a", "primary"))]
+    assert (exc.value.kind, exc.value.retry_after) == ("rate_limit", 90.0)
+
+
 async def test_no_fallback_configured_leaves_one_route():
     provider = RouteRecorder(failing={"primary"})
     client = _retry_client(provider, retries=0, fallback=lambda: None)

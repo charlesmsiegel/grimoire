@@ -11,8 +11,9 @@ from fastapi.responses import Response, StreamingResponse
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from .common import (_bounded_call, _display_name_or_400, _require_connection, _serve_image,
-                     _upload_image_ext, _world_char_version_or_404, _world_root_or_404, get_llm)
+from .common import (_bounded_call, _display_name_or_400, _llm_http_error, _require_connection,
+                     _serve_image, _upload_image_ext, _world_char_version_or_404,
+                     _world_root_or_404, get_llm)
 from .models import (AvatarFocus, CharacterBirthdate, CharacterCreate, ChubImportBody,
                      ChubSourceBody, DefaultVersion, NameBody, TaglineSave, VersionCreate, VersionUpdate,
                      VoiceAnchorSave)
@@ -218,7 +219,7 @@ async def post_character_tagline_generate(wid: str, cid: str,
         with store.usage.meter("tagline") as m:
             text = await _bounded_call(client.complete(messages, conn, m.usage))
     except LLMError as exc:
-        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+        raise _llm_http_error(exc) from exc
     # Preview only — the caller persists via PUT on Save, so Generate-then-cancel
     # (e.g. the import popup's Skip) leaves nothing written.
     return {"tagline": store.taglines.parse_output(text)}
@@ -272,7 +273,7 @@ async def post_character_voice_anchor_generate(wid: str, cid: str,
         with store.usage.meter("voice-anchor") as m:
             text = await _bounded_call(client.complete(messages, conn, m.usage))
     except LLMError as exc:
-        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+        raise _llm_http_error(exc) from exc
     # Preview only, like tagline/generate — the caller persists via PUT on Save,
     # so an anchor is never written without review (#59).
     return {"voice_anchor": store.voice_anchors.parse_output(text)}

@@ -18,9 +18,9 @@ from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from .common import (computes_only, _bounded_call, _campaign_root_or_404, _content_fields,
-                     _display_name_or_400, _dump, _page_of, _page_window, _require_connection,
-                     _response_body, get_llm, _serve_image, _serve_image_file, _upload_image_ext,
-                     _write_response)
+                     _display_name_or_400, _dump, _llm_http_error, _page_of, _page_window,
+                     _require_connection, _response_body, get_llm, _serve_image,
+                     _serve_image_file, _upload_image_ext, _write_response)
 from .models import (AdvanceTime, AvatarFocus, CalendarConfig, CampaignClimate, CopyFromGreeting,
                      ScheduledEventCreate, ScheduledEventEdit,
                      DefaultVersion, ForkCampaign, GroupStateSave, NameBody, NewCampaign, PCCreate,
@@ -1398,7 +1398,7 @@ async def post_campaign_voice_anchor_generate(cid: str, char: str,
                 store.voice_anchors.build_prompt(data if isinstance(data, dict) else {}),
                 conn, m.usage))
     except LLMError as exc:
-        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+        raise _llm_http_error(exc) from exc
     return {"voice_anchor": store.voice_anchors.parse_output(text)}
 
 

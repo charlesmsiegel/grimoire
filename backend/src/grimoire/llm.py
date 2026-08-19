@@ -52,7 +52,9 @@ CLAUDE_DEFAULT_MODEL = "opus"
 #: overloaded provider (worth retrying) with a well-formed 200 whose body the
 #: parser could not use (never worth retrying), and the taxonomy cannot yet
 #: tell them apart -- retrying the pair would hammer a provider over a reply
-#: that will never parse, so it waits for #213 to split the kind.
+#: that will never parse. Splitting the kind is still open: #213 gave every kind
+#: an HTTP status and did not need it, because both halves are a 502 either way,
+#: so the split has to be argued on retry behaviour alone.
 #:
 #: `timeout` is the deliberate one. It is transient, and it is still excluded:
 #: unlike the others it costs the *whole* `llm_timeout` to detect, so retrying
@@ -378,6 +380,7 @@ async def _resilient(open_stream, routes, timeout: float,
     tries = 0
     first: LLMError | None = None
     last: LLMError | None = None
+    fell_back = False
     for index, (conn, retries) in enumerate(routes):
         retryable = True
         for attempt in range(max(0, retries) + 1):
@@ -428,13 +431,21 @@ async def _resilient(open_stream, routes, timeout: float,
             if not retryable:
                 break  # a repeat cannot fix this one; the next route might
         if index + 1 < len(routes):
+            fell_back = True
             nxt = routes[index + 1][0]
             log.warning("LLM connection %r gave up (%s: %s); falling back to %r",
                         _label(conn), last.kind, last.detail, _label(nxt))
     # Only reachable with every attempt swallowed above, which is the only way
     # out of the loops without a return or a raise -- so both are always set.
-    if first is last:
-        raise last  # one route, one story: the original exception, untouched
+    if not fell_back:
+        # One route, however many attempts it took: the failure it ended on is
+        # the whole story, and its `retry_after` is the freshest window the
+        # provider named. The test used to be `first is last`, which is a
+        # different question and got this wrong -- a RETRIED route raises two
+        # distinct exception objects, so three attempts against a lone
+        # connection reported "and the fallback failed too" to a user who had
+        # configured no fallback at all.
+        raise last
     # Both routes failed, and neither error alone is the whole truth. The kind
     # stays the PRIMARY's, because that is the connection the user chose and
     # the one the frontend branches on -- reporting a refused connection to a
@@ -443,7 +454,13 @@ async def _resilient(open_stream, routes, timeout: float,
     # fallback's failure is just as misleading: it leaves them fixing the
     # primary and still getting nothing.
     raise LLMError(first.kind,
-                   f"{first.detail} — and the fallback failed too: {last.detail}")
+                   f"{first.detail} — and the fallback failed too: {last.detail}",
+                   # The window comes from the primary for the same reason the
+                   # kind does. It is what reaches the caller as the
+                   # `Retry-After` of a 429 (#213), and a fallback's window
+                   # would say when a connection they are not using will be
+                   # ready.
+                   first.retry_after)
 
 
 class LLMClient:

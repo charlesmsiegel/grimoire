@@ -2,15 +2,18 @@
 
 Dependency-injection providers, the pydantic-version shim, the response-scope
 read/write pair, image serving, the 404 guards every domain module reuses, the
-opt-in page window the growing list routes share (#216), and the stale-write
-precondition every record editor shares (#35). This module holds no routes and
-imports no sibling route module, so it is always safe to import from one.
+opt-in page window the growing list routes share (#216), the stale-write
+precondition every record editor shares (#35), and the LLM error-status
+taxonomy every non-stream generation route answers with (#213). This module
+holds no routes and imports no sibling route module, so it is always safe to
+import from one.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import math
 import os
 import tempfile
 from pathlib import Path
@@ -67,6 +70,100 @@ def _fresh_or_409(expected: str | None, current: str | None) -> None:
         "kind": "stale_record", "rev": current,
         "detail": "This record changed on disk since you opened it — "
                   "reload to see the current version before saving."})
+
+
+# ---- the LLM error taxonomy (#213) ----
+#: The HTTP status each `LLMError.kind` answers with.
+#:
+#: Every non-stream LLM route used to answer 502 for all of them. The `kind` was
+#: in the body the whole time, but a status code is the part a browser, a proxy,
+#: a retry helper and a log reader all understand without knowing this app's
+#: vocabulary -- and 502 told every one of them the same wrong thing: that the
+#: provider had misbehaved, when it had in fact answered clearly.
+#:
+#: Streaming routes are deliberately not covered. By the time a provider fails
+#: there, the reply is already a `200 text/event-stream`, so their errors stay
+#: in-band SSE events carrying the same `kind` (`streaming.py`). No status code
+#: can be sent after the headers are gone, and inventing one for the body would
+#: be a second, disagreeing taxonomy.
+_LLM_STATUS = {
+    # Not 401. This API has no authentication of its own, so 401 would be a
+    # claim about the *caller's* credentials that is simply untrue -- and RFC
+    # 9110 requires a `WWW-Authenticate` on one, which there is no honest value
+    # for. An upstream that refused our key is a gateway that could not serve
+    # the request, which is what 502 says. The `kind` still tells the frontend
+    # which gateway failure this is.
+    "auth": 502,
+    # Setup rather than failure: nothing can be sent until the user changes a
+    # connection. 409 because `_require_connection` already answers exactly that
+    # for exactly this, and two codes for one condition would be worse than
+    # either alone. `missing_dependency` is the same condition with a different
+    # piece missing -- a `claude` connection whose SDK is not installed sails
+    # past `_require_connection`, which checks a key and a base URL, neither of
+    # which that kind has -- so it gets the same answer rather than a second one.
+    "missing_key": 409,
+    "missing_dependency": 409,
+    # The one this issue is named for. A caller that can tell "slow down" from
+    # "the provider is broken" can wait and try again; one reading 502 cannot.
+    "rate_limit": 429,
+    # Upstream never finished, or our own ceiling expired waiting on it
+    # (`_bounded_call`). Both are 504 rather than 502: the gateway reached the
+    # provider fine, it just never got an answer back.
+    "timeout": 504,
+    "network": 502,
+    "bad_response": 502,
+}
+#: What a kind with no entry above answers with. It cannot happen today -- a
+#: test holds `_LLM_STATUS`'s keys to `llm_errors.KINDS` -- but this runs on the
+#: failure path, where a KeyError would replace the provider's error with our
+#: own, and 502 is the answer every kind gave before this map existed.
+_LLM_STATUS_FALLBACK = 502
+
+
+def _retry_after_header(seconds: float | None) -> str | None:
+    """A provider-named wait as a `Retry-After` value, or None for no header.
+
+    Rounded *up* to whole seconds: the header's delta-seconds form is an
+    integer, and rounding down would advise a retry fractionally inside a window
+    the provider already said it would reject.
+
+    Non-finite and non-positive both answer None. `llm_errors.retry_after_seconds`
+    already rejects those where a header is parsed, but a provider client is free
+    to construct an `LLMError` with any float it likes, and `Retry-After: inf` is
+    worse than no header at all.
+    """
+    if seconds is None or not math.isfinite(seconds) or seconds <= 0:
+        return None
+    return str(math.ceil(seconds))
+
+
+def _llm_http_error(exc: LLMError) -> HTTPException:
+    """The HTTP failure one non-stream LLM error becomes (#213).
+
+    One function rather than a raise at each of the ten call sites, because the
+    reason those sites were all wrong is that they each spelled the answer out
+    themselves. Callers `raise _llm_http_error(exc) from exc`: the provider failure
+    IS the cause, and dropping it leaves a traceback that starts at the `raise`
+    with nothing saying which call failed or why.
+
+    A rate limit carries the provider's own `Retry-After` when it named one.
+    Gated on the *kind* rather than on the status being 429, because the kind is
+    what makes the window mean anything: `retry_after` is set from an error
+    response's header, and only a rate-limiter's is advice about when this
+    request will be served. Reading the status instead would tie the header to a
+    number that could be revisited, and silently drop it when it was.
+
+    It can be absent even for a provider that did name one -- `llm._resilient`
+    waits such a window out and re-raises whatever the *last* attempt said -- so
+    the header is a bonus, never a promise, which is exactly what RFC 9110 makes
+    it.
+    """
+    status = _LLM_STATUS.get(exc.kind, _LLM_STATUS_FALLBACK)
+    retry_after = _retry_after_header(exc.retry_after) if exc.kind == "rate_limit" else None
+    return HTTPException(
+        status_code=status,
+        detail={"detail": exc.detail, "kind": exc.kind},
+        headers={"Retry-After": retry_after} if retry_after else None)
 
 
 def _connection_problem(conn: dict) -> str | None:
@@ -244,8 +341,9 @@ async def _bounded_call(coro):
     the ceiling stays where the policy is: the routes that opt into it.
 
     An overrun is raised as the same `LLMError("timeout", ...)` an upstream stall
-    already raises, so every caller's existing 502 handler covers it with no new
-    branch. `llm_call_budget <= 0` disables the ceiling.
+    already raises, so every caller's existing `except LLMError` covers it with
+    no new branch -- and it reaches the client as the 504 that kind maps to
+    (#213), which is what it is. `llm_call_budget <= 0` disables the ceiling.
 
     `asyncio.wait_for` is deliberately NOT used, for the reason `llm._settle`
     spells out: it cancels the call and then waits for that cancellation to
@@ -277,7 +375,7 @@ async def _bounded_call(coro):
         return task.result()
     except asyncio.TimeoutError as exc:
         # asyncio.TimeoutError IS the builtin TimeoutError from 3.11 on, so an
-        # upstream that gives up on its own lands in the same 502 handler as an
+        # upstream that gives up on its own lands in the same handler as an
         # expired ceiling. It keeps its own message: blaming a setting that had
         # nothing to do with it would send the user to tune the wrong knob.
         raise LLMError("timeout", str(exc) or "the call timed out") from exc

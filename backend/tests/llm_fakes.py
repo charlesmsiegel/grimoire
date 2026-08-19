@@ -272,10 +272,38 @@ class CapturingOpenRouter(FakeLLM):
 
 
 class FailingOpenRouter(FakeLLM):
-    """Streams `deltas`, then fails upstream — a turn that dies part-way."""
+    """Streams `deltas`, then fails upstream — a turn that dies part-way.
 
-    def __init__(self, deltas=(), kind="network", message="connection reset"):
-        super().__init__([list(deltas)], error=LLMError(kind, message))
+    `retry_after` is the window a provider named for itself (#144), which the
+    routes turn into the `Retry-After` of a 429 (#213). Defaulted to None, the
+    shape of every failure that carries no such advice."""
+
+    def __init__(self, deltas=(), kind="network", message="connection reset",
+                 retry_after: float | None = None):
+        super().__init__([list(deltas)], error=LLMError(kind, message, retry_after))
+
+
+class FakeModelsClient:
+    """Stands in for `OpenAICompatibleClient` at the
+    `routes.get_openai_compatible_client` seam.
+
+    Not a `FakeLLM`: model listing is a different dependency with a one-method
+    surface, and inheriting the gateway fake would mean answering `stream` and
+    `complete` calls this seam never receives. It lives here anyway, so the
+    "never write another inline fake" rule has somewhere to point for the second
+    seam as well as the first.
+    """
+
+    def __init__(self, models=None, error=None):
+        self.models = models or []
+        self.error = error
+        self.calls = []
+
+    async def list_models(self, base_url, key):
+        self.calls.append((base_url, key))
+        if self.error:
+            raise self.error
+        return self.models
 
 
 class StallingOpenRouter(FakeLLM):

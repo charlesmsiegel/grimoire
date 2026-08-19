@@ -20,8 +20,8 @@ from grimoire import llm, routes
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from tests.llm_fakes import (  # the shared gateway fakes (#204)
-    CapturingOpenRouter, FailingOpenRouter, FakeOpenRouter, FakeOpenRouterComplete,
-    QuietThenAnswers, StallingOpenRouter, from_entries)
+    CapturingOpenRouter, FailingOpenRouter, FakeModelsClient, FakeOpenRouter,
+    FakeOpenRouterComplete, QuietThenAnswers, StallingOpenRouter, from_entries)
 
 
 def _world(client, name="W"):
@@ -159,19 +159,6 @@ def test_models_refresh_400_for_openrouter_and_claude(client):
 
 def test_models_refresh_404_for_missing_connection(client):
     assert client.post("/api/llm-connections/nope/models/refresh").status_code == 404
-
-
-class FakeModelsClient:
-    def __init__(self, models=None, error=None):
-        self.models = models or []
-        self.error = error
-        self.calls = []
-
-    async def list_models(self, base_url, key):
-        self.calls.append((base_url, key))
-        if self.error:
-            raise self.error
-        return self.models
 
 
 def test_models_refresh_fetches_and_caches(client):
@@ -6089,7 +6076,7 @@ def test_a_failing_voice_check_does_not_fail_absorb(client):
         async def complete(self, messages, cfg, usage=None):
             if self.calls >= 2:                  # the voice call, after extraction + dossier
                 self.calls += 1
-                raise LLMError("upstream", "the model exploded")
+                raise LLMError("bad_response", "the model exploded")
             return await super().complete(messages, cfg)
 
     client.app.dependency_overrides[routes.get_llm] = \
@@ -7039,7 +7026,7 @@ class DribblingProvider:
     the upstream #272 is about, which in the wild does it forever.
 
     Bounded rather than endless on purpose, for the reason
-    test_absorb_extraction_overrunning_the_budget_is_502 keeps its sleep short:
+    test_absorb_extraction_overrunning_the_budget_is_a_504 keeps its sleep short:
     a regression that drops the ceiling must FAIL the suite in seconds, not hang
     it. The ceilings below are 0.05s, so the bound is never reached while the
     feature works."""
@@ -7075,7 +7062,7 @@ def test_a_dribbling_one_shot_generation_is_cut_off(client):
 
     r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
 
-    assert r.status_code == 502 and r.json()["kind"] == "timeout"
+    assert r.status_code == 504 and r.json()["kind"] == "timeout"
     # and the provider's stream is closed rather than left holding a connection
     assert provider.closed
 
@@ -7094,7 +7081,7 @@ def test_every_one_shot_generation_route_carries_the_ceiling(client):
                  f"/api/campaigns/{cid}/characters/mara/voice-anchor/generate"):
         _dribbling(client, DribblingProvider())
         r = client.post(path)
-        assert r.status_code == 502 and r.json()["kind"] == "timeout", path
+        assert r.status_code == 504 and r.json()["kind"] == "timeout", path
 
 
 class WedgedCleanupProvider(DribblingProvider):
@@ -7135,7 +7122,7 @@ def test_the_ceiling_does_not_wait_for_the_cancellation_it_requests(client):
     r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
     elapsed = time.monotonic() - started
 
-    assert r.status_code == 502 and r.json()["kind"] == "timeout"
+    assert r.status_code == 504 and r.json()["kind"] == "timeout"
     assert elapsed < provider.UNWIND / 2, f"the request waited out the cleanup ({elapsed:.2f}s)"
     # `provider.closed` is deliberately NOT asserted here, and its absence is
     # the point rather than an oversight: the abandoned call goes on unwinding
@@ -7216,7 +7203,7 @@ def test_a_timeout_from_inside_the_call_is_not_blamed_on_the_ceiling(client):
 
     r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
 
-    assert r.status_code == 502 and r.json()["kind"] == "timeout"
+    assert r.status_code == 504 and r.json()["kind"] == "timeout"
     assert r.json()["detail"] == "the upstream gave up"
 
 
@@ -7502,7 +7489,7 @@ def test_absorb_budget_of_zero_is_unbounded(client, npc_module_scene, monkeypatc
     assert fake.calls == 4 and body["mechanics"]["status"] == "ok"
 
 
-def test_absorb_extraction_overrunning_the_budget_is_502(client, npc_module_scene):
+def test_absorb_extraction_overrunning_the_budget_is_a_504(client, npc_module_scene):
     """Nothing has been produced yet, so there is nothing to degrade to."""
     import asyncio
 
@@ -7521,7 +7508,7 @@ def test_absorb_extraction_overrunning_the_budget_is_502(client, npc_module_scen
 
     client.app.dependency_overrides[routes.get_llm] = lambda: Wedged()
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
-    assert r.status_code == 502 and r.json()["kind"] == "timeout"
+    assert r.status_code == 504 and r.json()["kind"] == "timeout"
 
 
 def test_audit_retry_gets_a_fresh_budget(client, npc_module_scene, monkeypatch):
@@ -8216,7 +8203,9 @@ def test_scene_intent_resolves_names(client):
     assert r.json()["cast"][0]["name"] == "Mara"
 
 
-def test_scene_intent_reports_an_llm_failure_as_502(client):
+def test_scene_intent_reports_an_llm_failure_as_a_bad_gateway(client):
+    """`FailingOpenRouter`'s default kind is `network`, which is a 502; the
+    status each kind maps to is `test_llm_error_status.py`'s subject (#213)."""
     _wid, cid = _campaign(client)
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     client.app.dependency_overrides[routes.get_llm] = lambda: FailingOpenRouter()
