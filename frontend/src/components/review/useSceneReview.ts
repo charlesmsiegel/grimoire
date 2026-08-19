@@ -548,9 +548,30 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     }
   }
 
-  /** The review's half of `adoptSceneId`: a scene's id is its filename, so a
-   *  rename mints a new one and every piece of review state keyed by the old id
-   *  has to follow it. The rest of the page's id-keyed state is the caller's. */
+  /** The review's half of `adoptSceneId`. A scene's id is its filename, so a
+   *  rename mints a new one, and `scene_refs.repoint` carries every *persisted*
+   *  reference across — but three of this review's live only in this browser,
+   *  where no server-side repointer can see them:
+   *
+   *  - `absorbSid`, the id an open review's save and audit retry POST;
+   *  - `payload.scene` on each staged plot or commitment edit, which
+   *    absorb.materialize embedded and apply_edits passes straight to
+   *    plot.set_movement / commitments.set_movement / facts.record — so a save
+   *    after a rename would file the movement under a scene that is gone. All
+   *    three kinds, because each stamps its record with the scene it came from
+   *    (#115, #114). A fact row needs nothing beyond its payload: its staged
+   *    `before` is a `conflicts.fact_line`, which carries no scene id at all —
+   *    deliberately, so that the whole class of staleness the commitment
+   *    fingerprint forces on this function cannot arise for facts;
+   *  - the staged CONFLICT BASIS of a commitment row. `conflicts.commitment_line`
+   *    ends `[N beats, last moved in <scene>]`, and `scene_refs.repoint` rewrites
+   *    that scene id in the stored record — so a row left holding the old id no
+   *    longer matches what the store says and saves as a spurious conflict, on a
+   *    commitment nobody touched. `resolve_from` gets the same treatment: it is
+   *    the value the reviewer was shown, and it is compared the same way.
+   *
+   *  The page's other id-keyed state — the reroll alternates, the loaded-window
+   *  token, a parked prompt — is the caller's, in `adoptSceneId`. */
   function sceneRenamed(oldId: string, newId: string) {
     // Anchored to the END of the line, so a beat that happens to quote the old
     // scene id in its own text is left alone — only the fingerprint moves. The

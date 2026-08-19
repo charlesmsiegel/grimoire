@@ -22,11 +22,33 @@ vi.mock("../api/models", () => ({ getModels: vi.fn() }));
 import { api, ApiError } from "../api/client";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import {
-  here, Here, installCampaignMocks, ONE_SCENE, openScene, playRoutes, readCounter,
-  relistsAs, renderCampaign, RESPONSE_BUNDLE, RESPONSE_PRESETS, withPalette,
+  here, Here, installCampaignMocks, ONE_SCENE, openScene, playRoutes,
+  renderCampaign, RESPONSE_BUNDLE, RESPONSE_PRESETS, withPalette,
 } from "../testkit/campaignHarness";
 
 beforeEach(installCampaignMocks);
+
+// `listScenes` as the server actually answers it around a rename: the mount
+// read still sees the old id, and every read AFTER the rename landed sees the
+// new one. The relists that follow a mutation are `fresh` reads issued once the
+// write returned, so they cannot come back pre-rename — and mocking them that
+// way models a server that lost the rename it just confirmed.
+function relistsAs(before: any[], after: any[]) {
+  (api.listScenes as any).mockResolvedValueOnce(before).mockResolvedValue(after);
+}
+
+// `listScenes` no longer takes a `fresh` flag — the endpoint never coalesces
+// now (#87), so nothing distinguishes a mount read from a relist at the API
+// level. These fixtures tell them apart by order instead: the first read of a
+// campaign is its mount read, every later one is a relist.
+function readCounter() {
+  const seen = new Map<string, number>();
+  return (cid: string) => {
+    const n = (seen.get(cid) ?? 0) + 1;
+    seen.set(cid, n);
+    return n;
+  };
+}
 
 test("the pinned conditions block names where, when and the campaign's world copy", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);

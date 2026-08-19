@@ -1355,28 +1355,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   }
 
   // A scene's id is its filename, so a rename mints a new one. `scene_refs.repoint`
-  // carries every *persisted* reference across; four more live only in this
-  // browser, where no server-side repointer can see them:
-  //   - `absorbSid`, the id an open review's save and audit retry POST;
-  //   - `payload.scene` on each staged plot or commitment edit, which
-  //     absorb.materialize embedded and apply_edits passes straight to
-  //     plot.set_movement / commitments.set_movement / facts.record — so a save
-  //     after a rename would file the movement under a scene that is gone. All
-  //     three kinds, because each stamps its record with the scene it came from
-  //     (#115, #114). A fact row needs nothing beyond its payload: its staged
-  //     `before` is a `conflicts.fact_line`, which carries no scene id at all —
-  //     deliberately, so that the whole class of staleness the commitment
-  //     fingerprint forces on this function cannot arise for facts;
-  //   - the staged CONFLICT BASIS of a commitment row. `conflicts.commitment_line`
-  //     ends `[N beats, last moved in <scene>]`, and `scene_refs.repoint` rewrites
-  //     that scene id in the stored record — so a row left holding the old id no
-  //     longer matches what the store says and saves as a spurious conflict, on a
-  //     commitment nobody touched. `resolve_from` gets the same treatment: it is
-  //     the value the reviewer was shown, and it is compared the same way; and
-  //   - the id the reroll-alternates state is scoped to (below).
+  // carries every *persisted* reference across; the rest live only in this
+  // browser, where no server-side repointer can see them. Three of those belong
+  // to an open review and are repointed by `useSceneReview.sceneRenamed`, whose
+  // comment is where the reasoning for each of them lives; the fourth is the
+  // reroll-alternates state, and it is here.
   function reviewSceneRenamed(oldId: string, newId: string) {
-    // `absorbSid`, the staged edits' scene stamps and the unanswered conflicts
-    // all carry the old id; the review owns them and repoints its own.
     review.sceneRenamed(oldId, newId);
     // The alternates sidecar moves with the scene file (`scene_refs.repoint`),
     // but the id this state is scoped to lives only here — left stale, the
@@ -3002,8 +2986,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           {!focus && showIncoming && <IncomingReview key={cid} cid={cid} />}
           {review.editFailures.length > 0 && (
             <div className="mechanics-notice">
-              <p>{review.editFailures.length} change
-                 {review.editFailures.length === 1 ? "" : "s"} did not apply</p>
+              <p>{review.editFailures.length} change{review.editFailures.length === 1 ? "" : "s"} did not apply</p>
               {review.editFailures.map((f, i) => (
                 <p className="field-hint" key={i}>{f.label}: {f.reason} ({f.kind})</p>
               ))}
