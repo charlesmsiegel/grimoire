@@ -8349,6 +8349,11 @@ def test_get_scenes_pages_the_listing_it_already_returns(client):
 def test_get_chronicle_defaults_to_the_page_it_always_returned(client):
     cid = _seeded_chronicle(client, 60)
     out = client.get(f"/api/campaigns/{cid}/chronicle").json()
+    # The 50 is written out rather than read from `scenes.CHRONICLE_PAGE` ON
+    # PURPOSE: what this pins is that the default is the number the route
+    # returned before it could be paged at all. Importing the constant would
+    # make the test agree with whatever the constant becomes, which is the one
+    # thing it is here to refuse.
     assert [r["id"] for r in out] == [f"s{i:03d}" for i in range(10, 60)]
 
 
@@ -8395,6 +8400,40 @@ def test_get_changes_pages_the_listing_it_already_returns(client):
     assert page(offset=1) == full[1:]
     assert page(limit=1, offset=1) == full[1:2]
     assert page(offset=3) == []
+
+
+def test_get_changes_renders_a_diff_only_for_the_page_it_sends(client, monkeypatch):
+    """The route's reason for slicing where it does, held to the code.
+
+    `_page_of` sits between naming the records and rendering their diffs, and
+    the only observable difference that placement makes is how many times
+    `line_diff` runs. Move the slice down past the loop and every other test in
+    this section still passes, because the BODY would be identical -- so this is
+    the one that fails, which is what makes the placement a decision rather than
+    an accident.
+    """
+    _, cid = _campaign(client)
+    croot = store.campaigns.campaign_root(cid)
+    for name in ("Ashfall", "Brinepact", "Cinderwrit"):
+        store.entities.create_entity(croot, "lore", name, body="old body")
+        eid = name.lower()
+        store.absorb.apply_edits(cid, [{"id": f"lore:{eid}", "kind": "lore",
+                                        "target": {"kind": "lore", "id": eid},
+                                        "label": f"{name} — lore", "field": "body",
+                                        "before": "old body", "after": "old body\nnew line",
+                                        "authored": False}], "s1")
+
+    calls = Counter()
+    real = store.changes.line_diff
+    monkeypatch.setattr(store.changes, "line_diff",
+                        lambda before, after: (calls.update("d"), real(before, after))[1])
+
+    assert len(client.get(f"/api/campaigns/{cid}/changes").json()) == 3
+    assert calls["d"] == 3          # one field each, all three rendered
+
+    calls.clear()
+    assert len(client.get(f"/api/campaigns/{cid}/changes", params={"limit": 1}).json()) == 1
+    assert calls["d"] == 1          # the two rows off the page cost nothing
 
 
 @pytest.mark.parametrize("route", ["scenes", "chronicle", "changes"])
