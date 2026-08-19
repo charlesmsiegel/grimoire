@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api, type ReplayPreview, type ReplaySession } from "../api/client";
+import type { ChatEvent } from "../api/stream";
 
 /** The retcon replay's own surface (#79/#80).
  *
@@ -40,8 +41,14 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
   // post -- it is simply not rendered.
   const [preview, setPreview] = useState<{ at: number; data: ReplayPreview } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [ran, setRan] = useState(false);
   const [error, setError] = useState("");
+  // Whether a replayed reply is waiting on a verdict. The SESSION's answer, not
+  // a flag this component sets when it runs a turn: a reload, or a second tab,
+  // would lose that flag and offer "Replay next turn" for a turn already run —
+  // and the second generation would land beside the first. The server refuses
+  // that outright (`replay.stage`); this is the same fact, so the button the
+  // reviewer sees matches the one the server will accept.
+  const ran = !!session?.pending;
 
   // The session as last installed, and whether this panel is still mounted.
   // Both exist for the same reason: this component mounts on EVERY scene the
@@ -108,7 +115,6 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
     if (startAt === null) return;
     await api.startReplay(cid, sid, startAt);
     onStartHandled();
-    setRan(false);
     await load();
     onChanged();
   });
@@ -121,22 +127,31 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
     onForked(forked.id);
   });
 
+  /** Run a streaming call and surface what it streamed BACK, not merely whether
+   *  it threw. A generation that fails mid-stream reports an `error` frame and
+   *  the request still completes — so a caller that ignores frames reads a
+   *  failed turn as a finished one, and offers Accept for a reply that was
+   *  never written. */
+  async function streamed(run: (onEvent: (e: ChatEvent) => void) => Promise<void>) {
+    let failed = "";
+    await run((e) => { if (e.error) failed = e.error.detail; });
+    if (failed) setError(failed);
+  }
+
   const runTurn = () => guard(async () => {
-    await api.replayTurn(cid, sid, () => {});
-    setRan(true);
+    await streamed((on) => api.replayTurn(cid, sid, on));
     await load();
     onChanged();
   });
 
   const again = () => guard(async () => {
-    await api.regenerate(cid, sid, () => {});
+    await streamed((on) => api.regenerate(cid, sid, on));
     await load();
     onChanged();
   });
 
   const accept = () => guard(async () => {
     await api.acceptReplay(cid, sid);
-    setRan(false);
     await load();
     onChanged();
   });
@@ -149,7 +164,6 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
       "Cancel keeps the scene as the replay has left it and discards the posts " +
       "that have not been replayed yet.");
     await api.cancelReplay(cid, sid, restore);
-    setRan(false);
     await load();
     onChanged();
   });

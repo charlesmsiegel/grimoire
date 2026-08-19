@@ -15,7 +15,11 @@ import { api } from "../api/client";
 const SESSION = {
   scene: "s1", cut: 3, done: 0, steps: 4, turns_left: 2,
   next: "generation" as const, staged: false, created: "", gone: false,
+  pending: false,
 };
+/** The same session once a replayed reply is in the transcript, unaccepted —
+ *  what the server reports after a turn has run. */
+const PENDING = { ...SESSION, pending: true };
 const PREVIEW = { posts: 3, turns: 2, threshold: 10, fork: false, blocked: "" };
 
 beforeEach(() => {
@@ -100,6 +104,10 @@ test("shows the walk's position while a replay is running", async () => {
 test("accept and try again appear only once a turn has been run", async () => {
   (api.getReplay as any).mockResolvedValue(SESSION);
   await renderPanel();
+  // The server is what says a reply is waiting, so that is what the turn moves.
+  (api.replayTurn as any).mockImplementation(async () => {
+    (api.getReplay as any).mockResolvedValue(PENDING);
+  });
   fireEvent.click(screen.getByText("Replay next turn"));
   await waitFor(() => expect(screen.getByText("Accept")).toBeTruthy());
   expect(api.replayTurn).toHaveBeenCalled();
@@ -107,9 +115,38 @@ test("accept and try again appear only once a turn has been run", async () => {
   fireEvent.click(screen.getByText("Try again"));
   await waitFor(() => expect(api.regenerate).toHaveBeenCalled());
 
+  (api.acceptReplay as any).mockImplementation(async () => {
+    (api.getReplay as any).mockResolvedValue(SESSION);
+    return SESSION;
+  });
   fireEvent.click(screen.getByText("Accept"));
   await waitFor(() => expect(api.acceptReplay).toHaveBeenCalledWith("c1", "s1"));
   await waitFor(() => expect(screen.getByText("Replay next turn")).toBeTruthy());
+});
+
+test("a reply left waiting is still waiting after a reload", async () => {
+  // The regression this pins: the verdict used to be local state, so a reload
+  // offered "Replay next turn" for a turn already run — and the second
+  // generation landed beside the first.
+  (api.getReplay as any).mockResolvedValue(PENDING);
+  await renderPanel();
+  expect(screen.getByText("Accept")).toBeTruthy();
+  expect(screen.getByText("Try again")).toBeTruthy();
+  expect(screen.queryByText("Replay next turn")).toBeNull();
+});
+
+test("a turn that fails mid-stream is reported, not counted as run", async () => {
+  // `streamPost` resolves normally on an error frame — that is how a failed
+  // generation reports itself — so ignoring frames reads failure as success and
+  // offers Accept for a reply that was never written.
+  (api.getReplay as any).mockResolvedValue(SESSION);
+  (api.replayTurn as any).mockImplementation(async (_c: string, _s: string, on: any) => {
+    on({ error: { detail: "the model refused", kind: "provider" } });
+  });
+  await renderPanel();
+  fireEvent.click(screen.getByText("Replay next turn"));
+  await waitFor(() => expect(screen.getByText("the model refused")).toBeTruthy());
+  expect(screen.queryByText("Accept")).toBeNull();
 });
 
 test("stopping asks whether to put the rest of the scene back", async () => {

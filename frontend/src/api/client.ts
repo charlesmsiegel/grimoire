@@ -1084,8 +1084,10 @@ export const api = {
   getReplay: (cid: string, sid: string) =>
     request<ReplaySession | null>("GET", `/api/campaigns/${cid}/scenes/${sid}/replay`,
                                   undefined, { fresh: true }),
+  // Answers with the session in the same shape `getReplay` does, plus the
+  // cascade's report — the backlog is never on the wire, however this is asked.
   startReplay: (cid: string, sid: string, index: number) =>
-    request<{ cut: number; cascade: CascadeReport }>(
+    request<ReplaySession & { cascade: CascadeReport }>(
       "POST", `/api/campaigns/${cid}/scenes/${sid}/replay`, { index }),
   // Streams like `chat` and for the same reason: it re-posts the player's own
   // words and then generates one reply against the edited history. Rerolling

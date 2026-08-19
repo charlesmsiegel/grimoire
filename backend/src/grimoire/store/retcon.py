@@ -64,6 +64,7 @@ the one thing a retcon must not do on its own.
 from __future__ import annotations
 
 from . import changes, chronicle, commitments, plot, provenance, scene_ids
+from .absorb import conflicts
 from . import alternates, cascade, locks, turnstate
 from .scenes import read as scenes_read, write as scenes_write
 
@@ -73,22 +74,32 @@ from .scenes import read as scenes_read, write as scenes_write
 SOURCES: tuple[str, ...] = ("citation", "changes", "thread")
 
 
-def _play_order(cid: str) -> dict[str, tuple]:
+def _play_order(scenes: list[dict]) -> dict[str, tuple]:
     """Each scene id mapped to a sort key, or absent when it has none.
 
     Two keys, and they never mix: an id inside the grammar sorts by its number,
     an id outside it by its `created` stamp. Comparing one of each would be
-    comparing an integer with a date, so `_after` requires the two keys it is
-    given to be the same shape and declines the pair otherwise.
+    comparing an integer with a date, so the caller requires the two keys it
+    compares to be the same shape and declines the pair otherwise.
     """
     out: dict[str, tuple] = {}
-    for meta in scenes_read.list_scenes(cid):
+    for meta in scenes:
         parsed = scene_ids.parse_sid(meta["id"])
         if parsed:
             out[meta["id"]] = ("n", parsed["number"])
         elif meta.get("created"):
             out[meta["id"]] = ("t", meta["created"])
     return out
+
+
+def _later(scenes: list[dict], sid: str) -> set[str]:
+    """`later_scenes`, over a scene list the caller already has."""
+    order = _play_order(scenes)
+    mine = order.get(sid)
+    if mine is None:
+        return set()
+    return {other for other, key in order.items()
+            if other != sid and key[0] == mine[0] and key[1] > mine[1]}
 
 
 def later_scenes(cid: str, sid: str) -> set[str]:
@@ -99,19 +110,14 @@ def later_scenes(cid: str, sid: str) -> set[str]:
     reported against it. The alternative — assuming an unorderable scene is
     later — would put a badge on rows whose evidence is a coin toss.
     """
-    order = _play_order(cid)
-    mine = order.get(sid)
-    if mine is None:
-        return set()
-    return {other for other, key in order.items()
-            if other != sid and key[0] == mine[0] and key[1] > mine[1]}
+    return _later(scenes_read.list_scenes(cid), sid)
 
 
-def _titles(cid: str) -> dict[str, str]:
+def _titles(scenes: list[dict], cid: str) -> dict[str, str]:
     """Scene id -> the label a badge should show. The chronicle's one-line
     summary where the scene has been absorbed, the scene title otherwise, and
     the bare id when it has neither."""
-    out = {m["id"]: m.get("title") or m["id"] for m in scenes_read.list_scenes(cid)}
+    out = {m["id"]: m.get("title") or m["id"] for m in scenes}
     chron = chronicle.read_chronicle(cid)
     for sid, rec in (chron.items() if isinstance(chron, dict) else ()):
         line = rec.get("one_line") if isinstance(rec, dict) else ""
@@ -135,19 +141,59 @@ def _scene_of(rows: dict, key: str) -> str:
     return scene if isinstance(scene, str) else ""
 
 
-def _changed(edit: dict) -> bool:
+#: Kinds whose `before` and `after` are the same value in the same shape — the
+#: record's own text, or a rendering of it that both sides share — so the two
+#: can be compared directly. `conflicts.MERGEABLE` is the same idea from the
+#: other end (what a reviewer may paste back into the field), plus the two
+#: relationship kinds, whose `before`/`after` are both `_render_feeling` output
+#: or both a bare bond type.
+_COMPARABLE: frozenset[str] = conflicts.MERGEABLE | frozenset({"relationship", "bond"})
+
+#: Kinds whose disagreement is a STATUS, not a text. A plot row's `before` is
+#: `conflicts.plot_line` — a rendering of the thread's status plus its last beat
+#: — while its `after` is the new beat alone, so the two are never equal and a
+#: text comparison would call every row a contradiction. What actually
+#: contradicts a later scene there is the thread's state: this scene says
+#: `closed` where the scene after it left the thread `open`. An added beat is
+#: not a disagreement — beats accumulate.
+_STATUS_KINDS: dict[str, str] = {"plot": "plot", "commitment": "commitments"}
+
+
+def _changed(edit: dict, threads: dict, promises: dict) -> bool:
     """Whether this edit actually disagrees with what is stored.
 
-    `before` is the record's value as `materialize` read it, so equality means
-    the fresh extraction re-derived what is already there — a re-reading that
-    agrees with the record contradicts nobody, whoever wrote it. An edit with no
-    `before` at all has no basis to compare against and claims nothing, the same
-    silence `absorb/conflicts.py` keeps.
+    Three answers, and the third one is the point of the split:
+
+    - A **comparable** kind is compared as text. `before` is the record's value
+      as `materialize` read it, so equality means the fresh extraction
+      re-derived what is already there — a re-reading that agrees with the
+      record contradicts nobody, whoever wrote it.
+    - A **status** kind is compared on its status alone, for the reason
+      `_STATUS_KINDS` gives.
+    - Everything else — a fact, a weather axis, a dossier, a sheet, a record
+      this scene would CREATE — has no two values in one shape to compare, so
+      nothing is claimed. `fact_line` and `weather`'s rows render a fingerprint
+      into `before` that `after` was never in the format of; comparing those
+      would manufacture a disagreement out of a formatting difference, which is
+      exactly what a badge must not do.
+
+    An edit with no `before` at all has no basis and claims nothing either, the
+    same silence `absorb/conflicts.py` keeps.
     """
-    before, after = edit.get("before"), edit.get("after")
-    if not isinstance(before, str) or not isinstance(after, str):
-        return False
-    return before.strip() != after.strip()
+    kind = edit.get("kind")
+    if kind in _COMPARABLE:
+        before, after = edit.get("before"), edit.get("after")
+        if not isinstance(before, str) or not isinstance(after, str):
+            return False
+        return before.strip() != after.strip()
+    if kind in _STATUS_KINDS:
+        rec = _thread(edit, threads if kind == "plot" else promises)
+        payload = edit.get("payload")
+        proposed = payload.get("status") if isinstance(payload, dict) else None
+        stored = rec.get("status") if isinstance(rec, dict) else None
+        return (isinstance(proposed, str) and isinstance(stored, str)
+                and proposed != stored)
+    return False
 
 
 def _target_ref(edit: dict) -> str:
@@ -164,6 +210,14 @@ def _target_ref(edit: dict) -> str:
     return f"{kind}/{rid}"
 
 
+def _thread(edit: dict, threads: dict) -> dict:
+    """The stored thread an edit addresses, or `{}`."""
+    target = edit.get("target")
+    tid = target.get("id") if isinstance(target, dict) else None
+    rec = threads.get(tid) if isinstance(tid, str) and isinstance(threads, dict) else None
+    return rec if isinstance(rec, dict) else {}
+
+
 def _thread_scene(edit: dict, threads: dict, kind: str) -> str:
     """The scene that last moved the thread this edit addresses, or `""`.
 
@@ -173,10 +227,7 @@ def _thread_scene(edit: dict, threads: dict, kind: str) -> str:
     """
     if edit.get("kind") != kind:
         return ""
-    target = edit.get("target")
-    tid = target.get("id") if isinstance(target, dict) else None
-    rec = threads.get(tid) if isinstance(tid, str) else None
-    last = rec.get("last_scene") if isinstance(rec, dict) else None
+    last = _thread(edit, threads).get("last_scene")
     return last if isinstance(last, str) else ""
 
 
@@ -196,15 +247,20 @@ def contradictions(cid: str, sid: str, edits: list) -> list[dict]:
     whole staged list on a path that has just made several LLM calls, so the
     cost that matters is the file reads, not the loop.
     """
-    later = later_scenes(cid, sid)
+    # ONE enumeration of the scene directory, shared by the ordering and the
+    # labels. `list_scenes` parses the frontmatter of every scene in the
+    # campaign, and this used to run it twice — a second full walk of a long
+    # campaign's scenes to look up a handful of titles.
+    scenes = scenes_read.list_scenes(cid)
+    later = _later(scenes, sid)
     if not later:
         return []
     cites, log = provenance.read(cid), changes.read(cid)
     threads, promises = plot.read(cid), commitments.read(cid)
-    labels = _titles(cid)
+    labels = _titles(scenes, cid)
     out: list[dict] = []
     for edit in edits:
-        if not isinstance(edit, dict) or not _changed(edit):
+        if not isinstance(edit, dict) or not _changed(edit, threads, promises):
             continue
         ref = _target_ref(edit)
         # Order is the docstring's: the finest attribution that can answer wins.
