@@ -116,8 +116,11 @@ test("a refresh does not reset existing suggestions to pending while it is in fl
 });
 
 test("a failure empties the suggestions and reports the error", async () => {
-  (api.sceneSuggestions as any).mockRejectedValue({ detail: "no key" });
+  // The rejection is reported whole, not as text: the picker renders it, and
+  // `kind` is what lets it tell an unreachable model from a missing key (#210).
+  const refused = { detail: "no key", kind: "missing_key" };
+  (api.sceneSuggestions as any).mockRejectedValue(refused);
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
-  await waitFor(() => expect(result.current.error).toBe("no key"));
+  await waitFor(() => expect(result.current.error).toBe(refused));
   expect(result.current.suggestions).toEqual([]);
 });

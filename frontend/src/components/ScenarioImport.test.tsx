@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { ScenarioImport } from "./ScenarioImport";
 
 vi.mock("../api/client", () => ({
@@ -210,4 +211,15 @@ test("a card with no cast still offers its entries and openers", async () => {
   fireEvent.click(screen.getByRole("button", { name: /read card/i }));
   await screen.findByText(/no cast proposed/i);
   expect(screen.getByRole("button", { name: /import 3 records/i })).toBeTruthy();
+});
+
+test("a card the model could not be read for offers the local-model recovery", async () => {
+  // Parsing a scenario card is a generation like any other (#210): offline it
+  // failed with a bare socket error and no way forward.
+  (api.scenarioParse as any).mockRejectedValue({ detail: "connection refused", kind: "network" });
+  render(<MemoryRouter><ScenarioImport wid="w" /></MemoryRouter>);
+  pickFile();
+  fireEvent.click(screen.getByRole("button", { name: /read card/i }));
+  await screen.findByText(/Couldn.t reach the model provider/);
+  expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
 });

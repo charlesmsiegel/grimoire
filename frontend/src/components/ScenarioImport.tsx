@@ -3,6 +3,7 @@ import {
   api, type EntityKind, type LoreEntryDraft, type ScenarioCharacterDraft,
   type ScenarioGreetingDraft, type ScenarioImportResult, type ScenarioProposal,
 } from "../api/client";
+import { ErrorNote } from "./ErrorNote";
 
 const FORMATS = ["json", "png", "charx"];
 const CATEGORIES: EntityKind[] = ["lore", "locations", "items", "groups", "creatures"];
@@ -59,7 +60,9 @@ export function ScenarioImport({ wid, onImported }: { wid: string; onImported?: 
   const [kept, setKept] = useState<Kept | null>(null);
   const [art, setArt] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Raw: parsing a scenario card is a generation, so an unreachable model is
+  // one of the ways this fails (#210).
+  const [error, setError] = useState<unknown>(null);
   const [result, setResult] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -71,10 +74,10 @@ export function ScenarioImport({ wid, onImported }: { wid: string; onImported?: 
       const got = await load();
       setProposal(got);
       setKept(allKept(got));
-    } catch (err: any) {
+    } catch (err: unknown) {
       setProposal(null);
       setKept(null);
-      setError(err.detail ?? String(err));
+      setError(err);
     } finally {
       setBusy(false);
     }
@@ -173,8 +176,8 @@ export function ScenarioImport({ wid, onImported }: { wid: string; onImported?: 
       setKept(null);
       if (fileRef.current) fileRef.current.value = "";
       onImported?.();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(err);
     } finally {
       setBusy(false);
     }
@@ -200,7 +203,7 @@ export function ScenarioImport({ wid, onImported }: { wid: string; onImported?: 
 
   return (
     <div>
-      {error && <div className="banner">{error}</div>}
+      {error != null && <div className="banner"><ErrorNote err={error} /></div>}
       {result && <div className="banner">{result}</div>}
 
       <div className="picker">

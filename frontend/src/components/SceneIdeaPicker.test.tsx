@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { SceneIdeaPicker } from "./SceneIdeaPicker";
 import type { SceneIdea, SceneSuggestion } from "../api/client";
 
@@ -43,7 +44,7 @@ type StateOverrides = Partial<{
   picks: string[] | null;
   nextDate: string;
   busy: boolean;
-  error: string | null;
+  error: unknown;
   refresh: (direction: string) => void;
   onPicked: (draft: any, warning?: string) => void;
   onCancel: () => void;
@@ -72,7 +73,9 @@ function Wrapper(props: StateOverrides) {
 function renderPicker(overrides: StateOverrides = {}) {
   const onPicked = overrides.onPicked ?? vi.fn();
   const refresh = overrides.refresh ?? vi.fn();
-  const utils = render(<Wrapper {...overrides} onPicked={onPicked} refresh={refresh} />);
+  // Routed: an unreachable model puts a Connections link in the banner (#210).
+  const utils = render(
+    <MemoryRouter><Wrapper {...overrides} onPicked={onPicked} refresh={refresh} /></MemoryRouter>);
   return { onPicked, refresh, ...utils };
 }
 
@@ -205,6 +208,22 @@ test("greeting and generated cards are disabled while an extraction is in flight
   expect(screen.getByText("Reckoning").closest("button")).toBeDisabled();
   expect(screen.getByText("The creditor").closest("button")).toBeDisabled();
   await act(async () => { releaseIntent({ title: "x", date: "", location: null, cast: [] }); });
+});
+
+test("a generation the model could not be reached for offers the recovery", async () => {
+  // The hook hands the rejection up whole; this is the surface that turns a
+  // `network` kind into somewhere to go (#210).
+  renderPicker({ error: { detail: "connection refused", kind: "network" }, suggestions: [] });
+  await screen.findByText(/Couldn.t reach the model provider/);
+  expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
+  expect(screen.getByText(/connection refused/)).toBeInTheDocument();
+});
+
+test("a generation refused for any other reason still shows that reason", async () => {
+  renderPicker({ error: { detail: "No LLM connection selected", kind: "missing_key" },
+                 suggestions: [] });
+  await screen.findByText("No LLM connection selected");
+  expect(screen.queryByRole("link")).toBeNull();
 });
 
 test("a stale greetings-fetch error banner is cleared when Regenerate starts", async () => {

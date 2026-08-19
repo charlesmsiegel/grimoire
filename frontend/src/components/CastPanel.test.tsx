@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { CastPanel } from "./CastPanel";
 
 vi.mock("../api/client", async () => {
@@ -88,10 +89,14 @@ test("switching scenes clears a previously seeded prompt", async () => {
 
 function renderPanel(props: Partial<{ ready: boolean; onSeeded: () => void;
                                       onSceneRenamed: (id: string) => void; initialPrompt: string }> = {}) {
+  // Routed, because the panel's banner links to Connections when the model
+  // could not be reached (#210) -- a `Link` outside a router throws.
   render(
-    <CastPanel cid="c" sid="s" ready={props.ready ?? true}
-               onSeeded={props.onSeeded ?? (() => {})} onSceneRenamed={props.onSceneRenamed}
-               initialPrompt={props.initialPrompt} />,
+    <MemoryRouter>
+      <CastPanel cid="c" sid="s" ready={props.ready ?? true}
+                 onSeeded={props.onSeeded ?? (() => {})} onSceneRenamed={props.onSceneRenamed}
+                 initialPrompt={props.initialPrompt} />
+    </MemoryRouter>,
   );
 }
 
@@ -258,6 +263,21 @@ test("a failed greeting save says so and keeps the opener", async () => {
 
   expect(await screen.findByText("name taken")).toBeInTheDocument();
   expect(screen.getByText("Mist rolls in.")).toBeInTheDocument();
+});
+
+test("an opener the model could not be reached for offers the local-model recovery", async () => {
+  // The stream's error frame carries `kind`; the composer used to hand up
+  // `e.error.detail` alone, so being offline read as a bare socket error (#210).
+  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
+    onEvent({ error: { detail: "connection refused", kind: "network" } });
+  });
+  renderPanel();
+  await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
+  fireEvent.change(screen.getByLabelText("Opener prompt"), { target: { value: "A foggy harbor" } });
+  fireEvent.click(screen.getByRole("button", { name: /generate/i }));
+  await screen.findByText(/Couldn.t reach the model provider/);
+  expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
+  expect(screen.getByText(/connection refused/)).toBeInTheDocument();
 });
 
 test("Use adopts the generated opener as the scene's first post", async () => {

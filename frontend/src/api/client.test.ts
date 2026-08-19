@@ -917,3 +917,31 @@ test("a PC create that names no version sends none, leaving the server's default
     expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "Winifred" }) }),
   );
 });
+
+test("a 502 from an LLM route reaches the caller with its kind intact", async () => {
+  // The whole offline story (#210) hangs off this one lift: the backend's
+  // HTTPException handler flattens a dict detail, so `kind` arrives beside
+  // `detail` at the top level of the body, and `request` has to carry it onto
+  // the error. `isOffline` reads nothing else. Two branches of CampaignView
+  // (`already_absorbed`, `edit_conflicts`) have always read it too, and until
+  // now nothing proved `request` populated it at all -- every test that
+  // branches on a kind hands its component a hand-built object.
+  globalThis.fetch = vi.fn().mockResolvedValue({
+    ok: false, status: 502, statusText: "Bad Gateway",
+    json: async () => ({ detail: "connection reset", kind: "network" }),
+  }) as unknown as typeof fetch;
+  await expect(api.generateCharacterTagline("w", "seraphine")).rejects.toMatchObject({
+    status: 502, detail: "connection reset", kind: "network",
+  });
+});
+
+test("a stream that is refused before any body carries its kind too", async () => {
+  // `streamPost`'s non-2xx path builds its own ApiError; the opener composer
+  // and the chat view both read `kind` off it.
+  globalThis.fetch = vi.fn().mockResolvedValue({
+    ok: false, status: 502, statusText: "Bad Gateway",
+    json: async () => ({ detail: "connection reset", kind: "network" }),
+  }) as unknown as typeof fetch;
+  await expect(api.opener("run", "s1", "a foggy harbor", () => {}))
+    .rejects.toMatchObject({ status: 502, kind: "network" });
+});

@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { SceneInspector } from "./SceneInspector";
 
 vi.mock("../api/client", async () => {
@@ -143,7 +144,10 @@ const EMPTY_BRIEFING = {
   focus: [], plot: [], commitments: [], relationships: [], last_time: null };
 
 function renderInspector(onSceneChanged: () => void = () => {}) {
-  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={onSceneChanged} />);
+  // Routed: a refold the model could not be reached for links to
+  // Connections (#210), and a `Link` outside a router throws.
+  render(<MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
+                                       onSceneChanged={onSceneChanged} /></MemoryRouter>);
 }
 
 // ---- the scene-break detector (#84) ----
@@ -1109,6 +1113,19 @@ test("a failed refresh reports itself and never blanks the summary", async () =>
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
   await screen.findByText("OpenRouter key not set");
+  expect(screen.getByText("Standing summary.")).toBeInTheDocument();
+});
+
+test("a refold the model could not be reached for offers the recovery", async () => {
+  (api.getRollingSummary as any).mockResolvedValue({
+    summary: "Standing summary.", at: 4, total: 4, stale: false, every: 10, due: false });
+  (api.refreshRollingSummary as any).mockRejectedValue(
+    { detail: "connection refused", kind: "network" });
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
+  await screen.findByText(/Couldn.t reach the model provider/);
+  expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
+  // still never destructive
   expect(screen.getByText("Standing summary.")).toBeInTheDocument();
 });
 

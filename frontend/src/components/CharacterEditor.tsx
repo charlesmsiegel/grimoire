@@ -8,6 +8,7 @@ import { GreetingMarkdown } from "./GreetingMarkdown";
 import { HtmlNote } from "./HtmlNote";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import SheetPanel from "./SheetPanel";
+import { ErrorNote } from "./ErrorNote";
 import { TaglinePrompt } from "./TaglinePrompt";
 import { UrlImportPrompt } from "./UrlImportPrompt";
 import { scrollShellToTop } from "../shellScroll";
@@ -216,7 +217,13 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const [card, setCard] = useState<Card | null>(null);
   const [greetings, setGreetings] = useState<string[]>([]);
   const [mode, setMode] = useState<Mode>("grid");
-  const [error, setError] = useState<string | null>(null);
+  // The raw rejection rather than its text, so the banner can tell a model
+  // that could not be reached from any other refusal (#210). Generating a
+  // voice anchor or a tagline is a provider call like any other, and a plain
+  // string here would have thrown the `kind` away before the banner saw it.
+  // Every other setter still writes a composed sentence; `ErrorNote` renders
+  // a string unchanged.
+  const [error, setError] = useState<unknown>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const versionFileRef = useRef<HTMLInputElement>(null);
@@ -715,7 +722,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await api.pickVersion(scope.id, "characters", detail.meta.id, vid);
       await select(detail.meta.id);
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -726,7 +733,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await api.importVersion(scope.id, "characters", detail.meta.id, importVid);
       await select(detail.meta.id);
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -796,7 +803,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       if (anchorReq.current !== req) return;
       anchorLoaded.current = voiceAnchor;   // in sync again: no longer a draft
     } catch (err: unknown) {
-      if (anchorReq.current === req) setError(errorText(err));
+      if (anchorReq.current === req) setError(err);
     } finally {
       if (anchorReq.current === req) setAnchorSaving(false);
     }
@@ -827,7 +834,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       setVoiceAnchor(r.voice_anchor);
       setAnchorState("ready");
     } catch (err: unknown) {
-      if (anchorReq.current === req) setError(errorText(err));
+      if (anchorReq.current === req) setError(err);
     } finally {
       if (anchorReq.current === req) setAnchorBusy(false);
     }
@@ -838,7 +845,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       await api.setCharacterTagline(wid, detail.meta.id, tagline.trim());
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -849,7 +856,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       const r = await api.generateCharacterTagline(wid, detail.meta.id);
       setTagline(r.tagline);
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     } finally {
       setTaglineBusy(false);
     }
@@ -861,7 +868,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       await api.setCharacterBirthdate(wid, detail.meta.id, value);
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -888,7 +895,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       d = await api.readCharacter(scope, cid);
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
       return;
     }
     if (!adopt(d, scope)) return;
@@ -969,7 +976,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await select(detail.meta.id);
       await reload();
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -994,7 +1001,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await reload();
       await runLocalize(detail.meta.id, version);
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     } finally {
       e.target.value = "";
     }
@@ -1024,7 +1031,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
         ? "Already in world lore — nothing new to import"
         : `Imported ${created.length} entr${created.length === 1 ? "y" : "ies"} to world lore`);
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -1037,7 +1044,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await select(detail.meta.id);
       await reload();
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     } finally {
       e.target.value = "";
     }
@@ -1066,7 +1073,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await api.promoteImage(scope, detail.meta.id, vid, name);
       await refreshVersion();
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -1077,7 +1084,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await api.copyGreetingImage(scope, detail.meta.id, vid, { gid: a.gid, name: a.name, slot });
       await refreshVersion();
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -1089,7 +1096,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await api.setAvatarFocus(scope, detail.meta.id, vid, f);
       await refreshVersion();
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -1104,7 +1111,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await api.putImage(scope, detail.meta.id, vid, next, file);
       await refreshVersion();
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     } finally {
       e.target.value = "";
     }
@@ -1212,7 +1219,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       setImportMsg(describeChubResult(result));
       await runLocalize(detail.meta.id, result.version);
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -1231,7 +1238,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       setImportMsg(describeChubResult(result));
       await runLocalize(detail.meta.id, result.version);
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -1249,7 +1256,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       if (!adopt(d, scope)) return;
       loadVersion(d, vid);
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -1262,7 +1269,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       if (!adopt(d, scope)) return;
       loadVersion(d, vid);
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -1313,7 +1320,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
           : `${result.lorebooks_found} lorebook${result.lorebooks_found === 1 ? "" : "s"} (${n} ${n === 1 ? "entry" : "entries"}) added to world lore`,
       );
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -1323,7 +1330,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       const { versions } = await api.findChubUnlinked(wid);
       setUnlinkedVersions(versions);
     } catch (err: unknown) {
-      setError(errorText(err));
+      setError(err);
     }
   }
 
@@ -1426,7 +1433,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
             )}
           </div>
         )}
-        {error && <div className="banner">{error}</div>}
+        {error != null && <div className="banner"><ErrorNote err={error} /></div>}
         {rosterPending ? null : shown.length === 0 ? (
           <div className="editor-empty">
             {chars.length === 0
@@ -1516,7 +1523,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                              onSave={saveFocus}
                              onClose={() => setCropOpen(false)} />
         )}
-        {error && <div className="banner">{error}</div>}
+        {error != null && <div className="banner"><ErrorNote err={error} /></div>}
 
         {/* 274px identity · the card · 300px campaign state. The middle and
             right halves are the substance of this screen and are built to look
@@ -1849,7 +1856,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       <div className="editor-body">
         <button className="subtle back" onClick={backToGrid}>‹ All characters</button>
         <div className="form">
-          {error && <div className="banner">{error}</div>}
+          {error != null && <div className="banner"><ErrorNote err={error} /></div>}
           <div className="picker">
             <select value={vid} onChange={(e) => loadVersion(detail, e.target.value)} aria-label="Version">
               {detail.versions.map((v) => (

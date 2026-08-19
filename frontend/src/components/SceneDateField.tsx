@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type SceneDatetime } from "../api/client";
 import { CalendarDatePicker } from "./CalendarDatePicker";
-import { errMsg } from "./errMsg";
 import { LOCKED_WHILE_GENERATING } from "./sceneLock";
 
 /** The scene's "When" row: the current date, today's holidays, and a picker
@@ -22,7 +21,8 @@ export function SceneDateField({ cid, sid, sceneLocked, onAdvanced, onRenamed, o
   /** The first date set re-slugged the file; the host adopts the new id. */
   onRenamed?: (id: string) => void;
   onRenaming?: (active: boolean) => void;
-  onError: (msg: string | null) => void;
+  /** Raw, not stringified — see `OpenerComposer` (#210). */
+  onError: (err: unknown) => void;
 }) {
   const [when, setWhen] = useState<SceneDatetime | null>(null);
   const [dateInput, setDateInput] = useState("");
@@ -53,7 +53,7 @@ export function SceneDateField({ cid, sid, sceneLocked, onAdvanced, onRenamed, o
       await reload();
       onAdvanced(); // surface the transition line in the stream
     } catch (err: any) {
-      onError(errMsg(err));
+      onError(err);
     } finally {
       onRenaming?.(false);
     }

@@ -12,6 +12,8 @@ import {
 } from "../api/client";
 import { isAbortError, type ChatEvent } from "../api/stream";
 import { forkNotes } from "../components/forkNotes";
+import { ErrorNote } from "../components/ErrorNote";
+import { errMsg } from "../components/errMsg";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import { CastPanel } from "../components/CastPanel";
 import { NewSceneChooser } from "../components/NewSceneChooser";
@@ -378,10 +380,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // raised in scene B can be on screen while scene A's review is still open.
   // Without the tag, A's retry clearing "the previous attempt's error" would
   // take B's unrelated failure -- and its generate-a-reply Retry -- with it.
+  // `err` is the rejection itself, kept alongside its text so the banner can
+  // tell a model it could not reach from any other refusal (#210) -- the
+  // `network` kind lives on the rejection and nowhere in the sentence. Only
+  // `fail` has one to keep: half a dozen other raisers compose their own
+  // sentence out of nothing that failed, and set `text` alone.
   const [error, setError] =
-    useState<{ text: string; retryable: boolean; from?: string } | null>(null);
+    useState<{ text: string; retryable: boolean; from?: string; err?: unknown } | null>(null);
   const fail = (e: any, retryable = true, from?: string) =>
-    setError({ text: e?.detail ?? String(e), retryable, from });
+    setError({ text: errMsg(e), retryable, from, err: e });
   const [ctxKey, setCtxKey] = useState(0);
   // The campaign's budget, and the level the reader has already been told about
   // (#153). Held as a level rather than a boolean so dismissing the 80% warning
@@ -2925,7 +2932,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           )}
           {error && (
             <div className="banner error-banner">
-              <span>{error.text}</span>
+              {/* `?? text` for the raisers that composed a sentence rather than
+                  catching something: `ErrorNote` renders a plain string
+                  unchanged, so both kinds of banner go through one path. */}
+              <span><ErrorNote err={error.err ?? error.text} /></span>
               {error.retryable && (
                 <button className="retry" onClick={retry} disabled={busy || rolling}>
                   Retry

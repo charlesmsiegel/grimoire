@@ -1864,6 +1864,46 @@ test("a failure the backend did not roll back leaves the composer alone", async 
   expect(screen.getByRole("textbox")).toHaveValue("");
 });
 
+test("a network failure names the recovery, not just the socket error (#210)", async () => {
+  // Being offline used to read as the toast "connection reset" and nothing
+  // else: the `network` kind reached the browser and was thrown away. What the
+  // reader needs is that the library is local and a local model connection
+  // keeps play going -- and a way to get there.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => {
+      onEvent({ error: { detail: "connection reset", kind: "network" } });
+    });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByText(/Couldn.t reach the model provider/);
+  expect(screen.getByRole("link", { name: /Connections/ }))
+    .toHaveAttribute("href", "/connections");
+  // The provider's own words survive alongside it: `network` is also what a
+  // local endpoint that is not running raises, and that reader needs them.
+  expect(screen.getByText(/connection reset/)).toBeInTheDocument();
+  // Still retryable -- the network coming back is exactly the fix.
+  expect(screen.getByRole("button", { name: /^retry$/i })).toBeInTheDocument();
+});
+
+test("an unconfigured key is not an offline app", async () => {
+  // The two were flagged as conflated in #210 and have opposite fixes; a
+  // missing key gets the plain detail and no offline advice.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => {
+      onEvent({ error: { detail: "OpenRouter API key is not set", kind: "missing_key" } });
+    });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByText(/OpenRouter API key is not set/);
+  expect(screen.queryByText(/Couldn.t reach the model provider/)).toBeNull();
+});
+
 test("a body that ends before the done frame is an interrupted turn", async () => {
   // `reader.read()` reporting EOF resolves streamPost normally, so a proxy
   // cutting the body short used to look identical to a completed turn — the

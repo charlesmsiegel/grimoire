@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type SceneSuggestion } from "../api/client";
-import { errMsg } from "./errMsg";
 
 /** The generated half of the picker. `null` on suggestions/picks means "still
  *  generating"; `[]` means "nothing to offer" (no key, empty, or failed) — the
@@ -11,7 +10,9 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
   const [picks, setPicks] = useState<string[] | null>(ready ? null : []);
   const [nextDate, setNextDate] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // The raw rejection, so the picker can tell an unreachable model from any
+  // other refusal and offer the local-connection recovery (#210).
+  const [error, setError] = useState<unknown>(null);
 
   // Only the NEWEST request may write state. The initial ranked fetch and a
   // regenerate race freely, and without this a slow first reply lands after the
@@ -37,7 +38,7 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
         if (mine !== seq.current) return;
         setSuggestions([]);
         if (rank) setPicks([]);
-        setError(errMsg(err));
+        setError(err);
       })
       .finally(() => { if (mine === seq.current) setBusy(false); });
   }, [cid, afterSid, ready, offscreen]);
