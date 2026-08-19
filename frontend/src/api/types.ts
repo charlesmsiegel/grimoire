@@ -898,6 +898,39 @@ export type SceneAbsorb = {
   dossiers: Dossiers;
   voice: VoiceCheck;
   phases: AbsorbPhase[];
+  /** Empty for the ordinary end-of-scene absorb, which has no later scene to
+   *  disagree with. Non-empty after a retcon of an older scene, which is the
+   *  case it exists for. */
+  contradictions: Contradiction[];
+};
+/** One staged row a scene played AFTER this one already answered differently
+ *  (#78). Advisory: it names the later scene and how that scene's authorship was
+ *  established, and nothing about the save changes because of it — the reviewer
+ *  reads the badge and decides. `source` is `citation` (the quote behind the
+ *  later write), `changes` (that scene's write-back to this record) or `thread`
+ *  (a plot or commitment thread whose last beat is that scene's). */
+export type Contradiction = {
+  id: string; scene: string; label: string; source: "citation" | "changes" | "thread";
+};
+/** What a retcon did beyond rewriting the post (#78): the cascade's reversal
+ *  report, plus the scenes played after this one — the ones a re-extraction can
+ *  contradict, and the reason to re-absorb the scene and read the badges. */
+export type RetconReport = CascadeReport & { later: string[] };
+/** A live retcon replay (#79). `next` is what the walk owes: a model turn to
+ *  generate, the player's own posts to re-post first, or nothing. `gone` means
+ *  the scene was deleted under the session — its backlog is the only copy of
+ *  those posts, so it is reported rather than silently discarded. */
+export type ReplaySession = {
+  scene: string; cut: number; done: number; steps: number; turns_left: number;
+  next: "generation" | "verbatim" | "done"; staged: boolean; created: string;
+  gone: boolean;
+};
+/** What a replay from this post would cost, before anything is cut (#79/#80).
+ *  `fork` is the nudge: over the configured threshold, offer to copy the
+ *  campaign first. `blocked`, when non-empty, is why this span cannot be
+ *  replayed at all. */
+export type ReplayPreview = {
+  posts: number; turns: number; threshold: number; fork: boolean; blocked: string;
 };
 export type SceneSuggestion = {
   title: string; premise: string; date?: string;

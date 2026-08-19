@@ -57,6 +57,12 @@ vi.mock("../api/client", async () => {
       getSceneChecks: vi.fn(), rollCheck: vi.fn(),
       getConfig: vi.fn(),
       editMessage: vi.fn(), deleteMessagesFrom: vi.fn(),
+      // Retcon and its replay (#78/#79/#80). `getReplay` answers null for every
+      // suite here, which is what makes the embedded ReplayPanel render nothing
+      // -- the tests that want it say so.
+      retconMessage: vi.fn(), getReplay: vi.fn(), replayPreview: vi.fn(),
+      startReplay: vi.fn(), replayTurn: vi.fn(), acceptReplay: vi.fn(),
+      cancelReplay: vi.fn(), forkCampaign: vi.fn(),
       absorbScene: vi.fn(), saveChronicle: vi.fn(), getChronicle: vi.fn(), retryAudit: vi.fn(),
       retryDossiers: vi.fn(),
       // consumed by the embedded SceneInspector
@@ -201,6 +207,9 @@ beforeEach(() => {
   (api.rollCheck as any).mockResolvedValue({ ok: true, resolution: {}, message: "" });
   (api.getConfig as any).mockResolvedValue({ theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire", active_connection_id: "openrouter", active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true });
   (api.editMessage as any).mockResolvedValue({ ok: true });
+  (api.getReplay as any).mockResolvedValue(null);
+  (api.replayPreview as any).mockResolvedValue(
+    { posts: 1, turns: 1, threshold: 10, fork: false, blocked: "" });
   (api.getCast as any).mockResolvedValue([]);
   (api.addToCast as any).mockResolvedValue({ ok: true });
   // "The turn changed nobody", so no cast-change chips render: these suites are
@@ -816,6 +825,101 @@ test("cleanup that could not run is reported separately from a refused record", 
   await screen.findByText(/could not be cleaned up/i);
   expect(document.body.textContent).toContain("plot_beats");
   expect(document.body.textContent).not.toMatch(/could not be put back/i);
+});
+
+// ---- retcon and its replay (#78/#79/#80) ----
+//
+// Retcon sits beside Save in the edit form rather than replacing it, because
+// the two are different intentions: Save fixes the words, Retcon says the scene
+// did not happen that way and takes back what it recorded. The gutter's ⏩ is
+// the escalation — re-run the turns that followed — and is priced before
+// anything is cut.
+
+const RETCON_OK = { ...CASCADE_OK, later: [] };
+
+test("retcon rewrites the post through the retcon route, not the plain edit", async () => {
+  twoPostScene();
+  (api.retconMessage as any).mockResolvedValue(RETCON_OK);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderCampaign();
+  await screen.findByText("a reply");
+
+  fireEvent.click(screen.getAllByTitle("Edit message")[0]);
+  const ta = await screen.findByRole("textbox", { name: "Edit message" });
+  fireEvent.change(ta, { target: { value: "she never said it" } });
+  fireEvent.click(screen.getByRole("button", { name: /^retcon$/i }));
+  await waitFor(() =>
+    expect(api.retconMessage).toHaveBeenCalledWith("run", "s1", 0, "she never said it"));
+  expect(api.editMessage).not.toHaveBeenCalled();
+});
+
+test("the retcon confirm names what an absorbed scene gives back", async () => {
+  (api.listScenes as any).mockResolvedValue(DONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.retconMessage as any).mockResolvedValue({ ...RETCON_OK, was_absorbed: true });
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderCampaign();
+  await screen.findByText("a reply");
+
+  fireEvent.click(screen.getAllByTitle("Edit message")[0]);
+  fireEvent.click(screen.getByRole("button", { name: /^retcon$/i }));
+  // Awaited before reading the prompt: the click's own work (the retcon, the
+  // rail re-read, the refresh) settles inside the test rather than after it.
+  await waitFor(() => expect(api.retconMessage).toHaveBeenCalled());
+  await waitFor(() => expect((api.listScenes as any).mock.calls.length).toBeGreaterThan(1));
+  const asked = confirm.mock.calls[0][0] as string;
+  expect(asked).toMatch(/chronicle record/i);
+  // The half a reader is most likely to get wrong: a retcon is not a cut.
+  expect(asked).toMatch(/posts after it are left alone/i);
+});
+
+test("declining the retcon confirm does nothing", async () => {
+  twoPostScene();
+  vi.spyOn(window, "confirm").mockReturnValue(false);
+  renderCampaign();
+  await screen.findByText("a reply");
+
+  fireEvent.click(screen.getAllByTitle("Edit message")[0]);
+  fireEvent.click(screen.getByRole("button", { name: /^retcon$/i }));
+  expect(api.retconMessage).not.toHaveBeenCalled();
+});
+
+test("a retcon says how many later scenes can now disagree", async () => {
+  twoPostScene();
+  (api.retconMessage as any).mockResolvedValue(
+    { ...RETCON_OK, was_absorbed: true, later: ["002--the-long-quay", "003--low-water"] });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderCampaign();
+  await screen.findByText("a reply");
+
+  fireEvent.click(screen.getAllByTitle("Edit message")[0]);
+  fireEvent.click(screen.getByRole("button", { name: /^retcon$/i }));
+  // The whole point of re-absorbing: the badges are on the review, and nothing
+  // else tells the reader they are worth going to look at.
+  await screen.findByText(/2 later scenes already recorded state/i);
+});
+
+test("the gutter offers a replay only where there is something after the post", async () => {
+  twoPostScene();
+  renderCampaign();
+  await screen.findByText("a reply");
+  expect(screen.getByLabelText("Replay the turns after message 1")).toBeTruthy();
+  // Nothing follows the last post, so there is no turn to replay.
+  expect(screen.queryByLabelText("Replay the turns after message 2")).toBeNull();
+});
+
+test("asking to replay prices it before anything is cut", async () => {
+  twoPostScene();
+  (api.replayPreview as any).mockResolvedValue(
+    { posts: 1, turns: 1, threshold: 10, fork: false, blocked: "" });
+  renderCampaign();
+  await screen.findByText("a reply");
+
+  fireEvent.click(screen.getByLabelText("Replay the turns after message 1"));
+  await waitFor(() => expect(api.replayPreview).toHaveBeenCalledWith("run", "s1", 1));
+  await screen.findByText("Replay 1 turn");
+  expect(api.startReplay).not.toHaveBeenCalled();
 });
 
 test("a manual dice roll's transcript line has no Edit control", async () => {
@@ -3534,6 +3638,35 @@ async function reviewIntoConflict() {
   fireEvent.click(await screen.findByRole("button", { name: /Save chronicle/ }));
   await screen.findByText(/no longer match/);
 }
+
+test("a row a later scene already answered wears a badge naming it (#78)", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockResolvedValue({
+    ...LORE_REVIEW,
+    contradictions: [{ id: "lore:the-pact", scene: "002--the-long-quay",
+                       label: "The quay burned.", source: "citation" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+
+  // Advisory: it names the later scene and nothing about the save changes --
+  // the row is still approvable, and Save is still the same button.
+  const badge = await screen.findByText("later scene disagrees");
+  expect(badge.getAttribute("title")).toContain("The quay burned.");
+  expect(screen.getByRole("button", { name: /Save chronicle/ })).toBeTruthy();
+});
+
+test("the ordinary end-of-scene review carries no contradiction badges", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockResolvedValue({ ...LORE_REVIEW, contradictions: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByLabelText("Scene summary");
+  expect(screen.queryByText("later scene disagrees")).toBeNull();
+});
 
 test("a refused save keeps the review open and shows what the record now says", async () => {
   await reviewIntoConflict();
