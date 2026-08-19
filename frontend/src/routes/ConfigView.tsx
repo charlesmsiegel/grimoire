@@ -574,9 +574,10 @@ export default function ConfigView() {
               messages of the transcript, and nothing older. Every keyword-triggered section
               shares that window — world info, recalled scenes, keyed mechanics rules and the
               semantic-recall query — so it is the one number deciding whether an entry last
-              named twenty posts ago is still in play. <code>0</code> empties it: nothing in
-              the transcript activates anything, though a scene's opener and a director's
-              note still do, being this turn's own input. Recalled scenes bounds one of those
+              named twenty posts ago is still in play, and, set high enough, whether one scene
+              drags the whole world in behind it. <code>0</code> empties it: nothing in the
+              transcript activates anything, though a scene's opener and a director's note
+              still do, being this turn's own input. Recalled scenes bounds one of those
               sections — how many older absorbed scenes a keyword match may pull back at once.
             </p>
             <p className="config-copy">
@@ -600,7 +601,7 @@ export default function ConfigView() {
                         onChange={(v) => edit("context_budget", v)} />
               <NumField id="cfg-context-scan-depth" label="Context scan depth"
                         unit="messages" placeholder="8"
-                        caption="0 = scan no transcript"
+                        caption="0 = no scan window"
                         value={draft.context_scan_depth}
                         onChange={(v) => edit("context_scan_depth", v)} />
               <NumField id="cfg-archive-depth" label="Recalled scenes" placeholder="3"
