@@ -1818,6 +1818,9 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
    why it is not a styled label over a hidden one), so it stacks rather than
    sitting in the button row. */
 .image-picker .form-actions { flex-wrap: wrap; align-items: center; }
+/* The backdrop takes focus on mount so Escape has somewhere to land; it is
+   never a keyboard tab stop (tabIndex -1), so suppressing the ring hides no
+   focus a reader moved themselves. */
 .image-picker-backdrop:focus { outline: none; }
 
 .chooser-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 30; }

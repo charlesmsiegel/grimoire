@@ -30,6 +30,19 @@ Nothing here hangs off a *scene*, which is what keeps this out of
 ``store/scene_refs.py``: fork, undo and retcon renumber scene ids, and an image
 addressed by scene id would be orphaned by every one of them.
 
+What an upload is checked for is what the other six image surfaces check for
+and no more: the bytes have to name a format we can label (``routes.common.
+_upload_image_ext``, magic bytes -- the same detector ``export.packed_ext``
+names a packed image with, which is what keeps a stored suffix and a declared
+media type from being two rules that merely agree today). Deliberately not
+``covers.validate``'s PIL decode: a cover is thumbnailed for the campaigns list
+and so has to bound its raster, and only a cover is. These are thumbnailed
+too, by ``?w=``, and that path is bounded elsewhere -- ``MAX_BYTES`` caps the
+file, PIL refuses a raster past its own bomb threshold, and ``thumbs.thumbnail``
+answers None to any failed decode, which serves the original bytes. Identical
+to the six surfaces this mirrors; diverging here would leave one of seven
+stricter for no reason a reader could find.
+
 Two limits worth stating rather than discovering:
 
 - **A fork's posts still name the campaign they were written in.** The serving

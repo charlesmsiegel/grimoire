@@ -118,6 +118,17 @@ test("a rejected upload shows the server's reason", async () => {
   expect(await screen.findByText("unsupported image type")).toBeTruthy();
 });
 
+test("a library whose listing failed offers no upload", async () => {
+  // An upload names itself by stepping around the names already there, so
+  // uploading against a listing that never arrived would propose one that is
+  // taken and quietly replace an image the reader still has.
+  (api.listCampaignImages as any).mockRejectedValue({ detail: "campaign not found" });
+  render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
+                          onInsert={() => {}} onClose={() => {}} />);
+  expect(await screen.findByText("campaign not found")).toBeTruthy();
+  expect((screen.getByLabelText(/add an image/i) as HTMLInputElement).disabled).toBe(true);
+});
+
 test("removing a library image is confirmed first, and names what it costs", async () => {
   // One of these can already be linked from forty posts, which a cover never is.
   const ok = vi.spyOn(window, "confirm").mockReturnValue(true);
