@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, errorText, type EntityScope, type ModuleDetail, type PCDetail, type PCSummary, type Persona, type VersionRef } from "../api/client";
+import { api, type EntityScope, type ModuleDetail, type PCDetail, type PCSummary, type Persona, type VersionRef } from "../api/client";
 import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import CreationWizard from "./CreationWizard";
@@ -10,6 +10,7 @@ import { OwnedLorePanel } from "./OwnedLorePanel";
 import { Portrait } from "./Portrait";
 import SheetPanel from "./SheetPanel";
 
+import { errorText } from "../api/errors";
 const BLANK: Persona = { name: "", pronouns: "", summary: "", birthdate: "", description: "" };
 
 export function PCEditor({ scope, wid, onOpenLore, module = null }:

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, splitNativeDate, type CharacterSummary, type EntitySummary, type PCSummary,
          type RosterEntry } from "../api/client";
 import { CalendarDatePicker } from "./CalendarDatePicker";
-import { errMsg } from "./errMsg";
+import { errorText } from "../api/errors";
 import type { DraftCast, SceneDraft } from "./sceneDraft";
 
 /** Where the scene's opening post comes from (issue #90).
@@ -227,7 +227,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
       //    leaves CastPanel's date box pre-filled
       ({ id: sid } = await api.createScene(cid, finalTitle, date || undefined, draft.pcless));
     } catch (err: any) {
-      if (live.current) { setError(errMsg(err)); setWriting(false); }
+      if (live.current) { setError(errorText(err)); setWriting(false); }
       return;
     }
     if (!live.current) return;    // switched campaigns while createScene was in flight -- stop here
@@ -258,7 +258,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
           soft.push(`not seated: ${names.join(", ")}`);
         }
       } catch (err: any) {
-        if (live.current) { setError(await deleteAndReport(sid, errMsg(err))); setWriting(false); }
+        if (live.current) { setError(await deleteAndReport(sid, errorText(err))); setWriting(false); }
         return;
       }
     }
@@ -269,14 +269,14 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
     //      Neither failure deletes: each is one independent piece of metadata.
     if (location) {
       try { await api.setSceneLocation(cid, sid, location); }
-      catch (err: any) { soft.push(errMsg(err)); }
+      catch (err: any) { soft.push(errorText(err)); }
       if (!live.current) return;
     }
     if (date) {
       try {
         const r = await api.setSceneDatetime(cid, sid, date);
         sid = r.id;
-      } catch (err: any) { soft.push(errMsg(err)); }
+      } catch (err: any) { soft.push(errorText(err)); }
       if (!live.current) return;
     }
     // 5. seed. A failure here has written nothing outside the scene, so the
@@ -286,7 +286,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
         const r = await api.startFromGreeting(cid, sid, draft.gid);
         sid = r.id;
       } catch (err: any) {
-        if (live.current) { setError(await deleteAndReport(sid, errMsg(err))); setWriting(false); }
+        if (live.current) { setError(await deleteAndReport(sid, errorText(err))); setWriting(false); }
         return;
       }
       if (!live.current) return;
@@ -296,7 +296,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
       try {
         const r = await api.renameScene(cid, sid, finalTitle);
         sid = r.id;
-      } catch (err: any) { soft.push(errMsg(err)); }
+      } catch (err: any) { soft.push(errorText(err)); }
       if (!live.current) return;
     }
     // 6. the ledger, last: an idea becomes "used" only once the scene it
@@ -308,7 +308,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
     //    would have no way to tell that from a deliberate keep.
     if (draft.source === "saved" && draft.lid) {
       try { await api.setSceneIdeaStatus(cid, draft.lid, "used", sid); }
-      catch (err: any) { soft.push(`${errMsg(err)} — the saved idea is still on the list`); }
+      catch (err: any) { soft.push(`${errorText(err)} — the saved idea is still on the list`); }
       if (!live.current) return;
     }
     setWriting(false);

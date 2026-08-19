@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Availability, type SceneIdea, type SceneIdeaDraft,
          type SceneSuggestion } from "../api/client";
-import { errMsg } from "./errMsg";
+import { errorText } from "../api/errors";
 import { ErrorNote } from "./ErrorNote";
 import { customDraft, greetingDraft, savedDraft, suggestionDraft,
          type SceneDraft } from "./sceneDraft";
@@ -172,7 +172,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
       // another page would be advice against what they are already doing. The
       // banner above says it for every call that DOES stop.
       onPicked(customDraft(text, null, latestDate.current, pcless),
-               `${errMsg(err)} — continuing without inferred details.`);
+               `${errorText(err)} — continuing without inferred details.`);
     } finally {
       setInferring(false);
     }

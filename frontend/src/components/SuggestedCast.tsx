@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type Actor, type Suggestion } from "../api/client";
-import { errMsg } from "./errMsg";
+import { errorText } from "../api/errors";
 
 /** One shared empty list, so a scan that finds nothing lands as the same value
  *  the state already holds: React bails out of the update instead of
@@ -75,7 +75,7 @@ export function SuggestedCast({ cid, sid, cast, nameOf, onCast }: {
       await run();
       await reload();
     } catch (err: any) {
-      setError(errMsg(err));
+      setError(errorText(err));
     } finally {
       setPending(null);
     }

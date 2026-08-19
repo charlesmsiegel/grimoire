@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, errorText, type Appearance, type Card, type CardFormat, type Casefile, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type ModuleDetail, type VersionRef } from "../api/client";
+import { api, type Appearance, type Card, type CardFormat, type Casefile, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type ModuleDetail, type VersionRef } from "../api/client";
 import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import CreationWizard from "./CreationWizard";
@@ -13,6 +13,7 @@ import { TaglinePrompt } from "./TaglinePrompt";
 import { UrlImportPrompt } from "./UrlImportPrompt";
 import { scrollShellToTop } from "../shellScroll";
 
+import { errorText } from "../api/errors";
 const TEXT_FIELDS: { key: string; label: string; area?: boolean }[] = [
   { key: "description", label: "Description", area: true },
   { key: "personality", label: "Personality", area: true },
