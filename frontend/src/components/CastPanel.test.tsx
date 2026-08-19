@@ -144,7 +144,7 @@ test("generating an opener streams into the preview and can be saved as a greeti
   );
 });
 
-async function generateOpener(text = "Mist rolls in.") {
+async function renderWithOpener(text = "Mist rolls in.") {
   (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
     onEvent({ delta: text });
   });
@@ -159,7 +159,7 @@ async function generateOpener(text = "Mist rolls in.") {
 test("staging a PC for the scene does not block saving the opener as a greeting", async () => {
   // The save target used to BE the add-to-scene selection, so picking a PC
   // there disabled saving outright — with no way back but restaging (#12).
-  await generateOpener();
+  await renderWithOpener();
   fireEvent.change(screen.getByLabelText("Actor kind"), { target: { value: "pcs" } });
   fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "elara" } });
 
@@ -177,7 +177,7 @@ test("staging a PC for the scene does not block saving the opener as a greeting"
 test("restaging the add-to-scene actor leaves the greeting's target alone", async () => {
   // The two pickers are unrelated choices: staging someone else for the scene
   // used to silently re-target which character the opener was saved under.
-  await generateOpener();
+  await renderWithOpener();
   fireEvent.change(screen.getByLabelText("Greeting character"), { target: { value: "seraphine" } });
   fireEvent.change(screen.getByLabelText("Actor kind"), { target: { value: "pcs" } });
   fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "elara" } });
@@ -192,7 +192,7 @@ test("restaging the add-to-scene actor leaves the greeting's target alone", asyn
 });
 
 test("the opener can be attached to a non-default version", async () => {
-  await generateOpener();
+  await renderWithOpener();
   fireEvent.change(screen.getByLabelText("Greeting character"), { target: { value: "seraphine" } });
   // the version select defaults to the character's default_version...
   expect(screen.getByLabelText("Greeting version")).toHaveValue("default");
@@ -206,8 +206,33 @@ test("the opener can be attached to a non-default version", async () => {
   );
 });
 
+test("switching the greeting character drops the previous one's version pick", async () => {
+  // Both carry a "winter" — version ids are per-character slugs, and era-style
+  // variants run parallel across a roster, so the stale pick RESOLVES against
+  // the new character instead of falling away. Only clearing it on the switch
+  // gets the reader the default they were promised.
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default",
+      versions: [{ id: "default", name: "Default" }, { id: "winter", name: "Winter" }] },
+    { id: "mara", name: "Mara", default_version: "default",
+      versions: [{ id: "default", name: "Default" }, { id: "winter", name: "Winter" }] },
+  ]);
+  await renderWithOpener();
+  fireEvent.change(screen.getByLabelText("Greeting character"), { target: { value: "seraphine" } });
+  fireEvent.change(screen.getByLabelText("Greeting version"), { target: { value: "winter" } });
+  fireEvent.change(screen.getByLabelText("Greeting character"), { target: { value: "mara" } });
+
+  expect(screen.getByLabelText("Greeting version")).toHaveValue("default");
+  fireEvent.click(screen.getByRole("button", { name: /save as greeting/i }));
+  await waitFor(() =>
+    expect(api.createGreeting).toHaveBeenCalledWith({ kind: "campaign", id: "c" }, expect.objectContaining({
+      character: "mara", version: "default",
+    })),
+  );
+});
+
 test("with no greeting character picked, saving is disabled and says why", async () => {
-  await generateOpener();
+  await renderWithOpener();
   const save = screen.getByRole("button", { name: /save as greeting/i });
   expect(save).toBeDisabled();
   expect(save.getAttribute("title")).toMatch(/pick a character/i);

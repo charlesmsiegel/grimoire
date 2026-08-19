@@ -25,13 +25,17 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
   const [opener, setOpener] = useState("");
   const [busy, setBusy] = useState(false);
   const [charId, setCharId] = useState("");
-  const [versionId, setVersionId] = useState("");
+  const [versionPick, setVersionPick] = useState("");
 
   const target = characters.find((c) => c.id === charId) ?? null;
-  // A version the target does not have is a stale pick — the character changed,
-  // or the list reloaded without it — so the save falls back to its default.
-  const version = target?.versions.some((v) => v.id === versionId)
-    ? versionId
+  // The version to post: the explicit pick while the target still offers it,
+  // its default otherwise — no pick yet, or the pick belongs to the character
+  // picked before this one. That last case is not only cosmetic: this block
+  // outlives a campaign switch, and `create_greeting` writes the version it is
+  // given without checking, so a pick carried into a campaign whose copy of the
+  // character lacks that version would bake a dangling ref into the greeting.
+  const version = target?.versions.some((v) => v.id === versionPick)
+    ? versionPick
     : target?.default_version ?? "";
 
   // seed from the chooser's premise; reset on scene switch so a prior
@@ -132,13 +136,16 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
           <div className="opener-preview">{opener}</div>
           <div className="picker">
             <select aria-label="Greeting character" value={charId}
-                    onChange={(e) => { setCharId(e.target.value); setVersionId(""); }}>
+                    onChange={(e) => { setCharId(e.target.value); setVersionPick(""); }}>
               <option value="">— save as whose greeting? —</option>
               {characters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
-            {target && target.versions.length > 0 && (
+            {/* A picked character always has versions to offer: the store skips
+                version-less characters when it lists them, and reports a
+                `default_version` drawn from the list it emits. */}
+            {target && (
               <select aria-label="Greeting version" value={version}
-                      onChange={(e) => setVersionId(e.target.value)}>
+                      onChange={(e) => setVersionPick(e.target.value)}>
                 {target.versions.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
               </select>
             )}
