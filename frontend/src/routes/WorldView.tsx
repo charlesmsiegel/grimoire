@@ -12,6 +12,7 @@ import { GreetingEditor } from "../components/GreetingEditor";
 import { LorebookImport } from "../components/LorebookImport";
 import { ScenarioImport } from "../components/ScenarioImport";
 import { WorldOverview } from "../components/WorldOverview";
+import { WorldPushPanel } from "../components/WorldPushPanel";
 
 type IndexKey =
   | "characters" | "pcs" | "creatures" | "groups"
@@ -19,8 +20,10 @@ type IndexKey =
   | "lore" | "greetings" | "tags";
 
 /** Overview is not a kind of record, so it is not in the index: it sits above
- *  the groups, as the world itself rather than as something inside it. */
-type SectionKey = IndexKey | "overview";
+ *  the groups, as the world itself rather than as something inside it. Push is
+ *  the other one: the campaigns fed by this world are not records in it either,
+ *  and it is the only screen here that looks outward. */
+type SectionKey = IndexKey | "overview" | "push";
 
 /** The index that replaced the ten-tab strip.
  *
@@ -272,6 +275,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     if (!campaign) {
       out.push({ id: "world-section:overview", group: "IN THIS WORLD", label: "Overview",
                  meta: `${name} · setup`, run: () => select("overview") });
+      out.push({ id: "world-section:push", group: "IN THIS WORLD", label: "Push to campaigns",
+                 meta: `${name} · pending changes`, run: () => select("push") });
     }
     for (const g of groups) {
       for (const r of g.rows) {
@@ -291,7 +296,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const rows = groups.flatMap((g) => g.rows);
   const groupOf = (key: SectionKey) =>
     groups.find((g) => g.rows.some((r) => r.key === key))?.group ?? "World";
-  const labelOf = (key: SectionKey) => rows.find((r) => r.key === key)?.label ?? "Overview";
+  const labelOf = (key: SectionKey) =>
+    rows.find((r) => r.key === key)?.label ?? (key === "push" ? "Push to campaigns" : "Overview");
   // Undefined is "still loading", null is "that read failed" — both genuinely
   // unknown, and a dash says so where a 0 would claim the section is empty.
   const dash = (n: number | null | undefined) => (n === null || n === undefined ? "—" : n);
@@ -322,6 +328,16 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                 onClick={() => select("overview")}>
           <span className="column-row-label">Overview</span>
           <span className="column-row-count" aria-hidden>→</span>
+        </button>
+      )}
+
+      {/* World shape only: a campaign's fork of a world feeds nothing, and its
+          own pending changes are reviewed in the campaign, not here. */}
+      {!campaign && (
+        <button className={"column-row" + (section === "push" ? " active" : "")}
+                onClick={() => select("push")}>
+          <span className="column-row-label">Push to campaigns</span>
+          <span className="column-row-count">{dash(campaignCount)}</span>
         </button>
       )}
 
@@ -392,6 +408,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                            worldMid={worldMid} onPickMid={setWorldMid} />
           </>
         )}
+        {!campaign && section === "push" && <WorldPushPanel wid={wid} />}
         {section === "characters" && <CharacterEditor scope={scope} wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} onOpenGreeting={openGreeting} module={moduleCtx} />}
         {section === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore} module={moduleCtx} />}
         {!campaign && section === "tags" && <TagEditor wid={wid} />}
