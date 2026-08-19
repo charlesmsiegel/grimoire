@@ -14,6 +14,7 @@ import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import { CastPanel } from "../components/CastPanel";
 import { NewSceneChooser } from "../components/NewSceneChooser";
 import { ChangesPanel } from "../components/ChangesPanel";
+import { IncomingReview } from "../components/IncomingReview";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CampaignCover";
 import { SceneInspector } from "../components/SceneInspector";
@@ -554,6 +555,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [weather, setWeather] = useState<SceneWeather | null>(null);
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
   const [showChanges, setShowChanges] = useState(false);
+  /** The campaign side of push/sync (#6). Its own toggle rather than a tab
+   *  inside Changes: that panel is what this campaign's own play changed, and
+   *  this is what the world changed underneath it — the same shape of question
+   *  about a different author. */
+  const [showIncoming, setShowIncoming] = useState(false);
   const [absorb, setAbsorb] = useState<SceneAbsorb | null>(null);
   // The scene this review was absorbed FROM. Switching scenes leaves the panel
   // open, so saving against the currently selected scene would commit scene A's
@@ -3530,6 +3536,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           <button className="scene-action" onClick={() => setShowChanges((v) => !v)}>
             {showChanges ? "Close" : "Changes"}
           </button>
+          <button className="scene-action" onClick={() => setShowIncoming((v) => !v)}>
+            {showIncoming ? "Close" : "World updates"}
+          </button>
           <button className="scene-action" onClick={() => setShowMechanics((v) => !v)}>
             {showMechanics ? "Close" : "Mechanics"}
           </button>
@@ -3585,7 +3594,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
             </div>
           )}
           {!absorb && (<>
-          {/* Every one of these five is opened AND closed from the scene bar,
+          {/* Every one of these six is opened AND closed from the scene bar,
               which focus mode does not render — so one left open when focus
               starts would be a panel above the transcript with no control that
               can shut it. They keep their state and come back with the bar. The
@@ -3631,6 +3640,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
             </div>
           )}
           {!focus && showChanges && <ChangesPanel cid={cid} />}
+          {!focus && showIncoming && <IncomingReview cid={cid} />}
           {editFailures.length > 0 && (
             <div className="mechanics-notice">
               <p>{editFailures.length} change{editFailures.length === 1 ? "" : "s"} did not apply</p>

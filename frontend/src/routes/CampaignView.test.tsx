@@ -80,6 +80,7 @@ vi.mock("../api/client", async () => {
       listModules: vi.fn(), getCampaignSheets: vi.fn(),
       listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
       campaignChanges: vi.fn(),
+      getIncoming: vi.fn(),
       campaignLedger: vi.fn(),
       campaignProvenance: vi.fn(),
       getCasefile: vi.fn(),
@@ -237,6 +238,7 @@ beforeEach(() => {
     applied: [], failures: [] });
   (api.getChronicle as any).mockResolvedValue([]);
   (api.campaignChanges as any).mockResolvedValue([]);
+  (api.getIncoming as any).mockResolvedValue([]);
   (api.campaignProvenance as any).mockResolvedValue({});
   (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
   (api.listResponsePresets as any).mockResolvedValue([]);
@@ -7839,4 +7841,21 @@ test("the inspector stays reachable in focus mode, because its toggle does", asy
   fireEvent.click(screen.getByRole("button", { name: /what the model saw/i }));
   expect(await screen.findByRole("button", { name: /hide what the model saw/i }))
     .toBeInTheDocument();
+});
+
+test("the scene bar opens the incoming-changes review, and closes it again", async () => {
+  (api.getIncoming as any).mockResolvedValue([
+    { ref: { kind: "locations", id: "saltmarch-harbor" }, status: "conflict",
+      world: { name: "Saltmarch Harbor", body: "The harbour is blockaded." },
+      mine: { name: "Saltmarch Harbor", body: "A busy port town." } },
+  ]);
+  renderCampaign();
+  await screen.findByRole("button", { name: "World updates" });
+
+  fireEvent.click(screen.getByRole("button", { name: "World updates" }));
+  expect(await screen.findByRole("heading", { name: "Incoming world changes" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: /Saltmarch Harbor/ })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(screen.queryByRole("heading", { name: "Incoming world changes" })).toBeNull();
 });

@@ -36,6 +36,7 @@ vi.mock("../api/client", () => ({
     listAppearances: vi.fn(), markGreeting: vi.fn(), pickVersion: vi.fn(), importVersion: vi.fn(),
     listModules: vi.fn(), setWorldModule: vi.fn(),
     getCampaignModule: vi.fn(), readModule: vi.fn(), getWorldSheetsIndex: vi.fn(), getSheet: vi.fn(),
+    worldCampaigns: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -97,6 +98,9 @@ beforeEach(() => {
   (api.readModule as any).mockResolvedValue(POOL_BASIC);
   (api.getWorldSheetsIndex as any).mockResolvedValue({ modules: [], default: "" });
   (api.getSheet as any).mockResolvedValue({ sheet: null });
+  (api.worldCampaigns as any).mockResolvedValue([
+    { id: "c1", name: "Ashes of the Verdigris Crown", pending: { new: 1, update: 0, conflict: 2 } },
+  ]);
 });
 
 function renderAt() {
@@ -365,3 +369,18 @@ test("?section=characters&v= opens that character's version", async () => {
   expect(indexRow("Characters")).toHaveClass("active");
 });
 
+test("the index offers Push to campaigns, which lists what each campaign owes", async () => {
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(indexRow("Push to campaigns"));
+  expect(await screen.findByRole("heading", { name: "Push to campaigns" })).toBeInTheDocument();
+  const row = await screen.findByRole("link", { name: /Ashes of the Verdigris Crown/ });
+  expect(row.textContent).toContain("2 conflict");
+  expect(row).toHaveAttribute("href", "/campaigns/c1");
+});
+
+test("a campaign's fork of a world is not offered the push panel", async () => {
+  renderCampaign();
+  await screen.findByText(/Campaign view/);
+  expect(screen.queryByRole("button", { name: /^Push to campaigns/ })).not.toBeInTheDocument();
+});
