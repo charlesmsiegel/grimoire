@@ -53,9 +53,11 @@ from fastapi import APIRouter
 
 from . import (campaigns, characters, common, config, entities, greetings, mechanics,
                models, modules, scenes, search, streaming, usage, weather, worlds)
-from .common import get_llm, get_openai_compatible_client
+from .common import (build_llm, build_openai_compatible_client, get_llm,
+                     get_openai_compatible_client)
 
-__all__ = ["router", "get_llm", "get_openai_compatible_client"]
+__all__ = ["router", "build_llm", "build_openai_compatible_client", "get_llm",
+           "get_openai_compatible_client"]
 
 router = APIRouter()
 

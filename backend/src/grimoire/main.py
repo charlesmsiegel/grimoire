@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .routes import router
+from .routes import build_llm, build_openai_compatible_client, router
 from .store import backups, campaigns, locks, migrations, module_edit
 
 DEFAULT_DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"  # paths-ok: DEFAULT_DIST only; GRIMOIRE_DIST overrides it on Android
@@ -153,10 +153,30 @@ async def _lifespan(app: FastAPI):
     # stopping mid-zip does not leave a thread writing into a store the next
     # process is about to open. `atomic.streaming_write` is what makes that
     # safe: an interrupted archive was never published.
-    async with anyio.create_task_group() as tg:
-        tg.start_soon(_backup_ticker)
-        yield
-        tg.cancel_scope.cancel()
+    try:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(_backup_ticker)
+            yield
+            tg.cancel_scope.cancel()
+    finally:
+        # The gateway clients each own an `httpx` connection pool, and nothing
+        # else in the process closes one (#215). It costs nothing where the
+        # server *is* the process -- the pool dies with it -- and everything
+        # where an app is rebuilt inside a living one: the Android entry point
+        # starts uvicorn in-process, and every `TestClient` in this suite
+        # builds another app.
+        #
+        # Outside the task group on purpose: an `await` inside a scope that has
+        # just been cancelled is cancelled itself, so a close in there would
+        # drain nothing. In a `finally` because a shutdown arriving as an
+        # exception is still a shutdown -- and each close is guarded so a
+        # failing one neither strands the other pool nor replaces the exception
+        # on its way out with noise from the cleanup.
+        for client in (app.state.llm, app.state.openai_compatible):
+            try:
+                await client.aclose()
+            except Exception as exc:  # noqa: BLE001 -- see above
+                log.warning("closing %s failed -- %s", type(client).__name__, exc)
 
 
 class _CampaignActivityStamp:
@@ -240,6 +260,13 @@ class _CampaignActivityStamp:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="grimoire", lifespan=_lifespan)
+    # The gateway clients belong to the app, not the module (#215): each owns an
+    # `httpx` connection pool, and `_lifespan` closes both on shutdown. Built
+    # here rather than in the lifespan so the dependency resolves for a
+    # `TestClient` that never runs one -- and it costs nothing to, since neither
+    # client opens a socket before its first call.
+    app.state.llm = build_llm()
+    app.state.openai_compatible = build_openai_compatible_client()
     # character detail responses run to hundreds of KB of JSON; payloads under
     # the floor (and streaming responses) pass through untouched
     # compresslevel 6 over the default 9: ~2-3x less CPU for ~1% larger output

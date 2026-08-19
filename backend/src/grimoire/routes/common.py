@@ -110,14 +110,34 @@ def _fallback_connection() -> dict | None:
     return None if _connection_problem(conn) else conn
 
 
-# The idle bound is passed as a resolver, not a number: llm.py must not import
-# the store (#239), and reading config.md per call is what lets a
-# Configuration-page change land without a restart (#243). The retry count and
-# the fallback route (#144) ride the same seam for the same two reasons.
-_llm = LLMClient(timeout=store.config.llm_timeout,
-                 retries=store.config.llm_retries,
-                 fallback=_fallback_connection)
-_openai_compatible_client = OpenAICompatibleClient()
+def build_llm() -> LLMClient:
+    """The gateway client for one app (#215).
+
+    Built per app rather than once per process because it owns an
+    `httpx.AsyncClient` connection pool that `main._lifespan` closes on the way
+    out; a module-level singleton had nowhere to be closed from. Construction
+    opens nothing — the pool is created on the first call — so an app that
+    never generates pays nothing for holding one.
+
+    The idle bound is passed as a resolver, not a number: llm.py must not import
+    the store (#239), and reading config.md per call is what lets a
+    Configuration-page change land without a restart (#243). The retry count and
+    the fallback route (#144) ride the same seam for the same two reasons.
+    """
+    return LLMClient(timeout=store.config.llm_timeout,
+                     retries=store.config.llm_retries,
+                     fallback=_fallback_connection)
+
+
+def build_openai_compatible_client() -> OpenAICompatibleClient:
+    """The model-listing client for one app, owned and closed like `build_llm`'s.
+
+    A second instance rather than the one `LLMClient` holds for generation:
+    `list_models` is not part of the gateway's surface, which dispatches by
+    connection kind, and reaching through `LLMClient` for the inner client
+    would make a private attribute part of the route's contract.
+    """
+    return OpenAICompatibleClient()
 
 
 def _dump(model: BaseModel) -> dict:
@@ -263,12 +283,15 @@ async def _bounded_call(coro):
         raise LLMError("timeout", str(exc) or "the call timed out") from exc
 
 
-def get_llm() -> LLMClient:
-    return _llm
+def get_llm(request: Request) -> LLMClient:
+    """The app's gateway client, built in `main.create_app` and closed by its
+    lifespan (#215). `app.dependency_overrides` replaces this callable whole,
+    which is the seam `tests/llm_fakes.py` is injected at."""
+    return request.app.state.llm
 
 
-def get_openai_compatible_client() -> OpenAICompatibleClient:
-    return _openai_compatible_client
+def get_openai_compatible_client(request: Request) -> OpenAICompatibleClient:
+    return request.app.state.openai_compatible
 
 
 # ---- response bundle (scope endpoints) ----
