@@ -68,8 +68,10 @@ vi.mock("../api/client", async () => {
       getSceneWeather: vi.fn(() => Promise.resolve({ weather: null, location: null, native: null })),
       getCastDetail: vi.fn(), readEntity: vi.fn(),
       addToCast: vi.fn(), removeFromCast: vi.fn(),
-      // the cast column's in-turn cast-change scan (#97)
+      // the cast column's in-turn cast-change scan (#97) and the inspector's
+      // card-text suggestion strip (#96) — separate scans, one dismissal list
       castChanges: vi.fn(), createEmergentCast: vi.fn(), dismissSuggestion: vi.fn(),
+      getSuggestions: vi.fn(),
       getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
       listStyles: vi.fn(),
@@ -193,6 +195,11 @@ beforeEach(() => {
   // about the transcript and the panels around it, and the suggestion strip has
   // its own tests in components/play/CastChanges.test.tsx.
   (api.castChanges as any).mockResolvedValue({ enter: [], leave: [], unknown: [] });
+  // The embedded SceneInspector renders the suggestion strip for real. Without
+  // this the strip calls `undefined`, and every inspector mount in this file
+  // takes an exception path — extra async work in the suite least able to
+  // afford it (#351).
+  (api.getSuggestions as any).mockResolvedValue([]);
   (api.removeFromCast as any).mockResolvedValue({ ok: true });
   (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });
   (api.getSceneContext as any).mockResolvedValue({ model: "m", total_tokens: 0,
