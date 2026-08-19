@@ -48,7 +48,9 @@ def get_scenes(cid: str, limit: int | None = None, offset: int | None = None):
     a live campaign page by page can see one scene twice and miss another, the
     way any offset pager over a re-sorting list can. That is a real limit of the
     parameter, not of this implementation — a client that cannot tolerate it
-    wants a cursor, which is #94's problem and deliberately not this route's.
+    wants an anchor that does not drift, the way `GET .../scenes/{sid}` takes a
+    message INDEX (`before`) rather than an offset. #216 chose `offset` here
+    knowingly; adding a cursor is a different feature and not what it asked for.
     """
     limit, offset = _page_window(limit, offset)
     try:
