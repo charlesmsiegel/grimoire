@@ -407,7 +407,11 @@ def entity_root(cid: str, kind: str, eid: str) -> Path:
     where there is no file, so the caller's read raises its usual NotFound.
     """
     croot = croot_of(cid)
-    if _flat_path(croot, kind, eid).exists():
+    # `kind` and `eid` are path parameters, and a path parameter can carry an
+    # encoded slash: the resolvers refuse those, so this must not build a path
+    # out of one and stat it. Refusing here and letting the caller's
+    # `require_entity` raise keeps both answers the same 404.
+    if kind in entities.ENTITY_KINDS and safe_id(eid) and _flat_path(croot, kind, eid).exists():
         return croot
     if _flat_ref(kind, eid) in deleted(cid):
         return croot

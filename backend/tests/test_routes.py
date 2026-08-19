@@ -687,16 +687,16 @@ def _image_write_routes(client):
                    if surface.match(path)})
 
 
-def _surface_kind(path: str) -> str:
-    """The record kind a route works on. Literal for the actor and greeting
-    surfaces; the generic entity routes spell it `{kind}`, and this test drives
-    those as `locations` -- one kind is enough, because the gate they now take
-    is the same call for all five."""
-    seg = path.split("/")[4]
-    return _GHOST_KIND if seg.startswith("{") else seg
+def _surface_seg(path: str) -> str:
+    """The route's kind segment as written: `characters`, `pcs`, `greetings`,
+    or the literal `{kind}` of the generic entity routes. Reported as-is rather
+    than resolved to a kind, so the surface roster below cannot read as a claim
+    that there is a `worlds/locations` route -- there is one route for all
+    five kinds, and that is the thing worth seeing."""
+    return path.split("/")[4]
 
 
-def _ghosted(path: str, scope_id: str, rid: str, vid: str) -> str:
+def _ghosted(path: str, scope_id: str, rid: str, vid: str, kind: str = _GHOST_KIND) -> str:
     """Fill a route pattern by position: segment 3 is the scope id, and what
     follows is either `<kind>/<id>` with the kind a literal (`characters`,
     `pcs`, `greetings`) or `{kind}/{id}` with the kind a parameter. Any
@@ -707,7 +707,7 @@ def _ghosted(path: str, scope_id: str, rid: str, vid: str) -> str:
     segs = path.split("/")
     fill = {3: scope_id}
     if segs[4].startswith("{"):      # generic entity surface: /{kind}/{eid}
-        fill[4], fill[5] = _GHOST_KIND, rid
+        fill[4], fill[5] = kind, rid
     else:                            # named surface: /characters/{cid}/versions/{vid}
         fill[5] = rid
         if "/versions/" in path:
@@ -810,30 +810,31 @@ def test_every_image_write_route_refuses_an_id_that_names_nothing(client):
     store.assets.put_image(store.worlds.world_root(wid), gid, "default",
                            "embed-abc123def456", b"art", "png", base="greetings")
     eid = client.post(f"/api/worlds/{wid}/{_GHOST_KIND}", json={"name": "Saltmarch"}).json()["id"]
-    real = {"characters": chid, "pcs": pid, "greetings": gid, _GHOST_KIND: eid}
+    real = {"characters": chid, "pcs": pid, "greetings": gid, "{kind}": eid}
 
     routes = _image_write_routes(client)
     # The surfaces this test knows how to drive. A new one fails here rather
     # than in the loop below, where the failure would read as a broken route.
-    seen = Counter((path.split("/")[2], _surface_kind(path)) for _m, path in routes)
+    seen = Counter((path.split("/")[2], _surface_seg(path)) for _m, path in routes)
     assert set(seen) == {("worlds", "characters"), ("worlds", "pcs"),
                          ("campaigns", "characters"), ("campaigns", "pcs"),
                          ("worlds", "greetings"),
-                         ("worlds", _GHOST_KIND), ("campaigns", _GHOST_KIND)}, seen
-    # A floor on the whole surface rather than per group (the greeting subjects
-    # route is a group of one), to catch a filter that collapsed to almost nothing.
+                         ("worlds", "{kind}"), ("campaigns", "{kind}")}, seen
+    # 25 routes today (18 actor, 1 greeting, 6 entity). A floor on the whole
+    # surface rather than per group -- the greeting subjects route is a group
+    # of one -- to catch a filter that collapsed to almost nothing.
     assert sum(seen.values()) >= 22, seen
 
     for method, path in routes:
         scope_id = wid if path.startswith("/api/worlds") else cid
-        kind = _surface_kind(path)
+        seg = _surface_seg(path)
         # No version half off the actor surface: an entity's images are keyed
         # on a fixed "default", so the record is the only id there is to ghost.
-        ghosts = [("nobody", "default")]
+        ghosts = [("nobody", "default", _GHOST_KIND)]
         if "/versions/" in path:
-            ghosts.append((real[kind], "typo"))
-        for rid, vid in ghosts:
-            url = _ghosted(path, scope_id, rid, vid)
+            ghosts.append((real[seg], "typo", _GHOST_KIND))
+        for rid, vid, kind in ghosts:
+            url = _ghosted(path, scope_id, rid, vid, kind)
             r = _write_request(client, method, url, gid)
             assert r.status_code == 404 and r.json().get("detail") in gated, \
                 (method, url, r.status_code, r.text)
@@ -844,6 +845,44 @@ def test_every_image_write_route_refuses_an_id_that_names_nothing(client):
                           ("greetings", gid), (_GHOST_KIND, eid)):
             assert not (root / kind / "nobody").exists(), (root, kind)
             assert not (root / kind / rid / "assets" / "typo").exists(), (root, kind)
+
+
+
+def test_every_entity_image_write_route_refuses_a_kind_that_has_no_entities(client):
+    """The generic routes take their *kind* from the URL as well as their id,
+    and `put_image` files by that kind -- so an unchecked one writes
+    `potions/<id>/assets/default/avatar.png` for a kind no `list_entities` can
+    even be asked about.
+
+    Enumerated rather than spot-checked because the check moved: it used to sit
+    in `_entity_image_put`/`_entity_image_promote`, where every caller got it
+    for free, and it now rides along with the record gate the six handlers
+    call. That is the trade this test pays for. `greetings` is here beside the
+    nonsense kind because it is the near miss -- a real kind, with real images,
+    that the *read* routes accept (`_image_kind_or_404`) and the writes must
+    not, since nothing uploads a greeting image over HTTP.
+    """
+    wid, cid = _campaign(client)
+    eid = client.post(f"/api/worlds/{wid}/{_GHOST_KIND}", json={"name": "Saltmarch"}).json()["id"]
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Opener", "character": "sera", "version": "default"}).json()["id"]
+
+    entity_routes = [(m, p) for m, p in _image_write_routes(client) if _surface_seg(p) == "{kind}"]
+    assert len(entity_routes) == 6, entity_routes   # PUT/DELETE/promote, world + campaign
+
+    for method, path in entity_routes:
+        scope_id = wid if path.startswith("/api/worlds") else cid
+        for kind, rid in (("potions", eid), ("greetings", gid)):
+            url = _ghosted(path, scope_id, rid, "default", kind)
+            r = _write_request(client, method, url, gid)
+            assert (r.status_code, r.json().get("detail")) == (404, "unknown kind"), \
+                (method, url, r.status_code, r.text)
+
+    # the nonsense kind never became a directory, and the greeting's real
+    # asset directory was not touched on the way to those 404s
+    for root in (store.worlds.world_root(wid), store.campaigns.campaign_root(cid)):
+        assert not (root / "potions").exists(), root
+    assert not (store.campaigns.campaign_root(cid) / "greetings" / gid).exists()
 
 
 def test_image_upload_stores_the_extension_the_bytes_are(client):
@@ -1551,6 +1590,33 @@ def test_entity_image_writes_are_gated_for_every_kind(client):
     for root in (store.worlds.world_root(wid), store.campaigns.campaign_root(cid)):
         for kind in store.entities.ENTITY_KINDS:
             assert not (root / kind / "nobody").exists(), (root, kind)
+
+
+def test_deleting_an_entity_takes_its_images_with_it(client):
+    """The other door onto #373's orphaned folders, and the load-bearing half
+    of the gate: now that no write can name a record that isn't there, a delete
+    that unlinked the `.md` and left `<kind>/<eid>/assets/` behind would
+    manufacture exactly the unreachable bytes the gate exists to prevent --
+    through the app's own delete button. The world route sweeps its record dir
+    via `forget_world_record`; the campaign route via `overlay.delete_entity`."""
+    wid, cid = _campaign(client)
+    eid = client.post(f"/api/worlds/{wid}/locations", json={"name": "Saltmarch"}).json()["id"]
+    png = {"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}
+    assert client.put(f"/api/worlds/{wid}/locations/{eid}/images/avatar", files=png).status_code == 200
+    assert client.put(f"/api/campaigns/{cid}/locations/{eid}/images/avatar",
+                      files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}
+                      ).status_code == 200
+
+    wroot, croot = store.worlds.world_root(wid), store.campaigns.campaign_root(cid)
+    assert (wroot / "locations" / eid / "assets" / "default").is_dir()
+    assert (croot / "locations" / eid / "assets" / "default").is_dir()
+
+    # campaign-side first: the world delete sweeps dependent campaigns too, and
+    # this proves the campaign route does its own half
+    assert client.delete(f"/api/campaigns/{cid}/locations/{eid}").status_code == 200
+    assert not (croot / "locations" / eid).exists()
+    assert client.delete(f"/api/worlds/{wid}/locations/{eid}").status_code == 200
+    assert not (wroot / "locations" / eid).exists()
 
 
 def test_entity_image_reads_are_left_ungated(client):
