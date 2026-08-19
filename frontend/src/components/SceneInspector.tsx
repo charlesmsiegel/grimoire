@@ -16,6 +16,7 @@ import { ClockPanel } from "./ClockPanel";
 import { WeatherWidget } from "./WeatherWidget";
 import { ResponsePresetPicker } from "./ResponsePresetPicker";
 import { LOCKED_WHILE_GENERATING } from "./sceneLock";
+import { SuggestedCast } from "./SuggestedCast";
 
 const SECTIONS_KEY = "grimoire.inspector.sections";
 
@@ -928,6 +929,19 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           )}
           <button className="primary" onClick={addCastMember} disabled={!addActorId}>+ Add</button>
         </div>
+        {/* "Who should appear" (#96), under the picker it shortcuts. Keyed on
+            `refreshKey` because the scan reads the cards of whoever is cast
+            *now*, so a turn that seats someone can surface new names. */}
+        {cast.length > 0 && (
+          <SuggestedCast cid={cid} sid={sid} refreshKey={refreshKey}
+                         nameOf={(id) => names[`characters/${id}`]
+                                         ?? chars.find((c) => c.id === id)?.name ?? id}
+                         onCast={() => {
+                           reloadCast();
+                           onSceneChanged();
+                           askRolling();   // a join appends a transition post (#85)
+                         }} />
+        )}
       </SideSection>
 
       {/* Pins & excludes (#129). Directly under the cast, because the row

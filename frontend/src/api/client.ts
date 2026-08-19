@@ -28,8 +28,9 @@ import {
   type SceneIdea, type SceneIdeaDraft, type SceneIntentResult, type SceneLocation,
   type SceneMeta, type ScenePage, type SceneSuggestion, type SceneWeather, type SearchMode,
   type SearchResult, type Sheet, type SheetCoverage, type SheetExpected, type StagedEdit,
-  type StoreConflicts, type Style, type StyleDetail, type StyleDraft, type Timeline,
-  type TimelineEvent, type WeatherOverrideBody, type WeatherRangeBody, type WeatherSpan,
+  type StoreConflicts, type Style, type StyleDetail, type StyleDraft, type Suggestion,
+  type Timeline, type TimelineEvent, type WeatherOverrideBody, type WeatherRangeBody,
+  type WeatherSpan,
   type WorldCampaignPending, type WorldMeta,
 } from "./types";
 
@@ -764,6 +765,14 @@ export const api = {
   createEmergentCast: (cid: string, sid: string, name: string) =>
     request<{ character: string; version: string; name: string }>(
       "POST", `/api/campaigns/${cid}/scenes/${sid}/cast/emergent`, { name }),
+  /** The card-text mention scan (#96): who the seated cast's cards name that
+   *  this campaign has not seen yet. Distinct from `castChanges`, which reads
+   *  the turn's prose — the two find different people. */
+  getSuggestions: (cid: string, sid: string) =>
+    request<Suggestion[]>("GET", `/api/campaigns/${cid}/scenes/${sid}/suggestions`),
+  /** Shared by both: one per-scene dismissal list, one meaning — "not this
+   *  character, in this scene" — so silencing a name in either surface
+   *  silences it in the other. */
   dismissSuggestion: (cid: string, sid: string, character: string) =>
     request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/suggestions/dismiss`,
                              { character }),

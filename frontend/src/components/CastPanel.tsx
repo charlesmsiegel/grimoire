@@ -1,11 +1,20 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import {
-  api, type Actor, type CharacterSummary, type EntitySummary,
-  type PCSummary, type RosterEntry, type SceneLocation, type SceneDatetime,
-} from "../api/client";
-import { CalendarDatePicker } from "./CalendarDatePicker";
-import { LOCKED_WHILE_GENERATING } from "./sceneLock";
+import { useCallback, useEffect, useState } from "react";
+import { api, type Actor, type CharacterSummary, type PCSummary, type RosterEntry } from "../api/client";
+import { errMsg } from "./errMsg";
+import { OpenerComposer } from "./OpenerComposer";
+import { SceneCastList } from "./SceneCastList";
+import { SceneDateField } from "./SceneDateField";
+import { SceneSettingField } from "./SceneSettingField";
+import { SuggestedCast } from "./SuggestedCast";
 
+/** Set an empty scene up: where and when it happens, who is in it, and an
+ *  opener to start it with.
+ *
+ *  Each row owns its own load/save (`SceneSettingField`, `SceneDateField`,
+ *  `SuggestedCast`, `OpenerComposer`); what stays here is the state two of them
+ *  share — the cast, and the actor the picker has selected, which is also the
+ *  character an opener can be saved against. Errors funnel into one banner so
+ *  the panel never grows a second place to look. */
 export function CastPanel({
   cid, sid, ready, onSeeded, onSceneRenamed, initialPrompt, pcless, sceneLocked,
   onRenaming,
@@ -30,54 +39,29 @@ export function CastPanel({
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [pcs, setPCs] = useState<PCSummary[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
-  const [locations, setLocations] = useState<EntitySummary[]>([]);
-  const [setting, setSetting] = useState<SceneLocation | null>(null);
-  const [locId, setLocId] = useState("");
-  const [when, setWhen] = useState<SceneDatetime | null>(null);
-  const [dateInput, setDateInput] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const [kind, setKind] = useState<"characters" | "pcs">("characters");
   const [actorId, setActorId] = useState("");
   const [role, setRole] = useState<"player" | "npc">("npc");
 
-  const [prompt, setPrompt] = useState("");
-  const [opener, setOpener] = useState("");
-  const [busy, setBusy] = useState(false);
-
   const reloadCast = useCallback(() => api.getCast(cid, sid).then(setCast), [cid, sid]);
-  const reloadSetting = useCallback(
-    () => api.getSceneLocation(cid, sid).then(setSetting).catch(() => setSetting(null)),
-    [cid, sid]);
-  const reloadWhen = useCallback(
-    () => api.getSceneDatetime(cid, sid).then((w) => {
-      setWhen(w);
-      // dateless scene with a suggestion: pre-fill the input, but never clobber typing
-      if (!w.current && w.suggested) setDateInput((prev) => prev || w.suggested!);
-    }).catch(() => setWhen(null)),
-    [cid, sid]);
 
   useEffect(() => {
     reloadCast();
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
-    reloadSetting();
-    reloadWhen();
-  }, [cid, sid, reloadCast, reloadSetting, reloadWhen]);
-
-  // seed from the chooser's premise; reset on scene switch so a prior
-  // scene's premise never lingers in another scene's opener box
-  useEffect(() => {
-    setPrompt(initialPrompt ?? "");
-  }, [sid, initialPrompt]);
+  }, [cid, sid, reloadCast]);
 
   // characters/pcs available to add: the campaign copy holds every actor
   useEffect(() => {
     api.listCharacters({ kind: "campaign", id: cid }).then(setChars);
     api.listCampaignPCs(cid).then(setPCs);
-    api.listEntities({ kind: "campaign", id: cid }, "locations").then(setLocations).catch(() => setLocations([]));
   }, [cid]);
 
   const options = kind === "characters" ? chars : pcs;
+  const selected = kind === "characters" ? chars.find((c) => c.id === actorId) ?? null : null;
+  const nameOf = useCallback(
+    (id: string) => chars.find((c) => c.id === id)?.name ?? id, [chars]);
 
   async function add() {
     if (!actorId) return;
@@ -90,116 +74,8 @@ export function CastPanel({
       setActorId("");
       await reloadCast();
     } catch (err: any) {
-      setError(err.detail ?? String(err));
+      setError(errMsg(err));
     }
-  }
-
-  async function setLocation() {
-    if (!locId) return;
-    setError(null);
-    try {
-      await api.setSceneLocation(cid, sid, locId);
-      setLocId("");
-      await reloadSetting();
-      onSeeded(); // refresh the stream so the transition line shows
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
-    }
-  }
-
-  async function applyDatetime() {
-    if (!dateInput) return;
-    setError(null);
-    onRenaming?.(true);      // the first date set re-slugs the file
-    try {
-      const res = await api.setSceneDatetime(cid, sid, dateInput);
-      setDateInput("");
-      if (res.id !== sid) {
-        // first date set renames the scene file — adopt the new id; the sid
-        // prop change re-runs every load effect, so skip the stale reload
-        onSceneRenamed?.(res.id);
-        return;
-      }
-      await reloadWhen();
-      onSeeded(); // surface the transition line in the stream
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
-    } finally {
-      onRenaming?.(false);
-    }
-  }
-
-  // Which campaign/scene this panel is showing NOW, readable from a callback
-  // created under a previous one. See `generate`'s `finally`.
-  //
-  // A LAYOUT effect, not a passive one. Passive effects are scheduled in their
-  // own task, so between committing scene B and running them there is a gap in
-  // which microtasks run — and an opener from scene A settling in that gap
-  // reads a ref that still says A, matches the props it closed over, and
-  // navigates the reader back. Layout effects run synchronously inside the
-  // commit, where no promise callback can interleave, so the ref is never
-  // observable as stale.
-  const live = useRef(`${cid}/${sid}`);
-  useLayoutEffect(() => { live.current = `${cid}/${sid}`; }, [cid, sid]);
-
-  async function generate() {
-    if (!prompt.trim() || busy) return;
-    setError(null);
-    setOpener("");
-    setBusy(true);
-    let acc = "";
-    try {
-      await api.opener(cid, sid, prompt, (e) => {
-        if (e.delta) {
-          acc += e.delta;
-          setOpener(acc);
-        } else if (e.error) {
-          setError(e.error.detail);
-        }
-      });
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
-    } finally {
-      setBusy(false);
-      // The backend records an `opener` prompt snapshot for this attempt, and
-      // nothing else here bumps the refresh — so without this the inspector's
-      // Turn history keeps saying "No captured turns yet", and a rejected
-      // preview leaves the row invisible indefinitely (#157).
-      //
-      // Guarded, because `onSeeded` NAVIGATES: the parent's version is
-      // `() => selectScene(activeId)`, closed over the id this render was given.
-      // On the same scene that is a refresh and the preview above survives it —
-      // but a reader who started an opener in scene A and moved to B would be
-      // yanked back to A when the request finished, failure included. A ref,
-      // because this callback closes over the props it was created with, so
-      // comparing those to themselves would always agree.
-      if (live.current === `${cid}/${sid}`) onSeeded();
-    }
-  }
-
-  async function useOpener() {
-    if (!opener.trim() || busy) return;
-    setError(null);
-    try {
-      await api.firstPost(cid, sid, opener);
-      setOpener("");
-      onSeeded(); // the adopted opener now shows as the scene's first post
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
-    }
-  }
-
-  async function saveOpenerAsGreeting() {
-    if (!opener.trim() || kind !== "characters" || !actorId) return;
-    const character = chars.find((c) => c.id === actorId);
-    if (!character) return;
-    const name = window.prompt("Name this greeting?", "Opener")?.trim();
-    if (!name) return;
-    // an opener saved as a greeting belongs to the campaign, not the world baseline
-    await api.createGreeting({ kind: "campaign", id: cid }, {
-      name, character: actorId, version: character.default_version, body: opener,
-    });
-    setOpener("");
   }
 
   return (
@@ -208,63 +84,12 @@ export function CastPanel({
       <div className="panel-body">
         {error && <div className="banner">{error}</div>}
 
-        <div>
-          <div className="role">Setting</div>
-          <div className="field-hint">{setting?.current ? setting.current.name : "No setting"}</div>
-          <div className="picker">
-            <select aria-label="Location" value={locId} onChange={(e) => setLocId(e.target.value)}>
-              <option value="">— pick —</option>
-              {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </select>
-            <button className="primary" onClick={setLocation}
-                    disabled={!locId || locId === setting?.current?.id}>
-              {setting?.current ? "Move here" : "Set location"}
-            </button>
-          </div>
-        </div>
+        <SceneSettingField cid={cid} sid={sid} onMoved={onSeeded} onError={setError} />
 
-        <div>
-          <div className="role">When</div>
-          <div className="field-hint">
-            {when?.current
-              ? `${when.current.friendly} (${when.current.weekday})`
-              : "No date"}
-          </div>
-          {when?.current?.holidays_today?.length ? (
-            <div className="field-hint">Holidays: {when.current.holidays_today.join(", ")}</div>
-          ) : null}
-          <div className="picker">
-            <CalendarDatePicker scope={{ kind: "campaign", id: cid }} value={dateInput}
-                                onChange={setDateInput} ariaLabel="Scene date" />
-            {/* The first date set renames the scene file, so this is a rename
-                control in disguise — locked for the same reason the rail's is. */}
-            <button className="primary" onClick={applyDatetime}
-                    disabled={!dateInput || sceneLocked}
-                    title={sceneLocked ? LOCKED_WHILE_GENERATING : undefined}>
-              {when?.current ? "Advance to" : "Set date"}
-            </button>
-          </div>
-        </div>
+        <SceneDateField cid={cid} sid={sid} sceneLocked={sceneLocked} onAdvanced={onSeeded}
+                        onRenamed={onSceneRenamed} onRenaming={onRenaming} onError={setError} />
 
-        <div>
-          <div className="role">In this scene</div>
-          {cast.length === 0 && <div className="field-hint">No one cast yet.</div>}
-          {cast.map((a) => {
-            const ver = roster.find((r) => r.kind === a.kind && r.id === a.id)?.version;
-            return (
-              <div className="cast-row" key={`${a.kind}/${a.id}`}>
-                {ver
-                  ? <img className="row-avatar" alt={`${a.id} avatar`}
-                         src={api.actorImageUrl({ kind: "campaign", id: cid },
-                                                    a.kind, a.id, ver, "avatar")}
-                         onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
-                  : null}
-                <span>{a.id}</span>
-                <span className="role">{a.kind === "pcs" ? "PC" : "character"} · {a.role}</span>
-              </div>
-            );
-          })}
-        </div>
+        <SceneCastList cid={cid} cast={cast} roster={roster} />
 
         <div>
           <div className="role">Add to scene</div>
@@ -290,30 +115,17 @@ export function CastPanel({
           </div>
         </div>
 
-        <div>
-          <div className="role">Generate an opener</div>
-          {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
-          <div className="picker">
-            <input type="text" aria-label="Opener prompt" placeholder="A storm over the salt marshes…"
-                   value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-            <button className="primary" onClick={generate} disabled={!ready || busy || !prompt.trim()}>
-              {busy ? "…" : "Generate"}
-            </button>
-          </div>
-          {opener && (
-            <>
-              <div className="opener-preview">{opener}</div>
-              <div className="form-actions">
-                <button className="primary" onClick={useOpener} disabled={busy}>Use</button>
-                <button className="subtle" onClick={saveOpenerAsGreeting}
-                        disabled={kind !== "characters" || !actorId}
-                        title={kind !== "characters" || !actorId ? "Pick a character above to attach the saved greeting" : ""}>
-                  Save as greeting
-                </button>
-              </div>
-            </>
-          )}
-        </div>
+        {/* Directly under the picker it is an alternative to. The scan reads
+            the cards of whoever is already seated, so it moves as the cast does
+            (hence the reload key) and has nothing to say about an empty one —
+            which is also why an empty cast is not worth a request. */}
+        {cast.length > 0 && (
+          <SuggestedCast cid={cid} sid={sid} nameOf={nameOf} refreshKey={cast.length}
+                         onCast={reloadCast} />
+        )}
+
+        <OpenerComposer cid={cid} sid={sid} ready={ready} initialPrompt={initialPrompt}
+                        character={selected} onSeeded={onSeeded} onError={setError} />
       </div>
     </details>
   );

@@ -11,6 +11,7 @@ vi.mock("../api/client", async () => {
       listEntities: vi.fn(), getSceneLocation: vi.fn(), setSceneLocation: vi.fn(),
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
       addToCast: vi.fn(),
+      getSuggestions: vi.fn(), dismissSuggestion: vi.fn(),
       opener: vi.fn(), firstPost: vi.fn(), createGreeting: vi.fn(), listAppearances: vi.fn(),
       actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string) =>
         `/cimg/${sc.id}/${k}/${a}/${v}/${n}`,
@@ -47,6 +48,8 @@ beforeEach(() => {
   (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: true, friendly: "1 January 2027", id: "s" });
   (api.getCalendarMonths as any).mockResolvedValue({ months: GREG_MONTHS });
   (api.addToCast as any).mockResolvedValue({ ok: true });
+  (api.getSuggestions as any).mockResolvedValue([]);
+  (api.dismissSuggestion as any).mockResolvedValue({ ok: true });
   (api.createGreeting as any).mockResolvedValue({ id: "g" });
   (api.listAppearances as any).mockResolvedValue([
     { kind: "characters", id: "sera", version: "default", role: "npc", scenes: ["s"] },
