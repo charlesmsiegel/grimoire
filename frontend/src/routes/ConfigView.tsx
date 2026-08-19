@@ -567,17 +567,19 @@ export default function ConfigView() {
               dropped — recalled scenes first, then the older conversation, then the standing
               frame; the system prompts, the characters and the reply format are never dropped.
               The scene inspector shows what was cut. <code>0</code> means no ceiling, and
-              nothing is ever dropped. Recalled scenes is how many older absorbed scenes a
-              keyword match may pull back into context at once.
+              nothing is ever dropped.
             </p>
             <p className="config-copy">
-              Context scan depth is how far back the keyword scan reads: the last N messages
-              of the transcript, and nothing older. Every keyword-triggered section shares
-              that window — world info, recalled scenes, keyed mechanics rules and the
-              semantic-recall query — so raising it is what makes an entry mentioned twenty
-              posts ago come back, and lowering it is what stops the scene dragging the whole
-              world in behind it. <code>0</code> empties the window, leaving only the entries
-              marked always-on.
+              Context scan depth is how far back the keyword scan reads: the last so many
+              messages of the transcript, and nothing older. Every keyword-triggered section
+              shares that window — world info, recalled scenes, keyed mechanics rules and the
+              semantic-recall query — so raising it is what brings back an entry last named
+              twenty posts ago, and lowering it is what stops one scene dragging the whole
+              world in behind it. <code>0</code> empties the window, so nothing in the
+              transcript activates anything; a scene's opening prompt and a director's note
+              still do, since they are this turn's input and the history has not said those
+              words yet. Recalled scenes then bounds one of those sections: how many older
+              absorbed scenes a keyword match may pull back at once.
             </p>
             <p className="config-copy">
               Kept turn prompts is how many past turns each campaign keeps a frozen copy of
@@ -600,7 +602,7 @@ export default function ConfigView() {
                         onChange={(v) => edit("context_budget", v)} />
               <NumField id="cfg-context-scan-depth" label="Context scan depth"
                         unit="messages" placeholder="8"
-                        caption="0 = scan nothing; always-on entries only"
+                        caption="0 = scan no transcript"
                         value={draft.context_scan_depth}
                         onChange={(v) => edit("context_scan_depth", v)} />
               <NumField id="cfg-archive-depth" label="Recalled scenes" placeholder="3"
