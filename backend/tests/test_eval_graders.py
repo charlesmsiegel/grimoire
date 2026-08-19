@@ -171,6 +171,19 @@ def test_turns_flags_a_lead_out_talked_across_several_blocks():
     assert _turns(text) == {"turns.lead_carries"}
 
 
+def test_turns_accepts_a_lead_who_takes_fewer_blocks_but_more_of_the_turn():
+    """The direction a block count gets backwards: three clipped reactions do
+    not out-talk the character actually carrying the scene, and scoring them
+    3-1 against the lead would red a reply that did exactly what was asked."""
+    text = ("**Tobin:** The sheet is in my coat and I will read it out. Two "
+            "crates, off this pier, on the eleventh, signed for by me because "
+            "I was handed the pen and told to sign.\n\n"
+            "**Rowan:** Huh.\n\n"
+            "**Seraphine Vale:** Read it, then.\n\n"
+            "**Seraphine Vale:** Slowly.")
+    assert _turns(text) == set()
+
+
 def test_turns_flags_every_present_npc_taking_a_block():
     """The monologue's mirror image, and the one the section names outright:
     "Do not give every character a turn"."""
