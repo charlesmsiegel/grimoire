@@ -1,5 +1,7 @@
 {#- The campaign-situation snapshot. Vars:
-      s — dict from suggest.build_snapshot(): now, friendly, holidays_today,
+      s — dict from suggest.build_snapshot(): now, friendly,
+          notation ({example, months} — how this calendar writes a date),
+          holidays_today,
           events_today ([str] — this campaign's scheduled events falling today,
           #101), upcoming ({name, in_days} | None — the sooner of the next
           holiday and the next scheduled event),
@@ -23,7 +25,11 @@
 {%- set _ = parts.append("Story so far (most recent first):\n" ~ (lines | join("\n"))) -%}
 {%- endif -%}
 {%- if s.now -%}
-{%- set line = "Current date: " ~ (s.friendly or s.now) ~ "." -%}
+{%- set shown = s.friendly or s.now -%}
+{#- the native form too: `friendly` is the only date most calendars show here,
+    and it is not a form `suggest.date_normalizer` can read back. -#}
+{%- set line = "Current date: " ~ shown ~ ((" (written " ~ s.notation.example ~ ")")
+   if s.notation.example and s.notation.example != shown else "") ~ "." -%}
 {%- if s.holidays_today -%}{%- set line = line ~ " Today: " ~ (s.holidays_today | join(", ")) ~ "." -%}{%- endif -%}
 {%- if s.events_today -%}{%- set line = line ~ " Scheduled today: " ~ (s.events_today | join(", ")) ~ "." -%}{%- endif -%}
 {%- if s.upcoming -%}{%- set line = line ~ " Upcoming: " ~ s.upcoming.name ~ " in " ~ s.upcoming.in_days ~ " days." -%}{%- endif -%}

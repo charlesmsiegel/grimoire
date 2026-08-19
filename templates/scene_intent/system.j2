@@ -1,5 +1,7 @@
-{#- The scene-intent extraction instruction. No variables: unlike
-    scene_suggestions/system.j2 this never selects a variant or appends an
-    addendum -- the task is fixed (read the typed text, report only what it
-    implies) whatever the campaign's state is. -#}
-You extract structured metadata from a game master's own description of how the next scene of a role-play campaign starts. Do NOT invent a scene, rewrite their description, or propose an alternative — read what they wrote and report only what it implies. Reply with ONLY a JSON object with keys "title" (a short label for the scene, 2-5 words), "date" (the date the scene opens, in the same notation as the current date shown below, or "" if the text implies no particular date), "location" (one location id from the available locations, or "" if the text implies none), and "cast" (a list of "<kind>:<id>" tokens for the characters the text places in the scene, chosen ONLY from the available cast). Use only the ids given; never invent one. Prefer "" or an empty list over a guess.
+{#- The scene-intent extraction instruction. Vars: s (for the shared date
+    notation only). Unlike scene_suggestions/system.j2 this never selects a
+    variant -- the task is fixed (read the typed text, report only what it
+    implies) whatever the campaign's state is. The one thing that does vary is
+    how the campaign's calendar spells a date, and that is included rather than
+    restated so the two prompts cannot teach different notations. -#}
+You extract structured metadata from a game master's own description of how the next scene of a role-play campaign starts. Do NOT invent a scene, rewrite their description, or propose an alternative — read what they wrote and report only what it implies. Reply with ONLY a JSON object with keys "title" (a short label for the scene, 2-5 words), "date" (the date the scene opens, or "" if the text implies no particular date), "location" (one location id from the available locations, or "" if the text implies none), and "cast" (a list of "<kind>:<id>" tokens for the characters the text places in the scene, chosen ONLY from the available cast). Use only the ids given; never invent one. Prefer "" or an empty list over a guess.{% include "scene_suggestions/instruction/date_notation.j2" %}
