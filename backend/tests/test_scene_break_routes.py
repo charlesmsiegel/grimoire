@@ -17,6 +17,7 @@ import grimoire.store as store
 from grimoire import routes
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
+from grimoire.routes import scenes as scenes_routes
 
 from .llm_fakes import FakeLLM
 
@@ -49,10 +50,15 @@ def _scene(client, posts=0):
     return cid, sid
 
 
-def _posts(cid: str, sid: str, n: int, start: int = 0) -> None:
+def _posts(cid: str, sid: str, n: int, start: int = 0, text: str = "Post") -> None:
+    """`text` names the run, so a replay after a rewind can be DIFFERENT prose.
+    Replaying the identical strings would leave the covered prefix genuinely
+    unchanged, and the watermark genuinely still valid — a fixture that proves
+    nothing about a rewind, which is what the first draft of the test below
+    was."""
     for i in range(start, start + n):
         store.scenes.append_message(cid, sid, "user" if i % 2 == 0 else "assistant",
-                                    f"Post {i}.")
+                                    f"{text} {i}.")
 
 
 def _location(cid: str, name: str) -> str:
@@ -83,8 +89,9 @@ def _post(client, cid, sid, **params):
 # ---- GET: never spends a call ----
 def test_get_on_a_fresh_scene_reports_the_empty_state(client):
     cid, sid = _scene(client, posts=3)
-    assert _get(client, cid, sid) == {"verdict": "", "reason": "", "title": "", "posts": 3,
-                                      "score": 0, "signals": [], "every": 20, "due": False}
+    assert _get(client, cid, sid) == {
+        "verdict": "", "reason": "", "title": "", "stale": False, "posts": 3,
+        "score": 0, "signals": [], "every": 20, "due": False}
 
 
 def test_get_needs_no_llm_connection(client):
@@ -190,8 +197,9 @@ def test_zero_turns_the_feature_off_and_force_cannot_reopen_it(client):
     llm = _use(client, _judge())
     store.write_config(scene_break_every="0")
     cid, sid = _scene(client, posts=400)
-    assert _get(client, cid, sid) == {"verdict": "", "reason": "", "title": "", "posts": 400,
-                                      "score": 0, "signals": [], "every": 0, "due": False}
+    assert _get(client, cid, sid) == {
+        "verdict": "", "reason": "", "title": "", "stale": False, "posts": 400,
+        "score": 0, "signals": [], "every": 0, "due": False}
     assert _post(client, cid, sid, force="true")["asked"] is True and llm.calls == 1
 
 
@@ -322,6 +330,92 @@ def test_an_answer_about_a_transcript_that_changed_underneath_is_not_stored(clie
     body = _post(client, cid, sid)
     assert body["asked"] is False and body["verdict"] == ""
     assert _get(client, cid, sid)["verdict"] == ""
+
+
+def test_a_standing_answer_about_deleted_posts_is_presented_as_behind(client):
+    """The prose stays — it is still the best thing anyone has — but it stops
+    claiming to be about the scene on screen. A verdict whose watermark was
+    voided reasoned about posts the player has since cut."""
+    _key(client)
+    _use(client, _judge(YES))
+    cid, sid = _scene(client, posts=40)
+    assert _post(client, cid, sid)["stale"] is False
+    store.scenes.delete_from(cid, sid, 10)
+    behind = _get(client, cid, sid)
+    assert behind["verdict"] == "yes" and behind["stale"] is True
+    assert behind["reason"] == "The ledger changed hands."
+
+
+def test_the_model_sees_everything_the_answer_will_claim_to_cover(client):
+    """After a rewind the scene is scored from zero and the answer is recorded
+    as covering the whole transcript. Slicing the prompt from the OLD watermark
+    would show the model the last few posts while the verdict went on file as a
+    verdict about all of them."""
+    _key(client)
+    llm = _use(client, _judge(NO, YES))
+    cid, sid = _scene(client, posts=40)
+    _post(client, cid, sid)
+    store.scenes.delete_from(cid, sid, 10)
+    _posts(cid, sid, 40, start=10, text="Retake")
+    _post(client, cid, sid)
+    asked_about = llm.requests[1]["messages"][1]["content"]
+    assert "Post 0." in asked_about and "Retake 49." in asked_about
+
+
+def test_a_rewind_does_not_silence_the_detector_for_the_rest_of_the_scene(client):
+    """The watermark is a claim about SPECIFIC posts, and a bare count cannot
+    make it. Rewound from 40 to 10 and played back up to 35, this used to
+    report nothing new for twenty-five posts of real story — and went on
+    reporting nothing until the count passed 40 again."""
+    _key(client)
+    llm = _use(client, _judge(NO, YES))
+    cid, sid = _scene(client, posts=40)
+    _post(client, cid, sid)
+    assert _get(client, cid, sid)["posts"] == 0
+    store.scenes.delete_from(cid, sid, 10)
+    _posts(cid, sid, 40, start=10, text="Retake")
+    assert _get(client, cid, sid)["posts"] == 50        # the whole scene is unasked again
+    assert _post(client, cid, sid)["asked"] is True and llm.calls == 2
+
+
+def test_an_answer_about_fewer_posts_cannot_overwrite_a_newer_one(client):
+    """Two questions can be in flight at once — the panel's button beside the
+    play loop's — and the newer can finish first. The older one's prefix is
+    still intact, because everything since is an APPEND, so nothing about the
+    transcript refuses it. What refuses it is that the scene has already been
+    answered about MORE."""
+    _key(client)
+    _use(client, _judge(YES))
+    cid, sid = _scene(client, posts=45)
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    scenes_routes._break_commit(
+        cid, sid, {"at": 45, "locs": 0, "times": 0},
+        {"break": True, "reason": "the player asked, and it was yes", "title": "Next"},
+        store.rolling_summary.covered_digest(messages))
+    stale = scenes_routes._break_commit(
+        cid, sid, {"at": 40, "locs": 0, "times": 0},
+        {"break": False, "reason": "stale no", "title": ""},
+        store.rolling_summary.covered_digest(messages[:40]))
+    assert stale["landed"] is False
+    kept = store.scenes.get_scene_break(cid, sid)
+    assert kept["verdict"] == "yes" and kept["at"] == 45
+
+
+def test_a_dismissal_is_not_undone_by_a_question_that_was_already_out(client):
+    """"Not here" moves the watermark, so the same rule catches it: a proposal
+    the player waved off must not be resurrected by an answer to a question
+    that left before they said so."""
+    _key(client)
+    _use(client, _judge(YES))
+    cid, sid = _scene(client, posts=40)
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    digest = store.rolling_summary.covered_digest(messages)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/scene-break/dismiss")
+    late = scenes_routes._break_commit(
+        cid, sid, {"at": 40, "locs": 0, "times": 0},
+        {"break": True, "reason": "too late", "title": "No"}, digest)
+    assert late["landed"] is False
+    assert store.scenes.get_scene_break(cid, sid)["verdict"] == ""
 
 
 def test_a_post_landing_during_the_question_does_not_throw_the_answer_away(client):

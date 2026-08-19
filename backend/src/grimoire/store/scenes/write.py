@@ -10,7 +10,7 @@ in a single write — see `turns._set_turn_sizes`.
 
 from __future__ import annotations
 
-from .. import atomic, scene_break, turnstate
+from .. import atomic, rolling_summary, scene_break, turnstate
 from ..appearances import cast
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import now_iso, safe_id
@@ -605,7 +605,8 @@ def set_rolling_summary(cid: str, sid: str, summary: str, at: int, digest: str,
 
 @locking._serialized
 def set_scene_break(cid: str, sid: str, at: int, locs: int, times: int,
-                    verdict: str = "", reason: str = "", title: str = "") -> None:
+                    digest: str = "", verdict: str = "", reason: str = "",
+                    title: str = "") -> None:
     """Record what a scene-break question covered, and what it answered (#84).
 
     The watermark and the proposal go out in one write because they are only
@@ -613,6 +614,11 @@ def set_scene_break(cid: str, sid: str, at: int, locs: int, times: int,
     advances have already been considered, and the verdict is what was
     concluded about exactly those. A reader that saw a new verdict against an
     old watermark would show the answer to a question nobody asked.
+
+    `digest` is `rolling_summary.covered_digest` over the prefix the counts
+    describe, and it travels with them for the same reason it does there: the
+    transcript is not append-only, so a count alone cannot say whether the
+    posts it claims to have covered are still the posts on disk.
 
     Defaulting `verdict`/`reason`/`title` to empty is how a DISMISSAL is
     written -- the counts move forward, the proposal is cleared -- so
@@ -638,6 +644,7 @@ def set_scene_break(cid: str, sid: str, at: int, locs: int, times: int,
     meta["break_at"] = str(max(0, at))
     meta["break_locs"] = str(max(0, locs))
     meta["break_times"] = str(max(0, times))
+    meta["break_digest"] = digest
     meta["break_verdict"] = verdict
     meta["break_reason"] = " ".join(reason.split())
     meta["break_title"] = " ".join(title.split())
@@ -645,7 +652,7 @@ def set_scene_break(cid: str, sid: str, at: int, locs: int, times: int,
 
 
 @locking._serialized
-def dismiss_scene_break(cid: str, sid: str) -> dict:
+def dismiss_scene_break(cid: str, sid: str) -> None:
     """Retire a scene-break proposal, and start counting again from here (#84).
 
     "Not here" is an answer about the scene as it stands, so the watermark
@@ -659,21 +666,29 @@ def dismiss_scene_break(cid: str, sid: str) -> dict:
     dismissing a scene it saw before the post that landed in between, leaving
     that post outside both the retired question and the next one.
 
-    Returns the new watermark, so the route can answer with the state it wrote
-    instead of reading the file a third time.
+    Returns nothing. An earlier draft returned the watermark it wrote "so the
+    route need not read the file again", which was not true of any caller: what
+    the route has to answer with is a SCORED view -- signals, score, whether
+    anything is still due -- and no watermark can stand in for that. A return
+    value no caller can use is one a later caller will use wrongly.
     """
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         raise paths.SceneNotFound(sid)
     scene = read.read_scene(cid, sid)
+    history = read.histories(scene["meta"])
     at = len(scene["messages"])
-    locs = scene_break.moves(read.get_location_history(cid, sid))
-    times = scene_break.moves(read.get_time_history(cid, sid))
+    locs = scene_break.moves(history["locations"])
+    times = scene_break.moves(history["times"])
+    # Digested here too, off the same read: a dismissal's watermark has to
+    # survive a later rewind exactly as a question's does, and one written
+    # without a digest would be a watermark no reader could check.
+    digest = rolling_summary.covered_digest(scene["messages"])
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta["break_at"], meta["break_locs"], meta["break_times"] = str(at), str(locs), str(times)
+    meta["break_digest"] = digest
     meta["break_verdict"] = meta["break_reason"] = meta["break_title"] = ""
     atomic.write_text(p, dump_frontmatter(meta, body))
-    return {"at": at, "locs": locs, "times": times}
 
 
 @locking._serialized

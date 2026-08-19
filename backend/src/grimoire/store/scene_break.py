@@ -71,13 +71,19 @@ def moves(history: list[str]) -> int:
 
 def _gap_minutes(provider, before: str, after: str) -> int | None:
     """Minutes from one scene moment to the next, or None if this calendar
-    cannot read them.
+    cannot read them. SIGNED: negative when the moment moved backwards.
 
     None rather than 0 on failure, so a caller cannot confuse "no time passed"
     with "no answer" -- the first is a real signal about the story, the second
     is a hand-edited `time_history` or a plugin calendar that raised. A moment
     with no time of day counts as midnight, matching `clock._stamp`, so a
     dateless "the 5th" to "the 5th at 21:30" is the 21.5 hours it looks like.
+
+    Backwards is a real case, not a corrupt one: `_apply_datetime` refuses only
+    a REPEAT of the current moment, so a flashback and a corrected date both
+    land as an earlier entry. Callers size the jump with `abs`; the sign is
+    kept here because "back to that morning" and "on to the next" are different
+    things to say about a scene, and only this function still knows which.
     """
     try:
         days = calendars.fixed_of(provider, after) - calendars.fixed_of(provider, before)
@@ -93,12 +99,19 @@ def evaluate(messages: list[dict], location_history: list[str],
     """Score the break signals a scene has accumulated since it was last asked.
 
     `watermark` is `scenes.scene_break_fields`' counts -- the transcript length,
-    the moves and the advances that the last question already covered. Every
-    "since" below is measured against those and floored at zero, because all
-    three can go BACKWARDS: `delete_from` trims the transcript and
-    `_rewound_history` trims both histories with it, so a rewound scene must
-    read as "nothing new" rather than as a negative count that flips a
-    comparison somewhere downstream.
+    the moves and the advances that the last question already covered.
+
+    Whether those counts are still ABOUT this transcript is the caller's
+    question, not this one's: the stored digest answers it (`routes.scenes.
+    _break_intact`), and a caller holding a voided watermark passes zeroes.
+    Scoring cannot answer it, because a count carries no evidence of which posts
+    it counted -- which is exactly how a scene rewound from thirty posts to ten
+    used to report nothing new for the next twenty.
+
+    What this does own is that the counts can be LARGER than the scene: a
+    `delete_from` below the watermark leaves the covered prefix intact, so the
+    watermark stays valid while `_rewound_history` trims both histories under
+    it. Hence the cap as well as the floor.
 
     `every` is `config.scene_break_every()` -- 0 means the feature is off, and
     that is checked here rather than left to each caller, so the GET that only
@@ -111,10 +124,20 @@ def evaluate(messages: list[dict], location_history: list[str],
     only the extra point for a LONG skip depends on being able to measure it.
     """
     total = len(messages)
-    posts = max(0, total - watermark.get("at", 0))
     locs, times = moves(location_history), moves(time_history)
-    moved = max(0, locs - watermark.get("locs", 0))
-    advanced = max(0, times - watermark.get("times", 0))
+    # Floored at zero AND capped at what the scene actually has. Both matter,
+    # and for different failures. The floor is the hand-edited frontmatter case.
+    # The cap is a rewind that the caller's digest check did not void -- a
+    # `delete_from` BELOW the watermark leaves the covered prefix intact, so the
+    # watermark stays valid while both histories have been trimmed under it
+    # (`_rewound_history`), and an uncapped subtraction would then report the
+    # moves that survived as though they had already been asked about.
+    at = min(max(0, watermark.get("at", 0)), total)
+    seen_locs = min(max(0, watermark.get("locs", 0)), locs)
+    seen_times = min(max(0, watermark.get("times", 0)), times)
+    posts = total - at
+    moved = locs - seen_locs
+    advanced = times - seen_times
 
     signals: list[dict] = []
     # Switched off is switched off, all the way down to the signal list: the
@@ -144,12 +167,15 @@ def evaluate(messages: list[dict], location_history: list[str],
         # advance i is history[i-1] -> history[i].
         spans = [] if provider is None else [
             _gap_minutes(provider, time_history[i - 1], time_history[i])
-            for i in range(watermark.get("times", 0) + 1, times + 1)]
+            for i in range(seen_times + 1, times + 1)]
         measured = [s for s in spans if s is not None]
-        gap = max(measured) if measured else None
-        long_skip = gap is not None and gap >= LONG_SKIP_MINUTES
+        # By MAGNITUDE, not by value: a scene that jumped back a week to a
+        # flashback and then on by half an hour has moved a week, and `max` over
+        # signed minutes would report the half hour and call the scene calm.
+        gap = max(measured, key=abs) if measured else None
+        long_skip = gap is not None and abs(gap) >= LONG_SKIP_MINUTES
         signals.append({"kind": "time", "weight": 2 if long_skip else 1,
-                        "detail": _time_detail(advanced, gap, long_skip)})
+                        "detail": _time_detail(advanced, gap)})
 
     score = sum(s["weight"] for s in signals)
     return {"posts": posts, "signals": signals, "score": score,
@@ -165,19 +191,33 @@ def evaluate(messages: list[dict], location_history: list[str],
             "watermark": {"at": total, "locs": locs, "times": times}}
 
 
-def _time_detail(advanced: int, gap: int | None, long_skip: bool) -> str:
+def _time_detail(advanced: int, gap: int | None) -> str:
     """The time signal in words, for a prompt the model reads.
 
     Hours rather than minutes once there are any, because "the clock moved 930
     minutes" is a number a reader has to convert and "15 hours" is not -- and
     this string's only consumer is a language model being asked a question
     about pacing.
+
+    `long_skip` is re-derived here rather than passed in beside `gap`: it is a
+    fact ABOUT `gap`, and two parameters that must agree are two parameters that
+    can stop agreeing.
+
+    Sized with `abs` and worded from the sign, because a backwards jump is a
+    thing scenes do (a flashback, a corrected date) and floor division does not
+    survive it: `-30 // 60` is `-1`, so the naive form said "the clock advanced
+    -1 hours" about half an hour of flashback. "Back" is also the more useful
+    word for the model, since a jump backwards is a cut where a jump forwards
+    can still be pacing.
     """
     if gap is None:
-        return f"the clock advanced {advanced} time{'s' if advanced > 1 else ''}"
-    hours = gap // 60
-    span = f"{hours} hours" if hours else f"{gap} minutes"
-    return (f"the clock advanced {span}" + (" — a long skip" if long_skip else ""))
+        return f"the clock moved {advanced} time{'s' if advanced > 1 else ''}"
+    size = abs(gap)
+    hours = size // 60
+    span = f"{hours} hours" if hours else f"{size} minutes"
+    direction = "moved back" if gap < 0 else "advanced"
+    return (f"the clock {direction} {span}"
+            + (" — a long skip" if size >= LONG_SKIP_MINUTES else ""))
 
 
 def build_prompt(transcript: str, signals: list[dict], facts: dict | None = None,

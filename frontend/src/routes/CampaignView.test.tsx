@@ -103,7 +103,7 @@ const ONE_SCENE = [{ id: "s1", title: "Old", model: "", created: "", updated: ""
 // it renders the rail it always did and the play loop's per-post question is a
 // no-op it never has to think about.
 const NO_SCENE_BREAK = {
-  verdict: "" as const, reason: "", title: "",
+  verdict: "" as const, reason: "", title: "", stale: false,
   posts: 0, score: 0, signals: [], every: 20, due: false,
 };
 

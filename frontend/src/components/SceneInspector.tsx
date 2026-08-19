@@ -215,6 +215,30 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // reason: the button belongs to a scene, and one scene's pending question
   // must not disable another's.
   const [breakBusy, setBreakBusy] = useState<string | null>(null);
+  // A read that failed, kept apart from a read that said nothing — `rollingUnread`'s
+  // distinction, and this panel needs it more sharply, not less. "Nothing to
+  // suggest yet" is an ASSERTION about the scene; rendering it out of a failed
+  // GET tells the player the detector looked and found nothing when it never
+  // got an answer at all.
+  const [breakUnread, setBreakUnread] = useState(false);
+  // Reads yield to writes: a GET issued BEFORE a write must not install its
+  // pre-write answer afterwards. The effect's read can be in flight when Ask
+  // now commits, and resolving second would blank the verdict the player just
+  // paid for, with nothing later scheduled to put it back.
+  //
+  // Its own counter rather than `rolling`'s `writeSeq`, which gates the shared
+  // effect's reads for BOTH features: bumping that one for a break write would
+  // make the effect discard a perfectly good rolling read as superseded — one
+  // feature's write silently costing the other its answer.
+  //
+  // Deliberately no ticket pair ordering the WRITES against each other, unlike
+  // `refreshRolling`'s: `breakBusy` disables both this panel's break buttons
+  // for the record a question is out on, so two of its own writes cannot
+  // overlap on one scene — and a write arriving from somewhere else entirely
+  // (another tab) is refused by `_break_commit`, which is where that decision
+  // belongs. Ordering it here as well would be machinery for a race this panel
+  // cannot produce.
+  const breakSeq = useRef(0);
   const [breakError, setBreakError] = useState<{ key: string; text: string } | null>(null);
   // The stamp decides what may be RENDERED. This decides what may be STORED,
   // and one without the other is not enough — that took two review rounds:
@@ -454,7 +478,13 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     const key = `${cid}/${sid}`;
     currentKey.current = key;
     const mine = () => readToken.current === token && writeSeq.current === seenWrites;
+    const seenBreakWrites = breakSeq.current;
+    const breakMine = () => readToken.current === token && breakSeq.current === seenBreakWrites;
     setRollingUnread(false);
+    // Cleared up front like `rollingUnread`, not just on the next success:
+    // otherwise a scene whose read failed leaves "could not be read" standing
+    // over the NEXT scene until its own read lands.
+    setBreakUnread(false);
     // The previous record's summary is deliberately NOT cleared here: this
     // effect also re-runs on `refreshKey`, i.e. twice per turn, and blanking
     // would flash "No summary yet" over a summary that is about to come back.
@@ -478,11 +508,12 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     // read costs is a NEW proposal, which the next read or the next turn brings.
     api.getSceneBreak(cid, sid)
       .then((data) => {
-        if (!mine()) return;
+        if (!breakMine()) return;
         setBreakState({ key, data });
+        setBreakUnread(false);
         setBreakError((e) => (e?.key === key ? null : e));
       })
-      .catch(() => {});
+      .catch(() => { if (breakMine()) setBreakUnread(true); });
     reloadWhen();
     reloadCfg();
   }, [cid, sid, refreshKey, reloadWhen, reloadCfg, reloadCast, reloadPins]);
@@ -793,9 +824,18 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // the reason stated there: the id in the prop is already stale.
   function reloadBreak(id: string) {
     const key = `${cid}/${id}`;
+    const seen = breakSeq.current;
     api.getSceneBreak(cid, id)
-      .then((data) => { if (currentKey.current === key) setBreakState({ key, data }); })
-      .catch(() => {});
+      .then((data) => {
+        // A read, so it yields to any write that landed after it was issued —
+        // the same rule the scene-select effect's read follows.
+        if (currentKey.current !== key || breakSeq.current !== seen) return;
+        setBreakState({ key, data });
+        setBreakUnread(false);
+      })
+      .catch(() => {
+        if (currentKey.current === key && breakSeq.current === seen) setBreakUnread(true);
+      });
   }
 
   // The panel's own button: ask NOW, including when the automatic cadence is
@@ -812,7 +852,9 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       // is still the server's reconciled view of the scene, and dropping it
       // would leave the panel showing a score from before the last turn.
       if (currentKey.current !== key) return;
+      breakSeq.current += 1;
       setBreakState({ key, data });
+      setBreakUnread(false);
     } catch (err: any) {
       // Reported, never destructive: a standing proposal is still the best
       // thing anyone has, so a failed question leaves it exactly where it is.
@@ -833,7 +875,9 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     try {
       const data = await api.dismissSceneBreak(cid, sid);
       if (currentKey.current !== key) return;
+      breakSeq.current += 1;
       setBreakState({ key, data });
+      setBreakUnread(false);
     } catch (err: any) {
       if (currentKey.current !== key) return;
       setBreakError({ key, text: err.detail ?? String(err) });
@@ -968,13 +1012,25 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           // Only this campaign-and-scene's answer, `rolling`'s rule: another
           // record's proposal is not an answer about this one.
           const b = breakState?.key === `${cid}/${sid}` ? breakState.data : undefined;
-          if (b && b.every === 0) {
-            return (
-              <div className="field-hint">
-                Turned off — set “Scene-break check” in Configuration to switch it on.
-              </div>
-            );
+          if (breakUnread && !b) {
+            return <div className="field-hint">The detector could not be read.</div>;
           }
+          // A standing answer outranks "the feature is off", and review caught
+          // why the other order was a bug rather than a preference: `Ask now`
+          // works when the cadence is 0 — that is the whole point of a button
+          // that says now — so putting the off-notice first meant the player
+          // pressed it, paid for a call, and watched the panel go on saying
+          // "Turned off".
+          // Said beside either answer, never instead of it: the prose is still
+          // the best thing anyone has, and what it may no longer do is claim to
+          // be about the scene on screen. `rollingUnread`'s wording for the
+          // failed-read case, `stale`'s for the moved-transcript one — they are
+          // different facts and the panel says both.
+          const behind = breakUnread
+            ? "The latest read failed, so this may be behind."
+            : b?.stale
+              ? "Posts it was about have changed since — it may no longer apply."
+              : "";
           if (b?.verdict === "yes") {
             return (
               <>
@@ -982,6 +1038,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
                 {b.title && (
                   <div className="field-hint">Next scene, perhaps: “{b.title}”</div>
                 )}
+                {behind && <div className="field-hint">{behind}</div>}
               </>
             );
           }
@@ -990,7 +1047,16 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
               <>
                 <div className="field-hint">Not yet — the scene is still mid-beat.</div>
                 {b.reason && <div className="field-hint">{b.reason}</div>}
+                {behind && <div className="field-hint">{behind}</div>}
               </>
+            );
+          }
+          if (b && b.every === 0) {
+            return (
+              <div className="field-hint">
+                Turned off — set “Scene-break check” in Configuration to switch it on.
+                <br />Ask now still works.
+              </div>
             );
           }
           // Nothing asked yet. The signals are shown even below the bar,
@@ -1000,8 +1066,9 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           return (
             <>
               <div className="field-hint">
-                {b ? `Nothing to suggest yet — checked every ${b.every} posts.`
-                   : "Nothing to suggest yet."}
+                {breakUnread ? "The latest read failed, so this may be behind."
+                  : b ? `Nothing to suggest yet — checked every ${b.every} posts.`
+                      : "Nothing to suggest yet."}
               </div>
               {b?.signals.map((sig) => (
                 <div className="field-hint" key={sig.kind}>{sig.detail}</div>

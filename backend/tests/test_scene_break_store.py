@@ -89,7 +89,7 @@ def test_a_skip_nobody_can_measure_still_counts_as_an_advance(gregorian):
     way, and only the extra point depends on measuring it."""
     scored = _score(EVERY, times=["2026-07-05", "not a date at all"], provider=gregorian)
     assert scored["score"] == 2
-    assert scored["signals"][-1]["detail"] == "the clock advanced 1 time"
+    assert scored["signals"][-1]["detail"] == "the clock moved 1 time"
 
 
 def test_no_calendar_at_all_is_not_an_error(gregorian):
@@ -107,6 +107,42 @@ def test_only_the_advances_since_the_last_question_are_measured(gregorian):
                    watermark={"at": 0, "locs": 0, "times": 1})
     assert fresh["score"] == 3          # the overnight skip is in range
     assert asked["score"] == 2          # only the one-hour advance is
+
+
+def test_a_clock_that_moved_BACKWARDS_is_sized_and_worded_as_such(gregorian):
+    """`_apply_datetime` refuses only a repeat of the current moment, so a
+    flashback and a corrected date both land as an earlier entry. Floor
+    division does not survive that: `-30 // 60` is `-1`, which read out as
+    "the clock advanced -1 hours" — a number the model has to ignore, in a
+    sentence telling it the opposite of what happened."""
+    back = _score(EVERY, times=["2026-07-08", "2026-07-05"], provider=gregorian)
+    assert back["signals"][-1]["detail"] == "the clock moved back 72 hours — a long skip"
+    short = _score(EVERY, times=["2026-07-05T12:00", "2026-07-05T11:30"], provider=gregorian)
+    assert short["signals"][-1]["detail"] == "the clock moved back 30 minutes"
+
+
+def test_the_biggest_jump_is_the_biggest_by_SIZE(gregorian):
+    """A scene that cut back a week to a flashback and then on by half an hour
+    has moved a week. Taking the largest SIGNED gap would report the half hour
+    and call the scene calm."""
+    scored = _score(EVERY, provider=gregorian,
+                    times=["2026-07-12T09:00", "2026-07-05T09:00", "2026-07-05T09:30"])
+    assert "a long skip" in scored["signals"][-1]["detail"]
+    assert scored["score"] == 3
+
+
+def test_a_move_that_survived_a_rewind_is_not_re_earned():
+    """A `delete_from` BELOW the watermark keeps the covered prefix intact, so
+    the watermark stays valid while `_rewound_history` trims both histories
+    under it. The moves that survive are the EARLY ones — the ones the stale
+    count already covered — so capping the watermark at what the scene now has
+    must not turn them back into news."""
+    scored = _score(30, locations=["gate", "market"], times=["2026-07-05", "2026-07-06"],
+                    watermark={"at": 10, "locs": 9, "times": 9})
+    assert [s["kind"] for s in scored["signals"]] == ["length"]
+    # ...and the cap is what stops the subtraction going negative and flipping
+    # a comparison somewhere downstream.
+    assert scored["score"] == 2
 
 
 def test_a_rewound_scene_reads_as_nothing_new():

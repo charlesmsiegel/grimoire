@@ -2072,6 +2072,28 @@ def _break_provider(cid: str):
         return None
 
 
+def _break_intact(messages: list[dict], stored: dict) -> bool:
+    """Whether a stored watermark still describes the transcript on disk.
+
+    `_rolling_view`'s check, for `_rolling_view`'s reason and with its own
+    tool: the transcript is not append-only, so "we have already asked about
+    the first thirty posts" stops being true the moment one of those thirty is
+    rerolled, edited away or trimmed. An APPEND leaves the prefix alone and
+    keeps the watermark good, which it must, or an ordinary scene would forget
+    every question it had ever been asked.
+
+    `at > total` short-circuits rather than slicing: `messages[:at]` past the
+    end yields the whole list, which would digest-match a transcript trimmed
+    back to exactly what the watermark covered.
+
+    A watermark with no digest at all is not intact. That is a scene written
+    before this key existed (or hand-edited), and the safe reading of "we asked
+    about thirty posts, but cannot say which" is that we did not.
+    """
+    return bool(stored["digest"]) and stored["at"] <= len(messages) \
+        and store.rolling_summary.covered_digest(messages[:stored["at"]]) == stored["digest"]
+
+
 def _break_view(scene: dict, every: int, provider) -> dict:
     """The scene's break state, scored out of ONE snapshot of the scene.
 
@@ -2081,12 +2103,21 @@ def _break_view(scene: dict, every: int, provider) -> dict:
     move appends its transition line in the same mutator that extends
     `location_history`), so reading them separately can produce a location move
     counted against a transcript that does not contain the post announcing it.
+
+    A watermark whose prefix moved is VOID, not merely old: the scene is scored
+    from zero, which is the same answer the rolling summary gives a fold whose
+    ground moved. Review caught what carrying it forward instead did -- a scene
+    rewound from thirty posts to ten and played back up to twenty-five reported
+    nothing new for fifteen posts of real story, and went on reporting nothing
+    until the count passed thirty again.
     """
     stored = store.scenes.scene_break_fields(scene["meta"])
+    intact = _break_intact(scene["messages"], stored)
     history = store.scenes.histories(scene["meta"])
-    scored = store.scene_break.evaluate(scene["messages"], history["locations"],
-                                        history["times"], stored, every, provider)
-    return {**scored, "stored": stored}
+    scored = store.scene_break.evaluate(
+        scene["messages"], history["locations"], history["times"],
+        stored if intact else {"at": 0, "locs": 0, "times": 0}, every, provider)
+    return {**scored, "stored": stored, "intact": intact}
 
 
 def _break_body(view: dict, every: int) -> dict:
@@ -2104,7 +2135,15 @@ def _break_body(view: dict, every: int) -> dict:
     """
     stored = view["stored"]
     return {"verdict": stored["verdict"], "reason": stored["reason"],
-            "title": stored["title"], "posts": view["posts"], "score": view["score"],
+            "title": stored["title"],
+            # A standing answer whose watermark was voided describes a
+            # transcript that no longer exists -- the posts it reasoned about
+            # were rerolled, edited or cut. `_rolling_body`'s `stale`, for its
+            # reason: the panel may still show the prose, it may just not
+            # present it as current. A scene with no answer is not stale; it has
+            # nothing to be stale about.
+            "stale": bool(stored["verdict"]) and not view["intact"],
+            "posts": view["posts"], "score": view["score"],
             "signals": view["signals"], "every": every, "due": view["due"]}
 
 
@@ -2172,7 +2211,12 @@ async def _break_ask(cid: str, sid: str, scene: dict, view: dict, every: int,
     """The paid half of `post_scene_break`, split out so the route above reads as
     the decision it is."""
     messages = scene["messages"]
-    base = min(view["stored"]["at"], len(messages))
+    # Zero when the watermark was VOIDED, not the stale count it still holds.
+    # Review caught the pair coming apart: a rewound scene scores from zero and
+    # records a watermark covering the whole transcript, so slicing from the old
+    # count would show the model the last ten posts while the answer went on
+    # file as an answer about all fifty.
+    base = min(view["stored"]["at"], len(messages)) if view["intact"] else 0
     facts = store.chronicle.scene_facts(cid, sid)
     prompt = store.scene_break.build_prompt(
         store.chronicle.transcript_text(messages[base:]), view["signals"], facts,
@@ -2193,19 +2237,26 @@ async def _break_ask(cid: str, sid: str, scene: dict, view: dict, every: int,
     # ("is this still the same prose?"), same three fields.
     digest = store.rolling_summary.covered_digest(messages)
     try:
-        landed = await run_in_threadpool(_break_commit, cid, sid, view["watermark"],
-                                         answer, digest, every, provider)
+        result = await run_in_threadpool(_break_commit, cid, sid, view["watermark"],
+                                         answer, digest)
     except store.scenes.SceneNotFound:
         # Renamed or deleted while the model was answering -- the race
         # `_rolling_refresh` documents, reachable here for the same reason (the
         # play loop fires this after releasing the scene). There is nowhere to
         # put the answer and this call is fire-and-forget from the client.
         return {**_break_body(view, every), "asked": False}
-    return {**_break_body(landed["view"], every), "asked": landed["landed"]}
+    # Scored OUTSIDE the hold, from the scene the commit read back. Sizing a
+    # time skip runs the campaign's calendar provider, which is user-authored
+    # code, and this codebase does not run that under the campaign lock --
+    # `scenes.moment.set_datetime` and `scenes.lifecycle._date_hint` make the
+    # same cut, and review caught that resolving the provider outside the hold
+    # while still CALLING it inside was only half of the rule.
+    return {**_break_body(_break_view(result["scene"], every, provider), every),
+            "asked": result["landed"]}
 
 
-def _break_commit(cid: str, sid: str, watermark: dict, answer: dict, digest: str,
-                  every: int, provider) -> dict:
+def _break_commit(cid: str, sid: str, watermark: dict, answer: dict,
+                  digest: str) -> dict:
     """Store a verdict only if the transcript it was formed FROM is still there,
     and report the state that results either way.
 
@@ -2221,24 +2272,44 @@ def _break_commit(cid: str, sid: str, watermark: dict, answer: dict, digest: str
     scene could never be asked about at all. What fails is an edit or a reroll
     inside the prefix, a trim, and a recycled id.
 
-    `provider` is resolved by the caller and handed in, never looked up here:
-    a calendar provider is user-authored code, and this codebase does not run
-    that under the campaign lock (`scenes.moment.set_datetime` and
-    `scenes.lifecycle._date_hint` make the same cut).
+    ...and nothing that already covers at least as much may be stored. Review
+    caught that "the later write simply wins" was the wrong rule, and not even a
+    description of what happened: two questions can be in flight at once (the
+    panel's button beside the play loop's), the newer one can finish first, and
+    the older one's prefix is still perfectly intact because everything since is
+    an APPEND. Writing then replaced the answer the player had just asked for
+    with a staler verdict about fewer posts AND regressed the watermark, so the
+    next automatic question came early and re-asked what had just been answered.
+    A DISMISSAL moves the watermark the same way and is caught by the same rule,
+    which is what it should be: "not here" must not be undone by a question that
+    was already out when the player said it.
+
+    Scores nothing and reads no calendar: this runs under the hold, and the view
+    its caller needs is built outside it.
     """
     with store.locks.campaign_lock(cid):
         scene = store.scenes.read_scene(cid, sid)
-        covered = min(watermark["at"], len(scene["messages"]))
-        landed = (covered == watermark["at"]
-                  and store.rolling_summary.covered_digest(
-                      scene["messages"][:covered]) == digest)
+        stored = store.scenes.scene_break_fields(scene["meta"])
+        # Two questions about the same file, named apart because they are
+        # answered against different watermarks: whether the posts THIS answer
+        # was formed from are still on disk, and whether a DIFFERENT answer
+        # already covers at least as much.
+        unchanged = (watermark["at"] <= len(scene["messages"])
+                     and store.rolling_summary.covered_digest(
+                         scene["messages"][:watermark["at"]]) == digest)
+        # Against the stored watermark only while IT is still about this
+        # transcript: a rewind voids it, and a voided watermark is no bar to an
+        # answer about the scene as it now stands.
+        superseded = (_break_intact(scene["messages"], stored)
+                      and stored["at"] >= watermark["at"])
+        landed = unchanged and not superseded
         if landed:
             store.scenes.set_scene_break(
                 cid, sid, watermark["at"], watermark["locs"], watermark["times"],
-                "yes" if answer["break"] else "no", answer["reason"],
+                digest, "yes" if answer["break"] else "no", answer["reason"],
                 answer["title"] if answer["break"] else "")
             scene = store.scenes.read_scene(cid, sid)
-        return {"landed": landed, "view": _break_view(scene, every, provider)}
+        return {"landed": landed, "scene": scene}
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/scene-break/dismiss")
