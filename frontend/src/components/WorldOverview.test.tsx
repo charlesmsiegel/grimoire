@@ -97,3 +97,19 @@ test("the checklist reads the world's calendar once, not once per component", as
   await screen.findByText(/○ Calendar confirmed/);
   expect(api.getCalendarConfig).toHaveBeenCalledTimes(1);
 });
+
+test("switching worlds drops the previous world's calendar row", async () => {
+  // The row and the section below it are one claim. Leaving the old flag up
+  // while the section says "Loading calendar…" is the page contradicting itself
+  // about the world whose name is at the top of it.
+  (api.getCalendarConfig as any).mockImplementation((scope: { id: string }) =>
+    scope.id === "w"
+      ? Promise.resolve({ primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
+                          secondary: null, confirmed: true, stale_after_days: 30 })
+      : new Promise(() => {}));                    // the next world never answers
+  const { rerender } = render(<WorldOverview wid="w" onNavigate={vi.fn()} />);
+  expect(await screen.findByText(/✓ Calendar confirmed/)).toBeInTheDocument();
+  rerender(<WorldOverview wid="w2" onNavigate={vi.fn()} />);
+  expect(await screen.findByText(/loading calendar/i)).toBeInTheDocument();
+  expect(screen.queryByText(/Calendar confirmed/)).toBeNull();
+});
