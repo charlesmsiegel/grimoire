@@ -132,8 +132,9 @@ first if you think one should be skipped.
     `make check-py PY=~/github/grimoire/backend/.venv/bin/python` on macOS/Linux,
     `make check-py PY=C:/Users/<you>/github/grimoire/backend/.venv/Scripts/python.exe`
     on Windows. The venv's interpreter lives under `bin/` on macOS/Linux and
-    `Scripts/` on Windows; every command below that names one spells out both,
-    and `test_install_scripts.py` fails if a new one names only one.
+    `Scripts/` on Windows; every command in this file, in `README.md` and in the
+    frozen-campaign README spells out both forms, and `test_install_scripts.py`
+    fails on a new one that names only one.
   - `check-py` sets `PYTHONPATH` to this tree's `backend/src` on purpose:
     `backend/.venv` holds an editable install whose `.pth` points at whichever
     checkout created it, so a bare `pytest` inside a worktree silently tests the
