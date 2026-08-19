@@ -130,21 +130,38 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
     }
   }
 
+  /** Re-read the session, then tell the caller its transcript moved — but only
+   *  while this panel is still on screen. A reader who switches scene mid-request
+   *  unmounts it, and `onChanged` refreshes the scene this panel was for, which
+   *  by then is not the one they are looking at. */
+  async function refresh() {
+    await load();
+    if (alive.current) onChanged();
+  }
+
   const start = () => guard(async () => {
     if (startAt === null) return;
     await api.startReplay(cid, sid, startAt);
-    onStartHandled();
-    await load();
-    onChanged();
+    if (alive.current) onStartHandled();
+    await refresh();
   });
 
-  const fork = () => guard(async () => {
-    const name = window.prompt("Name for the forked campaign");
-    if (!name || !name.trim()) return;
-    const forked = await api.forkCampaign(cid, name.trim());
-    onStartHandled();
-    onForked(forked.id);
-  });
+  /** Asked BEFORE `guard`, deliberately. `window.prompt` is modal and
+   *  synchronous, so anything the guard is holding — `busy`, and the
+   *  transcript's write latch, which greys out the composer and the gutter for
+   *  the whole app — would be held for as long as the reader looks at the
+   *  dialog, or forever if they walk away from it. Same reason `stop` asks
+   *  first. */
+  function fork() {
+    const name = window.prompt("Name for the forked campaign")?.trim();
+    if (!name) return;
+    return guard(async () => {
+      const forked = await api.forkCampaign(cid, name);
+      if (!alive.current) return;
+      onStartHandled();
+      onForked(forked.id);
+    });
+  }
 
   /** Run a streaming call and surface what it streamed BACK, not merely whether
    *  it threw. A generation that fails mid-stream reports an `error` frame and
@@ -159,33 +176,35 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
 
   const runTurn = () => guard(async () => {
     await streamed((on) => api.replayTurn(cid, sid, on));
-    await load();
-    onChanged();
+    await refresh();
   });
 
   const again = () => guard(async () => {
     await streamed((on) => api.regenerate(cid, sid, on));
-    await load();
-    onChanged();
+    await refresh();
   });
 
   const accept = () => guard(async () => {
     await api.acceptReplay(cid, sid);
-    await load();
-    onChanged();
+    await refresh();
   });
 
-  const stop = () => guard(async () => {
-    // The default is the non-destructive answer, and the question is asked
-    // rather than assumed: the originals are only on file until this call.
+  /** The question comes first and outside `guard`, for `fork`'s reason: this
+   *  one is a modal the reader may sit on, and the latch it would otherwise be
+   *  holding belongs to the whole transcript.
+   *
+   *  The default is the non-destructive answer, and it is asked rather than
+   *  assumed: the originals are only on file until this call. */
+  function stop() {
     const restore = window.confirm(
       "Put the rest of the original scene back?\n\n" +
       "Cancel keeps the scene as the replay has left it and discards the posts " +
       "that have not been replayed yet.");
-    await api.cancelReplay(cid, sid, restore);
-    await load();
-    onChanged();
-  });
+    return guard(async () => {
+      await api.cancelReplay(cid, sid, restore);
+      await refresh();
+    });
+  }
 
   if (startAt !== null && !session) {
     const priced = preview && preview.at === startAt ? preview.data : null;
