@@ -85,10 +85,31 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
 
 def recent(cid: str, n: int) -> list[dict]:
     """The n highest-id (chronological-ish) records, ascending. n <= 0 -> []."""
-    if n <= 0:
+    return page(cid, n)
+
+
+def page(cid: str, limit: int, offset: int = 0) -> list[dict]:
+    """`recent`, with a window that can start further back than the newest record.
+
+    Anchored at the NEWEST end, because that is the end a chronicle is read
+    from: `offset` skips that many of the newest records, so a reader pages
+    backwards by asking again with `offset` raised by the page it just got.
+    The page itself still comes back ascending, the order `recent` has always
+    returned and every reader of this file already expects.
+
+    An unusable window is empty rather than an error -- `limit <= 0`, or an
+    `offset` past the oldest record. Range-checking a client's query belongs in
+    the route (`routes.common._page_window`), which can answer 400; here, a
+    caller that asked for nothing gets nothing, which is what `recent(cid, 0)`
+    has always done.
+    """
+    if limit <= 0 or offset < 0:
         return []
-    data = read_chronicle(cid)
-    return sorted(data.values(), key=lambda r: r.get("id", ""))[-n:]
+    rows = sorted(read_chronicle(cid).values(), key=lambda r: r.get("id", ""))
+    end = len(rows) - offset
+    if end <= 0:
+        return []
+    return rows[max(0, end - limit):end]
 
 
 def append_timeline(cid: str, events: list[dict]) -> None:

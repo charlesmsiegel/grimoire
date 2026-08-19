@@ -18,8 +18,9 @@ from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from .common import (computes_only, _bounded_call, _campaign_root_or_404, _content_fields,
-                     _display_name_or_400, _dump, _require_connection, _response_body, get_llm,
-                     _serve_image, _serve_image_file, _upload_image_ext, _write_response)
+                     _display_name_or_400, _dump, _page_of, _page_window, _require_connection,
+                     _response_body, get_llm, _serve_image, _serve_image_file, _upload_image_ext,
+                     _write_response)
 from .models import (AdvanceTime, AvatarFocus, CalendarConfig, CampaignClimate, CopyFromGreeting,
                      ScheduledEventCreate, ScheduledEventEdit,
                      DefaultVersion, ForkCampaign, GroupStateSave, NameBody, NewCampaign, PCCreate,
@@ -592,7 +593,19 @@ def _record_name(cid: str, kind: str, eid: str) -> str | None:
 
 
 @router.get("/campaigns/{cid}/changes")
-def get_changes(cid: str):
+def get_changes(cid: str, limit: int | None = None, offset: int | None = None):
+    """The rolling write-back deltas, one row per record, by kind then name.
+
+    With `limit`/`offset` (either, or both) the body is a slice of that same
+    listing; sending neither returns all of it, unchanged (#216).
+
+    The slice is taken between naming the records and rendering their diffs,
+    which is the only place it can be. The name is what the sort orders by, so
+    every surviving row has to resolve before any row can be dropped -- but
+    `line_diff` runs per FIELD, and a page that is not going to be sent has no
+    reason to pay for it.
+    """
+    limit, offset = _page_window(limit, offset)
     _campaign_root_or_404(cid)
     data = store.changes.read(cid)
     scenes_by_id = {s["id"]: s for s in store.scenes.list_scenes(cid)}
@@ -600,12 +613,16 @@ def get_changes(cid: str):
         chron = store.chronicle.read_chronicle(cid)
     except Exception:  # noqa: BLE001 — garbled chronicle.json: labels degrade, no 500
         chron = {}
-    out: list[dict] = []
+    named: list[tuple[str, str, str, dict]] = []
     for ref, entry in data.items():
         kind, _, eid = ref.partition("/")
         name = _record_name(cid, kind, eid)
         if name is None:
             continue  # record deleted since the change was captured
+        named.append((kind, name, eid, entry))
+    named.sort(key=lambda r: (r[0], r[1]))
+    out: list[dict] = []
+    for kind, name, eid, entry in _page_of(named, limit, offset):
         sid = entry.get("scene", "")
         s, c = scenes_by_id.get(sid, {}), chron.get(sid, {})
         fields = [{"field": f.get("field", ""), "label": f.get("label", ""),
@@ -614,7 +631,6 @@ def get_changes(cid: str):
         out.append({"ref": {"kind": kind, "id": eid}, "name": name,
                     "scene": {"id": sid, "title": s.get("title", sid), "date": c.get("date", "")},
                     "fields": fields})
-    out.sort(key=lambda r: (r["ref"]["kind"], r["name"]))
     return out
 
 

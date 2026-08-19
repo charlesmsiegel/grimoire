@@ -39,6 +39,36 @@ def test_recent_orders_by_id_and_bounds(monkeypatch, tmp_path):
     assert chronicle.recent(cid, 0) == []
 
 
+def test_page_walks_back_from_the_newest_record(monkeypatch, tmp_path):
+    """`offset` skips that many of the NEWEST records; the page still comes back
+    oldest-first, which is the order `recent` has always returned."""
+    cid = _campaign(monkeypatch, tmp_path)
+    for i in range(4):
+        chronicle.absorb(cid, {"id": f"2026-01-0{i + 1}", "one_line": f"beat {i}",
+                               "summary": "", "keywords": []})
+
+    def page(limit, offset=0):
+        return [r["one_line"] for r in chronicle.page(cid, limit, offset)]
+
+    assert page(2) == ["beat 2", "beat 3"]
+    assert page(2, 2) == ["beat 0", "beat 1"]
+    assert page(2, 3) == ["beat 0"]      # a partial page at the far end
+    assert page(2, 4) == []              # walked past the oldest record
+    assert page(99) == [f"beat {i}" for i in range(4)]
+    assert page(0) == [] and page(2, -1) == []
+
+
+def test_recent_is_page_at_offset_zero(monkeypatch, tmp_path):
+    """The two must not drift: `recent` is the un-offset case of `page`, and a
+    reader that switches to `page(cid, n, 0)` must see no difference."""
+    cid = _campaign(monkeypatch, tmp_path)
+    for i in range(3):
+        chronicle.absorb(cid, {"id": f"2026-01-0{i + 1}", "one_line": f"beat {i}",
+                               "summary": "", "keywords": []})
+    for n in (0, 1, 2, 3, 9):
+        assert chronicle.recent(cid, n) == chronicle.page(cid, n, 0)
+
+
 def test_append_timeline_writes_lines(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     chronicle.append_timeline(cid, [{"date": "2026-01-01", "text": "The gate opened."}])

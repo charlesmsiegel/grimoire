@@ -8293,6 +8293,123 @@ def test_get_changes_tolerates_garbled_chronicle(client):
     assert out.json()[0]["scene"]["date"] == ""  # date degrades, no 500
 
 
+# ---- opt-in limit/offset on the list routes that grow with play (#216) -----
+#
+# The contract these tests pin, on all three routes: omitting both parameters
+# returns exactly what the route returned before, and a page is a slice of that
+# same listing rather than a differently-ordered one. So every assertion below
+# is written against the route's OWN unpaged answer -- a test that hard-coded an
+# expected order would pass while the page came back sorted differently, which
+# is the failure worth catching.
+
+
+def _seeded_chronicle(client, n: int) -> str:
+    """A campaign whose chronicle.json holds `n` records, written directly.
+
+    `recent` orders by the record's `id` as a STRING, so the ids are zero-padded:
+    unpadded, "s9" sorts after "s10" and the window would be picking rows this
+    test did not mean. Written to the file rather than absorbed through the API
+    because the point is a chronicle longer than one page, and 60 absorbs would
+    be 60 LLM turns.
+    """
+    _, cid = _campaign(client)
+    rows = {f"s{i:03d}": {"id": f"s{i:03d}", "one_line": f"beat {i}"} for i in range(n)}
+    (store.campaigns.campaign_root(cid) / "chronicle.json").write_text(
+        json.dumps(rows), encoding="utf-8")
+    return cid
+
+
+def test_get_scenes_pages_the_listing_it_already_returns(client):
+    cid = _campaign_with_scenes(client, ["First Light", "The Salt Road", "Low Tide"])[0]
+    full = client.get(f"/api/campaigns/{cid}/scenes").json()
+    assert len({s["id"] for s in full}) == 3  # three distinct rows to slice
+
+    def page(**params):
+        return client.get(f"/api/campaigns/{cid}/scenes", params=params).json()
+
+    assert page(limit=2) == full[:2]
+    assert page(offset=1) == full[1:]
+    assert page(limit=1, offset=1) == full[1:2]
+    assert page(limit=99) == full           # a limit past the end is not an error
+    assert page(offset=3) == []             # an offset past the end is an empty page
+
+
+def test_get_chronicle_defaults_to_the_page_it_always_returned(client):
+    cid = _seeded_chronicle(client, 60)
+    out = client.get(f"/api/campaigns/{cid}/chronicle").json()
+    assert [r["id"] for r in out] == [f"s{i:03d}" for i in range(10, 60)]
+
+
+def test_get_chronicle_offset_walks_back_from_the_newest_record(client):
+    cid = _seeded_chronicle(client, 60)
+
+    def page(**params):
+        return [r["id"] for r in
+                client.get(f"/api/campaigns/{cid}/chronicle", params=params).json()]
+
+    # The window is anchored at the NEWEST end -- `offset` skips that many of the
+    # newest records, and the page still comes back oldest-first.
+    assert page(limit=2) == ["s058", "s059"]
+    assert page(limit=2, offset=2) == ["s056", "s057"]
+    assert page(limit=1000) == [f"s{i:03d}" for i in range(60)]
+    assert page(limit=5, offset=60) == []   # walked past the oldest record
+    assert page(limit=5, offset=58) == ["s000", "s001"]  # partial page at the far end
+
+
+def test_get_changes_pages_the_listing_it_already_returns(client):
+    _, cid = _campaign(client)
+    croot = store.campaigns.campaign_root(cid)
+    for name in ("Ashfall", "Brinepact", "Cinderwrit"):
+        store.entities.create_entity(croot, "lore", name, body="old body")
+        eid = name.lower()
+        store.absorb.apply_edits(cid, [{"id": f"lore:{eid}", "kind": "lore",
+                                        "target": {"kind": "lore", "id": eid},
+                                        "label": f"{name} — lore", "field": "body",
+                                        "before": "old body", "after": "old body\nnew line",
+                                        "authored": False}], "s1")
+    full = client.get(f"/api/campaigns/{cid}/changes").json()
+    assert [r["name"] for r in full] == ["Ashfall", "Brinepact", "Cinderwrit"]
+
+    def page(**params):
+        return client.get(f"/api/campaigns/{cid}/changes", params=params).json()
+
+    assert page(limit=2) == full[:2]
+    assert page(offset=1) == full[1:]
+    assert page(limit=1, offset=1) == full[1:2]
+    assert page(offset=3) == []
+
+
+@pytest.mark.parametrize("route", ["scenes", "chronicle", "changes"])
+@pytest.mark.parametrize("params,detail", [
+    ({"limit": 0}, "limit must be at least 1"),
+    ({"limit": -1}, "limit must be at least 1"),
+    ({"offset": -1}, "offset must not be negative"),
+])
+def test_list_routes_reject_an_unusable_page(client, route, params, detail):
+    """One rejection, worded identically on all three -- and on every route,
+    not merely the one that happens to be cheapest to reach."""
+    _, cid = _campaign(client)
+    res = client.get(f"/api/campaigns/{cid}/{route}", params=params)
+    assert res.status_code == 400 and res.json()["detail"] == detail
+
+
+@pytest.mark.parametrize("route", ["scenes", "chronicle", "changes"])
+def test_list_routes_reject_the_page_before_looking_for_the_campaign(client, route):
+    """An unusable page is a 400 whether or not the campaign exists.
+
+    Not a preference: FastAPI validates the query TYPES before the handler
+    runs, so `?limit=abc` against a missing campaign is already a 422 rather
+    than a 404. A hand-written range check that ordered itself the other way
+    would make `limit=abc` and `limit=0` answer differently for the same
+    request. `GET /campaigns/{cid}/scenes/{sid}` already checks its window
+    first for the same reason.
+    """
+    res = client.get(f"/api/campaigns/nope/{route}", params={"limit": 0})
+    assert res.status_code == 400 and res.json()["detail"] == "limit must be at least 1"
+    assert client.get(f"/api/campaigns/nope/{route}",
+                      params={"limit": "abc"}).status_code == 422
+
+
 def test_list_campaigns_scene_counts(client):
     _, cid = _campaign(client)
     client.post(f"/api/campaigns/{cid}/scenes", json={"title": "First Light"})

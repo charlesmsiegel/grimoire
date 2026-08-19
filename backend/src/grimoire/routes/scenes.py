@@ -16,9 +16,9 @@ from starlette.concurrency import run_in_threadpool
 from .. import prompts, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from .common import (computes_only, _bounded_call, _campaign_root_or_404, _dump, _record_prompt,
-                     _require_connection, _require_scene, _response_body, _turn_override,
-                     _write_response, get_llm)
+from .common import (computes_only, _bounded_call, _campaign_root_or_404, _dump, _page_of,
+                     _page_window, _record_prompt, _require_connection, _require_scene,
+                     _response_body, _turn_override, _write_response, get_llm)
 from .models import (Appear, AppearBatch, ChatTurn, ChronicleSave, Dismiss, EditMessage,
                      EmergentCast, NewScene, RegenerateBody, RenameScene, ReplayCancel,
                      ReplayStart, ResponseSettings, RetryBody, SceneDatetime,
@@ -31,9 +31,21 @@ log = logging.getLogger(__name__)
 
 
 @router.get("/campaigns/{cid}/scenes")
-def get_scenes(cid: str):
+def get_scenes(cid: str, limit: int | None = None, offset: int | None = None):
+    """Every scene in the campaign, newest-updated first.
+
+    With `limit`/`offset` (either, or both) the body is a slice of that same
+    listing instead — `offset` skips that many of the newest, `limit` caps what
+    follows. Sending neither returns the whole listing, which is what every
+    caller of this route reads today.
+
+    Paging does not make the read cheaper: the sort is over every scene, so the
+    listing is built in full and then sliced. What it bounds is the response —
+    one row per scene, growing for as long as the campaign is played (#216).
+    """
+    limit, offset = _page_window(limit, offset)
     try:
-        return store.scenes.list_scenes(cid)
+        return _page_of(store.scenes.list_scenes(cid), limit, offset)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
 
@@ -785,10 +797,30 @@ def post_scene_alternate(cid: str, sid: str, vid: str):
     return {"ok": True}
 
 
+#: How many chronicle records this route returns when the caller names no
+#: `limit`. The window has always been the newest `CHRONICLE_PAGE`, not the
+#: whole file: the panel that reads it renders a recap, and a campaign accretes
+#: one record per absorbed scene forever. `limit` is what an explicit caller
+#: raises (or lowers); `offset` is how it reaches what this default cuts off.
+CHRONICLE_PAGE = 50
+
+
 @router.get("/campaigns/{cid}/chronicle")
-def get_chronicle(cid: str):
+def get_chronicle(cid: str, limit: int | None = None, offset: int | None = None):
+    """The campaign's chronicle records, oldest-first, newest page by default.
+
+    The one route here whose window is anchored at the *newest* end rather than
+    the front of what it prints, because that is where it has always been
+    anchored. So `offset` skips that many of the NEWEST records — a reader pages
+    backwards by asking again with `offset` raised by the page it just got —
+    while the page itself still comes back ascending, unchanged.
+
+    Sending neither parameter returns the newest `CHRONICLE_PAGE`, byte for byte
+    what this route returned before it could be paged (#216).
+    """
+    limit, offset = _page_window(limit, offset)
     _campaign_root_or_404(cid)
-    return store.chronicle.recent(cid, 50)
+    return store.chronicle.page(cid, CHRONICLE_PAGE if limit is None else limit, offset)
 
 
 # Indirection so tests can drive budget arithmetic off a fake clock instead of
