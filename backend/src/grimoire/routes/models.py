@@ -3,6 +3,14 @@
 Plain ``BaseModel`` subclasses only — no ``Field``, validators or
 ``ConfigDict`` — so the Android build can pin pydantic 1.x
 (docs/android-architecture.md §7). Dump them with ``common._dump``.
+
+A list or dict default here (``tags: list[str] = []``) is a *pydantic field*
+default, not the shared-mutable-default hazard the same line would be on a
+plain class or a dataclass: pydantic copies it per instance, so one request
+mutating its own ``tags`` cannot reach the next. The health report flags these
+as ``mutable_class_attribute`` and proposes ``Field(default_factory=...)``,
+which is exactly what the paragraph above forbids — so the finding stays open
+by decision, not oversight.
 """
 
 from __future__ import annotations

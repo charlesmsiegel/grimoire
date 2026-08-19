@@ -1,10 +1,36 @@
-"""Shared fixtures for mechanics-Phase5 sheet/audit/absorb tests."""
+"""Shared fixtures: the route-test HTTP client, and the mechanics-Phase5
+sheet/audit/absorb store fixtures."""
 
+import importlib
 import json
 
 import pytest
+from fastapi.testclient import TestClient
 
+import grimoire.store as store
+from grimoire import routes
+from grimoire.main import create_app
 from grimoire.store import appearances, campaigns, characters, modules, scenes, sheets, worlds
+from tests.llm_fakes import FakeOpenRouter
+
+
+@pytest.fixture
+def client(monkeypatch, tmp_path):
+    """An app over a throwaway store, with the gateway faked.
+
+    One copy, here, rather than the identical one three route-test files each
+    carried: `store` is reloaded against this test's `GRIMOIRE_HOME`, so the
+    fixture has to run *before* the app is built, and every route suite needs
+    exactly that. A suite wanting a different fake overrides
+    `routes.get_llm` again in the test itself, or declares its own `client`
+    fixture, which still shadows this one.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    app = create_app()
+    app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["Hel", "lo"])
+    return TestClient(app)
+
 
 _WARRIOR_FIELDS = [
     {"key": "hp", "label": "Hit Points", "type": "resource", "max": 12},

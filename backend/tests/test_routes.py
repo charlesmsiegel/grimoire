@@ -11,26 +11,15 @@ import zipfile
 from PIL import Image
 import pytest
 from fastapi import Request
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire.store import atomic
 from grimoire import llm, routes
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
-from grimoire.main import create_app
 from tests.llm_fakes import (  # the shared gateway fakes (#204)
     CapturingOpenRouter, FailingOpenRouter, FakeOpenRouter, FakeOpenRouterComplete,
     QuietThenAnswers, StallingOpenRouter, from_entries)
-
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    app = create_app()
-    app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["Hel", "lo"])
-    return TestClient(app)
 
 
 def _world(client, name="W"):
@@ -1809,6 +1798,95 @@ def test_cast_and_suggestions_flow(client):
     assert [s["character"] for s in sugg] == ["drowned-king"]
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/suggestions/dismiss", json={"character": "drowned-king"})
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/suggestions").json() == []
+
+
+# ---- in-turn cast changes (#97) and emergent characters (#98) ----
+def _cast_change_campaign(client):
+    """A campaign whose scene has Seraphine cast and Mara waiting in the wings."""
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Docks"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"kind": "characters", "id": "seraphine"})
+    return wid, cid, sid
+
+
+def test_cast_changes_reports_enter_leave_and_unknown(client):
+    _wid, cid, sid = _cast_change_campaign(client)
+    store.scenes.append_message(cid, sid, "user", "Who is here?")
+    store.scenes.append_message(
+        cid, sid, "assistant",
+        "Mara is at the table. Seraphine slips out. The girl Winifred pours the ale.",
+        speaker="Narrator")
+
+    changes = client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast-changes").json()
+    assert [e["id"] for e in changes["enter"]] == ["mara"]
+    assert [d["id"] for d in changes["leave"]] == ["seraphine"]
+    assert [u["name"] for u in changes["unknown"]] == ["Winifred"]
+
+
+def test_cast_changes_on_an_unknown_scene_404s(client):
+    _wid, cid = _campaign(client)
+    assert client.get(f"/api/campaigns/{cid}/scenes/nope/cast-changes").status_code == 404
+
+
+def test_confirming_an_enter_candidate_seats_it_and_clears_the_chip(client):
+    _wid, cid, sid = _cast_change_campaign(client)
+    store.scenes.append_message(cid, sid, "assistant", "Mara is at the table.", speaker="Narrator")
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                       json={"kind": "characters", "id": "mara"}).status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast-changes").json()["enter"] == []
+
+
+def test_dismissing_an_unknown_name_hides_it(client):
+    """The chip sends the name as the prose spelled it; the route slugifies, so
+    it lands under the same id an emergent create would allocate."""
+    _wid, cid, sid = _cast_change_campaign(client)
+    store.scenes.append_message(cid, sid, "assistant", "The girl Winifred pours the ale.",
+                                speaker="Narrator")
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/suggestions/dismiss",
+                       json={"character": "Winifred"}).status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast-changes").json()["unknown"] == []
+
+
+def test_emergent_character_is_created_campaign_side_and_seated(client):
+    wid, cid, sid = _cast_change_campaign(client)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast/emergent", json={"name": "Winifred"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["character"] == "winifred" and body["version"] == "default"
+
+    assert {"kind": "characters", "id": "winifred", "role": "npc", "name": "Winifred"} \
+        in client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast").json()
+    # campaign-side only: the world library is untouched (#60 owns promotion)
+    assert [c["id"] for c in client.get(f"/api/worlds/{wid}/characters").json()] == \
+        ["mara", "seraphine"]
+    # and the version is locked, exactly as a library character's first appearance is
+    assert [r["version"] for r in client.get(f"/api/campaigns/{cid}/appearances").json()
+            if r["id"] == "winifred"] == ["default"]
+
+
+def test_emergent_character_never_shadows_a_world_character_id(client):
+    _wid, cid, sid = _cast_change_campaign(client)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast/emergent", json={"name": "Mara"})
+    assert r.json()["character"] != "mara"
+
+
+def test_a_refused_emergent_seat_creates_no_character(client):
+    """The role is settled before the create: a 400 must not leave an unseated
+    character behind that nothing in the campaign points at."""
+    _wid, cid, sid = _cast_change_campaign(client)
+    before = client.get(f"/api/campaigns/{cid}/characters").json()
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast/emergent",
+                       json={"name": "Winifred", "role": "chorus"}).status_code == 400
+    assert client.get(f"/api/campaigns/{cid}/characters").json() == before
+
+
+def test_emergent_character_needs_a_name(client):
+    _wid, cid, sid = _cast_change_campaign(client)
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast/emergent",
+                       json={"name": "  "}).status_code == 400
 
 
 def test_delete_cast_removes_member_and_narrates_when_scene_has_messages(client):
