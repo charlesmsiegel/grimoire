@@ -620,7 +620,7 @@ def get_changes(cid: str, limit: int | None = None, offset: int | None = None):
         if name is None:
             continue  # record deleted since the change was captured
         named.append((kind, name, eid, entry))
-    named.sort(key=lambda r: (r[0], r[1]))
+    named.sort(key=lambda r: r[:2])   # kind, then name
     out: list[dict] = []
     for kind, name, eid, entry in _page_of(named, limit, offset):
         sid = entry.get("scene", "")
