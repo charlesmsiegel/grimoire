@@ -222,7 +222,6 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const versionFileRef = useRef<HTMLInputElement>(null);
   const avatarRef = useRef<HTMLInputElement>(null);
   const shelfFileRef = useRef<HTMLInputElement>(null);
-  const [avatarBust, setAvatarBust] = useState(0);
   const [imageAppearances, setImageAppearances] = useState<Appearance[]>([]);
   const [worldGreetings, setWorldGreetings] = useState<Greeting[]>([]);
   const [bookMsg, setBookMsg] = useState<string | null>(null);
@@ -499,6 +498,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const avatarFocus = detail?.versions.find((v) => v.id === vid)?.avatar_focus ?? null;
   const chubSource = detail?.versions.find((v) => v.id === vid)?.chub_source ?? "";
   const isChub = detail?.versions.find((v) => v.id === vid)?.is_chub ?? false;
+  const imageTokens = detail?.versions.find((v) => v.id === vid)?.image_v ?? {};
   const galleryImages = (detail?.versions.find((v) => v.id === vid)?.images ?? [])
     .filter((n) => n.startsWith("gallery_"))
     .sort((a, b) => Number(a.slice("gallery_".length)) - Number(b.slice("gallery_".length)));
@@ -921,7 +921,13 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   }
 
   function buildCard(): Card {
-    return { ...card!, data: { ...card!.data, alternate_greetings: greetings.filter((g) => g.trim() !== "") } };
+    return { ...card!, data: { ...card!.data,
+                               // Trimmed so the card, the container and the text
+                               // `bake_char_name` already bakes with (it strips)
+                               // all hold the same string -- an untrimmed
+                               // `data.name` is also the version rail's label.
+                               name: (card!.data.name ?? "").trim(),
+                               alternate_greetings: greetings.filter((g) => g.trim() !== "") } };
   }
 
   async function newCharacter() {
@@ -937,6 +943,24 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     setError(null);
     try {
       await api.updateVersion(scope, detail.meta.id, vid, buildCard());
+      // #13: the card's name is not the character's. The grid tile, the cast
+      // panel and every `meta.name` prompt section read the CONTAINER name, so
+      // saving a renamed card has to carry it over or the two diverge forever.
+      // The card goes first: a failed rename then leaves a saved card and an
+      // error, not a renamed container holding edits that never landed.
+      // Only from the DEFAULT version -- a sibling version's card name is that
+      // version's rail label (`_version_label`), not the character's.
+      // Only when the user changed THIS form's Name field. Comparing against
+      // the container instead would rename on any save of a character whose
+      // card name already differed -- old records, an import given an explicit
+      // name, a chub re-download -- so editing a description would silently
+      // rename her everywhere, with no undo.
+      const stored = (detail.versions.find((v) => v.id === vid)?.card.data.name ?? "").trim();
+      const renamed = (card.data.name ?? "").trim();
+      if (renamed && renamed !== stored && renamed !== detail.meta.name
+          && vid === detail.meta.default_version) {
+        await api.setCharacterName(scope, detail.meta.id, renamed);
+      }
       await select(detail.meta.id);
       await reload();
     } catch (err: unknown) {
@@ -1007,7 +1031,6 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await api.putImage(scope, detail.meta.id, vid, "avatar", file);
       await select(detail.meta.id);
       await reload();
-      setAvatarBust((n) => n + 1);
     } catch (err: unknown) {
       setError(errorText(err));
     } finally {
@@ -1020,7 +1043,6 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     await api.deleteImage(scope, detail.meta.id, vid, "avatar");
     await select(detail.meta.id);
     await reload();
-    setAvatarBust((n) => n + 1);
   }
 
   // Reload the open version in place (select() would snap back to the default version).
@@ -1030,7 +1052,6 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     if (!adopt(d, scope)) return;
     loadVersion(d, vid);
     await reload();
-    setAvatarBust((n) => n + 1);
   }
 
   async function promote(name: string) {
@@ -1266,7 +1287,6 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       const d = await api.readCharacter(scope, detail.meta.id);
       if (!adopt(d, scope)) return;
       loadVersion(d, vid);
-      setAvatarBust((n) => n + 1); // bust the cache in case a re-download overwrote images in place
     } catch (err: unknown) {
       finalMsg = `Gallery download failed: ${errorText(err)}`;
     } finally {
@@ -1302,8 +1322,14 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     }
   }
 
-  const avatarSrc = (cid: string, version: string, bust = false) =>
-    api.actorImageUrl(scope, "characters", cid, version, "avatar") + (bust ? `?v=${avatarBust}` : "");
+  /** `?v=` names the exact content state, so these cache immutable; an upload,
+   *  a remove or a promote refreshes the tokens through select()/reload().
+   *  The token must come from the STORE: a session counter reset to its
+   *  initial value on every mount, which pinned the pre-upload image in the
+   *  browser cache for a year (an immutable URL is never revalidated). */
+  const withToken = (url: string, v?: string | null) => (v ? `${url}?v=${v}` : url);
+  const avatarSrc = (cid: string, version: string, v?: string | null) =>
+    withToken(api.actorImageUrl(scope, "characters", cid, version, "avatar"), v);
 
   if (wizardOpen && module && worldScope) {
     return (
@@ -1409,7 +1435,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                 <button className="char-card-main" onClick={() => openDetail(c.id)}>
                   {c.has_avatar
                     ? <img className="char-card-avatar" alt="" style={focusStyle(c.avatar_focus)}
-                           src={avatarSrc(c.id, c.default_version, true)} />
+                           src={avatarSrc(c.id, c.default_version, c.avatar_v)} />
                     : <div className="initials-avatar" aria-hidden>
                         {c.name.split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("")}
                       </div>}
@@ -1480,7 +1506,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                          onClose={() => setTaglineQueue((q) => q.slice(1))} />
         )}
         {cropOpen && hasAvatar && (
-          <AvatarFocusPicker src={avatarSrc(detail.meta.id, vid, true)}
+          <AvatarFocusPicker src={avatarSrc(detail.meta.id, vid, imageTokens.avatar)}
                              initial={avatarFocus ?? 50}
                              onSave={saveFocus}
                              onClose={() => setCropOpen(false)} />
@@ -1504,7 +1530,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                           aria-label="Adjust avatar crop" title="Adjust avatar crop"
                           onClick={() => setCropOpen(true)}>
                     <img className="detail-avatar" alt="" style={focusStyle(avatarFocus)}
-                         src={avatarSrc(detail.meta.id, vid, true)} />
+                         src={avatarSrc(detail.meta.id, vid, imageTokens.avatar)} />
                   </button>
                 : <div className="identity-art identity-art-empty" aria-hidden>
                     {name.split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("")}
@@ -1745,8 +1771,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                   <div className="images-shelf">
                     {hasAvatar ? (
                       <figure className="shelf-tile avatar-tile">
-                        <a href={avatarSrc(detail.meta.id, vid, true)} target="_blank" rel="noreferrer">
-                          <img alt="avatar image" src={avatarSrc(detail.meta.id, vid, true)} />
+                        <a href={avatarSrc(detail.meta.id, vid, imageTokens.avatar)} target="_blank" rel="noreferrer">
+                          <img alt="avatar image" src={avatarSrc(detail.meta.id, vid, imageTokens.avatar)} />
                         </a>
                         <figcaption>avatar</figcaption>
                       </figure>
@@ -1754,7 +1780,9 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                       <div className="shelf-tile shelf-empty">no avatar</div>
                     )}
                     {galleryImages.map((imgName) => {
-                      const src = `${api.actorImageUrl(scope, "characters", detail.meta.id, vid, imgName)}?v=${avatarBust}`;
+                      const src = withToken(
+                        api.actorImageUrl(scope, "characters", detail.meta.id, vid, imgName),
+                        imageTokens[imgName]);
                       return (
                         <div className="shelf-tile" key={imgName}>
                           <a href={src} target="_blank" rel="noreferrer"><img alt={imgName} src={src} /></a>
@@ -1842,7 +1870,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
 
           <div className="avatar-block">
             {hasAvatar ? (
-              <img className="avatar" alt="avatar" src={avatarSrc(detail.meta.id, vid, true)} />
+              <img className="avatar" alt="avatar" src={avatarSrc(detail.meta.id, vid, imageTokens.avatar)} />
             ) : (
               <div className="avatar avatar-empty" aria-label="no avatar">no avatar</div>
             )}

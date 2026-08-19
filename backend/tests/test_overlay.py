@@ -355,6 +355,29 @@ def test_read_character_patches_images_from_union(monkeypatch, tmp_path):
     assert listed["tagline"] == "A hero of legend."
 
 
+def test_image_cache_tokens_come_from_the_same_union_as_the_names(monkeypatch, tmp_path):
+    # `?v=` URLs are served immutable, so a token derived from a different root
+    # than the name it labels would pin the wrong bytes in the browser cache.
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    assets.put_image(wroot, aid, "default", "avatar", PNG, "png")
+    overlay.materialize_actor(cid, "characters", aid)   # cards campaign-side, asset world-side
+    world_v = assets.image_version(assets.image_path(wroot, aid, "default", "avatar"))
+    default = next(v for v in overlay.read_character(cid, aid)["versions"] if v["id"] == "default")
+    assert default["image_v"]["avatar"] == world_v
+    listed = next(c for c in overlay.list_characters(cid) if c["id"] == aid)
+    assert listed["avatar_v"] == world_v
+
+    # A campaign-side avatar shadows the world's, and the token has to follow.
+    assets.put_image(campaigns.campaign_root(cid), aid, "default", "avatar", b"mine-and-longer", "png")
+    mine_v = assets.image_version(
+        assets.image_path(campaigns.campaign_root(cid), aid, "default", "avatar"))
+    assert mine_v != world_v
+    listed = next(c for c in overlay.list_characters(cid) if c["id"] == aid)
+    assert listed["avatar_v"] == mine_v
+    default = next(v for v in overlay.read_character(cid, aid)["versions"] if v["id"] == "default")
+    assert default["image_v"]["avatar"] == mine_v
+
+
 def _pc_pair(monkeypatch, tmp_path):
     """A world with one two-version PC + a thin campaign on it (see
     `_actor_pair`, which this mirrors for the other actor kind)."""

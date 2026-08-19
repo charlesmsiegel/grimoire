@@ -14,7 +14,7 @@ from ..llm_errors import LLMError
 from .common import (_bounded_call, _require_connection, _serve_image, _upload_image_ext,
                      _world_char_version_or_404, _world_root_or_404, get_llm)
 from .models import (AvatarFocus, CharacterBirthdate, CharacterCreate, ChubImportBody,
-                     ChubSourceBody, DefaultVersion, TaglineSave, VersionCreate, VersionUpdate,
+                     ChubSourceBody, DefaultVersion, NameBody, TaglineSave, VersionCreate, VersionUpdate,
                      VoiceAnchorSave)
 
 router = APIRouter()
@@ -54,6 +54,21 @@ def put_world_character(wid: str, cid: str, body: DefaultVersion):
         raise HTTPException(status_code=404, detail="character not found")
     except store.characters.VersionNotFound:
         raise HTTPException(status_code=404, detail="version not found")
+    return {"ok": True}
+
+
+@router.put("/worlds/{wid}/characters/{cid}/name")
+def put_world_character_name(wid: str, cid: str, body: NameBody):
+    """Rename the container (#13). The card's own `data.name` is saved with the
+    card; this is the name the grid, the cast panel and the `meta.name` prompt
+    sections read, and the two used to be unable to agree."""
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    try:
+        store.characters.set_name(_world_root_or_404(wid), cid, name)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
     return {"ok": True}
 
 

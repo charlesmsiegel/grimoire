@@ -1393,6 +1393,23 @@ def put_campaign_character(cid: str, char: str, body: DefaultVersion):
     return {"ok": True}
 
 
+@router.put("/campaigns/{cid}/characters/{char}/name")
+def put_campaign_character_name(cid: str, char: str, body: NameBody):
+    """This campaign's own name for the character (#13). Materializes the actor
+    copy-on-write like every other campaign-side character write, so the world's
+    name is left alone."""
+    _campaign_root_or_404(cid)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    try:
+        root = store.overlay.ensure_actor_writable(cid, "characters", char)
+        store.characters.set_name(root, char, name)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    return {"ok": True}
+
+
 @router.post("/campaigns/{cid}/characters/{char}/versions")
 def post_campaign_character_version(cid: str, char: str, body: VersionCreate):
     _campaign_root_or_404(cid)

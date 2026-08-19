@@ -4980,6 +4980,68 @@ def test_character_birthdate_route_sets_meta(client):
     assert client.get(f"/api/worlds/{wid}/characters/{chid}").json()["meta"]["birthdate"] == "1985-03-14"
 
 
+def test_character_name_route_renames_the_container(client):
+    # #13: saving a card's name used to leave the container -- and so the grid
+    # tile, the cast panel and every meta-name prompt section -- on the old one.
+    wid = _world(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    r = client.put(f"/api/worlds/{wid}/characters/{chid}/name", json={"name": "Winifred"})
+    assert r.json() == {"ok": True}
+    assert client.get(f"/api/worlds/{wid}/characters/{chid}").json()["meta"]["name"] == "Winifred"
+    listed = client.get(f"/api/worlds/{wid}/characters").json()
+    assert [(c["id"], c["name"]) for c in listed] == [("seraphine", "Winifred")]
+
+
+def test_character_name_route_trims_and_rejects_blank(client):
+    wid = _world(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    assert client.put(f"/api/worlds/{wid}/characters/{chid}/name", json={"name": "   "}).status_code == 400
+    client.put(f"/api/worlds/{wid}/characters/{chid}/name", json={"name": "  Winifred  "})
+    assert client.get(f"/api/worlds/{wid}/characters/{chid}").json()["meta"]["name"] == "Winifred"
+
+
+def test_character_name_route_unknown_character_is_404(client):
+    wid = _world(client)
+    r = client.put(f"/api/worlds/{wid}/characters/nobody/name", json={"name": "Winifred"})
+    assert r.status_code == 404
+
+
+def test_campaign_character_name_route_renames_campaign_side_only(client):
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    r = client.put(f"/api/campaigns/{cid}/characters/{chid}/name", json={"name": "Winifred"})
+    assert r.json() == {"ok": True}
+    assert client.get(f"/api/campaigns/{cid}/characters/{chid}").json()["meta"]["name"] == "Winifred"
+    # The campaign copy is materialized on write; the world keeps its own name.
+    assert client.get(f"/api/worlds/{wid}/characters/{chid}").json()["meta"]["name"] == "Seraphine"
+
+
+def test_character_list_carries_the_avatar_cache_token(client):
+    # The grid tile spends this as `?v=`, which is served immutable.
+    wid = _world(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    assert client.get(f"/api/worlds/{wid}/characters").json()[0]["avatar_v"] is None
+    base = f"/api/worlds/{wid}/characters/{chid}/versions/default/images/avatar"
+    client.put(base, files={"file": ("a.png", _png_bytes(color=(1, 2, 3)), "image/png")})
+    first = client.get(f"/api/worlds/{wid}/characters").json()[0]["avatar_v"]
+    assert first
+    assert client.get(f"/api/worlds/{wid}/characters/{chid}").json()[
+        "versions"][0]["image_v"]["avatar"] == first
+    client.put(base, files={"file": ("b.png", _png_bytes(size=(8, 8), color=(9, 9, 9)), "image/png")})
+    assert client.get(f"/api/worlds/{wid}/characters").json()[0]["avatar_v"] != first
+
+
+def test_versioned_image_url_is_immutable_and_bare_one_is_not(client):
+    # The contract the token exists to satisfy (`routes.common._serve_image_file`).
+    wid = _world(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    base = f"/api/worlds/{wid}/characters/{chid}/versions/default/images/avatar"
+    client.put(base, files={"file": ("a.png", _png_bytes(), "image/png")})
+    token = client.get(f"/api/worlds/{wid}/characters").json()[0]["avatar_v"]
+    assert "immutable" in client.get(f"{base}?v={token}").headers["cache-control"]
+    assert client.get(base).headers["cache-control"] == "no-cache"
+
+
 def test_datetime_get_includes_cast_age(client):
     wid = _world(client)
     chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]

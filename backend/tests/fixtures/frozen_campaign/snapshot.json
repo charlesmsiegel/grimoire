@@ -77,6 +77,7 @@
   "characters.list_characters[saltmarch]": [
     {
       "avatar_focus": null,
+      "avatar_v": null,
       "default_version": "default",
       "gallery_count": 0,
       "greeting_count": 0,
@@ -94,6 +95,7 @@
     },
     {
       "avatar_focus": null,
+      "avatar_v": null,
       "default_version": "default",
       "gallery_count": 0,
       "greeting_count": 1,
@@ -753,6 +755,7 @@
   "overlay.list_characters[the-drowned-ledger]": [
     {
       "avatar_focus": null,
+      "avatar_v": null,
       "default_version": "default",
       "gallery_count": 0,
       "greeting_count": 0,
@@ -770,6 +773,7 @@
     },
     {
       "avatar_focus": null,
+      "avatar_v": null,
       "default_version": "default",
       "gallery_count": 0,
       "greeting_count": 1,

@@ -1387,3 +1387,71 @@ def test_export_filename_survives_a_card_name_with_nothing_sluggable(tmp_path):
     ch.update_version(tmp_path, cid, vid, card)
 
     assert ch.export_card(tmp_path, cid, vid, "png")[1] == f"{cid}.png"
+
+
+def test_set_name_renames_the_container_without_moving_the_id(tmp_path):
+    # #13: the container name is what the grid, the cast panel and every
+    # meta-name prompt section read; before this it was write-once at creation.
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    ch.set_name(tmp_path, cid, "Winifred")
+    detail = ch.read_character(tmp_path, cid)
+    assert detail["meta"]["name"] == "Winifred"
+    # The id is every reference in the store; a rename must not re-slug it.
+    assert detail["meta"]["id"] == cid == "seraphine"
+    assert [v["id"] for v in detail["versions"]] == [vid]
+
+
+def test_set_name_keeps_the_rest_of_the_frontmatter(tmp_path):
+    cid, _ = ch.create_character(tmp_path, "Seraphine")
+    ch.set_birthdate(tmp_path, cid, "1985-03-14")
+    ch.set_name(tmp_path, cid, "Winifred")
+    meta = ch.read_character(tmp_path, cid)["meta"]
+    assert (meta["birthdate"], meta["default_version"]) == ("1985-03-14", "default")
+
+
+def test_set_name_on_a_missing_character_raises(tmp_path):
+    with pytest.raises(ch.CharacterNotFound):
+        ch.set_name(tmp_path, "nobody", "Winifred")
+
+
+def test_set_name_leaves_the_version_cards_alone(tmp_path):
+    # A version's own `data.name` is its rail label (`_version_label`), so a
+    # container rename must not reach into sibling cards.
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    ch.set_name(tmp_path, cid, "Winifred")
+    assert ch.read_card(tmp_path, cid, vid)["data"]["name"] == "Seraphine"
+
+
+def test_list_characters_carries_the_avatar_cache_token(tmp_path):
+    # The grid tile builds `?v=<token>`, and a `?v=` URL is served immutable
+    # (`routes.common._serve_image_file`) -- so the token has to name the
+    # BYTES. A value that does not change with the file pins a stale avatar in
+    # the browser cache for a year.
+    from grimoire.store import assets
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    assert ch.list_characters(tmp_path)[0]["avatar_v"] is None
+    assets.put_image(tmp_path, cid, vid, assets.AVATAR, b"\x89PNG-one", "png")
+    first = ch.list_characters(tmp_path)[0]
+    assert first["has_avatar"] and first["avatar_v"] == assets.image_version(
+        assets.image_path(tmp_path, cid, vid, assets.AVATAR))
+
+
+def test_avatar_cache_token_changes_when_the_bytes_do(tmp_path):
+    from grimoire.store import assets
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    assets.put_image(tmp_path, cid, vid, assets.AVATAR, b"\x89PNG-one", "png")
+    before = ch.list_characters(tmp_path)[0]["avatar_v"]
+    assets.put_image(tmp_path, cid, vid, assets.AVATAR, b"\x89PNG-two-longer", "png")
+    assert ch.list_characters(tmp_path)[0]["avatar_v"] != before
+
+
+def test_read_character_carries_a_cache_token_per_image(tmp_path):
+    from grimoire.store import assets
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    assets.put_image(tmp_path, cid, vid, assets.AVATAR, b"\x89PNG-one", "png")
+    assets.put_image(tmp_path, cid, vid, "gallery_0", b"\x89PNG-two", "png")
+    version = ch.read_character(tmp_path, cid)["versions"][0]
+    assert sorted(version["images"]) == ["avatar", "gallery_0"]
+    assert version["image_v"]["avatar"] == assets.image_version(
+        assets.image_path(tmp_path, cid, vid, assets.AVATAR))
+    assert version["image_v"]["gallery_0"] != version["image_v"]["avatar"]
