@@ -5,6 +5,7 @@ import importlib
 import io
 import json
 import re
+import shutil
 import time
 import zipfile
 
@@ -2202,6 +2203,20 @@ def test_a_refused_emergent_seat_creates_no_character(client):
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast/emergent",
                        json={"name": "Winifred", "role": "chorus"}).status_code == 400
     assert client.get(f"/api/campaigns/{cid}/characters").json() == before
+
+
+def test_emergent_character_meeting_a_deleted_ones_record_is_a_409(client):
+    """A campaign-side delete leaves `appearances.json` alone by design, so a
+    re-used slug can meet its own stale record. That is a conflict, not a 500."""
+    _wid, cid, sid = _cast_change_campaign(client)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast/emergent",
+                    json={"name": "Winifred", "role": "player"})
+    assert r.status_code == 200
+    shutil.rmtree(store.campaigns.campaign_root(cid) / "characters" / r.json()["character"])
+
+    again = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast/emergent", json={"name": "Winifred"})
+    assert again.status_code == 409
+    assert "locked to role player" in again.json()["detail"]
 
 
 def test_emergent_character_needs_a_name(client):

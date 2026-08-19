@@ -26,8 +26,15 @@ def campaign(monkeypatch, tmp_path):
 
 
 def _turn(cid, sid, post, reply, speaker="Seraphine"):
+    """One exchange, persisted the way a real turn is.
+
+    `append_reply` rather than `append_message`, because it is the only entry
+    point that records a turn boundary -- and the boundary is what the scan
+    counts back through. Driving these tests with bare appends would have
+    exercised the untracked FALLBACK throughout and left the tracked path,
+    which is every turn in production, to one test."""
     scenes.append_message(cid, sid, "user", post)
-    scenes.append_message(cid, sid, "assistant", reply, speaker=speaker)
+    scenes.append_reply(cid, sid, [{"speaker": speaker, "content": reply}])
 
 
 # ---- enter ----
@@ -112,6 +119,41 @@ def test_a_cue_with_no_name_in_front_of_it_proposes_nothing(campaign):
     assert ap.cast_changes(cid, sid)["leave"] == []
 
 
+def test_an_offscreen_scenes_whole_turn_is_read_not_just_its_last_post(monkeypatch, tmp_path):
+    """An offscreen scene is all-assistant, so "everything after the last player
+    post" finds no boundary in it at all. The generation's own recorded extent
+    does (#96's per-NPC posts land as several)."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Seraphine")
+    characters.create_character(wroot, "Mara")
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "Saltmarch", pcless=True)
+    ap.appear(cid, sid, "characters", "seraphine", "default", "npc")
+    scenes.append_reply(cid, sid, [
+        {"speaker": "Narrator", "content": "Mara arrives at the gate."},
+        {"speaker": "Seraphine", "content": "Seraphine slips out the back."}])
+
+    changes = ap.cast_changes(cid, sid)
+    assert [e["id"] for e in changes["enter"]] == ["mara"]      # the FIRST post
+    assert [d["id"] for d in changes["leave"]] == ["seraphine"]  # and the last
+
+
+def test_an_older_player_post_does_not_widen_the_window(monkeypatch, tmp_path):
+    """Model-only turns can follow a player post; reaching back to it would
+    re-offer every name since."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    characters.create_character(worlds.world_root(wid), "Mara")
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "Saltmarch")
+    scenes.append_message(cid, sid, "user", "Go on.")
+    scenes.append_reply(cid, sid, [{"speaker": None, "content": "Mara waves from the door."}])
+    scenes.append_reply(cid, sid, [{"speaker": None, "content": "The hall empties."}])
+    assert ap.cast_changes(cid, sid)["enter"] == []
+
+
 def test_a_player_actor_is_never_proposed_for_removal(monkeypatch, tmp_path):
     """Which posts parse as player-side is derived from the scene's player
     names, so dropping one rewrites the transcript's own history."""
@@ -172,6 +214,16 @@ def test_the_unknown_bucket_is_capped(campaign):
     assert len(unknown) == ap.detect.MAX_UNKNOWN
     assert [u["name"] for u in unknown] == ["Alder", "Bracken", "Cobble", "Dunmore",
                                             "Everly", "Fennick"]
+
+
+def test_a_scene_with_no_turn_boundaries_falls_back_to_the_trailing_run(campaign):
+    """Scenes written before turn tracking, and any whose `turn_sizes` no longer
+    fits, have no boundary to count back through. The trailing model run is the
+    same fallback reroll takes for them."""
+    cid, sid = campaign
+    scenes.append_message(cid, sid, "user", "hello")
+    scenes.append_message(cid, sid, "assistant", "Mara waves from the door.", speaker="Narrator")
+    assert [e["id"] for e in ap.cast_changes(cid, sid)["enter"]] == ["mara"]
 
 
 def test_a_scene_with_no_posts_yet_proposes_nothing(campaign):

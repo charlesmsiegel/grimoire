@@ -30,23 +30,28 @@ const isEmpty = (c: Changes) => !c.enter.length && !c.leave.length && !c.unknown
  *  character id and would also silence that character's future *enter*
  *  suggestions, which is not what "no, they didn't leave" means. */
 export default function CastChanges(
-  { cid, sid, posts, refreshKey, onChanged }: {
+  { cid, sid, hasPosts, refreshKey, onChanged }: {
     cid: string;
     sid: string;
-    /** Posts in the transcript window. Only ever asked whether it is zero: the
-     *  fetch is windowed (#94), so in a long scene this is the page size and
-     *  says nothing about a turn landing — see `refreshKey`. */
-    posts: number;
+    /** Whether the scene has any posts at all. A boolean rather than a count,
+     *  because a count would be a lie in both directions: the transcript fetch
+     *  is windowed (#94), so it neither grows when a turn lands in a long scene
+     *  nor stands still when the reader pages backwards through an old one. */
+    hasPosts: boolean;
     /** Bumped every time the parent re-reads the scene, which is what a landed
-     *  turn does. The re-scan hangs off this rather than off `posts` for the
-     *  reason above. */
+     *  turn does. This, not the post count, is what makes a scan happen after a
+     *  turn in a scene long enough to be windowed. */
     refreshKey: number;
     /** A transition was applied; the parent re-reads the scene's cast. */
     onChanged: () => void;
   },
 ) {
   const [changes, setChanges] = useState<Changes>(EMPTY);
-  const [hidden, setHidden] = useState<string[]>([]);
+  // Departure chips the reader answered "Not yet". Keyed by the SENTENCE as
+  // well as the actor: the same actor genuinely leaving three turns later is a
+  // different chip and must be offered again, while a re-scan of the turn that
+  // was already answered must not bring the same one back.
+  const [notLeaving, setNotLeaving] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,23 +65,39 @@ export default function CastChanges(
   const live = useRef(`${cid}/${sid}`);
   useLayoutEffect(() => { live.current = `${cid}/${sid}`; }, [cid, sid]);
 
+  // Which scan is the newest. Two can be in flight at once -- a confirm reloads,
+  // and the parent's scene re-read bumps `refreshKey` into a second scan -- and
+  // they can land out of order, which without this would let the pre-confirm
+  // result install itself on top and re-offer the chip just applied.
+  const scan = useRef(0);
+
   const reload = useCallback(() => {
     const asked = `${cid}/${sid}`;
+    const mine = ++scan.current;
     // "Nothing changed" over "nothing changed" keeps the state object it already
     // has, so React bails out rather than re-rendering the column for a result
     // identical to the one on screen. That is most turns.
     const settle = (c: Changes) => {
-      if (live.current !== asked) return;
+      if (live.current !== asked || mine !== scan.current) return;
+      // A fresh scan retires the last action's error with it. Left standing, a
+      // failed confirm would keep its banner over chips read from a later turn.
+      setError(null);
       setChanges((prev) => (isEmpty(prev) && isEmpty(c) ? prev : c));
     };
     api.castChanges(cid, sid).then(settle).catch(() => settle(EMPTY));
   }, [cid, sid]);
 
+  // Both triggers are dependencies, `hasPosts` included: reading a guard while
+  // leaving it out of the deps is how a guard goes stale.
   useEffect(() => {
     setChanges(EMPTY);
-    setHidden([]);
-    if (posts > 0) reload();
-  }, [cid, sid, refreshKey, reload]);
+    if (hasPosts) reload();
+  }, [cid, sid, hasPosts, refreshKey, reload]);
+
+  // Answered departures are forgotten on a SCENE change, not on every re-scan:
+  // confirming any other chip bumps `refreshKey`, and clearing here would bring
+  // back a departure the reader had just waved off.
+  useEffect(() => { setNotLeaving([]); }, [cid, sid]);
 
   async function act(what: () => Promise<unknown>) {
     if (busy) return;
@@ -93,9 +114,11 @@ export default function CastChanges(
     }
   }
 
-  const enter = changes.enter.filter((e) => !hidden.includes(`enter/${e.id}`));
-  const leave = changes.leave.filter((d) => !hidden.includes(`leave/${d.id}`));
-  const unknown = changes.unknown.filter((u) => !hidden.includes(`unknown/${u.name}`));
+  // Only departures filter locally. An enter or unknown chip answered "Dismiss"
+  // is gone server-side by the time the re-scan lands, so a second, client-side
+  // list of them would be a copy of state the server already holds.
+  const { enter, unknown } = changes;
+  const leave = changes.leave.filter((d) => !notLeaving.includes(`${d.id}/${d.quote}`));
   if (!enter.length && !leave.length && !unknown.length && !error) return null;
 
   return (
@@ -109,7 +132,7 @@ export default function CastChanges(
       {enter.map((e) => (
         <div className="brief-row" key={`enter/${e.id}`}>
           <div className="brief-title">{e.name} is named but not in the scene</div>
-          <div className="brief-meta">MENTIONED BY {e.mentioned_by.join(", ")}</div>
+          <div className="brief-meta">Mentioned by {e.mentioned_by.join(", ")}</div>
           <div className="chips">
             <button className="chip" disabled={busy}
                     onClick={() => act(() => api.addToCast(cid, sid, { kind: e.kind, id: e.id }))}>
@@ -126,14 +149,14 @@ export default function CastChanges(
       {leave.map((d) => (
         <div className="brief-row" key={`leave/${d.id}`}>
           <div className="brief-title">{d.name} seems to have left</div>
-          <div className="brief-meta">“{d.quote}”</div>
+          <div className="cast-quote">“{d.quote}”</div>
           <div className="chips">
             <button className="chip" disabled={busy}
                     onClick={() => act(() => api.removeFromCast(cid, sid, d.kind, d.id))}>
               Remove {d.name}
             </button>
             <button className="chip" disabled={busy}
-                    onClick={() => setHidden((h) => [...h, `leave/${d.id}`])}>
+                    onClick={() => setNotLeaving((h) => [...h, `${d.id}/${d.quote}`])}>
               Not yet
             </button>
           </div>
@@ -143,7 +166,7 @@ export default function CastChanges(
       {unknown.map((u) => (
         <div className="brief-row" key={`unknown/${u.name}`}>
           <div className="brief-title">{u.name} is new to this campaign</div>
-          <div className="brief-meta">MENTIONED BY {u.mentioned_by.join(", ")}</div>
+          <div className="brief-meta">Mentioned by {u.mentioned_by.join(", ")}</div>
           <div className="chips">
             <button className="chip" disabled={busy}
                     onClick={() => act(() => api.createEmergentCast(cid, sid, u.name))}>

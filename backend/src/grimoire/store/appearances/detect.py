@@ -24,6 +24,13 @@ offering: a wrong chip costs one dismissal, whereas a miss is invisible. That
 trade is only sound *because* confirmation is mandatory -- read the two
 paragraphs above before making anything here automatic.
 
+It is also, unavoidably, an ENGLISH heuristic: the departure cues are English
+verbs and the novel-name rule assumes a capitalised-name convention. A campaign
+played in another language gets an empty ``leave`` bucket and a poor
+``unknown`` one, and loses nothing else -- ``enter`` matches recorded names, so
+it works in any language. Cast changes stay available by hand there, which is
+the state every campaign was in before this module.
+
 Cost: one scene read plus the campaign's character, PC and entity listings, per
 call -- which the client makes once per scene read (a landed turn, a scene
 switch). The listings are the same sweep ``context.world_state`` already runs
@@ -42,7 +49,8 @@ from ..paths import slugify
 # imports this package's `cast.py`, so binding whole packages in both directions
 # would close a cycle these file-level edges do not (same cut `transitions.py`
 # makes).
-from ..scenes import read as scenes_read, serialize as scenes_serialize
+from ..scenes import (read as scenes_read, serialize as scenes_serialize,
+                      turns as scenes_turns)
 from . import cast
 
 #: How many unknown names one turn may offer. A turn that mentions a dozen
@@ -134,7 +142,12 @@ def cast_changes(cid: str, scene_id: str) -> dict:
     ``transitions.suggestions``' character ids -- what is being cited here is a
     line of the transcript, and a line is attributable to a speaker label.
     """
-    messages = _turn_messages(scenes_read.read_scene(cid, scene_id)["messages"])
+    messages = _turn_messages(cid, scene_id, scenes_read.read_scene(cid, scene_id)["messages"])
+    if not messages:
+        # Before the listings below: a scene with nothing to read (no posts yet,
+        # or a turn that ended on a dice roll) should not sweep every entity
+        # kind to say so.
+        return {"enter": [], "leave": [], "unknown": []}
     dismissed = set(scenes_read.get_dismissed(cid, scene_id))
     in_scene = cast.scene_cast(cid, scene_id)
     characters = overlay.list_characters(cid)
@@ -153,23 +166,62 @@ def cast_changes(cid: str, scene_id: str) -> dict:
             "unknown": _unknown_names(messages, characters, cid, dismissed)}
 
 
-def _turn_messages(messages: list[dict]) -> list[dict]:
-    """The newest turn: the last player post and everything after it.
+def _turn_messages(cid: str, scene_id: str, messages: list[dict]) -> list[dict]:
+    """The newest turn: this generation's posts, plus the player post it answers.
 
-    Everything after it, not just the reply, because a turn is one exchange --
-    a name the player introduced ("I look for Winifred") is as much this turn's
-    news as one the model did, and per-speaker replies land as several posts.
+    The player's post, not just the reply, because a turn is one exchange -- a
+    name the player introduced ("I look for Winifred") is as much this turn's
+    news as one the model wrote.
+
+    The generation's extent comes from ``turn_sizes``, the same boundary record
+    reroll counts back through, rather than from "everything after the last
+    player post". Those agree in a scene with a player in it and disagree
+    completely in an OFFSCREEN one, which is all-assistant by construction: the
+    player-post rule finds no boundary at all there and would fall back to a
+    single message, so a turn that wrote one post per NPC would be read for
+    cast changes through its last post only.
+
+    Where this deliberately parts company with reroll is the DESYNCED case. A
+    ``turn_sizes`` list that no longer fits the transcript makes reroll refuse
+    outright (``TurnSizesDesynced``), because counting back through the wrong
+    blocks deletes transcript nobody asked to lose. Nothing here deletes
+    anything, so the same list falling out of step costs at most a window one
+    turn too wide -- and refusing to suggest would be the worse answer. It falls
+    back to the trailing model run, which is what reroll uses for a scene that
+    was never tracked at all.
 
     Synthetic speakers are dropped, which is load-bearing rather than tidy:
     ``*Seraphine leaves the scene.*`` is this feature's own output, so reading
     it back would suggest re-seating the actor the player just dismissed off
     stage, forever.
     """
-    last_post = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=None)
-    window = messages[last_post:] if last_post is not None else messages[-1:]
-    return [m for m in window
+    # Trailing transitions sit ON TOP of the generation, exactly as they do for
+    # reroll -- strip them before counting back (`alternates.reroll_target`).
+    core = messages[:len(messages) - scenes_read.trailing_transitions(messages)]
+    start = len(core) - _newest_generation(cid, scene_id, core)
+    last_post = max((i for i, m in enumerate(core) if m.get("role") == "user"), default=None)
+    # The post this generation answers sits immediately in front of it. An
+    # OLDER player post does not: several model-only turns can follow one (a
+    # multi-NPC scene continued without input), and reaching back to it would
+    # re-offer every name since.
+    if last_post is not None and last_post == start - 1:
+        start = last_post
+    return [m for m in core[start:]
             if m.get("speaker") not in scenes_serialize.SYNTHETIC_SPEAKERS
             and isinstance(m.get("content"), str)]
+
+
+def _newest_generation(cid: str, scene_id: str, core: list[dict]) -> int:
+    """How many of `core`'s trailing posts the newest generation wrote.
+
+    `_tracked_suffix_fits` is what makes the count safe to use as a message
+    index: it holds only when the last recorded generation sits contiguously at
+    the tail, so the final `sizes[-1]` entries of `core` are model blocks and
+    nothing else."""
+    sizes = scenes_turns.get_turn_sizes(cid, scene_id)
+    if sizes and scenes_turns._tracked_suffix_fits(core, sizes):
+        return sizes[-1]
+    return scenes_turns._trailing_model_run(core)
 
 
 def _speaker(m: dict) -> str:
