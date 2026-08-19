@@ -1,4 +1,5 @@
 import asyncio
+from collections import Counter
 import contextlib
 from datetime import datetime, timedelta, timezone
 import importlib
@@ -14,6 +15,7 @@ import pytest
 from fastapi import Request
 
 import grimoire.store as store
+from grimoire.main import app
 from grimoire.store import atomic
 from grimoire import llm, routes
 from grimoire.llm import LLMClient
@@ -21,6 +23,10 @@ from grimoire.llm_errors import LLMError
 from tests.llm_fakes import (  # the shared gateway fakes (#204)
     CapturingOpenRouter, FailingOpenRouter, FakeOpenRouter, FakeOpenRouterComplete,
     QuietThenAnswers, StallingOpenRouter, from_entries)
+
+
+# an id no record has, for the routes that must refuse one
+_GHOST_ID = "nobody"
 
 
 def _world(client, name="W"):
@@ -541,12 +547,16 @@ def test_character_image_reads_are_left_ungated(client):
     """Deliberately narrower than the PC surface: only the writes create
     anything, so only the writes are gated. A read of a character that isn't
     there already answers "no image" without touching the disk, and gating it
-    would put two extra stats on `GET .../images/avatar`, which a rendered
-    grid hits once per portrait."""
-    wid = _world(client)
-    assert client.get(f"/api/worlds/{wid}/characters/nobody/versions/default/images").json() == []
-    assert client.get(
-        f"/api/worlds/{wid}/characters/nobody/versions/default/images/avatar").status_code == 404
+    would put two extra stats on `GET .../images/avatar`, which a rendered grid
+    hits once per portrait. It also keeps a read serving art the campaign can
+    still see but no longer address -- an image under a version a later
+    `pick-version` locked away comes back with the version, so a 404 there
+    would be a regression rather than a guard."""
+    wid, cid = _campaign(client)
+    ghost = "characters/nobody/versions/default/images"
+    assert client.get(f"/api/worlds/{wid}/{ghost}").json() == []
+    assert client.get(f"/api/worlds/{wid}/{ghost}/avatar").status_code == 404
+    assert client.get(f"/api/campaigns/{cid}/{ghost}/avatar").status_code == 404
 
 
 def test_campaign_character_image_writes_gate_on_the_inherited_character(client):
@@ -629,6 +639,148 @@ def test_copy_image_from_greeting_refuses_a_character_that_is_not_there(client):
     for root in (store.worlds.world_root(wid), store.campaigns.campaign_root(cid)):
         assert not (root / "characters" / "nobody").exists()
         assert not (root / "characters" / chid / "assets" / "typo").exists()
+
+
+def _actor_image_write_routes():
+    """Every registered write route on the per-version actor image surface.
+
+    Enumerated from the app rather than listed here on purpose: the point is to
+    catch route number nineteen, added later by someone who did not read this
+    file. Nine handlers were hardened by hand for #360 and a tenth
+    (`routes/greetings.py`'s world-side copy-from-greeting) was only found by
+    going looking -- a list maintained alongside the routes would have missed
+    it exactly the way the issue's own list did.
+    """
+    def flatten(routes):
+        out = []
+        for r in routes:
+            if type(r).__name__ == "_IncludedRouter":   # lazily expanded include
+                out.extend(flatten(r.effective_candidates()))
+            elif hasattr(r, "methods") and hasattr(r, "path"):
+                out.append((frozenset(r.methods), r.path))
+        return out
+
+    surface = re.compile(r"^/api/(worlds|campaigns)/\{\w+\}/(characters|pcs)/\{\w+\}"
+                         r"/versions/\{\w+\}/images")
+    return sorted({(m, path) for methods, path in flatten(app.routes)
+                   for m in methods & {"PUT", "POST", "DELETE"}
+                   if surface.match(path)})
+
+
+def _ghosted(path: str, scope_id: str, actor: str, vid: str) -> str:
+    """Fill a route pattern positionally: the id after `worlds`/`campaigns` is
+    the scope, the one after `characters`/`pcs` is the actor, the one after
+    `versions` is the version, and a trailing image name is `avatar`. By
+    position, not by parameter name -- a world character's id parameter is
+    literally called `{cid}`, which is the campaign's name one route over."""
+    segs, out = path.split("/"), []
+    for i, seg in enumerate(segs):
+        if not seg.startswith("{"):
+            out.append(seg)
+            continue
+        prev = segs[i - 1]
+        out.append({"worlds": scope_id, "campaigns": scope_id, "characters": actor,
+                    "pcs": actor, "versions": vid, "images": "avatar"}[prev])
+    return "/".join(out)
+
+
+def _write_request(client, method: str, url: str, gid: str):
+    """Issue one write against `url`, with whatever body its shape needs."""
+    if url.endswith("/images/avatar/focus"):
+        return client.put(url, json={"focus": 10})
+    if url.endswith("/images/copy-from-greeting"):
+        return client.post(url, json={"gid": gid, "name": "embed-abc123def456", "slot": "avatar"})
+    if method == "PUT":
+        return client.put(url, files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    return client.request(method, url)
+
+
+def test_deleting_a_version_takes_its_images_with_it(client):
+    """The other door onto #360's orphaned folders, and the one this repo walks
+    through itself: `delete_version` unlinked the card and left
+    `assets/<vid>/` behind. No listing showed it (both endpoints enumerate the
+    versions that exist) and, once the image routes started refusing an id that
+    names no version, no delete route could name it either -- so the app's own
+    delete button manufactured exactly the bytes the issue is about. The art
+    goes with the version; the surviving version's art is untouched."""
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    older = client.post(f"/api/worlds/{wid}/characters/{chid}/versions",
+                        json={"name": "Older",
+                              "card": store.characters.blank_card("Sera")}).json()["version"]
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    pc_older = client.post(f"/api/worlds/{wid}/pcs/{pid}/versions",
+                           json={"name": "Older",
+                                 "persona": store.pcs.blank_persona("Winifred")}).json()["version"]
+    png = {"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}
+
+    for base in (f"/api/worlds/{wid}/characters/{chid}/versions/{older}",
+                 f"/api/worlds/{wid}/pcs/{pid}/versions/{pc_older}",
+                 f"/api/campaigns/{cid}/characters/{chid}/versions/{older}"):
+        assert client.put(f"{base}/images/avatar",
+                          files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}
+                          ).status_code == 200, base
+        assert client.put(f"{base}/images/avatar/focus", json={"focus": 20}).status_code == 200, base
+
+    wroot, croot = store.worlds.world_root(wid), store.campaigns.campaign_root(cid)
+    assert (wroot / "characters" / chid / "assets" / older).is_dir()
+    assert (wroot / "pcs" / pid / "assets" / pc_older).is_dir()
+    assert (croot / "characters" / chid / "assets" / older).is_dir()
+
+    # campaign-side first: deleting the world's copy would leave the campaign
+    # materializing a character whose `older` card the world no longer has
+    assert client.delete(f"/api/campaigns/{cid}/characters/{chid}/versions/{older}").status_code == 200
+    assert client.delete(f"/api/worlds/{wid}/characters/{chid}/versions/{older}").status_code == 200
+    assert client.delete(f"/api/worlds/{wid}/pcs/{pid}/versions/{pc_older}").status_code == 200
+
+    assert not (wroot / "characters" / chid / "assets" / older).exists()
+    assert not (wroot / "pcs" / pid / "assets" / pc_older).exists()   # focus.json included
+    assert not (croot / "characters" / chid / "assets" / older).exists()
+
+    # the version that is still there keeps its art
+    assert client.put(f"/api/worlds/{wid}/characters/{chid}/versions/default/images/avatar",
+                      files=png).status_code == 200
+    assert client.delete(f"/api/worlds/{wid}/characters/{chid}/versions/{older}").status_code == 404
+    assert (wroot / "characters" / chid / "assets" / "default").is_dir()
+
+
+def test_every_actor_image_write_route_refuses_an_unknown_actor_or_version(client):
+    """#360, generalized: no write on this surface may accept an id that names
+    nothing, because `assets.put_image` creates the directory it writes into
+    and the resulting folder is unreachable forever.
+
+    A route whose body this test cannot guess fails here with a 422 rather than
+    a 404 -- deliberately. Teaching it the new shape is a smaller price than
+    the guard quietly skipping the route it was added to cover.
+    """
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Winifred"}).json()["pc"]
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Opener", "character": chid, "version": "default"}).json()["id"]
+    store.assets.put_image(store.worlds.world_root(wid), gid, "default",
+                           "embed-abc123def456", b"art", "png", base="greetings")
+    real = {"characters": chid, "pcs": pid}
+
+    routes = _actor_image_write_routes()
+    seen = Counter((path.split("/")[2], path.split("/")[4]) for _m, path in routes)
+    assert set(seen) == {("worlds", "characters"), ("worlds", "pcs"),
+                         ("campaigns", "characters"), ("campaigns", "pcs")}, seen
+    assert min(seen.values()) >= 4, seen   # a filter that matched almost nothing
+
+    for method, path in routes:
+        scope_id = wid if path.startswith("/api/worlds") else cid
+        kind = path.split("/")[4]
+        for actor, vid in ((_GHOST_ID, "default"), (real[kind], _GHOST_ID)):
+            url = _ghosted(path, scope_id, actor, vid)
+            r = _write_request(client, method, url, gid)
+            assert r.status_code == 404, (method, url, r.status_code, r.text)
+
+    # and not one of those refusals left a directory behind
+    for root in (store.worlds.world_root(wid), store.campaigns.campaign_root(cid)):
+        for kind, aid in (("characters", chid), ("pcs", pid)):
+            assert not (root / kind / _GHOST_ID).exists(), (root, kind)
+            assert not (root / kind / aid / "assets" / _GHOST_ID).exists(), (root, kind)
 
 
 def test_image_upload_stores_the_extension_the_bytes_are(client):
