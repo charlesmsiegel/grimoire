@@ -84,18 +84,22 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
 
 
 def recent(cid: str, n: int) -> list[dict]:
-    """The n highest-id (chronological-ish) records, ascending. n <= 0 -> []."""
+    """The n highest-id (chronological-ish) records, ascending. n <= 0 -> [].
+
+    `page` at offset zero, and `test_recent_is_page_at_offset_zero` holds the
+    two to that -- four callers read this one and none of them wants a window.
+    """
     return page(cid, n)
 
 
 def page(cid: str, limit: int, offset: int = 0) -> list[dict]:
     """`recent`, with a window that can start further back than the newest record.
 
-    Anchored at the NEWEST end, because that is the end a chronicle is read
-    from: `offset` skips that many of the newest records, so a reader pages
-    backwards by asking again with `offset` raised by the page it just got.
-    The page itself still comes back ascending, the order `recent` has always
-    returned and every reader of this file already expects.
+    `offset` skips that many of the NEWEST records; the page still comes back
+    ascending. Anchored at that end not because a chronicle is only read from
+    there but because `recent` already anchored it there, and `recent` is what
+    `GET /campaigns/{cid}/chronicle` has always returned -- a front-anchored
+    window with the same default would hand that route the OLDEST 50 instead.
 
     An unusable window is empty rather than an error -- `limit <= 0`, or an
     `offset` past the oldest record. Range-checking a client's query belongs in
