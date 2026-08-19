@@ -51,6 +51,10 @@ changes on purpose. Then, and only then:
 cd backend && PYTHONPATH=src .venv/bin/python -m tests.fixtures.frozen_campaign.sweep
 ```
 
+```powershell
+cd backend; $env:PYTHONPATH="src"; .venv\Scripts\python.exe -m tests.fixtures.frozen_campaign.sweep
+```
+
 The regenerated snapshot belongs in the same commit as the change that moved it,
 with its diff reviewed. Regenerating it to turn a red test green throws away the
 only thing standing between a store refactor and a silently broken read — and

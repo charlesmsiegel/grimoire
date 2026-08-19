@@ -1,6 +1,6 @@
 """The two installers and the docs that stand in for them agree with the repo.
 
-Three fresh-clone failures (#207), each of which the repo already had the right
+Four fresh-clone failures (#207), each of which the repo already had the right
 answer for somewhere else:
 
 - a **version floor** stated in an install script but nowhere checked, so too
@@ -10,7 +10,9 @@ answer for somewhere else:
   first API call, so an installer that says nothing leaves the path (and the
   chance to repoint it) undiscoverable until after first run;
 - **a Windows-only interpreter path given as *the* command** in `CLAUDE.md`,
-  which is simply wrong on a Unix clone.
+  which is simply wrong on a Unix clone;
+- **`install.sh` committed non-executable**, so the one line the README tells a
+  fresh clone to run answered with `Permission denied`.
 
 None of that is reachable by running the scripts here: one is bash, one is
 PowerShell, both mutate the developer's home directory. So these read the
@@ -88,19 +90,25 @@ def test_node_floor_matches_package_engines():
             f"{script.name} checks a different Node than package.json requires")
 
 
-def test_the_two_installers_state_the_same_floors():
-    """The platforms are meant to be symmetric; a floor is easy to bump singly."""
-    assert _python_floor(UNIX) == _python_floor(WINDOWS)
-    assert _node_floor(UNIX) == _node_floor(WINDOWS)
-
-
 @INSTALLERS
-def test_floors_are_probed_not_merely_stated(script):
-    """Presence on PATH is not the check -- the running version is."""
-    # `_step` raises, naming the script, when no command carries the probe --
-    # a floor stated in a variable and never compared against is the bug.
-    _step(script, "sys.version_info")
-    _step(script, "process.versions.node")
+def test_each_floor_is_probed_and_probed_against_what_was_declared(script):
+    """Presence on PATH is not the check -- the running version is, and against
+    the floor the tests above pin.
+
+    Both halves matter. Without the probe the floor is a comment; without the
+    interpolation the pinning is decorative, since `PY_MIN="3.11"` sitting
+    beside a probe that hard-codes `(3, 9)` satisfies every other test in this
+    file while checking the wrong number -- the same two-copies-of-one-value
+    drift the floors were centralised to end. `_step` raises, naming the
+    script, when no command carries the probe at all.
+    """
+    lines = _text(script).splitlines()
+    python_probe = lines[_step(script, "sys.version_info")]
+    node_probe = lines[_step(script, "process.versions.node")]
+    assert re.search(r"\$\{?(PY_MIN|PyMin)\}?", python_probe), (
+        f"{script.name} probes a Python version it did not declare:\n  {python_probe.strip()}")
+    assert re.search(r"\$\{?(NODE_MIN|NodeMin)\}?", node_probe), (
+        f"{script.name} probes a Node version it did not declare:\n  {node_probe.strip()}")
 
 
 @INSTALLERS
@@ -116,8 +124,8 @@ def test_installer_reports_the_store_location(script):
     text = _text(script)
     assert "-m grimoire.where" in text, (
         f"{script.name} finishes without saying where the library will live")
-    assert not re.search(r'echo[^\n]*~[/\\]\.grimoire|Write-Host[^\n]*~[\\/]\.grimoire',
-                         text), f"{script.name} hard-codes a store path it cannot know"
+    assert not re.search(r"(echo|Write-Host)[^\n]*\.grimoire", text), (
+        f"{script.name} prints a store path of its own; only the resolver knows it")
 
 
 @INSTALLERS
@@ -127,13 +135,28 @@ def test_store_location_is_reported_after_the_venv_exists(script):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="no execute bit on a Windows checkout")
-def test_the_unix_installer_is_executable():
-    """README tells a fresh clone to run it directly, so the mode git records
-    has to allow that. `install.sh` chmods the *other* unix scripts, which is
-    why only this one can be stranded: it cannot fix itself before it runs."""
-    assert UNIX.stat().st_mode & stat.S_IXUSR, (
-        "scripts/unix/install.sh is not executable; `scripts/unix/install.sh` "
-        "as documented in the README fails with Permission denied")
+@pytest.mark.parametrize("name", ["install.sh", "run.sh", "shutdown.sh"])
+def test_the_unix_scripts_are_executable(name):
+    """The README invokes all three by path, so the mode git records has to
+    allow it. `install.sh` chmods the directory, but that only ever repaired
+    the other two after the fact -- and could never repair itself, since the
+    chmod is a line *inside* the script that would not start."""
+    script = UNIX.with_name(name)
+    assert script.stat().st_mode & stat.S_IXUSR, (
+        f"scripts/unix/{name} is not executable; running it as the README "
+        "documents fails with Permission denied")
+
+
+def test_the_readme_requirements_match_the_floors():
+    """A third hand-maintained copy of the same two numbers, in the file a
+    human reads before running anything. It drifts the same way the scripts
+    would have, and is wrong in the same way -- so it is pinned the same way."""
+    readme = _text(REPO / "README.md")
+    python_stated = re.search(r"\*\*Python ([\d.]+)\+\*\*", readme)
+    node_stated = re.search(r"\*\*Node (\d+)\+\*\*", readme)
+    assert python_stated and node_stated, "README no longer states its Requirements"
+    assert python_stated.group(1) == _python_floor(UNIX)
+    assert node_stated.group(1) == _node_floor(UNIX)
 
 
 # --- docs ------------------------------------------------------------------
@@ -145,8 +168,15 @@ def test_the_unix_installer_is_executable():
 # lines, since these documents are long and a matching form ten sections away
 # helps nobody reading the command in front of them.
 
-DOCS = pytest.mark.parametrize(
-    "doc", [REPO / "CLAUDE.md", REPO / "README.md"], ids=["claude-md", "readme"])
+DOCS = pytest.mark.parametrize("doc", [
+    REPO / "CLAUDE.md",
+    REPO / "README.md",
+    # The third one, and the reason the rule is a test rather than a fix:
+    # CLAUDE.md's sweep note links here, and this file had the same Unix-only
+    # command. Two spots got found by reading the issue; this one only by
+    # grepping for the shape.
+    Path(__file__).parent / "fixtures" / "frozen_campaign" / "README.md",
+], ids=["claude-md", "readme", "frozen-campaign-readme"])
 UNIX_PY = re.compile(r"\.venv/bin/python")
 WINDOWS_PY = re.compile(r"\.venv[/\\]Scripts[/\\]python")
 NEARBY = 4      # lines either side: the same command, bullet, or code block
