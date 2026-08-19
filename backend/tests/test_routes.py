@@ -5374,6 +5374,70 @@ def test_calendar_config_rejects_malformed_custom_holiday(client):
     assert client.put(f"/api/campaigns/{cid}/calendar", json=bogus).status_code == 400
 
 
+# ---- the world's calendar (#223) ----
+#
+# Same store file and same shape as the campaign's, one level up: a world sets
+# the default its campaigns are created with, because `create_campaign` copies
+# calendar.json out of the world root. Until these routes existed the world half
+# of that file was reachable only on disk, so `confirmed` could never be set
+# world-side -- which is what the Overview checklist item needs.
+
+
+def test_world_calendar_config_get_put(client):
+    wid = _world(client)
+    assert client.get(f"/api/worlds/{wid}/calendar").json()["primary"]["region"] == "US"
+    cfg = {"primary": {"provider": "hebrew", "region": "IL", "custom_holidays": [], "anchor": None},
+           "secondary": None, "confirmed": True, "stale_after_days": 7}
+    assert client.put(f"/api/worlds/{wid}/calendar", json=cfg).json() == {"ok": True}
+    got = client.get(f"/api/worlds/{wid}/calendar").json()
+    assert got["primary"]["provider"] == "hebrew"
+    assert got["confirmed"] is True and got["stale_after_days"] == 7
+
+
+def test_world_calendar_confirmed_is_inherited_by_a_new_campaign(client):
+    # The payoff, and the reason `confirmed` is worth a checklist row: a campaign
+    # created from a confirmed world starts confirmed, so the clock and the scene
+    # inspector stop asking the reader to choose a calendar they already chose.
+    wid = _world(client)
+    cfg = {"primary": {"provider": "hebrew", "region": "IL", "custom_holidays": [], "anchor": None},
+           "secondary": None, "confirmed": True, "stale_after_days": 30}
+    client.put(f"/api/worlds/{wid}/calendar", json=cfg)
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    got = client.get(f"/api/campaigns/{cid}/calendar").json()
+    assert got["primary"]["provider"] == "hebrew" and got["confirmed"] is True
+
+
+def test_world_calendar_config_rejects_a_calendar_that_will_not_load(client):
+    wid = _world(client)
+    bogus = {"primary": {"provider": "bogus", "region": "", "custom_holidays": [], "anchor": None},
+             "secondary": None}
+    assert client.put(f"/api/worlds/{wid}/calendar", json=bogus).status_code == 400
+    bad_holiday = {"primary": {"provider": "gregorian", "region": "US",
+                   "custom_holidays": [{"name": "Oops", "month": 13}], "anchor": None},
+                   "secondary": None}
+    assert client.put(f"/api/worlds/{wid}/calendar", json=bad_holiday).status_code == 400
+
+
+def test_world_calendar_config_404s_for_a_world_that_is_not_there(client):
+    good = {"primary": {"provider": "gregorian", "region": "US", "custom_holidays": [], "anchor": None},
+            "secondary": None, "confirmed": True}
+    assert client.get("/api/worlds/nope/calendar").status_code == 404
+    assert client.put("/api/worlds/nope/calendar", json=good).status_code == 404
+    # An id the path resolver refuses is exactly as absent as a missing one --
+    # it must not escape as a 500 (test_path_guard_store.py's rule).
+    assert client.get("/api/worlds/C:evil/calendar").status_code == 404
+    assert client.put("/api/worlds/C:evil/calendar", json=good).status_code == 404
+
+
+def test_world_calendar_months_follow_the_saved_world_calendar(client):
+    wid = _world(client)
+    cfg = {"primary": {"provider": "hebrew", "region": "", "custom_holidays": [], "anchor": None},
+           "secondary": None, "confirmed": True}
+    client.put(f"/api/worlds/{wid}/calendar", json=cfg)
+    months = client.get(f"/api/worlds/{wid}/calendar/months", params={"year": 5786}).json()["months"]
+    assert months[2]["key"] == "Kislev"
+
+
 def test_calendar_months_campaign_and_world(client):
     wid, cid = _campaign(client)
     # default gregorian

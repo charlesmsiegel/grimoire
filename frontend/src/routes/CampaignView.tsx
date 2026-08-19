@@ -2952,7 +2952,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               in the composer, which focus mode keeps. */}
           {!focus && showCalendar && (
             <div className="panel-slot">
-              <CalendarConfig cid={cid} />
+              <CalendarConfig scope={{ kind: "campaign", id: cid }} />
             </div>
           )}
           {!focus && showMechanics && (

@@ -909,3 +909,36 @@ test("a stream that is refused before any body carries its kind too", async () =
   await expect(api.opener("run", "s1", "a foggy harbor", () => {}))
     .rejects.toMatchObject({ status: 502, kind: "network" });
 });
+
+// ---- the calendar config, on both scopes (#223) ----
+//
+// One store file, two roots: the campaign's copy and the world default it was
+// created from. The URL is the only thing that says which, so it is what these
+// pin — a scope that silently fell back to /api/campaigns would edit some other
+// record's calendar and still resolve.
+test("getCalendarConfig GETs the campaign's calendar", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ confirmed: false }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.getCalendarConfig({ kind: "campaign", id: "run" });
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/campaigns/run/calendar", expect.objectContaining({ method: "GET" }));
+});
+
+test("getCalendarConfig GETs the world's calendar", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ confirmed: false }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.getCalendarConfig({ kind: "world", id: "realm" });
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/worlds/realm/calendar", expect.objectContaining({ method: "GET" }));
+});
+
+test("setCalendarConfig PUTs to the scope it was given", async () => {
+  const cfg = { primary: { provider: "hebrew", region: "IL", custom_holidays: [], anchor: null },
+                secondary: null, confirmed: true, stale_after_days: 30 };
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.setCalendarConfig({ kind: "world", id: "realm" }, cfg);
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/worlds/realm/calendar",
+    expect.objectContaining({ method: "PUT", body: JSON.stringify(cfg) }));
+});

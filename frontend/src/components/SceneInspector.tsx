@@ -392,7 +392,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     }).catch(() => setWhen(null)),
     [cid, sid]);
   const reloadCfg = useCallback(
-    () => api.getCalendarConfig(cid).then(setCfg).catch(() => setCfg(null)),
+    () => api.getCalendarConfig({ kind: "campaign", id: cid }).then(setCfg).catch(() => setCfg(null)),
     [cid]);
   const reloadCast = useCallback(
     () => api.getCast(cid, sid).then(setCast).catch(() => setCast([])),
@@ -646,7 +646,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     if (!cfg) return;
     setError(null);
     try {
-      await api.setCalendarConfig(cid, {
+      await api.setCalendarConfig({ kind: "campaign", id: cid }, {
         ...cfg, primary: { ...cfg.primary, provider }, confirmed: true });
       await reloadCfg();
     } catch (err: any) {

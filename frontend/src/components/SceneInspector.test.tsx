@@ -407,7 +407,7 @@ test("no calendar selected: choosing one confirms the calendar", async () => {
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /use this calendar/i }));
   await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith(
-    "c", expect.objectContaining({ confirmed: true })));
+    { kind: "campaign", id: "c" }, expect.objectContaining({ confirmed: true })));
 });
 
 test("calendar but no date: setting a date calls setSceneDatetime and notifies", async () => {

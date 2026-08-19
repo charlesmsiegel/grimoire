@@ -790,8 +790,11 @@ export const api = {
               // with it (#100). Forward only: a flashback reports moved: false.
               clock?: { moved: boolean; now: string } }>(
       "PUT", `/api/campaigns/${cid}/scenes/${sid}/datetime`, { datetime }),
-  getCalendarConfig: (cid: string) =>
-    request<CalendarConfig>("GET", `/api/campaigns/${cid}/calendar`),
+  // Both scopes: a campaign's calendar, and the world default it was created
+  // from (#223). One store file (calendar.json) under two roots, so the scope
+  // is carried in the URL and nowhere else.
+  getCalendarConfig: (scope: CalendarScope) =>
+    request<CalendarConfig>("GET", `${entityBase(scope)}/calendar`),
   getCalendarProviders: () =>
     request<{ providers: { id: string; name: string }[] }>("GET", "/api/calendars/providers"),
 
@@ -859,11 +862,9 @@ export const api = {
   deleteClimate: (id: string) =>
     request<{ ok: boolean; reverted_to_preset: boolean }>("DELETE", `/api/climates/${id}`),
   getCalendarMonths: (scope: CalendarScope, year: number) =>
-    request<{ months: CalendarMonth[] }>(
-      "GET",
-      `/api/${scope.kind === "campaign" ? "campaigns" : "worlds"}/${scope.id}/calendar/months?year=${year}`),
-  setCalendarConfig: (cid: string, cfg: CalendarConfig) =>
-    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/calendar`, cfg),
+    request<{ months: CalendarMonth[] }>("GET", `${entityBase(scope)}/calendar/months?year=${year}`),
+  setCalendarConfig: (scope: CalendarScope, cfg: CalendarConfig) =>
+    request<{ ok: boolean }>("PUT", `${entityBase(scope)}/calendar`, cfg),
   listConnections: () => request<LLMConnection[]>("GET", "/api/llm-connections"),
   createConnection: (draft: LLMConnectionDraft) =>
     request<{ id: string }>("POST", "/api/llm-connections", draft).then((r) => {

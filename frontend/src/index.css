@@ -1091,6 +1091,11 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 }
 .check-row:hover { color: var(--accent); }
 .check-row.ok { color: var(--muted); }
+/* A row whose fix is a section of this same page, so there is nowhere to click
+   through to. Same type and rhythm as its neighbours, without the affordances
+   that would promise a jump it cannot make. */
+.check-row.static { cursor: default; display: block; }
+.check-row.static:hover { color: inherit; }
 
 /* lore rail grouped by owner */
 .rail-group { margin-bottom: 8px; }

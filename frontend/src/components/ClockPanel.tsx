@@ -47,7 +47,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     () => api.getCampaignClock(cid).then(setClock).catch(() => setClock(null)),
     [cid]);
   useEffect(() => { reload(); }, [reload, refreshKey]);
-  useEffect(() => { api.getCalendarConfig(cid).then(setCfg).catch(() => setCfg(null)); }, [cid]);
+  useEffect(() => { api.getCalendarConfig({ kind: "campaign", id: cid }).then(setCfg).catch(() => setCfg(null)); }, [cid]);
 
   // A digest belongs to the request that produced it. Changing the target (or
   // the campaign) invalidates it, and showing a stale one next to new inputs is

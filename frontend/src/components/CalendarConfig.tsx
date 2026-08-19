@@ -1,18 +1,33 @@
 import { useEffect, useState } from "react";
-import { api, type CalendarConfig as Cfg } from "../api/client";
+import { api, type CalendarConfig as Cfg, type CalendarScope } from "../api/client";
 
 const REGIONS = ["US", "GB", "CA", "AU", "IL", ""];
 
-export function CalendarConfig({ cid }: { cid: string }) {
+/** The calendar editor for either scope (#223).
+ *
+ *  One store file under two roots: a campaign's own calendar.json, and the
+ *  world default `create_campaign` copies into every campaign started from that
+ *  world. The form is the same because the file is the same; the scope only
+ *  decides the URL, the wording of the hints, and whether `confirmed` gets a
+ *  control of its own — campaign-side the scene inspector already owns that
+ *  flag, world-side nothing else can set it.
+ */
+export function CalendarConfig({ scope, onSaved }: {
+  scope: CalendarScope;
+  /** Called after a save lands, so a page holding its own copy of `confirmed`
+   *  (the world Overview's checklist) can re-read without polling. */
+  onSaved?: (cfg: Cfg) => void;
+}) {
+  const isWorld = scope.kind === "world";
   const [cfg, setCfg] = useState<Cfg | null>(null);
   const [providers, setProviders] = useState<{ id: string; name: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    api.getCalendarConfig(cid).then(setCfg).catch(() => setCfg(null));
+    api.getCalendarConfig(scope).then(setCfg).catch(() => setCfg(null));
     api.getCalendarProviders().then((r) => setProviders(r.providers)).catch(() => setProviders([]));
-  }, [cid]);
+  }, [scope.kind, scope.id]);
 
   if (!cfg) return <div className="field-hint">Loading calendar…</div>;
 
@@ -24,8 +39,12 @@ export function CalendarConfig({ cid }: { cid: string }) {
   async function save() {
     setError(null);
     try {
-      await api.setCalendarConfig(cid, cfg!);
+      await api.setCalendarConfig(scope, cfg!);
       setSaved(true);
+      // The saved config, not a re-read: the server normalizes but does not
+      // decide any field the form shows, and a second GET would race this
+      // component's own scope effect if the reader had already moved on.
+      onSaved?.(cfg!);
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -77,7 +96,30 @@ export function CalendarConfig({ cid }: { cid: string }) {
       </label>
       <div className="field-hint">
         Days a thread or commitment may go untouched before the ledger calls it stale.
+        {isWorld && " Campaigns started from this world begin with this threshold."}
       </div>
+      {/* World scope only. `confirmed` means "a person chose this calendar", and
+          campaign-side that answer is given to the scene inspector's prompt —
+          a second control there would be two ways to say the same thing. World
+          -side there is no prompt to answer, and the flag is the whole point of
+          the world's copy: `create_campaign` writes it into every campaign
+          started from this world, so confirming here is what stops each of them
+          asking again. */}
+      {isWorld && (
+        <>
+          <label className="check-inline">
+            <input type="checkbox" aria-label="Confirmed" checked={cfg.confirmed}
+                   onChange={(e) => {
+                     setSaved(false);
+                     setCfg({ ...cfg!, confirmed: e.target.checked });
+                   }} />
+            Confirmed
+          </label>
+          <div className="field-hint">
+            Campaigns started from this world inherit this calendar and will not ask again.
+          </div>
+        </>
+      )}
       <button className="primary" onClick={save}>Save</button>
       {saved && <span className="field-hint">Saved.</span>}
     </div>

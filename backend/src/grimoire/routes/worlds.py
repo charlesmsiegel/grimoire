@@ -23,9 +23,9 @@ from ..llm_errors import LLMError
 from .common import (_bounded_call, _content_fields, _dump, _require_connection,
                      _serve_image, _spooled_upload, _upload_image_ext, _world_root_or_404,
                      get_llm)
-from .models import (AvatarFocus, LorebookCommit, ModuleSetting, NameBody, PCCreate, PCUpdate,
-                     PersonaVersionCreate, PersonaVersionUpdate, ScenarioProposal,
-                     ScenarioUrlBody, SheetBody, SheetCreationBody)
+from .models import (AvatarFocus, CalendarConfig, LorebookCommit, ModuleSetting, NameBody,
+                     PCCreate, PCUpdate, PersonaVersionCreate, PersonaVersionUpdate,
+                     ScenarioProposal, ScenarioUrlBody, SheetBody, SheetCreationBody)
 
 router = APIRouter()
 
@@ -604,6 +604,41 @@ async def post_scenario_import(wid: str, body: ScenarioProposal):
         return await run_in_threadpool(store.scenario.apply, root, wid, prop, art=body.art)
     except store.lorebook.LorebookError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ---- the world's calendar (#223) ----
+#
+# The same calendar.json the campaign routes edit, one level up. A world's copy
+# is the DEFAULT its campaigns are created with -- `campaigns.create_campaign`
+# reads it out of the world root and writes it into the new campaign -- so
+# `confirmed` set here means every campaign started from this world begins with
+# a calendar the reader has already chosen, instead of the clock and the scene
+# inspector asking again per campaign.
+#
+# Declared in `worlds`, which `routes.__init__` includes before `entities`, so
+# `/worlds/{wid}/{kind}` cannot capture `calendar`; `test_route_order.py` holds
+# that rather than this comment.
+@router.get("/worlds/{wid}/calendar")
+def get_world_calendar_config(wid: str):
+    return store.calendars.read_calendar(_world_root_or_404(wid))
+
+
+@router.put("/worlds/{wid}/calendar")
+def put_world_calendar_config(wid: str, body: CalendarConfig):
+    root = _world_root_or_404(wid)
+    # Field-by-field rather than `_dump(body)` for the same reason the campaign
+    # route does it: the store re-normalizes and coerces every field anyway
+    # (`stale_after_days` included -- 0 or a missing field means "no opinion",
+    # not a threshold of zero), so this is the shape of the request, not its
+    # validation.
+    cfg = {"primary": body.primary, "secondary": body.secondary, "confirmed": body.confirmed,
+           "stale_after_days": body.stale_after_days}
+    try:
+        store.calendars.validate_calendar(cfg)
+    except store.calendars.CalendarError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    store.calendars.write_calendar(root, cfg)
+    return {"ok": True}
 
 
 @router.get("/worlds/{wid}/calendar/months")
