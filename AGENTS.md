@@ -22,8 +22,8 @@ disagree with it, it wins.
 
 ## Read first, before touching anything
 
-1. [`CLAUDE.md`](CLAUDE.md), whole. It is short, and every section of it is a
-   rule you can break in your first edit.
+1. [`CLAUDE.md`](CLAUDE.md), whole — not the section you think applies. Every
+   part of it is a rule you can break in your first edit.
 2. The **privacy** section of it in particular. This repo is public and the
    data store is not; the failure mode is a real world/campaign/character name
    reaching a doc, a commit message, a test fixture or a screenshot, and the
@@ -79,8 +79,9 @@ run green.
 
 ## Skills
 
-`.claude/skills/` holds task-specific procedures — launching an isolated
-instance for end-to-end verification (`verify`), authoring a mechanics module,
-ingesting a campaign log, populating world content. If one covers what you are
-doing, use it; it knows the ports, the mocks and the isolation rules that keep
-a verification run away from the user's real library.
+[`.claude/skills/`](.claude/skills/) holds task-specific procedures —
+launching an isolated instance for end-to-end verification (`verify`),
+authoring a mechanics module, ingesting a campaign log, populating world
+content. If one covers what you are doing, use it; it knows the ports, the
+mocks and the isolation rules that keep a verification run away from the
+user's real library.

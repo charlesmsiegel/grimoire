@@ -5,7 +5,7 @@ Grimoire is a FastAPI backend (`backend/`, pytest) plus a Vite/React frontend
 (`android/`). [`README.md`](README.md) covers installing and running it as a
 user; this page covers changing it.
 
-Two documents sit beside this one and are not repeated here:
+Its companions, which it points at rather than repeats:
 
 - [`CLAUDE.md`](CLAUDE.md) — the project conventions themselves (store layout,
   the frontend list/detail page pattern, the architecture guards, the Android
@@ -14,6 +14,8 @@ Two documents sit beside this one and are not repeated here:
 - [`docs/store-guarantees.md`](docs/store-guarantees.md) — what the store
   promises about atomicity and concurrency, and what it deliberately does not.
   Read it before writing anything that mutates campaign-scoped state.
+- [`AGENTS.md`](AGENTS.md) — the entry point for a coding agent. Worth a look
+  even if you are not one: it is the shortest list of what will fail on you.
 
 ---
 
@@ -73,12 +75,16 @@ locally with the same one-line command.
 | `make check-py` | `pytest backend -q` | backend (py3.11, py3.14) |
 | `make check-web` | `npm ci && npm run typecheck && npm run test:coverage` in `frontend/` | frontend |
 | `make check-templates` | `scripts/verify_templates.py` — builders and templates agree byte-for-byte | templates |
-| `make check-pydantic1` | the whole suite against the **Android** dependency set (pydantic 1.10, no `desktop` extra) in a throwaway venv | pydantic1 |
+| `make check-pydantic1` | the same suite again, in a throwaway venv resolved to what the APK ships | pydantic1 |
 | `make check-apk` | builds `frontend/dist` and then the debug APK | apk |
 
-`make check` runs the first five. **`check-apk` is deliberately excluded**: it
-needs a per-machine `make android-bootstrap` first, so folding it in would
-break `make check` on any un-bootstrapped machine. CI runs it as its own job.
+`make check` runs every target in that table except **`check-apk`**, which is
+excluded deliberately: it needs a per-machine `make android-bootstrap` first,
+so folding it in would break `make check` on any un-bootstrapped machine. CI
+runs it as its own job. (The `check:` line in the `Makefile` is the list that
+counts — `test_docs_guard.py` fails if a target here goes unmentioned, but no
+test can tell you a sentence about *how many* there are went stale, which is
+why there is no number in this one.)
 
 ### Four things that will bite you
 
@@ -92,24 +98,23 @@ break `make check` on any un-bootstrapped machine. CI runs it as its own job.
    (`.../Scripts/python.exe` on Windows.) CI passes `PY=python`, where the deps
    really are global to the runner.
 
-2. **`check-py` sets `PYTHONPATH` to *this* tree's `backend/src` on purpose.**
-   `backend/.venv` holds an editable install whose `.pth` points at whichever
-   checkout created it, so a bare `pytest` inside a worktree silently tests the
-   *other* tree's sources — and passes while testing nothing you changed.
+2. **Never run a bare `pytest` from inside a worktree.** The venv's editable
+   install resolves to whichever checkout created it, so the run tests the
+   *other* tree and passes without having seen your change. `check-py` sets
+   `PYTHONPATH` ahead of site-packages to prevent that; use the target, or
+   export it yourself.
 
-3. **Run vitest *from* `frontend/`.** `npx --prefix frontend vitest run`
-   executes from the repo root, which skips `frontend/vitest.config.ts`,
-   disables `globals`, and fails every mock-based test. `make check-web` does
-   this right.
+3. **`cd frontend` before running vitest.** Driving it from the repo root with
+   `--prefix` looks equivalent and is not: the config file never loads, so
+   `globals` is off and every mock-based test fails for a reason that has
+   nothing to do with your change. `make check-web` gets this right.
 
-4. **`check-web` runs `npm run test:coverage`, not `npm test`.** Same suite,
-   same pass/fail, plus it writes `frontend/coverage/lcov.info` — gitignored,
-   uploaded by CI as the `frontend-coverage` artifact, and the file external
-   readers discover by name. Coverage config lives in `frontend/vite.config.ts`
-   under `test.coverage`; the **istanbul** provider and `all: true` are
-   load-bearing there and the comments say why. **Do not switch to the v8
-   provider**, which reports a file no test imports as 100% covered rather
-   than 0%. `npm test` still runs the suite bare when you only want pass/fail.
+4. **`check-web` measures coverage; `npm test` does not.** Same suite and same
+   verdict either way, but the target also drops `frontend/coverage/lcov.info`,
+   which CI uploads as the `frontend-coverage` artifact. Reach for `npm test`
+   when you only want pass/fail. The provider settings in
+   `frontend/vite.config.ts` are load-bearing and their comments say why —
+   `CLAUDE.md` records the one change you must not make there.
 
 For a single test while iterating:
 
@@ -137,6 +142,7 @@ cannot fail a test run.
 | `test_usage_guard.py` | every generation route meters what it spends | `# usage-ok:` |
 | `test_import_guard.py` | module-scope imports, acyclic graph, submodule binding inside `store/` | `# import-ok:` |
 | `test_path_guard_store.py` | the store never joins a caller-supplied id onto a path unchecked | — |
+| `test_docs_guard.py` | this page, `AGENTS.md` and `docs/store-guarantees.md` still match the code | — |
 
 Clearing a genuinely safe call takes `# <marker>: <reason>`. **A marker with no
 reason fails, deliberately**, each guard caps how many exemptions exist, and —
@@ -145,97 +151,72 @@ reason has to hold up, not merely be present. Marker parsing is shared in
 `backend/tests/guard_markers.py`; a marker inside a string literal does not
 count.
 
-Two rules worth knowing before you trip them:
-
-- **Adding a module that mutates campaign-scoped state?** Classify it in
-  `store/locks.py` (`DOMAIN_MODULES` / `OUTSIDE_DOMAIN` / `UNREVIEWED`) or
-  `test_lock_domain_guard.py` fails naming your module. `UNREVIEWED` is a
-  frozen backlog that may only shrink — it is not open for new entries.
-- **Inside `store/`, a cross-package import binds a submodule and keeps it as a
-  module object** — `from ..campaigns import read` then `read.world_refs()`,
-  never `from ..campaigns.read import world_refs`. Binding a name off a package
-  that is still initializing raises at import time, and binding a function *by
-  value* off a sibling's leaf module makes the caller cache it, so a test
-  patching `campaigns.read.world_refs` silently stops intercepting and goes
-  green while injecting nothing.
+Each guard's docstring states its own reach, including where it stops seeing
+things — read the one that failed you before arguing with it. Two of them fail
+on code that looks perfectly ordinary, so [`CLAUDE.md`](CLAUDE.md) explains
+both at length: classifying a new campaign-scoped mutator in `store/locks.py`,
+and how a cross-package import inside `store/` must bind a submodule rather
+than a name.
 
 ---
 
 ## Writing tests
 
-- **Isolate the store**: `monkeypatch.setenv("GRIMOIRE_HOME", tmp_path)`. Never
-  let a test touch a real library.
-- **Fake the LLM with `backend/tests/llm_fakes.py`**, injected at
-  `app.dependency_overrides[routes.get_llm]` — never write another inline fake.
-  Scripted turns (`FakeOpenRouter`, `FakeOpenRouterComplete`, …) answer by call
-  order; a *cassette* (`from_cassette("campaign_flow")`) answers by what the
-  request looks like, replaying hand-authored bodies from
-  `backend/tests/fixtures/llm/`. A request matching no cassette entry raises
-  rather than defaulting, and `test_llm_fakes.py` renders every real prompt
-  template to prove the matchers still match — reword a system prompt and it
-  fails *there* rather than silently everywhere else.
+The conventions — store isolation, the shared LLM fakes, the frozen-campaign
+fixture, what a record-list page's tests must cover — are in
+[`CLAUDE.md`](CLAUDE.md) under **Working notes** and **the list/detail page
+pattern**. Read them there; what follows is only the part that is a command
+rather than a rule.
 
-  These bodies are canned, not recorded: they prove the code handles a reply,
-  never that a model would send one. `evals/run.py --live` is the only thing
-  that answers that.
-- **The frozen campaign** (`backend/tests/fixtures/frozen_campaign/`) is a
-  whole store tree checked in as a fixture — the only store in the repo that
-  today's code did not write, which is the only way to catch a change that
-  breaks reading what an *older* version wrote. `home/` is **never
-  regenerated**; its value is being old. `snapshot.json` *is* regenerated
-  deliberately, when a template or render moved on purpose and the new text was
-  reviewed:
+Every backend test isolates the store with
+`monkeypatch.setenv("GRIMOIRE_HOME", tmp_path)`, and every LLM call is served
+by `backend/tests/llm_fakes.py` through
+`app.dependency_overrides[routes.get_llm]`. Do not hand-roll either.
 
-  ```bash
-  cd backend && PYTHONPATH=src .venv/bin/python -m tests.fixtures.frozen_campaign.sweep
-  ```
+Regenerating the frozen campaign's `snapshot.json` — deliberately, when a
+template or render moved on purpose and you have read the new text:
 
-  Commit it with the change that moved it. See that directory's README.
-- **Frontend record-list pages** follow the two-pane view/edit pattern in
-  `CLAUDE.md`, and their tests must cover: clicking a row shows the read-only
-  view (rendered body, no `textarea`), **Edit** reveals the form, `+ New` opens
-  the form directly. `GreetingEditor.test.tsx` and `EntityEditor.test.tsx` are
-  the canonical pair.
+```bash
+cd backend && PYTHONPATH=src .venv/bin/python -m tests.fixtures.frozen_campaign.sweep
+```
+
+Commit it alongside the change that moved it. Its sibling `home/` is never
+regenerated; `CLAUDE.md` and that directory's README explain why.
 
 ---
 
 ## Prompts and templates
 
-Every prompt grimoire sends lives as a Jinja2 template under
-[`templates/`](templates/README.md); nothing prompt-shaped is hard-coded. After
-editing anything there, `make check` covers both harnesses that guard prompts:
+The rule and the reasoning live in [`CLAUDE.md`](CLAUDE.md); the layout is in
+[`templates/README.md`](templates/README.md). Operationally: after editing
+anything under `templates/`, run `make check`. It covers both harnesses —
+`scripts/verify_templates.py` (via `make check-templates`) and the offline
+`evals/run.py`, which runs inside `pytest backend`.
 
-- `scripts/verify_templates.py` — builders and templates agree byte-for-byte.
-- `evals/run.py`, which runs inside `pytest backend`. Offline it proves the
-  *instructions* are still in the assembled prompt: it renders the budget,
-  reply-format and roll-protocol sections and requires each verbatim, plus
-  every key of the absorb contract and owned-lore containment, and it checks
-  that the graders still score recorded output correctly.
-
-Whether the model still *follows* a reworded instruction is a question only
-`evals/run.py --live` answers. That makes real LLM calls and is opt-in.
+`evals/run.py --live` is separate, makes real model calls, and is opt-in. See
+[`evals/README.md`](evals/README.md).
 
 ---
 
 ## Android constraints
 
-The Android app packages `backend/src` and the built frontend **verbatim**
-(Chaquopy + APK assets). Never copy grimoire code into `android/`. Three rules
-keep the platforms in lockstep — the full version is in
-[`docs/android-architecture.md`](docs/android-architecture.md):
+Three rules keep the two platforms in lockstep, and breaking one of them is
+invisible on the desktop build. They are stated in [`CLAUDE.md`](CLAUDE.md)
+(**Android**) and in full in
+[`docs/android-architecture.md`](docs/android-architecture.md): use the
+filesystem resolvers, keep base dependencies installable on Android, and keep
+pydantic usage version-agnostic.
 
-1. Backend code must not assume a repo checkout layout or a desktop `~`:
-   filesystem access goes through `store.paths`, `prompts.templates_dir()`
-   (`GRIMOIRE_TEMPLATES`) and `main.dist_dir()` (`GRIMOIRE_DIST`).
-2. `pyproject.toml` **base** deps must stay Android-installable (pure Python or
-   Chaquopy-wheel'd). Compiled desktop-only deps go in the `desktop` extra, and
-   the pip block in `android/app/build.gradle.kts` mirrors the base list.
-3. pydantic usage stays v1/v2-agnostic: plain `BaseModel` fields only, dump via
-   `routes.common._dump` — no `model_dump()`, `Field`, validators or
-   `ConfigDict`.
+What is worth knowing *here* is which command proves which:
 
-`make check-pydantic1` is what proves (3) for the whole suite. Building:
-`make android-bootstrap` once per machine, then `make apk`.
+| Rule | Proved by |
+|---|---|
+| version-agnostic pydantic, across the whole suite | `make check-pydantic1` |
+| the APK still builds with your change in it | `make check-apk` (needs `make android-bootstrap` first) |
+| the resolvers really are used | `test_paths_guard.py`, in `make check-py` |
+
+Neither of the first two runs as part of `make check-py`, so a change that only
+breaks Android passes a backend-only test run.
 
 ---
 
@@ -245,35 +226,29 @@ Documentation screenshots go in `docs/screenshots/` and **must be captured
 against an isolated store**, never a real library — see [the privacy
 rule](#before-you-start-the-privacy-rule).
 
-`.claude/skills/verify/SKILL.md` describes the harness: point `GRIMOIRE_HOME`
-at a scratch directory, patch `grimoire.openrouter.API_URL` at a local mock
-that replays `backend/tests/fixtures/llm/campaign_flow.json`, run the backend
-and vite on non-default ports (8199 / 5199 — never 8173 / 5173, which is where
-someone's real instance lives), and seed the store through the API using
-placeholder names. Confirm isolation before capturing anything:
-`curl http://127.0.0.1:8199/api/worlds` must return `[]` on first run.
+The procedure has one owner:
+[`docs/screenshots/README.md`](docs/screenshots/README.md), which sits beside
+the images and is what the next person to re-capture will actually open. It
+defers in turn to [`.claude/skills/verify/SKILL.md`](.claude/skills/verify/SKILL.md)
+for the harness itself.
+Neither the ports nor the isolation check are repeated here, because a
+safety procedure kept in three places is a safety procedure with two stale
+copies.
 
 ---
 
 ## Review gates
 
-The spec → plan → implementation pipeline has mandatory Codex checkpoints. Do
-not advance to the next stage until the gate passes and its findings are
-resolved:
+Work that goes through the spec → plan → implementation pipeline has four
+mandatory Codex checkpoints. **[`CLAUDE.md`](CLAUDE.md) defines them** — which
+command runs at which stage, and what the final one is looking for — under
+*Development workflow: Codex review gates*. Do not restate that list anywhere;
+follow it there.
 
-| Stage | Gate |
-|---|---|
-| spec → planning | `/codex:adversarial-review` against the spec |
-| plan → implementation | `/codex:adversarial-review` against the plan |
-| implementation → done | `/codex:review` against the diff |
-| done → actually done | `/codex:adversarial-review` against the diff *and* the originating spec, asking specifically whether the changes implement the spec |
-
-That last one targets gaps, drift and quietly-dropped requirements, not style.
-If a gate surfaces findings, address them — or explicitly note why not — before
-moving on. Don't skip a gate because a change feels small; ask first if you
-think one should be skipped.
-
-Specs live in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`.
+Two things worth adding for a human contributor: specs live in
+`docs/superpowers/specs/` and plans in `docs/superpowers/plans/`, and a gate
+you could not run (no Codex access, an exhausted quota) is a thing to say in
+the pull request rather than to pass over silently.
 
 ---
 
