@@ -16,6 +16,7 @@ import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import { CastPanel } from "../components/CastPanel";
 import { NewSceneChooser } from "../components/NewSceneChooser";
 import { ChangesPanel } from "../components/ChangesPanel";
+import { ReplayPanel } from "../components/ReplayPanel";
 import { IncomingReview } from "../components/IncomingReview";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CampaignCover";
@@ -570,6 +571,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  about a different author. */
   const [showIncoming, setShowIncoming] = useState(false);
   const [absorb, setAbsorb] = useState<SceneAbsorb | null>(null);
+  // The post a reader asked to replay FROM (#79) -- the one after the retcon,
+  // since the retconned post itself stands. Held here rather than in the panel
+  // because the transcript gutter is what sets it.
+  const [replayAt, setReplayAt] = useState<number | null>(null);
   // The scene this review was absorbed FROM. Switching scenes leaves the panel
   // open, so saving against the currently selected scene would commit scene A's
   // review onto scene B (#235).
@@ -2418,6 +2423,71 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     askAfterPost(activeId, seen);   // #85, #84
   }
 
+  /** Retcon: the same rewrite `saveEdit` makes, plus the reversal of what this
+   *  scene's absorb wrote (#78).
+   *
+   *  Two buttons rather than one, because they are different intentions and
+   *  only one of them is destructive. A plain Save fixes the words; a retcon
+   *  says the scene did not happen that way, which makes the recorded summary,
+   *  the write-backs and the beats descriptions of a transcript that is no
+   *  longer there — so they are put back and the scene becomes unfinished,
+   *  ready to be absorbed again.
+   *
+   *  Guarded exactly as `saveEdit` and `deleteMessagesFrom` are, and for their
+   *  reasons: `rolling`, because a swap in flight is rewriting the posts this
+   *  index addresses, and `transcriptIsActive`, because during a background
+   *  refresh the messages on screen can belong to a scene other than `activeId`.
+   */
+  async function saveRetcon() {
+    if (!editing || !activeId || rolling || !transcriptIsActive) return;
+    if (!window.confirm(
+      "Retcon this post?\n\n" +
+      (activeDone
+        ? "This scene has been absorbed. Every recorded write-back is put back, its " +
+          "chronicle record, beats, change history and citations go, and it becomes " +
+          "unfinished so it can be absorbed again — which is how the re-extraction " +
+          "gets to disagree with what later scenes recorded.\n\n"
+        : "") +
+      "The posts after it are left alone. Replay them from the gutter if they no " +
+      "longer follow.")) return;
+    const release = takeRollLatch(activeId);
+    let report;
+    try {
+      report = await api.retconMessage(cid, activeId, editing.index, editing.text);
+    } catch (err: any) {
+      fail(err, false);            // not retryable: Retry re-runs the CHAT retry
+      return;
+    } finally {
+      release();
+    }
+    setEditing(null);
+    // The rail carries `done`, which an absorbed scene has just lost.
+    await loadScenes();
+    const seen = await selectScene(activeId);
+    setCtxKey((k) => k + 1);       // beats and citations left the ledger
+    askForRollingSummary(activeId, seen);   // #85, exactly as `saveEdit` asks
+    // What the transcript afterwards cannot show, in the same two clauses the
+    // cut reports and for the same reason — plus the one thing specific to a
+    // retcon: which scenes were played after this one, and so can disagree with
+    // what a re-absorb now extracts.
+    const notes = [];
+    if (report.refused.length) {
+      notes.push(
+        `${report.refused.length} record${report.refused.length === 1 ? "" : "s"} ` +
+        "could not be put back: " + report.refused.map((r) => r.label).join(", "));
+    }
+    if (report.failed.length) {
+      notes.push("some continuity records could not be cleaned up (" +
+                 report.failed.join(", ") + ") — check them by hand");
+    }
+    if (report.later.length) {
+      notes.push(`${report.later.length} later scene${report.later.length === 1 ? "" : "s"} ` +
+                 "already recorded state from here on — absorb this scene again to see " +
+                 "which of its findings they contradict");
+    }
+    if (notes.length) setError({ retryable: false, text: notes.join(". ") });
+  }
+
   /** Cascade post-delete: this post and everything after it (#75).
    *
    *  The confirmation is not a formality. A cascade delete reaches records the
@@ -2932,6 +3002,22 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // Conflicts still showing, keyed by their row. Already bound to a row when
   // the refusal arrived; all that is left is to drop the ones whose row has
   // since been unapproved, which IS the keep answer.
+  /** How a contradicted row's later scene was established, in the reviewer's
+   *  words. The three sources are not equally strong and the tooltip says which
+   *  one answered: a quote is evidence a reader can go and check, a write-back
+   *  is a record-level log entry, and a thread's last beat is neither. */
+  const CONTRADICTION_SOURCES: Record<string, string> = {
+    citation: "quoted",
+    changes: "recorded",
+    thread: "last beat",
+  };
+
+  /** Contradictions by staged-edit id (#78). Empty for the ordinary end-of-scene
+   *  absorb, which has no later scene to disagree with. */
+  const contradictionById = useMemo(
+    () => new Map((absorb?.contradictions ?? []).map((c) => [c.id, c])),
+    [absorb]);
+
   const conflictByRow = useMemo(() => {
     const out = new Map<number, EditConflict>();
     for (const { row, conflict } of conflicts) {
@@ -3222,6 +3308,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               {e.review.band} · {AUTHORITY_LABELS[e.review.authority] ?? e.review.authority}
             </span>)}
           {conflict && <span className="chip on absorb-conflict-badge">Changed</span>}
+          {/* A row a LATER scene already answered differently (#78). Advisory,
+              and worded as attribution rather than as a verdict: the badge
+              names the scene and the save is unchanged by it. */}
+          {contradictionById.get(e.id) && (
+            <span className="chip absorb-contradiction-badge"
+                  title={`${CONTRADICTION_SOURCES[contradictionById.get(e.id)!.source]} in ` +
+                         `"${contradictionById.get(e.id)!.label}"`}>
+              later scene disagrees
+            </span>)}
         </div>
         {/* Under the label rather than the diff for the rows whose "diff" is an
             editable textarea: the citation is what the proposal RESTS on, and a
@@ -4097,6 +4192,20 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                                     disabled={rolling}
                                     onClick={() => deleteMessagesFrom(index)}>🗑</button>
                           )}
+                          {/* Replay the turns AFTER this one (#79): the post
+                              itself stands -- it is the one that was retconned
+                              -- and everything past it is cut and re-run one
+                              turn at a time. Offered only where there is
+                              something after it to replay, and on a roll line
+                              too: a cut span may contain one, and replaying it
+                              re-posts the line while `rolls.json` keeps the
+                              entry it names. */}
+                          {transcriptIsActive && index < firstIndex + messages.length - 1 && (
+                            <button className="msg-edit" title="Replay the turns after this post"
+                                    aria-label={`Replay the turns after message ${index + 1}`}
+                                    disabled={rolling}
+                                    onClick={() => setReplayAt(index + 1)}>⏩</button>
+                          )}
                         </span>
                       )}
                       {rerollPrompt !== null && !busy &&
@@ -4124,6 +4233,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                                     onChange={(e) => setEditing({ index, text: e.target.value })} />
                           <div className="form-actions">
                             <button className="subtle" onClick={() => setEditing(null)}>Cancel</button>
+                            {/* Beside Save rather than instead of it: Save fixes
+                                the words, Retcon says the scene did not happen
+                                that way and takes back what it wrote (#78). */}
+                            <button className="subtle" onClick={saveRetcon} disabled={rolling}
+                                    title="Rewrite this post and take back what the scene recorded">
+                              Retcon
+                            </button>
                             <button className="primary" onClick={saveEdit} disabled={rolling}>Save</button>
                           </div>
                         </div>
@@ -4166,6 +4282,22 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           {proposal && activeId && (
             <RollProposal key={proposal.id} record={proposal} busy={busy || rolling}
                           onResolve={resolve} />
+          )}
+          {activeId && (
+            /* Keyed by scene: the panel holds the walk's local state (whether a
+               turn has been run and is waiting on a verdict), and carrying that
+               across a scene switch would offer Accept for a reply in another
+               scene. `onChanged` is the same refresh every transcript mutation
+               here funnels through. */
+            <ReplayPanel key={activeId} cid={cid} sid={activeId} startAt={replayAt}
+                         disabled={busy || rolling}
+                         onStartHandled={() => setReplayAt(null)}
+                         onForked={(forked) => navigate(`/campaigns/${encodeURIComponent(forked)}`)}
+                         onChanged={() => {
+                           void loadScenes();
+                           void selectScene(activeId);
+                           setCtxKey((k) => k + 1);
+                         }} />
           )}
           {activeDone ? (
             /* The whole composer, not a disabled entry box. This scene's summary

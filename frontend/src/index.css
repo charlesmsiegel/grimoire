@@ -1754,6 +1754,11 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .absorb-conflict-badge { margin-left: auto; }
 .absorb-stored { color: var(--ink); font-size: 13px; margin: 2px 0; white-space: pre-wrap; }
 
+/* A row a later scene already answered differently (#78). Quiet on purpose: it
+   is attribution, not a verdict, and nothing about the save turns on it -- so it
+   must not read like the conflict badge above, which IS blocking. */
+.absorb-contradiction-badge { margin-left: 6px; font-size: 11px; color: var(--muted); }
+
 /* Confidence routing (#110/#112). The band chip is quiet for `high` and
    `medium` and accented only for `low`: its job is to say why a row is NOT
    pre-approved, and painting every row would leave the one that needs reading
@@ -1874,6 +1879,14 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
   padding: 6px 8px; font-family: var(--fb); font-size: 15px;
 }
 .roll-proposal .form-actions { justify-content: flex-start; margin-top: 10px; }
+
+/* The retcon replay's panel (#79/#80) -- the same slab as the roll proposal, in
+   the same place in the transcript column, because it asks the same kind of
+   question: one decision, taken now, about the turn in front of you. */
+.replay-panel { background: var(--panel2); border: 1px solid var(--rule); padding: 10px 14px; margin: 8px 0; }
+.replay-panel h4 { margin: 0 0 6px; font-family: var(--fm); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink); }
+.replay-panel .field-hint { margin: 4px 0; }
+.replay-panel .form-actions { justify-content: flex-start; margin-top: 10px; gap: 6px; }
 
 /* ---- sheet display: widgets, layout, theme (#165) ----
    All --sheet-* vars are set inline on .sheet-takeover from the module's

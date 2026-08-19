@@ -22,10 +22,10 @@ import {
   type ModuleDetail, type ModuleEditResult, type ModuleRenameKind, type ModuleSummary,
   type PCDetail, type PCSummary, type Persona, type PinRule, type PromptEntry,
   type PromptLayout, type PromptSnapshot, type ProposalRecord, type Provenance,
-  type RecordChange, type ResponseBundle, type ResponseFields, type ResponseOverride,
+  type RecordChange, type ReplayPreview, type ReplaySession, type ResponseBundle, type ResponseFields, type ResponseOverride,
   type ResponsePresetDetail, type ResponsePresetDraft, type ResponsePresetSummary,
   type ResponsePresetUsage, type RollEntry, type RollingSummary, type RollingSummaryRefresh,
-  type RosterEntry, type ScenarioImportResult, type ScenarioProposal, type SceneAbsorb,
+  type RetconReport, type RosterEntry, type ScenarioImportResult, type ScenarioProposal, type SceneAbsorb,
   type SceneAlternates, type SceneCheckActor, type SceneContext, type SceneDatetime,
   type SceneIdea, type SceneIdeaDraft, type SceneIntentResult, type SceneLocation,
   type SceneBreak, type SceneBreakAnswer,
@@ -344,6 +344,13 @@ export const api = {
     request<{ meta: CampaignMeta; body: string }>("GET", `/api/campaigns/${cid}`),
   renameCampaign: (cid: string, name: string) =>
     request<{ id: string; name: string }>("PUT", `/api/campaigns/${cid}`, { name }).then(notifyCampaigns),
+  // Fork (#72), which is what the replay nudge offers (#80): a copy of the
+  // campaign as it stands, so an expensive or destructive thing can be done to
+  // the copy. `notifyCampaigns`, like create and rename — the sidebar's Recent
+  // rail gains a row.
+  forkCampaign: (cid: string, name: string) =>
+    request<{ id: string; name: string }>(
+      "POST", `/api/campaigns/${cid}/fork`, { name }).then(notifyCampaigns),
   deleteCampaign: (cid: string) =>
     request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}`).then(notifyCampaigns),
   /** Fork `cid` into a new campaign. `fromScene` cuts the copy back to that
@@ -1059,6 +1066,41 @@ export const api = {
   // transcript afterwards cannot show, so the caller has to be able to say so.
   deleteMessagesFrom: (cid: string, sid: string, index: number) =>
     request<CascadeReport>("DELETE", `/api/campaigns/${cid}/scenes/${sid}/messages/${index}`),
+  // Retcon (#78): the same rewrite `editMessage` makes, plus the reversal of
+  // what this scene's absorb wrote and the clearing of `done`, so the scene can
+  // be extracted again over the text that is now there. The two are separate
+  // calls rather than a flag because they are different intentions — a typo fix
+  // must not un-absorb a finished scene.
+  retconMessage: (cid: string, sid: string, index: number, content: string) =>
+    request<RetconReport>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/messages/${index}/retcon`, { content }),
+  // Retcon replay (#79). `fresh` for every read here, like the alternates and
+  // proposal reads: the session moves with each step of the walk, and a shared
+  // read is as old as the request it joined.
+  replayPreview: (cid: string, sid: string, index: number) =>
+    request<ReplayPreview>(
+      "GET", `/api/campaigns/${cid}/scenes/${sid}/replay/preview?index=${index}`,
+      undefined, { fresh: true }),
+  getReplay: (cid: string, sid: string) =>
+    request<ReplaySession | null>("GET", `/api/campaigns/${cid}/scenes/${sid}/replay`,
+                                  undefined, { fresh: true }),
+  startReplay: (cid: string, sid: string, index: number) =>
+    request<{ cut: number; cascade: CascadeReport }>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/replay`, { index }),
+  // Streams like `chat` and for the same reason: it re-posts the player's own
+  // words and then generates one reply against the edited history. Rerolling
+  // that reply is plain `regenerate` — it is the trailing run.
+  replayTurn: (cid: string, sid: string, onEvent: (e: ChatEvent) => void,
+               signal?: AbortSignal) =>
+    streamPost(`/api/campaigns/${cid}/scenes/${sid}/replay/turn`, undefined, onEvent, signal),
+  acceptReplay: (cid: string, sid: string) =>
+    request<ReplaySession | null>("POST", `/api/campaigns/${cid}/scenes/${sid}/replay/accept`),
+  // `restore` defaults to putting the unreplayed originals back — sent
+  // explicitly so the destructive answer is never the one a dropped field
+  // produces.
+  cancelReplay: (cid: string, sid: string, restore: boolean) =>
+    request<{ scene: string; restored: number; dropped: number }>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/replay/cancel`, { restore }),
   // `force` re-runs an absorb the backend has already recorded in the chronicle;
   // without it that POST is a 409 (kind "already_absorbed") -- see #235.
   absorbScene: (cid: string, sid: string, force = false) =>

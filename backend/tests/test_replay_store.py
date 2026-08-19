@@ -10,8 +10,8 @@ to happen BEFORE the cut rather than after it.
 
 import pytest
 
-from grimoire.store import (campaigns, chronicle, entities, replay, scenes,
-                            scene_refs, worlds)
+from grimoire.store import (campaigns, chronicle, replay, scenes, scene_refs,
+                            worlds)
 from grimoire.store.scenes import serialize as scenes_serialize, turns as scenes_turns
 
 
