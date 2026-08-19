@@ -819,10 +819,9 @@ def get_chronicle(cid: str, limit: int | None = None, offset: int | None = None)
     """The campaign's chronicle records, oldest-first, newest page by default.
 
     The one route here whose window is anchored at the *newest* end rather than
-    the front of what it prints, because that is where it has always been
-    anchored. So `offset` skips that many of the NEWEST records — a reader pages
-    backwards by asking again with `offset` raised by the page it just got —
-    while the page itself still comes back ascending, unchanged.
+    at the front of what it prints: `offset` skips that many of the NEWEST
+    records, so a reader pages backwards by raising it. `chronicle.page` holds
+    that shape and says why it is the only one available here.
 
     Sending neither parameter returns the newest `CHRONICLE_PAGE`, byte for byte
     what this route returned before it could be paged (#216). `offset` on its

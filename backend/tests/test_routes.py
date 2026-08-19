@@ -8423,17 +8423,21 @@ def test_get_changes_renders_a_diff_only_for_the_page_it_sends(client, monkeypat
                                         "before": "old body", "after": "old body\nnew line",
                                         "authored": False}], "s1")
 
-    calls = Counter()
+    rendered = []
     real = store.changes.line_diff
-    monkeypatch.setattr(store.changes, "line_diff",
-                        lambda before, after: (calls.update("d"), real(before, after))[1])
+
+    def counting(before, after):
+        rendered.append(before)
+        return real(before, after)
+
+    monkeypatch.setattr(store.changes, "line_diff", counting)
 
     assert len(client.get(f"/api/campaigns/{cid}/changes").json()) == 3
-    assert calls["d"] == 3          # one field each, all three rendered
+    assert len(rendered) == 3       # one field each, all three rendered
 
-    calls.clear()
+    rendered.clear()
     assert len(client.get(f"/api/campaigns/{cid}/changes", params={"limit": 1}).json()) == 1
-    assert calls["d"] == 1          # the two rows off the page cost nothing
+    assert len(rendered) == 1       # the two rows off the page cost nothing
 
 
 @pytest.mark.parametrize("route", ["scenes", "chronicle", "changes"])
