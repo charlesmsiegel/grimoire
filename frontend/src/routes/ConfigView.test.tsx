@@ -376,6 +376,8 @@ test("saves the scene-break cadence, and 0 as the way to turn it off", async () 
   fireEvent.change(screen.getByLabelText(/scene-break check/i), { target: { value: "0" } });
   save();
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ scene_break_every: "0" }));
+});
+
 test("saves the replay fork threshold (#80)", async () => {
   renderView();
   await open(/^While playing/);

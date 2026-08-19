@@ -2470,7 +2470,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     await loadScenes();
     const seen = await selectScene(activeId);
     setCtxKey((k) => k + 1);       // beats and citations left the ledger
-    askForRollingSummary(activeId, seen);   // #85, exactly as `saveEdit` asks
+    askAfterPost(activeId, seen);   // #85/#84, exactly as `saveEdit` asks
     // What the transcript afterwards cannot show, in the same two clauses the
     // cut reports and for the same reason — plus the one thing specific to a
     // retcon: which scenes were played after this one, and so can disagree with
@@ -4313,12 +4313,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                            void loadScenes();
                            const seen = await selectScene(activeId);
                            setCtxKey((k) => k + 1);
-                           // Same reason the cut asks (#85): the stored fold
-                           // covers a prefix a replay has just cut, regenerated
-                           // or put back, so its digest no longer describes the
-                           // transcript. Nothing else turns the stale flag back
-                           // into a correct summary.
-                           askForRollingSummary(activeId, seen);
+                           // Same reason the cut asks (#85/#84): the stored
+                           // fold covers a prefix a replay has just cut,
+                           // regenerated or put back, so its digest no longer
+                           // describes the transcript — and a walk that has
+                           // just rewritten several turns is exactly when the
+                           // scene-break question wants re-asking too.
+                           askAfterPost(activeId, seen);
                          }} />
           )}
           {activeDone ? (

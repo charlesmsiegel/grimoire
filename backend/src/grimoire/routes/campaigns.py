@@ -373,37 +373,6 @@ def delete_campaign_cover(cid: str):
     return {"ok": True}
 
 
-# Declared before `PUT /campaigns/{cid}` for readability only -- `fork` is a
-# POST on a longer path, so nothing here could capture it. What it must stay
-# ahead of is `entities`' generic `/campaigns/{cid}/{kind}`, and that router is
-# included last (routes/__init__.py).
-@router.post("/campaigns/{cid}/fork")
-def post_campaign_fork(cid: str, body: NameBody):
-    """Copy this campaign whole, under a new name (#72).
-
-    The fork the retcon-replay nudge offers (#80): replay into the copy, and
-    the campaign you were playing is still there if the replay goes wrong.
-
-    A name is required rather than derived. `uniquify` would happily mint
-    `<name>-2`, but a shelf of campaigns is browsed by name, and two entries
-    differing by a numeral is exactly where the wrong one gets played.
-    """
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="name is required")
-    try:
-        new_cid = store.campaigns.fork_campaign(cid, name)
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
-    except OSError as exc:
-        # A copytree that ran out of disk, or a source another process is
-        # deleting under us. 500 rather than a bare traceback, because the
-        # half-copied directory is the thing the reader needs told about.
-        raise HTTPException(status_code=500,
-                            detail=f"the campaign could not be copied: {exc}") from exc
-    return {"id": new_cid, "name": name}
-
-
 @router.put("/campaigns/{cid}")
 def put_campaign(cid: str, body: NameBody):
     name = body.name.strip()
