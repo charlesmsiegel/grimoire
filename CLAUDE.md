@@ -138,7 +138,9 @@ first if you think one should be skipped.
     `fireEvent.click` on one dispatches nothing and reports nothing), a gutter
     not yet rendered, a `<select>` not yet filled. That is invisible on an idle
     machine and reds CI on a shared runner, in a different test every run
-    (#351). `settle.test.tsx` is the guarantee, deterministically.
+    (#351). `settle.test.tsx` is the guarantee, deterministically — it fails
+    both with the wrapper gone and with it settling for one unchanged tick
+    instead of two, which is the rule that carries the invisible stages.
   - `check-web` runs `npm run test:coverage` (`vitest run --coverage`), which
     writes `frontend/coverage/lcov.info` — gitignored, uploaded by CI as the
     `frontend-coverage` artifact, and the file external readers discover by
