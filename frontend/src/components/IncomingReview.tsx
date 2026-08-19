@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type IncomingBlob, type IncomingItem, type IncomingRef } from "../api/client";
@@ -13,16 +13,27 @@ const KIND_LABELS: Record<string, string> = {
   pcs: "PC", plotmap: "Plot map",
 };
 
-/** What each status means for the reader, since the word alone does not say
- *  which side is at risk. */
-const STATUS_HINTS: Record<string, string> = {
-  new: "the world has this and this campaign does not",
-  update: "this campaign's copy is unchanged, so taking the world's loses nothing",
-  conflict: "both sides changed — accepting replaces this campaign's copy",
-};
-
 const refKey = (ref: IncomingRef) => `${ref.kind}/${ref.id}`;
 const kindLabel = (kind: string) => KIND_LABELS[kind] ?? kind;
+
+/** What the status means for the reader, since the word alone does not say
+ *  which side is at risk -- and the word alone is not enough to tell:
+ *  `store/sync.py` grades an item by comparing hashes, and grades one whose
+ *  campaign copy is *gone* a conflict, because a missing copy does not match the
+ *  base either. So "both sides changed" is only true when there is a copy to
+ *  have changed, and `mine` is what says whether there is.
+ *
+ *  `new` is in the API's vocabulary and in the world-side counts, but no pass in
+ *  `incoming()` emits it today; it is handled rather than assumed away. */
+function statusHint(item: IncomingItem): string {
+  if (!item.mine)
+    return item.status === "new"
+      ? "the world has this and this campaign does not"
+      : "this campaign has no copy of its own, so accepting only stops the nagging";
+  if (item.status === "update")
+    return "this campaign's copy is unchanged, so taking the world's loses nothing";
+  return "both sides changed — accepting replaces this campaign's copy";
+}
 
 type Row = { key: string; label: string; value: string };
 
@@ -32,7 +43,7 @@ type Row = { key: string; label: string; value: string };
  *  locked character version, a persona for a locked PC version, and a plain
  *  body for everything else — an entity, a plot map, or the version list of an
  *  actor whose version is not pinned. */
-function rowsOf(blob: IncomingBlob | undefined): Row[] {
+function rowsOf(blob: IncomingBlob | undefined, kind: string): Row[] {
   if (!blob) return [];
   if (blob.card) {
     const data = blob.card.data as Record<string, unknown>;
@@ -42,15 +53,22 @@ function rowsOf(blob: IncomingBlob | undefined): Row[] {
     const persona = blob.persona as unknown as Record<string, unknown>;
     return PERSONA_FIELDS.map((f) => ({ ...f, value: String(persona[f.key] ?? "") }));
   }
-  return [{ key: "body", label: "Body", value: blob.body ?? "" }];
+  // The name is compared, not just printed as the heading. `entity_hash` covers
+  // the whole file -- front matter included -- so a world-side *rename* is a
+  // pending change whose bodies match, and showing only bodies would present it
+  // as a change with nothing in it. The exception is a plot map, whose name is
+  // the constant "Plot map" on both sides and so is never news.
+  const name: Row[] = kind === "plotmap"
+    ? [] : [{ key: "name", label: "Name", value: blob.name }];
+  return [...name, { key: "body", label: "Body", value: blob.body ?? "" }];
 }
 
 /** The two sides of every field, lined up. Both sides are the same kind, so
  *  they yield the same keys; a field neither side fills is dropped rather than
  *  framed and left blank, the way the character view drops an empty one. */
 function pairs(item: IncomingItem): { key: string; label: string; world: string; mine: string }[] {
-  const mine = new Map(rowsOf(item.mine).map((r) => [r.key, r.value]));
-  return rowsOf(item.world)
+  const mine = new Map(rowsOf(item.mine, item.ref.kind).map((r) => [r.key, r.value]));
+  return rowsOf(item.world, item.ref.kind)
     .map((r) => ({ key: r.key, label: r.label, world: r.value, mine: mine.get(r.key) ?? "" }))
     .filter((r) => r.world.trim() || r.mine.trim());
 }
@@ -61,6 +79,22 @@ function pairs(item: IncomingItem): { key: string; label: string; world: string;
  *  through it. */
 function isMarkdown(item: IncomingItem): boolean {
   return item.ref.kind !== "plotmap" && !item.world.card && !item.world.persona;
+}
+
+/** What a change this view cannot show could have been, per kind. The hashes
+ *  behind a pending item cover the whole record, and these blobs do not: a card
+ *  carries greetings, tags, an embedded lorebook and `extensions` beyond its
+ *  prose, and an entity blob is only `{name, body}` -- so once the name is
+ *  compared too, what is left unreachable is the rest of the front matter. When
+ *  every compared field matches, the change is in there somewhere, and saying
+ *  nothing would let it read as no change at all. */
+function invisibleChangeHint(item: IncomingItem): string {
+  if (item.world.card)
+    return "greetings, tags, an embedded lorebook, or other card metadata";
+  if (item.world.persona) return "the persona's birthdate, which this view does not compare";
+  if (item.ref.kind === "greetings")
+    return "the greeting's presence list, its required tags, or its edges to other greetings";
+  return "the record's keys, owners, or secrecy — front matter this view is not sent";
 }
 
 function Value({ text, markdown }: { text: string; markdown: boolean }) {
@@ -80,6 +114,8 @@ function Detail({ item, busy, onResolve }: {
 }) {
   const markdown = isMarkdown(item);
   const fields = pairs(item);
+  // Only worth saying when there are two sides to have matched.
+  const identical = Boolean(item.mine) && fields.every((f) => f.world === f.mine);
   return (
     <div className="detail-view">
       <div className="detail-main">
@@ -89,6 +125,12 @@ function Detail({ item, busy, onResolve }: {
             {item.world.version ? ` · version ${item.world.version}` : ""}</span>
         </h3>
         {fields.length === 0 && <p className="field-hint">Nothing to compare.</p>}
+        {identical && (
+          <p className="banner">
+            Every field below is identical. The world's change is in something
+            this view is not shown: {invisibleChangeHint(item)}.
+          </p>
+        )}
         {fields.map((f) => (
           <div key={f.key} className="side-section">
             <h4>{f.label}</h4>
@@ -97,8 +139,9 @@ function Detail({ item, busy, onResolve }: {
                 <div className="eyebrow">From the world</div>
                 <Value text={f.world} markdown={markdown} />
               </div>
-              {/* A `new` item has no campaign side, so it is one column and not
-                  a column paired with an empty frame claiming a copy exists. */}
+              {/* No campaign copy means one column, not a column paired with an
+                  empty frame claiming a copy exists. Keyed off `mine` rather
+                  than the status, because a conflict can be a missing copy. */}
               {item.mine && (
                 <div className="incoming-col">
                   <div className="eyebrow">In this campaign</div>
@@ -117,8 +160,9 @@ function Detail({ item, busy, onResolve }: {
                   onClick={() => onResolve([item.ref], false)}>Reject</button>
         </div>
         <div className="side-section">
-          <h4>{item.status}</h4>
-          <p className="field-hint">{STATUS_HINTS[item.status] ?? ""}</p>
+          <h4>Status</h4>
+          <span className={"chip incoming-badge incoming-" + item.status}>{item.status}</span>
+          <p className="field-hint">{statusHint(item)}</p>
         </div>
         <div className="side-section">
           <h4>Ref</h4>
@@ -126,6 +170,58 @@ function Detail({ item, busy, onResolve }: {
         </div>
       </aside>
     </div>
+  );
+}
+
+/** The bulk actions, behind a confirmation.
+ *
+ *  Accepting is destructive and has no undo: `sync.accept` deletes the
+ *  campaign's copy so the record reverts to the world's (`store/sync.py`), and
+ *  no journal entry stands behind that the way one stands behind an absorb. One
+ *  object at a time is an informed click -- the reader is looking at that diff.
+ *  A list is not, so this one names what it is about to overwrite. */
+function BulkActions({ items, busy, onResolve }: {
+  items: IncomingItem[]; busy: boolean;
+  onResolve: (refs: IncomingRef[], accept: boolean) => void;
+}) {
+  const [pending, setPending] = useState<"accept" | "reject" | null>(null);
+  // A refetch takes the confirmation with it. `items` is a new array on every
+  // read, and a per-object Accept is still clickable while this is open -- so
+  // without this, confirming afterwards would send the refs of a list the
+  // reader was never shown the count of.
+  useEffect(() => { setPending(null); }, [items]);
+  const refs = items.map((i) => i.ref);
+  const conflicts = items.filter((i) => i.status === "conflict" && i.mine).length;
+
+  if (pending) {
+    const accept = pending === "accept";
+    return (
+      <>
+        {/* Announced: the reader who clicked "Accept all" and cannot see the
+            header change needs to hear what is being asked. */}
+        <span className="field-hint" role="status" aria-live="polite">
+          {accept
+            ? `Replace ${refs.length} record${refs.length === 1 ? "" : "s"} in this campaign` +
+              (conflicts ? `, discarding ${conflicts} the campaign changed itself?` : "?")
+            : `Keep this campaign's ${refs.length} record${refs.length === 1 ? "" : "s"} ` +
+              "and stop offering these changes?"}
+        </span>
+        <button className={accept ? "primary" : "subtle"} disabled={busy}
+                onClick={() => { setPending(null); onResolve(refs, accept); }}>
+          {accept ? "Yes, accept all" : "Yes, reject all"}
+        </button>
+        <button className="subtle" disabled={busy}
+                onClick={() => setPending(null)}>Cancel</button>
+      </>
+    );
+  }
+  return (
+    <>
+      <button className="subtle" disabled={busy}
+              onClick={() => setPending("accept")}>Accept all</button>
+      <button className="subtle" disabled={busy}
+              onClick={() => setPending("reject")}>Reject all</button>
+    </>
   );
 }
 
@@ -141,10 +237,25 @@ export function IncomingReview({ cid }: { cid: string }) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // `cid` is a route param, and `/campaigns/:cid` keeps this instance across a
+  // switch rather than remounting it -- so a read or a resolve started for one
+  // campaign can settle while another is on screen, and commit its answer into
+  // the wrong panel. Every commit below is gated on the campaign it was made
+  // for still being the one displayed. (CampaignView also mounts this keyed by
+  // cid, which clears the panel on a switch; this is the half that holds even
+  // if that key is ever dropped.) Declared before the effects that read it so
+  // it is current by the time they run.
+  const liveCid = useRef(cid);
+  useEffect(() => { liveCid.current = cid; }, [cid]);
+
   const load = useCallback(async () => {
     try {
-      setItems(await api.getIncoming(cid));
+      const got = await api.getIncoming(cid);
+      if (liveCid.current !== cid) return;
+      setItems(got);
+      setErr(null);   // a read that lands clears the last one that did not
     } catch (e) {
+      if (liveCid.current !== cid) return;
       // Reported, not swallowed: an unread failure here looks exactly like a
       // campaign that is up to date, which is the one wrong answer this panel
       // must never give.
@@ -153,10 +264,7 @@ export function IncomingReview({ cid }: { cid: string }) {
     }
   }, [cid]);
 
-  useEffect(() => {
-    setErr(null);
-    void load();
-  }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
   const resolve = useCallback(async (refs: IncomingRef[], accept: boolean) => {
     setBusy(true);
@@ -170,9 +278,9 @@ export function IncomingReview({ cid }: { cid: string }) {
       // is the only one that knows what is left.
       await load();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      if (liveCid.current === cid) setErr(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (liveCid.current === cid) setBusy(false);
     }
   }, [cid, load]);
 
@@ -180,23 +288,25 @@ export function IncomingReview({ cid }: { cid: string }) {
   // first row when it does not -- which is what resolving the selected item
   // does, every time.
   const active = items?.find((i) => refKey(i.ref) === sel) ?? items?.[0] ?? null;
-  const allRefs = (items ?? []).map((i) => i.ref);
+  const onResolve = (refs: IncomingRef[], accept: boolean) => void resolve(refs, accept);
 
   return (
     <div className="incoming-panel">
       <div className="incoming-head">
         <h4>Incoming world changes</h4>
         <span className="header-spacer" />
-        {allRefs.length > 1 && (
-          <>
-            <button className="subtle" disabled={busy}
-                    onClick={() => void resolve(allRefs, true)}>Accept all</button>
-            <button className="subtle" disabled={busy}
-                    onClick={() => void resolve(allRefs, false)}>Reject all</button>
-          </>
+        {items && items.length > 1 && (
+          <BulkActions items={items} busy={busy} onResolve={onResolve} />
         )}
       </div>
-      {err && <p className="banner error-banner">{err}</p>}
+      {err && (
+        <p className="banner error-banner">
+          <span>{err}</span>
+          {/* Without this a failed read is a dead panel: nothing else here asks
+              again, so the only retry would be closing and reopening it. */}
+          <button className="retry" disabled={busy} onClick={() => void load()}>Retry</button>
+        </p>
+      )}
       {items === null && <p className="field-hint">Checking the world…</p>}
       {items !== null && items.length === 0 && !err && (
         <p className="field-hint">This campaign is up to date with its world.</p>
@@ -217,7 +327,7 @@ export function IncomingReview({ cid }: { cid: string }) {
             })}
           </div>
           <div className="editor-body">
-            {active && <Detail item={active} busy={busy} onResolve={(refs, accept) => void resolve(refs, accept)} />}
+            {active && <Detail item={active} busy={busy} onResolve={onResolve} />}
           </div>
         </div>
       )}

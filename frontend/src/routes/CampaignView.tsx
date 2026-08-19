@@ -3640,7 +3640,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
             </div>
           )}
           {!focus && showChanges && <ChangesPanel cid={cid} />}
-          {!focus && showIncoming && <IncomingReview cid={cid} />}
+          {/* Keyed by cid for the reason MechanicsConfig is: this route keeps
+              its instance across a campaign switch, so an unkeyed panel would
+              show one campaign's pending list while another is on screen. */}
+          {!focus && showIncoming && <IncomingReview key={cid} cid={cid} />}
           {editFailures.length > 0 && (
             <div className="mechanics-notice">
               <p>{editFailures.length} change{editFailures.length === 1 ? "" : "s"} did not apply</p>

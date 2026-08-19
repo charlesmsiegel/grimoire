@@ -380,11 +380,16 @@ export const api = {
   // before that write landed -- leaving the resolved row on screen.
   getIncoming: (cid: string) =>
     request<IncomingItem[]>("GET", `/api/campaigns/${cid}/incoming`, undefined, { fresh: true }),
-  // Both take a list, so one object and "all of them" are the same call.
+  // Both take a list, so one object and "all of them" are the same call. Both
+  // also notify the campaigns channel: advancing a base calls `campaigns.touch`
+  // server-side (`store/sync._advance`), so the sidebar's Recent rail is sorted
+  // on a value this just moved -- the same reason rename and delete notify.
   acceptIncoming: (cid: string, refs: IncomingRef[]) =>
-    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/incoming/accept`, { refs }),
+    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/incoming/accept`, { refs })
+      .then(notifyCampaigns),
   rejectIncoming: (cid: string, refs: IncomingRef[]) =>
-    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/incoming/reject`, { refs }),
+    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/incoming/reject`, { refs })
+      .then(notifyCampaigns),
   // Counted by running `incoming` for every campaign in the world, so it is
   // `fresh` for the same reason: it is read again after a campaign resolved
   // something, and a shared read would still be showing the old count.
