@@ -223,6 +223,16 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # module (#129), so it starts inside the exclusion rather than joining the
     # frozen `UNREVIEWED` backlog.
     "store.pins",
+    # Forking copies one campaign's whole directory into another and, for a
+    # retrospective fork, cuts the copy back to an earlier scene. It is the
+    # only mutator in the package whose critical section spans TWO campaigns,
+    # so it is also the only one outside `module_edit` and the world-module
+    # rebind route that goes through `hold_all` -- the source's lock so the
+    # copy is not taken across somebody else's write, the fork's so nobody
+    # sees the branch between `copytree` publishing `campaign.md` and the cut
+    # finishing. New module (#72), so it starts inside the exclusion rather
+    # than joining the frozen `UNREVIEWED` backlog.
+    "store.fork",
     "store.sheets.tally",
     "store.sheets.writer",
     "store.audit.baselines",

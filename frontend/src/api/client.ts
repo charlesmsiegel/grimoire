@@ -9,6 +9,7 @@ import {
   type BackupList, type BackupRun, type Briefing, type CalendarConfig, type CalendarMonth,
   type CalendarScope, type CampaignClock, type CampaignMeta, type CampaignModule, type Card,
   type CardFormat, type CascadeReport, type Casefile, type CastChanges, type CastDetail,
+  type ForkReport,
   type CharacterDetail,
   type CharacterSummary, type CheckResolution, type ChronicleEntry, type ChubImportResult,
   type ChubUnlinkedVersion, type Climate, type ClimateSummary, type Config, type ConfigUpdate,
@@ -342,6 +343,14 @@ export const api = {
     request<{ id: string; name: string }>("PUT", `/api/campaigns/${cid}`, { name }).then(notifyCampaigns),
   deleteCampaign: (cid: string) =>
     request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}`).then(notifyCampaigns),
+  /** Fork `cid` into a new campaign. `fromScene` cuts the copy back to that
+   *  scene — it and everything before it stay, everything after it comes off
+   *  the fork and nothing at all happens to `cid`. Omitted, the fork is of the
+   *  campaign as it stands. `notifyCampaigns` for the same reason
+   *  `createCampaign` sends it: the shelf and the sidebar gain a row. */
+  forkCampaign: (cid: string, name: string, fromScene?: string) =>
+    request<ForkReport>("POST", `/api/campaigns/${cid}/fork`,
+      { name, ...(fromScene ? { from_scene: fromScene } : {}) }).then(notifyCampaigns),
   // `fresh` for the caller re-reading *because* an undo just repointed one of
   // these deltas: handed a promise started before that write, it would conclude
   // the reversal never happened.

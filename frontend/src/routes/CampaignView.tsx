@@ -10,6 +10,7 @@ import {
   type Briefing, type Casefile, type Provenance, type SceneLocation, type SceneWeather,
 } from "../api/client";
 import { isAbortError, type ChatEvent } from "../api/stream";
+import { forkNotes } from "../components/forkNotes";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import { CastPanel } from "../components/CastPanel";
 import { NewSceneChooser } from "../components/NewSceneChooser";
@@ -1794,6 +1795,61 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // the reader on — or, with nothing left, clears the view and drops the
     // scene from the URL. Deleting a row the reader is NOT on leaves the sid
     // valid, and the resolver leaves them where they are.
+  }
+
+  /** Fork the campaign at this scene (#72), leaving this one untouched.
+   *
+   *  Offered from the scene you are reading rather than from the shelf,
+   *  because "fork at an earlier turn" needs a scene and this is the only
+   *  place the app already has one in hand. The fork keeps this scene whole
+   *  and takes every later one off the copy, putting back what those scenes'
+   *  absorbs wrote wherever the change journal still reaches.
+   *
+   *  The confirmation says what a cut costs, for the reason
+   *  `deleteMessagesFrom`'s does: none of it is visible on the branch
+   *  afterwards. It is stated only when there ARE later scenes — forking at
+   *  the newest one copies the campaign whole and has nothing to warn about.
+   *
+   *  Navigates to the fork. The player asked to branch, and a branch you are
+   *  not looking at is a fork you have to go and find; this campaign is
+   *  unchanged and one click away in the shelf.
+   *
+   *  The note is raised BEFORE that navigation and is meant to survive it —
+   *  it describes the fork, so the fork's page is where it belongs. That works
+   *  because the `[cid]` effect above clears the campaign-scoped review state
+   *  and deliberately not `error`; a change there that started clearing it
+   *  would silently drop this report, which is what
+   *  `what the fork could not put back is reported` pins.
+   */
+  async function forkAtScene(sid: string) {
+    const later = scenes.filter((x) => x.id > sid).length;
+    const title = scenes.find((x) => x.id === sid)?.title ?? sid;
+    const ask = [
+      `Fork this campaign at '${title}'?`,
+      later === 0
+        ? "It is the newest scene, so the fork is a copy of this campaign as it stands."
+        : `The fork keeps this scene and drops the ${later} scene${later === 1 ? "" : "s"} ` +
+          "after it, putting back what their absorbs wrote wherever that is still on " +
+          "record. Records something else has written to since, and records a dropped " +
+          "scene created, keep what they hold and are reported.",
+      "This campaign is not changed.",
+    ].join("\n\n");
+    if (!window.confirm(ask)) return;
+    const forkName = window.prompt("Name the fork?", `${name} (fork)`)?.trim();
+    if (!forkName) return;
+    let report;
+    try {
+      report = await api.forkCampaign(cid, forkName, sid);
+    } catch (err: any) {
+      // Not retryable: the banner's Retry generates, and there is nothing here
+      // to generate — the same call `deleteMessagesFrom` makes for the same
+      // reason.
+      fail(err, false);
+      return;
+    }
+    const notes = forkNotes(report);
+    if (notes) setError({ retryable: false, text: notes });
+    navigate(`/campaigns/${report.id}`);
   }
 
   // How long to keep looking for a cancelled turn's partial. Aborting rejects
@@ -3860,6 +3916,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 <button aria-label="Rename scene" disabled={sceneLocked}
                         title={sceneLocked ? LOCKED_WHILE_GENERATING : "Rename scene"}
                         onClick={() => setRenamingScene({ id: activeId, title: sceneTitle })}>✎</button>
+                {/* Forking is not one of the two: it writes nothing here at
+                    all, and is offered from this row because the scene you are
+                    reading is the turn you would branch at. Locked with the
+                    others while a turn is streaming — a copy taken mid-write
+                    would carry half a reply. */}
+                <button aria-label="Fork campaign at this scene" disabled={sceneLocked}
+                        title={sceneLocked ? LOCKED_WHILE_GENERATING
+                                           : "Fork the campaign at this scene"}
+                        onClick={() => forkAtScene(activeId)}>⑂</button>
                 <button aria-label="Delete scene" disabled={sceneLocked}
                         title={sceneLocked ? LOCKED_WHILE_GENERATING : "Delete scene"}
                         onClick={() => {

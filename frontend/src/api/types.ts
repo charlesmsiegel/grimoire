@@ -176,6 +176,31 @@ export type CampaignMeta = {
    *  A token rather than a boolean: it also makes the URL change when the
    *  bytes do, so a replaced cover cannot keep rendering from cache. */
   cover?: string;
+  /** Lineage (#72): the id of the campaign this one was forked from, "" for one
+   *  that was created rather than forked. An id and not a name, so a rename on
+   *  either side leaves the link intact. It may name a campaign that is no
+   *  longer in the list — a deleted parent leaves its children as roots, which
+   *  is what the shelf renders them as. */
+  parent?: string;
+  /** The scene a retrospective fork was cut at, "" for a fork from where the
+   *  campaign stood. Only the first kind is an approximation of a past state,
+   *  so the two are worth telling apart on the card. */
+  forked_from_scene?: string;
+};
+
+/** What a fork actually did (#72). `removed_scenes` is empty for a fork from
+ *  now; for one cut at an earlier scene it lists, in play order, the scenes the
+ *  copy does not have.
+ *
+ *  `records`, `refused` and `failed` mean exactly what they mean in
+ *  `CascadeReport`, because that is what produced them: the cut runs each
+ *  removed scene through the same reversal a cascade post-delete uses. So
+ *  `refused` names records that kept what a removed scene gave them, and
+ *  `failed` names cleanup that could not run — neither is a failure of the
+ *  fork, which by then exists. */
+export type ForkReport = {
+  id: string; from_scene: string; removed_scenes: string[];
+  records: number; refused: { label: string; reason: string }[]; failed: string[];
 };
 /** `done` is the scene's absorb mark: End Scene run to completion and its
  *  changes accepted, written into the scene's own frontmatter by

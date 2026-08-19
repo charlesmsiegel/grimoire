@@ -21,7 +21,7 @@ from .common import (computes_only, _bounded_call, _campaign_root_or_404, _conte
                      _dump, _require_connection, _response_body, get_llm,
                      _serve_image, _serve_image_file, _upload_image_ext, _write_response)
 from .models import (AdvanceTime, AvatarFocus, CalendarConfig, CampaignClimate, CopyFromGreeting,
-                     DefaultVersion, GroupStateSave, NameBody, NewCampaign, PCCreate,
+                     DefaultVersion, ForkCampaign, GroupStateSave, NameBody, NewCampaign, PCCreate,
                      PCUpdate, PersonaVersionCreate, PersonaVersionUpdate, PickBody, PinRule,
                      RefList, ResponseSettings, VersionCreate, VersionUpdate,
                      VoiceAnchorSave)
@@ -383,6 +383,31 @@ def put_campaign(cid: str, body: NameBody):
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     return {"id": cid, "name": name}
+
+
+# Declared here rather than in `entities`, which registers the
+# `/campaigns/{cid}/{kind}` catch-alls -- `routes/__init__` includes that module
+# last precisely so a literal third segment like `fork` is still reachable.
+@router.post("/campaigns/{cid}/fork")
+def post_campaign_fork(cid: str, body: ForkCampaign):
+    """Fork `cid` into a new campaign, optionally cut back to an earlier scene.
+
+    Returns the fork's id alongside the store's own report of the cut, which
+    the client shows verbatim: a retrospective fork restores what carries the
+    scene's id and reports the rest rather than pretending (`store/fork.py`).
+    """
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    # "" and None mean the same thing here -- a client that always sends the
+    # field should not get a 404 for a scene called "".
+    from_scene = (body.from_scene or "").strip() or None
+    try:
+        return store.fork.fork_campaign(cid, name, from_scene)
+    except store.campaigns.CampaignNotFound:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.SceneNotFound:
+        raise HTTPException(status_code=404, detail="scene not found")
 
 
 @router.delete("/campaigns/{cid}")

@@ -2053,6 +2053,81 @@ def test_campaign_unknown_climate_400(client):
     assert "no-such" in r.json()["detail"]
 
 
+# ---- fork (#72) ----
+def _campaign_with_scenes(client, titles):
+    wid = _world(client)
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    sids = []
+    for title in titles:
+        sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": title}).json()["id"]
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/messages",
+                    json={"role": "user", "content": f"{title} happened"})
+        sids.append(sid)
+    return cid, sids
+
+
+def test_fork_route_copies_the_campaign_and_records_the_lineage(client):
+    cid, sids = _campaign_with_scenes(client, ["One", "Two"])
+    r = client.post(f"/api/campaigns/{cid}/fork", json={"name": "Branch"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] != cid and body["removed_scenes"] == []
+    assert client.get(f"/api/campaigns/{body['id']}").json()["meta"]["parent"] == cid
+    assert [s["id"] for s in client.get(f"/api/campaigns/{body['id']}/scenes").json()] \
+        == [s["id"] for s in client.get(f"/api/campaigns/{cid}/scenes").json()]
+
+
+def test_fork_route_cuts_at_a_scene_and_leaves_the_source_whole(client):
+    cid, sids = _campaign_with_scenes(client, ["One", "Two", "Three"])
+    body = client.post(f"/api/campaigns/{cid}/fork",
+                       json={"name": "Branch", "from_scene": sids[0]}).json()
+    assert body["removed_scenes"] == sids[1:]
+    assert [s["id"] for s in client.get(f"/api/campaigns/{body['id']}/scenes").json()] == [sids[0]]
+    assert len(client.get(f"/api/campaigns/{cid}/scenes").json()) == 3
+
+
+def test_fork_route_reaches_the_literal_segment_past_the_entity_catch_all(client):
+    """`/campaigns/{cid}/{kind}` would capture `fork` if `entities` were not
+    included last. A 404 body of "kind not found" is what regression looks
+    like."""
+    cid, _ = _campaign_with_scenes(client, ["One"])
+    r = client.post(f"/api/campaigns/{cid}/fork", json={"name": "Branch"})
+    assert r.status_code == 200 and "id" in r.json()
+
+
+def test_fork_route_404s_for_an_unknown_campaign_or_scene(client):
+    cid, _ = _campaign_with_scenes(client, ["One"])
+    assert client.post("/api/campaigns/no-such/fork", json={"name": "B"}).status_code == 404
+    r = client.post(f"/api/campaigns/{cid}/fork",
+                    json={"name": "B", "from_scene": "0009--nope"})
+    assert r.status_code == 404 and r.json()["detail"] == "scene not found"
+
+
+def test_fork_route_requires_a_name(client):
+    cid, _ = _campaign_with_scenes(client, ["One"])
+    assert client.post(f"/api/campaigns/{cid}/fork", json={"name": "   "}).status_code == 400
+
+
+def test_fork_route_treats_an_empty_from_scene_as_forking_from_now(client):
+    """A client that always sends the field must not get a 404 for the scene
+    called ""."""
+    cid, sids = _campaign_with_scenes(client, ["One", "Two"])
+    body = client.post(f"/api/campaigns/{cid}/fork",
+                       json={"name": "Branch", "from_scene": ""}).json()
+    assert body["from_scene"] == "" and body["removed_scenes"] == []
+    assert len(client.get(f"/api/campaigns/{body['id']}/scenes").json()) == 2
+
+
+def test_the_campaigns_listing_carries_the_fork_lineage(client):
+    cid, sids = _campaign_with_scenes(client, ["One", "Two"])
+    child = client.post(f"/api/campaigns/{cid}/fork",
+                        json={"name": "Branch", "from_scene": sids[0]}).json()["id"]
+    rows = {c["id"]: c for c in client.get("/api/campaigns").json()}
+    assert rows[cid]["parent"] == "" and rows[cid]["forked_from_scene"] == ""
+    assert rows[child]["parent"] == cid
+    assert rows[child]["forked_from_scene"] == sids[0]
+
+
 # ---- sync ----
 def test_incoming_and_accept_flow(client):
     wid = _world(client)

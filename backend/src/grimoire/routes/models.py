@@ -174,6 +174,19 @@ class NewCampaign(BaseModel):
     climate: str | None = None
 
 
+class ForkCampaign(BaseModel):
+    """A fork's name, and optionally the scene to cut it at (#72).
+
+    `from_scene` names a scene of the SOURCE campaign: it and everything before
+    it stay on the fork, everything after it comes off. Absent (or "") forks
+    from where the campaign stands, which is the shape with no approximation in
+    it -- see `store/fork.py` for what a retrospective cut can and cannot put
+    back.
+    """
+    name: str
+    from_scene: str | None = None
+
+
 class WeatherOverride(BaseModel):
     """One override span, or a clear of the range it names.
 

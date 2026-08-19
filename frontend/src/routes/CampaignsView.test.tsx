@@ -14,6 +14,7 @@ vi.mock("../api/client", () => ({
     listWorlds: vi.fn(),
     renameCampaign: vi.fn(),
     deleteCampaign: vi.fn(),
+    forkCampaign: vi.fn(),
     campaignCoverUrl: (cid: string, o?: { w?: number; v?: string }) =>
       `/api/campaigns/${cid}/cover?w=${o?.w}&v=${o?.v}`,
   },
@@ -28,6 +29,8 @@ beforeEach(() => {
   ]);
   (api.renameCampaign as any).mockResolvedValue({ id: "c1", name: "New" });
   (api.deleteCampaign as any).mockResolvedValue({ ok: true });
+  (api.forkCampaign as any).mockResolvedValue({
+    id: "c2", from_scene: "", removed_scenes: [], records: 0, refused: [], failed: [] });
 });
 
 function renderView() {
@@ -218,4 +221,91 @@ test("a replacement cover is not hidden by the previous version's broken mark", 
 
   const v2img = await screen.findByAltText("Saltmarch Nights cover");
   expect(v2img.getAttribute("src")).toContain("v=v2");
+});
+
+
+// ---- fork lineage (#72) ----
+
+const FAMILY = [
+  { id: "c1", name: "Saltmarch", world: "w1", scenes: 3, last_scene: "",
+    updated: "2026-08-02 10:00:00" },
+  { id: "c2", name: "Saltmarch (fork)", world: "w1", scenes: 1, last_scene: "",
+    updated: "2026-08-03 10:00:00", parent: "c1", forked_from_scene: "001--the-oath" },
+];
+
+test("a fork is nested under the campaign it came from, however it ranks", async () => {
+  // c2 was played more recently, so the flat shelf would put it first. The tree
+  // groups it under its parent without re-ranking anything else.
+  (api.listCampaigns as any).mockResolvedValue(FAMILY);
+  renderView();
+  await screen.findByText("Saltmarch (fork)");
+  const cards = document.querySelectorAll(".campaign-card");
+  expect([...cards].map((c) => c.querySelector(".campaign-name")?.textContent))
+    .toEqual(["Saltmarch", "Saltmarch (fork)"]);
+  expect(cards[0].className).not.toContain("forked");
+  expect(cards[1].className).toContain("forked");
+});
+
+test("a fork says which campaign it came from, and that it was cut at a scene", async () => {
+  (api.listCampaigns as any).mockResolvedValue(FAMILY);
+  renderView();
+  await screen.findByText("Saltmarch (fork)");
+  const c = within(card("Saltmarch (fork)"));
+  expect(c.getByText(/FORKED FROM SALTMARCH/)).toBeInTheDocument();
+  expect(c.getByText(/AT AN EARLIER SCENE/)).toBeInTheDocument();
+  // ...and the campaign it was forked from carries no such chip.
+  expect(within(card("Saltmarch")).queryByText(/FORKED FROM/)).toBeNull();
+});
+
+test("a fork whose parent is gone still sits on the shelf and still names it", async () => {
+  (api.listCampaigns as any).mockResolvedValue([
+    { id: "c2", name: "Orphan", world: "w1", scenes: 1, last_scene: "", parent: "deleted-one" },
+  ]);
+  renderView();
+  await screen.findByText("Orphan");
+  expect(document.querySelectorAll(".campaign-card")).toHaveLength(1);
+  expect(within(card("Orphan")).getByText(/FORKED FROM DELETED-ONE/)).toBeInTheDocument();
+});
+
+test("forking from the shelf names the fork and relists", async () => {
+  (api.listCampaigns as any).mockResolvedValue([
+    { id: "c1", name: "Saltmarch", world: "w1", scenes: 3, last_scene: "" },
+  ]);
+  const prompt = vi.spyOn(window, "prompt").mockReturnValue("A Second Run");
+  renderView();
+  await screen.findByText("Saltmarch");
+  fireEvent.click(screen.getByLabelText("Fork Saltmarch"));
+  expect(prompt.mock.calls[0][1]).toBe("Saltmarch (fork)");   // a default worth accepting
+  await waitFor(() => expect(api.forkCampaign).toHaveBeenCalledWith("c1", "A Second Run"));
+  // The shelf is re-read rather than navigated away from: the new branch
+  // appearing under its parent is the point.
+  await waitFor(() => expect(api.listCampaigns).toHaveBeenCalledTimes(2));
+  expect(navigate).not.toHaveBeenCalled();
+});
+
+test("a cancelled fork prompt forks nothing", async () => {
+  (api.listCampaigns as any).mockResolvedValue([
+    { id: "c1", name: "Saltmarch", world: "w1", scenes: 3, last_scene: "" },
+  ]);
+  vi.spyOn(window, "prompt").mockReturnValue(null);
+  renderView();
+  await screen.findByText("Saltmarch");
+  fireEvent.click(screen.getByLabelText("Fork Saltmarch"));
+  expect(api.forkCampaign).not.toHaveBeenCalled();
+});
+
+test("what a fork could not put back is reported on the shelf", async () => {
+  (api.listCampaigns as any).mockResolvedValue([
+    { id: "c1", name: "Saltmarch", world: "w1", scenes: 3, last_scene: "" },
+  ]);
+  (api.forkCampaign as any).mockResolvedValue({
+    id: "c2", from_scene: "001--the-oath", removed_scenes: ["002--the-debt"], records: 2,
+    refused: [{ label: "The Pact — lore", reason: "this record changed after the edit" }],
+    failed: [] });
+  vi.spyOn(window, "prompt").mockReturnValue("A Second Run");
+  renderView();
+  await screen.findByText("Saltmarch");
+  fireEvent.click(screen.getByLabelText("Fork Saltmarch"));
+  await screen.findByText(/The Pact — lore/);
+  expect(document.body.textContent).toMatch(/still holds what a removed scene wrote/i);
 });
