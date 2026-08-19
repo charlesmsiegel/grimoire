@@ -506,7 +506,10 @@ export type CalendarBlock = {
   anchor: { native: string; gregorian: string } | null;
 };
 export type CalendarMonth = { key: string; name: string; days: number };
-export type CalendarScope = { kind: "campaign" | "world"; id: string };
+/** Where a calendar lives: a campaign's own copy, or the world default it was
+ *  created from (#223). Structurally an `EntityScope` and deliberately the
+ *  same type, so the one URL builder serves both surfaces. */
+export type CalendarScope = EntityScope;
 
 /** Split a native datetime on its trailing Thh:mm only — month tokens may contain T. */
 export function splitNativeDate(native: string): { date: string; time: string | null } {

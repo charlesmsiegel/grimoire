@@ -35,6 +35,7 @@ vi.mock("../api/client", () => ({
       `/img/${sc.id}/${k}/${a}/${v}/${n}`,
     listAppearances: vi.fn(), markGreeting: vi.fn(), pickVersion: vi.fn(), importVersion: vi.fn(),
     listModules: vi.fn(), setWorldModule: vi.fn(),
+    getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
     getCampaignModule: vi.fn(), readModule: vi.fn(), getWorldSheetsIndex: vi.fn(), getSheet: vi.fn(),
     worldCampaigns: vi.fn(),
   },
@@ -92,6 +93,12 @@ beforeEach(() => {
   });
   (api.getGreetingSubjects as any).mockResolvedValue({});
   (api.listUntaggedImages as any).mockResolvedValue([]);
+  (api.getCalendarConfig as any).mockResolvedValue({
+    primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
+    secondary: null, confirmed: false, stale_after_days: 30 });
+  (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
+  (api.getCalendarProviders as any).mockResolvedValue({ providers: [
+    { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" }] });
   (api.listModules as any).mockResolvedValue([]);
   (api.setWorldModule as any).mockResolvedValue({ ok: true });
   (api.getCampaignModule as any).mockResolvedValue({ setting: "", resolved: null, source: null });

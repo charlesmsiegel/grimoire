@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { WorldOverview } from "./WorldOverview";
 
 vi.mock("../api/client", () => ({
@@ -6,6 +6,7 @@ vi.mock("../api/client", () => ({
     getWorld: vi.fn(), listGreetings: vi.fn(), readGreeting: vi.fn(),
     listCharacters: vi.fn(), listUntaggedImages: vi.fn(),
     listModules: vi.fn(), setWorldModule: vi.fn(),
+    getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -24,6 +25,12 @@ beforeEach(() => {
   (api.listUntaggedImages as any).mockResolvedValue([]);
   (api.listModules as any).mockResolvedValue([]);
   (api.setWorldModule as any).mockResolvedValue({ ok: true });
+  (api.getCalendarConfig as any).mockResolvedValue({
+    primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
+    secondary: null, confirmed: false, stale_after_days: 30 });
+  (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
+  (api.getCalendarProviders as any).mockResolvedValue({ providers: [
+    { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" }] });
 });
 
 test("renders count tiles that navigate to their tab", async () => {
@@ -42,4 +49,47 @@ test("derives the setup checklist", async () => {
   const missing = screen.getByText(/1 character missing a tagline/i);
   fireEvent.click(missing);                       // next-action: jump to Characters
   expect(nav).toHaveBeenCalledWith("characters");
+});
+
+// ---- the calendar's confirmed flag (#223) ----
+
+test("an unconfirmed world calendar is an open checklist item", async () => {
+  render(<WorldOverview wid="w" onNavigate={vi.fn()} />);
+  expect(await screen.findByText(/○ Calendar confirmed/)).toBeInTheDocument();
+});
+
+test("a confirmed world calendar closes it", async () => {
+  (api.getCalendarConfig as any).mockResolvedValue({
+    primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
+    secondary: null, confirmed: true, stale_after_days: 30 });
+  render(<WorldOverview wid="w" onNavigate={vi.fn()} />);
+  expect(await screen.findByText(/✓ Calendar confirmed/)).toBeInTheDocument();
+});
+
+test("the calendar row is a statement, not a next-action — the editor is on this page", async () => {
+  // Every other row jumps to the tab that fixes it. This one has nowhere to
+  // jump: the world's calendar editor is a section of the Overview itself, so
+  // a button here would be a click that did nothing.
+  render(<WorldOverview wid="w" onNavigate={vi.fn()} />);
+  const row = await screen.findByText(/○ Calendar confirmed/);
+  expect(row.closest("button")).toBeNull();
+  expect(await screen.findByLabelText("Calendar")).toBeInTheDocument();
+});
+
+test("confirming the calendar closes the checklist item without a reload", async () => {
+  render(<WorldOverview wid="w" onNavigate={vi.fn()} />);
+  fireEvent.click(await screen.findByLabelText(/confirmed/i));
+  // Scoped: Mechanics has a Save of its own on this same page.
+  const panel = document.querySelector(".calendar-config") as HTMLElement;
+  fireEvent.click(within(panel).getByRole("button", { name: /save/i }));
+  expect(await screen.findByText(/✓ Calendar confirmed/)).toBeInTheDocument();
+});
+
+test("a world whose calendar cannot be read shows no calendar row at all", async () => {
+  // Unknown is not "unconfirmed": a failed read must not put a chore on the
+  // list that confirming would never clear.
+  (api.getCalendarConfig as any).mockRejectedValue(new Error("nope"));
+  render(<WorldOverview wid="w" onNavigate={vi.fn()} />);
+  expect(await screen.findByText(/plot map has connections/i)).toBeInTheDocument();
+  expect(screen.queryByText(/Calendar confirmed/)).toBeNull();
 });

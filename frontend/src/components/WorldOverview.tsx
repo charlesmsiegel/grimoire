@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
+import { CalendarConfig } from "./CalendarConfig";
 import WorldMechanics from "./WorldMechanics";
 
 const TILES = [
@@ -13,18 +14,28 @@ const TILES = [
   { key: "greetings", label: "Greetings", tab: "greetings" },
 ] as const;
 
-type Check = { label: string; ok: boolean; tab: string };
+/** One checklist row. `tab` is the next action — the tab that fixes it — and is
+ *  absent for a row whose fix is a section of the Overview itself, which renders
+ *  as a statement rather than a button that would click through to where you
+ *  already are. */
+type Check = { label: string; ok: boolean; tab?: string };
 
 export function WorldOverview({
   wid, onNavigate, worldMid = "", onPickMid = () => {},
 }: { wid: string; onNavigate: (tab: string) => void; worldMid?: string; onPickMid?: (mid: string) => void }) {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [checks, setChecks] = useState<Check[]>([]);
+  // Held apart from `checks` and refreshed on its own: the rest of the list
+  // costs a read of every greeting, and a save on the calendar section below
+  // must not pay for that just to tick one box. `null` is "not read yet, or the
+  // read failed" — genuinely unknown, and an unknown flag is not a chore, so it
+  // contributes no row at all.
+  const [confirmed, setConfirmed] = useState<boolean | null>(null);
+  const scope = useMemo(() => ({ kind: "world" as const, id: wid }), [wid]);
 
   useEffect(() => {
     let live = true;
     (async () => {
-      const scope = { kind: "world" as const, id: wid };
       const [w, greetings, chars, untagged] = await Promise.all([
         api.getWorld(wid), api.listGreetings(scope), api.listCharacters(scope), api.listUntaggedImages(wid),
       ]);
@@ -48,7 +59,19 @@ export function WorldOverview({
       ]);
     })();
     return () => { live = false; };
-  }, [wid]);
+  }, [wid, scope]);
+
+  useEffect(() => {
+    let live = true;
+    api.getCalendarConfig(scope)
+      .then((c) => { if (live) setConfirmed(c.confirmed); })
+      .catch(() => { if (live) setConfirmed(null); });
+    return () => { live = false; };
+  }, [scope]);
+
+  const rows: Check[] = confirmed === null
+    ? checks
+    : [...checks, { label: "Calendar confirmed", ok: confirmed }];
 
   return (
     <div className="world-overview">
@@ -63,14 +86,28 @@ export function WorldOverview({
       <div className="side-section">
         <h4>Setup checklist</h4>
         <ul className="overview-checklist">
-          {checks.map((c) => (
+          {rows.map((c) => (
             <li key={c.label}>
-              <button className={"check-row" + (c.ok ? " ok" : "")} onClick={() => onNavigate(c.tab)}>
-                {c.ok ? "✓" : "○"} {c.label}
-              </button>
+              {c.tab ? (
+                <button className={"check-row" + (c.ok ? " ok" : "")} onClick={() => onNavigate(c.tab!)}>
+                  {c.ok ? "✓" : "○"} {c.label}
+                </button>
+              ) : (
+                <span className={"check-row static" + (c.ok ? " ok" : "")}>
+                  {c.ok ? "✓" : "○"} {c.label}
+                </span>
+              )}
             </li>
           ))}
         </ul>
+      </div>
+      {/* The world's two defaults, side by side: what campaigns started from it
+          reckon time by, and what they roll dice with. Both are copied into a
+          campaign at creation, which is why they live on the world's setup
+          screen rather than in any one campaign. */}
+      <div className="side-section">
+        <h4>Calendar</h4>
+        <CalendarConfig scope={scope} onSaved={(c) => setConfirmed(c.confirmed)} />
       </div>
       <WorldMechanics wid={wid} worldMid={worldMid} onPickMid={onPickMid} />
     </div>

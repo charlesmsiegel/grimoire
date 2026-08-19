@@ -10,7 +10,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   (api.getCalendarConfig as any).mockResolvedValue({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
-    secondary: null, stale_after_days: 30 });
+    secondary: null, confirmed: false, stale_after_days: 30 });
   (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
   (api.getCalendarProviders as any).mockResolvedValue({ providers: [
     { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" },
@@ -19,46 +19,81 @@ beforeEach(() => {
 });
 
 test("edits the region and saves", async () => {
-  render(<CalendarConfig cid="run" />);
+  render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
   const sel = await screen.findByLabelText("Holidays region");
   fireEvent.change(sel, { target: { value: "GB" } });
   fireEvent.click(screen.getByRole("button", { name: /save/i }));
-  await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith("run",
+  await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith({ kind: "campaign", id: "run" },
     expect.objectContaining({ primary: expect.objectContaining({ region: "GB" }) })));
 });
 
 test("selecting hebrew shows Observance and saves the Israel setting", async () => {
-  render(<CalendarConfig cid="run" />);
+  render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
   const provider = await screen.findByLabelText("Calendar");
   fireEvent.change(provider, { target: { value: "hebrew" } });
   expect(screen.queryByLabelText("Holidays region")).toBeNull();
   const observance = screen.getByLabelText("Observance");
   fireEvent.change(observance, { target: { value: "IL" } });
   fireEvent.click(screen.getByRole("button", { name: /save/i }));
-  await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith("run",
+  await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith({ kind: "campaign", id: "run" },
     expect.objectContaining({ primary: expect.objectContaining({ provider: "hebrew", region: "IL" }) })));
 });
 
 test("selecting a custom (user-authored) calendar hides both region and observance and saves", async () => {
-  render(<CalendarConfig cid="run" />);
+  render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
   const provider = await screen.findByLabelText("Calendar");
   expect(screen.getByRole("option", { name: "My Custom Calendar" })).toBeInTheDocument();
   fireEvent.change(provider, { target: { value: "my-custom-calendar" } });
   expect(screen.queryByLabelText("Holidays region")).toBeNull();
   expect(screen.queryByLabelText("Observance")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: /save/i }));
-  await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith("run",
+  await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith({ kind: "campaign", id: "run" },
     expect.objectContaining({ primary: expect.objectContaining({ provider: "my-custom-calendar" }) })));
 });
 
 test("edits how long a record may go untouched before it is stale", async () => {
   // The campaign's one aging knob (#103), saved with the rest of its time
   // config — a client that dropped the field would reset it on every save.
-  render(<CalendarConfig cid="run" />);
+  render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
   const days = await screen.findByLabelText("Stale after days");
   expect(days).toHaveValue(30);
   fireEvent.change(days, { target: { value: "7" } });
   fireEvent.click(screen.getByRole("button", { name: /save/i }));
-  await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith("run",
+  await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith({ kind: "campaign", id: "run" },
     expect.objectContaining({ stale_after_days: 7 })));
+});
+
+// ---- world scope (#223) ----
+
+test("a world's calendar is read and saved against the world, not a campaign", async () => {
+  render(<CalendarConfig scope={{ kind: "world", id: "realm" }} />);
+  await screen.findByLabelText("Calendar");
+  expect(api.getCalendarConfig).toHaveBeenCalledWith({ kind: "world", id: "realm" });
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith(
+    { kind: "world", id: "realm" }, expect.objectContaining({ confirmed: false })));
+});
+
+test("confirming a world's calendar is what campaigns created from it inherit", async () => {
+  // World-side there is no scene inspector to answer, so the flag needs a
+  // control of its own — and it is the whole point of the world's copy: it is
+  // what `create_campaign` writes into every campaign started from this world.
+  render(<CalendarConfig scope={{ kind: "world", id: "realm" }} />);
+  fireEvent.click(await screen.findByLabelText(/confirmed/i));
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith(
+    { kind: "world", id: "realm" }, expect.objectContaining({ confirmed: true })));
+});
+
+test("a campaign's calendar has no confirmed control — the scene inspector owns that", async () => {
+  render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
+  await screen.findByLabelText("Calendar");
+  expect(screen.queryByLabelText(/confirmed/i)).toBeNull();
+});
+
+test("a save tells its owner, so the page around it can re-read", async () => {
+  const onSaved = vi.fn();
+  render(<CalendarConfig scope={{ kind: "world", id: "realm" }} onSaved={onSaved} />);
+  fireEvent.click(await screen.findByRole("button", { name: /save/i }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalled());
 });
