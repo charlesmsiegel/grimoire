@@ -574,11 +574,24 @@ def test_campaign_character_image_writes_gate_on_the_inherited_character(client)
     assert (r.status_code, r.json()["detail"]) == (404, "character not found")
     assert not (croot / "characters" / "nobody").exists()
 
+    # A character the campaign INVENTED (absorb's emergent cast, #98) lives only
+    # in the campaign, so it resolves the other way -- croot is authoritative
+    # and the world knows nothing about it. Uploading its portrait right after
+    # the scene names it is the flow a gate that resolved wrongly would break.
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S1"}).json()["id"]
+    made = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast/emergent",
+                       json={"name": "Winifred", "role": "npc"}).json()
+    mine = f"/api/campaigns/{cid}/characters/{made['character']}/versions/{made['version']}/images"
+    assert client.put(f"{mine}/avatar",
+                      files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}
+                      ).status_code == 200
+    assert client.put(f"{mine}/avatar/focus", json={"focus": 25}).status_code == 200
+
     # A character this campaign has DELETED resolves to the campaign root, where
     # there is no character.md -- so the gate refuses it for the same reason it
     # refuses a typo, and art cannot be filed against a record the campaign disowned.
     store.overlay.add_deleted(cid, f"characters/{chid}")
-    assert client.get(f"/api/campaigns/{cid}/characters").json() == []
+    assert chid not in {c["id"] for c in client.get(f"/api/campaigns/{cid}/characters").json()}
     r = client.put(f"{base}/avatar",
                    files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
     assert (r.status_code, r.json()["detail"]) == (404, "character not found")
@@ -655,7 +668,10 @@ def _actor_image_write_routes(client):
                 out.append((frozenset(r.methods), r.path))
         return out
 
-    surface = re.compile(r"^/api/(worlds|campaigns)/\{\w+\}/(characters|pcs)/\{\w+\}"
+    # `\w+` rather than `characters|pcs`: a third actor kind added later is
+    # caught by this test rather than silently skipped by it. Nothing else has
+    # a `/versions/` segment, so the pattern stays exact.
+    surface = re.compile(r"^/api/(worlds|campaigns)/\{\w+\}/(\w+)/\{\w+\}"
                          r"/versions/\{\w+\}/images")
     return sorted({(m, path) for methods, path in flatten(client.app.routes)
                    for m in methods & {"PUT", "POST", "DELETE"}
@@ -764,6 +780,8 @@ def test_every_actor_image_write_route_refuses_an_unknown_actor_or_version(clien
     real = {"characters": chid, "pcs": pid}
 
     routes = _actor_image_write_routes(client)
+    # The kinds this test knows how to drive. A new one fails here rather than
+    # in the loop below, where the failure would read as a broken route.
     seen = Counter((path.split("/")[2], path.split("/")[4]) for _m, path in routes)
     assert set(seen) == {("worlds", "characters"), ("worlds", "pcs"),
                          ("campaigns", "characters"), ("campaigns", "pcs")}, seen
