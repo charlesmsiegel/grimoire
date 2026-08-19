@@ -79,9 +79,16 @@ def _path(cid: str) -> Path:
 
 
 def read(cid: str) -> dict:
-    """The stored session, or `{}`. Tolerant of a garbled file for the reason
-    `changes.read` is — except that here the loss is real, so the route says so
-    rather than pretending there was never a replay."""
+    """The stored session, or `{}`.
+
+    Tolerant of a garbled file, and that tolerance costs more here than it does
+    anywhere else in the store: this file holds the only copy of the posts the
+    replay's cut removed, so a `{}` from an unparseable one reads as "there was
+    never a replay" and those posts are unrecoverable through this module.
+    Raising instead would not bring them back either — it would only leave every
+    later request 500ing — and the file itself is untouched on disk for anyone
+    who wants to repair it by hand, which is the recovery that exists.
+    """
     p = _path(cid)
     if not p.exists():
         return {}
@@ -288,7 +295,10 @@ def stage(cid: str) -> dict:
             for m in pending[0]["messages"]:
                 scenes_write.append_message(cid, sid, m["role"], m["content"],
                                             speaker=m["speaker"] or None)
-            rec["staged"] = 1
+            # The COUNT, not a flag. `accept` has to tell a replayed reply from
+            # the originals staged in front of it, and both raise the
+            # transcript's length -- so the count is what its guard subtracts.
+            rec["staged"] = len(pending[0]["messages"])
             _write(cid, rec)
         return rec
 
@@ -309,13 +319,19 @@ def accept(cid: str) -> dict | None:
         sid = rec.get("scene", "")
         landed = len(scenes_read.read_scene(cid, sid)["messages"])
         mark = int(rec.get("mark", 0))
-        if landed <= mark:
+        staged = max(int(rec.get("staged", 0)), 0)
+        # `mark + staged`, not `mark`. The player's own posts are put back by
+        # `stage` and raise the transcript's length on their own, so a guard
+        # against `mark` would read them as a replayed reply — and accepting
+        # then steps past an original model turn with nothing in its place,
+        # which is a deletion wearing the word "accept".
+        if landed <= mark + staged:
             raise ReplayError("nothing has been replayed yet to accept")
-        staged = 1 if rec.get("staged") else 0
         # The verbatim step (if one was staged) and the generation it led to are
         # accepted together: they are one step of the walk to the reviewer, who
         # never saw the player's own post as a decision.
-        step = staged + (1 if len(pending) > staged else 0)
+        taken = 1 if staged else 0
+        step = taken + (1 if len(pending) > taken else 0)
         rec["done"] = int(rec.get("done", 0)) + step
         rec["staged"] = 0
         rec["mark"] = landed
@@ -361,18 +377,6 @@ def cancel(cid: str, restore: bool = True) -> dict:
         _clear(cid)
         return {"scene": sid, "restored": restored, "dropped": 0 if restore else
                 sum(len(s["messages"]) for s in _pending(rec))}
-
-
-def drop_scene(cid: str, sid: str) -> None:
-    """Forget a session belonging to a scene that is gone.
-
-    Deliberately not called from `scenes.delete_scene`: the backlog is the only
-    copy of the posts it holds, so discarding it is the player's decision (the
-    route offers it), not a consequence of deleting the scene it came from.
-    """
-    with locks.campaign_lock(cid):
-        if read(cid).get("scene") == sid:
-            _clear(cid)
 
 
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:

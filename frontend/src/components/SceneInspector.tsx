@@ -38,6 +38,7 @@ type PinKind = typeof PIN_KINDS[number];
 const TASK_LABELS: Record<PromptEntry["task"], string> = {
   chat: "Send", director: "Director", retry: "Retry",
   regenerate: "Regenerate", continuation: "Roll result", opener: "Opener",
+  replay: "Replay",
 };
 
 /** The captured timestamp is UTC (`…Z`, stamped by the store); show it local. */

@@ -268,7 +268,9 @@ def test_a_session_whose_scene_is_gone_says_so_rather_than_vanishing(cid, sid):
     replay.begin(cid, sid, 1)
     scenes.delete_scene(cid, sid)
     assert replay.state(cid)["gone"] is True
-    replay.drop_scene(cid, sid)
+    # Discarding it is the player's decision, and it goes through the same call
+    # the panel's Stop does -- there is nowhere to restore those posts TO.
+    replay.cancel(cid, restore=False)
     assert replay.state(cid) is None
 
 
@@ -286,3 +288,19 @@ def test_consecutive_generations_stay_separate_steps(cid, sid):
     assert [s["kind"] for s in session["steps"]] == ["generation", "generation"]
     replay.cancel(cid)
     assert scenes_turns.get_turn_sizes(cid, sid) == [1, 1, 1]
+
+
+def test_staged_player_posts_are_not_mistaken_for_a_replayed_reply(cid, sid):
+    """`stage` puts the player's own posts back, which lengthens the transcript
+    on its own. Accepting on the strength of that alone would step past an
+    original model turn with nothing in its place."""
+    replay.begin(cid, sid, 1)
+    scenes.append_reply(cid, sid, [{"speaker": None, "content": "fresh one"}])
+    replay.accept(cid)
+    replay.stage(cid)                       # re-posts "player two", nothing more
+    with pytest.raises(replay.ReplayError):
+        replay.accept(cid)
+    # ... and the original second reply is still on file, unaccepted.
+    assert replay.state(cid)["turns_left"] == 1
+    replay.cancel(cid)
+    assert _contents(cid, sid) == ["player one", "fresh one", "player two", "reply two"]
