@@ -1,0 +1,1108 @@
+/** The API's data model: every payload shape the backend sends or takes, plus
+ *  the handful of constants and pure helpers that describe them.
+ *
+ *  Split out of `client.ts`, which had grown to 2100 lines by holding both the
+ *  types and the calls -- two groups of exports that never reference each
+ *  other, which is exactly the seam the code-health report named. `client.ts`
+ *  re-exports everything here, so `import { api, type Card } from
+ *  "../api/client"` keeps working and no caller had to change.
+ *
+ *  Nothing in this module may import from `client.ts`: the types describe the
+ *  wire format and know nothing about how a request is made.
+ */
+import type { Model } from "./models";
+import type { RollProposalPayload } from "./stream";
+
+export type LLMConnectionKind = "openrouter" | "claude" | "openai_compatible";
+export type LLMConnection = {
+  id: string; kind: LLMConnectionKind; name: string;
+  base_url: string; model: string; post_process: "none" | "strict";
+  key_set: boolean; rev: string;
+};
+export type LLMConnectionDetail = LLMConnection & { models: Model[]; fetched_at: string };
+export type LLMConnectionDraft = {
+  kind?: LLMConnectionKind; name?: string; base_url?: string; api_key?: string;
+  model?: string; post_process?: "none" | "strict";
+};
+export type ModelsRefreshResult = { models: Model[]; fetched_at: string; rev: string };
+export type Config = {
+  theme: string; system_prompt: string;
+  quote_color: string; user_label: string; assistant_label: string;
+  active_connection_id: string;
+  active_connection: { id: string; kind: LLMConnectionKind; name: string; model: string } | null;
+  ready: boolean;
+  /** Seconds of silence before an LLM call is abandoned; "0" disables. */
+  llm_timeout: string;
+  /** Seconds one absorb's whole LLM sequence may take; "0" disables. */
+  absorb_budget: string;
+  /** Seconds one non-streaming LLM call may take in total; "0" disables. */
+  llm_call_budget: string;
+  /** Re-attempts a transiently-failed generation gets before its connection is
+   *  given up on (#144); "0" is the old one-attempt behaviour. */
+  llm_retries: string;
+  /** Connection a generation falls back to once the active one is exhausted,
+   *  tried once; "" = no fallback. */
+  fallback_connection_id: string;
+  context_budget: string;
+  archive_depth: string;
+  /** "on" once the setup wizard has been finished or dismissed (#194). */
+  setup_done: string;
+  /** Server's verdict on whether to show the setup wizard: the flag is unset
+   *  AND the store holds no worlds and no campaigns. Derived rather than left
+   *  to the client so a boot needs one request, not three. */
+  first_run: boolean;
+  /** The store this config describes, so a client can tell that a decision it
+   *  made about `first_run` belongs to a library it is no longer looking at. */
+  data_dir: string;
+  prompt_log_depth: string;
+  /** Posts of transcript tail the transient-state ledger is read over; "0" disables it. */
+  turnstate_depth: string;
+  /** Consecutive recorded values that promote a transient field to character state. */
+  promote_streak: string;
+  /** Posts between live rolling-summary refreshes; "0" turns the automatic
+   *  refresh off, leaving only the inspector's own Refresh button. */
+  rolling_summary_every: string;
+  /** Characters the off-scene cast's "known to exist" tier may name; "0" = no
+   *  ceiling. Over it, the ones the in-scene cast mentions are kept first. */
+  offscene_known_limit: string;
+  /** Semantic recall: the openai_compatible connection serving /embeddings, "" = off. */
+  embeddings_connection_id: string;
+  embeddings_model: string;
+  /** Entries a similarity pass may add on top of the keyword ones; "0" = off. */
+  semantic_recall_depth: string;
+  /** Cosine floor a recalled entry must clear. */
+  semantic_recall_threshold: string;
+  /** "on" applies the stored prompt layout; "off" (the default) renders the
+   *  catalog and LEAVES the layout on disk, so it can be A/B'd. */
+  prompt_layout_enabled: string;
+  /** "on" renders the active-speaker section in group scenes; "off" default. */
+  speaker_turn_taking: string;
+  /** "on" once automatic backups are enabled (#32); "off" on every install
+   *  until someone turns them on. */
+  backup_enabled: string;
+  /** Hours between automatic backups. */
+  backup_interval_hours: string;
+  /** Archives kept by the retention sweep; "0" keeps every one. */
+  backup_keep: string;
+  /** Where archives are written; "" means `<data dir>/backups`. */
+  backup_dir: string;
+};
+/**
+ * The subset of Config the Configuration page writes — the mirror of the
+ * backend's `ConfigUpdate`. Named rather than inlined at each call site: it
+ * was spelled out three times, and the copies drifted the moment a field was
+ * added.
+ */
+export type ConfigUpdate = Partial<Pick<Config,
+  "theme" | "system_prompt" | "quote_color" | "user_label" | "assistant_label" |
+  "active_connection_id" | "llm_timeout" | "absorb_budget" | "llm_call_budget" |
+  "llm_retries" | "fallback_connection_id" |
+  "context_budget" | "archive_depth" | "setup_done" | "prompt_log_depth" |
+  "turnstate_depth" | "promote_streak" | "rolling_summary_every" |
+  "offscene_known_limit" |
+  "embeddings_connection_id" | "embeddings_model" |
+  "semantic_recall_depth" | "semantic_recall_threshold" |
+  "prompt_layout_enabled" | "speaker_turn_taking" |
+  "backup_enabled" | "backup_interval_hours" | "backup_keep" | "backup_dir">>;
+/** One archive written by `store/backups.py`. */
+export type BackupEntry = {
+  name: string;
+  /** Bytes on disk. */
+  size: number;
+  /** When it was taken, read from its own filename. */
+  created: string;
+};
+/** The archives, and the directory they live in — which is a setting, so the
+ *  answer to "why is this list empty" is often "you moved it". */
+export type BackupList = { dir: string; backups: BackupEntry[] };
+/** A `POST /api/backups`: the refreshed listing, plus what that call did.
+ *  `retention_error` is set when the archive was written but the sweep that
+ *  follows it could not run — a success with a problem attached, which is a
+ *  third outcome the two-state ok/failed shape could not say. */
+export type BackupRun = BackupList & {
+  created: string;
+  swept: string[];
+  retention_error: string | null;
+};
+export type DataDirInfo = {
+  data_dir: string;
+  default: string;
+  is_default: boolean;
+  source: "env" | "custom" | "default";
+  exists: boolean;
+};
+/** A file a sync client left behind when two devices wrote the same record
+ *  (#35). `path` is relative to the store root, slash-separated. */
+export type StoreConflict = {
+  path: string; name: string; tool: string;
+  kind: "file" | "directory";
+  /** null for a directory — a conflicted folder is reported, not measured. */
+  size: number | null;
+  modified: string;
+};
+export type StoreConflicts = { conflicts: StoreConflict[]; truncated: boolean };
+export type WorldMeta = {
+  id: string;
+  name: string;
+  created: string;
+  updated: string;
+  counts: Record<string, number>;
+  module?: string;
+};
+export type CampaignMeta = {
+  id: string;
+  name: string;
+  world: string;
+  world_name?: string;
+  created: string;
+  updated: string;
+  scenes: number;
+  last_scene: string;
+  /** The opening paragraph of campaign.md's body — the pitch the campaign was
+   *  started from, shown as each card's blurb. "" when the body is empty. */
+  blurb?: string;
+  /** Title of the newest scene carrying an absorb mark: how far the chronicle,
+   *  the ledger and the dossiers are caught up to. Deliberately not derivable
+   *  from `scenes` — playing a scene ahead of the absorb is the normal state
+   *  of a campaign in progress. "" when nothing has been absorbed yet. */
+  absorbed_through?: string;
+  /** Whole-campaign high-water mark: the later of campaign.md's `updated` and
+   *  its newest scene's. `updated` alone misses play entirely, so anything
+   *  ranking by "recently worked on" wants this. Only the list endpoint
+   *  computes it -- GET /campaigns/{cid} returns the bare meta. */
+  activity?: string;
+  module?: string;
+  /** Cache-busting token for the campaign's cover image, "" when it has none.
+   *  A token rather than a boolean: it also makes the URL change when the
+   *  bytes do, so a replaced cover cannot keep rendering from cache. */
+  cover?: string;
+};
+/** `done` is the scene's absorb mark: End Scene run to completion and its
+ *  changes accepted, written into the scene's own frontmatter by
+ *  `scenes.mark_absorbed`. It is what the rail marks and what the composer
+ *  hides itself for. */
+export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string; date: string; pcless?: boolean; done?: boolean };
+export type Message = { role: "user" | "assistant"; content: string; speaker?: string };
+export type Scene = { meta: { id: string; title: string; response_preset?: string }; messages: Message[] };
+// One stored variant of the generation a reroll replaces. `posts` is how many
+// transcript posts it becomes (one reply can split per speaker), `preview` is
+// clipped server-side, and `guidance` is the reroll hint that produced it.
+// `id` is derived from the variant's content, not its position: retention drops
+// the oldest take when a full set grows, and every index below it shifts.
+export type SceneAlternate = {
+  id: string; created: string; guidance: string; posts: number; preview: string;
+};
+export type SceneAlternates = { active: number | null; alternates: SceneAlternate[] };
+// A windowed read (`getScene` with a `limit`) carries the tail of the
+// transcript plus the cursor to walk backwards from. `offset` is the absolute
+// index of `messages[0]` — the index `editMessage` takes — so a client holding
+// one page addresses a post exactly as one holding the whole scene does. The
+// fields are absent from an unwindowed read, which returns the scene whole.
+// `has_user_message` covers the WHOLE transcript, not the window: a tail page
+// cannot tell on its own whether the run it holds was answering a player.
+export type ScenePage = Scene & {
+  offset?: number; total?: number; has_older?: boolean; has_user_message?: boolean;
+};
+
+// entities (locations | lore)
+export type EntityKind = "locations" | "lore" | "items" | "groups" | "creatures";
+export type EntityScope = { kind: "world" | "campaign"; id: string };
+
+// Mirrors backend/src/grimoire/store/entity_schema.py — keep in sync.
+export const ENTITY_FIELDS: Record<EntityKind, { key: string; label: string }[]> = {
+  locations: [
+    { key: "climate", label: "Climate" },
+    { key: "persistence", label: "Weather persistence" },
+    { key: "weather_zone", label: "Weather zone" },
+  ],
+  lore: [],
+  items: [{ key: "item_type", label: "Type" }, { key: "rarity", label: "Rarity" }],
+  groups: [{ key: "group_type", label: "Type" }],
+  creatures: [{ key: "creature_type", label: "Type" }, { key: "threat", label: "Threat" }],
+};
+
+// Mirrors store.entities.SECRECY_LEVELS. `owners` says what puts an entry in
+// the prompt; `secrecy` says how the prompt may use it once there — "secret"
+// renders under a "don't let uninvolved characters reveal this" heading,
+// "gm-only" never reaches the model at all. Absent == "public".
+export const SECRECY_LEVELS = ["public", "secret", "gm-only"] as const;
+export type Secrecy = (typeof SECRECY_LEVELS)[number];
+export const SECRECY_LABELS: Record<Secrecy, string> = {
+  public: "Public", secret: "Secret", "gm-only": "GM-only",
+};
+
+// `tokens` is what this record's body costs when it reaches a prompt, counted
+// server-side with the same tokenizer as the context inspector (#51). Optional
+// because it is a measurement rather than stored data — a payload written
+// before it existed simply has none, and the badge stays off. Measured
+// regardless of `secrecy`: it is the cost of the text, and a gm-only body
+// costs nothing because it is never sent, not because it is short.
+export type EntitySummary = { id: string; name: string; keys?: string; owners?: string;
+  secrecy?: string; has_image?: boolean; image_v?: string | null; tokens?: number } & Record<string, unknown>;
+export type EntityDetail = {
+  meta: { id: string; name: string; keys?: string; owners?: string; secrecy?: string;
+    sd_prompt?: string } & Record<string, unknown>;
+  body: string;
+  tokens?: number;
+  /** Content hash of the record as read. Echo it back on save and the write is
+   *  refused with 409 `stale_record` if the file moved underneath (#35). */
+  rev: string;
+};
+
+// characters (V3 cards)
+export type CardData = {
+  name: string;
+  description?: string;
+  personality?: string;
+  scenario?: string;
+  first_mes?: string;
+  mes_example?: string;
+  system_prompt?: string;
+  post_history_instructions?: string;
+  alternate_greetings?: string[];
+  creator?: string;
+  creator_notes?: string;
+  tags?: string[];
+  character_book?: { entries?: unknown[] };
+  extensions?: { sd_prompt?: string; [k: string]: unknown };
+  [k: string]: unknown;
+};
+export type Card = { spec: string; spec_version: string; data: CardData };
+/** The card containers the backend reads and writes (`_EXPORT_MEDIA`). */
+export type CardFormat = "json" | "png" | "charx";
+export type VersionRef = { id: string; name: string };
+export type CharacterSummary = {
+  id: string; name: string; default_version: string; has_avatar?: boolean;
+  avatar_focus?: number | null; gallery_count?: number; localized_count?: number;
+  greeting_count?: number; tagline?: string; versions: VersionRef[];
+};
+export type CharacterDetail = {
+  meta: { id: string; name: string; default_version: string; birthdate?: string };
+  versions: { id: string; name: string; card: Card; images?: string[];
+              avatar_focus?: number | null; chub_source?: string; is_chub?: boolean }[];
+};
+export type ChubImportResult = {
+  character: string;
+  version: string;
+  updated: boolean;
+  gallery: { attempted: number; stored: number };
+  lore: { lorebooks_found: number; created: { kind: string; id: string }[] };
+};
+export type ChubUnlinkedVersion = { character: string; character_name: string; version: string; version_name: string };
+
+// PCs
+export type Persona = { name: string; pronouns: string; summary: string; description: string; birthdate?: string };
+export type PCSummary = {
+  id: string; name: string; tags: string[]; default_version: string; versions: VersionRef[];
+  // Same derived image fields a CharacterSummary carries, bar `localized_count`
+  // — only a character card's text is localized, so a PC has no `embed-` images.
+  has_avatar?: boolean; avatar_focus?: number | null; gallery_count?: number;
+};
+export type PCDetail = {
+  meta: { id: string; name: string; tags: string[]; default_version: string };
+  versions: { id: string; name: string; persona: Persona; images?: string[];
+              avatar_focus?: number | null }[];
+};
+
+// campaign sync: what the world has that a campaign has not taken yet (#6, #8).
+// A ref is `{kind, id}` and the shapes on either side of it differ by kind, so
+// `IncomingBlob` is the union flattened into optional fields rather than a
+// discriminated one: the backend tags nothing (`store/sync.py`), and which
+// field arrived IS the discriminant.
+export type IncomingRef = { kind: string; id: string };
+/** `new` has no campaign copy to compare against; `update` means the campaign
+ *  copy still matches the base the world moved on from, so taking the world's
+ *  version loses nothing; `conflict` means both sides changed. */
+export type IncomingStatus = "new" | "update" | "conflict";
+/** One side of an incoming change. `card` for a locked character version,
+ *  `persona` for a locked PC version, `body` for everything else — an entity, a
+ *  plot map, or the version list of an actor with no locked version. */
+export type IncomingBlob = {
+  name: string; version?: string; body?: string; card?: Card; persona?: Persona;
+};
+export type IncomingItem = {
+  ref: IncomingRef; status: IncomingStatus; world: IncomingBlob;
+  /** Absent when the campaign has no copy of its own to weigh against. */
+  mine?: IncomingBlob;
+};
+/** One campaign descended from a world, and how much of that world it has not
+ *  taken yet — the world-side half of the same question (#8). */
+export type WorldCampaignPending = {
+  id: string; name: string;
+  pending: { new: number; update: number; conflict: number };
+};
+
+// greetings & plot maps
+export type GreetingMark = "played" | "completed" | "skipped" | null;
+export type Greeting = {
+  id: string;
+  name: string;
+  character: string;
+  version: string;
+  present: string[];
+  requires_tags: string[];
+  predecessor_join: "all" | "any";
+  pcless?: boolean;
+  mark?: GreetingMark;   // campaign lists carry it
+};
+export type Edges = { leads_to: string[]; excludes: string[] };
+export type GreetingDetail = { meta: Greeting; body: string; edges: Edges; predecessors: string[];
+  /** See EntityDetail.rev (#35). */
+  rev: string };
+export type GreetingDraft = {
+  name: string;
+  character: string;
+  version: string;
+  body?: string;
+  present?: string[];
+  requires_tags?: string[];
+  predecessor_join?: "all" | "any";
+  pcless?: boolean;
+};
+export type Style = { id: string; name: string; description: string; tags: string[]; built_in: boolean };
+export type StyleDetail = { meta: Style; body: string };
+export type StyleDraft = { name: string; description?: string; tags?: string[]; body?: string };
+
+// response presets & the response bundle (scoped preset + overrides + resolution)
+// The explicit "clear the inherited style" sentinel, mirroring
+// response_presets.STYLE_CLEAR byte for byte. "" is a different answer — "this
+// scope has no opinion, keep walking outward". The U+2063 prefix (invisible
+// separator, as in scenes.ROLL_SPEAKER) keeps it out of slugify's reach, so a
+// user style genuinely named "None" — id `none` — stays an ordinary style.
+// Defined here, not per-component, so the two pickers cannot drift apart.
+export const STYLE_CLEAR = "⁣none";
+export type ResponsePresetSummary = {
+  id: string; name: string; description?: string; built_in: boolean;
+  style_id?: string; length_preset?: string;
+  reply_words?: string; blocks?: string; paragraphs?: string;
+  speakers?: string; blocks_per_speaker?: string;
+  validity?: { valid: boolean; issues: string[] };
+};
+export type ResponsePresetDetail = { meta: ResponsePresetSummary; validity: { valid: boolean; issues: string[] } };
+export type ResponsePresetDraft = {
+  name: string; description?: string; style_id?: string; length_preset?: string;
+  knobs?: Record<string, number> | null;
+};
+export type LengthPreset = {
+  reply_words: number; blocks: number; paragraphs: number; speakers: number; blocks_per_speaker: number;
+};
+export type ResponsePresetUsageEntry = {
+  scope: "global" | "campaign" | "scene"; id: string; name: string;
+  before: Partial<ResponseEffective>; after: Partial<ResponseEffective>;
+};
+/** A scope the impact scan could not read. Rendering the affected list without
+ * these turns a partial answer into a confident "nothing else changes" — the
+ * one thing a preview shown before an irreversible delete must never do. */
+export type ResponsePresetUsageSkip = {
+  scope: "campaign" | "scene"; id: string; name: string; reason: string;
+};
+export type ResponsePresetUsage = {
+  affected: ResponsePresetUsageEntry[]; unevaluated?: ResponsePresetUsageSkip[];
+};
+export type ResponseFields = {
+  response_preset: string; style_id: string;
+  length_reply_words: string; length_blocks: string; length_paragraphs: string;
+  length_speakers: string; length_blocks_per_speaker: string;
+};
+export type ResponseEffective = {
+  style_id: string; reply_words: number; blocks: number; paragraphs: number;
+  speakers: number; blocks_per_speaker: number;
+};
+export type ResponseProvenance = Record<string, { scope: string; source?: string }>;
+// A one-shot, unpersisted per-turn override — the same scope-shaped dict
+// response_presets.resolve(turn=...) accepts server-side: a bare
+// {response_preset: id} or loose knob overrides.
+export type ResponseOverride = Partial<ResponseFields>;
+export type ResponseBundle = ResponseFields & { effective: ResponseEffective; provenance: ResponseProvenance };
+export type Availability = {
+  id: string; name: string; available: boolean; reasons: string[]; unlocked: boolean;
+  pcless?: boolean;
+  mark?: GreetingMark;
+};
+export type Appearance = { gid: string; greeting_name: string; name: string; url: string; thumb?: string };
+
+// cast
+export type Actor = { kind: "characters" | "pcs"; id: string; role: "player" | "npc"; name: string };
+/** What the newest turn's prose suggests about the cast (#97, #98). Every
+ *  entry is a candidate the reader confirms or dismisses; nothing here has
+ *  been applied. */
+export type CastChanges = {
+  enter: { kind: string; id: string; name: string; mentioned_by: string[] }[];
+  leave: { kind: string; id: string; name: string; quote: string }[];
+  unknown: { name: string; mentioned_by: string[] }[];
+};
+export type RosterEntry = {
+  kind: string; id: string; version: string; role: string; scenes: string[];
+};
+export type SceneLocationRef = { id: string; name: string };
+export type SceneLocation = { current: SceneLocationRef | null; visited: SceneLocationRef[] };
+export type SceneDatetimeCast = { kind: string; id: string; name: string; age: number | null; birthday_today: boolean };
+export type SceneDatetimeFacts = {
+  native: string; friendly: string; weekday: string; secondary_friendly: string | null;
+  holidays_today: string[]; upcoming: { name: string; in_days: number } | null; cast: SceneDatetimeCast[];
+};
+export type SceneDatetime = { current: SceneDatetimeFacts | null; history: string[]; suggested: string | null };
+export type CalendarBlock = {
+  provider: string; region: string;
+  custom_holidays: Array<{ name: string; month: number | string; day?: number; nth?: number; weekday?: number }>;
+  anchor: { native: string; gregorian: string } | null;
+};
+export type CalendarMonth = { key: string; name: string; days: number };
+export type CalendarScope = { kind: "campaign" | "world"; id: string };
+
+/** Split a native datetime on its trailing Thh:mm only — month tokens may contain T. */
+export function splitNativeDate(native: string): { date: string; time: string | null } {
+  const m = native.match(/T(\d{1,2}:\d{2})$/);
+  return m ? { date: native.slice(0, m.index), time: m[1] } : { date: native, time: null };
+}
+
+export type CalendarConfig = { primary: CalendarBlock; secondary: CalendarBlock | null; confirmed: boolean };
+
+// ---- the campaign clock (#100) ----
+/** One row of the clock's log: where time went, why, and when that was recorded. */
+export type ClockLogEntry = { from: string; to: string; reason: string; at: string };
+export type CampaignClock = { now: string; friendly: string; log: ClockLogEntry[] };
+/** What an advance crosses. Deterministic, so the preview and the advance that
+ *  follows it report the same thing. `truncated` means the span was too long to
+ *  itemize — `elapsed_days` is exact either way. */
+export type AdvanceDigest = {
+  from: string; to: string; from_friendly: string; to_friendly: string;
+  elapsed_days: number; backward: boolean; truncated: boolean;
+  holidays: { name: string; native: string; friendly: string; in_days: number }[];
+  birthdays: { name: string; age: number; native: string; friendly: string }[];
+  open_threads: { id: string; title: string; status: string; last_scene: string; latest_beat: string }[];
+};
+/** `to` skips to a date, `days` advances by a duration; `to` wins if both are sent. */
+export type AdvanceRequest = { to?: string; days?: number; reason?: string };
+
+// ---- weather (#45, #195) and climates (#40) ----
+export const WEATHER_AXES = ["condition", "temperature", "wind"] as const;
+export type WeatherAxis = (typeof WEATHER_AXES)[number];
+export type WeatherAxes = Record<WeatherAxis, string>;
+/** "procedural" means drawn, not authored — the HUD marks the other two. */
+export type WeatherSource = Record<WeatherAxis, "procedural" | "manual" | "extractor">;
+
+export type WeatherSpan = {
+  id: string; location?: string; from: string; to: string | null;
+  condition?: string; temperature?: string; wind?: string;
+  note?: string; source?: string; seq?: number; set_at?: string; suppress?: string[];
+};
+
+export type SceneWeather = {
+  weather: WeatherAxes | null;
+  source?: WeatherSource;
+  procedural?: WeatherAxes;
+  stack?: WeatherSpan[];
+  climate?: string;
+  season?: string;
+  location: string | null;
+  native: string | null;
+  /** The block ordinal. */
+  ordinal?: number;
+  /** Blocks from here to the end of the displayed date. Server-computed: the
+   *  ordinal alone cannot distinguish 01:00 (the previous date's night, with a
+   *  whole day ahead) from an ordinary 22:00 night. */
+  blocks_left_today?: number;
+  /** The active season's entries, per axis. Server-supplied: the client cannot
+   *  derive them without reimplementing the climate fallback chain and the
+   *  calendar's year-fraction arithmetic. */
+  tables?: Record<WeatherAxis, string[]>;
+};
+
+export type WeatherOverrideBody = {
+  location: string; start: string; end?: string | null;
+  condition?: string; temperature?: string; wind?: string;
+  note?: string; suppress?: string[]; clear?: boolean; blocks?: number | null;
+  /** Which moment `blocks` is counted from, when not `start`. */
+  blocks_from?: string;
+};
+
+export type WeatherRangeBody = {
+  location: string; start: string; end?: string | null; axes?: WeatherAxis[];
+  /** A block count instead of an `end`. Server-side so the client never has to
+   *  reimplement the calendar's month lengths. */
+  blocks?: number | null;
+};
+
+export type ClimateSummary = { id: string; name: string; builtin: boolean; custom: boolean };
+export type ClimateEntry = { name: string; weight: number; requires_temp?: string[] };
+export type ClimateSeason = {
+  name: string; from: number; to: number;
+  temperature: ClimateEntry[]; conditions: ClimateEntry[]; wind: ClimateEntry[];
+};
+export type Climate = { id: string; name: string; persistence: number; seasons: ClimateSeason[] };
+/** `dropped` sections were rendered but left out of the prompt by the budget
+ *  packer; they still carry their text so the inspector can show what was cut.
+ *  `trimmed` is how many history messages the packer dropped from the front —
+ *  0 on every section except Conversation history. */
+export type ContextSection = {
+  /** Stable section identity (#29). OPTIONAL because a prompt snapshot frozen
+   *  before ids existed does not carry one — those predate editable labels
+   *  too, so their labels are still unique and are a safe fallback key. */
+  id?: string;
+  label: string; text: string; tokens: number;
+  tier: "lock-in" | "spotlight" | "background" | "archive" | "recalled" | "history";
+  dropped: boolean; trimmed: number;
+  /** The section carries content the reader pinned, so the packer left it alone
+   *  whatever its tier (#129). Optional: snapshots frozen before pins existed
+   *  have no such field, and they are rendered by this same component. */
+  pinned?: boolean;
+};
+/** One row of the prompt layout editor. `label` is what the INSPECTOR calls the
+ *  section — never what the model reads, which each template emits itself.
+ *  `default_label` is the catalog's, shown as the input's placeholder. */
+export type PromptLayoutSection = {
+  id: string; label: string; default_label: string;
+  tier: string; enabled: boolean;
+};
+export type PromptLayout = { enabled: boolean; sections: PromptLayoutSection[] };
+/** `total_tokens` counts kept sections only — what was actually sent.
+ *  `budget_tokens` is 0 when no budget is configured (nothing is dropped). */
+export type SceneContext = {
+  model: string; total_tokens: number; dropped_tokens: number;
+  budget_tokens: number; sections: ContextSection[];
+};
+/** One user pin or exclude (#129) as the panel sees it: the rule, the target it
+ *  names resolved to something displayable, and how many posts it has left.
+ *  `remaining` is null for a standing rule; `missing` marks a rule whose target
+ *  the campaign no longer has — inert, but shown rather than hidden so it can
+ *  be cleared. */
+export type PinRule = {
+  ref: string; kind: string; id: string; name: string; missing: boolean;
+  mode: "pin" | "exclude"; scope: "scene" | "campaign"; sid: string;
+  ttl_posts: number; remaining: number | null; created: string;
+};
+/** One past turn's frozen prompt, as listed. The section text is not here —
+ *  it lives in the entry itself, which is large enough that shipping every
+ *  one of them would defeat the point of a list. */
+export type PromptEntry = {
+  id: string; scene: string; ts: string; model: string;
+  task: "chat" | "director" | "retry" | "regenerate" | "continuation" | "opener";
+  total_tokens: number; dropped_tokens: number; budget_tokens: number;
+};
+/** A frozen breakdown: the same shape `getSceneContext` returns, plus which
+ *  turn it was. Rendered by the same component, pointed at stored text. */
+export type PromptSnapshot = SceneContext & Omit<PromptEntry, "scene">;
+/** The live running summary of a scene still being played (#85).
+ *  `at` is how many posts it covers, `total` how many there are; `stale` means
+ *  the posts it covered have since been rerolled, edited or trimmed, so it
+ *  describes a transcript that no longer exists. `due` is what a POST without
+ *  `force` would decide — the gate lives on the server, so the client never
+ *  has to know what `every` means. */
+export type RollingSummary = {
+  summary: string; at: number; total: number;
+  stale: boolean; every: number; due: boolean;
+};
+/** `refreshed` is false whenever the call spent nothing: not due, an empty
+ *  scene, or a provider that answered with no text. */
+export type RollingSummaryRefresh = RollingSummary & { refreshed: boolean };
+export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
+/** One feeling this actor holds toward another in the room. The three axes run
+ *  0–5 and the column draws them as five pips each. */
+export type Feeling = {
+  ref: string; kind: string; id: string; name: string;
+  trust: number; affection: number; tension: number; note: string;
+};
+/** Everything the campaign has decided about one actor — the play view's
+ *  dossier column. Every field is a record the absorb pass already writes;
+ *  `standing` / `knows` / `suspects` and `feels_toward` had no reader outside a
+ *  staged review row until this existed. */
+export type Casefile = {
+  // The casefile route only ever answers for an actor, and its portrait URL
+  // keys on this, so it names the two actor kinds rather than any string.
+  kind: "characters" | "pcs"; id: string; name: string; version: string; role: string;
+  /** The scenes she is cast in, oldest first, labelled — a scene id is a
+   *  filename, and the column puts these in a sentence. */
+  scenes: { id: string; title: string }[];
+  /** The title of the newest of them. */
+  last_seen: string;
+  standing: string; knows: string; suspects: string;
+  dossier: string;
+  /** The one-line identity, meaningful only for someone never played. */
+  tagline: string;
+  feels_toward: Feeling[];
+  standing_facts: StandingFact[];
+};
+export type TimelineEvent = { date: string; text: string };
+/** Why one stored field is what it is: the excerpt the extractor cited, who it
+ *  attributed it to, its own 0–1 rating (`null` when it gave none) and the band
+ *  `absorb/routing.py` weighed those into.
+ *
+ *  `band` is stored rather than derived here on purpose — it is certainty
+ *  weighted by authority, and a second copy of that table on the client is how
+ *  the panel and the review end up disagreeing about the same row. */
+export type Citation = {
+  quote: string; speaker: string; certainty: number | null;
+  authority: string; band: string;
+  /** The recording scene's id, and its title resolved at read time — a title
+   *  frozen into the stored citation would name a scene a later rename
+   *  retired. */
+  scene: string; scene_title?: string;
+  recorded: string;
+};
+/** Keyed `"<kind>/<id>#<field>"`. A field with no entry is the normal case: the
+ *  later absorb phases rest on no transcript citation, and anything written
+ *  before the store existed — or edited by hand — has none. */
+export type Provenance = Record<string, Citation>;
+/** How much weight one staged proposal has earned (#110/#112), computed by
+ *  `store/absorb/routing.py`. Display and default-checkbox state only — the
+ *  server never reads it back on save, and a `low` row a reviewer ticks anyway
+ *  applies exactly like any other. */
+export type EditReview = {
+  /** The extractor's own 0-1 rating, or null when it gave none. Poorly
+   *  calibrated by construction, so it is shown and ordered by, never trusted
+   *  as a probability. */
+  certainty: number | null;
+  /** The excerpt it cited, and the transcript label it attributed them to.
+   *  Both "" when it cited nothing. */
+  quote: string; speaker: string;
+  /** What the transcript actually corroborates about that speaker, relative to
+   *  the record being changed. `unattributed` means the citation cannot be
+   *  checked — nobody spoke under that name, or two speakers answer to it. */
+  authority: "narration" | "self" | "other" | "unattributed" | "uncited";
+  /** `certainty` weighted by `authority`, and the band the panel routes on. */
+  score: number; band: "high" | "medium" | "low";
+};
+export type StagedEdit = {
+  id: string; kind: "character_state" | "lore" | "authored" | "relationship" | "bond" | "plot"
+    | "commitment" | "fact" | "new_character" | "new_location" | "new_lore" | "sheet"
+    | "dossier" | "voice_drift";
+  target: { kind: string; id: string }; label: string; field: string;
+  before: string; after: string; authored: boolean;
+  payload?: Record<string, unknown>;
+  /** Present on the rows `absorb.materialize` staged from the extraction, and
+   *  absent on the ones staged by the later phases (dossier, voice, sheet),
+   *  which rest on no transcript citation to weigh. An absent block routes as
+   *  `medium`: shown and pre-approved, exactly as every row was before #110. */
+  review?: EditReview;
+  /** Set once the reviewer has answered a conflict on this row (#111): the
+   *  reviewer's authorization to write over a target that moved since the
+   *  scene was absorbed. Both values authorize; they differ in whether `after`
+   *  is still the staged text or one the reviewer merged by hand. Absent means
+   *  unanswered, and the save is refused. */
+  resolve?: "replace" | "merge";
+  /** The stored value the reviewer was shown when they answered. Sent with
+   *  `resolve` so the server can hold the retry to it: the flag authorizes
+   *  overwriting *that* text, not whatever the record holds by the time the
+   *  save lands. */
+  resolve_from?: string;
+};
+/** A staged edit whose target no longer matches the value it was staged
+ *  against (#111). Carries everything the three choices need — what is stored
+ *  now, and a merged draft where merging into the field makes sense — so
+ *  answering one costs no extra round-trip. */
+export type EditConflict = {
+  id: string; label: string; kind: string; field: string;
+  before: string; after: string; stored: string; reason: string;
+  mergeable: boolean; merged: string;
+  /** Position in the submitted `edits` array. The only reliable way back to
+   *  the row: `id` is not unique (only plot threads are deduped), and the
+   *  response omits the rows that were fine, so ordinal position among the
+   *  conflicts does not line up with ordinal position among the edits. */
+  index: number;
+};
+export type MechanicsDrop = { id: string; field?: string; reason: string };
+/** The two facts a bare status cannot carry, on every phase that makes an LLM
+ *  call: whether a request reached the model at all, and whether the absorb's
+ *  shared time budget is why it did not. A phase stopped by the clock is worth
+ *  retrying as-is; one that failed on its own merits is not. */
+export type PhaseAttempt = { attempted: boolean; budget_exhausted: boolean };
+export type Mechanics = PhaseAttempt & {
+  status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
+  warnings: string[]; dropped: MechanicsDrop[];
+};
+export type DossierFailure = { id: string; reason: string };
+export type Dossiers = PhaseAttempt & {
+  status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
+  proposed: string[]; failed: DossierFailure[];
+  /** NPCs the absorb budget ran out before reaching — never attempted (#243). */
+  skipped: string[];
+};
+export type VoiceCheck = PhaseAttempt & {
+  status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
+  /** NPCs whose dialogue was judged against their anchor — only ones that HAVE
+   *  an anchor are judged at all, which is what keeps the extra calls opt-in. */
+  checked: string[];
+  /** The subset of `checked` that came back out of voice (#59). */
+  flagged: string[];
+  /** The subset of `checked` that said too little to judge. Named separately
+   *  because `checked` minus `flagged` would otherwise read as "confirmed in
+   *  voice" for a character nobody actually heard — and silence never clears a
+   *  standing corrective. */
+  unjudged: string[];
+  failed: DossierFailure[];
+  /** Anchored NPCs the absorb budget ran out before reaching — never attempted. */
+  skipped: string[];
+};
+/** One row per LLM-backed step of a single absorb, in run order. A projection of
+ *  `mechanics`/`dossiers`/`voice` (never a second source of truth) that also covers
+ *  the extraction, so a run cut short by the time budget is legible as one instead
+ *  of looking like a model with nothing to suggest. */
+export type AbsorbPhase = PhaseAttempt & {
+  name: "extraction" | "dossiers" | "voice" | "audit";
+  status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
+};
+export type SceneAbsorb = {
+  one_line: string; summary: string; keywords: string[];
+  timeline_events: TimelineEvent[]; cast: string[]; location: string; date: string;
+  edits: StagedEdit[];
+  mechanics: Mechanics;
+  /** Idempotency key for this review's save (#235) — replaying a spent one
+   *  returns the first result instead of committing twice. */
+  commit_token: string;
+  dossiers: Dossiers;
+  voice: VoiceCheck;
+  phases: AbsorbPhase[];
+};
+export type SceneSuggestion = {
+  title: string; premise: string; date?: string;
+  cast: { kind: string; id: string; name: string }[];
+  location: { id: string; name: string } | null;
+};
+/** A row of the scene ledger (#88) — a saved idea, or a greeting composed into
+ *  the same shape. Deliberately a superset of `SceneSuggestion`, so one card
+ *  renderer covers both: `cast` and `location` come back resolved.
+ *
+ *  `source` is `"greeting"` for the composed entries, whose ids are
+ *  `greeting:<gid>` and whose status writes delegate to the greeting's own
+ *  marks server-side. */
+export type SceneIdea = {
+  id: string; title: string; premise: string; date: string;
+  cast: { kind: string; id: string; name: string }[];
+  location: { id: string; name: string } | null;
+  pcless: boolean;
+  source: "llm" | "user" | "greeting";
+  status: "active" | "used" | "dismissed";
+  created: string; used_scene: string;
+};
+export type SceneIdeaDraft = {
+  title?: string; premise?: string; cast?: string[]; location?: string;
+  date?: string; pcless?: boolean; source?: "llm" | "user";
+};
+export type SceneIntentResult = {
+  title: string; date: string;
+  location: { id: string; name: string } | null;
+  cast: { kind: string; id: string; name: string }[];
+};
+export type ChronicleEntry = {
+  id: string; one_line: string; summary: string; keywords: string[];
+  cast: string[]; location: string; date: string; absorbed: string;
+};
+/** What a cascade post-delete actually did (#75). Counts rather than a bare
+ *  ack, because the reversal reaches records the transcript does not show.
+ *
+ *  Two different kinds of incomplete, and they must not be conflated:
+ *  `refused` names records that could not be put back (something wrote to them
+ *  after this scene did, or the kind carries no reversal), which keep the value
+ *  the deleted scene gave them; `failed` names cleanup STEPS that could not run
+ *  at all — a garbled `plot.json` and the like. The cut itself always happened
+ *  by the time either is non-empty, which is why they are reported rather than
+ *  raised. A count of zero beside a name in `failed` means "not known", not
+ *  "none". */
+export type CascadeReport = {
+  index: number; removed: number; was_absorbed: boolean;
+  records: number; refused: { label: string; reason: string }[];
+  chronicle: boolean; plot_beats: number; commitment_beats: number;
+  changes: number; citations: number; failed: string[];
+};
+export type DiffLine = { op: "equal" | "insert" | "delete"; text: string };
+export type FieldDiff = { field: string; label: string; diff: DiffLine[] };
+export type RecordChange = {
+  ref: { kind: string; id: string }; name: string;
+  scene: { id: string; title: string; date: string };
+  fields: FieldDiff[];
+};
+
+/** One row of the append-only change journal (#31). `RecordChange` is the
+ *  rolling view — the latest delta per record — and this is the history behind
+ *  it, newest first, with the reversal the server is willing to perform.
+ *
+ *  `undoable` is the SERVER's answer and is never re-derived here: whether a
+ *  change can be put back depends on what it wrote and whether the record has
+ *  moved since, and a second copy of that rule in the client would be the kind
+ *  of drift that ends with a button offering what the store refuses. `why`
+ *  carries the reason when it is false. */
+export type JournalEntry = {
+  id: string; ts: string; source: string; kind: string;
+  ref: { kind: string; id: string }; name: string; label: string; field: string;
+  scene: { id: string; title: string; date: string };
+  diff: DiffLine[];
+  undoable: boolean; why: string;
+  undone: { ts: string; by: string } | null;
+};
+
+// continuity ledger (#117). `kind` is promise | threat | foreshadowing and
+// `status` open | fulfilled | broken | expired — a commitment resolves, where a
+// plot thread only advances. Contradictions are the fourth section this view is
+// named for and arrive with #111.
+export type LedgerScene = { id: string; title: string; date: string };
+export type PlotThread = {
+  id: string; title: string; status: string;
+  last_scene: string; latest_beat: string; scene: LedgerScene;
+};
+export type Commitment = PlotThread & { kind: string; due: string };
+/** A standing fact on the ledger (#114). `scene` is the scene that RECORDED it,
+ *  not one that last moved it: a fact's text never changes once written, and a
+ *  fact that stopped being true is retired off this list rather than rewritten. */
+export type StandingFact = {
+  id: string; text: string; date: string; scene: LedgerScene;
+};
+/** A fact that stopped being true (#114), and the half of facts.json that never
+ *  left the server until the ledger got its own screen (4e).
+ *
+ *  `scene` is still the scene that RECORDED it — a retired fact keeps its dated
+ *  place in the ledger — and `retired_scene` is the one that ENDED it.
+ *  `superseded_by` names the fact that replaced this one and is "" when nothing
+ *  did, which is the whole difference between a truth another truth overtook
+ *  and one that simply lapsed. It is a bare id pointing into `facts` or back
+ *  into `retired` of the same response: the replacement's text is on its own
+ *  row, and shipping it twice would let the two copies disagree. */
+export type RetiredFact = StandingFact & {
+  superseded_by: string; retired_scene: LedgerScene;
+};
+/** One line of relationships.json. Two shapes share it because the reader's
+ *  question is what stands between two people: `kind: "feeling"` is directed
+ *  (a→b, metered 0–5, not reciprocated by construction) and `kind: "bond"` is
+ *  symmetric, `type`d ("kin", "sworn") and dated to `scene`, which is the empty
+ *  label for every feeling. */
+export type LedgerRelationship = {
+  id: string; kind: string; a: string; b: string; a_name: string; b_name: string;
+  trust: number; affection: number; tension: number;
+  note: string; type: string; since_scene: string; scene: LedgerScene;
+};
+export type LedgerFact = { id: string; one_line: string; date: string; title: string };
+export type Ledger = {
+  plot: PlotThread[]; commitments: Commitment[]; facts: StandingFact[];
+  retired: RetiredFact[]; relationships: LedgerRelationship[];
+  chronicle: LedgerFact[];
+};
+
+// keyword search (#33)
+/** One record the query matched.
+ *
+ *  `scope` and `root` together say *which* record: a world's lore and a
+ *  campaign's fork of it carry the same `id`, and only the scope tells them
+ *  apart. `sub` is what inside the record matched where a record has parts — a
+ *  card version, a persona version, a relationship's side — and "" where it
+ *  does not. */
+export type SearchHit = {
+  scope: "world" | "campaign";
+  root: string;
+  root_name: string;
+  kind: string;
+  id: string;
+  sub: string;
+  name: string;
+  /** A one-line window of the body around the first matching term, ellipsed at
+   *  either end. Plain text, not markdown: the emphasis runs are stripped. */
+  snippet: string;
+  score: number;
+};
+export type SearchMode = "keyword" | "semantic";
+
+export type SearchResult = {
+  q: string;
+  /** The query as the server split it — phrases kept whole — so the client
+   *  highlights exactly what matched rather than re-implementing the split.
+   *  Empty in semantic mode: nothing matched a term, so nothing is marked. */
+  terms: string[];
+  /** Hits after the kind filter; `hits` is this list cut to the limit. */
+  total: number;
+  /** Hits per kind BEFORE the kind filter, so a chip can say what dropping the
+   *  current filter would find. */
+  facets: Record<string, number>;
+  scopes: Record<string, number>;
+  truncated: boolean;
+  hits: SearchHit[];
+  /** The ranking that actually produced this page, which is not always the one
+   *  that was asked for: semantic mode needs an embeddings connection, and
+   *  falls back to keyword when it has none rather than erroring (#34). */
+  mode?: SearchMode;
+  requested_mode?: SearchMode;
+  /** Why the two differ, written to be shown to the reader. "" when they do
+   *  not. */
+  note?: string;
+  /** Semantic mode only: passages of the corpus that had a vector to score
+   *  against, out of how many there are. A query warms a bounded number of
+   *  them, so a large library indexes over several searches rather than
+   *  stalling the first one. */
+  indexed?: number;
+  corpus?: number;
+};
+
+// the play timeline (#198) — the ledger's other half. The ledger answers what
+// is still open; this answers what happened, in play order, one card per scene.
+//
+// `one_line`, `location` and `done` exist only after the absorb, and a campaign
+// being played is normally a scene or two ahead of it — so the ORDINARY card
+// carries none of them and falls back to its title and its own date. Treat them
+// as optional content, never as "still loading".
+//
+// The absorb's full `summary` is deliberately absent: a card is one line, and
+// shipping the whole campaign's prose for a view that renders none of it is the
+// biggest thing on the wire paying for nothing. `one_line` already falls back
+// to it server-side for the save that left `one_line` empty.
+/** One beat of a plot thread, on the card of the scene it landed in — the
+ *  "thread pair" the timeline is for: what moved, and where. `title`/`status`
+ *  are the THREAD's, repeated per beat so a card needs no second lookup. */
+export type TimelineBeat = {
+  thread: string; title: string; status: string; text: string;
+};
+export type TimelineScene = {
+  id: string; title: string; one_line: string;
+  /** The scene's own opening moment, falling back to the chronicle's date. */
+  date: string;
+  location: string; done: boolean; pcless: boolean; beats: TimelineBeat[];
+};
+/** Only the threads with a beat on some card: a chip that filters to nothing
+ *  is worse than no chip. */
+export type TimelineThread = { id: string; title: string; status: string };
+export type Timeline = { scenes: TimelineScene[]; threads: TimelineThread[] };
+
+// pre-scene briefing (#118) — the ledger's per-scene sibling. The rows are the
+// ledger's, minus the `scene` label (this view is about who, not when) and plus
+// `involves`: the display names of the scene's cast this row can be traced to,
+// empty for a row it cannot. `focus` names who the flag was computed against —
+// the scene's players, or its whole cast when it is an offscreen scene with
+// none. Rows are ordered flagged-first and never filtered: an unflagged
+// commitment is still owed.
+export type BriefingRow = {
+  id: string; title: string; status: string;
+  last_scene: string; latest_beat: string; involves: string[];
+};
+export type BriefingCommitment = BriefingRow & { kind: string; due: string };
+export type BriefingFact = { id: string; one_line: string; title: string; date: string };
+export type Briefing = {
+  focus: string[]; plot: BriefingRow[]; commitments: BriefingCommitment[];
+  relationships: string[]; last_time: BriefingFact | null;
+};
+
+// lorebook import
+export type LoreEntryDraft = { name: string; keys: string[]; body: string; category: EntityKind };
+
+// scenario-card import (#217) — one card describing a whole setting, split into
+// the records a world is made of. A proposal speaks in cast NAMES, not ids: the
+// characters it proposes do not exist while it is being reviewed, and the
+// backend resolves the names once they do.
+export type ScenarioCharacterDraft = {
+  name: string; description: string; personality: string;
+  /** The import will reuse a world character of this name rather than create
+   *  one. Advisory: the backend re-resolves at import time. */
+  exists?: boolean;
+};
+export type ScenarioGreetingDraft = {
+  name: string; body: string; character: string; present: string[];
+};
+export type ScenarioProposal = {
+  characters: ScenarioCharacterDraft[];
+  entries: LoreEntryDraft[];
+  greetings: ScenarioGreetingDraft[];
+};
+export type ScenarioArtSummary = {
+  total: number; localized: number; skipped: number; failed: number; capped: boolean;
+};
+export type ScenarioImportResult = {
+  characters: { name: string; id: string; version: string; created: boolean }[];
+  entries: { kind: string; id: string }[];
+  greetings: { name: string; id: string }[];
+  art: ScenarioArtSummary;
+};
+
+// dice rolls
+export type DieDetail = { value: number; rolls: number[]; kept: boolean };
+export type RollResult = {
+  notation: string; seed: number; dice: DieDetail[]; modifier: number;
+  pool_target: number | null; vs: number | null;
+  total: number | null; successes: number | null; outcome: string | null;
+};
+export type RollEntry = {
+  id: string; ts: string; scene: string | null; label: string | null; result: RollResult;
+};
+export type ProposalRecord = { id: string; status: string; payload: RollProposalPayload; resolution: CheckResolution | null };
+export type CheckResolution = { check: string; check_label: string; actor: string; actor_label: string; notation: string; tier: string | null; difficulty: number | null; modifier: number; roll_id?: string };
+export type SceneCheckActor = { ref: string; label: string; sheet_type: string; checks: [string, string][] };
+
+// campaign group state (#47)
+export type GroupState = {
+  goals: string; resources: string; focus: string;
+  public_perception: string; secrets: string; updated?: string;
+};
+
+// modules
+export type LayoutNode = {
+  row?: LayoutNode[]; column?: LayoutNode[]; group?: string;
+  fields?: string[]; derived?: string[]; title?: string; grid?: boolean;
+};
+export type ModuleTheme = {
+  colors?: Partial<Record<"bg" | "ink" | "muted" | "accent" | "rule", string>>;
+  fonts?: Partial<Record<"display" | "body", string>>;
+  dots?: string; corners?: string;
+};
+export type DisplayError = {
+  source: "layout" | "theme";
+  // "*" = file-level failure that dropped every layout
+  sheet_type: string | null;
+  message: string;
+};
+
+export type ModuleSummary = {
+  id: string; name: string; description: string;
+  version: string; source: "builtin" | "user"; valid: boolean;
+  display_ok?: boolean;
+};
+export type ModuleField = {
+  key: string; label?: string; type: string;
+  max?: number; min?: number; default?: number;
+  ref_kind?: string;
+};
+export type ModuleSheetType = {
+  label: string; kind: string; groups: string[];
+  fields: ModuleField[]; derived?: Record<string, string>;
+  creation?: { pools: Record<string, { budget: number | string; costs: Record<string, number> }> };
+  advancement?: { pool: string; costs: Record<string, string> };
+};
+export type ModuleEditResult = {
+  ok: boolean; errors: string[]; display_errors: DisplayError[];
+  impact?: { sheet_types: string[]; sheets_migrated: number;
+             sheets_newly_invalid: number; dangling_refs: number };
+  sample?: Record<string, { fields: Record<string, unknown>;
+                            derived: Record<string, number | boolean> }>;
+  migration?: { migrated: number; skipped: string[] };
+};
+export type ModuleRenameKind =
+  "group" | "field" | "derived" | "sheet_type" | "check" | "rule" | "content";
+
+export type ModuleDetail = {
+  id: string;
+  source: "builtin" | "user";
+  manifest: { id: string; name: string; description?: string; version?: string; dice?: string; notes?: string };
+  sheets: { groups: Record<string, { label?: string; fields: ModuleField[]; derived?: Record<string, string> }>;
+            sheet_types: Record<string, ModuleSheetType> };
+  checks: Record<string, { label?: string; roll?: string; requires?: string[]; rules?: string[];
+                           difficulty?: number; outcomes?: { label: string; when: string }[] }>;
+  rules: { id: string; keys: string[]; always: boolean; on_roll: boolean; sheet_types: string[] }[];
+  content: { kind: string; id: string; name: string; sheet_type: string | null }[];
+  errors: string[];
+  layout?: { sheet_types: Record<string, LayoutNode> };
+  layout_source?: Record<string, unknown>;
+  theme?: ModuleTheme;
+  display_errors?: DisplayError[];
+};
+export type ModuleContentEntry = {
+  kind: string; id: string; name: string; body: string; keys: string;
+  sheet_type: string | null; fields: Record<string, unknown>;
+};
+export type CampaignModule = {
+  setting: string; resolved: string | null; source: "campaign" | "world" | null;
+};
+
+// sheets (Phase 3 mechanics)
+export type Sheet = {
+  sheet_type: string | null;
+  fields: Record<string, unknown>;
+  derived: Record<string, number | boolean>;
+  errors: string[];
+  gen: string | null;
+};
+export type SheetExpected = { sheet_type: string | null; fields: Record<string, unknown>; gen: string | null } | null;
+export type SheetCoverage = Record<string, { total: number; sheeted: number; invalid: number }>;
