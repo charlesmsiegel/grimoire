@@ -227,28 +227,6 @@ export function Here() {
 }
 export const here = () => screen.getByTestId("here").textContent;
 
-// `listScenes` as the server actually answers it around a rename: the mount
-// read still sees the old id, and every read AFTER the rename landed sees the
-// new one. The relists that follow a mutation are `fresh` reads issued once the
-// write returned, so they cannot come back pre-rename — and mocking them that
-// way models a server that lost the rename it just confirmed.
-export function relistsAs(before: any[], after: any[]) {
-  (api.listScenes as any).mockResolvedValueOnce(before).mockResolvedValue(after);
-}
-
-// `listScenes` no longer takes a `fresh` flag — the endpoint never coalesces
-// now (#87), so nothing distinguishes a mount read from a relist at the API
-// level. These fixtures tell them apart by order instead: the first read of a
-// campaign is its mount read, every later one is a relist.
-export function readCounter() {
-  const seen = new Map<string, number>();
-  return (cid: string) => {
-    const n = (seen.get(cid) ?? 0) + 1;
-    seen.set(cid, n);
-    return n;
-  };
-}
-
 /** The shell's ⌘K, mounted around the page exactly as `App` mounts it.
  *
  *  The scene rail is gone: scene navigation is the palette now, and the page
