@@ -457,6 +457,24 @@ async def _spooled_upload(request: Request, cap: int, too_large: str):
             pass
 
 
+def _display_name_or_400(name: str) -> str:
+    """A trimmed, single-line display name, or a 400.
+
+    `dump_frontmatter` writes one `key: value` line per field and the parser
+    reads them back a line at a time, so a value carrying a newline stores a
+    mangled name AND leaves a stray line in the record that a later parse
+    could read as a field. Tabs and other control characters round-trip no
+    better. Printability is the test rather than ASCII: accents, CJK and
+    symbols are ordinary names, and a library is not English.
+    """
+    cleaned = name.strip()
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="name is required")
+    if not cleaned.isprintable():
+        raise HTTPException(status_code=400, detail="name must be a single line")
+    return cleaned
+
+
 # ---- 404 guards and other lookups shared by worlds and campaigns ----
 def _world_root_or_404(wid: str):
     if not store.worlds.world_exists(wid):

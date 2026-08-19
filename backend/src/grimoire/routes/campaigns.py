@@ -18,7 +18,7 @@ from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from .common import (computes_only, _bounded_call, _campaign_root_or_404, _content_fields,
-                     _dump, _require_connection, _response_body, get_llm,
+                     _display_name_or_400, _dump, _require_connection, _response_body, get_llm,
                      _serve_image, _serve_image_file, _upload_image_ext, _write_response)
 from .models import (AdvanceTime, AvatarFocus, CalendarConfig, CampaignClimate, CopyFromGreeting,
                      ScheduledEventCreate, ScheduledEventEdit,
@@ -1399,9 +1399,7 @@ def put_campaign_character_name(cid: str, char: str, body: NameBody):
     copy-on-write like every other campaign-side character write, so the world's
     name is left alone."""
     _campaign_root_or_404(cid)
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="name is required")
+    name = _display_name_or_400(body.name)
     try:
         root = store.overlay.ensure_actor_writable(cid, "characters", char)
         store.characters.set_name(root, char, name)
