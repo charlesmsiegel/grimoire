@@ -1,4 +1,5 @@
 import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { ReplayPanel } from "./ReplayPanel";
 
 vi.mock("../api/client", () => ({
@@ -40,7 +41,9 @@ async function renderPanel(props: Partial<Parameters<typeof ReplayPanel>[0]> = {
     cid: "c1", sid: "s1", startAt: null, onStartHandled: noop, onChanged: noop,
     onForked: noop, ...props,
   };
-  render(<ReplayPanel {...all} />);
+  // Routed: a turn the model could not be reached for links to Connections
+  // (#210), and a `Link` outside a router throws.
+  render(<MemoryRouter><ReplayPanel {...all} /></MemoryRouter>);
   await act(async () => {});
 }
 
@@ -165,6 +168,19 @@ test("a turn that fails mid-stream is reported, not counted as run", async () =>
   fireEvent.click(screen.getByText("Replay next turn"));
   await waitFor(() => expect(screen.getByText("the model refused")).toBeTruthy());
   expect(screen.queryByText("Accept")).toBeNull();
+});
+
+test("a replay turn the model could not be reached for offers the recovery", async () => {
+  // A replay re-runs model turns, so it goes dark offline exactly like the
+  // composer does -- and used to say so with a bare socket error (#210).
+  (api.getReplay as any).mockResolvedValue(SESSION);
+  (api.replayTurn as any).mockImplementation(async (_c: string, _s: string, on: any) => {
+    on({ error: { detail: "connection refused", kind: "network" } });
+  });
+  await renderPanel();
+  fireEvent.click(screen.getByText("Replay next turn"));
+  await screen.findByText(/Couldn.t reach the model provider/);
+  expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
 });
 
 test("stopping asks whether to put the rest of the scene back", async () => {
