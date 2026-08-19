@@ -175,15 +175,19 @@ like the failure, which is the per-turn form of the multi-turn failure #82
 describes — with a lead named every turn, the monologue can only re-form if
 single turns ignore it. A red one says the loop is back on the table.
 
+"Followed" is judged in words, not blocks: a reply that answers the nomination
+with one obliging line and then hands the floor back to whoever has been
+talking all scene has not taken turns, and counting blocks scores it 1-1.
+
 One run is an anecdote. Repeat it across a few connections and models before
 either closing #82 or paying for N calls a turn on the strength of it.
 
 The case outlives the decision either way. If #82 closes because the layer
 works, this is what keeps it working: "the model still follows the Active
 speaker section" is a live-behaviour claim with exactly the standing of the
-length budget's, and it is one reworded section away from quietly stopping to
+length budget's, and it is one reworded section away from quietly ceasing to
 be true.
 
 Fixture content uses invented placeholder names only (Realm, Saltmarch,
-Seraphine Vale, Mara, Winifred). See CLAUDE.md: real world, campaign and
+Seraphine Vale, Mara, Winifred, Rowan, Tobin). See CLAUDE.md: real world, campaign and
 character names must never enter this repo, not even as examples.
