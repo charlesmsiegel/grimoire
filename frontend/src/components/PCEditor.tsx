@@ -331,7 +331,7 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
                 {hasAvatar ? (
                   <figure className="shelf-tile avatar-tile">
                     <a href={imgSrc(detail.meta.id, "avatar")} target="_blank" rel="noreferrer">
-                      <img alt="avatar image" src={imgSrc(detail.meta.id, "avatar")} />
+                      <img alt="avatar" src={imgSrc(detail.meta.id, "avatar")} />
                     </a>
                     <figcaption>avatar</figcaption>
                     <button className="shelf-promote" onClick={() => removeImage("avatar")}>Remove</button>

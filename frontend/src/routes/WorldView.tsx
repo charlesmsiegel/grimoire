@@ -264,7 +264,6 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     }
     // The openers are redeclared every render and close over nothing that
     // outlives one -- `params` is the only real dependency.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
   /** What this page contributes to ⌘K: its own index, so a section can be
@@ -287,7 +286,6 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     return out;
     // `select` is redeclared every render and closes over nothing that outlives
     // one, so it is deliberately not a dependency.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaign, groups, name]);
   usePaletteSource(paletteSource);
 

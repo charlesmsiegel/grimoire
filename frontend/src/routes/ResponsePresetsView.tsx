@@ -359,7 +359,7 @@ export default function ResponsePresetsView() {
                 </Field>
 
                 <div className="field">
-                  <label>Length</label>
+                  <span className="field-caption">Length</span>
                   <div className="joined">
                     <label>
                       <input type="radio" name="length-mode" checked={form.lengthMode === "preset"}

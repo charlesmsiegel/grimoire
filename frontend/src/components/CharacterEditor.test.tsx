@@ -1449,7 +1449,7 @@ test("campaign scope: picking a version calls pickVersion", async () => {
   (api.listCharacters as any).mockResolvedValue([
     { id: "mara", name: "Mara", default_version: "young", versions: [] },
   ]);
-  (api.readCharacter as any).mockImplementation(async (scope: any) => ({
+  (api.readCharacter as any).mockImplementation(async () => ({
     meta: { id: "mara", name: "Mara", default_version: "young" },
     versions: [
       { id: "young", name: "Young", card: { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Mara" } } },
