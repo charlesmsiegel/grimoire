@@ -828,9 +828,10 @@ export const api = {
   // ---- scheduled events (#101) ----
   campaignEvents: (cid: string) =>
     // `fresh`: the clock fires events, so a cached list would show a campaign
-    // its own past as still upcoming.
-    request<{ events: ScheduledEvent[] }>("GET", `/api/campaigns/${cid}/events`,
-                                          undefined, { fresh: true }),
+    // its own past as still upcoming. `now` is the moment `passed` was judged
+    // against, so the panel can say what "already gone by" means here.
+    request<{ events: ScheduledEvent[]; now: string; friendly: string }>(
+      "GET", `/api/campaigns/${cid}/events`, undefined, { fresh: true }),
   createCampaignEvent: (cid: string, body: { name: string; date: string; note?: string }) =>
     request<{ ok: boolean; id: string }>("POST", `/api/campaigns/${cid}/events`, body),
   /** Every field is optional: what is not sent keeps the stored value. */

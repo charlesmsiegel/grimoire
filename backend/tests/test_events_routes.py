@@ -175,3 +175,34 @@ def test_the_staleness_threshold_survives_a_calendar_save(client):
                json={"primary": cfg["primary"], "secondary": None, "confirmed": True})
     assert client.get(f"/api/campaigns/{cid}/calendar").json()["stale_after_days"] \
         == store.calendars.STALE_AFTER_DAYS
+
+
+def test_the_list_says_which_events_the_clock_has_gone_by(client):
+    """A day already behind the campaign's present that no move ever fired.
+    Nothing else in the app would say so, and no advance can reach it."""
+    cid = _campaign(client)
+    client.post(f"/api/campaigns/{cid}/advance", json={"to": "2026-06-01", "reason": "start"})
+    client.post(f"/api/campaigns/{cid}/events", json={"name": "Mistyped", "date": "2026-05-09"})
+    client.post(f"/api/campaigns/{cid}/events", json={"name": "Ahead", "date": "2026-07-01"})
+    body = client.get(f"/api/campaigns/{cid}/events").json()
+    assert body["now"] == "2026-06-01" and body["friendly"]
+    assert {e["name"]: e["passed"] for e in body["events"]} == {"Mistyped": True, "Ahead": False}
+
+
+def test_a_campaign_with_no_clock_marks_nothing_as_passed(client):
+    cid = _campaign(client)
+    client.post(f"/api/campaigns/{cid}/events", json={"name": "Someday", "date": "2026-05-09"})
+    body = client.get(f"/api/campaigns/{cid}/events").json()
+    assert body["now"] == "" and body["events"][0]["passed"] is False
+
+
+def test_an_event_can_be_re_dated_through_the_route(client):
+    """The repair the `passed` label points at — and the only caller the edit
+    endpoint has, which is the point of it existing."""
+    cid = _campaign(client)
+    client.post(f"/api/campaigns/{cid}/advance", json={"to": "2026-06-01", "reason": "start"})
+    client.post(f"/api/campaigns/{cid}/events", json={"name": "Mistyped", "date": "2026-05-09"})
+    assert client.put(f"/api/campaigns/{cid}/events/mistyped",
+                      json={"date": "2026-06-10"}).status_code == 200
+    row = _events(client, cid)[0]
+    assert row["date"] == "2026-06-10" and row["passed"] is False

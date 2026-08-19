@@ -68,7 +68,10 @@ def test_a_hand_edited_record_projects_as_text(monkeypatch, tmp_path):
     events._path(cid).write_text(json.dumps(
         {"x": {"name": {}, "date": [], "note": 3, "fired": "yes"}}), encoding="utf-8")
     assert events.list_events(cid) == [
-        {"id": "x", "name": "x", "date": "", "friendly": "", "note": "", "fired": None}]
+        {"id": "x", "name": "x", "date": "", "friendly": "", "note": "", "fired": None,
+         # No clock was handed in, so "has the campaign gone by this" is
+         # unanswerable and answered False rather than guessed.
+         "passed": False}]
 
 
 # ---- creating, editing, deleting -------------------------------------------
@@ -257,7 +260,10 @@ def test_an_advance_fires_what_it_crosses(monkeypatch, tmp_path):
     eid = events.create(cid, "Coronation", "2026-05-09")
     result = clock.advance(cid, days=30, reason="a month passes")
     assert [e["id"] for e in result["digest"]["events"]] == [eid]
-    assert result["fired"] == [{**result["digest"]["events"][0]}]
+    # The rows that actually took the stamp, not a copy of the digest compared
+    # against itself: `fire` skips what a concurrent advance got to first, and
+    # this is the assertion that would notice if it skipped everything.
+    assert [e["id"] for e in result["fired"]] == [eid]
     assert events.get(cid, eid)["fired"]["moment"] == "2026-05-31"
 
 
@@ -320,3 +326,70 @@ def test_a_campaign_taking_its_first_date_fires_nothing(monkeypatch, tmp_path):
     events.create(cid, "Coronation", "2026-05-09")
     assert clock.observe(cid, "2026-05-31", "the first scene")["fired"] == []
     assert events.get(cid, "coronation")["fired"] is None
+
+
+# ---- the day the clock has already gone by ---------------------------------
+
+def test_an_event_behind_the_clock_is_reported_as_passed(monkeypatch, tmp_path):
+    """The state nothing used to mention: scheduled for a day the campaign is
+    already past, and no move can ever cross it, because a span starting at
+    "now" cannot contain a day behind it."""
+    cid = _campaign(monkeypatch, tmp_path)
+    clock.advance(cid, to="2026-06-01", reason="start")
+    events.create(cid, "Mistyped", "2026-05-09")
+    events.create(cid, "Still ahead", "2026-07-01")
+    rows = {e["name"]: e for e in
+            events.list_events(cid, _provider(cid), _fixed(cid, "2026-06-01"))}
+    assert rows["Mistyped"]["passed"] is True
+    assert rows["Still ahead"]["passed"] is False
+
+
+def test_a_fired_event_is_never_reported_as_passed(monkeypatch, tmp_path):
+    """`passed` is the unfired half of "behind the clock" — the half that still
+    wants something from the reader."""
+    cid = _campaign(monkeypatch, tmp_path)
+    eid = events.create(cid, "Coronation", "2026-05-09")
+    events.fire(cid, [eid], "2026-05-09")
+    row = events.list_events(cid, _provider(cid), _fixed(cid, "2026-06-01"))[0]
+    assert row["passed"] is False and row["fired"] is not None
+
+
+def test_an_event_on_the_clock_s_own_day_has_not_been_passed(monkeypatch, tmp_path):
+    """Today is not behind: the day is still being lived through, and an advance
+    out of it crosses nothing (`crossed` is half-open at the start)."""
+    cid = _campaign(monkeypatch, tmp_path)
+    events.create(cid, "Today", "2026-06-01")
+    row = events.list_events(cid, _provider(cid), _fixed(cid, "2026-06-01"))[0]
+    assert row["passed"] is False
+
+
+def test_re_dating_a_passed_event_forward_lets_it_fire_again(monkeypatch, tmp_path):
+    """The repair the label points at, end to end."""
+    cid = _campaign(monkeypatch, tmp_path)
+    clock.advance(cid, to="2026-06-01", reason="start")
+    eid = events.create(cid, "Mistyped", "2026-05-09")
+    events.update(cid, eid, date="2026-06-10")
+    result = clock.advance(cid, to="2026-06-30", reason="a month passes")
+    assert [e["id"] for e in result["fired"]] == [eid]
+
+
+def test_a_long_name_and_note_are_truncated_rather_than_refused(monkeypatch, tmp_path):
+    """A paste that is too long should still record the event it describes —
+    `clock.REASON_LIMIT`'s rule, and the only thing bounding a file every turn
+    reads and a public endpoint writes."""
+    cid = _campaign(monkeypatch, tmp_path)
+    eid = events.create(cid, "N" * 500, "2026-05-09", "x" * 5000)
+    row = events.get(cid, eid)
+    assert len(row["name"]) == events.NAME_LIMIT
+    assert len(row["note"]) == events.NOTE_LIMIT
+    assert events.update(cid, eid, name="M" * 500, note="y" * 5000)
+    row = events.get(cid, eid)
+    assert len(row["name"]) == events.NAME_LIMIT and len(row["note"]) == events.NOTE_LIMIT
+
+
+def test_a_blank_name_still_leaves_a_readable_row(monkeypatch, tmp_path):
+    """The id is the fallback, so an unnamed event is still something a reader
+    can find and fix rather than an empty line."""
+    cid = _campaign(monkeypatch, tmp_path)
+    eid = events.create(cid, "   ", "2026-05-09")
+    assert events.get(cid, eid)["name"] == eid
