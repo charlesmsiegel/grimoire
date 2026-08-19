@@ -110,6 +110,12 @@ _LLM_STATUS = {
     # (`_bounded_call`). Both are 504 rather than 502: the gateway reached the
     # provider fine, it just never got an answer back.
     "timeout": 504,
+    # Could not talk to the provider at all, which includes httpx's own connect
+    # and read timeouts -- the providers raise `network` for every `HTTPError`.
+    # That looks like a `timeout` in the making and is deliberately left alone:
+    # `network` is retryable and `timeout` is not (`llm.RETRYABLE_KINDS` says
+    # why), so reclassifying a refused connection would stop it being retried.
+    # 502 is also the right answer for it -- there was no answer to be late.
     "network": 502,
     "bad_response": 502,
 }
