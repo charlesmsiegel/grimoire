@@ -159,19 +159,23 @@ async def _lifespan(app: FastAPI):
             yield
             tg.cancel_scope.cancel()
     finally:
-        # The gateway clients each own an `httpx` connection pool, and nothing
-        # else in the process closes one (#215). It costs nothing where the
-        # server *is* the process -- the pool dies with it -- and everything
-        # where an app is rebuilt inside a living one: the Android entry point
-        # starts uvicorn in-process, and every `TestClient` in this suite
-        # builds another app.
+        # Closing the gateway clients' `httpx` pools (#215). Worth nothing
+        # where the server *is* the process -- the pool dies with it -- and
+        # everything where an app is rebuilt inside a living one: the Android
+        # entry point starts uvicorn in-process, and this suite builds an app
+        # per test.
         #
-        # Outside the task group on purpose: an `await` inside a scope that has
-        # just been cancelled is cancelled itself, so a close in there would
-        # drain nothing. In a `finally` because a shutdown arriving as an
-        # exception is still a shutdown -- and each close is guarded so a
-        # failing one neither strands the other pool nor replaces the exception
-        # on its way out with noise from the cleanup.
+        # Outside the task group: an `await` in a scope that has just been
+        # cancelled is cancelled itself, so a close in there would drain
+        # nothing. In a `finally`: a shutdown arriving as an exception is still
+        # a shutdown. Each close guarded: a failing one must neither strand the
+        # other pool nor bury the exception on its way out.
+        #
+        # Blind spot: these are the pools an *app* owns. The `EmbeddingsClient`
+        # singletons in `store/semsearch` and `store/context/semantic` are
+        # reachable only from store code with no app to hang them on, and are
+        # still closed by nobody. `test_llm_lifecycle` fails if a closable is
+        # added to `app.state` and left out of the loop below.
         for client in (app.state.llm, app.state.openai_compatible):
             try:
                 await client.aclose()
