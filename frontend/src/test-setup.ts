@@ -62,21 +62,48 @@ if (!window.matchMedia) {
 // mocks, because the same shape has now been seen in two suites that share no
 // fixtures (`CampaignView`, `ResponsePresetPicker`).
 //
-// Two consecutive unchanged ticks, not one: a stage that lands a value without
-// moving the DOM (a fetch identity, a token) still starts the next stage, and
-// one tick would stop on it. `act` so React's commits are flushed rather than
-// merely scheduled, and a hard cap so a component that genuinely never settles
-// fails on the test's own timeout instead of spinning here.
+// Two consecutive unchanged ticks, not one: a stage can land a value without
+// moving anything a test can see and still start the next stage, and one tick
+// would stop on it. `settle.test.tsx` pins that rule rather than this comment
+// asserting it. `act` so React's commits are flushed rather than merely
+// scheduled.
+//
+// The cap is measured, not guessed. Over a whole-suite run under 2x CPU
+// oversubscription, 3283 of 3385 waits found the page already quiet, 101 needed
+// one more tick, and exactly one reached 5 -- so the ceiling is not purely a
+// property of the promise chain, and a slower runner is the direction that tail
+// moves in. 25 leaves it five times over, and is the backstop for a component
+// that genuinely never settles: that has to fail on the test's own timeout, not
+// spin here. Raise it rather than trim it if some page ever needs the room --
+// a wait that finds quiet costs two ticks whatever the cap says.
 const SETTLE_TICKS = 25;
 
+/** Everything a test could query, as one comparable string.
+ *
+ *  `innerHTML` alone is NOT that, and the gap is exactly one of the shapes
+ *  above: a form control's current value is a PROPERTY, so React filling a
+ *  `<select>` moves nothing in the markup (measured -- setting `.value` leaves
+ *  `document.body.innerHTML` byte-identical). A signal blind to it would count
+ *  the tick that filled the control as quiet. */
+function observable(): string {
+  let seen = document.body.innerHTML;
+  for (const el of document.querySelectorAll("input, select, textarea")) {
+    const control = el as HTMLInputElement;
+    seen += `\u0000${control.value}:${control.checked}`;
+  }
+  return seen;
+}
+
+// Tick first, THEN compare: the observation that matters is the one after a
+// macrotask has had its chance, and seeding the comparison with the state on
+// entry is what keeps an already-quiet page to two ticks instead of three.
 async function settle() {
-  let quiet = 0;
-  let last = "";
-  for (let i = 0; i < SETTLE_TICKS && quiet < 2; i++) {
-    const now = document.body.innerHTML;
+  let last = observable();
+  for (let quiet = 0, i = 0; i < SETTLE_TICKS && quiet < 2; i++) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    const now = observable();
     quiet = now === last ? quiet + 1 : 0;
     last = now;
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
   }
 }
 
