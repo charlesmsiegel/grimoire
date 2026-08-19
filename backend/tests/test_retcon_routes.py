@@ -267,3 +267,34 @@ def test_a_replay_in_the_fork_leaves_the_original_scene_intact(client, scene):
     client.post(f"/api/campaigns/{fork}/scenes/{sid}/replay", json={"index": 1})
     assert _contents(fork, sid) == ["player one"]
     assert len(_contents(cid, sid)) == 4
+
+
+def test_a_fork_is_not_a_campaign_until_it_carries_its_own_name(client, scene):
+    """Readers take no lock, so a copy carrying the SOURCE's `campaign.md` would
+    be visible under the source's name for as long as the rest of the tree takes
+    to copy — two campaigns with one name, one of them half there. The meta is
+    left out of the copy and written last, which makes that write the
+    publication."""
+    import shutil
+    cid, _ = scene
+    mid_copy: list[list[str]] = []
+    original = shutil.copytree
+
+    def watched(*a, **kw):
+        out = original(*a, **kw)
+        # Once per directory: `shutil.copytree` recurses through its own public
+        # name, so this fires for `scenes/` too -- every one of them a moment
+        # when the copy is partly on disk and a reader could arrive.
+        mid_copy.append(sorted(c["name"] for c in store.campaigns.list_campaigns()))
+        return out
+
+    shutil.copytree = watched
+    try:
+        fork = client.post(f"/api/campaigns/{cid}/fork",
+                           json={"name": "Run (retcon)"}).json()["id"]
+    finally:
+        shutil.copytree = original
+
+    assert mid_copy and all(seen == ["Run"] for seen in mid_copy)
+    assert sorted(c["name"] for c in store.campaigns.list_campaigns()) == ["Run", "Run (retcon)"]
+    assert store.campaigns.read_campaign(fork)["meta"]["parent"] == cid

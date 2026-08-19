@@ -301,3 +301,14 @@ def test_a_hand_mangled_attribution_file_costs_the_badges_not_the_review(cid, tw
     (campaigns.campaign_root(cid) / "provenance.json").write_text(
         '{"lore/pact#body": ["also not a row"]}', encoding="utf-8")
     assert retcon.contradictions(cid, first, [_lore_edit("stored body", "different")]) == []
+
+
+def test_an_open_review_cannot_save_over_a_retcon(cid, sid):
+    """A review prepared from the pre-retcon transcript is still holding a valid
+    commit token, and saving it would write that transcript's summary and edits
+    straight back over the reversal. The same fence a cut raises, for the same
+    reason."""
+    from grimoire.store import commits
+    before = commits.scene_epoch(cid, sid)
+    retcon.retcon(cid, sid, 1, "she never said it")
+    assert commits.scene_epoch(cid, sid) > before

@@ -63,7 +63,7 @@ the one thing a retcon must not do on its own.
 
 from __future__ import annotations
 
-from . import changes, chronicle, commitments, plot, provenance, scene_ids
+from . import changes, chronicle, commitments, commits, plot, provenance, scene_ids
 from .absorb import conflicts
 from . import alternates, cascade, locks, turnstate
 from .scenes import read as scenes_read, write as scenes_write
@@ -318,6 +318,14 @@ def retcon(cid: str, sid: str, index: int, content: str) -> dict:
         # that can fail (an unreadable scenes directory) between a landed edit
         # and the reversal it must not be separated from.
         later = sorted(later_scenes(cid, sid))
+        # FIRST, for `cascade.delete_from`'s reason and against the same
+        # hazard: a review prepared from the pre-retcon transcript is holding a
+        # valid commit token, and saving it would write that transcript's
+        # summary and its edits straight back over the reversal below. Retiring
+        # the scene's epoch fences it, and it goes ahead of the edit because a
+        # fence that fails there costs a request, where one that fails after
+        # leaves the post rewritten and the stale review free to save.
+        commits.retire_scene(cid, sid)
         scenes_write.edit_message(cid, sid, index, content)
         try:
             turnstate.supersede(cid, sid, index)

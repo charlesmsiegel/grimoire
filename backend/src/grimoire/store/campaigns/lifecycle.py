@@ -383,15 +383,22 @@ def fork_campaign(cid: str, name: str) -> str:
         # a response-setting write land between the read and the copy, giving
         # the fork one file's version of the campaign and the tree's another.
         meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
-        shutil.copytree(paths.campaign_root(cid), paths.campaign_root(new_cid))
+        src = paths.campaign_root(cid)
+        # `campaign.md` is deliberately NOT copied. It is what makes a directory
+        # a campaign to `list_campaigns`, and readers take no lock -- so a copy
+        # carrying the SOURCE's meta is visible the moment that file lands,
+        # listing two campaigns with one name for as long as the rest of the
+        # tree takes to copy, and offering a writer a campaign that is still
+        # half-copied. Left out, the directory is not a campaign to anybody
+        # until the write below publishes it under its own name, which makes
+        # that write the publication rather than a correction of one. A crash
+        # mid-copy leaves an unlisted directory, and `uniquify` reads it as
+        # taken so nothing adopts it -- the same orphan a failed
+        # `create_campaign` leaves.
+        shutil.copytree(src, paths.campaign_root(new_cid),
+                        ignore=lambda d, names: {"campaign.md"} if Path(d) == src else set())
         now = now_iso()
         meta = {**meta, "name": name, "created": now, "updated": now, "parent": cid}
-        # LAST inside the hold. `campaign.md` is what makes a directory a
-        # campaign to `list_campaigns` (`create_campaign` holds the lock across
-        # publication for this reason), and the one copytree just wrote still
-        # carries the SOURCE's name -- so a reader arriving in the gap would
-        # list two campaigns with one name, and a writer could act on the copy
-        # believing it was the original.
         atomic.write_text(paths.campaign_meta_path(new_cid), dump_frontmatter(meta, body))
     return new_cid
 
