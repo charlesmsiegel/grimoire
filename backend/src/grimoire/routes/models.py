@@ -478,6 +478,13 @@ class Dismiss(BaseModel):
     character: str
 
 
+class EmergentCast(BaseModel):
+    """A name the prose used that no record answers to (#98). `role` follows
+    `Appear`'s: a created character seats as an npc unless asked otherwise."""
+    name: str
+    role: str | None = None
+
+
 class GreetingCreate(BaseModel):
     name: str
     character: str

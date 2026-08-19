@@ -9,11 +9,11 @@ Stored as <campaign>/appearances.json, keyed "<kind>/<id>":
 
 from __future__ import annotations
 
-# Submodules before names, and `cast`/`transitions` after `paths`/`versions`:
-# `cast.py` and `transitions.py` both reach back into `paths` (and
-# `transitions.py` into `versions` too), so those two must already be bound
-# here first.
-from . import paths, versions, cast, transitions  # noqa: F401
+# Submodules before names, and `cast`/`transitions`/`detect` after
+# `paths`/`versions`: `cast.py` and `transitions.py` both reach back into
+# `paths` (and `transitions.py` into `versions` too), so those two must already
+# be bound here first; `detect.py` reads `cast` the same way.
+from . import paths, versions, cast, transitions, detect  # noqa: F401
 from .paths import (  # noqa: F401
     ACTOR_KINDS, AppearError, _path, _ref, _split, _write, locked_actor_root,
     record, repoint_scenes,
@@ -28,3 +28,4 @@ from .cast import (  # noqa: F401
     roster, roster_names, scene_cast,
 )
 from .transitions import appear, leave, suggestions  # noqa: F401
+from .detect import cast_changes  # noqa: F401

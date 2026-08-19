@@ -38,7 +38,8 @@ const opened: string[] = [];
 function renderColumn(props: Partial<Parameters<typeof CastColumn>[0]> = {}) {
   opened.length = 0;
   return render(
-    <CastColumn cid="saltmarch" cast={CAST} roster={ROSTER} briefing={BRIEFING}
+    <CastColumn cid="saltmarch" sid="s1" posts={0} refreshKey={0} cast={CAST} roster={ROSTER}
+                briefing={BRIEFING} onCastChanged={() => {}}
                 onOpen={(kind, id) => opened.push(`${kind}/${id}`)} {...props} />,
   );
 }

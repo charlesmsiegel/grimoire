@@ -1,5 +1,6 @@
 import { api, type Actor, type Briefing, type RosterEntry } from "../../api/client";
 import { Portrait } from "../Portrait";
+import CastChanges from "./CastChanges";
 
 /** Where an actor stands in the scene in front of you. */
 export type CastState = "PLAYER" | "IN SCENE";
@@ -66,12 +67,19 @@ function Tile(
  *  closed. Continuity is the thing this app is *for*, so it sits beside the
  *  transcript permanently and nothing has to be reopened to check it. */
 export default function CastColumn(
-  { cid, cast, roster, briefing, onOpen }: {
+  { cid, sid, posts, refreshKey, cast, roster, briefing, onOpen, onCastChanged }: {
     cid: string;
+    /** The open scene, or "" when none is. The cast-change scan is per scene. */
+    sid: string;
+    /** Posts in the open scene's window, and the parent's scene-read counter:
+     *  between them, whether the cast-change scan runs and when it re-runs. */
+    posts: number;
+    refreshKey: number;
     cast: Actor[];
     roster: RosterEntry[];
     briefing: Briefing | null;
     onOpen: (kind: string, id: string) => void;
+    onCastChanged: () => void;
   },
 ) {
   const tiles = tiers(cast, roster);
@@ -91,6 +99,10 @@ export default function CastColumn(
           Nobody is in this scene yet. Cast someone to begin.
         </p>
       )}
+
+      {/* Directly under the grid: what the last turn says the grid should be. */}
+      {sid && <CastChanges cid={cid} sid={sid} posts={posts} refreshKey={refreshKey}
+                           onChanged={onCastChanged} />}
 
       <div className="column-section">
         <div className="column-section-head">

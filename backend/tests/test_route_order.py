@@ -95,6 +95,12 @@ CROSSING_PAIRS = [
      "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
     ("/api/campaigns/{cid}/scenes/{sid}/cast/batch",
      "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
+    # Same shape and same decision as `cast/batch` directly above: only
+    # `/campaigns/{cid}/scenes/instantiate/cast/emergent` matches both, and
+    # "scenes" is not an entity kind, so the instantiate pattern can never
+    # legitimately claim it. The scene route is registered first and wins.
+    ("/api/campaigns/{cid}/scenes/{sid}/cast/emergent",
+     "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
     # `.../scenes/instantiate/alternates/{id}` matches both. The scene route
     # wins, like every other five-segment scene route above: `{kind}` there is
     # an entity kind, and "scenes" is not one, so the instantiate pattern can
