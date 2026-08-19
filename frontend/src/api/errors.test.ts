@@ -1,3 +1,6 @@
+// Vite's `?raw` — the file as text, resolved the same way the real import
+// is, so the guard below cannot end up reading some other copy.
+import errorsSource from "./errors?raw";
 import { ApiError } from "./client";
 import { errorText, isOffline } from "./errors";
 
@@ -65,4 +68,17 @@ test("a rejection that is not an object at all does not throw", () => {
   expect(isOffline("boom")).toBe(false);
   expect(isOffline(null)).toBe(false);
   expect(isOffline(undefined)).toBe(false);
+});
+
+test("errors.ts imports nothing, which is the only reason it works", () => {
+  // Not a style rule. These helpers were first written next to `ApiError` in
+  // `client.ts`, and five suites went red at once: the components that render
+  // an error are tested against a `vi.mock("../api/client")` that replaces
+  // that module wholesale, so the helper is undefined by the time the
+  // component asks for it. A single import here re-opens that door -- most
+  // likely `import { ApiError }` to "tidy" the structural reads below into an
+  // `instanceof`, which would also break the SSE frames, which are plain
+  // objects. The file's own docstring says so; this is what holds it.
+  expect(errorsSource).not.toMatch(/^\s*import\b/m);
+  expect(errorsSource).not.toMatch(/\brequire\s*\(/);
 });
