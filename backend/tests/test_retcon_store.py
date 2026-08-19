@@ -255,3 +255,15 @@ def test_a_commitment_is_attributed_like_a_plot_thread(cid, two_scenes):
 def test_the_retcon_report_names_the_scenes_a_re_extraction_can_contradict(cid, sid):
     second = scenes.create_scene(cid, "The Long Quay")
     assert retcon.retcon(cid, sid, 0, "different")["later"] == [second]
+
+
+def test_a_hand_mangled_attribution_file_costs_the_badges_not_the_review(cid, two_scenes):
+    """Every store the pass reads is a file the user owns. One bad row must
+    mean "no attribution" — the review it would otherwise take down is several
+    model calls old by the time this runs."""
+    first, _ = two_scenes
+    (campaigns.campaign_root(cid) / "changes.json").write_text(
+        '{"lore/pact": "not a row"}', encoding="utf-8")
+    (campaigns.campaign_root(cid) / "provenance.json").write_text(
+        '{"lore/pact#body": ["also not a row"]}', encoding="utf-8")
+    assert retcon.contradictions(cid, first, [_lore_edit("stored body", "different")]) == []

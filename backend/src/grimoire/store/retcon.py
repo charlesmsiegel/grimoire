@@ -112,11 +112,27 @@ def _titles(cid: str) -> dict[str, str]:
     summary where the scene has been absorbed, the scene title otherwise, and
     the bare id when it has neither."""
     out = {m["id"]: m.get("title") or m["id"] for m in scenes_read.list_scenes(cid)}
-    for sid, rec in chronicle.read_chronicle(cid).items():
+    chron = chronicle.read_chronicle(cid)
+    for sid, rec in (chron.items() if isinstance(chron, dict) else ()):
         line = rec.get("one_line") if isinstance(rec, dict) else ""
         if isinstance(line, str) and line.strip():
             out[sid] = line.strip()
     return out
+
+
+def _scene_of(rows: dict, key: str) -> str:
+    """The scene one row of a scene-tagged store names, or `""`.
+
+    Every store read here is a hand-editable file the user owns, so a row that
+    is not a dict — or a `scene` that is not a string — has to mean "no
+    attribution" rather than an exception out of a display pass. Same tolerance
+    `changes.read` and `provenance.read` apply to the files themselves.
+    """
+    if not key or not isinstance(rows, dict):
+        return ""
+    row = rows.get(key)
+    scene = row.get("scene") if isinstance(row, dict) else None
+    return scene if isinstance(scene, str) else ""
 
 
 def _changed(edit: dict) -> bool:
@@ -193,8 +209,8 @@ def contradictions(cid: str, sid: str, edits: list) -> list[dict]:
         ref = _target_ref(edit)
         # Order is the docstring's: the finest attribution that can answer wins.
         candidates = (
-            ("citation", (cites.get(provenance.key(edit) or "") or {}).get("scene")),
-            ("changes", (log.get(ref) or {}).get("scene") if ref else None),
+            ("citation", _scene_of(cites, provenance.key(edit) or "")),
+            ("changes", _scene_of(log, ref)),
             ("thread", _thread_scene(edit, threads, "plot")
                        or _thread_scene(edit, promises, "commitment")),
         )
@@ -240,6 +256,12 @@ def retcon(cid: str, sid: str, index: int, content: str) -> dict:
     it for the one caller that reaches this through the route.
     """
     with locks.campaign_lock(cid):
+        # Read BEFORE the edit, which is the only thing here that can be asked
+        # of the caller. It does not depend on the edit — the scene list is the
+        # same either side of it — and reading it afterwards would put a read
+        # that can fail (an unreadable scenes directory) between a landed edit
+        # and the reversal it must not be separated from.
+        later = sorted(later_scenes(cid, sid))
         scenes_write.edit_message(cid, sid, index, content)
         try:
             turnstate.supersede(cid, sid, index)
@@ -249,5 +271,4 @@ def retcon(cid: str, sid: str, index: int, content: str) -> dict:
             alternates.reconcile(cid, sid)
         except OSError:
             pass
-        return {"later": sorted(later_scenes(cid, sid)),
-                **cascade.revert_scene(cid, sid)}
+        return {"later": later, **cascade.revert_scene(cid, sid)}

@@ -663,7 +663,8 @@ export type PinRule = {
  *  one of them would defeat the point of a list. */
 export type PromptEntry = {
   id: string; scene: string; ts: string; model: string;
-  task: "chat" | "director" | "retry" | "regenerate" | "continuation" | "opener";
+  task: "chat" | "director" | "retry" | "regenerate" | "continuation" | "opener"
+      | "replay";
   total_tokens: number; dropped_tokens: number; budget_tokens: number;
 };
 /** A frozen breakdown: the same shape `getSceneContext` returns, plus which
