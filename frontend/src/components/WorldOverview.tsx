@@ -25,11 +25,11 @@ export function WorldOverview({
 }: { wid: string; onNavigate: (tab: string) => void; worldMid?: string; onPickMid?: (mid: string) => void }) {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [checks, setChecks] = useState<Check[]>([]);
-  // Held apart from `checks` and refreshed on its own: the rest of the list
-  // costs a read of every greeting, and a save on the calendar section below
-  // must not pay for that just to tick one box. `null` is "not read yet, or the
-  // read failed" — genuinely unknown, and an unknown flag is not a chore, so it
-  // contributes no row at all.
+  // Reported by the Calendar section below rather than read here: it fetches
+  // the same config anyway, and the rest of this list costs a read of every
+  // greeting, which a save on one checkbox must not re-run. `null` is "not
+  // reported yet, or that read failed" — genuinely unknown, and an unknown flag
+  // is not a chore, so it contributes no row at all.
   const [confirmed, setConfirmed] = useState<boolean | null>(null);
   const scope = useMemo(() => ({ kind: "world" as const, id: wid }), [wid]);
 
@@ -61,17 +61,16 @@ export function WorldOverview({
     return () => { live = false; };
   }, [wid, scope]);
 
-  useEffect(() => {
-    let live = true;
-    api.getCalendarConfig(scope)
-      .then((c) => { if (live) setConfirmed(c.confirmed); })
-      .catch(() => { if (live) setConfirmed(null); });
-    return () => { live = false; };
-  }, [scope]);
+  // A different world's answer is not this one's. Without the reset the row
+  // would keep showing the last world's flag until the section below reloads.
+  useEffect(() => { setConfirmed(null); }, [wid]);
 
+  // First: it is the one item on this list that is a decision rather than a
+  // count, and appending it would make the list grow upwards as the slower
+  // reads land.
   const rows: Check[] = confirmed === null
     ? checks
-    : [...checks, { label: "Calendar confirmed", ok: confirmed }];
+    : [{ label: "Calendar confirmed", ok: confirmed }, ...checks];
 
   return (
     <div className="world-overview">
@@ -107,7 +106,7 @@ export function WorldOverview({
           screen rather than in any one campaign. */}
       <div className="side-section">
         <h4>Calendar</h4>
-        <CalendarConfig scope={scope} onSaved={(c) => setConfirmed(c.confirmed)} />
+        <CalendarConfig scope={scope} onConfig={(c) => setConfirmed(c.confirmed)} />
       </div>
       <WorldMechanics wid={wid} worldMid={worldMid} onPickMid={onPickMid} />
     </div>

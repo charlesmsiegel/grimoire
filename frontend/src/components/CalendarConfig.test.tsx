@@ -91,9 +91,28 @@ test("a campaign's calendar has no confirmed control — the scene inspector own
   expect(screen.queryByLabelText(/confirmed/i)).toBeNull();
 });
 
-test("a save tells its owner, so the page around it can re-read", async () => {
-  const onSaved = vi.fn();
-  render(<CalendarConfig scope={{ kind: "world", id: "realm" }} onSaved={onSaved} />);
-  fireEvent.click(await screen.findByRole("button", { name: /save/i }));
-  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+test("the config it loads and the one it saves are both reported to its owner", async () => {
+  // The world Overview's checklist row is derived from this and nothing else,
+  // so a load that reported nothing would leave the row permanently absent.
+  const onConfig = vi.fn();
+  render(<CalendarConfig scope={{ kind: "world", id: "realm" }} onConfig={onConfig} />);
+  await waitFor(() => expect(onConfig).toHaveBeenCalledWith(
+    expect.objectContaining({ confirmed: false })));
+  fireEvent.click(await screen.findByLabelText(/confirmed/i));
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  await waitFor(() => expect(onConfig).toHaveBeenLastCalledWith(
+    expect.objectContaining({ confirmed: true })));
+});
+
+test("a failed load reports nothing, so an owner cannot mistake it for unconfirmed", async () => {
+  (api.getCalendarConfig as any).mockRejectedValue(new Error("nope"));
+  const onConfig = vi.fn();
+  render(<CalendarConfig scope={{ kind: "world", id: "realm" }} onConfig={onConfig} />);
+  expect(await screen.findByText(/loading calendar/i)).toBeInTheDocument();
+  expect(onConfig).not.toHaveBeenCalled();
+});
+
+test("the world's save says what it saves — Mechanics has a Save beside it", async () => {
+  render(<CalendarConfig scope={{ kind: "world", id: "realm" }} />);
+  expect(await screen.findByRole("button", { name: "Save calendar" })).toBeInTheDocument();
 });

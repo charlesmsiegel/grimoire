@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { WorldOverview } from "./WorldOverview";
 
 vi.mock("../api/client", () => ({
@@ -79,9 +79,7 @@ test("the calendar row is a statement, not a next-action — the editor is on th
 test("confirming the calendar closes the checklist item without a reload", async () => {
   render(<WorldOverview wid="w" onNavigate={vi.fn()} />);
   fireEvent.click(await screen.findByLabelText(/confirmed/i));
-  // Scoped: Mechanics has a Save of its own on this same page.
-  const panel = document.querySelector(".calendar-config") as HTMLElement;
-  fireEvent.click(within(panel).getByRole("button", { name: /save/i }));
+  fireEvent.click(screen.getByRole("button", { name: "Save calendar" }));
   expect(await screen.findByText(/✓ Calendar confirmed/)).toBeInTheDocument();
 });
 
@@ -92,4 +90,10 @@ test("a world whose calendar cannot be read shows no calendar row at all", async
   render(<WorldOverview wid="w" onNavigate={vi.fn()} />);
   expect(await screen.findByText(/plot map has connections/i)).toBeInTheDocument();
   expect(screen.queryByText(/Calendar confirmed/)).toBeNull();
+});
+
+test("the checklist reads the world's calendar once, not once per component", async () => {
+  render(<WorldOverview wid="w" onNavigate={vi.fn()} />);
+  await screen.findByText(/○ Calendar confirmed/);
+  expect(api.getCalendarConfig).toHaveBeenCalledTimes(1);
 });

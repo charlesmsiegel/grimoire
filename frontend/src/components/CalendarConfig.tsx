@@ -12,11 +12,15 @@ const REGIONS = ["US", "GB", "CA", "AU", "IL", ""];
  *  control of its own — campaign-side the scene inspector already owns that
  *  flag, world-side nothing else can set it.
  */
-export function CalendarConfig({ scope, onSaved }: {
+export function CalendarConfig({ scope, onConfig }: {
   scope: CalendarScope;
-  /** Called after a save lands, so a page holding its own copy of `confirmed`
-   *  (the world Overview's checklist) can re-read without polling. */
-  onSaved?: (cfg: Cfg) => void;
+  /** Every config this panel comes to hold — the one it loads, and each one it
+   *  saves. The world Overview's checklist row is derived from it rather than
+   *  from a read of its own: two components fetching one endpoint on one mount
+   *  is a request nobody needs and a second `confirmed` that can disagree with
+   *  this one. Not called when the load fails, which is what leaves that row
+   *  off the list entirely — unknown is not unconfirmed. */
+  onConfig?: (cfg: Cfg) => void;
 }) {
   const isWorld = scope.kind === "world";
   const [cfg, setCfg] = useState<Cfg | null>(null);
@@ -25,7 +29,9 @@ export function CalendarConfig({ scope, onSaved }: {
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    api.getCalendarConfig(scope).then(setCfg).catch(() => setCfg(null));
+    api.getCalendarConfig(scope)
+      .then((c) => { setCfg(c); onConfig?.(c); })
+      .catch(() => setCfg(null));
     api.getCalendarProviders().then((r) => setProviders(r.providers)).catch(() => setProviders([]));
   }, [scope.kind, scope.id]);
 
@@ -44,7 +50,7 @@ export function CalendarConfig({ scope, onSaved }: {
       // The saved config, not a re-read: the server normalizes but does not
       // decide any field the form shows, and a second GET would race this
       // component's own scope effect if the reader had already moved on.
-      onSaved?.(cfg!);
+      onConfig?.(cfg!);
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -107,7 +113,7 @@ export function CalendarConfig({ scope, onSaved }: {
           asking again. */}
       {isWorld && (
         <>
-          <label className="check-inline">
+          <label>
             <input type="checkbox" aria-label="Confirmed" checked={cfg.confirmed}
                    onChange={(e) => {
                      setSaved(false);
@@ -120,7 +126,12 @@ export function CalendarConfig({ scope, onSaved }: {
           </div>
         </>
       )}
-      <button className="primary" onClick={save}>Save</button>
+      {/* World-side this panel sits beside Mechanics, which has a Save of its
+          own; "Save" twice in a row is ambiguous to anyone reading the page by
+          its controls. The visible text stays "Save" and the name only extends
+          it, so "click Save" still resolves (WCAG 2.5.3). */}
+      <button className="primary" onClick={save}
+              aria-label={isWorld ? "Save calendar" : undefined}>Save</button>
       {saved && <span className="field-hint">Saved.</span>}
     </div>
   );
