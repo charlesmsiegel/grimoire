@@ -23,6 +23,26 @@ def test_context_scan_depth_default_and_write(monkeypatch, tmp_path):
     assert s.read_config()["context_scan_depth"] == "5"
 
 
+def test_scan_depth_reads_like_the_counts_beside_it(monkeypatch, tmp_path):
+    """One accessor for the setting, so the default lives in one place.
+
+    The builder used to parse `context_scan_depth` inline against a hardcoded
+    `"8"`, which meant `DEFAULT_SCAN_DEPTH` was not actually the default of
+    anything -- and now that the Configuration page seeds a field from it too,
+    that literal would have been the third copy (#11).
+    """
+    s = reload_with_home(monkeypatch, tmp_path)
+    assert s.config.scan_depth() == 8
+    s.write_config(context_scan_depth="3")
+    assert s.config.scan_depth() == 3
+    s.write_config(context_scan_depth="0")      # a real choice: no scan window
+    assert s.config.scan_depth() == 0
+    s.write_config(context_scan_depth="-2")     # not an index from the far end
+    assert s.config.scan_depth() == 0
+    s.write_config(context_scan_depth="abc")    # a cleared field falls back
+    assert s.config.scan_depth() == 8
+
+
 def test_write_merges_without_clearing(monkeypatch, tmp_path):
     s = reload_with_home(monkeypatch, tmp_path)
     s.write_config(user_label="Kestrel")

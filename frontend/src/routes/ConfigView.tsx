@@ -22,7 +22,8 @@ import { useTheme } from "../theme/ThemeProvider";
 const DRAFT_FIELDS = [
   "active_connection_id", "fallback_connection_id", "llm_retries",
   "llm_timeout", "absorb_budget", "llm_call_budget",
-  "context_budget", "archive_depth", "prompt_log_depth", "offscene_known_limit",
+  "context_budget", "context_scan_depth", "archive_depth", "prompt_log_depth",
+  "offscene_known_limit",
   "speaker_turn_taking", "prompt_layout_enabled",
   "turnstate_depth", "promote_streak",
   "embeddings_connection_id", "embeddings_model",
@@ -71,7 +72,7 @@ const SECTIONS: SectionDef[] = [
   { id: "timeouts", group: "The install", label: "Timeouts",
     fields: ["llm_timeout", "absorb_budget", "llm_call_budget"] },
   { id: "context", group: "What the model sees", label: "Context",
-    fields: ["context_budget", "archive_depth", "prompt_log_depth",
+    fields: ["context_budget", "context_scan_depth", "archive_depth", "prompt_log_depth",
              "offscene_known_limit", "speaker_turn_taking"] },
   { id: "layout", group: "What the model sees", label: "Prompt layout",
     fields: ["prompt_layout_enabled"] },
@@ -570,6 +571,15 @@ export default function ConfigView() {
               keyword match may pull back into context at once.
             </p>
             <p className="config-copy">
+              Context scan depth is how far back the keyword scan reads: the last N messages
+              of the transcript, and nothing older. Every keyword-triggered section shares
+              that window — world info, recalled scenes, keyed mechanics rules and the
+              semantic-recall query — so raising it is what makes an entry mentioned twenty
+              posts ago come back, and lowering it is what stops the scene dragging the whole
+              world in behind it. <code>0</code> empties the window, leaving only the entries
+              marked always-on.
+            </p>
+            <p className="config-copy">
               Kept turn prompts is how many past turns each campaign keeps a frozen copy of
               the exact prompt for, readable from the scene inspector's Turn history. They
               hold whole prompts, so the count is per campaign rather than per scene — playing
@@ -588,6 +598,11 @@ export default function ConfigView() {
               <NumField id="cfg-context-budget" label="Context budget" unit="tokens"
                         placeholder="0" caption="0 = no ceiling" value={draft.context_budget}
                         onChange={(v) => edit("context_budget", v)} />
+              <NumField id="cfg-context-scan-depth" label="Context scan depth"
+                        unit="messages" placeholder="8"
+                        caption="0 = scan nothing; always-on entries only"
+                        value={draft.context_scan_depth}
+                        onChange={(v) => edit("context_scan_depth", v)} />
               <NumField id="cfg-archive-depth" label="Recalled scenes" placeholder="3"
                         caption="older scenes a keyword match may pull back"
                         value={draft.archive_depth}

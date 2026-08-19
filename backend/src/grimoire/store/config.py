@@ -318,6 +318,19 @@ def _count(key: str, default: str) -> int:
         return max(int(default), 0)
 
 
+def scan_depth() -> int:
+    """Messages of transcript tail the keyword scan reads.
+
+    The window every keyword-triggered section shares: world info, chronicle
+    recall, keyed mechanics rules and the semantic-recall query are all matched
+    against these messages and nothing older. 0 is a real answer rather than a
+    disabled feature -- it empties the window, so only always-on entries render
+    -- while a cleared or hand-mangled field falls back to the default, which is
+    `_count`'s split and the reason this is not spelled out inline.
+    """
+    return _count("context_scan_depth", DEFAULT_SCAN_DEPTH)
+
+
 def turnstate_depth() -> int:
     """Posts of transcript tail the transient-state ledger is read over. 0 turns
     the whole feature off — no tracker instruction, no injected section."""
