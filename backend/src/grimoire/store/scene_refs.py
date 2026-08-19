@@ -2,12 +2,13 @@
 
 A scene's id is its filename stem, so file renames (title renames, first-date
 stamps, width re-pads, legacy migration) must be followed by every persisted
-reference. Fourteen stores hold scene ids: appearances (per-actor scenes lists),
+reference. Fifteen stores hold scene ids: appearances (per-actor scenes lists),
 audit (sheet baselines keyed by scene id), chronicle (record keys + id
 fields), changes (per-record scene field), plot and commitments (both
 beats[].scene + last_scene), facts (each fact's recording scene and, once it
 is retired, the scene that ended it), journal (the append-only change history's
-per-entry scene field), rolls (per-entry scene field), prompt_log
+per-entry scene field), provenance (each citation's scene field, the post it was
+quoted from), rolls (per-entry scene field), prompt_log
 (the frozen per-turn prompt index's scene field), commits (the per-scene commit
 epoch's keys + each token entry's sid), turnstate (the per-turn state ledger,
 keyed by scene id then post index), scene_ideas (the scene ledger's
@@ -23,7 +24,7 @@ themselves.
 from __future__ import annotations
 
 from . import (alternates, changes, chronicle, commitments, commits, facts, journal,
-               pins, plot, prompt_log, rolls, scene_ideas, turnstate)
+               pins, plot, prompt_log, provenance, rolls, scene_ideas, turnstate)
 from .appearances import paths as appearances_paths
 from .audit import baselines as audit_baselines
 
@@ -33,6 +34,6 @@ def repoint(cid: str, mapping: dict[str, str]) -> None:
     if not mapping:
         return
     for mod in (alternates, appearances_paths, audit_baselines, changes, chronicle,
-                commitments, commits, facts, journal, pins, plot, prompt_log, rolls,
-                scene_ideas, turnstate):
+                commitments, commits, facts, journal, pins, plot, prompt_log,
+                provenance, rolls, scene_ideas, turnstate):
         mod.repoint_scenes(cid, mapping)

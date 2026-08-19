@@ -1,7 +1,7 @@
 import json
 
 from grimoire.store import (appearances, campaigns, changes, chronicle, commitments,
-                            facts, plot, scene_refs, worlds)
+                            facts, plot, provenance, scene_refs, worlds)
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -29,6 +29,12 @@ def test_repoint_updates_every_store_that_holds_scene_ids(monkeypatch, tmp_path)
                              "sworn at the vault door", old)
     gone = facts.record(cid, "The vault has two doors.", "the third night", old)
     facts.record(cid, "The vault has three doors.", "", old, supersedes=gone)
+    provenance.record(cid, {
+        "characters/a#dossier": {"scene": old, "quote": "I will not be alone with him.",
+                                 "speaker": "Mara", "certainty": 1.0},
+        "characters/b#dossier": {"scene": "other", "quote": "elsewhere",
+                                 "speaker": "Winifred", "certainty": 1.0},
+    })
 
     scene_refs.repoint(cid, {old: "001--2026-07-04--s"})
 
@@ -47,6 +53,13 @@ def test_repoint_updates_every_store_that_holds_scene_ids(monkeypatch, tmp_path)
     retired = facts.get(cid, gone)
     assert retired["scene"] == "001--2026-07-04--s"
     assert retired["retired_scene"] == "001--2026-07-04--s"
+    # A citation names the post it was quoted from. Left behind by a rename it
+    # points at an id no longer on disk, and `forget_scene` -- which matches on
+    # this same field -- would no longer find the row when the scene is deleted,
+    # so the citation would outlive the scene it quotes.
+    cited = provenance.read(cid)
+    assert cited["characters/a#dossier"]["scene"] == "001--2026-07-04--s"
+    assert cited["characters/b#dossier"]["scene"] == "other"  # untouched
 
 
 def test_repoint_identity_and_empty_are_noops(monkeypatch, tmp_path):

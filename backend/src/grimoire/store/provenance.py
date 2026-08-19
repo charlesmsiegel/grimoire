@@ -152,6 +152,35 @@ def forget(cid: str, keys) -> None:
         atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
+def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
+    """Follow renamed scene ids in each row's ``scene`` field.
+
+    A scene's id is its filename stem, so the first date set on a scene moves
+    it (`scenes.moment._stamp_start_date`) and every store holding that id has
+    to follow. This one was missing from `scene_refs.repoint`'s fan-out, so a
+    renamed scene left its citations pointing at an id no longer on disk: the
+    panel could still render the quote, but nothing could get back to the post
+    it came from, and `forget_scene` would no longer find these rows to drop
+    when that scene was deleted -- the citations would outlive the scene
+    entirely.
+
+    Takes the campaign lock for the reason `record` and `forget` do: a
+    read-modify-write of one whole file.
+    """
+    mapping = {old: new for old, new in mapping.items() if old != new}
+    if not mapping:
+        return
+    with locks.campaign_lock(cid):
+        data = read(cid)
+        hit = False
+        for row in data.values():
+            if isinstance(row, dict) and row.get("scene") in mapping:
+                row["scene"] = mapping[row["scene"]]
+                hit = True
+        if hit:
+            atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
 def forget_scene(cid: str, sid: str) -> int:
     """Drop every citation this scene left. Returns how many went (#75).
 
