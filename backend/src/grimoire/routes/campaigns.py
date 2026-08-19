@@ -247,9 +247,25 @@ def _event_provider(cid: str):
 
 @router.get("/campaigns/{cid}/events")
 def get_campaign_events(cid: str):
-    """Every scheduled event, soonest first, each with its fire stamp."""
+    """Every scheduled event, soonest first, each with its fire stamp.
+
+    The campaign's present rides along, and each row says whether the clock has
+    gone by it unfired (`passed`). That state is reachable — schedule a beat for
+    a day already behind the clock and no advance can ever cross it — and
+    nothing else in the app would mention it. Resolved here rather than in the
+    panel because the comparison is calendar arithmetic, which is the server's.
+    """
     _campaign_root_or_404(cid)
-    return {"events": store.events.list_events(cid, _event_provider(cid))}
+    provider = _event_provider(cid)
+    now = store.clock.now(cid)
+    now_fixed = None
+    if provider is not None and now:
+        try:
+            now_fixed = store.calendars.fixed_of(provider, now)
+        except store.calendars.CalendarError:
+            now_fixed = None   # a present this calendar cannot read marks nothing
+    return {"events": store.events.list_events(cid, provider, now_fixed),
+            "now": now, "friendly": _clock_friendly(cid, now)}
 
 
 @router.post("/campaigns/{cid}/events")
@@ -963,8 +979,10 @@ def get_ledger(cid: str):
     # the reason every other read here has one: the aging pass resolves a
     # calendar provider, and a campaign whose provider is a broken plugin should
     # lose its badges, not its ledger.
-    aged = _tolerant(lambda: [store.aging.prepare(cid, clock_now)])
-    ctx = aged[0] if aged else None
+    try:
+        ctx = store.aging.prepare(cid, clock_now)
+    except Exception:  # noqa: BLE001 — a broken calendar plugin costs the badges
+        ctx = None     # (`_tolerant` is for the section reads; this empties no section)
     if ctx is not None:
         threads = store.aging.annotate(ctx, threads)
         owed = store.aging.annotate(ctx, owed)

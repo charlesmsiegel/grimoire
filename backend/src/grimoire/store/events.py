@@ -134,7 +134,7 @@ def _fired(value) -> dict | None:
     return {"at": _text(value.get("at")), "moment": _text(value.get("moment"))}
 
 
-def _row(eid: str, rec, provider=None) -> dict:
+def _row(eid: str, rec, provider=None, now_fixed: int | None = None) -> dict:
     """One projected event. `provider`, when given, adds the friendly date.
 
     The label is computed here rather than in the route because every consumer
@@ -142,6 +142,17 @@ def _row(eid: str, rec, provider=None) -> dict:
     date parsed, which this already did to sort. A date this calendar cannot
     read keeps an empty label rather than dropping the row: the row is the only
     place the reader can see, and fix, the date that broke.
+
+    `passed` is a READING, never a stored state: the campaign's present is
+    already past this day and no move ever fired it. That combination is
+    reachable and was, until it was named here, completely silent — schedule a
+    beat for a day the clock has gone by (a mistyped year, a beat written up
+    after the fact) and `crossed` will never see it, because a span that starts
+    at "now" cannot contain a day behind it. Firing it anyway would have an
+    advance report crossing something it did not cross, so the answer is to
+    say so rather than to write: a passed event is one the reader re-dates
+    forward, or deletes. `False` whenever there is no clock to compare against,
+    which is the same "cannot tell" the aging badges degrade to.
     """
     rec = rec if isinstance(rec, dict) else {}
     date = _text(rec.get("date"))
@@ -151,9 +162,13 @@ def _row(eid: str, rec, provider=None) -> dict:
             friendly = calendars.friendly(provider, date)
         except calendars.CalendarError:
             friendly = ""
+    fired = _fired(rec.get("fired"))
+    fixed = _fixed(provider, date) if provider is not None else None
     return {"id": eid, "name": _text(rec.get("name"), eid), "date": date,
             "friendly": friendly, "note": _text(rec.get("note")),
-            "fired": _fired(rec.get("fired"))}
+            "fired": fired,
+            "passed": fired is None and now_fixed is not None
+            and fixed is not None and fixed < now_fixed}
 
 
 def _fixed(provider, date: str) -> int | None:
@@ -172,7 +187,7 @@ def _fixed(provider, date: str) -> int | None:
         return None
 
 
-def list_events(cid: str, provider=None) -> list[dict]:
+def list_events(cid: str, provider=None, now_fixed: int | None = None) -> list[dict]:
     """Every stored event, soonest first.
 
     Sorted on the fixed-day axis when a provider resolves it, so two calendars'
@@ -180,8 +195,13 @@ def list_events(cid: str, provider=None) -> list[dict]:
     calendar cannot parse sorts last, by id, rather than interleaving on a
     string comparison that means nothing. With no provider the order is by id
     alone — a stable answer, not a chronological one.
+
+    `now_fixed` is the campaign's present, and only marks the rows the clock has
+    already gone by (see `_row`). Optional because it is the caller's to
+    resolve: the one that has a clock passes it, and the ones that do not — a
+    test, a tool reading the file — get an honest list without it.
     """
-    rows = [_row(eid, rec, provider) for eid, rec in read(cid).items()]
+    rows = [_row(eid, rec, provider, now_fixed) for eid, rec in read(cid).items()]
     if provider is None:
         return sorted(rows, key=lambda r: r["id"])
     order = {r["id"]: _fixed(provider, r["date"]) for r in rows}
@@ -233,9 +253,11 @@ def update(cid: str, eid: str, name: str | None = None, date: str | None = None,
 
     Each field is three-valued the way `commitments.set_movement`'s `due` is:
     None leaves the stored value alone, so a caller sending only a note cannot
-    blank the name. A date can be corrected but not removed — an event with no
-    day is not a scheduled event — so an empty `date` is a no-op rather than a
-    clear.
+    blank the name. Two of the three cannot be *emptied* either, and for the
+    same reason: an event with no day is not a scheduled event, and one with no
+    name is a row nobody can read, so a blank `date` or `name` is a no-op rather
+    than a clear. Only `note` — the field with a meaningful empty state — is
+    cleared by `""`.
 
     Re-dating an event does NOT clear its fire stamp. The stamp records that the
     clock reached the day the event was on at the time, which happened; deciding

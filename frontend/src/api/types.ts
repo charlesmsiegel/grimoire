@@ -520,6 +520,11 @@ export type Aging = {
 export type ScheduledEvent = {
   id: string; name: string; date: string; friendly: string; note: string;
   fired: { at: string; moment: string } | null;
+  /** The campaign's present is past this day and nothing ever fired it — a
+   *  reading the server computes, never a stored state. No advance can reach
+   *  such an event (a span starting at "now" cannot contain a day behind it),
+   *  so the row is asking to be re-dated forward or deleted. */
+  passed: boolean;
 };
 /** What an advance crosses. Deterministic, so the preview and the advance that
  *  follows it report the same thing. `truncated` means the span was too long to

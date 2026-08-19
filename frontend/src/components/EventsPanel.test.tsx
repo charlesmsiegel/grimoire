@@ -7,6 +7,7 @@ vi.mock("../api/client", async () => {
   return { ...actual, api: {
     campaignEvents: vi.fn(),
     createCampaignEvent: vi.fn(),
+    updateCampaignEvent: vi.fn(),
     unfireCampaignEvent: vi.fn(),
     deleteCampaignEvent: vi.fn(),
     // CalendarDatePicker (the date control on the form) fetches months.
@@ -16,12 +17,12 @@ vi.mock("../api/client", async () => {
 
 const UPCOMING = {
   id: "coronation", name: "The coronation", date: "2026-12-26",
-  friendly: "26 December 2026", note: "In the old hall.", fired: null,
+  friendly: "26 December 2026", note: "In the old hall.", fired: null, passed: false,
 };
 const FIRED = {
   id: "envoy", name: "The envoy arrives", date: "2026-12-01",
   friendly: "1 December 2026", note: "",
-  fired: { at: "2026-12-01T10:00:00Z", moment: "2026-12-02" },
+  fired: { at: "2026-12-01T10:00:00Z", moment: "2026-12-02" }, passed: false,
 };
 
 /** Fill the date control the way a reader does — year, then month, then day.
@@ -35,8 +36,10 @@ async function pickDate(year = "2027", month = "01", day = "5") {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(api.campaignEvents).mockResolvedValue({ events: [FIRED, UPCOMING] } as never);
+  vi.mocked(api.campaignEvents).mockResolvedValue(
+    { events: [FIRED, UPCOMING], now: "2026-12-24", friendly: "24 December 2026" } as never);
   vi.mocked(api.createCampaignEvent).mockResolvedValue({ ok: true, id: "x" } as never);
+  vi.mocked(api.updateCampaignEvent).mockResolvedValue({ ok: true } as never);
   vi.mocked(api.unfireCampaignEvent).mockResolvedValue({ ok: true } as never);
   vi.mocked(api.deleteCampaignEvent).mockResolvedValue({ ok: true } as never);
   // One real month, so the date control can actually compose a date: the
@@ -57,7 +60,7 @@ test("says when the clock has already reached one", async () => {
 });
 
 test("an empty campaign says so rather than showing nothing", async () => {
-  vi.mocked(api.campaignEvents).mockResolvedValue({ events: [] } as never);
+  vi.mocked(api.campaignEvents).mockResolvedValue({ events: [], now: "", friendly: "" } as never);
   render(<EventsPanel cid="c" />);
   expect(await screen.findByText("Nothing scheduled.")).toBeInTheDocument();
 });
@@ -111,7 +114,48 @@ test("deleting removes it and reloads", async () => {
 test("a date the campaign's calendar cannot read still shows its raw value", async () => {
   // This row is the only place a reader can see, and fix, the value that broke.
   vi.mocked(api.campaignEvents).mockResolvedValue(
-    { events: [{ ...UPCOMING, friendly: "" }] } as never);
+    { events: [{ ...UPCOMING, friendly: "" }], now: "", friendly: "" } as never);
   render(<EventsPanel cid="c" />);
   expect(await screen.findByText(/The coronation — 2026-12-26/)).toBeInTheDocument();
+});
+
+test("an event the campaign is already past says so, and says what to do", async () => {
+  // No advance can fire it — a span starting at "now" cannot contain a day
+  // behind it — so the label and the Edit button beside it are the whole remedy.
+  vi.mocked(api.campaignEvents).mockResolvedValue(
+    { events: [{ ...UPCOMING, passed: true }], now: "2026-12-31",
+      friendly: "31 December 2026" } as never);
+  render(<EventsPanel cid="c" />);
+  expect(await screen.findByText("missed")).toBeInTheDocument();
+  expect(screen.getByText(/already past this day/)).toBeInTheDocument();
+});
+
+test("an event can be re-dated in place", async () => {
+  render(<EventsPanel cid="c" />);
+  await screen.findByText(/The coronation/);
+  fireEvent.click(screen.getAllByText("Edit")[1]);
+  await pickDate("2027", "01", "5");
+  fireEvent.click(screen.getByText("Save"));
+  await waitFor(() => expect(api.updateCampaignEvent).toHaveBeenCalledWith(
+    "c", "coronation", { name: "The coronation", date: "2027-01-05",
+                         note: "In the old hall." }));
+});
+
+test("an edit form opens on the stored values", async () => {
+  render(<EventsPanel cid="c" />);
+  await screen.findByText(/The coronation/);
+  fireEvent.click(screen.getAllByText("Edit")[1]);
+  expect(screen.getByLabelText("Event name")).toHaveValue("The coronation");
+  expect(screen.getByLabelText("Event note")).toHaveValue("In the old hall.");
+});
+
+test("a rejected edit keeps the form open with what was typed", async () => {
+  vi.mocked(api.updateCampaignEvent).mockRejectedValue({ detail: "not a date in this calendar" });
+  render(<EventsPanel cid="c" />);
+  await screen.findByText(/The coronation/);
+  fireEvent.click(screen.getAllByText("Edit")[1]);
+  fireEvent.change(screen.getByLabelText("Event name"), { target: { value: "Renamed" } });
+  fireEvent.click(screen.getByText("Save"));
+  expect(await screen.findByText("not a date in this calendar")).toBeInTheDocument();
+  expect(screen.getByLabelText("Event name")).toHaveValue("Renamed");
 });

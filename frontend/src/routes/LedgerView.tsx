@@ -163,9 +163,9 @@ function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
     return ledger.plot.map((t) => ({
       key: t.id, mark: "▸", what: t.title,
       note: joinNote(agingLabel(t.aging), t.latest_beat),
-      // Overdue is the alert colour on a thread as it is on a threat: both are
-      // "this is owed and time has run out on it".
-      alert: t.aging?.state === "overdue",
+      // No `alert` here: a thread has no deadline, so it can only ever be
+      // stale, and colouring a row for a state it cannot reach would imply the
+      // section has an urgency it does not.
       asOf: t.status.toUpperCase(), scene: t.scene.title,
     }));
   if (section === "commitments")
