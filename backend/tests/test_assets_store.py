@@ -28,6 +28,52 @@ def test_replace_with_different_ext_leaves_one_file(tmp_path):
     assert assets.image_path(tmp_path, "sera", "default", "avatar").read_bytes() == b"b"
 
 
+@pytest.mark.parametrize("ext", ["gif", "webp"])
+def test_list_images_reports_one_entry_per_logical_image(tmp_path, ext):
+    """A stem with two files on disk is one image, listed once, as the one
+    `image_path` resolves.
+
+    `put_in` writes the new extension before dropping the old, and `path_in`
+    self-heals an unlink that never happened, so the two-file state is
+    reachable and can persist. Listing it twice double-counts galleries, gives
+    the frontend two tiles under one key, and -- the reason this was found --
+    lets a cache token be read off the sibling the server will not serve, which
+    a `?v=` URL then pins immutably for a year.
+    """
+    import os
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"served bytes", "png")
+    served = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
+    stale = served.with_suffix(f".{ext}")
+    stale.write_bytes(b"stale bytes of another length")
+    os.utime(stale, (1, 1))
+
+    imgs = assets.list_images(tmp_path, "sera", "default")
+    assert _named(imgs) == [("avatar", "png")]
+    assert imgs[0]["v"] == assets.image_version(served)
+
+
+def test_a_file_that_vanishes_mid_scan_is_dropped_not_raised(tmp_path, monkeypatch):
+    """The listing stats each file it just saw in the directory, and `put_in`
+    unlinks a stale sibling right after publishing the new one -- so a
+    concurrent reader can genuinely scan a path that is gone by the stat.
+    `_mtime_ns` already tolerates it; the token stat has to as well, or one
+    vanishing file 500s a route that lists every character.
+    """
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"a", "png")
+    assets.put_image(tmp_path, "sera", "default", "gallery_0", b"b", "png")
+    doomed = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
+    real = assets._addressable_name
+
+    def vanishing(stem):
+        # runs per candidate file, immediately before it is stat'd
+        if stem == assets.AVATAR and doomed.exists():
+            doomed.unlink()
+        return real(stem)
+
+    monkeypatch.setattr(assets, "_addressable_name", vanishing)
+    assert _named(assets.list_images(tmp_path, "sera", "default")) == [("gallery_0", "png")]
+
+
 def test_delete_and_absent(tmp_path):
     assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"a", "png")
     assets.delete_image(tmp_path, "sera", "default", assets.AVATAR)

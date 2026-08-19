@@ -371,7 +371,17 @@ def list_images(root: Path, cid: str, vid: str, base: str = "characters") -> lis
     # old promotion stranded gets a reachable name before the listing is built,
     # so it shows up in the editor instead of staying invisible forever.
     _heal_stranded_promotion(d)
-    out: list[dict] = []
+    # ONE ENTRY PER LOGICAL IMAGE, not per file. Two files can share a stem:
+    # `put_in` writes the new extension before dropping the old one, and
+    # `path_in` self-heals an unlink that never happened, so the state is
+    # reachable and can persist. Listing both double-counts galleries, hands
+    # the frontend two tiles under one key, and lets a caller read a cache
+    # token off the sibling the server will not serve -- which a `?v=` URL,
+    # answered `immutable, max-age=1y`, then pins for a year.
+    #
+    # Newest wins, the same rule and the same tie-break `path_in` resolves by,
+    # so the entry always describes the bytes the serve route returns.
+    best: dict[str, Path] = {}
     for p in sorted(d.iterdir()):
         # filter on addressability, not just the extension: a name image_path
         # could never resolve would advertise a gallery entry that cannot be
@@ -379,8 +389,17 @@ def list_images(root: Path, cid: str, vid: str, base: str = "characters") -> lis
         # deliberate exception -- unwritable, but a stranded one is shown on
         # purpose so failed recovery is visible rather than silent (#253).
         if p.is_file() and _norm_ext(p.suffix) and _addressable_name(p.stem):
-            out.append({"name": p.stem, "ext": p.suffix.lstrip(".").lower(),
+            cur = best.get(p.stem)
+            if cur is None or (_mtime_ns(p), p.name) > (_mtime_ns(cur), cur.name):
+                best[p.stem] = p
+    out: list[dict] = []
+    for name in sorted(best):
+        p = best[name]
+        try:
+            out.append({"name": name, "ext": p.suffix.lstrip(".").lower(),
                         "v": image_version(p)})
+        except OSError:
+            continue   # vanished mid-scan; a listing must not fail over one file
     return out
 
 

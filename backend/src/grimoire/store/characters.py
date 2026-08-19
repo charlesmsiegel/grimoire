@@ -241,6 +241,9 @@ def read_character(root: Path, cid: str) -> dict:
             "name": _version_label(card, vid),
             "card": card,
             "images": [i["name"] for i in version_images],
+            # `list_images` is one entry per logical image, resolved the way
+            # the serve route resolves, so the token always names the bytes a
+            # `?v=` URL will return -- and that URL is cached immutable.
             "image_v": {i["name"]: i["v"] for i in version_images},
             "avatar_focus": assets.read_focus(root, cid, vid),
             "chub_source": chub_source,
