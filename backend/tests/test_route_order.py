@@ -114,6 +114,15 @@ CROSSING_PAIRS = [
     # "scenes" is not an entity kind, so the instantiate pattern can never
     # legitimately claim a URL under /scenes/.
     ("/api/campaigns/{cid}/scenes/{sid}/scene-break/dismiss",
+    # The three retcon-replay steps (#79), same decision as every five-segment
+    # scene route above: only an entity kind literally named "scenes" could
+    # reach the crossing, "scenes" is not one, and the scene routes are
+    # registered first.
+    ("/api/campaigns/{cid}/scenes/{sid}/replay/turn",
+     "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
+    ("/api/campaigns/{cid}/scenes/{sid}/replay/accept",
+     "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
+    ("/api/campaigns/{cid}/scenes/{sid}/replay/cancel",
      "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
     ("/api/campaigns/{cid}/sheets/{kind}/{eid}",
      "/api/campaigns/{cid}/{kind}/{eid}/images"),

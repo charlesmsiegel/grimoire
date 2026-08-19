@@ -13,8 +13,9 @@ quoted from), rolls (per-entry scene field), prompt_log
 epoch's keys + each token entry's sid), turnstate (the per-turn state ledger,
 keyed by scene id then post index), scene_ideas (the scene ledger's
 `used_scene`, the scene a saved idea became), pins (each scene-scoped pin or
-exclude, which carries its scene id in the record *and* in its key), and
-alternates (a
+exclude, which carries its scene id in the record *and* in its key), replay (the
+retcon-replay session's scene, whose backlog is the only copy of the posts that
+scene's cut removed), and alternates (a
 `<sid>.alts.json` sidecar, which moves rather than being rewritten — it is the
 one store keyed by *filename* instead of by a field, and so is not reachable
 through the fan-out the others share). Callers rename the `.md` files
@@ -29,7 +30,8 @@ trail (`store.usage.KIND_RENAME`).
 from __future__ import annotations
 
 from . import (alternates, changes, chronicle, commitments, commits, facts, journal,
-               pins, plot, prompt_log, provenance, rolls, scene_ideas, turnstate, usage)
+               pins, plot, prompt_log, provenance, replay, rolls, scene_ideas,
+               turnstate, usage)
 from .appearances import paths as appearances_paths
 from .audit import baselines as audit_baselines
 
@@ -40,5 +42,5 @@ def repoint(cid: str, mapping: dict[str, str]) -> None:
         return
     for mod in (alternates, appearances_paths, audit_baselines, changes, chronicle,
                 commitments, commits, facts, journal, pins, plot, prompt_log,
-                provenance, rolls, scene_ideas, turnstate, usage):
+                provenance, replay, rolls, scene_ideas, turnstate, usage):
         mod.repoint_scenes(cid, mapping)
