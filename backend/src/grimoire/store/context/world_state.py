@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Callable
 
-from .. import (calendars, characters, entities, groupstate, overlay, pcs,
+from .. import (calendars, characters, entities, events, groupstate, overlay, pcs,
                 playstate, turnstate, weather)
 from ..appearances import versions as appearances_versions
 from ..scenes import read as scenes_read
@@ -211,9 +211,20 @@ def _today_data(cid: str, sid: str, croot) -> dict | None:
         facts = calendars.today_facts(cfg, history[-1])
     except calendars.CalendarError:
         return None  # garbled date — omit, don't crash
+    # The campaign's own scheduled events (#101) beside the calendar's holidays.
+    # Two sources, one section: a holiday recurs and belongs to the world's
+    # calendar, an event happens once and belongs to this campaign, but to the
+    # model reading this block they are both "what today is". `events.day_facts`
+    # is where the campaign half lives — `today_facts` takes a calendar config
+    # and has no business reading a campaign — and `events.sooner` is the merge
+    # rule the two callers of it share, so the prompt and the suggestion
+    # snapshot cannot disagree about what is next.
+    scheduled = events.day_facts(cid, croot, history[-1])
     return {"friendly": facts["friendly"], "weekday": facts["weekday"],
             "secondary_friendly": facts["secondary_friendly"],
-            "holidays_today": facts["holidays_today"], "upcoming": facts["upcoming"],
+            "holidays_today": facts["holidays_today"],
+            "events_today": scheduled["events_today"],
+            "upcoming": events.sooner(facts["upcoming"], scheduled["upcoming"]),
             "cast": cast_data.cast_datetime_facts(cid, sid, history[-1])}
 
 

@@ -493,21 +493,53 @@ export function splitNativeDate(native: string): { date: string; time: string | 
   return m ? { date: native.slice(0, m.index), time: m[1] } : { date: native, time: null };
 }
 
-export type CalendarConfig = { primary: CalendarBlock; secondary: CalendarBlock | null; confirmed: boolean };
+export type CalendarConfig = {
+  primary: CalendarBlock; secondary: CalendarBlock | null; confirmed: boolean;
+  /** How long a thread or commitment may go untouched before the ledger calls
+   *  it stale (#103). Sent back on save: a client that drops it is a campaign
+   *  reset to a threshold nobody chose. */
+  stale_after_days: number;
+};
 
 // ---- the campaign clock (#100) ----
 /** One row of the clock's log: where time went, why, and when that was recorded. */
 export type ClockLogEntry = { from: string; to: string; reason: string; at: string };
 export type CampaignClock = { now: string; friendly: string; log: ClockLogEntry[] };
+/** How long a record has been owed (#103), computed at read time and never
+ *  stored. `overdue` needs a `due` the campaign's calendar can parse — a
+ *  deadline written in the fiction's own words ("before the harvest moon") ages
+ *  by staleness alone. `due_in` is the not-yet-due side of the same number. */
+export type Aging = {
+  state: "ok" | "stale" | "overdue";
+  days_since: number | null; days_over: number | null; due_in: number | null;
+};
+/** One scheduled event (#101): a dated thing this campaign has planned, and the
+ *  stamp the clock writes when it reaches the day. `fired` is null until then,
+ *  and carries both reckonings — `at` is wall-clock, `moment` the in-world date
+ *  the clock landed on. */
+export type ScheduledEvent = {
+  id: string; name: string; date: string; friendly: string; note: string;
+  fired: { at: string; moment: string } | null;
+};
 /** What an advance crosses. Deterministic, so the preview and the advance that
  *  follows it report the same thing. `truncated` means the span was too long to
- *  itemize — `elapsed_days` is exact either way. */
+ *  itemize — `elapsed_days` is exact either way, and `events` is listed however
+ *  long the span, since those are the campaign's own authored rows and the ones
+ *  the advance fires. */
 export type AdvanceDigest = {
   from: string; to: string; from_friendly: string; to_friendly: string;
   elapsed_days: number; backward: boolean; truncated: boolean;
   holidays: { name: string; native: string; friendly: string; in_days: number }[];
   birthdays: { name: string; age: number; native: string; friendly: string }[];
-  open_threads: { id: string; title: string; status: string; last_scene: string; latest_beat: string }[];
+  events: (ScheduledEvent & { in_days: number })[];
+  // The ledger's rows without the resolved scene label: the digest reads the
+  // stores directly and joins no scene titles, so the type says so rather than
+  // promising a field the panel would render as `undefined`.
+  open_threads: (Omit<PlotThread, "scene"> & { aging: Aging })[];
+  commitments: (Omit<Commitment, "scene"> & { aging: Aging })[];
+  /** Counted over both lists, aged against the moment the move LANDS on — what
+   *  the skip will leave overdue, which is the question before confirming it. */
+  aging: { overdue: number; stale: number; stale_after: number };
 };
 /** `to` skips to a date, `days` advances by a duration; `to` wins if both are sent. */
 export type AdvanceRequest = { to?: string; days?: number; reason?: string };
@@ -947,6 +979,9 @@ export type LedgerScene = { id: string; title: string; date: string };
 export type PlotThread = {
   id: string; title: string; status: string;
   last_scene: string; latest_beat: string; scene: LedgerScene;
+  /** Present on ledger and digest rows (#103); the digest's own type restates
+   *  it as required, since every row there is aged. */
+  aging?: Aging;
 };
 export type Commitment = PlotThread & { kind: string; due: string };
 /** A standing fact on the ledger (#114). `scene` is the scene that RECORDED it,
@@ -983,6 +1018,10 @@ export type Ledger = {
   plot: PlotThread[]; commitments: Commitment[]; facts: StandingFact[];
   retired: RetiredFact[]; relationships: LedgerRelationship[];
   chronicle: LedgerFact[];
+  /** This campaign's staleness threshold, beside the rows rather than on each
+   *  of them: a panel saying "40 days untouched" needs to be able to say what
+   *  this campaign calls too long. */
+  stale_after_days: number;
 };
 
 // keyword search (#33)

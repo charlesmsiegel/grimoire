@@ -40,7 +40,10 @@ def test_empty_campaign_returns_six_empty_sections(client):
     cid = _campaign(client)
     assert client.get(f"/api/campaigns/{cid}/ledger").json() == {
         "plot": [], "commitments": [], "facts": [], "retired": [],
-        "relationships": [], "chronicle": []}
+        "relationships": [], "chronicle": [],
+        # The campaign's staleness threshold rides beside the sections (#103):
+        # the panel needs it to say what "40 days untouched" means here.
+        "stale_after_days": store.calendars.STALE_AFTER_DAYS}
 
 
 def test_open_threads_and_commitments_carry_their_scene(client):
@@ -190,8 +193,15 @@ def test_a_record_with_non_string_fields_still_renders_as_a_row(client):
     row = client.get(f"/api/campaigns/{cid}/ledger").json()["commitments"][0]
     assert row == {"id": "x", "title": "x", "kind": "promise", "status": "open",
                    "due": "", "last_scene": "s1", "latest_beat": "",
-                   "scene": {"id": "s1", "title": "s1", "date": ""}}
-    assert all(isinstance(v, str) for k, v in row.items() if k != "scene")
+                   "scene": {"id": "s1", "title": "s1", "date": ""},
+                   # Aged like every other row (#103), and unaged in substance:
+                   # this campaign has no clock, so there is no present to
+                   # measure from and every number is honestly None.
+                   "aging": {"state": "ok", "days_since": None,
+                             "days_over": None, "due_in": None}}
+    # `scene` and `aging` are the row's two structured fields; the rest is text
+    # the panel interpolates, which is what this test is about.
+    assert all(isinstance(v, str) for k, v in row.items() if k not in ("scene", "aging"))
 
 
 def test_a_thread_with_non_string_fields_still_renders_as_a_row(client):
@@ -205,7 +215,9 @@ def test_a_thread_with_non_string_fields_still_renders_as_a_row(client):
                "last_scene": "s1"}}), encoding="utf-8")
     row = client.get(f"/api/campaigns/{cid}/ledger").json()["plot"][0]
     assert row["id"] == "t" and row["title"] == "t" and row["status"] == "open"
-    assert all(isinstance(v, str) for k, v in row.items() if k != "scene")
+    # `scene` and `aging` are the two structured fields on a row; everything
+    # else is text the panel interpolates, which is what this is about.
+    assert all(isinstance(v, str) for k, v in row.items() if k not in ("scene", "aging"))
 
 
 def test_one_unsortable_chronicle_id_does_not_cost_the_other_facts(client):

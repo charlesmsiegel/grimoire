@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type AdvanceDigest, type CalendarConfig, type CampaignClock } from "../api/client";
+import { agingLabel } from "../aging";
+import { api, type AdvanceDigest, type CalendarConfig, type CampaignClock,
+         type ClockLogEntry } from "../api/client";
 import { CalendarDatePicker } from "./CalendarDatePicker";
+
+/** What a shown digest *is*, so one block can serve all three states without
+ *  the reader having to guess which they are looking at: a preview, a move that
+ *  landed, or a confirmed advance the server treated as a no-op because the
+ *  clock was already at that moment (`moved: false`). Calling that last one
+ *  "Advanced" would claim a write that did not happen. */
+type Outcome = "preview" | "moved" | "unchanged";
 
 /** The campaign clock (#100): where the story's present is, and the one control
  *  that moves it deliberately — by a duration or to a date, always with a reason.
@@ -30,12 +39,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   const [target, setTarget] = useState("");
   const [reason, setReason] = useState("");
   const [digest, setDigest] = useState<AdvanceDigest | null>(null);
-  /** What the shown digest *is*, so one block can serve all three states without
-   *  the reader having to guess which they are looking at: a preview, a move that
-   *  landed, or a confirmed advance the server treated as a no-op because the
-   *  clock was already at that moment (`moved: false`). Calling that last one
-   *  "Advanced" would claim a write that did not happen. */
-  const [outcome, setOutcome] = useState<"preview" | "moved" | "unchanged">("preview");
+  const [outcome, setOutcome] = useState<Outcome>("preview");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -140,76 +144,125 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
 
       {error && <div className="field-hint error">{error}</div>}
 
-      {digest && (
-        <div className="clock-digest">
-          <div className="field-hint">
-            {{ preview: "Would advance", moved: "Advanced",
-               unchanged: "Already at" }[outcome]}{" "}
-            {digest.from_friendly ? `${digest.from_friendly} → ` : ""}{digest.to_friendly}
-            {" · "}
-            {digest.backward
-              ? `${Math.abs(digest.elapsed_days)} days back`
-              : `${digest.elapsed_days} day${digest.elapsed_days === 1 ? "" : "s"}`}
-          </div>
-          {/* Two ways `truncated` gets set and they need different sentences: the
-              span was past what the digest scans (nothing listed) or a list hit
-              its row cap (some of it listed). Saying "too long to itemize" above
-              sixty itemized rows would be a plain lie. */}
-          {digest.truncated && (
-            <div className="field-hint">
-              {digest.holidays.length || digest.birthdays.length
-                ? "More was crossed than is listed here."
-                : "Too long a span to itemize — holidays and birthdays are not listed."}
-            </div>
-          )}
-          {digest.holidays.length > 0 && (
-            <div className="side-section-body">
-              <h4>Holidays crossed</h4>
-              {digest.holidays.map((h) => (
-                <div className="field-hint" key={`${h.name}-${h.native}`}>
-                  {h.name} — {h.friendly}
-                </div>
-              ))}
-            </div>
-          )}
-          {digest.birthdays.length > 0 && (
-            <div className="side-section-body">
-              <h4>Birthdays crossed</h4>
-              {/* Index-keyed: two actors can share a name and a birthday
-                  (twins, or one character cast at two versions), and a
-                  duplicate key silently drops a row from a list whose whole
-                  job is to be complete. The list is regenerated whole on
-                  every digest, never reordered in place. */}
-              {digest.birthdays.map((b, i) => (
-                <div className="field-hint" key={i}>
-                  {b.name} turns {b.age} — {b.friendly}
-                </div>
-              ))}
-            </div>
-          )}
-          {digest.open_threads.length > 0 && (
-            <div className="side-section-body">
-              {/* Untouched by construction: a skip contains no scenes, so
-                  nothing in it can have moved a thread. */}
-              <h4>Still open</h4>
-              {digest.open_threads.map((t) => (
-                <div className="field-hint" key={t.id}>{t.title}</div>
-              ))}
-            </div>
-          )}
+      {digest && <AdvanceDigestView digest={digest} outcome={outcome} />}
+
+      {clock && clock.log.length > 0 && <ClockLog log={clock.log} />}
+    </div>
+  );
+}
+
+
+/** What an advance crossed, and what it leaves the campaign owing.
+ *
+ *  Its own component because the panel above it is a form and this is a report:
+ *  they change for different reasons, and holding both in one function is what
+ *  made the original 197 lines long enough for the code-health sweep to flag.
+ *  Everything here is server-computed — the panel never recomputes a number, so
+ *  what the reader approved is exactly what they got.
+ */
+function AdvanceDigestView({ digest, outcome }: { digest: AdvanceDigest; outcome: Outcome }) {
+  const span = digest.backward
+    ? `${Math.abs(digest.elapsed_days)} days back`
+    : `${digest.elapsed_days} day${digest.elapsed_days === 1 ? "" : "s"}`;
+  return (
+    <div className="clock-digest">
+      <div className="field-hint">
+        {{ preview: "Would advance", moved: "Advanced",
+           unchanged: "Already at" }[outcome]}{" "}
+        {digest.from_friendly ? `${digest.from_friendly} → ` : ""}{digest.to_friendly}
+        {" · "}{span}
+      </div>
+      {/* Two ways `truncated` gets set and they need different sentences: the
+          span was past what the digest scans (nothing listed) or a list hit
+          its row cap (some of it listed). Saying "too long to itemize" above
+          sixty itemized rows would be a plain lie. */}
+      {digest.truncated && (
+        <div className="field-hint">
+          {digest.holidays.length || digest.birthdays.length
+            ? "More was crossed than is listed here."
+            : "Too long a span to itemize — holidays and birthdays are not listed."}
         </div>
       )}
-
-      {clock && clock.log.length > 0 && (
-        <div className="clock-log">
-          <h4>Recent advances</h4>
-          {clock.log.slice(-5).reverse().map((e, i) => (
-            <div className="field-hint" key={i}>
-              {e.from ? `${e.from} → ` : ""}{e.to}{e.reason ? ` — ${e.reason}` : ""}
+      {digest.events.length > 0 && (
+        <div className="side-section-body">
+          {/* The one list here that is also a WRITE: confirming stamps these as
+              fired (#101), which is why the heading changes with the outcome
+              rather than saying "fired" over a preview that fired nothing. A
+              backward correction reports what it un-lived and stamps nothing,
+              so it keeps the neutral wording too. */}
+          <h4>{outcome === "moved" && !digest.backward ? "Events fired" : "Scheduled events"}</h4>
+          {digest.events.map((e) => (
+            <div className="field-hint" key={e.id}>{e.name} — {e.friendly || e.date}</div>
+          ))}
+        </div>
+      )}
+      {digest.holidays.length > 0 && (
+        <div className="side-section-body">
+          <h4>Holidays crossed</h4>
+          {digest.holidays.map((h) => (
+            <div className="field-hint" key={`${h.name}-${h.native}`}>
+              {h.name} — {h.friendly}
             </div>
           ))}
         </div>
       )}
+      {digest.birthdays.length > 0 && (
+        <div className="side-section-body">
+          <h4>Birthdays crossed</h4>
+          {/* Index-keyed: two actors can share a name and a birthday
+              (twins, or one character cast at two versions), and a
+              duplicate key silently drops a row from a list whose whole
+              job is to be complete. The list is regenerated whole on
+              every digest, never reordered in place. */}
+          {digest.birthdays.map((b, i) => (
+            <div className="field-hint" key={i}>
+              {b.name} turns {b.age} — {b.friendly}
+            </div>
+          ))}
+        </div>
+      )}
+      {digest.open_threads.length > 0 && (
+        <div className="side-section-body">
+          {/* Untouched by construction: a skip contains no scenes, so
+              nothing in it can have moved a thread. The badge says how long
+              that has been true on the far side of this move (#103). */}
+          <h4>Still open</h4>
+          {digest.open_threads.map((t) => (
+            <div className="field-hint" key={t.id}>{t.title}{badge(agingLabel(t.aging))}</div>
+          ))}
+        </div>
+      )}
+      {digest.commitments.length > 0 && (
+        <div className="side-section-body">
+          {/* Commitments before threads is the ledger's order, and the reason
+              holds here: a promise with a deadline is what a skip can break. */}
+          <h4>Still owed</h4>
+          {digest.commitments.map((c) => (
+            <div className="field-hint" key={c.id}>{c.title}{badge(agingLabel(c.aging))}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** An aging label as a trailing clause, or nothing at all. Written once because
+ *  a badge that appeared on one of the two lists and not the other would read
+ *  as a claim about the difference between them. */
+function badge(label: string) {
+  return label ? <span className="field-hint"> · {label}</span> : null;
+}
+
+/** Where the campaign's present has been, newest first. */
+function ClockLog({ log }: { log: ClockLogEntry[] }) {
+  return (
+    <div className="clock-log">
+      <h4>Recent advances</h4>
+      {log.slice(-5).reverse().map((e, i) => (
+        <div className="field-hint" key={i}>
+          {e.from ? `${e.from} → ` : ""}{e.to}{e.reason ? ` — ${e.reason}` : ""}
+        </div>
+      ))}
     </div>
   );
 }

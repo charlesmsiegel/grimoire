@@ -192,6 +192,15 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # (user-authored) code, which must not run under this lock -- the same cut
     # `scenes.moment.set_datetime` and `scenes.lifecycle._date_hint` make.
     "store.clock",
+    # events.json is rewritten whole by every create, edit and fire, and a lost
+    # write here is not a stale panel: `fire` stamps that the clock reached a
+    # scheduled event, and losing that stamp means the same event fires again on
+    # the next advance that re-crosses its day. New module (#101), so it starts
+    # inside the exclusion rather than joining the frozen `UNREVIEWED` backlog.
+    # As in `clock`, only the read-modify-write is inside -- normalizing a date
+    # runs the campaign's (possibly user-authored) calendar provider, which must
+    # not happen under this lock.
+    "store.events",
     # `facts.json` the same (#114), and with one reason of its own on top of
     # the whole-file rewrite: `record` retires the superseded fact and writes
     # its replacement in one read-modify-write, so an unlocked pair can also

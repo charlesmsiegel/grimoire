@@ -26,7 +26,7 @@ import json
 from pathlib import Path
 
 from .. import prompts
-from . import atomic, locks
+from . import atomic, fieldtext, locks
 from .campaigns import paths as campaigns_paths
 
 KINDS = ("promise", "threat", "foreshadowing")
@@ -222,8 +222,11 @@ def _field(value, fallback: str = "") -> str:
     reaches `LedgerPanel`, where React refuses to render an object as a child
     and the whole panel goes blank. One hand-edited record must not be able to
     do that, so the projection is the place the types are made true.
+
+    One rule, in `fieldtext.text`: this used to be its own copy of the same
+    three lines, as it was in eight other modules.
     """
-    return value.strip() if isinstance(value, str) else fallback
+    return fieldtext.text(value, fallback)
 
 
 def open_commitments(cid: str) -> list[dict]:

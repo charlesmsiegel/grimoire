@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
+import { agingLabel } from "../aging";
 import {
   api, type Ledger, type RecordChange, type RetiredFact, type StandingFact,
 } from "../api/client";
@@ -54,6 +55,7 @@ const SECTIONS: { key: SectionKey; label: string; eyebrow: string;
  *  the same policy the panel this screen replaced ran on. */
 const EMPTY: Ledger = {
   plot: [], commitments: [], facts: [], retired: [], relationships: [], chronicle: [],
+  stale_after_days: 0,
 };
 
 /** The rows of the standing-facts table, with every supersession chain hung
@@ -142,19 +144,36 @@ function factRows(ledger: Ledger, showRetired: boolean): Row[] {
   return out;
 }
 
+/** The note line, skipping the parts that are empty — a stale badge on a thread
+ *  with no beat should not leave a dangling separator. */
+function joinNote(...parts: string[]): string {
+  return parts.filter(Boolean).join(" · ");
+}
+
 function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
                  showRetired: boolean): Row[] {
   if (section === "facts") return factRows(ledger, showRetired);
+  // The aging badge (#103) leads the note on both sections: "overdue by 12
+  // days" is the reason to read the row, and a reader scanning for what the
+  // campaign has let slip should not have to reach the end of a beat to find
+  // it. Empty for a record inside the campaign's patience, and for one there is
+  // no clock or dated scene to measure — an unbadged row is "cannot tell", the
+  // same thing this table showed before aging existed.
   if (section === "threads")
     return ledger.plot.map((t) => ({
-      key: t.id, mark: "▸", what: t.title, note: t.latest_beat,
+      key: t.id, mark: "▸", what: t.title,
+      note: joinNote(agingLabel(t.aging), t.latest_beat),
+      // Overdue is the alert colour on a thread as it is on a threat: both are
+      // "this is owed and time has run out on it".
+      alert: t.aging?.state === "overdue",
       asOf: t.status.toUpperCase(), scene: t.scene.title,
     }));
   if (section === "commitments")
     return ledger.commitments.map((c) => ({
-      key: c.id, mark: c.kind === "threat" ? "◆" : "◇", alert: c.kind === "threat",
+      key: c.id, mark: c.kind === "threat" ? "◆" : "◇",
+      alert: c.kind === "threat" || c.aging?.state === "overdue",
       what: c.title,
-      note: <>{c.kind.toUpperCase()}{c.latest_beat ? ` · ${c.latest_beat}` : ""}</>,
+      note: joinNote(agingLabel(c.aging), c.kind.toUpperCase(), c.latest_beat),
       asOf: c.due || "NO DEADLINE", scene: c.scene.title,
     }));
   if (section === "relationships")

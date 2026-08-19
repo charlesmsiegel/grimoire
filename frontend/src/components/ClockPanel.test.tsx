@@ -27,7 +27,17 @@ const DIGEST = {
   holidays: [{ name: "Christmas Day", native: "2026-12-25", friendly: "25 December 2026", in_days: 1 }],
   birthdays: [{ name: "Seraphine", age: 36, native: "2026-12-26", friendly: "26 December 2026" }],
   open_threads: [{ id: "debt", title: "The moneylender's debt", status: "open",
-                   last_scene: "001--a", latest_beat: "Interest accrues." }],
+                   last_scene: "001--a", latest_beat: "Interest accrues.",
+                   aging: { state: "stale", days_since: 53, days_over: null, due_in: null } }],
+  // Scheduled events (#101) and the commitments this move ages (#103): both
+  // arrive on every digest, so the fixture carries both.
+  events: [{ id: "coronation", name: "The coronation", date: "2026-12-26",
+             friendly: "26 December 2026", note: "", fired: null, in_days: 2 }],
+  commitments: [{ id: "the-debt", title: "Repay the moneylender", kind: "promise",
+                  status: "open", due: "2026-12-20", last_scene: "001--a",
+                  latest_beat: "Mara swore it.",
+                  aging: { state: "overdue", days_since: 53, days_over: 7, due_in: null } }],
+  aging: { overdue: 1, stale: 1, stale_after: 30 },
 };
 
 beforeEach(() => {
@@ -35,7 +45,8 @@ beforeEach(() => {
   vi.mocked(api.getCampaignClock).mockResolvedValue(CLOCK as never);
   vi.mocked(api.previewAdvance).mockResolvedValue({ digest: DIGEST } as never);
   vi.mocked(api.advanceTime).mockResolvedValue(
-    { ok: true, moved: true, now: "2026-12-27", friendly: "27 December 2026", digest: DIGEST } as never);
+    { ok: true, moved: true, now: "2026-12-27", friendly: "27 December 2026",
+      digest: DIGEST, fired: DIGEST.events } as never);
   vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: [] } as never);
   vi.mocked(api.getCalendarConfig).mockResolvedValue({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
@@ -188,4 +199,27 @@ test("a failed clock read degrades to the empty state", async () => {
   vi.mocked(api.getCampaignClock).mockRejectedValue(new Error("offline"));
   render(<ClockPanel cid="c" />);
   expect(await screen.findByText(/No campaign date yet/)).toBeInTheDocument();
+});
+
+test("a preview lists the scheduled events the skip would reach", async () => {
+  // Deliberately NOT "fired": a preview writes nothing, and the heading is the
+  // only thing on screen that says which of the two this is.
+  render(<ClockPanel cid="c" />);
+  fireEvent.click(await screen.findByText("Preview"));
+  expect(await screen.findByText("Scheduled events")).toBeInTheDocument();
+  expect(screen.getByText(/The coronation — 26 December 2026/)).toBeInTheDocument();
+});
+
+test("a confirmed advance says the events fired", async () => {
+  render(<ClockPanel cid="c" />);
+  fireEvent.change(await screen.findByLabelText("Reason"), { target: { value: "a week off" } });
+  fireEvent.click(screen.getByText("Advance time"));
+  expect(await screen.findByText("Events fired")).toBeInTheDocument();
+});
+
+test("the digest badges what the skip leaves overdue and stale", async () => {
+  render(<ClockPanel cid="c" />);
+  fireEvent.click(await screen.findByText("Preview"));
+  expect(await screen.findByText(/OVERDUE BY 7 DAYS/)).toBeInTheDocument();
+  expect(screen.getByText(/STALE · 53 DAYS UNTOUCHED/)).toBeInTheDocument();
 });

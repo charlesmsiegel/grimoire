@@ -506,6 +506,38 @@ class CalendarConfig(BaseModel):
     primary: dict
     secondary: dict | None = None
     confirmed: bool = False
+    #: How long a thread or commitment may go untouched before the ledger calls
+    #: it stale (#103). Defaulted rather than required so a client that predates
+    #: the field -- or one editing only the calendars -- keeps sending three
+    #: fields; the store coerces anything unusable back to its own default, so
+    #: this is the shape of the request, not the validation of it.
+    stale_after_days: int = 0
+
+
+class ScheduledEventCreate(BaseModel):
+    """A new scheduled event (#101): what happens, and the day it happens on.
+
+    Both fields are required in substance but neither is validated here. An
+    empty name earns the id it deserves, and a date this campaign's calendar
+    cannot read earns a 400 carrying the calendar's own sentence about it --
+    which is more use to the reader than a 422 naming a field.
+    """
+    name: str = ""
+    date: str = ""
+    note: str = ""
+
+
+class ScheduledEventEdit(BaseModel):
+    """An edit to one scheduled event. Every field is three-valued.
+
+    None leaves the stored value alone, which is what lets a client send only
+    the field it changed -- see `store.events.update`, which owns that rule.
+    Firing is deliberately not editable here: the stamp says the clock reached
+    this day, and taking it back is `POST .../unfire`, an action with a name.
+    """
+    name: str | None = None
+    date: str | None = None
+    note: str | None = None
 
 
 class EditMessage(BaseModel):

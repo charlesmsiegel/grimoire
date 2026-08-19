@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 
 from .. import prompts
-from . import (birthdays, calendars, characters, chronicle, clock,
+from . import (birthdays, calendars, characters, chronicle, clock, events,
                greetings, overlay, pcs, playing, plot)
 from .appearances import cast as appearances_cast, paths as appearances_paths
 from .campaigns import paths as campaigns_paths
@@ -72,12 +72,22 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
         t["dormancy"] = _dormancy(t.get("last_scene", ""))
 
     friendly, holidays_today, upcoming = "", [], None
+    events_today: list[str] = []
     if now:
         try:
             facts = calendars.today_facts(calendars.read_calendar(croot), now)
             friendly, holidays_today, upcoming = facts["friendly"], facts["holidays_today"], facts["upcoming"]
         except (calendars.CalendarError, KeyError):
             pass
+        # The campaign's scheduled events (#101), merged into the same two
+        # fields the calendar's holidays feed — the same merge, through the same
+        # `sooner`, that the Today prompt section makes. A suggestion prompt that
+        # knew about the coronation while the scene block did not (or the other
+        # way round) is exactly the drift that reads as the model inventing
+        # things. `day_facts` is tolerant end to end, so no guard here.
+        scheduled = events.day_facts(cid, croot, now)
+        events_today = scheduled["events_today"]
+        upcoming = events.sooner(upcoming, scheduled["upcoming"])
 
     present = {_tok(ref) for ref in (recent[-1].get("cast") or [])} if recent else set()
     roster_tokens = {f"{a['kind']}:{a['id']}" for a in roster}
@@ -120,6 +130,7 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
                            for e in overlay.list_entities(cid, "locations")]
 
     return {"now": now, "friendly": friendly, "holidays_today": holidays_today,
+            "events_today": events_today,
             "upcoming": upcoming, "birthdays": birthdays.upcoming(cid, now, roster),
             "story_so_far": story_so_far, "open_threads": open_threads,
             "cast": cast, "available_locations": available_locations}

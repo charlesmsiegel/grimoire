@@ -26,8 +26,8 @@ do ``from grimoire.store import x``, which is the whole reason that test exists.
 from __future__ import annotations
 
 from . import (
-    absorb, alternates, appearances, assets, atomic, audit, backups, birthdays, briefing, campaign_climate, campaigns, cards, cascade, casefile, changes, characters, checks, chronicle, clock, commitments, commits,
-    chub, climates, config, context, covers, dice, dossiers, embed_space, entities, entity_schema, epub, export, external, facts, fence, fetch, fork, greetings, groupstate,
+    absorb, aging, alternates, appearances, assets, atomic, audit, backups, birthdays, briefing, campaign_climate, campaigns, cards, cascade, casefile, changes, characters, checks, chronicle, clock, commitments, commits,
+    chub, climates, config, context, covers, dice, dossiers, embed_space, entities, entity_schema, epub, events, export, external, facts, fence, fetch, fieldtext, fork, greetings, groupstate,
     image_subjects, journal, length_drift, lengths, llm_connections, localize, locks, lorebook, migrations, module_edit, modules, overlay, pcs, playing,
     pins, playstate, plot, prompt_log, proposals, provenance, relationships, response_presets, rolling_summary, rolls, scenario, scene_break, scene_ideas, scene_ids, scene_refs, scenes, search, semsearch, sheets,
     styles, suggest,
@@ -74,6 +74,9 @@ __all__ = [
     "casefile",
     "parse_frontmatter",
     "dump_frontmatter",
+    # The one text coercion every JSON-store projection runs on its way to
+    # React; `routes.campaigns` needs it too, so the facade carries it.
+    "fieldtext",
     "home",
     "ensure_home",
     "set_data_dir",
@@ -106,6 +109,11 @@ __all__ = [
     # The campaign clock and the roster-birthdate reads it shares with
     # `suggest` (#100) -- a deliberate addition to the facade, not a leak.
     "clock",
+    # Scheduled events (#101) and the aging computation over what a campaign
+    # still owes (#103) -- both read by routes, both part of the same
+    # question the clock answers, so both on the facade beside it.
+    "events",
+    "aging",
     "birthdays",
     "commitments",
     "commits",

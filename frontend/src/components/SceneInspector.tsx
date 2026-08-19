@@ -14,6 +14,7 @@ import { Portrait } from "./Portrait";
 import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import { ClockPanel } from "./ClockPanel";
+import { EventsPanel } from "./EventsPanel";
 import { WeatherWidget } from "./WeatherWidget";
 import { ResponsePresetPicker } from "./ResponsePresetPicker";
 import { LOCKED_WHILE_GENERATING } from "./sceneLock";
@@ -1323,6 +1324,15 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       <SideSection id="clock" title="Campaign clock" collapsed={collapsed.clock ?? true}
                    onToggle={toggleSection}>
         <ClockPanel cid={cid} refreshKey={refreshKey} onAdvanced={reloadWhen} />
+      </SideSection>
+
+      {/* The clock's other half (#101): events are authored here and fired by
+          the panel above — or by this scene taking a date past one. Keyed on the
+          same `refreshKey` for that reason. Collapsed by default, like the clock
+          it belongs to. */}
+      <SideSection id="events" title="Scheduled events" collapsed={collapsed.events ?? true}
+                   onToggle={toggleSection}>
+        <EventsPanel cid={cid} refreshKey={refreshKey} />
       </SideSection>
 
       <SideSection id="weather" title="Weather" collapsed={!!collapsed.weather} onToggle={toggleSection}>
