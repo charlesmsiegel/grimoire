@@ -45,13 +45,19 @@ export function CalendarConfig({ scope, onConfig }: {
     api.getCalendarConfig(scope)
       .then((c) => { if (live) { setCfg(c); onConfig?.(c); } })
       .catch(() => { if (live) { setCfg(null); setFailed(true); } });
-    api.getCalendarProviders().then((r) => setProviders(r.providers)).catch(() => setProviders([]));
     return () => { live = false; };
     // `onConfig` is deliberately not a dependency: callers pass an inline
     // lambda, and re-running this on every render of the parent would refetch
     // forever. The scope is the only thing that decides what to load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope.kind, scope.id]);
+
+  // Once per mount, not once per scope: the provider list is a global — the
+  // built-in calendars plus whatever plugins the store holds — and nothing
+  // about which record you are editing changes it.
+  useEffect(() => {
+    api.getCalendarProviders().then((r) => setProviders(r.providers)).catch(() => setProviders([]));
+  }, []);
 
   if (!cfg) {
     return <div className="field-hint">

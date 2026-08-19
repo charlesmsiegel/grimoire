@@ -145,3 +145,15 @@ test("a scope change hides the form until the new scope's calendar has landed", 
   expect(await screen.findByText(/loading calendar/i)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /save/i })).toBeNull();
 });
+
+test("the provider list is read once per mount, not again per scope", async () => {
+  // It is a global: the built-in calendars plus whatever plugins the store
+  // holds. Nothing about a scope changes it, so nothing about a scope should
+  // re-read it.
+  const { rerender } = render(<CalendarConfig scope={{ kind: "world", id: "realm" }} />);
+  await screen.findByLabelText("Calendar");
+  rerender(<CalendarConfig scope={{ kind: "world", id: "saltmarch" }} />);
+  await screen.findByLabelText("Calendar");
+  expect(api.getCalendarProviders).toHaveBeenCalledTimes(1);
+  expect(api.getCalendarConfig).toHaveBeenCalledTimes(2);
+});
