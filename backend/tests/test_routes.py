@@ -12895,3 +12895,19 @@ def test_the_two_new_toggles_are_public_config(client):
     assert cfg["speaker_turn_taking"] == "off"
     client.put("/api/config", json={"speaker_turn_taking": "on"})
     assert client.get("/api/config").json()["speaker_turn_taking"] == "on"
+
+
+def test_creating_a_pc_with_any_version_name_leaves_one_the_reader_can_open(client):
+    """`version_name` reaches both PC create routes from the request body, and
+    the world route's caller is now typed to send it (#14). Whatever it says,
+    what comes back has to be a PC the very next GET can read -- `PC` used to
+    slug onto the container's own `pc.md` and produce a 201 whose id 404s."""
+    wid, cid = _campaign(client)
+    for url in (f"/api/worlds/{wid}/pcs", f"/api/campaigns/{cid}/pcs"):
+        made = client.post(url, json={"name": "Winifred", "version_name": "PC"})
+        assert made.status_code == 200, url
+        pid, vid = made.json()["pc"], made.json()["version"]
+        detail = client.get(f"{url}/{pid}")
+        assert detail.status_code == 200, url
+        assert [v["id"] for v in detail.json()["versions"]] == [vid], url
+        assert detail.json()["meta"]["default_version"] == vid, url

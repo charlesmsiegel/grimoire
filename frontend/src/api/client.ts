@@ -240,6 +240,9 @@ export function invalidateConfigCache() {
   retireInflight("/api/config");
 }
 
+/** The `PCCreate` body, which both PC create routes take (#14). */
+type PCCreateBody = { name: string; tags?: string[]; version_name?: string; persona?: Persona };
+
 export const api = {
   /** `fresh` forces a new request and re-seeds the cache with it. The cache is
    *  keyed to nothing but this tab's own writes, so a store populated by
@@ -680,10 +683,13 @@ export const api = {
 
   // pcs
   listPCs: (scope: EntityScope) => request<PCSummary[]>("GET", `${entityBase(scope)}/pcs`),
-  createCampaignPC: (cid: string, body: { name: string; tags?: string[]; persona?: Persona }) =>
+  // Both PC creates post the one `PCCreate` body, so both spell it the same:
+  // `version_name` names the first version (the server defaults it to
+  // "default"), exactly as `createCharacter` already names a character's.
+  createCampaignPC: (cid: string, body: PCCreateBody) =>
     request<{ pc: string; version: string }>("POST", `/api/campaigns/${cid}/pcs`, body),
   listCampaignPCs: (cid: string) => request<PCSummary[]>("GET", `/api/campaigns/${cid}/pcs`),
-  createPC: (wid: string, body: { name: string; tags?: string[]; persona?: Persona }) =>
+  createPC: (wid: string, body: PCCreateBody) =>
     request<{ pc: string; version: string }>("POST", `/api/worlds/${wid}/pcs`, body),
   readPC: (scope: EntityScope, pid: string) => request<PCDetail>("GET", `${entityBase(scope)}/pcs/${pid}`),
   updatePC: (scope: EntityScope, pid: string, patch: { default_version?: string; tags?: string[] }) =>
