@@ -670,13 +670,18 @@ def _image_write_routes(client):
     """Every registered write route on a per-record image surface.
 
     Enumerated from the app under test rather than listed here on purpose: the
-    point is to catch route number twenty-five, added later by someone who did
+    point is to catch route number twenty-six, added later by someone who did
     not read this file. Nine handlers were hardened by hand for #360 and a
     tenth (`routes/greetings.py`'s world-side copy-from-greeting) was only
     found by going looking -- a list maintained alongside the routes would have
     missed it exactly the way the issue's own list did. #373 was the same
     defect a third time, on the six generic entity handlers this filter did not
     reach until it stopped saying `/versions/`.
+
+    Twenty-five today, and the greeting-subjects PUT is one of them: it writes
+    a sidecar rather than an image, but through the same `mkdir(parents=True)`
+    into the same `<kind>/<id>/assets/` directory, so it is the same defect
+    wearing a different body. It was already gated; this keeps it that way.
     """
     def flatten(routes):
         out = []
@@ -692,7 +697,7 @@ def _image_write_routes(client):
     # whose kind is a path parameter rather than a literal. `\w+` rather than a
     # roster of kinds, and the whole `/versions/` half optional, so a surface
     # added later is caught by this test rather than silently skipped by it.
-    surface = re.compile(r"^/api/(worlds|campaigns)/\{\w+\}/(\{?\w+\}?)/\{\w+\}"
+    surface = re.compile(r"^/api/(worlds|campaigns)/\{\w+\}/(\w+|\{\w+\})/\{\w+\}"
                          r"(/versions/\{\w+\})?/images")
     return sorted({(m, path) for methods, path in flatten(client.app.routes)
                    for m in methods & {"PUT", "POST", "DELETE"}
@@ -720,10 +725,10 @@ def _ghosted(path: str, scope_id: str, rid: str, vid: str, kind: str = _GHOST_KI
     fill = {3: scope_id}
     if segs[4].startswith("{"):      # generic entity surface: /{kind}/{eid}
         fill[4], fill[5] = kind, rid
-    else:                            # named surface: /characters/{cid}/versions/{vid}
+    else:                            # named surface: /characters/{cid}[/versions/{vid}]
         fill[5] = rid
-        if "/versions/" in path:
-            fill[7] = vid
+        if "versions" in segs:       # located, not counted: nothing pins its depth
+            fill[segs.index("versions") + 1] = vid
     out = []
     for i, seg in enumerate(segs):
         if not seg.startswith("{"):
@@ -857,7 +862,6 @@ def test_every_image_write_route_refuses_an_id_that_names_nothing(client):
                           ("greetings", gid), (_GHOST_KIND, eid)):
             assert not (root / kind / "nobody").exists(), (root, kind)
             assert not (root / kind / rid / "assets" / "typo").exists(), (root, kind)
-
 
 
 def test_every_entity_image_write_route_refuses_a_kind_that_has_no_entities(client):
