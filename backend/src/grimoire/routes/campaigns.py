@@ -646,6 +646,12 @@ def get_changes(cid: str, limit: int | None = None, offset: int | None = None):
 #: be a much larger response than anyone reads. The store keeps more than this
 #: (`journal.RETENTION` / `journal.MAX_BYTES`) and an older entry is still
 #: undoable by id — it is simply not in the list.
+#:
+#: Still a cap after #216 gave the route above a `limit`/`offset`, and for the
+#: reason that route did not have: this one was already bounded. What #216 paged
+#: were the listings that returned EVERYTHING and grew with play. Reaching past
+#: this cap is a different feature — the store retains by age and by bytes, so
+#: what falls off the end is not something a bare offset can name.
 JOURNAL_PAGE = 100
 
 
