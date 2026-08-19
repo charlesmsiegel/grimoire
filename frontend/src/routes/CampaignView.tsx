@@ -4296,6 +4296,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                here funnels through. */
             <ReplayPanel key={activeId} cid={cid} sid={activeId} startAt={replayAt}
                          disabled={busy || rolling}
+                         // The same latch every other write to this transcript
+                         // takes: a replayed turn is a generation into the scene
+                         // on screen, and while one runs nothing else here may
+                         // offer to start a second.
+                         latch={() => takeRollLatch(activeId)}
                          onStartHandled={() => setReplayAt(null)}
                          // Into the SAME scene in the copy, not the campaign's
                          // front door: a fork copies the scenes wholesale, so

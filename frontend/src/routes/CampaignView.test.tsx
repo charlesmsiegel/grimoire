@@ -39,11 +39,12 @@ vi.mock("../components/CalendarConfig", () => ({ CalendarConfig: () => <div data
 // its own that drives the real thing. What CampaignView owns is which post the
 // gutter hands it, so that is all the stub reports.
 vi.mock("../components/ReplayPanel", () => ({
-  ReplayPanel: ({ startAt, onStartHandled, onForked, onChanged }: any) => (
+  ReplayPanel: ({ startAt, onStartHandled, onForked, onChanged, latch }: any) => (
     <div data-testid="replay-panel" data-start-at={startAt ?? ""}>
       <button onClick={() => onStartHandled()}>stub-replay-close</button>
       <button onClick={() => onForked("forked")}>stub-replay-forked</button>
       <button onClick={() => onChanged()}>stub-replay-changed</button>
+      <button onClick={() => latch()}>stub-replay-latch</button>
     </div>
   ),
 }));
@@ -858,7 +859,7 @@ test("retcon rewrites the post through the retcon route, not the plain edit", as
   renderCampaign();
   await screen.findByText("a reply");
 
-  fireEvent.click(screen.getAllByTitle("Edit message")[0]);
+  fireEvent.click((await screen.findAllByTitle("Edit message"))[0]);
   const ta = await screen.findByRole("textbox", { name: "Edit message" });
   fireEvent.change(ta, { target: { value: "she never said it" } });
   fireEvent.click(screen.getByRole("button", { name: /^retcon$/i }));
@@ -876,7 +877,7 @@ test("the retcon confirm names what an absorbed scene gives back", async () => {
   renderCampaign();
   await screen.findByText("a reply");
 
-  fireEvent.click(screen.getAllByTitle("Edit message")[0]);
+  fireEvent.click((await screen.findAllByTitle("Edit message"))[0]);
   fireEvent.click(screen.getByRole("button", { name: /^retcon$/i }));
   // Awaited before reading the prompt: the click's own work (the retcon, the
   // rail re-read, the refresh) settles inside the test rather than after it.
@@ -894,7 +895,7 @@ test("declining the retcon confirm does nothing", async () => {
   renderCampaign();
   await screen.findByText("a reply");
 
-  fireEvent.click(screen.getAllByTitle("Edit message")[0]);
+  fireEvent.click((await screen.findAllByTitle("Edit message"))[0]);
   fireEvent.click(screen.getByRole("button", { name: /^retcon$/i }));
   expect(api.retconMessage).not.toHaveBeenCalled();
 });
@@ -907,7 +908,7 @@ test("a retcon says how many later scenes can now disagree", async () => {
   renderCampaign();
   await screen.findByText("a reply");
 
-  fireEvent.click(screen.getAllByTitle("Edit message")[0]);
+  fireEvent.click((await screen.findAllByTitle("Edit message"))[0]);
   fireEvent.click(screen.getByRole("button", { name: /^retcon$/i }));
   // The whole point of re-absorbing: the badges are on the review, and nothing
   // else tells the reader they are worth going to look at.
@@ -918,7 +919,10 @@ test("the gutter offers a replay only where there is something after the post", 
   twoPostScene();
   renderCampaign();
   await screen.findByText("a reply");
-  expect(screen.getByLabelText("Replay the turns after message 1")).toBeTruthy();
+  // Awaited: the gutter is gated on `transcriptIsActive`, which settles a tick
+  // after the posts themselves render — grabbing it the instant the text lands
+  // is the racy pattern, not a stable one.
+  await screen.findByLabelText("Replay the turns after message 1");
   // Nothing follows the last post, so there is no turn to replay.
   expect(screen.queryByLabelText("Replay the turns after message 2")).toBeNull();
 });
@@ -931,7 +935,7 @@ test("the gutter hands the panel the post AFTER the one clicked", async () => {
   await screen.findByText("a reply");
   expect(screen.getByTestId("replay-panel").getAttribute("data-start-at")).toBe("");
 
-  fireEvent.click(screen.getByLabelText("Replay the turns after message 1"));
+  fireEvent.click(await screen.findByLabelText("Replay the turns after message 1"));
   await waitFor(() =>
     expect(screen.getByTestId("replay-panel").getAttribute("data-start-at")).toBe("1"));
   expect(api.startReplay).not.toHaveBeenCalled();
@@ -951,7 +955,7 @@ test("forking lands in the same scene of the copy, with the ask still standing",
   }));
   renderCampaign();
   await screen.findByText("a reply in s1");
-  fireEvent.click(screen.getByLabelText("Replay the turns after message 1"));
+  fireEvent.click(await screen.findByLabelText("Replay the turns after message 1"));
   await waitFor(() =>
     expect(screen.getByTestId("replay-panel").getAttribute("data-start-at")).toBe("1"));
 
@@ -987,13 +991,28 @@ test("the asked-for post does not follow the reader into another scene", async (
   }));
   renderCampaign();
   await screen.findByText("a reply in s1");
-  fireEvent.click(screen.getByLabelText("Replay the turns after message 1"));
+  fireEvent.click(await screen.findByLabelText("Replay the turns after message 1"));
   await waitFor(() =>
     expect(screen.getByTestId("replay-panel").getAttribute("data-start-at")).toBe("1"));
 
   await openScene(/The Saltmarch Gate/);
   await screen.findByText("a reply in s2");
   expect(screen.getByTestId("replay-panel").getAttribute("data-start-at")).toBe("");
+});
+
+test("a replay request latches the transcript against a second generation", async () => {
+  // The panel takes the same latch retry, reroll and the roll paths take —
+  // which is what stops the composer and the gutter offering to start another
+  // generation into the scene a replayed turn is being written into.
+  twoPostScene();
+  renderCampaign();
+  await screen.findByText("a reply");
+  expect(await screen.findByLabelText("Delete message 1 and everything after it"))
+    .not.toBeDisabled();
+
+  fireEvent.click(screen.getByText("stub-replay-latch"));
+  await waitFor(() =>
+    expect(screen.getByLabelText("Delete message 1 and everything after it")).toBeDisabled());
 });
 
 test("a manual dice roll's transcript line has no Edit control", async () => {

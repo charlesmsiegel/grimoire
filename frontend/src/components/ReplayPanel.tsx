@@ -17,7 +17,8 @@ import type { ChatEvent } from "../api/stream";
  *  is the same `regenerate` the gutter offers, because the fresh reply is the
  *  trailing run.
  */
-export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onForked, disabled }: {
+export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onForked,
+                             disabled, latch }: {
   cid: string;
   sid: string;
   /** The post the reader asked to replay from, or null. Set by the transcript
@@ -32,6 +33,14 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
   /** True while the transcript is busy with something else — a turn in flight,
    *  a swap. Every button here writes to the same transcript. */
   disabled?: boolean;
+  /** Take the transcript's write latch for the duration of one of this panel's
+   *  requests, releasing it with the returned function. The same latch retry,
+   *  reroll, edit and the roll paths take — and this panel needs it for the
+   *  same reason they do: a replayed turn is a generation into the scene on
+   *  screen, so while one runs the composer, the gutter and Retry must not
+   *  offer to start a second one. Optional so the component stands alone in
+   *  its own tests. */
+  latch?: () => () => void;
 }) {
   const [session, setSession] = useState<ReplaySession | null>(null);
   // The price, stamped with the post it was taken for. Stamped rather than
@@ -102,12 +111,22 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
   async function guard(fn: () => Promise<void>) {
     setBusy(true);
     setError("");
+    // Held across the whole request, not just the write inside it: what the
+    // latch keeps out is a second generation into this scene, and that window
+    // is the request.
+    const release = latch?.();
     try {
       await fn();
     } catch (err: unknown) {
-      setError(err instanceof ApiError ? err.detail : "that step could not be taken");
+      // `alive`, on every state update past an await: a reader who switches
+      // scene mid-turn unmounts this panel while its request is still open, and
+      // the request is the server's to finish either way.
+      if (alive.current) {
+        setError(err instanceof ApiError ? err.detail : "that step could not be taken");
+      }
     } finally {
-      setBusy(false);
+      release?.();
+      if (alive.current) setBusy(false);
     }
   }
 
@@ -135,7 +154,7 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
   async function streamed(run: (onEvent: (e: ChatEvent) => void) => Promise<void>) {
     let failed = "";
     await run((e) => { if (e.error) failed = e.error.detail; });
-    if (failed) setError(failed);
+    if (failed && alive.current) setError(failed);
   }
 
   const runTurn = () => guard(async () => {
