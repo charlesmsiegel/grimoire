@@ -430,14 +430,25 @@ def grade_owned_lore(ctx: dict, output: str) -> list[Check]:
 
 # -------------------------------------------- case 5: group-scene turn taking
 
-#: The four NPCs in the room. Distinct first tokens on purpose: `speaker._named`
-#: drops a label two present actors answer to, so a shared first name would make
-#: the nomination read as unnamed and hide what this case measures.
+#: The four NPCs in the room, as (description, personality). Distinct first
+#: tokens on purpose: `speaker._named` drops a label two present actors answer
+#: to, so a shared first name would make the nomination read as unnamed and hide
+#: what this case measures.
+#:
+#: No card says anything about when its character speaks. An earlier draft gave
+#: all four "Speaks up when spoken to", which is a fixture arguing with its own
+#: hypothesis: this case measures whether the Active speaker section is what
+#: decides who talks, and a card that also answers that question makes a green
+#: run unattributable.
 _CROWD = {
-    "Seraphine Vale": "Tall, sharp-eyed smuggler with salt-cracked hands.",
-    "Mara": "A fortune-teller who deals in secrets and never in change.",
-    "Rowan": "The pier's night watch, bored and armed.",
-    "Tobin": "A ledger clerk who counts crates nobody logged.",
+    "Seraphine Vale": ("Tall, sharp-eyed smuggler with salt-cracked hands.",
+                       "Wry, wary, slow to trust and slower to explain."),
+    "Mara": ("A fortune-teller who deals in secrets and never in change.",
+             "Oblique. Answers the question under the question."),
+    "Rowan": ("The pier's night watch, bored and armed.",
+              "Blunt, literal, and tired of both."),
+    "Tobin": ("A ledger clerk who counts crates nobody logged.",
+              "Precise, anxious, keeps the receipts."),
 }
 #: Who the nomination must land on: the NPC whose last block is furthest back.
 #: Named so the case's own control check can say the transcript still has the
@@ -475,10 +486,9 @@ def build_turn_taking() -> dict:
     wid = worlds.create_world("Realm")
     wroot = worlds.world_root(wid)
     ids: dict[str, str] = {}
-    for name, description in _CROWD.items():
+    for name, (description, personality) in _CROWD.items():
         card = characters.blank_card(name)
-        card["data"].update({"description": description,
-                             "personality": "Speaks up when spoken to."})
+        card["data"].update({"description": description, "personality": personality})
         ids[name], _ = characters.create_character(wroot, name, "default", card)
     pier = entities.create_entity(wroot, "locations", "Saltmarch Pier",
                                   "Fog-slick planks stacked with unlogged crates.",

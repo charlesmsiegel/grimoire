@@ -136,7 +136,8 @@ def _turns(text: str) -> set:
 
 def test_turns_accepts_a_reply_the_nominated_lead_carries():
     text = ("Nobody moves for a moment.\n\n"
-            "**Tobin:** I have the tally sheet.\n\n"
+            "**Tobin:** I have the tally sheet in my coat, and it is not a good "
+            "sheet, because the only signature under those two crates is mine.\n\n"
             "**Rowan:** That is the first true thing tonight.")
     assert _turns(text) == set()
 
@@ -151,10 +152,22 @@ def test_turns_flags_a_reply_the_lead_is_absent_from_and_reports_nothing_else():
     assert not checks[0].ok
 
 
-def test_turns_flags_a_lead_who_speaks_but_is_out_talked():
+def test_turns_flags_a_lead_who_gets_a_block_but_not_the_turn():
+    """The reply the block count cannot see, and the whole reason this is
+    measured in words: the nomination is honoured with one obliging line and
+    the character who has been talking all scene keeps the floor. One block
+    each ties 1-1 and would score green."""
     text = ("**Tobin:** I have the tally sheet \u2014\n\n"
+            "**Seraphine Vale:** He has a tally sheet. He also has a signature "
+            "on it, which is more than the rest of you brought tonight, and I "
+            "am not going to stand here while a clerk reads it out to me.")
+    assert _turns(text) == {"turns.lead_carries"}
+
+
+def test_turns_flags_a_lead_out_talked_across_several_blocks():
+    text = ("**Tobin:** I have the tally sheet.\n\n"
             "**Seraphine Vale:** He has a sheet. I have the crates.\n\n"
-            "**Seraphine Vale:** So put the lamp down.")
+            "**Seraphine Vale:** So put the lamp down and stop asking.")
     assert _turns(text) == {"turns.lead_carries"}
 
 
@@ -168,11 +181,46 @@ def test_turns_flags_every_present_npc_taking_a_block():
 def test_turns_reads_a_shortened_label_as_the_character_it_names():
     """Canonicalized through the same match_name the nomination itself uses: a
     reply stamped "Seraphine" is Seraphine Vale speaking, not a stranger \u2014 so
-    she counts against the lead rather than being silently dropped."""
+    her words count against the lead rather than being silently dropped."""
     text = ("**Tobin:** I signed for two crates.\n\n"
-            "**Seraphine:** You did.\n\n"
-            "**Seraphine:** And you will sign the next one too.")
+            "**Seraphine:** You did, and you will sign the next one too, and "
+            "the one after that, and you will not ask me what is in them.")
     assert _turns(text) == {"turns.lead_carries"}
+
+
+def test_turns_does_not_credit_a_roll_fence_to_the_speaker_it_landed_in():
+    """Words come from length_drift._words, which subtracts the fence. Counting
+    it would let a mechanical block out-talk the nominated lead on the strength
+    of dice notation nobody wrote."""
+    fenced = ("**Seraphine Vale:** She weighs it.\n\n"
+              "```roll\ncheck: steady-hand\nactor: characters:seraphine-vale\n"
+              "reason: prying the crate open without waking the pier\n```")
+    text = "**Tobin:** I signed for two crates that were never here.\n\n" + fenced
+    assert _turns(text) == set()
+
+
+def test_turns_tells_a_format_failure_apart_from_an_invented_speaker():
+    """Both leave the nominated lead with no block, and they send a live run to
+    completely different places: one is the reply format coming apart, the
+    other is the model answering as somebody who is not in the scene. A report
+    that read the same for both would have #82 answered on the wrong
+    evidence."""
+    none_at_all = graders.grade_turn_taking("The fog closes in.", NOMINATION,
+                                            PLAYERS, CROWD)
+    assert "no **Name:** blocks at all" in none_at_all[0].detail
+
+    stray = graders.grade_turn_taking("**Harbourmaster:** Nobody logged those.",
+                                      NOMINATION, PLAYERS, CROWD)
+    assert "name nobody present: Harbourmaster" in stray[0].detail
+
+
+def test_turns_accepts_a_reply_only_the_nominated_lead_speaks_in():
+    """No rival to be out-talked by. The check passes and says nothing, rather
+    than reporting a comparison against a speaker who does not exist."""
+    checks = graders.grade_turn_taking("**Tobin:** Two crates, and my name on "
+                                       "both of them.", NOMINATION, PLAYERS, CROWD)
+    assert failed(checks) == set()
+    assert next(c for c in checks if c.name == "turns.lead_carries").detail == ""
 
 
 def test_turns_flags_a_reply_of_pure_narration():
@@ -186,6 +234,18 @@ def test_turns_does_not_count_a_forged_player_block_as_a_character_taking_the_tu
     storing a forged player line, and this grader inherits that: a reply that
     answers for Winifred has still left the nominated NPC silent."""
     assert _turns("**Winifred:** Fine, I will say it myself.") == {"turns.lead_speaks"}
+
+
+def test_turns_reports_a_missing_nomination_instead_of_raising():
+    """`nominate` returns None below two present NPCs. A grader that indexed
+    the nomination blind would take the whole run down on a fixture that lost a
+    cast member, instead of reporting the input it was handed \u2014 grade_absorb's
+    rule, applied here."""
+    for empty in (None, {}):
+        checks = graders.grade_turn_taking("**Tobin:** Anything.", empty,
+                                           PLAYERS, CROWD)
+        assert [c.name for c in checks] == ["turns.nominated"]
+        assert not checks[0].ok
 
 
 # ------------------------------------------------------------------- fences

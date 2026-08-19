@@ -1,10 +1,11 @@
 Everyone answers at once, and then in turn.
 
-**Tobin:** Two crates. I signed for two crates that were not there.
+**Tobin:** Two crates. I signed for two crates that were never on this pier, and
+I have said so to anyone who would stand still long enough to hear it, which
+until tonight was nobody at all, and I would like that on the record.
 
 **Rowan:** I saw him sign it.
 
-**Mara:** The cards said a clerk would be the one to talk. They did not say he
-would be the last to.
+**Mara:** The cards said a clerk would talk.
 
-**Seraphine Vale:** And I say the manifest is mine to be short.
+**Seraphine Vale:** The manifest is mine to be short.
