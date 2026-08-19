@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, type CampaignMeta, type WorldMeta } from "../api/client";
 import { ColumnSection, PageShell } from "../components/PageShell";
+import { errMsg } from "../components/errMsg";
 import { forkNotes } from "../components/forkNotes";
 import { lineage } from "./campaignLineage";
 
@@ -67,7 +68,12 @@ export default function CampaignsView() {
   const stamp = (c: CampaignMeta) => c.activity || c.updated || "";
   const ranked = useMemo(() => [...campaigns].sort((a, b) => stamp(b).localeCompare(stamp(a))),
     [campaigns]);
-  const shown = world ? ranked.filter((c) => c.world === world) : ranked;
+  // Memoized, not because filtering is expensive but because `rows` below is
+  // keyed on this array's identity: `ranked.filter(...)` returns a fresh array
+  // every render, so a bare expression here would make that memo miss on every
+  // render while looking like it did not.
+  const shown = useMemo(
+    () => (world ? ranked.filter((c) => c.world === world) : ranked), [ranked, world]);
   // The one you are most likely to have meant. It gets the border, the glow
   // and the only rename/delete controls on the page: those are rare, and a ✕
   // on every card is a ✕ you can hit by accident on the wrong campaign.
@@ -109,7 +115,20 @@ export default function CampaignsView() {
   async function forkFromNow(c: CampaignMeta) {
     const name = window.prompt(`Fork '${c.name}' as?`, `${c.name} (fork)`)?.trim();
     if (!name) return;
-    const report = await api.forkCampaign(c.id, name);
+    let report;
+    try {
+      report = await api.forkCampaign(c.id, name);
+    } catch (err) {
+      // Reported, not dropped. `rename` and `remove` above let a rejection
+      // become an unhandled promise — the row simply does not change, which
+      // reads as "nothing happened" and is nearly true for them. It is not true
+      // here: a fork holds two campaign locks, so 409 CAMPAIGN BUSY is a
+      // reachable answer for a campaign being played in another window, and a
+      // silent one would look identical to a fork that worked. The campaign
+      // page reports the same failure the same way.
+      setForkNote(`'${c.name}' could not be forked: ${errMsg(err)}`);
+      return;
+    }
     setForkNote(forkNotes(report));
     setCampaigns(await api.listCampaigns());
   }
@@ -253,6 +272,13 @@ export default function CampaignsView() {
                   <div className="row-actions">
                     <button aria-label={`Rename ${c.name}`}
                             onClick={() => setRenaming({ id: c.id, name: c.name })}>✎</button>
+                    {/* Fork sits with the other two for placement, not for
+                        their reason: it destroys nothing, and the ✕'s
+                        one-card-only rule is about accidental deletion. It is
+                        here because this is the card you are most likely to
+                        have meant — and forking any other campaign is a click
+                        away on its own page, where you also get to choose the
+                        turn to branch at. */}
                     <button aria-label={`Fork ${c.name}`} title="Fork this campaign"
                             onClick={() => forkFromNow(c)}>⑂</button>
                     <button aria-label={`Delete ${c.name}`} onClick={() => remove(c)}>✕</button>

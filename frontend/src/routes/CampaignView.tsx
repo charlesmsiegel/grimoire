@@ -1819,7 +1819,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  because the `[cid]` effect above clears the campaign-scoped review state
    *  and deliberately not `error`; a change there that started clearing it
    *  would silently drop this report, which is what
-   *  `what the fork could not put back is reported` pins.
+   *  `what the fork could not put back is reported, and outlives the
+   *  navigation` pins.
    */
   async function forkAtScene(sid: string) {
     const later = scenes.filter((x) => x.id > sid).length;

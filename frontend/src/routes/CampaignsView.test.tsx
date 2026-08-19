@@ -309,3 +309,20 @@ test("what a fork could not put back is reported on the shelf", async () => {
   await screen.findByText(/The Pact — lore/);
   expect(document.body.textContent).toMatch(/still holds what a removed scene wrote/i);
 });
+
+test("a fork the server refuses is reported rather than silently doing nothing", async () => {
+  // 409 CAMPAIGN BUSY is reachable: a fork holds two campaign locks, and the
+  // source may be being played in another window. Dropped, that looks exactly
+  // like a fork that worked.
+  (api.listCampaigns as any).mockResolvedValue([
+    { id: "c1", name: "Saltmarch", world: "w1", scenes: 3, last_scene: "" },
+  ]);
+  (api.forkCampaign as any).mockRejectedValue({ detail: "campaign is busy" });
+  vi.spyOn(window, "prompt").mockReturnValue("A Second Run");
+  renderView();
+  await screen.findByText("Saltmarch");
+  fireEvent.click(screen.getByLabelText("Fork Saltmarch"));
+  await screen.findByText(/could not be forked: campaign is busy/i);
+  // ...and the shelf is not re-read, because nothing on it changed.
+  expect(api.listCampaigns).toHaveBeenCalledTimes(1);
+});
