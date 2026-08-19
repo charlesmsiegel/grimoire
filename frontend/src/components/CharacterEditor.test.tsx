@@ -213,6 +213,18 @@ test("imports an embedded character_book and shows the result", async () => {
   await screen.findByText(/imported 1/i);
 });
 
+// Re-importing an unchanged book is a no-op by design (`lorebook.commit`
+// drops entries already in world lore), and "Imported 0 entries" reads as a
+// failure of the thing that in fact worked.
+test("re-importing an already-imported book says so instead of reporting zero", async () => {
+  (api.importCharacterBook as any).mockResolvedValue({ created: [] });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  fireEvent.click(screen.getByRole("button", { name: /import .* lore/i }));
+  await screen.findByText(/already in world lore/i);
+  expect(screen.queryByText(/imported 0/i)).toBeNull();
+});
+
 // The import posts no card -- the route commits whatever character_book is
 // stored for the version. It does not write the card back (unlike localize),
 // so unsaved edits survive it; what they do is make the click act on a version

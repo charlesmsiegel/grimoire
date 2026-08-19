@@ -591,11 +591,12 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   };
   const dirty = !!(card && normalizedStored && JSON.stringify(buildCard()) !== JSON.stringify(normalizedStored));
   // The import posts no card: the route commits whatever character_book is on
-  // disk for this version, normalized. So the label counts the server's
-  // `importable_lore`, never the live editor card and never the raw `entries`
-  // list — the first drifts the moment the form is edited, and the second
-  // counts the disabled and blank entries normalization drops, offering an
-  // import of 4 that lands 1 (#16).
+  // disk for this version, normalized. So the count is a fact about the stored
+  // version, and it comes from the payload that describes it — not from the
+  // live editor card (which is the editor's state, not disk's, and would
+  // follow a book edit the import ignores) and not from a `.entries.length`
+  // taken here, which counts the disabled and blank entries normalization
+  // drops: offer 4, land 1 (#16).
   const bookCount = storedVersion?.importable_lore ?? 0;
 
   function localizeControls(blocked: boolean, blockedHint?: string) {
@@ -987,7 +988,12 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     setBookMsg(null);
     try {
       const { created } = await api.importCharacterBook(wid, detail.meta.id, vid);
-      setBookMsg(`Imported ${created.length} entr${created.length === 1 ? "y" : "ies"} to world lore`);
+      // `lorebook.commit` drops entries already in world lore, so a second
+      // click on an unchanged book legitimately creates nothing. "Imported 0
+      // entries" reads as a failure; say what actually happened instead.
+      setBookMsg(created.length === 0
+        ? "Already in world lore — nothing new to import"
+        : `Imported ${created.length} entr${created.length === 1 ? "y" : "ies"} to world lore`);
     } catch (err: unknown) {
       setError(errorText(err));
     }
