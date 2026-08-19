@@ -99,47 +99,85 @@ def grade_turn_taking(text: str, nomination: dict, players: frozenset[str],
     #82's question, asked one turn at a time. The failure the active-speaker
     layer exists to prevent is a multi-turn shape — one character monologues
     while three stand silent — but with a lead nominated on every turn, that
-    shape can only occur if single turns ignore the nomination. So the per-turn
-    question IS the whole question, and it is the half no offline check can
-    answer: `--live` is what these three score.
+    shape can only re-form if single turns ignore the nomination. So the
+    per-turn question IS the whole question, and it is the half no offline
+    check can answer: `--live` is what these score.
 
-    Speakers are canonicalized through the same `match_name` the nomination and
-    drift measurement use. A reply that stamps "Seraphine" for "Seraphine Vale"
-    is that character speaking, not a stranger who happens to be quiet.
+    "Carries" is measured in WORDS, not blocks. Block counts are what the
+    monologue hides behind: one obliging four-word line for the nominated lead
+    and three paragraphs for the character who has been talking all scene ties
+    1-1 and scores green, which is the reply this case exists to catch. Words
+    come from `length_drift._words`, so a roll fence is not credited to
+    whoever's block it landed in — the same subtraction drift measurement
+    makes.
 
-    `turns.lead_carries` short-circuits rather than failing alongside
-    `turns.lead_speaks`: "the lead said nothing at all" and "the lead was
-    out-talked by someone else" are different failures with different fixes,
-    and reporting the second whenever the first fires would make it impossible
-    for a counterexample to isolate either.
+    Speakers are canonicalized through `match_name`, the same function the
+    nomination and drift measurement use: a reply stamped "Seraphine" for
+    "Seraphine Vale" is that character speaking, not a stranger who happens to
+    be quiet. A label naming nobody present is dropped rather than counted as
+    an actor — `length_drift._identity` keeps it as itself instead, which is
+    right for measuring reply LENGTH and wrong here, where every question is
+    about who among the present cast took the turn.
     """
-    lead = nomination["lead"]
-    spoken: dict[str, int] = {}
+    lead = (nomination or {}).get("lead")
+    if not lead:
+        # Nothing was nominated: `nominate` returns None below two present
+        # NPCs, so a fixture that lost a cast member lands here. Reported
+        # rather than raised, for grade_absorb's reason — a grader that raises
+        # takes the whole run down instead of reporting what it was handed.
+        return [Check("turns.nominated", False,
+                      "no lead was nominated; there is nothing to score against")]
+
+    blocks: dict[str, int] = {}
+    words: dict[str, int] = {}
+    strays: set[str] = set()
     for seg in scenes.split_reply(text, players):
-        who = seg["speaker"] and scenes.match_name(seg["speaker"], npc_names)
-        if who:
-            spoken[who] = spoken.get(who, 0) + 1
+        if not seg["speaker"]:
+            continue                     # narration, or a block routed to it
+        who = scenes.match_name(seg["speaker"], npc_names)
+        if not who:
+            strays.add(seg["speaker"])
+            continue
+        blocks[who] = blocks.get(who, 0) + 1
+        words[who] = words.get(who, 0) + length_drift._words(seg["content"])
 
-    if not spoken.get(lead):
+    if not blocks.get(lead):
+        # Three different things send a live run to three different places, so
+        # the detail distinguishes them: somebody present took the turn, nobody
+        # did because the reply carried no speaker markers at all (a reply
+        # FORMAT failure, not a nomination one), or the blocks went to labels
+        # naming nobody on stage. A report that read the same for all three
+        # would have #82 answered from the wrong evidence.
+        if blocks:
+            carried = f"it was carried by {', '.join(sorted(blocks))}"
+        elif strays:
+            carried = ("its blocks name nobody present: "
+                       f"{', '.join(sorted(strays))}")
+        else:
+            carried = "the reply carried no **Name:** blocks at all"
         return [Check("turns.lead_speaks", False,
-                      f"nominated {lead!r} has no block in the reply; "
-                      f"it was carried by {sorted(spoken) or 'nobody'}")]
+                      f"nominated {lead!r} has no block in the reply; {carried}")]
 
-    others = {n: c for n, c in spoken.items() if n != lead}
-    loudest = max(others.values(), default=0)
+    # Short-circuited above rather than reported alongside: "the lead said
+    # nothing at all" and "the lead was out-talked" are different failures with
+    # different fixes, and a counterexample cannot isolate either one if both
+    # always fire together.
+    rivals = {n: w for n, w in words.items() if n != lead}
+    loudest = max(rivals.values(), default=0)
+    top = ", ".join(sorted(n for n, w in rivals.items() if w == loudest))
     return [
         Check("turns.lead_speaks", True),
-        Check("turns.lead_carries", spoken[lead] >= loudest,
-              f"nominated {lead!r} took {spoken[lead]} block(s) against "
-              f"{loudest} for " + ", ".join(
-                  sorted(n for n, c in others.items() if c == loudest))),
+        Check("turns.lead_carries", words[lead] >= loudest,
+              f"nominated {lead!r} got {words[lead]} words against "
+              f"{loudest} for {top}" if rivals else ""),
         # "Do not give every character a turn" is the section's other
         # instruction, and the other half of the failure #82 names: four
         # characters answering the same question in sequence is not turn-taking
         # either, it is the monologue's mirror image.
-        Check("turns.some_stay_quiet", len(spoken) < len(npc_names),
+        Check("turns.some_stay_quiet", len(blocks) < len(npc_names),
               f"all {len(npc_names)} present NPCs took a block"),
     ]
+
 
 
 # ------------------------------------------------------------------ roll fence

@@ -178,6 +178,12 @@ single turns ignore it. A red one says the loop is back on the table.
 One run is an anecdote. Repeat it across a few connections and models before
 either closing #82 or paying for N calls a turn on the strength of it.
 
+The case outlives the decision either way. If #82 closes because the layer
+works, this is what keeps it working: "the model still follows the Active
+speaker section" is a live-behaviour claim with exactly the standing of the
+length budget's, and it is one reworded section away from quietly stopping to
+be true.
+
 Fixture content uses invented placeholder names only (Realm, Saltmarch,
 Seraphine Vale, Mara, Winifred). See CLAUDE.md: real world, campaign and
 character names must never enter this repo, not even as examples.
