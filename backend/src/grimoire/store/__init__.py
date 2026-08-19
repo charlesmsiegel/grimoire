@@ -14,13 +14,20 @@ initializing raises at import time, and binding a function by value from a
 submodule silently defeats any test that tries to patch it -- both survive
 the acyclic check untouched, which is why the import-form rule has to be
 checked, and recorded, separately.
+
+Every import below is a re-export, so none of them is *used* in this file --
+which is why ``docs/health.html`` reports fourteen of them as
+``unused_import``. They are not: this module is the facade, ``__all__`` is what
+publishes them, and ``tests/test_store_api_baseline.py`` fails if any one
+stops resolving. Deleting one to clear the finding would break the callers that
+do ``from grimoire.store import x``, which is the whole reason that test exists.
 """
 
 from __future__ import annotations
 
 from . import (
     absorb, alternates, appearances, assets, atomic, audit, backups, birthdays, briefing, campaign_climate, campaigns, cards, cascade, casefile, changes, characters, checks, chronicle, clock, commitments, commits,
-    chub, climates, config, context, covers, dice, dossiers, embed_space, entities, entity_schema, epub, export, external, facts, fence, fetch, greetings, groupstate,
+    chub, climates, config, context, covers, dice, dossiers, embed_space, entities, entity_schema, epub, export, external, facts, fence, fetch, fork, greetings, groupstate,
     image_subjects, journal, length_drift, lengths, llm_connections, localize, locks, lorebook, migrations, module_edit, modules, overlay, pcs, playing,
     pins, playstate, plot, prompt_log, proposals, provenance, relationships, response_presets, rolling_summary, rolls, scenario, scene_ideas, scene_ids, scene_refs, scenes, search, semsearch, sheets,
     styles, suggest,
@@ -63,6 +70,7 @@ __all__ = [
     "backups",
     "briefing",
     "cascade",
+    "fork",
     "casefile",
     "parse_frontmatter",
     "dump_frontmatter",

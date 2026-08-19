@@ -20,6 +20,14 @@ from . import paths
 # the filesystem itself guarantees no child of it can ever exist.
 _NO_WORLD = "(no world)"
 
+#: `campaign.md` frontmatter: the id of the campaign this one was forked from,
+#: and the scene a retrospective fork was cut at (#72). `store/fork.py` writes
+#: them; they are declared here, beside the reader that surfaces them, because
+#: this module is the lower layer -- `fork` imports `campaigns`, never the
+#: other way about, and a key spelled in two places is a key that drifts.
+PARENT_KEY = "parent"
+FORKED_AT_KEY = "forked_from_scene"
+
 
 def read_campaign(cid: str) -> dict:
     mp = paths.campaign_meta_path(cid)
@@ -117,6 +125,18 @@ def list_campaigns() -> list[dict]:
                 "world": meta.get("world", ""),
                 "created": meta.get("created", ""),
                 "updated": meta.get("updated", ""),
+                # Lineage (#72). Read here rather than derived, so the shelf can
+                # draw the fork tree from this one call. "" for a campaign that
+                # was created rather than forked -- and for one whose parent has
+                # since been deleted, which the reader decides for itself: this
+                # reports what campaign.md says, and a `parent` naming nothing
+                # simply finds no row to hang under.
+                "parent": meta.get(PARENT_KEY, ""),
+                # The scene a retrospective fork was cut at, "" for a fork from
+                # where the campaign stood. It is what makes the two kinds of
+                # fork distinguishable to a reader, which matters because only
+                # one of them is an approximation of a past state.
+                "forked_from_scene": meta.get(FORKED_AT_KEY, ""),
                 # The pitch the campaign was started from. The list has always
                 # parsed the body and thrown it away; the campaigns page shows
                 # it as each card's blurb, so a shelf of campaigns reads as a

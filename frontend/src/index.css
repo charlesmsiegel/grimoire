@@ -357,6 +357,12 @@ body::before {
   border: 1px solid transparent;
 }
 .campaign-card.active { border-color: var(--line-strong); box-shadow: var(--shadow-glow); }
+/* A fork, indented under the campaign it came from (#72). The rule down the
+   left is what makes the indent read as descent rather than as a stray margin —
+   the shelf is a flat column otherwise, and 28px of whitespace alone says
+   nothing. `margin-left` is set per card in CampaignsView, since it carries the
+   depth; only the mark belongs here. */
+.campaign-card.forked { border-left: 2px solid var(--rule); }
 /* `.shelf-cover`, not `.campaign-cover`: that name belongs to CampaignCover.tsx,
    the cover *editor*, and taking it redefined a 260px preview into a 104px
    thumbnail everywhere that component renders. */
