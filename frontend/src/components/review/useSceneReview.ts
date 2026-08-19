@@ -641,10 +641,15 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
    *  recomputed from this list's own ordering. */
   const shownRows = editRows.flatMap((e, i) =>
     (drawerKey(e) === openSection ? [[e, i] as const] : []));
+  /** Show a drawer. Takes the key and nothing else: the raw setter would also
+   *  accept an updater function, and `openSection` above is the RESOLVED
+   *  drawer, so a caller reading the previous value out of one would not get
+   *  back the value it had just set. */
+  const openDrawer = (key: string) => setReviewSection(key);
 
   return {
     absorb, absorbSid, editRows, reviewQuote, setReviewQuote,
-    editChronicle, openSection, openDrawer: setReviewSection,
+    editChronicle, openSection, openDrawer,
     editFailures, dismissFailures: () => setEditFailures([]),
     conflictByRow, contradictionById, saveError,
     absorbing, saving, reviewBusy, retryingAudit, retryingDossiers,
