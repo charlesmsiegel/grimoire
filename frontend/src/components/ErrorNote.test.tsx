@@ -1,8 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ApiError } from "../api/client";
-import { errMsg, isOffline } from "./errMsg";
 import { ErrorNote } from "./ErrorNote";
+
+// What the reader SEES. Which rejections count as offline is `isOffline`'s
+// own question, and is pinned in `api/errors.test.ts`.
 
 function show(err: unknown, at = "/campaigns/run") {
   render(
@@ -10,25 +12,6 @@ function show(err: unknown, at = "/campaigns/run") {
       <div className="banner"><ErrorNote err={err} /></div>
     </MemoryRouter>);
 }
-
-test("an ApiError tagged network is offline; the same error untagged is not", () => {
-  expect(isOffline(new ApiError(502, "connection reset", "network"))).toBe(true);
-  expect(isOffline(new ApiError(502, "connection reset"))).toBe(false);
-});
-
-test("a stream error frame carries its kind as a plain object", () => {
-  expect(isOffline({ detail: "connection reset", kind: "network" })).toBe(true);
-});
-
-test("missing_key is NOT offline — an unconfigured key is a different fix", () => {
-  expect(isOffline({ detail: "No LLM connection selected", kind: "missing_key" })).toBe(false);
-});
-
-test("a rejection that is not an object at all does not throw", () => {
-  expect(isOffline("boom")).toBe(false);
-  expect(isOffline(null)).toBe(false);
-  expect(isOffline(undefined)).toBe(false);
-});
 
 test("a network failure offers the local-connection recovery, not just the error", () => {
   show(new ApiError(502, "connection reset", "network"));
@@ -45,8 +28,32 @@ test("any other failure renders its detail and nothing else", () => {
   expect(screen.queryByRole("link")).toBeNull();
 });
 
-test("errMsg still reads a plain string rejection", () => {
-  expect(errMsg("boom")).toBe("boom");
+test("a composed sentence renders unchanged", () => {
+  // Half the raisers of these banners never caught anything -- they write a
+  // sentence out of what they found ("Could not import — 2 files failed").
+  // Those go through the same component, and a version of it that only knew
+  // how to read `detail` off an object would blank every one of them.
+  show("Could not import — 2 files failed.");
+  expect(screen.getByText("Could not import — 2 files failed.")).toBeInTheDocument();
+});
+
+test("a failure with an empty detail says something rather than nothing", () => {
+  // `errorText`'s own rule, and the reason this reads through it rather than
+  // taking `detail` itself: a backend answering `{"detail": ""}` used to give
+  // an error box with nothing in it. An earlier draft of this change routed
+  // every banner through a helper that did not have that rule, which put the
+  // blank box back in the one editor that had been spared it.
+  show(new ApiError(500, ""));
+  expect(screen.getByText(/Error/)).toBeInTheDocument();
+});
+
+test("the note names the recovery, not merely that something broke", () => {
+  // The point of #210 is that a local model connection keeps play going. A
+  // note that only said "you are offline" would pass every other assertion
+  // here and be worth nothing.
+  show({ detail: "connection reset", kind: "network" });
+  expect(screen.getByText(/local model connection/)).toBeInTheDocument();
+  expect(screen.getByText(/library is on this machine/)).toBeInTheDocument();
 });
 
 test("on Connections itself the note keeps its words and drops the link", () => {

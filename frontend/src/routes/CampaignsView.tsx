@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, type CampaignMeta, type WorldMeta } from "../api/client";
 import { ColumnSection, PageShell } from "../components/PageShell";
-import { errMsg } from "../components/errMsg";
+import { errorText } from "../api/errors";
 import { forkNotes } from "../components/forkNotes";
 import { lineage } from "./campaignLineage";
 
@@ -126,7 +126,7 @@ export default function CampaignsView() {
       // reachable answer for a campaign being played in another window, and a
       // silent one would look identical to a fork that worked. The campaign
       // page reports the same failure the same way.
-      setForkNote(`'${c.name}' could not be forked: ${errMsg(err)}`);
+      setForkNote(`'${c.name}' could not be forked: ${errorText(err)}`);
       return;
     }
     setForkNote(forkNotes(report));

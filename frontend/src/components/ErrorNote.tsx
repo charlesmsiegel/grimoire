@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { errMsg, isOffline } from "./errMsg";
+import { errorText, isOffline } from "../api/errors";
 
 /** What a `network` failure says instead of its raw socket error (#210).
  *
@@ -40,5 +40,5 @@ function OfflineNote({ detail }: { detail: string }) {
  *  surface — the scene view's carries a Retry button and lives in a flex row,
  *  the panels' is a bare `.banner` — and only the message inside it is shared. */
 export function ErrorNote({ err }: { err: unknown }) {
-  return isOffline(err) ? <OfflineNote detail={errMsg(err)} /> : <>{errMsg(err)}</>;
+  return isOffline(err) ? <OfflineNote detail={errorText(err)} /> : <>{errorText(err)}</>;
 }

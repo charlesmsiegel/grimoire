@@ -13,7 +13,7 @@ import {
 import { isAbortError, type ChatEvent } from "../api/stream";
 import { forkNotes } from "../components/forkNotes";
 import { ErrorNote } from "../components/ErrorNote";
-import { errMsg } from "../components/errMsg";
+import { errorText } from "../api/errors";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import { CastPanel } from "../components/CastPanel";
 import { NewSceneChooser } from "../components/NewSceneChooser";
@@ -388,7 +388,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [error, setError] =
     useState<{ text: string; retryable: boolean; from?: string; err?: unknown } | null>(null);
   const fail = (e: any, retryable = true, from?: string) =>
-    setError({ text: errMsg(e), retryable, from, err: e });
+    setError({ text: errorText(e), retryable, from, err: e });
   const [ctxKey, setCtxKey] = useState(0);
   // The campaign's budget, and the level the reader has already been told about
   // (#153). Held as a level rather than a boolean so dismissing the 80% warning
