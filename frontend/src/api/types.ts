@@ -44,9 +44,10 @@ export type Config = {
    *  tried once; "" = no fallback. */
   fallback_connection_id: string;
   context_budget: string;
-  /** Recent messages every keyword scan reads — world info, chronicle recall,
-   *  keyed mechanics rules and the semantic-recall query all share this
-   *  window; "0" empties it, leaving only always-on entries. */
+  /** Recent transcript messages every keyword scan reads — world info, chronicle
+   *  recall, keyed mechanics rules and the semantic-recall query all share this
+   *  window. "0" empties it; a scene opener's prompt and a director's note seed
+   *  activation themselves either way. */
   context_scan_depth: string;
   archive_depth: string;
   /** "on" once the setup wizard has been finished or dismissed (#194). */

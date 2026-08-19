@@ -323,10 +323,15 @@ def scan_depth() -> int:
 
     The window every keyword-triggered section shares: world info, chronicle
     recall, keyed mechanics rules and the semantic-recall query are all matched
-    against these messages and nothing older. 0 is a real answer rather than a
-    disabled feature -- it empties the window, so only always-on entries render
-    -- while a cleared or hand-mangled field falls back to the default, which is
-    `_count`'s split and the reason this is not spelled out inline.
+    against these messages and nothing older.
+
+    0 is a real answer rather than a disabled feature -- it empties the window,
+    so no keyword in the TRANSCRIPT activates anything. It does not silence the
+    turn's own un-persisted input: `_assemble`'s `wi_seed` folds a scene
+    opener's prompt or a director's note in regardless, because nothing in the
+    history has said those words yet. A cleared or hand-mangled field falls back
+    to the default instead, which is `_count`'s split between a choice and a
+    mistake and the reason this is not parsed inline.
     """
     return _count("context_scan_depth", DEFAULT_SCAN_DEPTH)
 
