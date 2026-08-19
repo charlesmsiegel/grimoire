@@ -72,11 +72,42 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
-      # No project install: ruff parses, it does not import. Pin matches the
-      # `dev` extra in backend/pyproject.toml -- an unpinned linter turns a
-      # green commit red on someone else's release schedule.
+      # No project install: ruff parses, it does not import, and the ratchet
+      # only reads its JSON. Pin matches the `dev` extra in
+      # backend/pyproject.toml -- an unpinned linter turns a green commit red
+      # on someone else's release schedule, and this one is ratcheted against
+      # a committed count of its findings, so "red" would mean every branch.
       - run: pip install "ruff==0.16.0"
       - run: make check-lint PY=python
+
+  mypy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      # `[dev]` and nothing else. `mypy.ini` makes the two optional extras
+      # opaque precisely so this install list cannot change the finding count,
+      # but installing them anyway would make that claim untested.
+      - run: pip install -e "./backend[dev]"
+      - run: make check-mypy PY=python
+
+  eslint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # eslint is node; the ratchet that reads its report is python. No project
+      # install -- `scripts/ratchet.py` imports nothing outside the stdlib.
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - run: make check-eslint PY=python
 
   templates:
     runs-on: ubuntu-24.04

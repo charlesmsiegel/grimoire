@@ -68,7 +68,10 @@ export JAVA_HOME
 # by its SDK location.
 ADB = $(call fixpath,$(SDK_DIR)/platform-tools/adb)
 
-.PHONY: apk apk-release apk-install android-bootstrap android-clean         check check-py check-web check-lint check-templates check-pydantic1         check-apk web-dist sync-phone sync-phone-apply
+.PHONY: apk apk-release apk-install android-bootstrap android-clean \
+        check check-py check-web check-lint check-mypy check-eslint \
+        check-templates check-pydantic1 check-apk web-dist baseline \
+        sync-phone sync-phone-apply
 
 apk:
 	$(GRADLEW) :app:assembleDebug $(if $(BUILD_PYTHON),-Pgrimoire.buildPython="$(BUILD_PYTHON)",)
@@ -98,7 +101,7 @@ android-clean:
 # check-apk is deliberately excluded: it needs a per-machine
 # `make android-bootstrap`, so folding it in would break `make check` on any
 # un-bootstrapped machine. CI runs the two as separate jobs.
-check: check-lint check-py check-web check-templates check-pydantic1
+check: check-lint check-mypy check-py check-web check-eslint check-templates check-pydantic1
 
 check-py:
 	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend -q
@@ -110,8 +113,28 @@ check-py:
 check-web:
 	cd frontend && npm ci && npm run typecheck && npm run test:coverage
 
+# The three ratcheted gates. Each runs its tool and compares the findings to
+# `lint-baselines/<tool>.json`; `scripts/ratchet.py` explains why they land
+# against a baseline rather than report-only. `make baseline` rewrites all
+# three -- run it when a change *fixes* findings, and commit the smaller
+# baseline alongside.
 check-lint:
-	"$(call fixpath,$(PY))" -m ruff check .
+	"$(call fixpath,$(PY))" scripts/ratchet.py ruff
+
+check-mypy:
+	"$(call fixpath,$(PY))" scripts/ratchet.py mypy
+
+# Its own `npm ci` rather than leaning on check-web's: `make -j` gives no
+# ordering between two prerequisites of `check`, and a gate that passes only
+# when another target ran first is a gate that fails at random.
+check-eslint:
+	cd frontend && npm ci
+	"$(call fixpath,$(PY))" scripts/ratchet.py eslint
+
+baseline:
+	"$(call fixpath,$(PY))" scripts/ratchet.py ruff --update
+	"$(call fixpath,$(PY))" scripts/ratchet.py mypy --update
+	"$(call fixpath,$(PY))" scripts/ratchet.py eslint --update
 
 check-templates:
 	"$(call fixpath,$(PY))" scripts/verify_templates.py

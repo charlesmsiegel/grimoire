@@ -14,6 +14,10 @@ backend/.venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+# Tool caches. ruff is run with --no-cache by the gate, but a bare
+# `ruff check` from a shell still writes one.
+.ruff_cache/
+.mypy_cache/
 
 # Node / Vite
 frontend/node_modules/
