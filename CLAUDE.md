@@ -249,10 +249,11 @@ first if you think one should be skipped.
   that guard prompts: `scripts/verify_templates.py` (builders and templates agree
   byte-for-byte) and `evals/run.py` (see `evals/README.md`). Offline, the eval
   suite proves the *instructions* are still in the assembled prompt — it
-  renders the budget, reply-format and roll-protocol sections and requires each
-  one verbatim in the prompt (so all five length knobs and the whole check
-  roster are covered), plus every key of the absorb contract and owned-lore
-  containment — and that the graders still score recorded output correctly. It
-  runs inside `pytest backend`.
+  renders the budget, reply-format, roll-protocol and active-speaker sections
+  and requires each one verbatim in the prompt (so all five length knobs, the
+  whole check roster and the nomination the speaker layer derived are covered),
+  plus every key of the absorb contract and owned-lore containment — and that
+  the graders still score recorded output correctly. It runs inside
+  `pytest backend`.
   Whether the model still *follows* a reworded instruction is a question only
   `evals/run.py --live` answers; that makes real LLM calls and is opt-in.
