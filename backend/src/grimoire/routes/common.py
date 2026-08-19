@@ -3,9 +3,8 @@
 Dependency-injection providers, the pydantic-version shim, the response-scope
 read/write pair, image serving, the 404 guards every domain module reuses, the
 opt-in page window the growing list routes share (#216), and the stale-write
-precondition every record editor shares (#35). This module
-holds no routes and imports no sibling route module, so it is always safe to
-import from one.
+precondition every record editor shares (#35). This module holds no routes and
+imports no sibling route module, so it is always safe to import from one.
 """
 
 from __future__ import annotations
@@ -495,8 +494,11 @@ def _page_window(limit: int | None, offset: int | None) -> tuple[int | None, int
     Hand-checked rather than `Query(ge=1)`, which would be shorter and would put
     the bound in the OpenAPI schema: FastAPI answers a violated `ge` with a 422
     and its own error body, and `GET /campaigns/{cid}/scenes/{sid}` -- the
-    windowed route these follow -- already answers 400 with this wording. One
-    inconsistency was on offer either way; this is the one a client sees.
+    windowed route these follow -- already answers 400 with this wording. Either
+    way one pair of inputs answers inconsistently, so the choice is which pair:
+    `ge` would have split `limit=0` from the windowed route it was copied from,
+    where this splits `limit=0` from `limit=abc`. A client sends the first by
+    arithmetic and the second only by writing a bug.
 
     Checked BEFORE the route looks for its campaign, matching that same route.
     FastAPI validates the query TYPES ahead of the handler, so `?limit=abc` is a
