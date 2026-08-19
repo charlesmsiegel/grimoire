@@ -18,6 +18,8 @@ vi.mock("../components/ReplayPanel", async () =>
 vi.mock("../components/ResponsePresetPicker", async () =>
   (await import("../testkit/campaignMocks")).componentStubs.ResponsePresetPicker());
 vi.mock("../api/client", async () => (await import("../testkit/campaignMocks")).campaignApiMock());
+vi.mock("../components/PostImagePicker", async () =>
+  (await import("../testkit/campaignMocks")).componentStubs.PostImagePicker());
 vi.mock("../api/models", () => ({ getModels: vi.fn() }));
 import { api, ApiError } from "../api/client";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
@@ -232,6 +234,93 @@ test("editing a message saves and reloads", async () => {
   fireEvent.change(ta, { target: { value: "hello" } });
   fireEvent.click(screen.getByRole("button", { name: /save/i }));
   await waitFor(() => expect(api.editMessage).toHaveBeenCalledWith("run", "s1", 0, "hello"));
+});
+
+// ---- inserting an image into a post (#376) ----
+//
+// The button sits in the same gutter row as Edit, under the same gates, and
+// hands the picker the post's own speaker: an actor post offers that actor's
+// art, a narrator post the campaign's own library. The insert writes into the
+// buffer Edit already opens, so there is no new persistence path at all --
+// Save, Retcon and Cancel are exactly what they were.
+
+test("a narrator post's picker is scoped to the campaign, not to an actor", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" },
+    messages: [{ role: "assistant", content: "The room is cold." }] });
+  renderCampaign();
+  await screen.findByText("The room is cold.");
+  fireEvent.click(screen.getAllByTitle("Insert an image")[0]);
+  const picker = await screen.findByTestId("image-picker");
+  expect(JSON.parse(picker.getAttribute("data-target")!))
+    .toEqual({ kind: "campaign", name: "Grimoire" });
+});
+
+test("an actor post's picker names the actor and the version the roster locked", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCast as any).mockResolvedValue([
+    { kind: "characters", id: "seraphine", role: "npc", name: "Seraphine Vale" },
+  ]);
+  (api.listAppearances as any).mockResolvedValue([
+    { kind: "characters", id: "seraphine", version: "v1", role: "npc", scenes: ["s1"] },
+  ]);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" },
+    messages: [{ role: "assistant", content: "She waits.", speaker: "Seraphine Vale" }] });
+  renderCampaign();
+  await screen.findByText("She waits.");
+  fireEvent.click(screen.getAllByTitle("Insert an image")[0]);
+  expect(JSON.parse((await screen.findByTestId("image-picker")).getAttribute("data-target")!))
+    .toEqual({ kind: "characters", id: "seraphine", version: "v1", name: "Seraphine Vale" });
+});
+
+test("an actor the roster cannot place falls back to the campaign's library", async () => {
+  // No appearance record, so there is no locked version to build image URLs
+  // from -- the same gap that leaves the speaker plate showing initials.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCast as any).mockResolvedValue([
+    { kind: "pcs", id: "yara", role: "player", name: "Yara" },
+  ]);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" },
+    messages: [{ role: "user", content: "Hello.", speaker: "Yara" }] });
+  renderCampaign();
+  await screen.findByText("Hello.");
+  fireEvent.click(screen.getAllByTitle("Insert an image")[0]);
+  expect(JSON.parse((await screen.findByTestId("image-picker")).getAttribute("data-target")!))
+    .toEqual({ kind: "campaign", name: "Yara" });
+});
+
+test("picking an image opens the post for editing with the reference appended", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" },
+    messages: [{ role: "assistant", content: "The room is cold." }] });
+  renderCampaign();
+  await screen.findByText("The room is cold.");
+  fireEvent.click(screen.getAllByTitle("Insert an image")[0]);
+  fireEvent.click(await screen.findByText("stub-insert"));
+
+  const ta = await screen.findByLabelText(/edit message/i);
+  expect((ta as HTMLTextAreaElement).value).toBe(
+    "The room is cold.\n\n![coastline](/api/campaigns/run/images/coastline)");
+  expect(screen.queryByTestId("image-picker")).toBeNull();   // the pick closes it
+
+  // and the existing Save is the save: no new route, no second write path
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  await waitFor(() => expect(api.editMessage).toHaveBeenCalledWith(
+    "run", "s1", 0,
+    "The room is cold.\n\n![coastline](/api/campaigns/run/images/coastline)"));
+});
+
+test("a dice-roll line is offered no image button, for the reason it is offered no Edit", async () => {
+  // Its text has to stay in lockstep with an immutable rolls.json entry, and an
+  // insert rewrites the post.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: "🎲 2d6 = 7", speaker: "⁣Roll" }] });
+  renderCampaign();
+  await screen.findByText("🎲 2d6 = 7");
+  expect(screen.getAllByTitle("Insert an image")).toHaveLength(1);   // the user post only
+  expect(screen.getAllByTitle("Edit message")).toHaveLength(1);
 });
 
 // ---- cascade post-delete (#75) ----

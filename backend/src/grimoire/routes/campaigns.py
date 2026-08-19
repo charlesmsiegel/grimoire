@@ -483,6 +483,86 @@ def delete_campaign_cover(cid: str):
     return {"ok": True}
 
 
+# ---- the campaign's own image library (store/campaign_images.py) ----------
+# Declared here for the same reason the cover is: `routes/__init__` includes
+# `campaigns` before `entities`, whose `/campaigns/{cid}/{kind}` would otherwise
+# capture `images`.
+def _library_name_or_400(name: str) -> str:
+    """Refuse a name no post could link to, BEFORE anything is written (#373).
+
+    Up front, and on every write, because `assets.put_in` creates the directory
+    it writes into: a name that gets past this would file bytes under a token
+    the picker can never insert and this app can never show -- reported to the
+    caller as a successful upload. The campaign id is gated the same way, by
+    `_campaign_root_or_404`, one line above every one of these handlers.
+    """
+    if not store.campaign_images.addressable(name):
+        raise HTTPException(status_code=400,
+                            detail="image name cannot be used in a link")
+    return name
+
+
+@router.get("/campaigns/{cid}/images")
+def list_campaign_library(cid: str):
+    _campaign_root_or_404(cid)
+    return store.campaign_images.list_images(cid)
+
+
+@router.get("/campaigns/{cid}/images/{name}")
+def get_campaign_library_image(cid: str, name: str, request: Request):
+    _campaign_root_or_404(cid)
+    p = store.campaign_images.image_path(cid, name)
+    if p is None:
+        raise HTTPException(status_code=404, detail="image not found")
+    return _serve_image_file(p, request)
+
+
+@router.put("/campaigns/{cid}/images/{name}")
+async def put_campaign_library_image(cid: str, name: str, file: UploadFile = File(...)):
+    _campaign_root_or_404(cid)
+    _library_name_or_400(name)
+    # Size BEFORE the read, exactly as `put_campaign_cover` does and for the
+    # same reason: `read()` materializes the whole upload as one `bytes` object,
+    # and on Android (Chaquopy) that allocation is what OOMs the process before
+    # a 413 could be composed. `file.size` is Optional in the ASGI contract, so
+    # the length of what was actually read is re-checked below.
+    if file.size is not None and file.size > store.campaign_images.MAX_BYTES:
+        raise HTTPException(status_code=413, detail=store.campaign_images.TOO_LARGE)
+    data = await file.read()
+    if len(data) > store.campaign_images.MAX_BYTES:
+        raise HTTPException(status_code=413, detail=store.campaign_images.TOO_LARGE)
+    ext = _upload_image_ext(data)  # the bytes name the type, not `file.filename` (#321)
+    try:
+        stored = store.campaign_images.put_image(cid, name, data, ext)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    p = store.campaign_images.image_path(cid, name)
+    # `v` so the client can build the immutable `?v=` URL without a second
+    # round trip; "" if the file went away between the write and this stat,
+    # which costs a revalidation and nothing else.
+    return {"name": name, "ext": stored,
+            "v": store.assets.image_version(p) if p is not None else ""}
+
+
+@router.delete("/campaigns/{cid}/images/{name}")
+def delete_campaign_library_image(cid: str, name: str):
+    _campaign_root_or_404(cid)
+    # Deliberately NOT gated by `_library_name_or_400`, unlike the put. That
+    # gate exists to stop unreachable bytes being *created*; a file already on
+    # disk under a name the picker will not offer -- one a sync client dropped
+    # -- is exactly the stray this store can hold, and refusing to remove it
+    # would leave it with no way out of the app at all. `assets.delete_in`
+    # still applies its own name rules.
+    try:
+        store.campaign_images.delete_image(cid, name)
+    except OSError:
+        # `delete_image` confirms the removal rather than swallowing a failed
+        # unlink, so this is a file that is genuinely still there -- held by a
+        # sync client on Windows, or a read-only store. 200 would be a lie.
+        raise HTTPException(status_code=500, detail="image could not be removed")
+    return {"ok": True}
+
+
 @router.put("/campaigns/{cid}")
 def put_campaign(cid: str, body: NameBody):
     name = body.name.strip()

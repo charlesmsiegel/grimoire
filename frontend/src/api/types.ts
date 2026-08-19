@@ -529,6 +529,10 @@ export type CalendarConfig = {
 /** One row of the clock's log: where time went, why, and when that was recorded. */
 export type ClockLogEntry = { from: string; to: string; reason: string; at: string };
 export type CampaignClock = { now: string; friendly: string; log: ClockLogEntry[] };
+
+/** One image in a campaign's own library (#376). `v` is the cache token an
+ *  `?v=` URL is answered `immutable` for. */
+export type CampaignImage = { name: string; ext: string; v: string };
 /** How long a record has been owed (#103), computed at read time and never
  *  stored. `overdue` needs a `due` the campaign's calendar can parse — a
  *  deadline written in the fiction's own words ("before the harvest moon") ages

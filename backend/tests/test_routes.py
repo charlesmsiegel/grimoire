@@ -890,6 +890,158 @@ def test_every_entity_image_write_route_refuses_a_kind_that_has_no_entities(clie
     assert not (store.campaigns.campaign_root(cid) / "greetings" / gid).exists()
 
 
+# ---- the campaign's own image library (#376) --------------------------------
+def _library_names(client, cid) -> list:
+    return [i["name"] for i in client.get(f"/api/campaigns/{cid}/images").json()]
+
+
+def _campaign_library_write_routes(client):
+    """Every registered write route on the campaign image library surface.
+
+    Enumerated from the app rather than listed here, for the reason
+    `_actor_image_write_routes` gives about its own surface: the point is to
+    catch route number five, added later by someone who did not read this file.
+    The two surfaces are enumerated separately because their shapes and their
+    gates differ -- this one has no actor and no version, so the only id it can
+    get wrong is the campaign's.
+    """
+    def flatten(routes):
+        out = []
+        for r in routes:
+            if type(r).__name__ == "_IncludedRouter":   # lazily expanded include
+                out.extend(flatten(r.effective_candidates()))
+            elif hasattr(r, "methods") and hasattr(r, "path"):
+                out.append((frozenset(r.methods), r.path))
+        return out
+
+    surface = re.compile(r"^/api/campaigns/\{\w+\}/images(/|$)")
+    return sorted({(m, path) for methods, path in flatten(client.app.routes)
+                   for m in methods & {"PUT", "POST", "DELETE"}
+                   if surface.match(path)})
+
+
+def test_every_campaign_library_write_route_refuses_an_unknown_campaign(client):
+    """#360/#373, at the surface where that bug class would start next.
+
+    `assets.put_in` creates the directory it writes into, so a write against an
+    id nothing can reach files bytes under `campaigns/<typo>/assets/images/`
+    that no listing will ever show and no delete route can ever name -- and
+    reports it to the caller as a success. Covered from the first commit rather
+    than widened after the fact for the third time.
+
+    The refusal has to come from a *gate*, which is why the detail is checked
+    and not merely the status: a URL this test built wrongly would match no
+    route at all, and Starlette answers that with its own 404 -- a guard that
+    accepted any 404 would pass hardest when its URLs were most wrong.
+    """
+    _wid, cid = _campaign(client)
+    routes_found = _campaign_library_write_routes(client)
+    assert len(routes_found) >= 2, routes_found   # PUT and DELETE at minimum
+
+    for method, path in routes_found:
+        url = path.replace("{cid}", "ghost").replace("{name}", "coastline")
+        assert "{" not in url, (method, path)     # a shape this test cannot fill
+        r = (client.put(url, files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+             if method == "PUT" else client.request(method, url))
+        assert (r.status_code, r.json().get("detail")) == (404, "campaign not found"), \
+            (method, url, r.status_code, r.text)
+
+    assert not (store.paths.home() / "campaigns" / "ghost").exists()
+    # and the real campaign got no library out of the refusals either
+    assert not (store.campaigns.campaign_root(cid) / "assets" / "images").exists()
+
+
+def test_campaign_library_round_trip_through_the_routes(client):
+    _wid, cid = _campaign(client)
+    assert client.get(f"/api/campaigns/{cid}/images").json() == []
+
+    png = _png_bytes()
+    r = client.put(f"/api/campaigns/{cid}/images/coastline",
+                   files={"file": ("coast.png", io.BytesIO(png), "image/png")})
+    assert r.status_code == 200
+    assert r.json()["name"] == "coastline" and r.json()["ext"] == "png"
+    assert r.json()["v"], r.json()          # the token the `?v=` URL is built from
+
+    listed = client.get(f"/api/campaigns/{cid}/images").json()
+    assert [i["name"] for i in listed] == ["coastline"]
+    assert listed[0]["v"] == r.json()["v"]
+
+    got = client.get(f"/api/campaigns/{cid}/images/coastline")
+    assert got.status_code == 200 and got.content == png
+    assert got.headers["content-type"] == "image/png"
+    assert got.headers["cache-control"] == "no-cache"       # bare URL revalidates
+    versioned = client.get(f"/api/campaigns/{cid}/images/coastline?v={listed[0]['v']}")
+    assert versioned.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+    assert client.delete(f"/api/campaigns/{cid}/images/coastline").json() == {"ok": True}
+    assert client.get(f"/api/campaigns/{cid}/images").json() == []
+    assert client.get(f"/api/campaigns/{cid}/images/coastline").status_code == 404
+
+
+def test_campaign_library_upload_stores_the_extension_the_bytes_are(client):
+    """#321, on the new surface: the stored suffix is what every consumer names
+    a media type from -- this server, the EPUB manifest, the HTML export's data
+    URIs -- so it comes from the bytes and never from `file.filename`."""
+    _wid, cid = _campaign(client)
+    jpeg = _jpeg_bytes()
+    r = client.put(f"/api/campaigns/{cid}/images/map",
+                   files={"file": ("map.png", io.BytesIO(jpeg), "image/png")})
+    assert r.status_code == 200 and r.json()["ext"] == "jpg"
+    assert (store.campaigns.campaign_root(cid) / "assets" / "images" / "map.jpg").exists()
+    got = client.get(f"/api/campaigns/{cid}/images/map")
+    assert got.content == jpeg and got.headers["content-type"] == "image/jpeg"
+
+    # bytes in no format we can label are refused rather than stored under a
+    # name that lies about them
+    bad = client.put(f"/api/campaigns/{cid}/images/notes",
+                     files={"file": ("notes.png", io.BytesIO(b"not an image"), "image/png")})
+    assert bad.status_code == 400
+    assert _library_names(client, cid) == ["map"]
+
+
+@pytest.mark.parametrize("name", ["coast line", "map(1)", "map%20b", "<map>", "50%25"])
+def test_campaign_library_refuses_a_name_no_post_could_link_to(client, name):
+    """The 400 lands before a byte is stored: a name the picker cannot insert
+    into `![alt](url)` names bytes this app could never show again (#373).
+
+    `?` and `#` are absent from this list because they cannot reach a handler
+    at all -- they delimit the query and the fragment, so the server is handed
+    a shorter path and never sees them. They are still refused, and are tested
+    where the refusal is reachable: `test_campaign_images_store.py`.
+    """
+    _wid, cid = _campaign(client)
+    r = client.put(f"/api/campaigns/{cid}/images/{name}",
+                   files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    assert r.status_code == 400, (name, r.text)
+    assert not (store.campaigns.campaign_root(cid) / "assets" / "images").exists()
+
+
+def test_campaign_library_refuses_an_oversized_upload(client, monkeypatch):
+    """The 413 comes from `UploadFile.size`, before `read()` materializes the
+    whole body as one `bytes` object -- that allocation is what the cap exists
+    to bound on Android."""
+    _wid, cid = _campaign(client)
+    monkeypatch.setattr(store.campaign_images, "MAX_BYTES", 8)
+    r = client.put(f"/api/campaigns/{cid}/images/map",
+                   files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    assert r.status_code == 413 and r.json()["detail"] == store.campaign_images.TOO_LARGE
+    assert not (store.campaigns.campaign_root(cid) / "assets" / "images").exists()
+
+
+def test_campaign_library_delete_can_still_reach_a_stray(client):
+    """The put's name gate is not on the delete, deliberately: it exists to stop
+    unreachable bytes being *created*, and a file a sync client dropped under an
+    unlinkable name is exactly the stray this store can hold. Refusing to remove
+    it would leave it no way out of the app at all."""
+    _wid, cid = _campaign(client)
+    d = store.campaigns.campaign_root(cid) / "assets" / "images"
+    d.mkdir(parents=True)
+    (d / "holiday snap.png").write_bytes(_png_bytes())
+    assert _library_names(client, cid) == []          # not offered
+    assert client.delete(f"/api/campaigns/{cid}/images/holiday snap").json() == {"ok": True}
+    assert not (d / "holiday snap.png").exists()
+
+
 def test_image_upload_stores_the_extension_the_bytes_are(client):
     """#321: the stored extension used to come from the client's filename, so a
     JPEG uploaded as `avatar.png` was stored as `.png` and then declared

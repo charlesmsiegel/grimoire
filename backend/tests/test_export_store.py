@@ -5,7 +5,8 @@ import io
 import json
 import zipfile
 
-from grimoire.store import appearances, assets, campaigns, characters, chronicle, covers, entities, export, pcs, scenes, worlds
+from grimoire.store import (appearances, assets, campaign_images, campaigns, characters,
+                            chronicle, covers, entities, export, pcs, scenes, worlds)
 
 
 def _img(fmt: str = "PNG", color=(10, 20, 30), size=(8, 8)) -> bytes:
@@ -60,6 +61,50 @@ def test_rewrite_images_world_fallback(monkeypatch, tmp_path):
     # missing file degrades to alt text
     out2 = export.rewrite_images(f"![gone](/api/worlds/{wid}/greetings/g1/images/nope)", cid, images)
     assert out2 == "gone"
+
+
+def test_rewrite_images_packs_a_campaign_library_image(monkeypatch, tmp_path):
+    """#376: a URL shape missing from `_IMG_URL` is not a rendering bug, it is a
+    book shipped with the image silently degraded to its alt text."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    campaign_images.put_image(cid, "coastline", _jpeg(), "jpg")
+    images = export.Images()
+    out = export.rewrite_images(
+        f"![The coast](/api/campaigns/{cid}/images/coastline)", cid, images)
+    assert out == "![The coast](images/img-000.jpg)"
+    assert list(images.by_path) == [campaign_images.image_path(cid, "coastline")]
+
+    # missing degrades to alt text, like every other shape
+    assert export.rewrite_images(
+        f"![gone](/api/campaigns/{cid}/images/nope)", cid, images) == "gone"
+
+
+def test_a_forked_campaigns_book_carries_its_own_library_copy(monkeypatch, tmp_path):
+    """`store.fork` copies a campaign's text verbatim, so a branch's posts still
+    name the campaign they were written in. The book is unaffected: every
+    localized URL resolves against the campaign being EXPORTED, not against the
+    id written into it, so the fork packs the fork's own bytes."""
+    from grimoire.store import fork
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    campaign_images.put_image(cid, "coastline", _img(color=(1, 2, 3)), "png")
+    branch = fork.fork_campaign(cid, "Branch")["id"]
+    campaign_images.put_image(branch, "coastline", _img(color=(9, 9, 9)), "png")
+
+    images = export.Images()
+    # the URL still names `cid` -- the source -- because that is what a fork copies
+    export.rewrite_images(f"![c](/api/campaigns/{cid}/images/coastline)", branch, images)
+    assert list(images.by_path) == [campaign_images.image_path(branch, "coastline")]
+
+
+def test_a_world_scoped_library_url_is_not_a_shape_the_app_writes(monkeypatch, tmp_path):
+    """The campaign library branch is spelled out as its own alternative rather
+    than as an empty one inside the shared `(worlds|campaigns)` prefix, which
+    would also have matched `/api/worlds/<wid>/images/<name>` -- a URL nothing
+    serves and nothing writes."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    assert export._IMG_URL.match(f"/api/worlds/{wid}/images/coastline") is None
+    assert export.rewrite_images(
+        f"![c](/api/worlds/{wid}/images/coastline)", cid, export.Images()) == "c"
 
 
 def test_rewrite_images_honors_asset_tombstone(monkeypatch, tmp_path):

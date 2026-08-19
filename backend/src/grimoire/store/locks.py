@@ -177,6 +177,12 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # `delete_cover` take the lock around the publish-then-clean sequence, and
     # `delete_cover` verifies the removal under it.
     "store.covers",
+    # The campaign's own image library (`<campaign>/assets/images/`), the same
+    # shape as the cover at a higher cardinality (#376). `put_image` and
+    # `delete_image` take the lock around the publish-then-clean sequence, and
+    # `delete_image` verifies the removal under it. New module, so it starts
+    # inside the exclusion rather than joining the frozen `UNREVIEWED` backlog.
+    "store.campaign_images",
     # `journal.json` is rewritten whole by every append, and an append that
     # loses the race loses the only record of a write that already landed --
     # which is worse than a stale panel, because the reversal it carries is the
