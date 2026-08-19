@@ -77,7 +77,7 @@ vi.mock("../api/client", async () => {
       // -- the tests that want it say so.
       retconMessage: vi.fn(), getReplay: vi.fn(), replayPreview: vi.fn(),
       startReplay: vi.fn(), replayTurn: vi.fn(), acceptReplay: vi.fn(),
-      cancelReplay: vi.fn(), forkCampaign: vi.fn(),
+      cancelReplay: vi.fn(),
       absorbScene: vi.fn(), saveChronicle: vi.fn(), getChronicle: vi.fn(), retryAudit: vi.fn(),
       retryDossiers: vi.fn(),
       // consumed by the embedded SceneInspector

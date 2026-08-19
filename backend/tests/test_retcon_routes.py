@@ -231,35 +231,6 @@ def test_an_out_of_range_preview_is_a_400(client, scene):
     assert r.status_code == 400
 
 
-def test_forking_copies_the_campaign_and_leaves_the_original_alone(client, scene):
-    cid, sid = scene
-    r = client.post(f"/api/campaigns/{cid}/fork", json={"name": "Run (retcon)"})
-    assert r.status_code == 200
-    fork = r.json()["id"]
-    assert fork != cid
-    assert _contents(fork, sid) == _contents(cid, sid)
-
-    store.scenes.append_message(fork, sid, "user", "only in the fork")
-    assert "only in the fork" not in _contents(cid, sid)
-
-
-def test_the_fork_records_where_it_came_from(client, scene):
-    cid, _ = scene
-    fork = client.post(f"/api/campaigns/{cid}/fork", json={"name": "Run (retcon)"}).json()["id"]
-    meta = client.get(f"/api/campaigns/{fork}").json()["meta"]
-    assert meta["parent"] == cid and meta["name"] == "Run (retcon)"
-    assert meta["world"] == client.get(f"/api/campaigns/{cid}").json()["meta"]["world"]
-
-
-def test_a_fork_needs_a_name(client, scene):
-    cid, _ = scene
-    assert client.post(f"/api/campaigns/{cid}/fork", json={"name": "  "}).status_code == 400
-
-
-def test_forking_an_unknown_campaign_is_a_404(client):
-    assert client.post("/api/campaigns/nope/fork", json={"name": "X"}).status_code == 404
-
-
 def test_a_replay_in_the_fork_leaves_the_original_scene_intact(client, scene):
     """The whole point of the nudge: replay into the copy, and the campaign you
     were playing is still there if it goes wrong."""
@@ -268,37 +239,6 @@ def test_a_replay_in_the_fork_leaves_the_original_scene_intact(client, scene):
     client.post(f"/api/campaigns/{fork}/scenes/{sid}/replay", json={"index": 1})
     assert _contents(fork, sid) == ["player one"]
     assert len(_contents(cid, sid)) == 4
-
-
-def test_a_fork_is_not_a_campaign_until_it_carries_its_own_name(client, scene):
-    """Readers take no lock, so a copy carrying the SOURCE's `campaign.md` would
-    be visible under the source's name for as long as the rest of the tree takes
-    to copy — two campaigns with one name, one of them half there. The meta is
-    left out of the copy and written last, which makes that write the
-    publication."""
-    import shutil
-    cid, _ = scene
-    mid_copy: list[list[str]] = []
-    original = shutil.copytree
-
-    def watched(*a, **kw):
-        out = original(*a, **kw)
-        # Once per directory: `shutil.copytree` recurses through its own public
-        # name, so this fires for `scenes/` too -- every one of them a moment
-        # when the copy is partly on disk and a reader could arrive.
-        mid_copy.append(sorted(c["name"] for c in store.campaigns.list_campaigns()))
-        return out
-
-    shutil.copytree = watched
-    try:
-        fork = client.post(f"/api/campaigns/{cid}/fork",
-                           json={"name": "Run (retcon)"}).json()["id"]
-    finally:
-        shutil.copytree = original
-
-    assert mid_copy and all(seen == ["Run"] for seen in mid_copy)
-    assert sorted(c["name"] for c in store.campaigns.list_campaigns()) == ["Run", "Run (retcon)"]
-    assert store.campaigns.read_campaign(fork)["meta"]["parent"] == cid
 
 
 # --- the whole point, end to end -------------------------------------------

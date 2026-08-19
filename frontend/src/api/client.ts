@@ -344,13 +344,6 @@ export const api = {
     request<{ meta: CampaignMeta; body: string }>("GET", `/api/campaigns/${cid}`),
   renameCampaign: (cid: string, name: string) =>
     request<{ id: string; name: string }>("PUT", `/api/campaigns/${cid}`, { name }).then(notifyCampaigns),
-  // Fork (#72), which is what the replay nudge offers (#80): a copy of the
-  // campaign as it stands, so an expensive or destructive thing can be done to
-  // the copy. `notifyCampaigns`, like create and rename — the sidebar's Recent
-  // rail gains a row.
-  forkCampaign: (cid: string, name: string) =>
-    request<{ id: string; name: string }>(
-      "POST", `/api/campaigns/${cid}/fork`, { name }).then(notifyCampaigns),
   deleteCampaign: (cid: string) =>
     request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}`).then(notifyCampaigns),
   /** Fork `cid` into a new campaign. `fromScene` cuts the copy back to that
