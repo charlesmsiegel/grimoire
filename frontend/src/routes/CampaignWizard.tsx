@@ -64,6 +64,17 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
     api.listTags(world).then((m) => setWorldTags(Object.values(m))).catch(() => setWorldTags([]));
     setPickedPC(null); // a pick belongs to one world
     api.listPCs({ kind: "world", id: world }).then(setWorldPCs).catch(() => setWorldPCs([]));
+    // Seeded from the world, not left on this component's own default (#223).
+    // `commit` ALWAYS passes `calendar`, and `create_campaign` reads any value
+    // it is given as an explicit choice that overwrites what the world says —
+    // so an unseeded picker meant a world set to Hebrew, or to a user-authored
+    // plugin calendar, silently produced Gregorian campaigns unless the reader
+    // noticed and re-picked. Still a picker: the world is the default here, not
+    // a constraint. A world whose calendar cannot be read leaves the current
+    // selection alone rather than resetting it to something nobody chose.
+    api.getCalendarConfig({ kind: "world", id: world })
+      .then((cfg) => { setCalendar(cfg.primary.provider); setRegion(cfg.primary.region); })
+      .catch(() => {});
   }, [world]);
 
   function addTag() {

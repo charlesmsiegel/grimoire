@@ -22,6 +22,7 @@ vi.mock("../api/client", () => ({
     startFromGreeting: vi.fn(),
     opener: vi.fn(),
     getCalendarProviders: vi.fn(),
+    getCalendarConfig: vi.fn(),
     listClimates: vi.fn(() => Promise.resolve({ climates: [
       { id: "temperate-interior", name: "Temperate Interior", builtin: true, custom: false },
       { id: "high-desert", name: "High Desert", builtin: true, custom: false },
@@ -40,6 +41,9 @@ beforeEach(() => {
     { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" },
     { id: "my-custom-calendar", name: "My Custom Calendar" },
   ] });
+  (api.getCalendarConfig as any).mockResolvedValue({
+    primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
+    secondary: null, confirmed: false, stale_after_days: 30 });
   (api.createCampaign as any).mockResolvedValue({ id: "run" });
   (api.createCampaignPC as any).mockResolvedValue({ pc: "mara", version: "default" });
   (api.createScene as any).mockResolvedValue({ id: "s1" });
@@ -246,4 +250,27 @@ test("a first-run opener the model could not be reached for offers the recovery"
   fireEvent.click(screen.getByRole("button", { name: /^generate$/i }));
   await screen.findByText(/Couldn.t reach the model provider/);
   expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
+});
+
+// ---- the world's calendar is the default this wizard opens on (#223) ----
+
+test("the calendar picker opens on the world's own calendar, not on Gregorian", async () => {
+  // The wizard ALWAYS sends `calendar`, and `create_campaign` treats any value
+  // it is given as an explicit choice that overwrites the world's. Seeded from
+  // the world, the reader can still pick something else; unseeded, a world set
+  // to Hebrew quietly produced Gregorian campaigns forever.
+  (api.getCalendarConfig as any).mockResolvedValue({
+    primary: { provider: "hebrew", region: "IL", custom_holidays: [], anchor: null },
+    secondary: null, confirmed: true, stale_after_days: 30 });
+  renderWizard();
+  await screen.findByText("Realm");
+  await waitFor(() => expect(screen.getByLabelText("Calendar")).toHaveValue("hebrew"));
+  expect(api.getCalendarConfig).toHaveBeenCalledWith({ kind: "world", id: "w1" });
+});
+
+test("a world with an unreadable calendar leaves the picker on its own default", async () => {
+  (api.getCalendarConfig as any).mockRejectedValue(new Error("nope"));
+  renderWizard();
+  await screen.findByText("Realm");
+  expect(screen.getByLabelText("Calendar")).toHaveValue("gregorian");
 });
