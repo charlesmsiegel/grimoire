@@ -9,7 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from .. import store
 from ..llm import LLMClient
 from .common import (_campaign_root_or_404, _fresh_or_409, _record_prompt,
-                     _require_connection, _require_scene, _world_root_or_404, get_llm)
+                     _require_connection, _require_scene, _world_char_version_or_404,
+                     _world_root_or_404, get_llm)
 from .models import (CopyFromGreeting, Edges, FirstPost, GreetingCreate, GreetingUpdate,
                      ImportGreetings, MarkBody, Opener, StartFromGreeting, SubjectsBody)
 from .streaming import _ephemeral_stream, _persist_reply
@@ -179,7 +180,9 @@ def get_world_character_appearances(wid: str, cid: str):
 
 @router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/images/copy-from-greeting")
 def post_copy_image_from_greeting(wid: str, cid: str, vid: str, body: CopyFromGreeting):
-    root = _world_root_or_404(wid)
+    # the copy writes through `assets.put_image` like every other image write,
+    # so it takes the same gate on the destination (#360)
+    root = _world_char_version_or_404(wid, cid, vid)
     try:
         stored = store.image_subjects.copy_to_character(root, body.gid, body.name, cid, vid, body.slot)
     except FileNotFoundError:

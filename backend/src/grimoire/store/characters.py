@@ -103,18 +103,13 @@ def create_version(root: Path, cid: str, version_name: str, card: dict) -> str:
 
 
 def update_version(root: Path, cid: str, vid: str, card: dict) -> None:
-    _require_char(root, cid)
-    p = _card_path(root, cid, vid)
-    if not safe_id(vid) or not p.exists():
-        raise VersionNotFound(vid)
+    p = require_version(root, cid, vid)
     cards.bake_char_name(card)  # #137: {{char}} is always self-reference, baked at write time
     atomic.write_text(p, _dumps(card))
 
 
 def set_default_version(root: Path, cid: str, vid: str) -> None:
-    _require_char(root, cid)
-    if not safe_id(vid) or not _card_path(root, cid, vid).exists():
-        raise VersionNotFound(vid)
+    require_version(root, cid, vid)
     meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
     meta["default_version"] = vid
     atomic.write_text(_meta_path(root, cid), dump_frontmatter(meta, ""))
@@ -150,12 +145,25 @@ def _version_ids(root: Path, cid: str) -> list[str]:
     return sorted(p.stem for p in _char_dir(root, cid).glob("*.json") if safe_id(p.stem))
 
 
-def read_card(root: Path, cid: str, vid: str) -> dict:
+def require_version(root: Path, cid: str, vid: str) -> Path:
+    """Assert `cid`/`vid` name a real character version; return the card's path.
+
+    Two stats and no read, which is the point: the image routes gate on this
+    per request (#360), and reading the card to answer a question `Path.exists`
+    answers would put a file read and a JSON parse on every upload.
+
+    Raises the same two exceptions the lookups here already raised inline; this
+    is the guard pair they were each repeating, named once -- the same shape
+    `pcs.require_version` is for the PC surface."""
     _require_char(root, cid)
     p = _card_path(root, cid, vid)
     if not safe_id(vid) or not p.exists():
         raise VersionNotFound(vid)
-    return json.loads(p.read_text(encoding="utf-8"))
+    return p
+
+
+def read_card(root: Path, cid: str, vid: str) -> dict:
+    return json.loads(require_version(root, cid, vid).read_text(encoding="utf-8"))
 
 
 def _version_label(card: dict, vid: str) -> str:
@@ -280,10 +288,7 @@ def list_characters(root: Path) -> list[dict]:
 
 
 def delete_version(root: Path, cid: str, vid: str) -> None:
-    _require_char(root, cid)
-    p = _card_path(root, cid, vid)
-    if not safe_id(vid) or not p.exists():
-        raise VersionNotFound(vid)
+    p = require_version(root, cid, vid)
     if len(_version_ids(root, cid)) == 1:
         raise ValueError("cannot delete the last version of a character")
     p.unlink()

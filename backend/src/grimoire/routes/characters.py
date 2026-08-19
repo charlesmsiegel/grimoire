@@ -12,7 +12,7 @@ from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from .common import (_bounded_call, _require_connection, _serve_image, _upload_image_ext,
-                     _world_root_or_404, get_llm)
+                     _world_char_version_or_404, _world_root_or_404, get_llm)
 from .models import (AvatarFocus, CharacterBirthdate, CharacterCreate, ChubImportBody,
                      ChubSourceBody, DefaultVersion, TaglineSave, VersionCreate, VersionUpdate,
                      VoiceAnchorSave)
@@ -378,7 +378,7 @@ def get_world_image(wid: str, cid: str, vid: str, name: str, request: Request):
 
 @router.put("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}")
 async def put_world_image(wid: str, cid: str, vid: str, name: str, file: UploadFile = File(...)):
-    root = _world_root_or_404(wid)
+    root = _world_char_version_or_404(wid, cid, vid)
     data = await file.read()
     ext = _upload_image_ext(data)  # the bytes name the type, not `file.filename` (#321)
     try:
@@ -390,14 +390,18 @@ async def put_world_image(wid: str, cid: str, vid: str, name: str, file: UploadF
 
 @router.delete("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}")
 def delete_world_image(wid: str, cid: str, vid: str, name: str):
-    store.assets.delete_image(_world_root_or_404(wid), cid, vid, name)
+    # Gated on the character and the version, not on the image: removing an
+    # image that is already gone is the caller getting what they asked for, but
+    # removing one from a character that does not exist is a typo worth reporting.
+    store.assets.delete_image(_world_char_version_or_404(wid, cid, vid), cid, vid, name)
     return {"ok": True}
 
 
 @router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}/promote")
 def promote_world_image(wid: str, cid: str, vid: str, name: str):
+    root = _world_char_version_or_404(wid, cid, vid)
     try:
-        store.assets.promote_image(_world_root_or_404(wid), cid, vid, name)
+        store.assets.promote_image(root, cid, vid, name)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
     except ValueError as exc:
@@ -408,7 +412,7 @@ def promote_world_image(wid: str, cid: str, vid: str, name: str):
 
 @router.put("/worlds/{wid}/characters/{cid}/versions/{vid}/images/avatar/focus")
 def put_world_avatar_focus(wid: str, cid: str, vid: str, body: AvatarFocus):
-    root = _world_root_or_404(wid)
+    root = _world_char_version_or_404(wid, cid, vid)
     if store.assets.image_path(root, cid, vid, store.assets.AVATAR) is None:
         raise HTTPException(status_code=404, detail="image not found")
     store.assets.write_focus(root, cid, vid, body.focus)
