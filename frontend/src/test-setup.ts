@@ -58,9 +58,9 @@ if (!window.matchMedia) {
 // None of them is a hang, which is why raising the ceiling does not help: 4 of 6
 // runs still failed with `asyncUtilTimeout` at 5s. What the tests are missing is
 // not time, it is a definition of "settled" — so that is what the wait means
-// now. Quiet is measured off the rendered DOM rather than off any one file's
-// mocks, because the same shape has now been seen in two suites that share no
-// fixtures (`CampaignView`, `ResponsePresetPicker`).
+// now. Quiet is measured off the page itself (see `observable` below) rather
+// than off any one file's mocks, because the same shape has now been seen in
+// two suites that share no fixtures (`CampaignView`, `ResponsePresetPicker`).
 //
 // Two consecutive unchanged ticks, not one: a stage can land a value without
 // moving anything a test can see and still start the next stage, and one tick
