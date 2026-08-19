@@ -574,13 +574,13 @@ def test_no_connection_is_a_409_not_a_500(client):
     assert llm.calls == 0
 
 
-def test_an_upstream_failure_is_a_502_and_leaves_the_stored_summary_alone(client):
+def test_an_upstream_failure_leaves_the_stored_summary_alone(client):
     _key(client)
     _use(client, _summarizer("Good summary."))
     cid, sid = _scene(client, posts=10)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
 
-    _use(client, FakeLLM([["ignored"]], error=LLMError("upstream", "the model exploded")))
+    _use(client, FakeLLM([["ignored"]], error=LLMError("bad_response", "the model exploded")))
     for n in range(10, 25):
         store.scenes.append_message(cid, sid, "user", f"Post {n}.")
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
@@ -724,7 +724,7 @@ async def test_the_claim_is_released_so_the_next_refresh_can_run(monkeypatch, tm
     app = create_app()
 
     app.dependency_overrides[routes.get_llm] = lambda: FakeLLM(
-        [["ignored"]], error=LLMError("upstream", "the model exploded"))
+        [["ignored"]], error=LLMError("bad_response", "the model exploded"))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
         wid = (await ac.post("/api/worlds", json={"name": "Realm"})).json()["id"]

@@ -10,19 +10,36 @@ from __future__ import annotations
 import math
 
 
+#: Every failure kind an `LLMError` carries.
+#:
+#: A named set rather than the comment this used to be, because something now
+#: has to answer for each one: `routes.common` maps kind to an HTTP status
+#: (#213) and a test holds that map to exactly this set, so a kind added here
+#: without a status decided for it fails loudly instead of quietly arriving as
+#: the fallback 502 nobody chose.
+KINDS = frozenset({
+    "missing_key", "auth", "rate_limit", "network", "bad_response",
+    "missing_dependency", "timeout",
+})
+
+
 class LLMError(Exception):
     def __init__(self, kind: str, detail: str = "", retry_after: float | None = None):
         super().__init__(detail or kind)
-        # missing_key | auth | rate_limit | network | bad_response |
-        # missing_dependency | timeout
+        #: One of `KINDS` -- unvalidated on purpose. This constructor runs on
+        #: the failure path, where raising over a typo would replace the error
+        #: the caller needs to see with one about our own bookkeeping; the
+        #: status map answers an unknown kind with 502 instead.
         self.kind = kind
         self.detail = detail or kind
         #: Seconds the provider itself asked us to wait before trying again,
         #: or None if it did not say (#144). Optional, and defaulted, because
         #: this is raised from dozens of places that have no such information —
-        #: only an HTTP error response carries it. `llm._resilient` is the one
-        #: reader: a provider that names its own window is more accurate than
-        #: any backoff schedule guessing at it.
+        #: only an HTTP error response carries it. Two readers: `llm._resilient`
+        #: waits it out rather than trusting its own backoff schedule, because a
+        #: provider that names its own window is more accurate than any guess at
+        #: it, and `routes.common` passes it on to the caller as the
+        #: `Retry-After` of the 429 it becomes (#213).
         self.retry_after = retry_after
 
 

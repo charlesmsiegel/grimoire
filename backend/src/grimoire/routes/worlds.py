@@ -20,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from .common import (_bounded_call, _content_fields, _dump, _require_connection,
+from .common import (_bounded_call, _content_fields, _dump, _llm_http_error, _require_connection,
                      _serve_image, _spooled_upload, _upload_image_ext, _world_root_or_404,
                      get_llm)
 from .models import (AvatarFocus, LorebookCommit, ModuleSetting, NameBody, PCCreate, PCUpdate,
@@ -534,7 +534,8 @@ async def _scenario_proposal(card: dict, client: LLMClient, conn: dict, root) ->
     A reply the extraction cannot use — prose, a refusal, a truncated object —
     is not an error: `parse_output` yields empty sections and the proposal falls
     back to what the card alone holds, which is its own world-info and its
-    openers. A provider that *failed* is a different thing and surfaces as a 502.
+    openers. A provider that *failed* is a different thing and surfaces as the
+    status its failure maps to (#213), leaving the world untouched.
     """
     try:
         # Metered like every other generation (#152): a world-level call, so the
@@ -544,7 +545,7 @@ async def _scenario_proposal(card: dict, client: LLMClient, conn: dict, root) ->
             text = await _bounded_call(
                 client.complete(store.scenario.build_prompt(card), conn, m.usage))
     except LLMError as exc:
-        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+        raise _llm_http_error(exc) from exc
     # The world's roster comes along so each proposed row can say whether the
     # import would REUSE a character of that name rather than create one.
     existing = [c["name"] for c in store.characters.list_characters(root)]

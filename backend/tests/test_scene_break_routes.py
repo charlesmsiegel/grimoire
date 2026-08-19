@@ -223,12 +223,12 @@ def test_a_missing_connection_is_refused_before_the_gate_is_consulted(client):
     assert r.status_code == 409
 
 
-def test_a_provider_failure_is_a_502_and_writes_nothing(client):
+def test_a_provider_failure_reports_its_kind_and_writes_nothing(client):
     _key(client)
     _use(client, FakeLLM([["ignored"]], error=LLMError("rate_limit", "rate limited")))
     cid, sid = _scene(client, posts=40)
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/scene-break")
-    assert r.status_code == 502 and r.json()["kind"] == "rate_limit"
+    assert r.status_code == 429 and r.json()["kind"] == "rate_limit"   # (#213)
     assert _get(client, cid, sid)["verdict"] == ""
 
 

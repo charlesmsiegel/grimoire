@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from .. import llm, store
 from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
-from .common import (_dump, _response_body, _write_response,
+from .common import (_dump, _llm_http_error, _response_body, _write_response,
                      get_openai_compatible_client)
 from .models import (ConfigUpdate, ConnectionCreate, ConnectionUpdate, DataDirUpdate,
                      PromptLayoutUpdate, ResponsePresetCreate, ResponsePresetUpdate,
@@ -304,7 +304,7 @@ async def post_connection_models_refresh(
     try:
         models = await client.list_models(conn["base_url"], conn["api_key"])
     except LLMError as exc:
-        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+        raise _llm_http_error(exc) from exc
     fetched_at = store.now_iso()
     store.llm_connections.set_cached_models(id, models, rev)
     return {"models": models, "fetched_at": fetched_at, "rev": rev}

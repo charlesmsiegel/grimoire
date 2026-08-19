@@ -132,11 +132,11 @@ def test_parsing_without_a_connection_is_a_409_and_beats_the_cards_own_errors(cl
         assert r.json()["kind"] == "missing_key"
 
 
-def test_a_provider_failure_surfaces_as_a_502_and_still_writes_nothing(client, wid):
+def test_a_provider_failure_surfaces_as_its_own_status_and_still_writes_nothing(client, wid):
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FailingOpenRouter([], "rate_limit", "slow down")
     r = _upload(client, wid)
-    assert r.status_code == 502
+    assert r.status_code == 429                 # the kind's own status (#213)
     assert r.json()["kind"] == "rate_limit"
     assert _counts(client, wid) == {"characters": 0, "lore": 0, "locations": 0, "greetings": 0}
 

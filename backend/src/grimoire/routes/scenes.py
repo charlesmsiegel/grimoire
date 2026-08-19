@@ -16,8 +16,8 @@ from starlette.concurrency import run_in_threadpool
 from .. import prompts, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from .common import (computes_only, _bounded_call, _campaign_root_or_404, _dump, _page_of,
-                     _page_window, _record_prompt, _require_connection, _require_scene,
+from .common import (computes_only, _bounded_call, _campaign_root_or_404, _dump, _llm_http_error,
+                     _page_of, _page_window, _record_prompt, _require_connection, _require_scene,
                      _response_body, _turn_override, _write_response, get_llm)
 from .models import (Appear, AppearBatch, ChatTurn, ChronicleSave, Dismiss, EditMessage,
                      EmergentCast, NewScene, RegenerateBody, RenameScene, ReplayCancel,
@@ -118,7 +118,7 @@ async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: 
         with store.usage.meter("suggestions", campaign=cid) as m:
             text = await _bounded_call(client.complete(messages, conn, m.usage))
     except LLMError as exc:
-        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+        raise _llm_http_error(exc) from exc
     loc_names = {e["id"]: e.get("name", e["id"]) for e in store.overlay.list_entities(cid, "locations")}
     out = []
     for s in store.suggest.parse_output(text, cid, offscreen=offscreen):
@@ -149,7 +149,7 @@ async def post_scene_intent(cid: str, body: SceneIntent,
         with store.usage.meter("intent", campaign=cid) as m:
             text = await _bounded_call(client.complete(messages, conn, m.usage))
     except LLMError as exc:
-        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+        raise _llm_http_error(exc) from exc
     got = store.suggest.parse_intent(text, cid, offscreen=body.offscreen)
     loc_names = {e["id"]: e.get("name", e["id"]) for e in store.overlay.list_entities(cid, "locations")}
     loc = ({"id": got["location"], "name": loc_names.get(got["location"], got["location"])}
@@ -1074,7 +1074,7 @@ def _phase_report(dossiers: dict, voice: dict, mechanics: dict) -> list[dict]:
     the review panel renders beside it.
 
     Extraction gets no block because it has no partial outcome: `post_absorb`
-    raises 502 when it fails, so reaching this call already proves it succeeded.
+    raises when it fails, so reaching this call already proves it succeeded.
 
     ("Phase" here means a step of one absorb run; the `Phase 2:`/`Phase 5:`
     comments elsewhere in this file are roadmap milestones, unrelated.)"""
@@ -1622,8 +1622,7 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
         # boundary), so an exception in one of them is a bug in that boundary
         # rather than a state to report -- `_phase_or_raise` says so.
         if isinstance(text, LLMError):
-            raise HTTPException(status_code=502,
-                                detail={"detail": text.detail, "kind": text.kind})
+            raise _llm_http_error(text) from text
         raise text
     parsed = store.absorb.parse_output(text)
     # Both halves come from the SAME snapshot, and for the same reason: a reroll
@@ -1739,9 +1738,10 @@ def _rolling_claim(cid: str, sid: str):
     out however it leaves.
 
     The release is in a `finally` and gated on having claimed, so a failed call
-    -- a 502, a cancelled request, a raised anything -- frees the scene. A claim
-    that outlived its request would wedge that scene's summary for the life of
-    the process, which is strictly worse than the duplicate call this prevents.
+    -- a provider error, a cancelled request, a raised anything -- frees the
+    scene. A claim that outlived its request would wedge that scene's summary for
+    the life of the process, which is strictly worse than the duplicate call this
+    prevents.
     """
     key = (cid, sid)
     with _rolling_inflight_guard:
@@ -2079,7 +2079,7 @@ async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: i
         with store.usage.meter("rolling-summary", campaign=cid, scene=sid) as m:
             text = await client.complete(prompt, conn, m.usage)
     except LLMError as exc:
-        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+        raise _llm_http_error(exc) from exc
     summary = store.rolling_summary.parse_output(text)
     if not summary:
         # A provider can return an empty completion. Storing it would blank a
@@ -2300,11 +2300,7 @@ async def _break_ask(cid: str, sid: str, scene: dict, view: dict, every: int,
         with store.usage.meter("scene-break", campaign=cid, scene=sid) as m:
             text = await client.complete(prompt, conn, m.usage)
     except LLMError as exc:
-        # `from exc`: the provider failure IS the cause, and dropping it here
-        # would leave the 502's traceback starting at this line with nothing
-        # saying which call failed or why.
-        raise HTTPException(status_code=502,
-                            detail={"detail": exc.detail, "kind": exc.kind}) from exc
+        raise _llm_http_error(exc) from exc
     answer = store.scene_break.parse_output(text)
     # The prefix the question was asked ABOUT, digested before the write goes
     # anywhere near the file. `rolling_summary.covered_digest` is the right tool
