@@ -238,29 +238,36 @@ def hash_phone(adb: Adb, root: str) -> tuple[dict[str, str], list[str]]:
 
     A library of any size makes the difference between one `find` and copying
     every file over USB just to discover that nothing changed.
+
+    Two passes, because one is not safely parseable: with stderr folded into
+    stdout the shell interleaves them mid-line, and a truncated hash line
+    spliced onto a permission error parses as a real entry for the wrong path.
+    The first pass takes stdout with errors discarded, the second takes only
+    stderr.
     """
     listing = adb.shell(
-        f"cd {quote(root)} 2>/dev/null && find . -type f -exec sha256sum {{}} + 2>&1 || true"
+        f"cd {quote(root)} 2>/dev/null && "
+        f"find . -type f -exec sha256sum {{}} + 2>/dev/null"
     )
     out: dict[str, str] = {}
-    denied: list[str] = []
     for line in listing.splitlines():
         line = line.rstrip("\r")
-        if not line:
-            continue
-        if "Permission denied" in line or line.startswith("sha256sum:"):
-            denied.append(line)
-            continue
         parts = line.split("  ", 1)
         if len(parts) != 2:
             continue
         digest, path = parts[0].strip(), parts[1].strip()
-        if len(digest) != 64:
+        if len(digest) != 64 or not path:
             continue
         rel = PurePosixPath(path[2:] if path.startswith("./") else path)
         if _excluded(rel):
             continue
         out[str(rel)] = digest
+
+    errors = adb.shell(
+        f"cd {quote(root)} 2>/dev/null && "
+        f"find . -type f -exec sha256sum {{}} + 2>&1 >/dev/null"
+    )
+    denied = [ln.rstrip("\r") for ln in errors.splitlines() if ln.strip()]
     return out, denied
 
 
@@ -319,6 +326,29 @@ def save_baseline(
 
 
 # ------------------------------------------------------------------ planning
+
+
+def reconcile(
+    base: dict[str, str],
+    conflicts: dict[str, list[str]],
+    pc: dict[str, str],
+    phone: dict[str, str],
+) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """Fold what the two sides now agree on into the baseline.
+
+    Only paths that genuinely match belong there -- it is the record of the
+    last state both sides shared, and anything else in it would make the next
+    run mistake an unsynced file for an edited one. Agreement also retires a
+    standing conflict: once someone has resolved one by hand, the note saying
+    the two sides were at odds describes hashes neither side holds any more.
+    """
+    base = dict(base)
+    conflicts = dict(conflicts)
+    for rel, digest in pc.items():
+        if phone.get(rel) == digest:
+            base[rel] = digest
+            conflicts.pop(rel, None)
+    return base, conflicts
 
 
 class Plan:
@@ -532,6 +562,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="do not force-stop the app before writing")
     ap.add_argument("--no-snapshot", action="store_true",
                     help="do not git-commit the PC store before writing")
+    ap.add_argument("--allow-unreadable", action="store_true",
+                    help="copy even when files on the phone cannot be read "
+                         "(they are treated as absent, so PC copies win)")
     ap.add_argument("--limit", type=int, default=20,
                     help="how many paths to list per section (default 20)")
     args = ap.parse_args(argv)
@@ -578,6 +611,7 @@ def main(argv: list[str] | None = None) -> int:
     if not base:
         print("\nno baseline for this device yet -- first sync. Files that differ\n"
               "on both sides are reported as conflicts rather than guessed at.")
+    serial = adb.serial or "device"
     plan = plan_sync(pc_files, phone_files, base, known)
 
     print()
@@ -593,8 +627,29 @@ def main(argv: list[str] | None = None) -> int:
         print("\nDry run. Nothing was written. Re-run with --apply to copy.")
         return 0
 
+    if denied and not args.allow_unreadable:
+        # Every unreadable path looks absent, and absent-on-the-phone means
+        # "copy the PC's version over it". That is the one direction this tool
+        # must never take on a guess: the phone is where the unsynced work is.
+        print(
+            f"\nRefusing to write: {len(denied)} path(s) on the phone could not "
+            "be read,\nso they are indistinguishable from files the phone never "
+            "had. Copying now\ncould overwrite them with older PC copies.\n\n"
+            "Open the app on the phone once (it re-runs its permission pass at "
+            "startup),\nthen re-run. --allow-unreadable overrides this, and "
+            "treats them as absent.",
+            file=sys.stderr,
+        )
+        return 3
+
     if not (plan.to_pc or plan.to_phone or plan.conflicts):
-        print("\nNothing to do.")
+        # No transfers, but the two sides may have agreed since the last
+        # run -- a conflict resolved by hand shows up here and nowhere else.
+        settled, cleared = reconcile(base, known, pc_files, phone_files)
+        if settled != base or cleared != known:
+            save_baseline(serial, local, remote, settled, cleared)
+            print(f'\nbaseline updated at {baseline_path(serial)}')
+        print('\nNothing to copy.')
         return 0
 
     if not args.no_snapshot:
@@ -608,7 +663,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"stopped {args.app_id} on the device")
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    serial = adb.serial or "device"
     new_base = dict(base)
     new_conflicts = dict(known)
     failures: list[str] = []
@@ -655,13 +709,8 @@ def main(argv: list[str] | None = None) -> int:
         if target:
             print(f"  conflict: {rel} -> {target}")
 
-    # Only paths that genuinely agree now belong in the baseline -- it is the
-    # record of the last state both sides shared, and anything else in it would
-    # make the next run mistake an unsynced file for an edited one.
-    for rel, digest in pc_files.items():
-        if phone_files.get(rel) == digest:
-            new_base[rel] = digest
-
+    new_base, new_conflicts = reconcile(
+        new_base, new_conflicts, pc_files, phone_files)
     save_baseline(serial, local, remote, new_base, new_conflicts)
     print(f"\nbaseline written to {baseline_path(serial)}")
 

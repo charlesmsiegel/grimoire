@@ -18,11 +18,19 @@ intent needs one thing from this side: Android runs app processes with
 ``umask 0077``, so every file the store wrote landed 0600 and `adb pull`
 answered "Permission denied" on all of them — the directory is setgid with
 group ``ext_data_rw``, which adb belongs to, but the files granted that group
-nothing. `_open_store_to_usb` relaxes the umask so new files are group
-read/write, and walks the existing tree once to fix what the old umask already
+nothing.
+
+Group bits alone are not enough, which cost a sync to discover. The store root
+is setgid with group ``ext_data_rw``, so files the app created there did land in
+a group adb could read -- but directories *adb itself* creates while pushing are
+owned by ``shell`` with no setgid bit, and app-created subdirectories inside
+those inherit the app's own group instead. adb is not in that group and cannot
+chmod files it does not own, so the tree turns unreadable from the cable exactly
+where a sync last wrote. `_open_store_to_usb` therefore opens the "other" bits
+too, and walks the existing tree once to fix whatever a stricter umask already
 wrote. Nothing else on the device gains access: Android 11+ keeps every other
-app out of ``Android/data/<pkg>`` regardless of mode bits, so the grant is to
-USB (and the user holding the cable) alone.
+app out of ``Android/data/<pkg>`` whatever the mode bits say, so the grant is to
+USB (and the person holding the cable) alone.
 """
 
 import os
@@ -43,7 +51,7 @@ def _open_store_to_usb(home_dir: str) -> None:
     cannot sync over the cable, which is a worse outcome than an unsyncable
     store only if it also stops the app from starting. It must not.
     """
-    os.umask(0o007)
+    os.umask(0o000)
     try:
         from grimoire.store import paths
 
@@ -59,12 +67,19 @@ def _open_store_to_usb(home_dir: str) -> None:
             return  # nothing written yet; the umask covers everything from here
         for dirpath, _dirnames, filenames in os.walk(root):
             try:
-                os.chmod(dirpath, 0o770)
+                os.chmod(dirpath, 0o777)
             except OSError:
-                continue
+                # Not `continue`: a directory this process does not own is
+                # exactly where the unreadable files are. A sync pushes into
+                # the store as the `shell` user, so the directories it creates
+                # belong to shell and refuse our chmod -- while the files the
+                # app later writes inside them are ours to fix and are the only
+                # copies of that work. Skipping them here is how the whole of a
+                # campaign written since the last sync stayed unreadable.
+                pass
             for name in filenames:
                 try:
-                    os.chmod(os.path.join(dirpath, name), 0o660)
+                    os.chmod(os.path.join(dirpath, name), 0o666)
                 except OSError:
                     pass
         with open(sentinel, "w", encoding="utf-8") as fh:
