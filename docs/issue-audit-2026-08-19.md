@@ -5,7 +5,8 @@
 153. Every claim below was checked against the working tree at `49e2c11`, not
 against the issue text.
 
-**Counts.** 153 open, 111 closed, numbers running to #351 (the gaps are PRs).
+**Counts.** 153 open and 111 closed when the audit ran; 147 open after the six
+closures in section 1. Numbers run to #351 (the gaps are PRs).
 
 **The backlog is unusually well kept.** Most bodies carry a hand-written
 `## Current state` section, and several carry per-item checkboxes marking what has
@@ -26,7 +27,9 @@ Two structural findings are worth more than any individual issue:
 
 ---
 
-## 1. Done — close these
+## 1. Done — closed 19 Aug 2026
+
+All six were closed as `completed`, each with a comment citing the code that finished it.
 
 | # | Title | Evidence in the tree |
 |---|---|---|
@@ -39,10 +42,12 @@ Two structural findings are worth more than any individual issue:
 
 ---
 
-## 2. Blocker cleared or gap closed since triage — re-scope, don't re-read
+## 2. Blocker cleared or gap closed since triage — all 13 re-scoped 19 Aug 2026
 
-These are not done, but each body describes a blocker or a gap that has since
-closed. Left as written, they will be re-analysed from scratch every time.
+None of these are done, but each *body* described a blocker or a gap that had
+since closed — so left as written they would have been re-analysed from scratch
+every time. Each now carries a title naming its actual residue and a body
+recording what landed. The table below is the finding; the issues carry the detail.
 
 | # | What changed |
 |---|---|
@@ -57,7 +62,7 @@ closed. Left as written, they will be re-analysed from scratch every time.
 | **#82** per-character posts | The split half was already done. `context/speaker.py` now nominates a lead speaker from history without N calls per turn, which addresses the failure mode the "speaker loop" was meant to fix at a fraction of the cost. Worth deciding whether the loop is still wanted at all. |
 | **#77** regenerate with steering or a different model | Steering shipped (`RegenerateBody.guidance`, `templates/scene/regenerate_guidance.j2`, the reroll-guidance input in `CampaignView`). Only the per-call model override is left, and it is cheaper now that `store/llm_connections.py` holds named connections. |
 | **#83** director mode | 5 of 7 boxes already ticked in the body; the residue is a dedicated director's-note input affordance. |
-| **#207 / #208** setup scripts, shortcuts, icons | Both bodies already say "largely implemented". The residue is small and specific (a macOS `.icns`, a few flow gaps). Re-title so they stop reading as unstarted. |
+| **#207 / #208** setup scripts, shortcuts, icons | Both bodies already say "largely implemented". The residue is small and specific (a macOS `.icns`, a wrong Unix venv path in `CLAUDE.md`, no first-run store-path notice). Re-titled so they stop reading as unstarted. |
 
 ---
 
@@ -188,3 +193,66 @@ downstream of the imagegen epic and inherit the parking.
 - **Line references rot fast.** The bodies' prose survived the `routes.py` split
   intact; the `routes.py:NNNN` citations did not. Module-and-symbol references
   (`store/assets.py:list_images`) held up across the same refactor.
+
+---
+
+## 7. What was applied, 19 Aug 2026
+
+The audit's findings were written back into the tracker rather than left in this
+document.
+
+**Closed (6)** — everything in section 1, as `completed`, each with a comment
+citing the file and line that finished it. #256 was closed as completed rather
+than as a duplicate so the badge matches its comment; the duplication of #250 is
+stated in the first line of that comment.
+
+**Re-scoped (13)** — every issue in section 2. Each got a title naming its real
+residue and a body split into "what landed since" and "what is actually left",
+with the superseded analysis summarised rather than deleted. Two are worth
+flagging beyond the table:
+
+- **#212** turned out to have *no* engineering residue — atomicity, cross-request
+  locking, cross-process locking and cross-writer conflict detection have all
+  landed. It was re-scoped to writing the resulting guarantees down, and its body
+  says plainly that closing it instead is defensible.
+- **#202** was two unrelated record kinds in one issue. The style-guides half
+  shipped and was recorded as such; the issue is now the image-presets half only,
+  parked behind imagegen.
+
+**Retitled (~120)** — the pre-rebuild feature-list fragments ("large-service
+splits", "lifecycle extraction", "data-layer hardening") and the
+`feat(scope):`-prefixed subset were rewritten as plain statements of what the
+change does. Titles that already said what the work was were left alone.
+
+### Label taxonomy
+
+Extended in place rather than replaced — the existing axes were kept and the
+gaps filled. All 147 open issues now carry a type and at least one module,
+against roughly 40 before.
+
+| Axis | Values |
+|---|---|
+| Type (exactly one) | `bug`, `feature`, `enhancement`, `chore` *(new)* |
+| Module | existing: `characters`, `frontend`, `world`, `library`, `scene-manager`, `context-builder`, `export`, `testing` · new: `llm`, `mechanics`, `calendar`, `store`, `api`, `build`, `observability`, `imagegen`, `plugins`, `inventory` |
+| Status | existing: `partially implemented` · new: `needs-ui`, `epic:parked`, `blocked`, `stale-premise`, `flaky-test` |
+
+Three status labels encode the audit's findings directly, so they stay
+actionable without anyone re-reading this file:
+
+- **`needs-ui`** (#6, #7, #8, #96, #153) — the shipped-backend-no-caller set from
+  section 5, tier 1.
+- **`epic:parked`** (21 issues) — imagegen, plugins, inventory, plus the two
+  downstream stragglers (#159, #202).
+- **`stale-premise`** (#4, #5) — body describes code that never existed here.
+  Both need a rewrite or a closure before anyone starts them.
+
+The new labels were created implicitly by applying them, so they carry GitHub's
+default grey and no description. Colouring them to match the existing
+`module:*` blue is a manual step in the repo's label settings; nothing depends
+on it.
+
+### Not done
+
+`priority:*`, `size:*` and `tier:*` exist on exactly one issue (#256) and were
+left alone. Assigning them across 147 issues would have meant inventing
+estimates, and a guessed priority is worse than none.
