@@ -573,13 +573,11 @@ export default function ConfigView() {
               Context scan depth is how far back the keyword scan reads: the last so many
               messages of the transcript, and nothing older. Every keyword-triggered section
               shares that window — world info, recalled scenes, keyed mechanics rules and the
-              semantic-recall query — so raising it is what brings back an entry last named
-              twenty posts ago, and lowering it is what stops one scene dragging the whole
-              world in behind it. <code>0</code> empties the window, so nothing in the
-              transcript activates anything; a scene's opening prompt and a director's note
-              still do, since they are this turn's input and the history has not said those
-              words yet. Recalled scenes then bounds one of those sections: how many older
-              absorbed scenes a keyword match may pull back at once.
+              semantic-recall query — so it is the one number deciding whether an entry last
+              named twenty posts ago is still in play. <code>0</code> empties it: nothing in
+              the transcript activates anything, though a scene's opener and a director's
+              note still do, being this turn's own input. Recalled scenes bounds one of those
+              sections — how many older absorbed scenes a keyword match may pull back at once.
             </p>
             <p className="config-copy">
               Kept turn prompts is how many past turns each campaign keeps a frozen copy of
