@@ -23,13 +23,16 @@ def test_context_scan_depth_default_and_write(monkeypatch, tmp_path):
     assert s.read_config()["context_scan_depth"] == "5"
 
 
-def test_scan_depth_reads_like_the_counts_beside_it(monkeypatch, tmp_path):
-    """One accessor for the setting, so the default lives in one place.
+def test_scan_depth_separates_a_typed_zero_from_a_cleared_field(monkeypatch, tmp_path):
+    """The split `_count` exists for, on a setting the UI can now write (#11):
+    "0" is an instruction to empty the scan window, while an unparseable value
+    -- a field cleared in the Configuration page, a hand-mangled config.md --
+    is a mistake to recover from, and falls back to the default rather than
+    silently turning keyword activation off on the play path.
 
-    The builder used to parse `context_scan_depth` inline against a hardcoded
-    `"8"`, which meant `DEFAULT_SCAN_DEPTH` was not actually the default of
-    anything -- and now that the Configuration page seeds a field from it too,
-    that literal would have been the third copy (#11).
+    The accessor is under test at all because the builder used to parse this
+    key inline against a hardcoded `"8"`, which left `DEFAULT_SCAN_DEPTH` the
+    default of nothing -- and the new form field would have been a third copy.
     """
     s = reload_with_home(monkeypatch, tmp_path)
     assert s.config.scan_depth() == 8

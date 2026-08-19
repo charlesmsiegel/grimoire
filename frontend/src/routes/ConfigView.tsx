@@ -22,8 +22,8 @@ import { useTheme } from "../theme/ThemeProvider";
 const DRAFT_FIELDS = [
   "active_connection_id", "fallback_connection_id", "llm_retries",
   "llm_timeout", "absorb_budget", "llm_call_budget",
-  "context_budget", "context_scan_depth", "archive_depth", "prompt_log_depth",
-  "offscene_known_limit",
+  "context_budget", "context_scan_depth", "archive_depth",
+  "prompt_log_depth", "offscene_known_limit",
   "speaker_turn_taking", "prompt_layout_enabled",
   "turnstate_depth", "promote_streak",
   "embeddings_connection_id", "embeddings_model",

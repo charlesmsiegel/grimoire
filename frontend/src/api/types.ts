@@ -111,8 +111,8 @@ export type ConfigUpdate = Partial<Pick<Config,
   "theme" | "system_prompt" | "quote_color" | "user_label" | "assistant_label" |
   "active_connection_id" | "llm_timeout" | "absorb_budget" | "llm_call_budget" |
   "llm_retries" | "fallback_connection_id" |
-  "context_budget" | "context_scan_depth" | "archive_depth" | "setup_done" |
-  "prompt_log_depth" |
+  "context_budget" | "context_scan_depth" | "archive_depth" |
+  "setup_done" | "prompt_log_depth" |
   "turnstate_depth" | "promote_streak" | "rolling_summary_every" |
   "scene_break_every" |
   "offscene_known_limit" |
