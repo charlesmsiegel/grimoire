@@ -431,6 +431,12 @@ export type CastChanges = {
   leave: { kind: string; id: string; name: string; quote: string }[];
   unknown: { name: string; mentioned_by: string[] }[];
 };
+/** What the seated cast's CARDS suggest about who else belongs (#96) — the
+ *  other half of `CastChanges`, which reads the turn's prose instead. Each is
+ *  a character this campaign has not seen who was named in the card text of
+ *  someone on stage; `mentioned_by` is a list of character *ids*, which the
+ *  caller resolves to names. */
+export type Suggestion = { character: string; name: string; mentioned_by: string[] };
 export type RosterEntry = {
   kind: string; id: string; version: string; role: string; scenes: string[];
 };

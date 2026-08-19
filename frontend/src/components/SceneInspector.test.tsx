@@ -20,6 +20,7 @@ vi.mock("../api/client", async () => {
       listEntities: vi.fn(), setSceneLocation: vi.fn(), sceneBriefing: vi.fn(),
       getRollingSummary: vi.fn(), refreshRollingSummary: vi.fn(),
       addToCast: vi.fn(), removeFromCast: vi.fn(),
+      getSuggestions: vi.fn(), dismissSuggestion: vi.fn(),
       getPins: vi.fn(), setPin: vi.fn(), removePin: vi.fn(),
       actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string) => `/img/${k}/${a}/${v}`,
       entityImageUrl: () => "/loc-img",
@@ -55,6 +56,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   (api.getCast as any).mockResolvedValue([{ kind: "characters", id: "seraphine", role: "npc" }]);
   (api.addToCast as any).mockResolvedValue({ ok: true });
+  (api.getSuggestions as any).mockResolvedValue([]);
+  (api.dismissSuggestion as any).mockResolvedValue({ ok: true });
   (api.removeFromCast as any).mockResolvedValue({ ok: true });
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "c", world: "w" }, body: "" });
   (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine", default_version: "default", versions: [] }]);
@@ -125,6 +128,34 @@ test("lists cast names and the location and a context section", async () => {
   await screen.findByText("Seraphine");
   await screen.findByText("The Crypt");
   await screen.findByText(/World info/);
+});
+
+test("suggested cast: mid-scene mentions can be seated or dismissed from the inspector", async () => {
+  // The scan reads the cards of who is already cast, so it only pays off once
+  // the scene has a cast — which is exactly where CastPanel has stopped
+  // rendering (#7, #96).
+  (api.getSuggestions as any).mockResolvedValue([
+    { character: "mara", name: "Mara", mentioned_by: ["seraphine"] },
+  ]);
+  const onSceneChanged = vi.fn();
+  renderInspector(onSceneChanged);
+  await screen.findByText("Suggested cast");
+  expect(screen.getByText("mentioned by Seraphine")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Add Mara to the scene" }));
+  await waitFor(() => expect(api.addToCast).toHaveBeenCalledWith(
+    "c", "s", { kind: "characters", id: "mara", role: "npc" }));
+  await waitFor(() => expect(onSceneChanged).toHaveBeenCalled());
+});
+
+test("suggested cast: dismissing one drops it from this scene", async () => {
+  (api.getSuggestions as any)
+    .mockResolvedValueOnce([{ character: "mara", name: "Mara", mentioned_by: ["seraphine"] }])
+    .mockResolvedValue([]);
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: "Dismiss Mara" }));
+  await waitFor(() => expect(api.dismissSuggestion).toHaveBeenCalledWith("c", "s", "mara"));
+  await waitFor(() => expect(screen.queryByText("Suggested cast")).toBeNull());
 });
 
 test("clicking a cast row opens the drawer", async () => {
