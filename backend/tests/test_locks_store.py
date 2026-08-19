@@ -479,6 +479,40 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
     assert order == sorted(order), f"unsorted acquisition: {order}"
 
 
+def test_fork_acquires_both_campaign_locks_in_sorted_order(monkeypatch, tmp_path):
+    """The third multi-campaign holder (#72), beside the other two — `hold_all`'s
+    docstring asks for exactly this test when a holder is added.
+
+    Two locks rather than three, and the pair is chosen so the SOURCE sorts
+    after the fork: `zulu` forked as "Alpha" takes `alpha` then `zulu`, which is
+    sorted order and is NOT the order the arguments are written in. A holder
+    that passed its ids straight through would pass a test that forked `alpha`
+    into `zulu`, and fail this one.
+
+    The two acquisitions are also asserted to be DISTINCT campaigns. The
+    reentrant acquires that follow — `cascade`, `scenes.delete_scene` and every
+    store under them retake the fork's lock — go through this same registry, so
+    a spy that only counted would be satisfied by a holder that took one lock
+    twice and never locked the source at all.
+    """
+    from grimoire.store import fork
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Zulu", wid)
+
+    order = []
+    real = locks.campaign_lock
+    monkeypatch.setattr(locks, "campaign_lock",
+                        lambda c: (order.append(c), real(c))[1])
+    fork.fork_campaign(cid, "Alpha")
+
+    first_two = order[:2]
+    assert len(first_two) == 2, f"acquired fewer than two locks: {order}"
+    assert first_two == sorted(first_two), f"unsorted acquisition: {first_two}"
+    assert set(first_two) == {"alpha", "zulu"}, first_two
+
+
 # ---- cross-process exclusion (#234) ----
 #
 # These need real processes. An in-process test cannot demonstrate that a

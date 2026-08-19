@@ -119,6 +119,67 @@ def test_the_forks_version_locks_travel_rather_than_being_re_derived(wid, cid):
     assert appearances.record(child) == appearances.record(cid)
 
 
+def test_a_materialized_records_images_travel_with_the_fork(wid, cid):
+    """`sync.md` and the world reference are copied, so the overlay resolves the
+    fork the way it resolves the source — but a materialized record's image
+    bytes live in the campaign tree itself and only travel because the whole
+    directory does. The tree-level copy is what this asserts; the overlay
+    resolution above is a different claim."""
+    from grimoire.store import assets
+    wroot = worlds.world_root(wid)
+    eid = entities.create_entity(wroot, "locations", "Saltmarch Docks", "world docks")
+    overlay.update_entity(cid, "locations", eid, body="campaign docks")
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(croot, eid, "default", assets.AVATAR, b"pretend-png", "png",
+                     base="locations")
+
+    child = fork.fork_campaign(cid, "Branch")["id"]
+    copied = campaigns.campaign_root(child) / "locations" / eid / "assets" / "default"
+    assert (copied / f"{assets.AVATAR}.png").read_bytes() == b"pretend-png"
+
+
+def test_a_copy_that_fails_partway_leaves_no_campaign_behind(cid, monkeypatch):
+    """`copytree` publishes `campaign.md` partway through, and that file is what
+    makes a directory a campaign to `list_campaigns` — so a copy that dies after
+    it would otherwise leave a phantom on the shelf under the SOURCE's name,
+    with no `parent` to mark it as a copy. The failure is raised, not swallowed;
+    what must not survive it is the half-made campaign."""
+    _played(cid, "One")
+
+    def die(*a, **kw):
+        campaigns.campaign_meta_path("wreck").write_text("---\nname: Saltmarch\n---\n")
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(fork.shutil, "copytree", die)
+    with pytest.raises(OSError):
+        fork.fork_campaign(cid, "Wreck")
+    assert [c["id"] for c in campaigns.list_campaigns()] == [cid]
+    assert not campaigns.campaign_root("wreck").exists()
+
+
+def test_losing_the_id_race_does_not_touch_the_campaign_that_won_it(cid, monkeypatch):
+    """The nastiest way to write the cleanup above is to let `copytree`'s own
+    `FileExistsError` be the guard against the window `uniquify` leaves — which
+    puts SOMEBODY ELSE'S campaign, sitting at the id this fork wanted, inside
+    the `rmtree` that follows. Claiming the id with a `mkdir` outside the
+    cleanup is what makes the lost race cost a request instead of a campaign.
+
+    The race is simulated by having the id already taken when the fork reaches
+    the lock, which is exactly the state it leaves behind."""
+    other = campaigns.create_campaign("Branch", _meta(cid)["world"])
+    _played(other, "A Scene The Winner Owns")
+    # `uniquify` would answer `branch-2` now, so the collision has to be made at
+    # the moment of the mkdir — the window the lock cannot close.
+    monkeypatch.setattr(fork, "uniquify", lambda base, taken: other)
+
+    with pytest.raises(FileExistsError):
+        fork.fork_campaign(cid, "Branch")
+    assert campaigns.campaign_exists(other)
+    assert _sids(other) == ["001--a-scene-the-winner-owns"]
+    assert _meta(other)["name"] == "Branch"        # not re-stamped by the loser
+    assert fork.PARENT_KEY not in _meta(other)
+
+
 def test_a_name_that_slugifies_onto_an_existing_campaign_takes_the_next_id(cid):
     out = fork.fork_campaign(cid, "Saltmarch")
     assert out["id"] == f"{cid}-2"
@@ -134,13 +195,15 @@ def test_forking_a_fork_names_its_immediate_parent(cid):
 def test_a_fork_of_a_retrospective_fork_starts_from_now_again(cid):
     """`forked_from_scene` describes one fork, not a dynasty: copied forward it
     would label a branch cut from nothing as an approximation of a past state."""
-    _played(cid, "One")
-    two = _played(cid, "Two")
-    child = fork.fork_campaign(cid, "Branch", from_scene=_sids(cid)[0])["id"]
-    assert _meta(child)[fork.FORKED_AT_KEY]
+    one = _played(cid, "One")
+    _played(cid, "Two")
+    child = fork.fork_campaign(cid, "Branch", from_scene=one)["id"]
+    assert _meta(child)[fork.FORKED_AT_KEY] == one
     grandchild = fork.fork_campaign(child, "Twig")["id"]
     assert fork.FORKED_AT_KEY not in _meta(grandchild)
-    assert two   # the source still has both scenes; see the isolation tests
+    # ...and the grandchild is a whole copy of the child, not of the child's
+    # own source: it has the one scene the cut left, not the two before it.
+    assert _sids(grandchild) == [one]
 
 
 # --- the source is never written to ----------------------------------------
@@ -290,6 +353,11 @@ def test_a_write_back_the_removed_scene_landed_is_put_back(wid, cid):
     assert overlay.read_entity(out["id"], "lore", "the-pact")["body"] == "old body"
     # the source keeps what its own play wrote
     assert overlay.read_entity(cid, "lore", "the-pact")["body"] == "new body"
+    # ...and the WORLD is untouched, which the two assertions above cannot show:
+    # the source materialized its own copy at the absorb, so a reversal that
+    # wrote through to the world would leave both of them reading exactly as
+    # they do here while corrupting every other campaign of that world.
+    assert entities.read_entity(wroot, "lore", "the-pact")["body"] == "old body"
 
 
 def test_the_reversal_is_reported_when_it_cannot_be_made(wid, cid):
@@ -325,13 +393,27 @@ def test_a_fork_from_now_reports_the_same_keys_as_a_cut_one(cid):
         set(fork.fork_campaign(cid, "Other", from_scene=_sids(cid)[0]))
 
 
-def test_the_journal_of_the_scenes_that_went_stays_with_the_fork_as_history(cid):
-    """Reversals are journalled, not erased: the fork's history says the branch
-    was cut, which is the record a later undo would need."""
+def test_the_reversals_the_cut_performed_are_journalled_on_the_fork(wid, cid):
+    """Reversals are recorded, not erased. `undo.undo` appends a row for the
+    reversal it performs, so the fork's history says the branch was cut — which
+    is the record anything reading that history later has to work from."""
+    from grimoire.store import absorb
+    entities.create_entity(worlds.world_root(wid), "lore", "The Pact", "old body")
     one = _played(cid, "One")
-    _played(cid, "Two")
+    two = _played(cid, "Two")
+    absorb.apply_edits(cid, [{
+        "id": "lore:the-pact", "kind": "lore",
+        "target": {"kind": "lore", "id": "the-pact"},
+        "label": "The Pact — lore", "field": "body",
+        "before": "old body", "after": "new body", "authored": False,
+    }], two)
+
     child = fork.fork_campaign(cid, "Branch", from_scene=one)["id"]
-    assert isinstance(journal.read(child), list)
+    sources = [e.get("source") for e in journal.read(child)]
+    assert "absorb" in sources, sources    # the write the removed scene landed
+    assert "undo" in sources, sources      # and the cut putting it back
+    # The source's own journal has only the write: nothing was reversed there.
+    assert [e.get("source") for e in journal.read(cid)] == ["absorb"]
 
 
 # --- lineage in the listing ------------------------------------------------

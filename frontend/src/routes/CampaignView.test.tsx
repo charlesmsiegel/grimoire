@@ -652,9 +652,9 @@ test("a record the reversal could not put back is reported", async () => {
 //
 // The ⑂ sits with rename and delete because the scene you are reading is the
 // turn you would branch at — but unlike those two it writes nothing here, and
-// the tests below are mostly about saying so.
+// most of what follows is about saying so.
 
-const FORK_OK = { id: "branch", from_scene: "s1", removed_scenes: [],
+const FORK_OK = { id: "branch", from_scene: "0001--old", removed_scenes: [],
                   records: 0, refused: [], failed: [] };
 
 const FORK_SCENES = [
@@ -662,18 +662,18 @@ const FORK_SCENES = [
   { id: "0002--newer", title: "Newer", model: "", created: "", updated: "" },
 ];
 
-function twoSceneCampaign() {
+function openAt(sid: string) {
   (api.listScenes as any).mockResolvedValue(FORK_SCENES);
-  (api.getScene as any).mockResolvedValue({ meta: { id: "0001--old", title: "Old" },
-                                            messages: [{ role: "user", content: "hi" }] });
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: sid, title: "Old" }, messages: [{ role: "user", content: "hi" }] });
+  renderCampaign(`/campaigns/run/scenes/${sid}`);
 }
 
 test("forking at a scene names it, and cuts nothing here", async () => {
-  twoSceneCampaign();
-  (api.forkCampaign as any).mockResolvedValue({ ...FORK_OK, from_scene: "0001--old" });
+  openAt("0001--old");
+  (api.forkCampaign as any).mockResolvedValue(FORK_OK);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   const prompt = vi.spyOn(window, "prompt").mockReturnValue("A Second Run");
-  renderCampaign("/campaigns/run/scenes/0001--old");
   await screen.findByText("hi");
 
   fireEvent.click(screen.getByLabelText("Fork campaign at this scene"));
@@ -688,10 +688,8 @@ test("forking at a scene names it, and cuts nothing here", async () => {
 });
 
 test("the fork confirm counts the scenes the branch will not have", async () => {
-  twoSceneCampaign();
-  (api.forkCampaign as any).mockResolvedValue(FORK_OK);
+  openAt("0001--old");
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-  renderCampaign("/campaigns/run/scenes/0001--old");
   await screen.findByText("hi");
 
   fireEvent.click(screen.getByLabelText("Fork campaign at this scene"));
@@ -705,47 +703,56 @@ test("the fork confirm counts the scenes the branch will not have", async () => 
 });
 
 test("forking at the newest scene says it is a copy rather than a cut", async () => {
-  (api.listScenes as any).mockResolvedValue(FORK_SCENES);
-  (api.getScene as any).mockResolvedValue({ meta: { id: "0002--newer", title: "Newer" },
-                                            messages: [{ role: "user", content: "hi" }] });
+  openAt("0002--newer");
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-  renderCampaign("/campaigns/run/scenes/0002--newer");
   await screen.findByText("hi");
 
   fireEvent.click(screen.getByLabelText("Fork campaign at this scene"));
   expect(confirm.mock.calls[0][0]).toMatch(/copy of this campaign as it stands/i);
 });
 
-test("what the fork could not put back is reported before the branch opens", async () => {
-  twoSceneCampaign();
+test("what the fork could not put back is reported, and outlives the navigation", async () => {
+  openAt("0001--old");
   (api.forkCampaign as any).mockResolvedValue({
     ...FORK_OK, removed_scenes: ["0002--newer"], records: 1,
     refused: [{ label: "The Pact — lore", reason: "this record changed after the edit" }] });
   vi.spyOn(window, "confirm").mockReturnValue(true);
   vi.spyOn(window, "prompt").mockReturnValue("A Second Run");
-  renderCampaign("/campaigns/run/scenes/0001--old");
   await screen.findByText("hi");
 
   fireEvent.click(screen.getByLabelText("Fork campaign at this scene"));
   await screen.findByText(/The Pact — lore/);
   expect(document.body.textContent).toMatch(/still holds what a removed scene wrote/i);
-  // And it is still there once the branch has opened: the note is about the
-  // FORK, so it has to outlive the navigation that goes to it.
+  // The note is about the FORK, so it has to survive the navigation that opens
+  // it — which it does only because the campaign-scoped effect clears the
+  // review state and deliberately not `error`.
   await waitFor(() => expect(here()).toMatch(/^\/campaigns\/branch(\/|$)/));
   expect(document.body.textContent).toMatch(/The Pact — lore/);
 });
 
 test("a cancelled fork name forks nothing", async () => {
-  twoSceneCampaign();
+  openAt("0001--old");
   vi.spyOn(window, "confirm").mockReturnValue(true);
   vi.spyOn(window, "prompt").mockReturnValue(null);
-  renderCampaign("/campaigns/run/scenes/0001--old");
   await screen.findByText("hi");
 
   fireEvent.click(screen.getByLabelText("Fork campaign at this scene"));
   expect(api.forkCampaign).not.toHaveBeenCalled();
 });
 
+test("a fork the server refuses is reported and the reader stays put", async () => {
+  // 409 CAMPAIGN BUSY is reachable: a fork holds two campaign locks. Dropped,
+  // it would look exactly like a fork that worked and navigated nowhere.
+  openAt("0001--old");
+  (api.forkCampaign as any).mockRejectedValue({ detail: "campaign is busy" });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.spyOn(window, "prompt").mockReturnValue("A Second Run");
+  await screen.findByText("hi");
+
+  fireEvent.click(screen.getByLabelText("Fork campaign at this scene"));
+  await screen.findByText(/campaign is busy/i);
+  expect(here()).toMatch(/^\/campaigns\/run/);
+});
 
 test("a cut in flight latches the gutter against a second one", async () => {
   twoPostScene();

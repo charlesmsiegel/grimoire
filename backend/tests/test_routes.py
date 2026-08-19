@@ -2086,15 +2086,6 @@ def test_fork_route_cuts_at_a_scene_and_leaves_the_source_whole(client):
     assert len(client.get(f"/api/campaigns/{cid}/scenes").json()) == 3
 
 
-def test_fork_route_reaches_the_literal_segment_past_the_entity_catch_all(client):
-    """`/campaigns/{cid}/{kind}` would capture `fork` if `entities` were not
-    included last. A 404 body of "kind not found" is what regression looks
-    like."""
-    cid, _ = _campaign_with_scenes(client, ["One"])
-    r = client.post(f"/api/campaigns/{cid}/fork", json={"name": "Branch"})
-    assert r.status_code == 200 and "id" in r.json()
-
-
 def test_fork_route_404s_for_an_unknown_campaign_or_scene(client):
     cid, _ = _campaign_with_scenes(client, ["One"])
     assert client.post("/api/campaigns/no-such/fork", json={"name": "B"}).status_code == 404

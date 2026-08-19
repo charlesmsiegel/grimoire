@@ -84,10 +84,13 @@ log = logging.getLogger(__name__)
 #: `forked_from_scene` is a LABEL, not a live reference: `store/scene_refs.py`
 #: does not fan out to frontmatter, so a later `repad` or title rename in the
 #: fork moves the scene and leaves this naming the id it had at the fork.
-#: Deliberate — it records what the branch was cut at, which is a fact about
-#: the moment of forking and not a pointer to be kept current.
+#: Deliberate, and safe because nothing dereferences it: the shelf reads it as
+#: a yes/no ("cut at a scene" vs "forked from now") and never resolves it to a
+#: scene. It records what the branch was cut at, which is a fact about the
+#: moment of forking rather than a pointer anything has to keep current.
 PARENT_KEY = campaigns_read.PARENT_KEY
 FORKED_AT_KEY = campaigns_read.FORKED_AT_KEY
+
 
 def _nothing_cut() -> dict:
     """The cut half of the report when there was no cut.
@@ -105,9 +108,16 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None) -> dict:
     report of what that took.
 
     `from_scene` names a scene of the source to fork *at*: that scene is kept
-    whole and every scene after it — lexicographic id order, which is play
-    order because scene ids are number-first (`store/scene_ids.py`) — is taken
-    off the copy. `None` forks from where the campaign stands.
+    whole and every scene after it is taken off the copy. `None` forks from
+    where the campaign stands.
+
+    "After" is a lexicographic comparison of scene ids, which is play order
+    because ids are number-first and every number is padded to one width
+    (`store/scene_ids.py`; `scenes.lifecycle.repad` is what keeps the width
+    uniform when a campaign outgrows it). That last clause is the whole of the
+    invariant: a hand-placed `999--x` beside a `1000--y` would sort backwards,
+    and nothing here would notice. `export.py` orders scenes the same way and
+    on the same footing.
 
     Raises `campaigns.CampaignNotFound` for an unknown source and
     `scenes.SceneNotFound` for a `from_scene` that is not one of its scenes.
@@ -137,9 +147,58 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None) -> dict:
     # future still in it. Everything inside is file work this package owns; no
     # calendar provider or other plugin code runs under it.
     with locks.hold_all([cid, new_cid]):
-        _copy(cid, new_cid, name, from_scene)
+        # Claim the id with an empty directory FIRST, and outside the block that
+        # cleans up -- this is the one step whose failure must not delete
+        # anything. `uniquify` ran before the lock, so the id can have been taken
+        # in between; `mkdir` is what loses that race, and it loses it against a
+        # directory somebody else's campaign is living in. Letting `copytree`'s
+        # own `FileExistsError` be the guard instead would put that campaign
+        # inside the cleanup below, which would `rmtree` it. Same claim-then-fill
+        # order as `create_campaign`, and for a sharper reason.
+        campaigns_paths.campaign_root(new_cid).mkdir(parents=True)
+        try:
+            _copy(cid, new_cid, name, from_scene)
+        except BaseException:
+            # Everything past the claim is ours to undo. `copytree` publishes
+            # `campaign.md` partway through a copy that can still fail after it
+            # -- a full disk, an unreadable file, a symlink with no target --
+            # and that file is what makes a directory a campaign to
+            # `list_campaigns`. Without this, a failed fork leaves a phantom on
+            # the shelf: partial content under the SOURCE's name, with no
+            # `parent` to mark it as a copy and nothing to tell the user it is
+            # one.
+            #
+            # Best-effort, and the original error wins. A cleanup that fails
+            # leaves exactly the debris there would have been anyway, and
+            # replacing a full disk with "could not remove directory" would hide
+            # the reason the fork failed.
+            _discard(new_cid)
+            raise
         report = _cut_after(new_cid, from_scene) if from_scene else _nothing_cut()
     return {"id": new_cid, "from_scene": from_scene or "", **report}
+
+
+def _discard(new_cid: str) -> None:
+    """Remove a fork that never finished being made. Never raises.
+
+    Only ever called for a directory THIS call created, in the `mkdir` above,
+    and published to nobody -- the lock is still held, so no other writer has
+    reached it. That ownership is the whole licence for an `rmtree` here, where
+    `delete_campaign` needs a canonical-name check before one: this must never
+    be reachable for a directory the fork merely found.
+
+    `ignore_errors` so a cleanup failure cannot displace the error that caused
+    it -- but the survival is checked and logged rather than passed over in
+    silence, because a fork directory left on the shelf is a phantom campaign
+    and the only trace of it would otherwise be the user finding it.
+    """
+    try:
+        root = campaigns_paths.campaign_root(new_cid)
+        shutil.rmtree(root, ignore_errors=True)
+        if root.exists():
+            log.warning("fork: the partial copy at %s could not be removed", new_cid)
+    except Exception:   # `campaign_root` can still refuse the id
+        log.warning("fork: could not discard the partial copy at %s", new_cid, exc_info=True)
 
 
 def _copy(cid: str, new_cid: str, name: str, from_scene: str | None) -> None:
@@ -171,12 +230,20 @@ def _copy(cid: str, new_cid: str, name: str, from_scene: str | None) -> None:
     """
     root = campaigns_paths.campaign_root(cid)
     new_root = campaigns_paths.campaign_root(new_cid)
-    # A whole-directory publication, so no `atomic` temp-and-replace applies:
-    # what it must not do is land on top of something, and `copytree` refuses a
-    # destination that exists. That refusal is the guard against the window
-    # `uniquify` leaves — same shape as `create_campaign`'s `mkdir(parents=True)`,
-    # which is likewise the thing that fails if the id was taken in between.
-    shutil.copytree(root, new_root)
+    # A whole-directory publication, so no `atomic` temp-and-replace applies.
+    # `dirs_exist_ok` because the caller has already claimed this id with an
+    # empty directory — that `mkdir`, not this call, is what fails if the id was
+    # taken between `uniquify` and the lock, which is what keeps somebody else's
+    # campaign out of the cleanup path (see `fork_campaign`).
+    #
+    # Symlinks are FOLLOWED (`symlinks` left False), and that is the setting
+    # this module's central claim rests on: copied as links, every file in the
+    # fork would still be the source's file, and the first write to the branch
+    # would land in the campaign it was forked from. A store is plain files the
+    # user owns and syncs, so a symlink in there is not hypothetical. Following
+    # them costs the bytes and can loop or dangle; both fail loudly and the
+    # caller's cleanup removes what was made.
+    shutil.copytree(root, new_root, dirs_exist_ok=True)
     mp = campaigns_paths.campaign_meta_path(new_cid)
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
     now = now_iso()
@@ -206,10 +273,19 @@ def _cut_after(cid: str, from_scene: str) -> dict:
     Each scene goes in two steps, and both are needed: `cascade.delete_from`
     at index 0 empties the transcript and reverses what the scene wrote, and
     `scenes.delete_scene` then removes the scene itself along with the stores
-    keyed by its id. A scene with no posts is not a failure — an empty scene
-    is what an interrupted one looks like, and `delete_from` refuses an index
-    that would remove nothing — so the `IndexError` means "there was nothing to
-    cut" and the delete proceeds.
+    keyed by its id.
+
+    **An empty scene is asked about rather than inferred from an exception.**
+    `delete_from` refuses an index that removes nothing, so a postless scene
+    (an interrupted one, or a created-but-never-played one) raises `IndexError`
+    at index 0 — and catching that would have been the short way to write this.
+    It is also wrong: `delete_from` runs `read_scene`, `alternates.state` and
+    `commits.retire_scene` before it cuts anything, and an `IndexError` out of
+    any of those — a malformed transcript, a hand-edited commit ledger — reads
+    identically. The scene would then be deleted with nothing reversed and
+    reported as cleanly removed, which is the one outcome this must never
+    produce silently. So emptiness is a question, and every exception is a
+    failure.
 
     Nothing here raises for a scene that would not come off. `delete_from`'s
     contract is `SceneNotFound` or `IndexError` and nothing else, and both are
@@ -228,9 +304,14 @@ def _cut_after(cid: str, from_scene: str) -> dict:
     removed, records, refused, failed = [], 0, [], []
     for sid in reversed(later):
         try:
-            report = cascade.delete_from(cid, sid, 0)
-        except IndexError:      # nothing in the transcript to cut
-            report = {}
+            # The read is `cascade.delete_from`'s own first step, repeated here
+            # so the empty case can be told apart from a failure (see above).
+            # Every non-empty scene therefore parses its transcript twice --
+            # accepted, because the alternative is a silent wrong answer and
+            # the pass is already doing a journal reversal and five store
+            # rewrites per scene.
+            report = (cascade.delete_from(cid, sid, 0)
+                      if scenes_read.read_scene(cid, sid)["messages"] else {})
         except Exception:       # see docstring: one scene may not sink the fork
             log.warning("fork %s: could not revert scene %s", cid, sid, exc_info=True)
             failed.append(sid)
