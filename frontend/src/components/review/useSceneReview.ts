@@ -328,6 +328,15 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     setReviewQuote("");
   }
 
+  /** Retype the chronicle the absorb wrote. The only public way to change
+   *  `absorb`, deliberately: a raw setter would also let a caller clear the
+   *  review, and clearing it without `releaseRetries` is the bug the whole
+   *  generation/abort apparatus above exists to prevent. Closing a review is
+   *  `discard`, `saveAbsorb` or the `[cid]` effect, all three of which release. */
+  function editChronicle(patch: Partial<Pick<SceneAbsorb, "one_line" | "summary">>) {
+    setAbsorb((a) => (a ? { ...a, ...patch } : a));
+  }
+
   /** Contradictions by staged-edit id (#78). Empty for the ordinary end-of-scene
    *  absorb, which has no later scene to disagree with. */
   const contradictionById = useMemo(
@@ -613,8 +622,8 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     (drawerKey(e) === openSection ? [[e, i] as const] : []));
 
   return {
-    absorb, setAbsorb, absorbSid, editRows, reviewQuote, setReviewQuote,
-    reviewSection: openSection, setReviewSection,
+    absorb, absorbSid, editRows, reviewQuote, setReviewQuote,
+    editChronicle, openSection, openDrawer: setReviewSection,
     editFailures, dismissFailures: () => setEditFailures([]),
     conflictByRow, contradictionById, saveError,
     absorbing, saving, reviewBusy, retryingAudit, retryingDossiers,

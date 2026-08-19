@@ -3,28 +3,28 @@ import { render, screen, fireEvent, waitFor, act, within } from "@testing-librar
 import { MemoryRouter, Link, useNavigate } from "react-router-dom";
 import { FocusProvider, useFocus } from "../components/focus";
 
-// The mocks and the per-test defaults live in `campaignHarness`, which the
-// review suite shares (#378). A `vi.mock` factory is hoisted above every import
+// The mocks and the per-test defaults live in `src/testkit`, which the review
+// suite shares (#378). A `vi.mock` factory is hoisted above every import
 // and can close over nothing, so it reaches the harness through a dynamic
 // import rather than a module-scope binding.
 vi.mock("../components/CastPanel", async () =>
-  (await import("./campaignMocks")).componentStubs.CastPanel());
+  (await import("../testkit/campaignMocks")).componentStubs.CastPanel());
 vi.mock("../components/NewSceneChooser", async () =>
-  (await import("./campaignMocks")).componentStubs.NewSceneChooser());
+  (await import("../testkit/campaignMocks")).componentStubs.NewSceneChooser());
 vi.mock("../components/CalendarConfig", async () =>
-  (await import("./campaignMocks")).componentStubs.CalendarConfig());
+  (await import("../testkit/campaignMocks")).componentStubs.CalendarConfig());
 vi.mock("../components/ReplayPanel", async () =>
-  (await import("./campaignMocks")).componentStubs.ReplayPanel());
+  (await import("../testkit/campaignMocks")).componentStubs.ReplayPanel());
 vi.mock("../components/ResponsePresetPicker", async () =>
-  (await import("./campaignMocks")).componentStubs.ResponsePresetPicker());
-vi.mock("../api/client", async () => (await import("./campaignMocks")).campaignApiMock());
+  (await import("../testkit/campaignMocks")).componentStubs.ResponsePresetPicker());
+vi.mock("../api/client", async () => (await import("../testkit/campaignMocks")).campaignApiMock());
 vi.mock("../api/models", () => ({ getModels: vi.fn() }));
 import { api, ApiError } from "../api/client";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import {
   here, Here, installCampaignMocks, ONE_SCENE, openScene, playRoutes, readCounter,
   relistsAs, renderCampaign, RESPONSE_BUNDLE, RESPONSE_PRESETS, withPalette,
-} from "./campaignHarness";
+} from "../testkit/campaignHarness";
 
 beforeEach(installCampaignMocks);
 
