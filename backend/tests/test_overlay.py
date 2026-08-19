@@ -378,6 +378,27 @@ def test_image_cache_tokens_come_from_the_same_union_as_the_names(monkeypatch, t
     assert default["image_v"]["avatar"] == mine_v
 
 
+@pytest.mark.parametrize("ext", ["gif", "webp"])
+def test_image_tokens_name_the_file_the_server_serves_through_the_union(monkeypatch, tmp_path, ext):
+    # Same trap as the world side, one root further out: the token has to come
+    # from `image_root` + `image_path`, the pair the serve route resolves with,
+    # not from the union listing's order. `?v=` caches immutable for a year.
+    import os
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    assets.put_image(wroot, aid, "default", "avatar", PNG, "png")
+    overlay.materialize_actor(cid, "characters", aid)   # cards campaign-side, asset world-side
+    served = assets.image_path(wroot, aid, "default", "avatar")
+    stale = served.with_suffix(f".{ext}")
+    stale.write_bytes(b"stale bytes of a different length")
+    os.utime(stale, (1, 1))
+    served_v = assets.image_version(served)
+
+    listed = next(c for c in overlay.list_characters(cid) if c["id"] == aid)
+    assert listed["avatar_v"] == served_v
+    default = next(v for v in overlay.read_character(cid, aid)["versions"] if v["id"] == "default")
+    assert default["image_v"]["avatar"] == served_v
+
+
 def _pc_pair(monkeypatch, tmp_path):
     """A world with one two-version PC + a thin campaign on it (see
     `_actor_pair`, which this mirrors for the other actor kind)."""

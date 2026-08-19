@@ -1455,3 +1455,41 @@ def test_read_character_carries_a_cache_token_per_image(tmp_path):
     assert version["image_v"]["avatar"] == assets.image_version(
         assets.image_path(tmp_path, cid, vid, assets.AVATAR))
     assert version["image_v"]["gallery_0"] != version["image_v"]["avatar"]
+
+
+def _stale_sibling(tmp_path, cid, vid, ext="gif"):
+    """The state `put_in` leaves for a moment and leaves for good if its unlink
+    fails: two files sharing one stem. `path_in` resolves newest-wins, and
+    self-heals exactly this, so it is reachable state and not a hypothetical."""
+    from grimoire.store import assets
+    import os
+    served = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
+    stale = served.with_suffix(f".{ext}")
+    stale.write_bytes(b"stale bytes of a different length")
+    os.utime(stale, (1, 1))                      # decisively older than the served file
+    return assets.image_version(served)
+
+
+# Both extensions matter: one sorts BEFORE the served file's and one after, so
+# a token picked by listing order is wrong in one direction or the other. The
+# pair proves the resolution is order-independent rather than luckily aligned.
+@pytest.mark.parametrize("ext", ["gif", "webp"])
+def test_avatar_token_names_the_file_the_server_actually_serves(tmp_path, ext):
+    # `?v=` is served IMMUTABLE for a year. A token taken from the listing's
+    # order rather than `image_path`'s resolution names one file while the
+    # server returns another -- pinning the wrong bytes, permanently.
+    from grimoire.store import assets
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    assets.put_image(tmp_path, cid, vid, assets.AVATAR, b"\x89PNG-served", "png")
+    served_v = _stale_sibling(tmp_path, cid, vid, ext)
+    assert ch.list_characters(tmp_path)[0]["avatar_v"] == served_v
+
+
+@pytest.mark.parametrize("ext", ["gif", "webp"])
+def test_per_image_token_names_the_file_the_server_actually_serves(tmp_path, ext):
+    from grimoire.store import assets
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    assets.put_image(tmp_path, cid, vid, assets.AVATAR, b"\x89PNG-served", "png")
+    served_v = _stale_sibling(tmp_path, cid, vid, ext)
+    version = ch.read_character(tmp_path, cid)["versions"][0]
+    assert version["image_v"]["avatar"] == served_v
