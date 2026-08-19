@@ -1657,7 +1657,22 @@ def test_campaign_entity_image_writes_gate_on_the_inherited_entity(client):
     croot = store.campaigns.campaign_root(cid)
     assert not (croot / "locations" / f"{eid}.md").exists()   # never materialized
 
+    # All three verbs against the record the campaign has never materialized --
+    # the accept side is what the overlay resolution is FOR, and a gate that
+    # only the upload had been driven through would leave two of them free to
+    # 404 on every inherited entity in the app.
+    day, night = _png_bytes(color=(1, 1, 1)), _png_bytes(color=(2, 2, 2))
+    wbase = f"/api/worlds/{wid}/locations/{eid}/images"
+    client.put(f"{wbase}/avatar", files={"file": ("d.png", io.BytesIO(day), "image/png")})
+    client.put(f"{wbase}/gallery_1", files={"file": ("n.png", io.BytesIO(night), "image/png")})
+
     base = f"/api/campaigns/{cid}/locations/{eid}/images"
+    assert client.post(f"{base}/gallery_1/promote").status_code == 200   # copies up, then swaps
+    assert client.get(f"{base}/avatar").content == night
+    assert client.get(f"{wbase}/avatar").content == day                 # world untouched
+    assert client.delete(f"{base}/gallery_1").status_code == 200
+    assert client.get(f"{base}/gallery_1").status_code == 404
+    assert client.get(f"{wbase}/gallery_1").content == night            # world untouched
     assert client.put(f"{base}/avatar",
                       files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")}
                       ).status_code == 200            # inherited entity resolves
