@@ -672,3 +672,41 @@ def test_supported_only_ignores_and_spares_a_foreign_sibling(tmp_path):
 
 def test_delete_in_is_a_noop_without_the_directory(tmp_path):
     assets.delete_in(tmp_path / "nope", "cover")  # no error
+
+
+def test_delete_version_images_drops_the_folder_and_its_sidecar(tmp_path):
+    """What `characters.delete_version` / `pcs.delete_version` call once the
+    version file is gone: nothing can address the folder afterwards, so
+    leaving it is how a version delete manufactures orphaned bytes (#360)."""
+    assets.put_image(tmp_path, "sera", "older", assets.AVATAR, b"a", "png")
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"b", "png")
+    assets.write_focus(tmp_path, "sera", "older", 30)
+
+    assets.delete_version_images(tmp_path, "sera", "older")
+    assert not (tmp_path / "characters" / "sera" / "assets" / "older").exists()
+    assert assets.read_focus(tmp_path, "sera", "older") is None
+    # the sibling version and the record itself are untouched
+    assert assets.image_path(tmp_path, "sera", "default", "avatar").read_bytes() == b"b"
+
+    assets.delete_version_images(tmp_path, "sera", "older")     # gone already: no error
+    assets.delete_version_images(tmp_path, "sera", "../escape")  # unsafe id: refused
+    assert (tmp_path / "characters" / "sera").is_dir()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="creating symlinks on Windows needs elevation")
+def test_a_symlinked_asset_folder_loses_the_link_not_the_library(tmp_path):
+    """`shutil.rmtree` refuses a symlink outright, and this runs *after* the
+    version file is unlinked -- so an unguarded rmtree would 500 the delete
+    with the record already gone. A store on a synced folder is exactly where
+    someone points an asset directory somewhere else."""
+    library = tmp_path / "library"
+    library.mkdir()
+    (library / "avatar.png").write_bytes(b"a")
+    d = tmp_path / "characters" / "sera" / "assets" / "older"
+    d.parent.mkdir(parents=True)
+    d.symlink_to(library, target_is_directory=True)
+    assert assets.image_path(tmp_path, "sera", "older", "avatar") is not None
+
+    assets.delete_version_images(tmp_path, "sera", "older")
+    assert not d.exists() and not d.is_symlink()
+    assert (library / "avatar.png").read_bytes() == b"a"   # the target is somebody else's
