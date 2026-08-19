@@ -107,6 +107,16 @@ async function settle() {
   }
 }
 
+// What this costs, and what it takes away. Cost: ~5% of wall clock, measured
+// back to back on a quiet machine (62.4s without, 65.8s with; test-execution
+// time is +13% and parallelism absorbs most of it). What it takes away is the
+// ability to catch a TRANSIENT -- a wait that settles past an in-flight state
+// cannot observe one. That was never reliable anyway; racing RTL's single
+// drain is what #351 turned out to be. A test that wants an in-flight state
+// pins it instead: hand the api a promise nobody resolves and the state stands
+// still for as long as the test needs it (`hangingChat()`, and the `landS2` /
+// `finishRelist` handles in CampaignView.test.tsx, are all exactly this).
+
 // Wraps RTL's own wrapper rather than replacing it: that one owns the act
 // environment for the duration of the wait, and dropping it would put every
 // `waitFor` back to warning about updates it deliberately allows.
