@@ -930,6 +930,11 @@ export type ReplaySession = {
   scene: string; cut: number; done: number; steps: number; turns_left: number;
   next: "generation" | "verbatim" | "done"; staged: boolean; created: string;
   gone: boolean;
+  /** A replayed reply is in the transcript, waiting on accept or another try.
+   *  The server's answer rather than the client's memory of having run a turn —
+   *  a reload loses that memory, and running the turn again would land a second
+   *  reply beside the first. */
+  pending: boolean;
 };
 /** What a replay from this post would cost, before anything is cut (#79/#80).
  *  `fork` is the nudge: over the configured threshold, offer to copy the

@@ -33,6 +33,18 @@ vi.mock("../components/NewSceneChooser", () => ({
   ),
 }));
 vi.mock("../components/CalendarConfig", () => ({ CalendarConfig: () => <div data-testid="calendar-config" /> }));
+// Same reason as the three above, and it is the one that turned up in this
+// file's flake budget rather than in review: ReplayPanel fetches its session on
+// mount, in EVERY test that renders the transcript, and it has a test file of
+// its own that drives the real thing. What CampaignView owns is which post the
+// gutter hands it, so that is all the stub reports.
+vi.mock("../components/ReplayPanel", () => ({
+  ReplayPanel: ({ startAt, onStartHandled }: any) => (
+    <div data-testid="replay-panel" data-start-at={startAt ?? ""}>
+      <button onClick={() => onStartHandled()}>stub-replay-close</button>
+    </div>
+  ),
+}));
 vi.mock("../components/ResponsePresetPicker", () => ({ ResponsePresetPicker: () => <div data-testid="response-preset-picker" /> }));
 
 vi.mock("../api/client", async () => {
@@ -909,16 +921,17 @@ test("the gutter offers a replay only where there is something after the post", 
   expect(screen.queryByLabelText("Replay the turns after message 2")).toBeNull();
 });
 
-test("asking to replay prices it before anything is cut", async () => {
+test("the gutter hands the panel the post AFTER the one clicked", async () => {
+  // The retconned post stands; what a replay redoes is everything past it. The
+  // panel's own tests cover what it then does with that index.
   twoPostScene();
-  (api.replayPreview as any).mockResolvedValue(
-    { posts: 1, turns: 1, threshold: 10, fork: false, blocked: "" });
   renderCampaign();
   await screen.findByText("a reply");
+  expect(screen.getByTestId("replay-panel").getAttribute("data-start-at")).toBe("");
 
   fireEvent.click(screen.getByLabelText("Replay the turns after message 1"));
-  await waitFor(() => expect(api.replayPreview).toHaveBeenCalledWith("run", "s1", 1));
-  await screen.findByText("Replay 1 turn");
+  await waitFor(() =>
+    expect(screen.getByTestId("replay-panel").getAttribute("data-start-at")).toBe("1"));
   expect(api.startReplay).not.toHaveBeenCalled();
 });
 

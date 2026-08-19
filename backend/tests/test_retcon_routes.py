@@ -164,6 +164,41 @@ def test_accepting_advances_the_walk(client, scene):
     assert r.status_code == 200 and r.json()["turns_left"] == 1
 
 
+def test_running_a_turn_over_an_unanswered_reply_is_a_409(client, scene):
+    """The client's memory of having run a turn is not what stops it running
+    twice — a reload loses that. The server does."""
+    cid, sid = scene
+    # A usable connection, because the route checks that BEFORE it stages: the
+    # player's originals must not be re-posted for a turn that then cannot run.
+    conn = client.post("/api/llm-connections", json={
+        "kind": "openai_compatible", "name": "Local", "base_url": "http://x",
+        "api_key": "sk-x"}).json()["id"]
+    client.put("/api/config", json={"active_connection_id": conn})
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/replay", json={"index": 1})
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "a fresh reply"}])
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/replay/turn")
+    assert r.status_code == 409 and r.json()["kind"] == "replay_refused"
+    assert "waiting on you" in r.json()["detail"]
+
+
+def test_the_session_says_whether_a_reply_is_waiting(client, scene):
+    cid, sid = scene
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/replay", json={"index": 1})
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/replay").json()["pending"] is False
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "a fresh reply"}])
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/replay").json()["pending"] is True
+
+
+def test_starting_a_replay_never_ships_the_backlog(client, scene):
+    """The one response that has the whole cut transcript in hand is the one
+    that must not return it — the GET's rule holds however the session is asked
+    for."""
+    cid, sid = scene
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/replay", json={"index": 1}).json()
+    assert body["steps"] == 3 and body["turns_left"] == 2
+    assert "reply one" not in str(body)
+
+
 def test_accepting_nothing_is_a_409(client, scene):
     cid, sid = scene
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/replay", json={"index": 1})

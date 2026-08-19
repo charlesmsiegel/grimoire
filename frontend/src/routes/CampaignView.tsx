@@ -1245,6 +1245,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // scene A's alternates must never offer themselves against scene B while
       // the fetch below is in flight — same reason the proposal chip clears here
       setAlternates(NO_ALTERNATES);
+      // The post a reader asked to replay from is an INDEX, and an index means
+      // nothing in another scene: carried across, it prices — and would cut —
+      // whatever post happens to sit there. Same reasoning as the one-shot
+      // response override two blocks up.
+      setReplayAt(null);
       // a new scene opens at its most recent page, at the bottom
       windowSizeRef.current = PAGE_SIZE;
       atBottomRef.current = true;

@@ -44,7 +44,10 @@ def test_beginning_cuts_the_scene_and_keeps_the_rest(cid, sid):
     session = replay.begin(cid, sid, 1)
     assert _contents(cid, sid) == ["player one"]
     assert session["cut"] == 1 and session["done"] == 0
-    assert [s["kind"] for s in session["steps"]] == [
+    # The reply carries the walk's position, not the backlog: `steps` is a
+    # count there, and the segmentation is read off the record itself.
+    assert session["steps"] == 3 and session["turns_left"] == 2
+    assert [s["kind"] for s in replay.read(cid)["steps"]] == [
         "generation", "verbatim", "generation"]
 
 
@@ -284,8 +287,8 @@ def test_consecutive_generations_stay_separate_steps(cid, sid):
     director turn) read as one long run to anyone parsing the transcript. The
     recorded turn boundaries are what keeps them apart."""
     scenes.append_reply(cid, sid, [{"speaker": None, "content": "and again"}])
-    session = replay.begin(cid, sid, 3)
-    assert [s["kind"] for s in session["steps"]] == ["generation", "generation"]
+    replay.begin(cid, sid, 3)
+    assert [s["kind"] for s in replay.read(cid)["steps"]] == ["generation", "generation"]
     replay.cancel(cid)
     assert scenes_turns.get_turn_sizes(cid, sid) == [1, 1, 1]
 
@@ -304,3 +307,28 @@ def test_staged_player_posts_are_not_mistaken_for_a_replayed_reply(cid, sid):
     assert replay.state(cid)["turns_left"] == 1
     replay.cancel(cid)
     assert _contents(cid, sid) == ["player one", "fresh one", "player two", "reply two"]
+
+
+def test_a_turn_cannot_be_run_twice_over_one_unanswered_reply(cid, sid):
+    """The refusal that makes a lost client state harmless. A reload forgets
+    that a turn was run; without this the next click generates a SECOND reply
+    beside the first, and one accept steps past both."""
+    replay.begin(cid, sid, 1)
+    scenes.append_reply(cid, sid, [{"speaker": None, "content": "fresh one"}])
+    assert replay.state(cid)["pending"] is True
+    with pytest.raises(replay.ReplayError):
+        replay.stage(cid)
+    replay.accept(cid)
+    assert replay.state(cid)["pending"] is False
+
+
+def test_cancelling_cleans_up_after_its_own_cut(cid, sid):
+    """A raw truncation is not the whole of a truncation anywhere else in this
+    store. The ledger entry describes a post the restore has just replaced."""
+    from grimoire.store import turnstate
+    replay.begin(cid, sid, 1)
+    scenes.append_reply(cid, sid, [{"speaker": None, "content": "a take nobody kept"}])
+    turnstate.record(cid, sid, 1, {"seraphine": {"mood": "furious"}})
+    replay.cancel(cid)
+    assert [i for i, _ in turnstate.entries(cid, sid)] == []
+    assert _contents(cid, sid) == ["player one", "reply one", "player two", "reply two"]

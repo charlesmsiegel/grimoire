@@ -55,13 +55,17 @@ time, with a review each.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
-from . import atomic, cascade, config, locks
+from . import alternates, atomic, cascade, config, locks, turnstate
 from .campaigns import paths as campaigns_paths
 from .paths import now_iso
 from .scenes import paths as scenes_paths, read as scenes_read, \
     serialize as scenes_serialize, turns as scenes_turns, write as scenes_write
+
+
+log = logging.getLogger(__name__)
 
 
 class ReplayError(Exception):
@@ -155,6 +159,26 @@ def _turns_left(rec: dict) -> int:
     return sum(1 for s in _pending(rec) if s.get("kind") == "generation")
 
 
+def _pending_reply(cid: str, rec: dict) -> bool:
+    """Whether a replayed reply is sitting in the transcript, unaccepted.
+
+    The transcript past `mark` is the walk's uncommitted work, and `staged` is
+    how much of that the ORIGINALS put there — so anything beyond the two is a
+    reply the model wrote and nobody has answered for yet.
+
+    This is a server fact and has to be, because it is the one thing standing
+    between "run the next turn" and running it twice. A client that holds it in
+    local state loses it on a reload and offers the button again; the second
+    generation then lands beside the first, and one `accept` steps past both.
+    Reported in `state` for the panel and enforced in `stage`.
+    """
+    try:
+        landed = len(scenes_read.read_scene(cid, rec.get("scene", ""))["messages"])
+    except (scenes_paths.SceneNotFound, campaigns_paths.CampaignNotFound):
+        return False        # a scene that is gone owes nobody a verdict
+    return landed > int(rec.get("mark", 0)) + max(int(rec.get("staged", 0)), 0)
+
+
 def preview(cid: str, sid: str, index: int) -> dict:
     """What starting a replay at `index` would cost, without starting one.
 
@@ -202,6 +226,9 @@ def state(cid: str) -> dict | None:
             "done": rec.get("done", 0), "steps": len(rec.get("steps") or []),
             "turns_left": _turns_left(rec), "next": nxt,
             "staged": bool(rec.get("staged")),
+            # Whether a replayed reply is waiting on a verdict. Derived here
+            # rather than remembered by the client -- see `_pending_reply`.
+            "pending": _pending_reply(cid, rec),
             "created": rec.get("created", ""),
             # A scene deleted under a running replay leaves a session nothing can
             # advance. Reported rather than silently cleared: the backlog is the
@@ -253,7 +280,13 @@ def begin(cid: str, sid: str, index: int) -> dict:
         except BaseException:
             _clear(cid)
             raise
-        return {**rec, "cascade": report}
+        # `state(cid)`, not the record: the backlog is a transcript's worth of
+        # text and the client can do nothing with it, which is the rule the GET
+        # keeps -- returning it here because it happened to be in hand would
+        # break that rule on the one response that carries the most of it. It
+        # also means the two ways to learn a session's position give the same
+        # shape, so nothing downstream has to know which call it came from.
+        return {**(state(cid) or {}), "cascade": report}
 
 
 def _append_steps(cid: str, sid: str, steps: list[dict]) -> int:
@@ -291,6 +324,14 @@ def stage(cid: str) -> dict:
         if not pending:
             raise ReplayError("this replay has no steps left")
         sid = rec.get("scene", "")
+        # The refusal that makes running a turn twice impossible, wherever the
+        # second click came from -- a reload that lost the client's own memory
+        # of having run it, a second tab, a stale panel. The reviewer answers
+        # the reply that is there (accept it, or reroll it) before another is
+        # generated on top of it.
+        if _pending_reply(cid, rec):
+            raise ReplayError("this replayed turn is waiting on you — accept it or "
+                              "try it again before running the next one")
         if not rec.get("staged") and pending[0]["kind"] == "verbatim":
             for m in pending[0]["messages"]:
                 scenes_write.append_message(cid, sid, m["role"], m["content"],
@@ -373,6 +414,24 @@ def cancel(cid: str, restore: bool = True) -> dict:
             landed = len(scenes_read.read_scene(cid, sid)["messages"])
             if mark < landed:
                 scenes_write.delete_from(cid, sid, mark)
+                # The two sidecars that key off post positions, cleaned exactly
+                # as `cascade.delete_from` cleans them after ITS cut -- a raw
+                # truncation is not the whole of a truncation anywhere else in
+                # this store, and it is not here either. The transient-state
+                # ledger would otherwise keep entries at indices the restored
+                # originals now occupy, and the reroll sidecar would be left
+                # anchored at a generation that has just been deleted, offering
+                # a discarded replay's takes as alternates of the original
+                # reply. Best-effort, and after the cut on purpose: the
+                # transcript is already back, and neither sidecar is a reason to
+                # fail a cancel that has done the thing it was asked to do.
+                for clean in (lambda: turnstate.supersede(cid, sid, mark),
+                              lambda: alternates.drop_scene(cid, sid)):
+                    try:
+                        clean()
+                    except Exception:  # a sidecar, cleaned after the fact
+                        log.warning("replay cancel in %s/%s: cleanup failed", cid, sid,
+                                    exc_info=True)
             restored = _append_steps(cid, sid, _pending(rec))
         _clear(cid)
         return {"scene": sid, "restored": restored, "dropped": 0 if restore else

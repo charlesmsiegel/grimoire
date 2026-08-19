@@ -184,13 +184,31 @@ def test_a_citation_names_the_scene_where_a_change_log_row_cannot(cid, two_scene
     assert [(r["scene"], r["source"]) for r in rows] == [(second, "citation")]
 
 
+def _plot_edit(status, beat="Nobody swore it.", pid="the-oath"):
+    """One plot row in the shape `materialize` stages it: `before` is a RENDERING
+    (status plus last beat) and `after` is the new beat alone, so the two are
+    never in the same format — which is why the disagreement this pass looks for
+    is the status in the payload."""
+    return {"id": f"plot:{pid}", "kind": "plot", "target": {"kind": "plot", "id": pid},
+            "field": "beat", "before": "open — They swore it.", "after": beat,
+            "payload": {"id": pid, "title": "The Oath", "status": status, "scene": ""}}
+
+
 def test_a_plot_thread_is_attributed_by_its_last_scene(cid, two_scenes):
     first, second = two_scenes
     plot.set_movement(cid, "the-oath", "The Oath", "open", "They swore it.", second)
-    edit = {"id": "plot:the-oath", "kind": "plot", "target": {"kind": "plot", "id": "the-oath"},
-            "field": "beat", "before": "open — They swore it.", "after": "closed — nobody swore"}
-    rows = retcon.contradictions(cid, first, [edit])
+    rows = retcon.contradictions(cid, first, [_plot_edit("closed")])
     assert [(r["scene"], r["source"]) for r in rows] == [(second, "thread")]
+
+
+def test_a_plot_row_that_only_adds_a_beat_is_not_a_contradiction(cid, two_scenes):
+    """A plot row's `before` is a rendering and its `after` is a bare beat, so a
+    text comparison calls every row changed — and after a retcon of an old scene
+    that is most of them. Beats accumulate; a thread left where it was is not a
+    later scene disagreeing."""
+    first, second = two_scenes
+    plot.set_movement(cid, "the-oath", "The Oath", "open", "They swore it.", second)
+    assert retcon.contradictions(cid, first, [_plot_edit("open")]) == []
 
 
 def test_a_row_that_agrees_with_the_record_contradicts_nobody(cid, two_scenes):
@@ -234,6 +252,20 @@ def test_the_badge_carries_the_later_scenes_one_line(cid, two_scenes):
     assert rows[0]["label"] == "The quay burned."
 
 
+def test_a_fact_row_is_never_flagged(cid, two_scenes):
+    """`fact_line` renders a fingerprint into `before` that `after` was never in
+    the format of. Comparing those manufactures a disagreement out of a
+    formatting difference, which is the one thing a badge must not do."""
+    first, second = two_scenes
+    provenance.record(cid, {"facts/f1#text": {"quote": "she said so", "speaker": "Mara",
+                                             "certainty": 0.9, "authority": "witness",
+                                             "band": "likely", "scene": second,
+                                             "recorded": ""}})
+    edit = {"id": "fact:f1", "kind": "fact", "target": {"kind": "facts", "id": "f1"},
+            "field": "text", "before": "active — the tide turned", "after": "the tide held"}
+    assert retcon.contradictions(cid, first, [edit]) == []
+
+
 def test_a_malformed_row_is_skipped_rather_than_raising(cid, two_scenes):
     """These come off a client PUT body, which validates each edit only as "a
     dict" — the same boundary `absorb/conflicts.py` keeps."""
@@ -247,7 +279,9 @@ def test_a_commitment_is_attributed_like_a_plot_thread(cid, two_scenes):
                              "She owes a favour.", second)
     edit = {"id": "commitment:the-debt", "kind": "commitment",
             "target": {"kind": "commitments", "id": "the-debt"}, "field": "beat",
-            "before": "open — She owes a favour.", "after": "closed — the debt was never owed"}
+            "before": "promise · open — She owes a favour.", "after": "The debt was never owed.",
+            "payload": {"id": "the-debt", "title": "The Debt", "kind": "promise",
+                        "status": "broken", "scene": ""}}
     rows = retcon.contradictions(cid, first, [edit])
     assert [(r["scene"], r["source"]) for r in rows] == [(second, "thread")]
 
