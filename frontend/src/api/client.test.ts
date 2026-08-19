@@ -942,3 +942,14 @@ test("setCalendarConfig PUTs to the scope it was given", async () => {
     "/api/worlds/realm/calendar",
     expect.objectContaining({ method: "PUT", body: JSON.stringify(cfg) }));
 });
+
+test("getCalendarMonths asks the scope's own calendar for its months", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ months: [] }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.getCalendarMonths({ kind: "campaign", id: "run" }, 2026);
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/campaigns/run/calendar/months?year=2026", expect.objectContaining({ method: "GET" }));
+  await api.getCalendarMonths({ kind: "world", id: "realm" }, 5786);
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/worlds/realm/calendar/months?year=5786", expect.objectContaining({ method: "GET" }));
+});

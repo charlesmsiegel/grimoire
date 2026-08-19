@@ -609,11 +609,13 @@ async def post_scenario_import(wid: str, body: ScenarioProposal):
 # ---- the world's calendar (#223) ----
 #
 # The same calendar.json the campaign routes edit, one level up. A world's copy
-# is the DEFAULT its campaigns are created with -- `campaigns.create_campaign`
-# reads it out of the world root and writes it into the new campaign -- so
-# `confirmed` set here means every campaign started from this world begins with
-# a calendar the reader has already chosen, instead of the clock and the scene
-# inspector asking again per campaign.
+# is the DEFAULT its campaigns are created with: `campaigns.create_campaign`
+# reads it out of the world root and writes the whole file -- `confirmed`
+# included -- into the new campaign. A creation that names a calendar of its own
+# is an explicit choice and confirms itself, so what the world's flag actually
+# carries is every other path: a campaign created without one starts confirmed
+# only because this world says it is settled, and its clock and scene inspector
+# never ask again.
 #
 # Declared in `worlds`, which `routes.__init__` includes before `entities`, so
 # `/worlds/{wid}/{kind}` cannot capture `calendar`; `test_route_order.py` holds
