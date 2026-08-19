@@ -3,24 +3,7 @@ advance it, and the reconciliation a per-scene date triggers."""
 
 from __future__ import annotations
 
-import importlib
-
-import pytest
-from fastapi.testclient import TestClient
-
 import grimoire.store as store
-from grimoire import routes
-from grimoire.main import create_app
-from tests.llm_fakes import FakeOpenRouter
-
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    app = create_app()
-    app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["Hel", "lo"])
-    return TestClient(app)
 
 
 def _campaign(client, calendar=None):

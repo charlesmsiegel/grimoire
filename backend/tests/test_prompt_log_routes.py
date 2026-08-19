@@ -6,24 +6,9 @@ returns the same shape `GET .../context` does, and that an entry cannot be
 read through a scene it does not belong to.
 """
 
-import importlib
-
 import pytest
-from fastapi.testclient import TestClient
 
 from grimoire import routes, store
-from grimoire.main import create_app
-
-from .llm_fakes import FakeOpenRouter
-
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    app = create_app()
-    app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["Hel", "lo"])
-    return TestClient(app)
 
 
 def _scene(client):
