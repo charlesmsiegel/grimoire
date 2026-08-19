@@ -579,17 +579,23 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     );
   }
 
-  const bookCount = card?.data.character_book?.entries?.length ?? 0;
-  // localize reads/writes the server-stored card, so running it with unsaved
-  // editor changes would discard them — guard the button when the form is dirty.
-  // Compare through buildCard()'s normalization (it always rewrites
-  // alternate_greetings) so an unedited card isn't flagged as dirty.
+  // localize and the embedded-lore import both read the server-stored card, so
+  // running either with unsaved editor changes would discard them — guard both
+  // buttons when the form is dirty. Compare through buildCard()'s normalization
+  // (it always rewrites alternate_greetings) so an unedited card isn't flagged
+  // as dirty.
   const storedCard = detail?.versions.find((v) => v.id === vid)?.card;
   const normalizedStored = storedCard && {
     ...storedCard,
     data: { ...storedCard.data, alternate_greetings: (storedCard.data.alternate_greetings ?? []).filter((g) => g.trim() !== "") },
   };
   const dirty = !!(card && normalizedStored && JSON.stringify(buildCard()) !== JSON.stringify(normalizedStored));
+  // Count the STORED card's entries, not the editor's: importCharacterBook
+  // posts no payload, so the backend commits whatever character_book is on
+  // disk for this version. A count read off the live card would name entries
+  // the import cannot deliver (or hide ones it would) the moment the two
+  // diverge (#16).
+  const bookCount = storedCard?.data.character_book?.entries?.length ?? 0;
 
   function localizeControls(blocked: boolean, blockedHint?: string) {
     if (!detail) return null;
@@ -1949,9 +1955,10 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
 
           {worldScope && bookCount > 0 && (
             <div className="book-import">
-              <button className="subtle" type="button" onClick={importBook}>
+              <button className="subtle" type="button" disabled={dirty} onClick={importBook}>
                 Import {bookCount} embedded lore {bookCount === 1 ? "entry" : "entries"} to world
               </button>
+              {dirty && <span className="field-hint">Save your changes before importing embedded lore</span>}
               {bookMsg && <span className="field-hint">{bookMsg}</span>}
             </div>
           )}
