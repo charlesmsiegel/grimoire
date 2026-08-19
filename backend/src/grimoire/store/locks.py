@@ -251,6 +251,15 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # lifecycle._date_hint` resolves its calendar before `_create_scene`'s
     # lock rather than inside it.
     "store.playing",
+    # `replay.json` holds a retcon replay's backlog -- the ONLY copy of the
+    # posts its cut removed -- and every step is a read-modify-write of that
+    # file PAIRED with a transcript write: stage appends the originals it then
+    # marks staged, accept reads the transcript's length to record the mark,
+    # cancel cuts and re-appends under the same hold. Splitting any of those
+    # pairs is how a session comes to describe a transcript that is not there.
+    # New module (#79), so it starts inside the exclusion rather than joining
+    # the frozen `UNREVIEWED` backlog.
+    "store.replay",
 })
 
 #: Modules deliberately outside the exclusion, with the reason. An entry here is

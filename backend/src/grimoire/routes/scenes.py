@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import threading
 import time
 
@@ -19,12 +20,14 @@ from .common import (computes_only, _bounded_call, _campaign_root_or_404, _dump,
                      _require_connection, _require_scene, _response_body, _turn_override,
                      _write_response, get_llm)
 from .models import (Appear, AppearBatch, ChatTurn, ChronicleSave, Dismiss, EditMessage,
-                     EmergentCast, NewScene, RegenerateBody, RenameScene, ResponseSettings,
-                     RetryBody, SceneDatetime, SceneIdeaCreate, SceneIdeaStatus, SceneIntent,
-                     SceneLocation)
+                     EmergentCast, NewScene, RegenerateBody, RenameScene, ReplayCancel,
+                     ReplayStart, ResponseSettings, RetryBody, SceneDatetime,
+                     SceneIdeaCreate, SceneIdeaStatus, SceneIntent, SceneLocation)
 from .streaming import _chat_stream
 
 router = APIRouter()
+
+log = logging.getLogger(__name__)
 
 
 @router.get("/campaigns/{cid}/scenes")
@@ -1481,6 +1484,22 @@ def _absorb_snapshot(cid: str, sid: str) -> tuple[int, dict, list]:
         return store.commits.scene_epoch(cid, sid), scene, ledger
 
 
+def _contradictions(cid: str, sid: str, edits: list) -> list[dict]:
+    """`retcon.contradictions`, and never a reason to lose an extraction.
+
+    The badges are advisory by design, and this runs at the very end of a
+    handler that has just made several model calls: a garbled `plot.json` or a
+    hand-edited `changes.json` costing the reviewer the whole review would be a
+    worse failure than showing it with no badges on it. Logged, because a
+    reader who cannot see the badges cannot report their absence.
+    """
+    try:
+        return store.retcon.contradictions(cid, sid, edits)
+    except Exception:  # an advisory pass, over hand-editable files
+        log.warning("contradiction pass failed for %s/%s", cid, sid, exc_info=True)
+        return []
+
+
 @router.post("/campaigns/{cid}/scenes/{sid}/absorb")
 @computes_only  # every edit here is staged; PUT /chronicle is what persists them
 async def post_absorb(cid: str, sid: str, force: bool = False,
@@ -1572,9 +1591,17 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     audit_edits, mechanics = _phase_or_raise(audit_result)
     edits += dossier_edits
     edits += voice_edits
+    staged = edits + audit_edits
     return {"one_line": parsed["one_line"], "summary": parsed["summary"],
             "keywords": parsed["keywords"], "timeline_events": parsed["timeline_events"],
-            **facts, "edits": edits + audit_edits, "mechanics": mechanics,
+            **facts, "edits": staged, "mechanics": mechanics,
+            # Which staged rows a LATER scene has already answered differently
+            # (#78). Empty for the ordinary case -- absorbing the newest scene,
+            # which has no later scene to disagree with -- so the pass is
+            # unconditional rather than a mode the caller has to know to ask
+            # for, and it lights up exactly where it matters: a re-extraction
+            # after a retcon of an old scene.
+            "contradictions": _contradictions(cid, sid, staged),
             "dossiers": dossiers, "voice": voice,
             # One uniform row per step so a short absorb is legible as one
             # (see _phase_report) rather than as a model with nothing to say.
@@ -2990,5 +3017,189 @@ def delete_scene_messages_from(cid: str, sid: str, index: int):
         return store.cascade.delete_from(cid, sid, index)
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
+    except (store.SceneNotFound, store.CampaignNotFound):
+        raise HTTPException(status_code=404, detail="scene not found")
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/messages/{index}/retcon")
+def post_scene_retcon(cid: str, sid: str, index: int, body: EditMessage):
+    """Rewrite a past post and let the scene be extracted again (#78).
+
+    The difference from `PUT .../messages/{index}` is everything that happens
+    after the text lands: a retcon un-does what this scene's absorb wrote and
+    clears `done`, because an edited post makes the recorded summary a
+    description of a transcript that is no longer there. The plain PUT stays
+    what it is — an in-place text fix, which must not silently un-absorb a
+    finished scene — so the caller says which of the two it means.
+
+    The reply is a report, like the cascade delete's and for the same reason:
+    the reversal touches records the player cannot see from the transcript, and
+    a compare-and-swap it had to refuse is exactly what they need told. `later`
+    names the scenes played after this one — the ones a re-extraction can
+    contradict, and the reason to re-absorb this scene and read the badges.
+    """
+    _require_scene(cid, sid)
+    # Macros resolved once at persist time, the same as a fresh send and the
+    # same as the plain edit (#137): a retconned `{{roll:1d20}}` must not
+    # re-roll on every later context build.
+    content = store.context.expand_macros(
+        body.content, store.context.scene_substitutions(cid, sid), cid, sid)
+    try:
+        return store.retcon.retcon(cid, sid, index, content)
+    except IndexError:
+        raise HTTPException(status_code=400, detail="message index out of range")
+    except store.scenes.RollMessageImmutable:
+        raise HTTPException(status_code=400,
+                            detail="a dice roll's transcript line can't be edited")
+    except (store.SceneNotFound, store.CampaignNotFound):
+        raise HTTPException(status_code=404, detail="scene not found")
+
+
+def _replay_session(cid: str, sid: str) -> dict:
+    """This scene's live replay, or a 409 naming the scene that has one.
+
+    A campaign holds at most one session (`store/replay.py`), so a request
+    against the wrong scene is not a not-found — the session exists, it is just
+    somewhere else, and saying which scene is what lets the client offer to go
+    there.
+    """
+    session = store.replay.state(cid)
+    if session is None:
+        raise HTTPException(status_code=409,
+                            detail={"detail": "no replay is running", "kind": "no_replay"})
+    if session["scene"] != sid:
+        raise HTTPException(
+            status_code=409,
+            detail={"detail": "a replay is running in another scene",
+                    "kind": "replay_elsewhere", "scene": session["scene"]})
+    return session
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/replay/preview")
+def get_replay_preview(cid: str, sid: str, index: int):
+    """What replaying from `index` would cost, before anything is cut (#79/#80).
+
+    Read-only and cheap — it parses the transcript and counts generations — so
+    the client can ask on hover. `fork` is the nudge: over the configured
+    threshold, offer to copy the campaign first (`POST /campaigns/{cid}/fork`)
+    and replay in the copy. `blocked`, when non-empty, is why this span cannot
+    be replayed at all, and the client shows it in place of the button.
+    """
+    _require_scene(cid, sid)
+    try:
+        return store.replay.preview(cid, sid, index)
+    except IndexError:
+        raise HTTPException(status_code=400, detail="message index out of range")
+    except (store.SceneNotFound, store.CampaignNotFound):
+        raise HTTPException(status_code=404, detail="scene not found")
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/replay")
+def get_replay(cid: str, sid: str):
+    """The live replay session for this scene, or null.
+
+    Null rather than a 404 for "there is none": the client asks this on every
+    scene open to decide whether to show the walk, and an absent session is the
+    ordinary answer. A session belonging to a DIFFERENT scene is also null here
+    — it is not this scene's state — and the campaign-wide banner is what
+    surfaces it, from the 409 the acting routes give.
+    """
+    _require_scene(cid, sid)
+    session = store.replay.state(cid)
+    return session if session and session["scene"] == sid else None
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/replay")
+def post_replay(cid: str, sid: str, body: ReplayStart):
+    """Start a replay: cut the scene at `index` and hold the rest for review.
+
+    The cut is the cascade's (#75), so everything the removed posts caused the
+    absorb to write comes back out with them — the reply carries that report
+    under `cascade`, which is the same one the gutter's delete returns.
+
+    Deliberately NOT the same request as the retcon edit above. A retcon is
+    worth doing on its own (re-absorb the scene and read the contradictions),
+    replaying is the expensive escalation, and pricing it (`GET
+    .../replay/preview`) is a step the client takes in between.
+    """
+    _require_scene(cid, sid)
+    try:
+        return store.replay.begin(cid, sid, body.index)
+    except IndexError:
+        raise HTTPException(status_code=400, detail="message index out of range")
+    except store.replay.ReplayError as exc:
+        raise HTTPException(status_code=409,
+                            detail={"detail": str(exc), "kind": "replay_refused"})
+    except (store.SceneNotFound, store.CampaignNotFound):
+        raise HTTPException(status_code=404, detail="scene not found")
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/replay/turn")
+def post_replay_turn(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
+    """Replay the next turn: re-post the originals that were the player's, then
+    stream a fresh reply against the edited history.
+
+    No new streaming machinery. The player's own posts go back verbatim — no
+    model rewrites what the player said — and the reply is composed by the same
+    `compose_turn` an ordinary turn uses, which reads the transcript as it now
+    stands and so is already "replay" by construction. Rerolling the result is
+    plain `POST .../regenerate`: the fresh reply is the trailing run.
+
+    Staging is idempotent (`replay.stage`), so a turn whose stream died is
+    retried by calling this again — it re-posts nothing and generates once more.
+    """
+    _require_scene(cid, sid)
+    conn = _require_connection()
+    _replay_session(cid, sid)
+    try:
+        store.replay.stage(cid)
+        session = store.replay.state(cid)
+    except store.replay.ReplayError as exc:
+        raise HTTPException(status_code=409,
+                            detail={"detail": str(exc), "kind": "replay_refused"})
+    if session is None or session["next"] != "generation":
+        raise HTTPException(status_code=409,
+                            detail={"detail": "this replay has no model turn left to run",
+                                    "kind": "replay_done"})
+    messages, breakdown = store.context.compose_turn(
+        cid, sid, describe=store.prompt_log.capturing())
+    # No `undo_user_post` hook, unlike `post_chat`. The staged posts are not
+    # this request's to take back: `stage` recorded them as staged, a retry
+    # re-uses them, and cancelling the replay is what puts the scene back.
+    stream = _chat_stream(cid, sid, messages, conn, client, task="replay")
+    _record_prompt(cid, sid, "replay", breakdown)
+    return stream
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/replay/accept")
+def post_replay_accept(cid: str, sid: str):
+    """Keep the replayed turn and step forward. Null when that was the last one."""
+    _require_scene(cid, sid)
+    _replay_session(cid, sid)
+    try:
+        session = store.replay.accept(cid)
+    except store.replay.ReplayError as exc:
+        raise HTTPException(status_code=409,
+                            detail={"detail": str(exc), "kind": "replay_refused"})
+    except (store.SceneNotFound, store.CampaignNotFound):
+        raise HTTPException(status_code=404, detail="scene not found")
+    return store.replay.state(cid) if session else None
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/replay/cancel")
+def post_replay_cancel(cid: str, sid: str, body: ReplayCancel | None = None):
+    """Stop the replay. By default the unreplayed originals go back.
+
+    The scene the session names is trusted over the path's — a session whose
+    scene was renamed mid-walk is followed by `scene_refs.repoint`, and the
+    restore has to land in the scene that actually holds the transcript.
+    """
+    _require_scene(cid, sid)
+    _replay_session(cid, sid)
+    try:
+        return store.replay.cancel(cid, restore=body.restore if body else True)
+    except store.replay.ReplayError as exc:
+        raise HTTPException(status_code=409,
+                            detail={"detail": str(exc), "kind": "replay_refused"})
     except (store.SceneNotFound, store.CampaignNotFound):
         raise HTTPException(status_code=404, detail="scene not found")

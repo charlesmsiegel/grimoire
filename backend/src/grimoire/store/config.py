@@ -160,6 +160,12 @@ DEFAULT_BACKUP_KEEP = "7"
 # stop being sync traffic, and stop being included in the very thing they back
 # up. Either way the backup dir is excluded from its own archives.
 DEFAULT_BACKUP_DIR = ""
+# How many model turns a retcon replay may redo before it offers to fork the
+# campaign first (#80). Ten because a replay costs one generation per turn, in
+# money and in wall clock, and around ten is where "just redo it in place" stops
+# being the obvious call — the number is configuration precisely because that
+# judgement is the user's and depends on their model's price.
+DEFAULT_REPLAY_FORK_THRESHOLD = "10"
 # The global scope of the response-preset cascade. These MUST be listed here:
 # read_config() narrows its return to _CONFIG_KEYS, so a key omitted from this
 # tuple is silently dropped and the global scope resolves as if unset — no
@@ -181,7 +187,7 @@ _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "semantic_recall_depth", "semantic_recall_threshold",
                 "prompt_layout_enabled", "speaker_turn_taking",
                 "backup_enabled", "backup_interval_hours", "backup_keep",
-                "backup_dir") + _LENGTH_KEYS
+                "backup_dir", "replay_fork_threshold") + _LENGTH_KEYS
 
 
 def _config_path():
@@ -201,6 +207,7 @@ def read_config() -> dict[str, str]:
                 "llm_timeout": DEFAULT_LLM_TIMEOUT, "absorb_budget": DEFAULT_ABSORB_BUDGET,
                 "absorb_concurrency": DEFAULT_ABSORB_CONCURRENCY,
                 "setup_done": DEFAULT_SETUP_DONE,
+                "replay_fork_threshold": DEFAULT_REPLAY_FORK_THRESHOLD,
                 "llm_retries": DEFAULT_LLM_RETRIES,
                 "fallback_connection_id": DEFAULT_FALLBACK_CONNECTION_ID,
                 "prompt_log_depth": DEFAULT_PROMPT_LOG_DEPTH,
@@ -333,6 +340,18 @@ def promote_streak() -> int:
     the ledger's per-scene memory — the ceiling belongs where the retention
     limit is, not here."""
     return _count("promote_streak", DEFAULT_PROMOTE_STREAK)
+
+
+def replay_fork_threshold() -> int:
+    """Model turns a retcon replay may redo before the client offers to fork the
+    campaign first (#80).
+
+    A threshold, not a limit: nothing here refuses a long replay, and 0 means
+    every replay is nudged rather than none — the same `_count` tolerance the
+    settings beside it have, where a cleared or hand-mangled value falls back to
+    the default rather than silently disabling the guard.
+    """
+    return _count("replay_fork_threshold", DEFAULT_REPLAY_FORK_THRESHOLD)
 
 
 def rolling_summary_every() -> int:

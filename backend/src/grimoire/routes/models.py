@@ -55,6 +55,7 @@ class ConfigUpdate(BaseModel):
     backup_interval_hours: str | None = None
     backup_keep: str | None = None
     backup_dir: str | None = None
+    replay_fork_threshold: str | None = None
 
 
 class PromptLayoutSection(BaseModel):
@@ -510,6 +511,18 @@ class CalendarConfig(BaseModel):
 
 class EditMessage(BaseModel):
     content: str
+
+
+class ReplayStart(BaseModel):
+    #: The first post to replay -- the one AFTER the retconned post.
+    index: int
+
+
+class ReplayCancel(BaseModel):
+    #: Whether to put the unreplayed originals back. Defaults to the
+    #: non-destructive answer: a cancel that silently dropped the rest of the
+    #: scene would be the one mistake this flow exists to make recoverable.
+    restore: bool = True
 
 
 class Dismiss(BaseModel):

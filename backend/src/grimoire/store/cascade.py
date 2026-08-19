@@ -1,6 +1,11 @@
 """Cascade post-delete: cut a scene at a post and undo what the scene wrote (#75).
 
-Two halves, and the second is the one that needed an argument.
+Two halves, and the second is the one that needed an argument. The second half
+has a second caller now — `revert_scene`, the reversal without the cut, which a
+retcon uses (#78): an edited post invalidates the extraction exactly as a
+removed one does, and both answers are "put back what this scene wrote, and let
+it be extracted again". Everything below about what is reverted and what is
+deliberately left alone is true of both entry points.
 
 **The cut.** `scenes.delete_from` slices the transcript at an index and takes
 everything from there on. That much is mechanical.
@@ -99,6 +104,7 @@ delegates to is classified in its own right.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from . import (alternates, changes, chronicle, commitments, commits, journal,
                locks, plot, provenance, turnstate, undo)
@@ -162,6 +168,98 @@ def _revert_journalled(cid: str, sid: str) -> tuple[int, list[dict]]:
     return reverted, refused
 
 
+def _revert_writes(cid: str, sid: str, step: Callable) -> dict:
+    """Undo what this scene's absorb wrote, and report what happened.
+
+    The reversal half of `delete_from`, lifted out whole because a retcon (#78)
+    needs exactly it without the cut: editing a post inside an absorbed scene
+    invalidates the extraction the same way removing one does, and re-absorbing
+    over records the first pass already wrote is what duplicates a lore append
+    and adds a second beat to a thread.
+
+    `step` is the caller's guard — every call here is one that must not raise,
+    for the caller's own reason (a cut has already landed, or an edit has), so
+    the guard belongs to the caller and this function only decides the order.
+
+    Nothing here is gated on `meta.done`: every step is driven by what carries
+    the scene's id, so an un-absorbed scene reverts nothing by construction. The
+    ordering argument is `delete_from`'s and is written there.
+    """
+    reverted, refused = step("journal", lambda: _revert_journalled(cid, sid)) or (0, [])
+    report: dict = {"records": reverted, "refused": refused}
+    # Each on its own, so a garbled `plot.json` does not cost the chronicle
+    # record its deletion. A step that failed reports its count as zero and
+    # names itself in `failed`; a zero with no name beside it means there was
+    # nothing of this scene's there.
+    for name, fn, empty in (
+            ("chronicle", lambda: chronicle.forget(cid, sid), False),
+            ("plot_beats", lambda: plot.forget_scene(cid, sid), 0),
+            ("commitment_beats", lambda: commitments.forget_scene(cid, sid), 0),
+            ("changes", lambda: changes.forget_scene(cid, sid), 0),
+            ("citations", lambda: provenance.forget_scene(cid, sid), 0)):
+        result = step(name, fn)
+        report[name] = empty if result is None else result
+    return report
+
+
+def _guard(cid: str, sid: str, failed: list[str]) -> Callable:
+    """A `step` that records a failure instead of raising it.
+
+    One definition rather than one per caller: both of this module's entry
+    points reach a point past which nothing may raise — the cut has landed, or
+    the edit has — and both answer a step that could not run the same way,
+    which is to name it in `failed` and carry on.
+    """
+    def step(name: str, fn):
+        try:
+            return fn()
+        except Exception:  # the caller's write landed; this step did not
+            log.warning("cascade in %s/%s: %s failed", cid, sid, name, exc_info=True)
+            failed.append(name)
+            return None
+    return step
+
+
+def revert_scene(cid: str, sid: str) -> dict:
+    """Undo what this scene's absorb wrote, leaving the transcript alone (#78).
+
+    The retcon counterpart to `delete_from`: an edited post makes the recorded
+    extraction describe a transcript that no longer exists, and the answer is
+    the same one a cut gets — put back what the absorb wrote, drop the
+    scene-tagged rows, and clear `done` so the scene can be extracted again.
+    What it deliberately leaves alone is everything `delete_from` leaves alone,
+    for the reasons this module's docstring gives, plus two more that are
+    specific to an edit rather than a cut:
+
+    - **The transcript.** The caller has already written it. This function is
+      the second half of a retcon and never the whole of one.
+    - **The reroll sidecar.** A cut can strand a set of variants of a
+      generation that is no longer there; an edit cannot — the generation is
+      still in place, and `alternates.reconcile` (which the retcon runs beside
+      the edit, exactly as `PUT /messages/{index}` does) is what keeps the set
+      in step with the text.
+
+    Raises `scenes.SceneNotFound` for an unknown scene, and nothing else: past
+    the un-absorb the same rule holds as after a cut — a step that could not run
+    is named in `failed` rather than raised, because a half-reverted scene whose
+    request 500s is the state nobody can act on.
+    """
+    with locks.campaign_lock(cid):
+        scene = scenes_read.read_scene(cid, sid)       # raises SceneNotFound
+        was_absorbed = str(scene["meta"].get("done", "")).lower() == "true"
+        failed: list[str] = []
+        step = _guard(cid, sid, failed)
+        report = {"was_absorbed": was_absorbed, **_revert_writes(cid, sid, step)}
+        if was_absorbed:
+            # LAST, for `delete_from`'s reason: this is the flag that says the
+            # scene may be reviewed again, and clearing it before the records it
+            # summarises have gone would invite a re-absorb onto half-reverted
+            # state.
+            step("unabsorb", lambda: scenes_write.unmark_absorbed(cid, sid))
+        report["failed"] = failed
+        return report
+
+
 def delete_from(cid: str, sid: str, index: int) -> dict:
     """Delete the post at `index` and everything after it, then undo what the
     scene wrote. Returns a report of what happened.
@@ -220,16 +318,7 @@ def delete_from(cid: str, sid: str, index: int) -> dict:
 
         # ---- past here the transcript is gone, so nothing may raise ----
         failed: list[str] = []
-
-        def step(name: str, fn):
-            """Run one cleanup, or record that it could not run."""
-            try:
-                return fn()
-            except Exception:  # the cut landed; this step did not
-                log.warning("cascade delete in %s/%s: %s failed", cid, sid, name,
-                            exc_info=True)
-                failed.append(name)
-                return None
+        step = _guard(cid, sid, failed)
 
         # The transient-state ledger from the cut on (#120): its entries are
         # keyed by post index, so every one at or past the cut describes a post
@@ -264,21 +353,8 @@ def delete_from(cid: str, sid: str, index: int) -> dict:
         # `_revert_journalled` catches per row, so this guard is for the journal
         # READ that feeds it — a garbled journal.json must not sink the sweep
         # below, which is what covers the same writes when the history cannot.
-        reverted, refused = step("journal", lambda: _revert_journalled(cid, sid)) or (0, [])
         report = {"index": index, "removed": removed, "was_absorbed": was_absorbed,
-                  "records": reverted, "refused": refused}
-        # Each on its own, so a garbled `plot.json` does not cost the chronicle
-        # record its deletion. A step that failed reports its count as zero and
-        # names itself in `failed`; a zero with no name beside it means there was
-        # nothing of this scene's there.
-        for name, fn, empty in (
-                ("chronicle", lambda: chronicle.forget(cid, sid), False),
-                ("plot_beats", lambda: plot.forget_scene(cid, sid), 0),
-                ("commitment_beats", lambda: commitments.forget_scene(cid, sid), 0),
-                ("changes", lambda: changes.forget_scene(cid, sid), 0),
-                ("citations", lambda: provenance.forget_scene(cid, sid), 0)):
-            result = step(name, fn)
-            report[name] = empty if result is None else result
+                  **_revert_writes(cid, sid, step)}
         if was_absorbed:
             step("unabsorb", lambda: scenes_write.unmark_absorbed(cid, sid))
         report["failed"] = failed

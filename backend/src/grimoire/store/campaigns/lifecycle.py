@@ -342,6 +342,60 @@ def _prune_duplicate_files(root: Path, wroot: Path) -> None:
             base.rmdir()
 
 
+def fork_campaign(cid: str, name: str) -> str:
+    """Copy a campaign whole, under a new name. Returns the new id (#72).
+
+    The cheap half of campaign fork, and the half #80 needs: a copy of the
+    campaign as it stands *now*, so an expensive or destructive thing — a retcon
+    replay, which regenerates one model turn per turn it redoes — can be done to
+    the copy with the original left untouched. Forking from an earlier turn is a
+    different feature and is not this one: play state is written at absorb and
+    only some of it carries a scene id, so truncating a copy back to a scene
+    boundary approximates the rest, and an approximation is not what "fork
+    before you break something" is for.
+
+    A campaign directory is self-contained — `campaign.md`, `sync.md`, the
+    manifest, `scenes/`, the materialized overlay records and every play-state
+    file beside them — so the copy is `copytree` plus a rewritten `campaign.md`.
+    `world` is copied verbatim on purpose: the fork is a fork of the campaign,
+    not of the world, and both point at the same world the same way, so the
+    overlay bases in `sync.md` keep meaning what they meant.
+
+    `parent` records where it came from. Nothing reads it yet — the lineage
+    tree is the rest of #72 — but it is written now because it can only be
+    recorded here: after the fact there is no way to tell a copy from an
+    original.
+
+    Both locks, through `locks.hold_all`, which sorts: the source must not be
+    written while it is being copied, and the destination must not be visible to
+    another process before its `campaign.md` says what it is. Two campaign locks
+    at once have exactly one legal shape and this is it — see `store/locks.py`,
+    and #267 for what the other shape cost.
+    """
+    mp = paths.campaign_meta_path(cid)
+    if not mp.exists():
+        raise paths.CampaignNotFound(cid)
+    ensure_home()
+    new_cid = uniquify(slugify(name), lambda c: paths.campaign_root(c).exists())
+    with locks.hold_all([cid, new_cid]):
+        # Re-read under the lock: the source's frontmatter is what the copy
+        # inherits every field of, and reading it outside would let a rename or
+        # a response-setting write land between the read and the copy, giving
+        # the fork one file's version of the campaign and the tree's another.
+        meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+        shutil.copytree(paths.campaign_root(cid), paths.campaign_root(new_cid))
+        now = now_iso()
+        meta = {**meta, "name": name, "created": now, "updated": now, "parent": cid}
+        # LAST inside the hold. `campaign.md` is what makes a directory a
+        # campaign to `list_campaigns` (`create_campaign` holds the lock across
+        # publication for this reason), and the one copytree just wrote still
+        # carries the SOURCE's name -- so a reader arriving in the gap would
+        # list two campaigns with one name, and a writer could act on the copy
+        # believing it was the original.
+        atomic.write_text(paths.campaign_meta_path(new_cid), dump_frontmatter(meta, body))
+    return new_cid
+
+
 def rename_campaign(cid: str, name: str) -> None:
     mp = paths.campaign_meta_path(cid)
     if not mp.exists():
