@@ -123,7 +123,7 @@ function pinRow(over: Partial<any> = {}) {
 }
 
 const NO_SCENE_BREAK = {
-  verdict: "" as const, reason: "", title: "",
+  verdict: "" as const, reason: "", title: "", stale: false,
   posts: 0, score: 0, signals: [], every: 20, due: false,
 };
 const EMPTY_BRIEFING = {
@@ -182,6 +182,34 @@ test("switched off, the panel says so instead of reporting a score of zero", asy
   await screen.findByText(/Turned off/);
 });
 
+test("a forced answer is shown even with the automatic cadence switched off", async () => {
+  // Ask now works when `every` is 0 — that is the whole point of a button that
+  // says now — so an off-notice that outranked the verdict meant the player
+  // pressed it, paid for a call, and watched the panel go on saying "Turned off".
+  (api.getSceneBreak as any).mockResolvedValue({ ...NO_SCENE_BREAK, every: 0, posts: 400 });
+  (api.askSceneBreak as any).mockResolvedValue({ ...BREAK_YES, every: 0, asked: true });
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /ask now/i }));
+  await screen.findByText("The ledger changed hands and both sides walked away.");
+});
+
+test("a proposal about deleted posts is shown, but not as current", async () => {
+  (api.getSceneBreak as any).mockResolvedValue({ ...BREAK_YES, stale: true });
+  renderInspector();
+  await screen.findByText("The ledger changed hands and both sides walked away.");
+  await screen.findByText(/may no longer apply/i);
+});
+
+test("a read that failed is not a detector that found nothing", async () => {
+  // "Nothing to suggest yet" is an assertion about the scene. Rendering it out
+  // of a failed GET tells the player it looked and found nothing when it never
+  // got an answer at all.
+  (api.getSceneBreak as any).mockRejectedValue(new Error("offline"));
+  renderInspector();
+  await screen.findByText(/could not be read/i);
+  expect(screen.queryByText(/Nothing to suggest yet/)).toBeNull();
+});
+
 test("Ask now forces a question and installs whatever comes back", async () => {
   (api.askSceneBreak as any).mockResolvedValue({ ...BREAK_YES, asked: true });
   renderInspector();
@@ -209,6 +237,35 @@ test("Not here goes to the server, because the watermark it moves lives there", 
   fireEvent.click(await screen.findByRole("button", { name: /not here/i }));
   await waitFor(() => expect(api.dismissSceneBreak).toHaveBeenCalledWith("c", "s"));
   await screen.findByText(/Nothing to suggest yet/);
+});
+
+test("a read issued before Ask now cannot blank the verdict it just landed", async () => {
+  // The scene-select effect's GET can be in flight when the button commits, and
+  // resolving second would install a pre-write answer over the one the player
+  // just paid for — with nothing later scheduled to put it back.
+  let releaseRead: ((v: unknown) => void) | undefined;
+  (api.getSceneBreak as any).mockImplementationOnce(
+    () => new Promise((resolve) => { releaseRead = resolve; }));
+  (api.askSceneBreak as any).mockResolvedValue({ ...BREAK_YES, asked: true });
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /ask now/i }));
+  await screen.findByText("The ledger changed hands and both sides walked away.");
+  await act(async () => { releaseRead!(NO_SCENE_BREAK); });
+  expect(screen.getByText("The ledger changed hands and both sides walked away."))
+    .toBeInTheDocument();
+});
+
+test("both break buttons are held while a question is out on this scene", async () => {
+  // What makes ordering the panel's own writes against each other unnecessary:
+  // they cannot overlap on one record. A write arriving from somewhere else is
+  // the server's to refuse, and `_break_commit` does.
+  (api.getSceneBreak as any).mockResolvedValue(BREAK_YES);
+  (api.askSceneBreak as any).mockReturnValueOnce(new Promise(() => {}));
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /ask now/i }));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /asking/i })).toBeDisabled());
+  expect(screen.getByRole("button", { name: /not here/i })).toBeDisabled();
 });
 
 test("switching scenes never shows the previous scene's proposal", async () => {

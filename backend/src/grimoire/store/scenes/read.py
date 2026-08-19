@@ -219,9 +219,19 @@ def get_rolling_summary(cid: str, sid: str) -> dict:
 def scene_break_fields(meta: dict) -> dict:
     """The scene-break watermark and proposal out of a scene's frontmatter (#84).
 
-    `{"at", "locs", "times", "verdict", "reason", "title"}` — the transcript
-    length, the location moves and the clock advances the last confirmation
-    call already covered, then what it answered.
+    `{"at", "locs", "times", "digest", "verdict", "reason", "title"}` — the
+    transcript length, the location moves and the clock advances the last
+    confirmation call already covered, `rolling_summary.covered_digest` over
+    that prefix as it stood then, and what the call answered.
+
+    The digest is what makes the three counts mean anything, and it is the same
+    answer `rolling_summary_fields` reaches for one line above: the transcript
+    is NOT append-only. A reroll replaces the trailing reply, `edit_message`
+    rewrites one in place, and `delete_from` shortens it — so "we have already
+    asked about the first thirty posts" is not a fact a count can carry. Without
+    it a scene rewound from thirty posts to ten and played back up to
+    twenty-five reports nothing new for fifteen posts of real story, and nothing
+    in the record can notice.
 
     Takes a `meta` for `rolling_summary_fields`' reason, and it is the same
     reason: reading the file a second time pairs one snapshot's transcript with
@@ -240,6 +250,7 @@ def scene_break_fields(meta: dict) -> dict:
     return {"at": _count(meta.get("break_at", "")),
             "locs": _count(meta.get("break_locs", "")),
             "times": _count(meta.get("break_times", "")),
+            "digest": meta.get("break_digest", ""),
             "verdict": meta.get("break_verdict", ""),
             "reason": meta.get("break_reason", ""),
             "title": meta.get("break_title", "")}

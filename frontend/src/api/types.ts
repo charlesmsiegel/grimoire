@@ -649,6 +649,11 @@ export type SceneBreakSignal = { kind: string; weight: number; detail: string };
 export type SceneBreak = {
   verdict: "" | "yes" | "no";
   reason: string; title: string;
+  /** The answer describes posts that have since been rerolled, edited or cut,
+   *  so it reasoned about a transcript that no longer exists. The prose is
+   *  still shown — it is the best thing anyone has — it just stops claiming to
+   *  be about the scene on screen. A scene with no answer is never stale. */
+  stale: boolean;
   posts: number; score: number; signals: SceneBreakSignal[];
   every: number; due: boolean;
 };
