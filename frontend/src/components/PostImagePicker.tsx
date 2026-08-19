@@ -18,11 +18,14 @@ type Group = { key: string; label: string; images: { name: string; url: string }
 /** A stored name derived from an uploaded file's own name.
  *
  *  Deliberately narrower than what the server accepts: anything outside letters,
- *  digits, `_` and `-` becomes a hyphen, which is a strict subset of
- *  `store.campaign_images.addressable` and so can never be refused for its
- *  characters. Case and script survive, because the name is also the alt text —
- *  "Coast-at-Dusk" reads as something in a text-only export, and `image-3` does
- *  not. */
+ *  digits, `_` and `-` becomes a hyphen. Case and script survive, because the
+ *  name is also the alt text — "Coast-at-Dusk" reads as something in a
+ *  text-only export, and `image-3` does not.
+ *
+ *  This does not try to be the server's rule. It cannot be: `assets` reserves
+ *  names of its own (`promote-tmp`), and a client copy of that list is a rule
+ *  in two places, which is how the two come to disagree. The server has the
+ *  last word and the picker shows what it says. */
 export function nameFromFile(filename: string): string {
   const stem = filename.replace(/\.[^.]*$/, "");
   const slug = stem.replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/-{2,}/g, "-")
@@ -53,9 +56,9 @@ export function insertion(name: string, url: string): string {
   // answers with a 304.
   //
   // Neither half needs escaping. `]` would close the alt text and `)` the
-  // destination, and a name can contain neither: `assets._addressable_name`
-  // refuses the glob metacharacters (`[`, `]`) and
-  // `store.campaign_images.addressable` the rest of the link punctuation.
+  // destination, and a name can contain neither: `store.campaign_images
+  // .addressable` refuses both the link punctuation and (through
+  // `assets.storable`) the glob metacharacters `[` and `]`.
   return `![${name}](${url})`;
 }
 
@@ -66,7 +69,11 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
   onInsert: (markdown: string) => void; onClose: () => void;
 }) {
   const [groups, setGroups] = useState<Group[] | null>(null);
-  const [library, setLibrary] = useState<CampaignImage[]>([]);
+  // `null` until a listing has actually come back. An upload names itself by
+  // stepping around the names already there, so uploading against a listing
+  // that FAILED would propose a name that is taken and quietly replace somebody
+  // else's image — an empty array cannot tell "no images" from "did not ask".
+  const [library, setLibrary] = useState<CampaignImage[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // Bumped after every upload and removal so the effect below re-reads the
@@ -123,6 +130,8 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
             })),
           })));
       } catch (err: any) {
+        // `library` is deliberately left as it was — null on a first failure,
+        // which is what closes the Add control (see the state above).
         if (live) { setGroups([]); setError(err?.detail ?? String(err)); }
       }
     })();
@@ -135,7 +144,7 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
     setError(null);
     try {
       await api.putCampaignImage(
-        cid, freeName(nameFromFile(file.name), library.map((i) => i.name)), file);
+        cid, freeName(nameFromFile(file.name), (library ?? []).map((i) => i.name)), file);
       setRevision((r) => r + 1);
     } catch (err: any) {
       setError(err?.detail ?? String(err));
@@ -225,9 +234,10 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
             // `image/*`, which offers AVIF and BMP the server refuses.
             <>
               <label className="field-hint" htmlFor="campaign-library-file">
-                {busy ? "Working…" : "Add an image"}
+                {busy ? "Working…" : library === null ? "Add an image (unavailable)"
+                                                      : "Add an image"}
               </label>
-              <input id="campaign-library-file" type="file" disabled={busy}
+              <input id="campaign-library-file" type="file" disabled={busy || library === null}
                      accept="image/png,image/jpeg,image/gif,image/webp"
                      onChange={(e) => { void upload(e.target.files?.[0]); e.target.value = ""; }} />
             </>
