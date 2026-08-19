@@ -135,6 +135,24 @@ test("a reply left waiting is still waiting after a reload", async () => {
   expect(screen.queryByText("Replay next turn")).toBeNull();
 });
 
+test("a turn holds the transcript's write latch for the whole request", async () => {
+  // A replayed turn is a generation into the scene on screen; while one runs,
+  // the composer, the gutter and Retry must not offer to start a second.
+  (api.getReplay as any).mockResolvedValue(SESSION);
+  let held = 0;
+  const latch = () => { held += 1; return () => { held -= 1; }; };
+  let land: () => void = () => {};
+  (api.replayTurn as any).mockReturnValue(new Promise<void>((res) => { land = res; }));
+  render(<ReplayPanel cid="c1" sid="s1" startAt={null} onStartHandled={noop}
+                      onChanged={noop} onForked={noop} latch={latch} />);
+  await act(async () => {});
+
+  fireEvent.click(screen.getByText("Replay next turn"));
+  await waitFor(() => expect(held).toBe(1));
+  await act(async () => { land(); });
+  await waitFor(() => expect(held).toBe(0));
+});
+
 test("a turn that fails mid-stream is reported, not counted as run", async () => {
   // `streamPost` resolves normally on an error frame — that is how a failed
   // generation reports itself — so ignoring frames reads failure as success and

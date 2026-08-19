@@ -410,8 +410,13 @@ def cancel(cid: str, restore: bool = True) -> dict:
         sid = rec.get("scene", "")
         restored = 0
         if restore:
-            mark = int(rec.get("mark", 0))
             landed = len(scenes_read.read_scene(cid, sid)["messages"])
+            # Clamped, because `mark` is this store's memory of a transcript
+            # somebody else may have shortened since -- the gutter's cut is one
+            # click away and takes no notice of a running replay. Past the end,
+            # `delete_from` would raise IndexError out of a cancel whose whole
+            # job is to be the way back.
+            mark = min(int(rec.get("mark", 0)), landed)
             if mark < landed:
                 # Ahead of the truncation, like every other fence in this store:
                 # the scene is un-absorbed for the walk's duration, so a review
@@ -424,12 +429,21 @@ def cancel(cid: str, restore: bool = True) -> dict:
                 # truncation is not the whole of a truncation anywhere else in
                 # this store, and it is not here either. The transient-state
                 # ledger would otherwise keep entries at indices the restored
-                # originals now occupy, and the reroll sidecar would be left
+                # originals now occupy, and the reroll sidecar could be left
                 # anchored at a generation that has just been deleted, offering
                 # a discarded replay's takes as alternates of the original
                 # reply. Best-effort, and after the cut on purpose: the
                 # transcript is already back, and neither sidecar is a reason to
                 # fail a cancel that has done the thing it was asked to do.
+                #
+                # The sidecar goes UNCONDITIONALLY, where `cascade.delete_from`
+                # first checks whether its cut moved the live variant. That
+                # check has nothing to weigh here: a parked set belongs to the
+                # trailing generation and the next post retires it (`stage`
+                # alone does that), so the only set that can exist when this
+                # runs is one parked on the uncommitted reply the truncation is
+                # removing. A conditional would be machinery for a state this
+                # walk cannot be in.
                 for clean in (lambda: turnstate.supersede(cid, sid, mark),
                               lambda: alternates.drop_scene(cid, sid)):
                     try:
