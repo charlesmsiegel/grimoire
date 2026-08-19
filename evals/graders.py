@@ -90,6 +90,58 @@ def grade_length(text: str, budget: dict, players: frozenset[str],
     ]
 
 
+# -------------------------------------------------------------- turn taking
+
+def grade_turn_taking(text: str, nomination: dict, players: frozenset[str],
+                      npc_names: list[str]) -> list[Check]:
+    """Did the reply hand the turn to the character the prompt nominated?
+
+    #82's question, asked one turn at a time. The failure the active-speaker
+    layer exists to prevent is a multi-turn shape — one character monologues
+    while three stand silent — but with a lead nominated on every turn, that
+    shape can only occur if single turns ignore the nomination. So the per-turn
+    question IS the whole question, and it is the half no offline check can
+    answer: `--live` is what these three score.
+
+    Speakers are canonicalized through the same `match_name` the nomination and
+    drift measurement use. A reply that stamps "Seraphine" for "Seraphine Vale"
+    is that character speaking, not a stranger who happens to be quiet.
+
+    `turns.lead_carries` short-circuits rather than failing alongside
+    `turns.lead_speaks`: "the lead said nothing at all" and "the lead was
+    out-talked by someone else" are different failures with different fixes,
+    and reporting the second whenever the first fires would make it impossible
+    for a counterexample to isolate either.
+    """
+    lead = nomination["lead"]
+    spoken: dict[str, int] = {}
+    for seg in scenes.split_reply(text, players):
+        who = seg["speaker"] and scenes.match_name(seg["speaker"], npc_names)
+        if who:
+            spoken[who] = spoken.get(who, 0) + 1
+
+    if not spoken.get(lead):
+        return [Check("turns.lead_speaks", False,
+                      f"nominated {lead!r} has no block in the reply; "
+                      f"it was carried by {sorted(spoken) or 'nobody'}")]
+
+    others = {n: c for n, c in spoken.items() if n != lead}
+    loudest = max(others.values(), default=0)
+    return [
+        Check("turns.lead_speaks", True),
+        Check("turns.lead_carries", spoken[lead] >= loudest,
+              f"nominated {lead!r} took {spoken[lead]} block(s) against "
+              f"{loudest} for " + ", ".join(
+                  sorted(n for n, c in others.items() if c == loudest))),
+        # "Do not give every character a turn" is the section's other
+        # instruction, and the other half of the failure #82 names: four
+        # characters answering the same question in sequence is not turn-taking
+        # either, it is the monologue's mirror image.
+        Check("turns.some_stay_quiet", len(spoken) < len(npc_names),
+              f"all {len(npc_names)} present NPCs took a block"),
+    ]
+
+
 # ------------------------------------------------------------------ roll fence
 
 def grade_roll_fence(text: str, allowed_checks: set[str],

@@ -176,7 +176,10 @@ DOCS = pytest.mark.parametrize("doc", [
     # command. Two spots got found by reading the issue; this one only by
     # grepping for the shape.
     Path(__file__).parent / "fixtures" / "frozen_campaign" / "README.md",
-], ids=["claude-md", "readme", "frozen-campaign-readme"])
+    # The fourth was Windows-only throughout, and stayed that way for as long
+    # as it was not in this list: the rule reaches exactly the files named here.
+    REPO / "evals" / "README.md",
+], ids=["claude-md", "readme", "frozen-campaign-readme", "evals-readme"])
 UNIX_PY = re.compile(r"\.venv/bin/python")
 WINDOWS_PY = re.compile(r"\.venv[/\\]Scripts[/\\]python")
 NEARBY = 4      # lines either side: the same command, bullet, or code block
