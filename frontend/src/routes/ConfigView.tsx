@@ -29,7 +29,7 @@ const DRAFT_FIELDS = [
   "semantic_recall_depth", "semantic_recall_threshold",
   "system_prompt",
   "quote_color", "user_label", "assistant_label",
-  "rolling_summary_every", "scene_break_every",
+  "rolling_summary_every", "scene_break_every", "replay_fork_threshold",
   "backup_enabled", "backup_interval_hours", "backup_keep", "backup_dir",
   "theme",
 ] as const;
@@ -86,7 +86,7 @@ const SECTIONS: SectionDef[] = [
   { id: "transcript", group: "What you see", label: "Transcript",
     fields: ["quote_color", "user_label", "assistant_label"] },
   { id: "playing", group: "What you see", label: "While playing",
-    fields: ["rolling_summary_every", "scene_break_every"] },
+    fields: ["rolling_summary_every", "scene_break_every", "replay_fork_threshold"] },
   { id: "appearance", group: "What you see", label: "Appearance", fields: ["theme"] },
 ];
 const GROUPS = SECTIONS.reduce<string[]>(
@@ -844,6 +844,10 @@ export default function ConfigView() {
               well under one call per that many posts. It never ends or splits a scene: the
               answer is a suggestion in the inspector, and yours to take or wave off.
               <code>0</code> turns it off, panel and all.
+              A retcon replay re-runs every turn after the post you rewrote, one model
+              call each, so a long one is expensive in both money and waiting. Past this
+              many turns the transcript offers to fork the campaign first and replay in
+              the copy, leaving what you were playing untouched.
             </p>
             <div className="config-fields">
               <NumField id="cfg-rolling-every" label="Summarize the scene every"
@@ -854,6 +858,13 @@ export default function ConfigView() {
                         unit="posts" placeholder="20" caption="0 = off"
                         value={draft.scene_break_every}
                         onChange={(v) => edit("scene_break_every", v)} />
+              {/* A threshold, not a limit: nothing refuses a long replay, and
+                  both buttons are always offered. What this moves is where the
+                  transcript starts recommending the fork. */}
+              <NumField id="cfg-replay-fork" label="Offer to fork before replaying more than"
+                        unit="turns" placeholder="10" caption="0 = suggest it every time"
+                        value={draft.replay_fork_threshold}
+                        onChange={(v) => edit("replay_fork_threshold", v)} />
             </div>
           </>
         )}

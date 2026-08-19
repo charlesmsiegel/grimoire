@@ -91,6 +91,10 @@ export type Config = {
   backup_keep: string;
   /** Where archives are written; "" means `<data dir>/backups`. */
   backup_dir: string;
+  /** Model turns a retcon replay may redo before the transcript offers to fork
+   *  the campaign first (#80). A threshold, not a limit: "0" nudges every
+   *  replay rather than none. */
+  replay_fork_threshold: string;
 };
 /**
  * The subset of Config the Configuration page writes — the mirror of the
@@ -109,7 +113,8 @@ export type ConfigUpdate = Partial<Pick<Config,
   "embeddings_connection_id" | "embeddings_model" |
   "semantic_recall_depth" | "semantic_recall_threshold" |
   "prompt_layout_enabled" | "speaker_turn_taking" |
-  "backup_enabled" | "backup_interval_hours" | "backup_keep" | "backup_dir">>;
+  "backup_enabled" | "backup_interval_hours" | "backup_keep" | "backup_dir" |
+  "replay_fork_threshold">>;
 /** One archive written by `store/backups.py`. */
 export type BackupEntry = {
   name: string;
