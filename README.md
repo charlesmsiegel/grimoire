@@ -9,6 +9,25 @@ in a database or a cloud account: your stories are files you own.
 
 ---
 
+## A look at it
+
+[![A scene mid-play: the transcript, the cast rail, and the response controls](docs/screenshots/scene.png)](docs/screenshots/scene.png)
+
+*Playing a scene. The rail on the left carries who is present and what the
+campaign still owes; the composer below sets response length and opens the
+prompt inspector.*
+
+| A world | A character |
+|---|---|
+| [![A world's overview page, with record counts and a setup checklist](docs/screenshots/world-overview.png)](docs/screenshots/world-overview.png) | [![A character's world record, in the two-pane list/detail editor](docs/screenshots/character-editor.png)](docs/screenshots/character-editor.png) |
+| Characters, PCs, locations, lore and greetings — with a checklist of what the world still needs before it plays well. | Every record page is the same two-pane editor: pick on the left, read on the right, edit deliberately. |
+
+*Every screenshot here is captured against a throwaway store seeded with
+invented content — see [`docs/screenshots/README.md`](docs/screenshots/README.md)
+for why that is a rule and not a convenience.*
+
+---
+
 ## What it does
 
 Grimoire organizes roleplay the way a long-running campaign actually works,
@@ -163,6 +182,11 @@ scripts\windows\shutdown.ps1    # Windows
 
 ## First steps
 
+Grimoire opens on your campaigns — one row each, newest play first, with
+**Continue** picking up the scene you left:
+
+[![The campaigns home: one row per campaign, with a Continue button](docs/screenshots/campaigns.png)](docs/screenshots/campaigns.png)
+
 1. Open **Config** (top-right) and paste your **OpenRouter API key**. The
    status pill in the header turns to `CONNECTED`. Here you can also pick the
    model, theme, and the default system prompt.
@@ -242,9 +266,14 @@ npx vitest run
 npx tsc -b
 ```
 
-Project conventions and the frontend list/detail page pattern are documented in
-[`CLAUDE.md`](CLAUDE.md); the prompt template layout is in
-[`templates/README.md`](templates/README.md).
+Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to run the gate
+(`make check`), what each architecture guard is asking of you, and the privacy
+rule that governs everything committed here. Project conventions and the
+frontend list/detail page pattern are documented in [`CLAUDE.md`](CLAUDE.md);
+what the file store promises about atomicity and concurrency is in
+[`docs/store-guarantees.md`](docs/store-guarantees.md); the prompt template
+layout is in [`templates/README.md`](templates/README.md). Coding agents should
+read [`AGENTS.md`](AGENTS.md) first.
 
 Repository layout:
 

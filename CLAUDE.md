@@ -8,6 +8,14 @@ overrides) → the user-chosen path recorded in the bootstrap pointer
 page (Storage location); point it at a synced folder to share a library across
 devices.
 
+Three companion documents, so this file does not have to carry everything:
+`CONTRIBUTING.md` (how to run `make check`, and the guard/marker table),
+`docs/store-guarantees.md` (what the store promises about atomicity and the
+campaign lock, and what it deliberately does not), and `AGENTS.md` (a router
+for coding agents, which points back here rather than restating it). What each
+of them claims about *this* tree is held to the code by
+`backend/tests/test_docs_guard.py`.
+
 ## Privacy: real data — and references to it — never get committed
 
 This repo is public. `~/.grimoire` (wherever `store.home()` points) holds
