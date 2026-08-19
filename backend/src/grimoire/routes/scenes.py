@@ -32,16 +32,23 @@ log = logging.getLogger(__name__)
 
 @router.get("/campaigns/{cid}/scenes")
 def get_scenes(cid: str, limit: int | None = None, offset: int | None = None):
-    """Every scene in the campaign, newest-updated first.
+    """Every scene in the campaign, most-recently-updated first.
 
     With `limit`/`offset` (either, or both) the body is a slice of that same
-    listing instead — `offset` skips that many of the newest, `limit` caps what
+    listing instead — `offset` skips that many from the front, `limit` caps what
     follows. Sending neither returns the whole listing, which is what every
     caller of this route reads today.
 
     Paging does not make the read cheaper: the sort is over every scene, so the
     listing is built in full and then sliced. What it bounds is the response —
     one row per scene, growing for as long as the campaign is played (#216).
+
+    `offset` indexes a listing whose ORDER MOVES WITH PLAY: a turn rewrites its
+    scene's `updated`, which sends that scene to the front. So a reader walking
+    a live campaign page by page can see one scene twice and miss another, the
+    way any offset pager over a re-sorting list can. That is a real limit of the
+    parameter, not of this implementation — a client that cannot tolerate it
+    wants a cursor, which is #94's problem and deliberately not this route's.
     """
     limit, offset = _page_window(limit, offset)
     try:
@@ -816,7 +823,15 @@ def get_chronicle(cid: str, limit: int | None = None, offset: int | None = None)
     while the page itself still comes back ascending, unchanged.
 
     Sending neither parameter returns the newest `CHRONICLE_PAGE`, byte for byte
-    what this route returned before it could be paged (#216).
+    what this route returned before it could be paged (#216). `offset` on its
+    own therefore slides that same default-sized window back, rather than
+    returning everything after a skip.
+
+    The anchor is what moves: absorbing a scene appends a record and shifts
+    every offset by one, so a reader paging backwards across a campaign still
+    being played can see a record twice. Same caveat as `GET .../scenes`, and
+    the same answer — an index-anchored window (`GET .../scenes/{sid}`, which
+    takes `before`) is what does not drift.
     """
     limit, offset = _page_window(limit, offset)
     _campaign_root_or_404(cid)
