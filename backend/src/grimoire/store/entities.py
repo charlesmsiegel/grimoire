@@ -100,11 +100,25 @@ def list_entities(root: Path, kind: str) -> list[dict]:
     return out
 
 
-def _read_record(root: Path, kind: str, eid: str) -> tuple[dict, str]:
+def require_entity(root: Path, kind: str, eid: str) -> Path:
+    """Assert `kind`/`eid` names a real entity here; return the record's path.
+
+    One stat and no read, which is the point: the entity image routes gate on
+    this per request (#373), and reading the record to answer a question
+    `Path.exists` answers would put a file read, a frontmatter parse and a
+    token encode on every upload. Raises the same two exceptions the readers
+    here already raised inline -- the guard pair they were repeating, named
+    once, the same shape `characters.require_version` is for the actor surface.
+    """
     _check_kind(kind)
     p = _entity_path(root, kind, eid)
     if not safe_id(eid) or not p.exists():
         raise EntityNotFound(f"{kind}/{eid}")
+    return p
+
+
+def _read_record(root: Path, kind: str, eid: str) -> tuple[dict, str]:
+    p = require_entity(root, kind, eid)
     text = p.read_text(encoding="utf-8")
     meta, body = parse_frontmatter(text)
     # `tokens` beside `meta`, not inside it: `meta` is the frontmatter this

@@ -397,6 +397,23 @@ def entity_rev(cid: str, kind: str, eid: str) -> str | None:
     return entities.entity_hash(wroot_of(cid), kind, eid)
 
 
+def entity_root(cid: str, kind: str, eid: str) -> Path:
+    """Root whose `<kind>/<eid>.md` is the record this campaign reads.
+
+    The flat-record twin of `actor_root`, and it resolves the way `read_entity`
+    does rather than the way `_inherits_world` does: a *detached* record is one
+    the campaign holds itself, so its own copy answers before the question of
+    inheritance comes up at all. A tombstoned record resolves to the campaign,
+    where there is no file, so the caller's read raises its usual NotFound.
+    """
+    croot = croot_of(cid)
+    if _flat_path(croot, kind, eid).exists():
+        return croot
+    if _flat_ref(kind, eid) in deleted(cid):
+        return croot
+    return wroot_of(cid)
+
+
 def create_entity(cid: str, kind: str, name: str, body: str = "", keys: str = "",
                   owners: str = "", sd_prompt: str = "", fields: dict | None = None,
                   secrecy: str = "") -> str:

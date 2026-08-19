@@ -232,8 +232,55 @@ def _image_kind_or_404(kind: str) -> None:
         raise HTTPException(status_code=404, detail="unknown kind")
 
 
+def _world_entity_or_404(wid: str, kind: str, eid: str):
+    """The world root, once `kind`/`eid` are known to name a real entity.
+
+    Every *write* on the entity image surface goes through this (#373).
+    `assets.put_image` creates the directory it writes into, so an unchecked id
+    turned a typo into `locations/<typo>/assets/default/avatar.png`: bytes no
+    listing shows (`list_entities` enumerates the records that exist) and no
+    delete route can name, reported to the caller as a successful upload.
+
+    The reads stay ungated, the same split `common._world_char_version_or_404`
+    documents for the actor surface: they create nothing, they already answer
+    "no image" for an id that names nothing, and `GET .../images/avatar` is hit
+    once per tile per rendered grid. Honest about its reach, too: this refuses
+    an id that names nothing *now*, not one deleted between the check and the
+    write -- a guard against a typo, not against a race.
+    """
+    root = _world_root_or_404(wid)
+    try:
+        store.entities.require_entity(root, kind, eid)
+    except store.entities.UnknownKind:
+        raise HTTPException(status_code=404, detail="unknown kind")
+    except store.entities.EntityNotFound:
+        raise HTTPException(status_code=404, detail="entity not found")
+    return root
+
+
+def _campaign_entity_or_404(cid: str, kind: str, eid: str):
+    """The campaign root, once `kind`/`eid` are known to name a real entity.
+
+    Resolved through `overlay.entity_root`, not the campaign root: on a thin
+    campaign an unmaterialized record is still the world's file, so a
+    croot-only check would 404 every inherited entity -- which is all of them.
+    The root this *returns* is always the campaign's, because that is where a
+    write has to land. A tombstoned entity resolves to the campaign root, where
+    there is no record, so it is refused for the same reason a typo is.
+
+    Why gate at all, and why the reads here are left ungated: `_world_entity_or_404`.
+    """
+    root = _campaign_root_or_404(cid)
+    try:
+        store.entities.require_entity(store.overlay.entity_root(cid, kind, eid), kind, eid)
+    except store.entities.UnknownKind:
+        raise HTTPException(status_code=404, detail="unknown kind")
+    except store.entities.EntityNotFound:
+        raise HTTPException(status_code=404, detail="entity not found")
+    return root
+
+
 async def _entity_image_put(root, kind: str, eid: str, name: str, file: UploadFile):
-    _entity_kind_or_404(kind)
     data = await file.read()
     ext = _upload_image_ext(data)  # the bytes name the type, not `file.filename` (#321)
     try:
@@ -244,7 +291,6 @@ async def _entity_image_put(root, kind: str, eid: str, name: str, file: UploadFi
 
 
 def _entity_image_promote(root, kind: str, eid: str, name: str):
-    _entity_kind_or_404(kind)
     try:
         store.assets.promote_image(root, eid, "default", name, base=kind)
     except FileNotFoundError:
@@ -269,19 +315,21 @@ def get_world_entity_image(wid: str, kind: str, eid: str, name: str, request: Re
 
 @router.put("/worlds/{wid}/{kind}/{eid}/images/{name}")
 async def put_world_entity_image(wid: str, kind: str, eid: str, name: str, file: UploadFile = File(...)):
-    return await _entity_image_put(_world_root_or_404(wid), kind, eid, name, file)
+    return await _entity_image_put(_world_entity_or_404(wid, kind, eid), kind, eid, name, file)
 
 
 @router.delete("/worlds/{wid}/{kind}/{eid}/images/{name}")
 def delete_world_entity_image(wid: str, kind: str, eid: str, name: str):
-    _entity_kind_or_404(kind)
-    store.assets.delete_image(_world_root_or_404(wid), eid, "default", name, base=kind)
+    # Gated on the record, not on the image: removing an image that is already
+    # gone is the caller getting what they asked for, but removing one from an
+    # entity that does not exist is a typo worth reporting.
+    store.assets.delete_image(_world_entity_or_404(wid, kind, eid), eid, "default", name, base=kind)
     return {"ok": True}
 
 
 @router.post("/worlds/{wid}/{kind}/{eid}/images/{name}/promote")
 def promote_world_entity_image(wid: str, kind: str, eid: str, name: str):
-    return _entity_image_promote(_world_root_or_404(wid), kind, eid, name)
+    return _entity_image_promote(_world_entity_or_404(wid, kind, eid), kind, eid, name)
 
 
 # ---- campaign entity CRUD (generic; see the module docstring on ordering) ----
@@ -332,21 +380,21 @@ def get_campaign_entity_image(cid: str, kind: str, eid: str, name: str, request:
 
 @router.put("/campaigns/{cid}/{kind}/{eid}/images/{name}")
 async def put_campaign_entity_image(cid: str, kind: str, eid: str, name: str, file: UploadFile = File(...)):
-    return await _entity_image_put(_campaign_root_or_404(cid), kind, eid, name, file)
+    return await _entity_image_put(_campaign_entity_or_404(cid, kind, eid), kind, eid, name, file)
 
 
 @router.delete("/campaigns/{cid}/{kind}/{eid}/images/{name}")
 def delete_campaign_entity_image(cid: str, kind: str, eid: str, name: str):
-    _campaign_root_or_404(cid)
-    _entity_kind_or_404(kind)
+    _campaign_entity_or_404(cid, kind, eid)
+    # tombstone so a still-materialized world image doesn't show back through
+    # the overlaid read the moment the campaign's own copy is gone.
     store.overlay.delete_image(cid, eid, "default", name, base=kind)
     return {"ok": True}
 
 
 @router.post("/campaigns/{cid}/{kind}/{eid}/images/{name}/promote")
 def promote_campaign_entity_image(cid: str, kind: str, eid: str, name: str):
-    _campaign_root_or_404(cid)
-    _entity_kind_or_404(kind)
+    _campaign_entity_or_404(cid, kind, eid)
     try:
         store.overlay.promote_image(cid, eid, "default", name, base=kind)
     except FileNotFoundError:
