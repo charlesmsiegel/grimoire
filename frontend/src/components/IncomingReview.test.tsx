@@ -25,7 +25,10 @@ const SERAPHINE = {
   mine: { name: "Seraphine", version: "v2", card: card("Keeps two tide ledgers.", "You again.") },
 };
 
-/** A `new` item: the world has it and the campaign has no copy to weigh. */
+/** `new` is in the API's vocabulary and in the world-side counts, but no pass in
+ *  `incoming()` emits it today -- kept because the panel handles it rather than
+ *  assuming it away. The shape the backend really does send for "no campaign
+ *  copy" is ORPHAN below. */
 const MARA = {
   ref: { kind: "pcs", id: "mara" },
   status: "new",
@@ -34,6 +37,25 @@ const MARA = {
     persona: { name: "Mara", pronouns: "they/them", summary: "A cartographer.",
                description: "Draws the coast nobody asked for." },
   },
+};
+
+/** What `_actor_incoming` sends when the campaign's copy of a locked version is
+ *  gone: `mine_h` is None, which does not match the base either, so the item is
+ *  graded a *conflict* with no `mine` at all (`store/sync.py`). */
+const ORPHAN = {
+  ref: { kind: "characters", id: "winifred" },
+  status: "conflict",
+  world: { name: "Winifred", version: "v1", card: card("Harbourmaster.", "Ledger's shut.") },
+};
+
+/** A card change outside the prose fields this view compares -- a new greeting,
+ *  a tag, the embedded lorebook. Both sides render identically, so the panel has
+ *  to say why rather than let it read as no change. */
+const UNSEEN = {
+  ref: { kind: "characters", id: "seraphine" },
+  status: "conflict",
+  world: { name: "Seraphine", version: "v2", card: card("Keeps the tide ledger.", "You again.") },
+  mine: { name: "Seraphine", version: "v2", card: card("Keeps the tide ledger.", "You again.") },
 };
 
 beforeEach(() => {
@@ -66,10 +88,39 @@ test("lists each incoming item with its name, kind and status badge", async () =
 test("an entity update shows world and campaign bodies side by side", async () => {
   (api.getIncoming as any).mockResolvedValue([HARBOR]);
   await renderPanel();
-  expect(screen.getByText("From the world")).toBeInTheDocument();
-  expect(screen.getByText("In this campaign")).toBeInTheDocument();
+  // Name and Body, each in two columns.
+  expect(screen.getAllByText("From the world")).toHaveLength(2);
+  expect(screen.getAllByText("In this campaign")).toHaveLength(2);
   expect(screen.getByText("The harbour is blockaded.")).toBeInTheDocument();
   expect(screen.getByText("A busy port town.")).toBeInTheDocument();
+});
+
+test("an entity renamed in the world reads as a rename, not as an empty change", async () => {
+  (api.getIncoming as any).mockResolvedValue([{
+    ref: { kind: "locations", id: "saltmarch-harbor" }, status: "update",
+    world: { name: "Saltmarch Quay", body: "A busy port town." },
+    mine: { name: "Saltmarch Harbor", body: "A busy port town." },
+  }]);
+  await renderPanel();
+  const field = screen.getByRole("heading", { name: "Name" }).parentElement!;
+  expect(within(field).getByText("Saltmarch Quay")).toBeInTheDocument();
+  expect(within(field).getByText("Saltmarch Harbor")).toBeInTheDocument();
+  // The bodies match, but the change is not invisible, so no notice is due.
+  expect(screen.queryByText(/Every field below is identical/)).not.toBeInTheDocument();
+});
+
+test("a plot map is compared as text, with no name row to compare", async () => {
+  (api.getIncoming as any).mockResolvedValue([{
+    ref: { kind: "plotmap", id: "plotmap" }, status: "update",
+    world: { name: "Plot map", body: '{"threads": ["the blockade"]}' },
+    mine: { name: "Plot map", body: "{}" },
+  }]);
+  await renderPanel();
+  expect(screen.getByRole("button", { name: /Plot map · Plot map/ })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Name" })).not.toBeInTheDocument();
+  // JSON is not markdown: it renders verbatim rather than through the renderer.
+  const json = screen.getByText('{"threads": ["the blockade"]}');
+  expect(json.tagName).toBe("PRE");
 });
 
 test("a character conflict renders both columns as labelled card fields", async () => {
@@ -79,10 +130,11 @@ test("a character conflict renders both columns as labelled card fields", async 
   expect(screen.getByRole("heading", { name: "First message" })).toBeInTheDocument();
   expect(screen.getByText("Keeps the tide ledger.")).toBeInTheDocument();
   expect(screen.getByText("Keeps two tide ledgers.")).toBeInTheDocument();
-  // One column per side, per field — and the field both sides agree on is
-  // still shown, because a reader checking a conflict needs the whole card.
-  expect(screen.getAllByText("From the world")).toHaveLength(2);
-  expect(screen.getAllByText("In this campaign")).toHaveLength(2);
+  // One column per side, per compared field (name, description, first message)
+  // — and the field both sides agree on is still shown, because a reader
+  // checking a conflict needs the whole card.
+  expect(screen.getAllByText("From the world")).toHaveLength(3);
+  expect(screen.getAllByText("In this campaign")).toHaveLength(3);
   // No card field the card does not fill is framed and left blank.
   expect(screen.queryByRole("heading", { name: "Scenario" })).not.toBeInTheDocument();
 });
@@ -129,13 +181,83 @@ test("the selected row is the one whose detail is shown", async () => {
     "c1", [{ kind: "characters", id: "seraphine" }]));
 });
 
-test("accept all sends every ref in one call", async () => {
+test("accept all confirms first, naming what it would overwrite", async () => {
   (api.getIncoming as any).mockResolvedValue([HARBOR, SERAPHINE]);
   await renderPanel();
   fireEvent.click(screen.getByRole("button", { name: "Accept all" }));
+  // Nothing is sent on the first click: accepting deletes the campaign's copy
+  // and no journal entry stands behind that.
+  expect(api.acceptIncoming).not.toHaveBeenCalled();
+  expect(screen.getByText(/Replace 2 records in this campaign, discarding 1 the campaign changed itself/))
+    .toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Yes, accept all" }));
   await waitFor(() => expect(api.acceptIncoming).toHaveBeenCalledWith(
     "c1", [{ kind: "locations", id: "saltmarch-harbor" },
            { kind: "characters", id: "seraphine" }]));
+});
+
+test("cancelling a bulk action sends nothing", async () => {
+  (api.getIncoming as any).mockResolvedValue([HARBOR, SERAPHINE]);
+  await renderPanel();
+  fireEvent.click(screen.getByRole("button", { name: "Reject all" }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(api.rejectIncoming).not.toHaveBeenCalled();
+  expect(api.acceptIncoming).not.toHaveBeenCalled();
+  // and the bulk actions come back rather than leaving the header stuck
+  expect(screen.getByRole("button", { name: "Reject all" })).toBeInTheDocument();
+});
+
+test("a conflict with no campaign copy shows one column and says so", async () => {
+  (api.getIncoming as any).mockResolvedValue([ORPHAN]);
+  await renderPanel();
+  expect(screen.queryByText("In this campaign")).not.toBeInTheDocument();
+  // Not "both sides changed": there is no copy here to have changed.
+  expect(screen.getByText(/no copy of its own/)).toBeInTheDocument();
+  expect(screen.queryByText(/both sides changed/)).not.toBeInTheDocument();
+});
+
+test("a change outside the compared fields is named, not passed off as no change", async () => {
+  (api.getIncoming as any).mockResolvedValue([UNSEEN]);
+  await renderPanel();
+  expect(screen.getByText(/Every field below is identical/)).toBeInTheDocument();
+  expect(screen.getByText(/embedded lorebook/)).toBeInTheDocument();
+});
+
+test("an entity whose front matter moved names the front matter, not the card", async () => {
+  (api.getIncoming as any).mockResolvedValue([{
+    ref: { kind: "lore", id: "the-salt-pact" }, status: "update",
+    world: { name: "The Salt Pact", body: "Debts written in salt." },
+    mine: { name: "The Salt Pact", body: "Debts written in salt." },
+  }]);
+  await renderPanel();
+  expect(screen.getByText(/keys, owners, or secrecy/)).toBeInTheDocument();
+});
+
+test("a world-side rename is visible as a field, not just in the heading", async () => {
+  (api.getIncoming as any).mockResolvedValue([{
+    ref: { kind: "characters", id: "seraphine" }, status: "update",
+    world: { name: "Seraphine of the Tides", version: "v2",
+             card: { spec: "chara_card_v3", spec_version: "3.0",
+                     data: { name: "Seraphine of the Tides", description: "Keeps the tide ledger." } } },
+    mine: { name: "Seraphine", version: "v2", card: card("Keeps the tide ledger.", "") },
+  }]);
+  await renderPanel();
+  // Scoped to the Name field: the new name is in the heading as well, and the
+  // point of the test is that the OLD one is on screen to be compared against.
+  const field = screen.getByRole("heading", { name: "Name" }).parentElement!;
+  expect(within(field).getByText("Seraphine of the Tides")).toBeInTheDocument();
+  expect(within(field).getByText("Seraphine")).toBeInTheDocument();
+});
+
+test("a failed read can be retried from the banner", async () => {
+  (api.getIncoming as any).mockRejectedValueOnce(new Error("campaign not found"))
+                          .mockResolvedValueOnce([HARBOR]);
+  await renderPanel();
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByRole("button", { name: /Saltmarch Harbor/ })).toBeInTheDocument();
+  // the banner goes with the failure it reported
+  expect(screen.queryByText("campaign not found")).not.toBeInTheDocument();
 });
 
 test("a single item offers no bulk actions", async () => {
@@ -163,4 +285,24 @@ test("a failed accept reports it and leaves the row in place", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Accept" }));
   expect(await screen.findByText("world is gone")).toBeInTheDocument();
   expect(row(/Saltmarch Harbor/)).toBeInTheDocument();
+});
+
+test("a read for one campaign cannot land in another campaign's panel", async () => {
+  // The panel is mounted by a route that keeps its instance across a `cid`
+  // change, so this is the shape of the bug: a slow read for c1 settling after
+  // c2 is on screen.
+  let settleFirst: (v: unknown) => void = () => {};
+  (api.getIncoming as any)
+    .mockReturnValueOnce(new Promise((res) => { settleFirst = res; }))
+    .mockResolvedValueOnce([SERAPHINE]);
+
+  const { rerender } = render(<IncomingReview cid="c1" />);
+  rerender(<IncomingReview cid="c2" />);
+  await act(async () => { settleFirst([HARBOR]); });
+
+  expect(api.getIncoming).toHaveBeenNthCalledWith(1, "c1");
+  expect(api.getIncoming).toHaveBeenNthCalledWith(2, "c2");
+  // c1's answer is discarded rather than shown under c2.
+  expect(screen.queryByRole("button", { name: /Saltmarch Harbor/ })).not.toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: /Seraphine/ })).toBeInTheDocument();
 });

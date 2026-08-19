@@ -31,7 +31,8 @@ function Row({ row }: { row: WorldCampaignPending }) {
         ))}
       </span>
       <span className="field-hint">
-        {total === 0 ? "up to date" : "review in the campaign →"}
+        {total === 0 ? "up to date" : "review in the campaign"}
+        {total > 0 && <span aria-hidden> →</span>}
       </span>
     </Link>
   );
