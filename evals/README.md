@@ -8,7 +8,7 @@ pytest/vitest suites verify the plumbing around them — that the right variable
 reach the right template — but nothing verified the hypothesis itself, and a
 template edit takes effect live, with no restart and no code change.
 
-This suite closes that. It is not an eval framework; it is four pass/fail
+This suite closes that. It is not an eval framework; it is five pass/fail
 questions that need no human judgement and that the codebase already has a
 stake in:
 
@@ -18,21 +18,30 @@ stake in:
 | `roll-fence` | a roll-requiring prompt emits a closed, parseable ` ```roll ` fence naming a check and actor that exist |
 | `absorb` | absorb returns JSON with every required section, and it materializes into applicable edits |
 | `owned-lore` | lore owned by an absent character stays out of both the prompt and the reply |
+| `turn-taking` | with four NPCs cast and `speaker_turn_taking` on, the reply is carried by the nominated speaker rather than by whoever has been monologuing |
 
 ## Running it
 
+The venv's interpreter lives under `bin/` on macOS/Linux and `Scripts/` on
+Windows; both forms are spelled out here for the same reason the rest of the
+repo's docs do it, and `test_install_scripts.py` holds this file to it.
+
 ```sh
 # replay: score the checked-in recordings. Offline, no API key, deterministic.
-backend/.venv/Scripts/python.exe evals/run.py
+backend/.venv/bin/python evals/run.py
+backend\.venv\Scripts\python.exe evals\run.py
 
 # just one case
-backend/.venv/Scripts/python.exe evals/run.py --case roll-fence
+backend/.venv/bin/python evals/run.py --case roll-fence
+backend\.venv\Scripts\python.exe evals\run.py --case roll-fence
 
 # live: one real generation per case through your ACTIVE LLM connection
-backend/.venv/Scripts/python.exe evals/run.py --live
+backend/.venv/bin/python evals/run.py --live
+backend\.venv\Scripts\python.exe evals\run.py --live
 
 # ...and save each reply as that case's new baseline recording
-backend/.venv/Scripts/python.exe evals/run.py --live --record
+backend/.venv/bin/python evals/run.py --live --record
+backend\.venv\Scripts\python.exe evals\run.py --live --record
 ```
 
 Replay also runs under pytest (`backend/tests/test_evals.py`) — this repo has
@@ -121,8 +130,8 @@ section added to absorb is graded from the day it lands.
   model output by running `--live --record`.
 - Every other variant is a permanent hand-authored counterexample
   (`bloated`, `collapsed`, `no-fence`, `unknown-check`, `unclosed`,
-  `truncated`, `no-summary`, `laundered`, `leaked`) and is never touched by a
-  live run.
+  `truncated`, `no-summary`, `laundered`, `leaked`, `monologue`, `out-talked`,
+  `chorus`) and is never touched by a live run.
 
 A file in `recordings/` that no case claims fails `test_no_orphan_recordings` —
 renaming a case without deleting its old files would otherwise leave dead
@@ -137,6 +146,37 @@ fixtures scoring nothing.
 3. `python evals/run.py --case <id>` until the baseline passes and each
    counterexample fails **on the checks you wrote it to violate** — the set
    equality makes "it happened to fail on something else" a failure too.
+
+## `turn-taking` and issue #82
+
+This case exists to answer one open question, and it is worth saying which.
+`store/context/speaker.py` nominates a lead speaker for every group turn, so
+that four cast NPCs do not leave one monologuing while three stand silent.
+#82 asks whether that is enough, or whether the fallback — one model call per
+NPC, sequentially, each persisted before the next — has to be built after all.
+
+That is a question about whether the model *obeys* a nomination, so replay
+cannot answer it and neither can pytest. What they hold is the prompt side:
+`prompt.active_speaker` renders the whole section from the nomination the
+fixture computed and requires it verbatim in the assembled prompt, so the
+layer going away, or the flag plumbing breaking, is caught offline.
+
+The answer itself comes from:
+
+```sh
+backend/.venv/bin/python evals/run.py --live --case turn-taking
+backend\.venv\Scripts\python.exe evals\run.py --live --case turn-taking
+```
+
+The fixture is a four-hander mid-monologue: every NPC has spoken, at strictly
+different distances back, and the last three blocks all belong to one of them.
+A green `turns.*` says the nomination was followed on a turn shaped exactly
+like the failure, which is the per-turn form of the multi-turn failure #82
+describes — with a lead named every turn, the monologue can only re-form if
+single turns ignore it. A red one says the loop is back on the table.
+
+One run is an anecdote. Repeat it across a few connections and models before
+either closing #82 or paying for N calls a turn on the strength of it.
 
 Fixture content uses invented placeholder names only (Realm, Saltmarch,
 Seraphine Vale, Mara, Winifred). See CLAUDE.md: real world, campaign and

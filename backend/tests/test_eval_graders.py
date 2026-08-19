@@ -123,6 +123,71 @@ def test_length_ignores_words_inside_a_roll_fence():
         graders.grade_length(text, TERSE, PLAYERS, CAST))
 
 
+# -------------------------------------------------------------- turn taking
+
+CROWD = ["Seraphine Vale", "Mara", "Rowan", "Tobin"]
+NOMINATION = {"lead": "Tobin", "reason": "rotation", "spoken": True,
+              "silent_for": 5, "quiet": ["Rowan", "Mara", "Seraphine Vale"]}
+
+
+def _turns(text: str) -> set:
+    return failed(graders.grade_turn_taking(text, NOMINATION, PLAYERS, CROWD))
+
+
+def test_turns_accepts_a_reply_the_nominated_lead_carries():
+    text = ("Nobody moves for a moment.\n\n"
+            "**Tobin:** I have the tally sheet.\n\n"
+            "**Rowan:** That is the first true thing tonight.")
+    assert _turns(text) == set()
+
+
+def test_turns_flags_a_reply_the_lead_is_absent_from_and_reports_nothing_else():
+    """The short-circuit: with the lead silent there is no meaningful answer to
+    "was the lead out-talked", and reporting one anyway would make it
+    impossible for a counterexample to isolate either check."""
+    text = "**Seraphine Vale:** I moved the crates.\n\n**Mara:** So she says."
+    checks = graders.grade_turn_taking(text, NOMINATION, PLAYERS, CROWD)
+    assert [c.name for c in checks] == ["turns.lead_speaks"]
+    assert not checks[0].ok
+
+
+def test_turns_flags_a_lead_who_speaks_but_is_out_talked():
+    text = ("**Tobin:** I have the tally sheet \u2014\n\n"
+            "**Seraphine Vale:** He has a sheet. I have the crates.\n\n"
+            "**Seraphine Vale:** So put the lamp down.")
+    assert _turns(text) == {"turns.lead_carries"}
+
+
+def test_turns_flags_every_present_npc_taking_a_block():
+    """The monologue's mirror image, and the one the section names outright:
+    "Do not give every character a turn"."""
+    text = "\n\n".join(f"**{name}:** A line." for name in CROWD)
+    assert _turns(text) == {"turns.some_stay_quiet"}
+
+
+def test_turns_reads_a_shortened_label_as_the_character_it_names():
+    """Canonicalized through the same match_name the nomination itself uses: a
+    reply stamped "Seraphine" is Seraphine Vale speaking, not a stranger \u2014 so
+    she counts against the lead rather than being silently dropped."""
+    text = ("**Tobin:** I signed for two crates.\n\n"
+            "**Seraphine:** You did.\n\n"
+            "**Seraphine:** And you will sign the next one too.")
+    assert _turns(text) == {"turns.lead_carries"}
+
+
+def test_turns_flags_a_reply_of_pure_narration():
+    """Narration is speakerless, so nobody carried the turn \u2014 including the
+    character the prompt nominated."""
+    assert _turns("The fog closes in and the lamp gutters.") == {"turns.lead_speaks"}
+
+
+def test_turns_does_not_count_a_forged_player_block_as_a_character_taking_the_turn():
+    """split_reply routes a player-named block to the narrator rather than
+    storing a forged player line, and this grader inherits that: a reply that
+    answers for Winifred has still left the nominated NPC silent."""
+    assert _turns("**Winifred:** Fine, I will say it myself.") == {"turns.lead_speaks"}
+
+
 # ------------------------------------------------------------------- fences
 
 FENCE_OK = ('**Grimoire:** She sets her shoulder to the frame.\n\n'

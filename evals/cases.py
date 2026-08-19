@@ -428,6 +428,114 @@ def grade_owned_lore(ctx: dict, output: str) -> list[Check]:
       + graders.grade_containment(output, SECRET)
 
 
+# -------------------------------------------- case 5: group-scene turn taking
+
+#: The four NPCs in the room. Distinct first tokens on purpose: `speaker._named`
+#: drops a label two present actors answer to, so a shared first name would make
+#: the nomination read as unnamed and hide what this case measures.
+_CROWD = {
+    "Seraphine Vale": "Tall, sharp-eyed smuggler with salt-cracked hands.",
+    "Mara": "A fortune-teller who deals in secrets and never in change.",
+    "Rowan": "The pier's night watch, bored and armed.",
+    "Tobin": "A ledger clerk who counts crates nobody logged.",
+}
+#: Who the nomination must land on: the NPC whose last block is furthest back.
+#: Named so the case's own control check can say the transcript still has the
+#: shape this case was written around.
+_OVERDUE = "Tobin"
+
+#: The scene's model blocks, oldest first. Tobin speaks once and never again;
+#: Seraphine takes the last three — the monologue #82 describes, in the
+#: smallest transcript that gives every NPC a strictly different silence.
+_OPENING_ROUND = (
+    ("Tobin", "The manifest was short two crates when I signed it. I said so."),
+    ("Rowan", "He did say so. I was standing right there."),
+    ("Mara", "Saying so and doing something are different trades."),
+    ("Seraphine Vale", "The manifest is short because I made it short."),
+    ("Seraphine Vale", "Two crates went to a man who does not take no for an answer."),
+    ("Seraphine Vale", "And before anyone asks: no, I am not naming him."),
+)
+
+
+def build_turn_taking() -> dict:
+    """A four-hander mid-monologue, with `speaker_turn_taking` switched on.
+
+    The transcript makes the nomination UNIQUE rather than a tie-break: every
+    NPC has spoken, each at a different distance back, and the last three
+    blocks all belong to one of them. `speaker.nominate` therefore ranks on
+    silence alone — Tobin 5 blocks back, Rowan 4, Mara 3, Seraphine 0 — and
+    neither cast order nor the said-least tie-breaker gets a say. A fixture
+    that leaned on either would keep scoring green while quietly measuring a
+    different question the first time something was reordered.
+
+    The closing player post names nobody. Direct address outranks silence, so a
+    name there would make the nomination `"named"` and turn this into a case
+    about following an address rather than about rotation.
+    """
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    ids: dict[str, str] = {}
+    for name, description in _CROWD.items():
+        card = characters.blank_card(name)
+        card["data"].update({"description": description,
+                             "personality": "Speaks up when spoken to."})
+        ids[name], _ = characters.create_character(wroot, name, "default", card)
+    pier = entities.create_entity(wroot, "locations", "Saltmarch Pier",
+                                  "Fog-slick planks stacked with unlogged crates.",
+                                  keys="pier, dock")
+
+    cid = campaigns.create_campaign("Saltmarch Nights", wid)
+    croot = campaigns.campaign_root(cid)
+    pid, _ = pcs.create_pc(croot, "Winifred", [], persona=pcs.blank_persona("Winifred"))
+
+    sid = scenes.create_scene(cid, "Four at the Pier")
+    for name in _CROWD:
+        appearances.appear(cid, sid, "characters", ids[name], "default", "npc")
+    appearances.appear(cid, sid, "pcs", pid, "default", "player")
+    scenes.set_location(cid, sid, pier)
+
+    scenes.append_message(cid, sid, "user", "I set the crate down and ask who "
+                          "wants to explain the missing manifest.", speaker="Winifred")
+    for name, line in _OPENING_ROUND:
+        scenes.append_message(cid, sid, "assistant", line, speaker=name)
+    scenes.append_message(cid, sid, "user",
+                          "I put the lamp on the crate and wait for somebody else "
+                          "to fill the silence.", speaker="Winifred")
+
+    # The layer is off by default, so a case that forgot this would assemble a
+    # prompt carrying no Active speaker section at all and still pass its output
+    # checks by luck.
+    config.write_config(speaker_turn_taking="on")
+
+    npc_names = _npc_names(cid, sid)
+    nomination = context.speaker.nominate(npc_names,
+                                          scenes.read_scene(cid, sid)["messages"])
+    return {"cid": cid, "sid": sid, "npc_names": npc_names, "nomination": nomination,
+            "players": frozenset(appearances.player_names(cid, sid))}
+
+
+def grade_turn_taking(ctx: dict, output: str) -> list[Check]:
+    nomination = ctx["nomination"] or {}
+    return [
+        # Positive control FIRST, as in owned-lore: every check below reads the
+        # nomination, so a fixture that stopped producing the intended one would
+        # score some other question under this case's name.
+        Check("turns.control",
+              nomination.get("lead") == _OVERDUE
+              and nomination.get("reason") == "rotation",
+              f"fixture nominated {nomination or None!r}, wanted {_OVERDUE!r} by "
+              "rotation; the fixture, not the model, is broken"),
+        # The prompt half, and the only half replay can judge: render the
+        # section from the nomination the case computed and require it verbatim.
+        # Switch the flag off, empty the template, or break the variable feeding
+        # it, and this fails offline — the output checks below cannot, because a
+        # recording does not react to a template edit.
+    ] + graders.grade_prompt_section(ctx["messages"], "active_speaker",
+                                     "scene/sections/active_speaker.j2",
+                                     speaker=nomination or None)       + graders.grade_turn_taking(output, nomination, ctx["players"],
+                                  ctx["npc_names"])
+
+
 # ------------------------------------------------------------------- the suite
 
 def _scene_prompt(ctx: dict) -> list[dict]:
@@ -485,6 +593,25 @@ CASES: tuple[Case, ...] = (
              Recording("laundered", ("absorb.summary", "absorb.keywords",
                                      "absorb.bond_changes", "absorb.new_lore",
                                      "absorb.weather_edits"), "json"))),
+    Case(id="turn-taking",
+         hypothesis="in a four-hander with turn-taking on, the reply is carried "
+                    "by the nominated speaker rather than by whoever has been "
+                    "monologuing, and not every present NPC gets a block",
+         build=build_turn_taking, prompt=_scene_prompt, grade=grade_turn_taking,
+         recordings=(
+             Recording(BASELINE),
+             # The failure #82 exists for: the nomination is ignored and the
+             # character who took the last three blocks takes a fourth. The
+             # lead says nothing, so `turns.lead_carries` short-circuits and
+             # only `lead_speaks` is reported.
+             Recording("monologue", ("turns.lead_speaks",)),
+             # The lead does speak, and first — but is out-talked by the hog,
+             # which is a different failure and must be reported as one.
+             Recording("out-talked", ("turns.lead_carries",)),
+             # The mirror image: everyone answers, in sequence. The lead leads
+             # and carries as many blocks as anyone, so this isolates the
+             # "do not give every character a turn" half on its own.
+             Recording("chorus", ("turns.some_stay_quiet",)))),
     Case(id="owned-lore",
          hypothesis="lore owned by an absent character stays out of both the "
                     "assembled prompt and the reply; a gm-only entry stays out "
