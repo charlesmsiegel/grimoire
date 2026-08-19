@@ -1,8 +1,9 @@
 """Shared helpers for the route modules.
 
 Dependency-injection providers, the pydantic-version shim, the response-scope
-read/write pair, image serving, the 404 guards every domain module reuses, and
-the stale-write precondition every record editor shares (#35). This module
+read/write pair, image serving, the 404 guards every domain module reuses, the
+opt-in page window the growing list routes share (#216), and the stale-write
+precondition every record editor shares (#35). This module
 holds no routes and imports no sibling route module, so it is always safe to
 import from one.
 """
@@ -473,6 +474,45 @@ def _display_name_or_400(name: str) -> str:
     if not cleaned.isprintable():
         raise HTTPException(status_code=400, detail="name must be a single line")
     return cleaned
+
+
+# ---- opt-in paging on the list routes that grow with play (#216) ----
+def _page_window(limit: int | None, offset: int | None) -> tuple[int | None, int]:
+    """An opt-in `limit`/`offset` pair, range-checked and normalized, or a 400.
+
+    Both are optional and both default to "the whole listing", so a route that
+    adopts this returns exactly what it returned before to every caller that
+    sends neither -- which is what lets these land without touching `client.ts`.
+
+    Shared rather than repeated so the routes that take a page cannot drift into
+    separate dialects of it. The rule, on all of them: `offset` skips that many
+    items from the front of the order the route documents, and `limit` caps how
+    many follow. `GET /campaigns/{cid}/chronicle` is the one whose documented
+    order is not the order it prints -- see that route.
+
+    Checked BEFORE the route looks for its campaign, matching
+    `GET /campaigns/{cid}/scenes/{sid}`. FastAPI validates the query TYPES ahead
+    of the handler, so `?limit=abc` is a 422 whatever the campaign is; a
+    hand-written range check that deferred to the 404 would make `limit=abc` and
+    `limit=0` answer differently for the same request.
+    """
+    if limit is not None and limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be at least 1")
+    if offset is not None and offset < 0:
+        raise HTTPException(status_code=400, detail="offset must not be negative")
+    return limit, offset or 0
+
+
+def _page_of(rows: list, limit: int | None, offset: int) -> list:
+    """`rows` narrowed to the window `_page_window` returned. `limit` None: no cap.
+
+    Deliberately takes the built list rather than a callback that could build
+    less: these listings are sorted before they are paged, so every row has to
+    exist before any row can be dropped. What a page bounds is the RESPONSE --
+    and, where the per-row work outlives the sort (`GET /changes` renders a diff
+    per field), whatever the route does after this call.
+    """
+    return rows[offset:] if limit is None else rows[offset:offset + limit]
 
 
 # ---- 404 guards and other lookups shared by worlds and campaigns ----
