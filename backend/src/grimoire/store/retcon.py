@@ -64,7 +64,6 @@ the one thing a retcon must not do on its own.
 from __future__ import annotations
 
 from . import changes, chronicle, commitments, commits, plot, provenance, scene_ids
-from .absorb import conflicts
 from . import alternates, cascade, locks, turnstate
 from .scenes import read as scenes_read, write as scenes_write
 
@@ -141,13 +140,20 @@ def _scene_of(rows: dict, key: str) -> str:
     return scene if isinstance(scene, str) else ""
 
 
-#: Kinds whose `before` and `after` are the same value in the same shape — the
-#: record's own text, or a rendering of it that both sides share — so the two
-#: can be compared directly. `conflicts.MERGEABLE` is the same idea from the
-#: other end (what a reviewer may paste back into the field), plus the two
-#: relationship kinds, whose `before`/`after` are both `_render_feeling` output
-#: or both a bare bond type.
-_COMPARABLE: frozenset[str] = conflicts.MERGEABLE | frozenset({"relationship", "bond"})
+#: Kinds whose `after` REPLACES the stored value, so `before` and `after` are
+#: two answers to one question and differing is disagreeing. A state body, a
+#: card field, a feeling and a bond type are each written whole.
+#:
+#: Deliberately NOT `conflicts.MERGEABLE`, which this was written from and which
+#: is one kind wider: a `lore` row's `after` is its `before` plus an appended
+#: paragraph (`materializer`), so it differs from what is stored every single
+#: time and a comparison here would badge every lore row a later scene had
+#: touched. Appending is not disagreeing, and no string comparison can tell
+#: whether the paragraph an older scene wants to add contradicts one a later
+#: scene already added — so this claims nothing about lore, which is the same
+#: silence it keeps for a fact or a weather axis.
+_COMPARABLE: frozenset[str] = frozenset({
+    "character_state", "group_state", "authored", "relationship", "bond"})
 
 #: Kinds whose disagreement is a STATUS, not a text. A plot row's `before` is
 #: `conflicts.plot_line` — a rendering of the thread's status plus its last beat
@@ -164,15 +170,16 @@ def _changed(edit: dict, threads: dict, promises: dict) -> bool:
 
     Three answers, and the third one is the point of the split:
 
-    - A **comparable** kind is compared as text. `before` is the record's value
-      as `materialize` read it, so equality means the fresh extraction
-      re-derived what is already there — a re-reading that agrees with the
-      record contradicts nobody, whoever wrote it.
+    - A **comparable** kind is compared as text: one whose apply REPLACES the
+      stored value, so `before` and `after` are two answers to one question.
+      Equality means the fresh extraction re-derived what is already there — a
+      re-reading that agrees with the record contradicts nobody, whoever wrote
+      it.
     - A **status** kind is compared on its status alone, for the reason
       `_STATUS_KINDS` gives.
-    - Everything else — a fact, a weather axis, a dossier, a sheet, a record
-      this scene would CREATE — has no two values in one shape to compare, so
-      nothing is claimed. `fact_line` and `weather`'s rows render a fingerprint
+    - Everything else — a lore append, a fact, a weather axis, a dossier, a
+      sheet, a record this scene would CREATE — has no two comparable answers,
+      so nothing is claimed. `fact_line` and `weather`'s rows render a fingerprint
       into `before` that `after` was never in the format of; comparing those
       would manufacture a disagreement out of a formatting difference, which is
       exactly what a badge must not do.

@@ -10,8 +10,8 @@ are the ones where it declines to make one.
 
 import pytest
 
-from grimoire.store import (campaigns, chronicle, commitments, entities, plot,
-                            provenance, retcon, scenes, turnstate, worlds)
+from grimoire.store import (campaigns, changes, chronicle, commitments, entities,
+                            plot, provenance, retcon, scenes, turnstate, worlds)
 from grimoire.store.scenes import serialize as scenes_serialize
 
 
@@ -35,8 +35,19 @@ def _contents(cid, sid):
 
 
 def _lore_edit(before, after, eid="pact"):
+    """A lore row as `materialize` stages it: `after` is `before` plus an
+    appended paragraph, which is why this kind is never flagged."""
     return {"id": f"lore:{eid}", "kind": "lore", "target": {"kind": "lore", "id": eid},
             "label": "The Pact — lore", "field": "body",
+            "before": before, "after": after, "authored": False}
+
+
+def _state_edit(before, after, char="seraphine"):
+    """A character-state row: the kind whose apply REPLACES the stored body, so
+    `before` and `after` are two answers to one question."""
+    return {"id": f"character_state:{char}", "kind": "character_state",
+            "target": {"kind": "characters", "id": char},
+            "label": "Seraphine — current state", "field": "current_state",
             "before": before, "after": after, "authored": False}
 
 
@@ -163,24 +174,38 @@ def two_scenes(cid):
 
 
 def test_a_row_a_later_scene_already_answered_is_flagged(cid, two_scenes):
-    from grimoire.store import absorb
     first, second = two_scenes
-    absorb.apply_edits(cid, [_lore_edit("stored body", "the later reading")], second)
+    # The row `absorb.apply` files for a write-back, keyed the way it keys it.
+    changes.record(cid, second, {"characters/seraphine": [
+        {"field": "current_state", "label": "Seraphine — current state",
+         "before": "Wary.", "after": "Loyal now."}]})
 
-    rows = retcon.contradictions(cid, first, [_lore_edit("the later reading", "the retconned reading")])
+    rows = retcon.contradictions(cid, first, [_state_edit("Loyal now.", "Still wary.")])
     assert [(r["id"], r["scene"], r["source"]) for r in rows] == [
-        ("lore:pact", second, "changes")]
+        ("character_state:seraphine", second, "changes")]
+
+
+def test_a_lore_row_is_never_flagged(cid, two_scenes):
+    """A lore edit APPENDS: its `after` is its `before` plus a paragraph, so it
+    differs from what is stored every time. Appending is not disagreeing, and no
+    string comparison can tell whether the paragraph an older scene wants to add
+    contradicts one a later scene already added."""
+    first, second = two_scenes
+    changes.record(cid, second, {"lore/pact": [
+        {"field": "body", "label": "The Pact — lore",
+         "before": "stored body", "after": "stored body\n\nthe later reading"}]})
+    assert retcon.contradictions(
+        cid, first, [_lore_edit("stored body", "stored body\n\nan older reading")]) == []
 
 
 def test_a_citation_names_the_scene_where_a_change_log_row_cannot(cid, two_scenes):
     """Provenance is per FIELD and reaches kinds `changes.json` never held — a
     relationship, a fact, a plot row — so it is consulted first."""
     first, second = two_scenes
-    provenance.record(cid, {"lore/pact#body": {"quote": "she named it", "speaker": "Mara",
-                                              "certainty": 0.9, "authority": "witness",
-                                              "band": "likely", "scene": second,
-                                              "recorded": ""}})
-    rows = retcon.contradictions(cid, first, [_lore_edit("stored body", "the retconned reading")])
+    provenance.record(cid, {"characters/seraphine#current_state": {
+        "quote": "she named it", "speaker": "Mara", "certainty": 0.9,
+        "authority": "witness", "band": "likely", "scene": second, "recorded": ""}})
+    rows = retcon.contradictions(cid, first, [_state_edit("Loyal now.", "Still wary.")])
     assert [(r["scene"], r["source"]) for r in rows] == [(second, "citation")]
 
 
@@ -212,43 +237,47 @@ def test_a_plot_row_that_only_adds_a_beat_is_not_a_contradiction(cid, two_scenes
 
 
 def test_a_row_that_agrees_with_the_record_contradicts_nobody(cid, two_scenes):
-    from grimoire.store import absorb
     first, second = two_scenes
-    absorb.apply_edits(cid, [_lore_edit("stored body", "the later reading")], second)
-    assert retcon.contradictions(
-        cid, first, [_lore_edit("the later reading", "the later reading")]) == []
+    changes.record(cid, second, {"characters/seraphine": [
+        {"field": "current_state", "label": "Seraphine — current state",
+         "before": "Wary.", "after": "Loyal now."}]})
+    assert retcon.contradictions(cid, first, [_state_edit("Loyal now.", "Loyal now.")]) == []
 
 
 def test_an_earlier_scenes_write_is_not_a_contradiction(cid, two_scenes):
     """The badge means "a scene played AFTER this one already answered
     differently". A value this scene or an earlier one wrote is just the record."""
-    from grimoire.store import absorb
     first, second = two_scenes
-    absorb.apply_edits(cid, [_lore_edit("stored body", "an earlier reading")], first)
-    assert retcon.contradictions(cid, second, [_lore_edit("an earlier reading", "new")]) == []
+    changes.record(cid, first, {"characters/seraphine": [
+        {"field": "current_state", "label": "Seraphine — current state",
+         "before": "Wary.", "after": "An earlier reading."}]})
+    assert retcon.contradictions(
+        cid, second, [_state_edit("An earlier reading.", "Something else.")]) == []
 
 
 def test_a_row_with_no_attribution_at_all_is_left_alone(cid, two_scenes):
     """Nothing on file says who wrote the stored value, so nothing here will
     guess. Not evidence of agreement — evidence of silence."""
     first, _ = two_scenes
-    assert retcon.contradictions(cid, first, [_lore_edit("stored body", "different")]) == []
+    assert retcon.contradictions(cid, first, [_state_edit("Loyal now.", "Still wary.")]) == []
 
 
 def test_the_newest_scene_has_nothing_to_contradict(cid, two_scenes):
-    from grimoire.store import absorb
     first, second = two_scenes
-    absorb.apply_edits(cid, [_lore_edit("stored body", "the later reading")], second)
-    assert retcon.contradictions(cid, second, [_lore_edit("x", "y")]) == []
+    changes.record(cid, second, {"characters/seraphine": [
+        {"field": "current_state", "label": "Seraphine — current state",
+         "before": "Wary.", "after": "Loyal now."}]})
+    assert retcon.contradictions(cid, second, [_state_edit("x", "y")]) == []
 
 
 def test_the_badge_carries_the_later_scenes_one_line(cid, two_scenes):
-    from grimoire.store import absorb
     first, second = two_scenes
-    absorb.apply_edits(cid, [_lore_edit("stored body", "the later reading")], second)
+    changes.record(cid, second, {"characters/seraphine": [
+        {"field": "current_state", "label": "Seraphine — current state",
+         "before": "Wary.", "after": "Loyal now."}]})
     chronicle.absorb(cid, {"id": second, "one_line": "The quay burned.", "summary": "",
                            "keywords": [], "cast": [], "location": "", "date": ""})
-    rows = retcon.contradictions(cid, first, [_lore_edit("the later reading", "no")])
+    rows = retcon.contradictions(cid, first, [_state_edit("Loyal now.", "Still wary.")])
     assert rows[0]["label"] == "The quay burned."
 
 
@@ -297,10 +326,10 @@ def test_a_hand_mangled_attribution_file_costs_the_badges_not_the_review(cid, tw
     model calls old by the time this runs."""
     first, _ = two_scenes
     (campaigns.campaign_root(cid) / "changes.json").write_text(
-        '{"lore/pact": "not a row"}', encoding="utf-8")
+        '{"characters/seraphine": "not a row"}', encoding="utf-8")
     (campaigns.campaign_root(cid) / "provenance.json").write_text(
-        '{"lore/pact#body": ["also not a row"]}', encoding="utf-8")
-    assert retcon.contradictions(cid, first, [_lore_edit("stored body", "different")]) == []
+        '{"characters/seraphine#current_state": ["also not a row"]}', encoding="utf-8")
+    assert retcon.contradictions(cid, first, [_state_edit("Loyal now.", "Still wary.")]) == []
 
 
 def test_an_open_review_cannot_save_over_a_retcon(cid, sid):
