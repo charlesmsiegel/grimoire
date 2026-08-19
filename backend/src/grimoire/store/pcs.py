@@ -29,6 +29,10 @@ PERSONA_FIELDS = ("name", "pronouns", "summary", "birthdate")  # frontmatter sca
 #: beside the persona files exactly as a character's does.
 ASSET_BASE = "pcs"
 
+#: The container's own file. Versions are `<vid>.md` in that same directory, so
+#: this name is the one slug a version may not have -- see `_new_version_id`.
+_META_NAME = "pc.md"
+
 
 class PCNotFound(Exception):
     pass
@@ -51,11 +55,28 @@ def _pc_dir(root: Path, pid: str) -> Path:
 
 
 def _meta_path(root: Path, pid: str) -> Path:
-    return _pc_dir(root, pid) / "pc.md"
+    return _pc_dir(root, pid) / _META_NAME
 
 
 def _version_path(root: Path, pid: str, vid: str) -> Path:
     return _pc_dir(root, pid) / f"{vid}.md"
+
+
+def _new_version_id(root: Path, pid: str, version_name: str) -> str:
+    """A version id nothing under `pid` is using -- `pc.md` included.
+
+    A version's file and the container's meta share one directory and one
+    extension, so `version_name="PC"` slugs onto `pc.md`: `create_pc` wrote the
+    persona there and then wrote the meta over it, leaving a PC that answered
+    201 and 404 in the same breath (`_version_ids` skips `pc.md`, so `read_pc`
+    saw no versions) while holding the name's slug against every later PC.
+    `create_version` never had the bug -- by then `pc.md` exists, so its own
+    existence check already stepped around it -- and now both allocate ids
+    through the one function that knows why (#14)."""
+    def taken(vid: str) -> bool:
+        p = _version_path(root, pid, vid)
+        return p.name == _META_NAME or p.exists()
+    return uniquify(slugify(version_name), taken)
 
 
 def blank_persona(name: str) -> dict:
@@ -98,7 +119,7 @@ def create_pc(root: Path, name: str, tags: list[str], version_name: str = "defau
     _pcs_dir(root).mkdir(parents=True, exist_ok=True)
     pid = uniquify(slugify(name), lambda c: _pc_dir(root, c).exists() or (taken and taken(c)))
     _pc_dir(root, pid).mkdir(parents=True)
-    vid = slugify(version_name)
+    vid = _new_version_id(root, pid, version_name)
     atomic.write_text(_version_path(root, pid, vid), _dump_persona(persona or blank_persona(name)))
     _write_meta(root, pid, name, tags, vid)
     return pid, vid
@@ -106,7 +127,7 @@ def create_pc(root: Path, name: str, tags: list[str], version_name: str = "defau
 
 def create_version(root: Path, pid: str, version_name: str, persona: dict) -> str:
     _require_pc(root, pid)
-    vid = uniquify(slugify(version_name), lambda v: _version_path(root, pid, v).exists())
+    vid = _new_version_id(root, pid, version_name)
     atomic.write_text(_version_path(root, pid, vid), _dump_persona(persona))
     return vid
 
@@ -130,7 +151,7 @@ def set_tags(root: Path, pid: str, tags: list[str]) -> None:
 def _version_ids(root: Path, pid: str) -> list[str]:
     # see characters._version_ids
     return sorted(p.stem for p in _pc_dir(root, pid).glob("*.md")
-                  if p.name != "pc.md" and safe_id(p.stem))
+                  if p.name != _META_NAME and safe_id(p.stem))
 
 
 def require_version(root: Path, pid: str, vid: str) -> Path:

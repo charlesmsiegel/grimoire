@@ -880,3 +880,40 @@ test("setCharacterName PUTs the rename under whichever scope is open", async () 
     expect.objectContaining({ method: "PUT", body: JSON.stringify({ name: "Winifred" }) }),
   );
 });
+
+test("both PC creates carry version_name through to their own route", async () => {
+  // The server's `PCCreate` has always had `version_name`; only these two body
+  // types left it out, so no caller could name a PC's first version without
+  // casting past the client (#14). Sent verbatim, and to the endpoint whose
+  // scope was asked for -- world PCs and a campaign's own are separate records.
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ pc: "winifred", version: "young" }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  await api.createPC("w", { name: "Winifred", version_name: "Young" });
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/worlds/w/pcs",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ name: "Winifred", version_name: "Young" }),
+    }),
+  );
+
+  await api.createCampaignPC("run", { name: "Winifred", version_name: "Young" });
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/campaigns/run/pcs",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ name: "Winifred", version_name: "Young" }),
+    }),
+  );
+});
+
+test("a PC create that names no version sends none, leaving the server's default", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ pc: "winifred", version: "default" }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.createPC("w", { name: "Winifred" });
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/worlds/w/pcs",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "Winifred" }) }),
+  );
+});

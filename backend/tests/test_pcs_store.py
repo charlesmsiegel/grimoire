@@ -117,3 +117,28 @@ def test_images_are_invisible_to_sync(tmp_path):
     after, files_after = pcs.snapshot(tmp_path, pid)
     assert (after, files_after) == (before, files_before)
     assert pcs.dir_hash(tmp_path, pid) == before
+
+
+def test_version_named_like_the_meta_file_does_not_land_on_it(tmp_path):
+    """`version_name` is a field the create route has always accepted, and one
+    value of it used to build a PC nothing could read: `pc.md` is the
+    container's meta, so a version slugging to `pc` was written and then
+    overwritten by the meta, leaving a directory holding the name's slug with
+    no version in it at all (#14)."""
+    pid, vid = pcs.create_pc(tmp_path, "Rook", [], "PC")
+    assert vid != "pc"
+    assert pcs.read_persona(tmp_path, pid, vid)["name"] == "Rook"
+    pc = pcs.read_pc(tmp_path, pid)
+    assert [v["id"] for v in pc["versions"]] == [vid]
+    assert pc["meta"]["default_version"] == vid
+    # and the second one through the other door gets its own id, as before
+    assert pcs.create_version(tmp_path, pid, "pc", pcs.blank_persona("Rook")) not in ("pc", vid)
+
+
+def test_version_name_survives_a_slug_with_nothing_in_it(tmp_path):
+    """The other end of the same argument: `slugify` answers "untitled" rather
+    than "", so an unslugifiable version name names a file instead of the
+    directory itself."""
+    pid, vid = pcs.create_pc(tmp_path, "Rook", [], "!!!")
+    assert vid == "untitled"
+    assert pcs.read_persona(tmp_path, pid, vid)["name"] == "Rook"
