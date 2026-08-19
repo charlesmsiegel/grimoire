@@ -12911,3 +12911,8 @@ def test_creating_a_pc_with_any_version_name_leaves_one_the_reader_can_open(clie
         assert detail.status_code == 200, url
         assert [v["id"] for v in detail.json()["versions"]] == [vid], url
         assert detail.json()["meta"]["default_version"] == vid, url
+        # and the symptom this shows up as: the rail. A PC with no addressable
+        # version is skipped by the listing, so the create "worked" and nothing
+        # appeared. Membership, not equality -- a campaign's rail unions the
+        # world's PCs with its own.
+        assert pid in [p["id"] for p in client.get(url).json()], url
