@@ -945,16 +945,21 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await api.updateVersion(scope, detail.meta.id, vid, buildCard());
       // #13: the card's name is not the character's. The grid tile, the cast
       // panel and every `meta.name` prompt section read the CONTAINER name, so
-      // saving a renamed card has to carry it over or the two diverge forever.
-      // The card goes first: a failed rename then leaves a saved card and an
-      // error, not a renamed container holding edits that never landed.
-      // Only from the DEFAULT version -- a sibling version's card name is that
-      // version's rail label (`_version_label`), not the character's.
-      // Only when the user changed THIS form's Name field. Comparing against
-      // the container instead would rename on any save of a character whose
-      // card name already differed -- old records, an import given an explicit
-      // name, a chub re-download -- so editing a description would silently
-      // rename her everywhere, with no undo.
+      // a renamed card has to carry the new name over or the two diverge for
+      // good. Three conditions, and each is load-bearing:
+      //
+      //   `renamed !== stored`  the user changed the Name field in THIS form.
+      //     Comparing against the container instead would rename on any save
+      //     of a character whose card name already differed -- an old record,
+      //     an import given an explicit name, a chub re-download -- so editing
+      //     a description would rename her everywhere, with no undo.
+      //   `renamed !== meta.name`  spares a no-op PUT when the edit merely
+      //     brings the card back into line with the container.
+      //   `vid === default_version`  a sibling version's card name is that
+      //     version's rail label (`_version_label`), not the character's.
+      //
+      // Card first, rename second: a failed rename then leaves a saved card
+      // and an error, not a renamed container holding edits that never landed.
       const stored = (detail.versions.find((v) => v.id === vid)?.card.data.name ?? "").trim();
       const renamed = (card.data.name ?? "").trim();
       if (renamed && renamed !== stored && renamed !== detail.meta.name

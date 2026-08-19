@@ -860,3 +860,23 @@ test("errorText treats an empty detail as no message at all", () => {
   expect(errorText(new ApiError(500, ""))).toBe("Error");
   expect(errorText({ detail: "" })).toBe("[object Object]");
 });
+
+test("setCharacterName PUTs the rename under whichever scope is open", async () => {
+  // Scope-aware on purpose (#13): the Name field is editable in campaign scope
+  // too, where the write must land on the campaign's own copy rather than the
+  // world record every campaign inherits from.
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  await api.setCharacterName({ kind: "world", id: "w" }, "seraphine", "Winifred");
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/worlds/w/characters/seraphine/name",
+    expect.objectContaining({ method: "PUT", body: JSON.stringify({ name: "Winifred" }) }),
+  );
+
+  await api.setCharacterName({ kind: "campaign", id: "run" }, "seraphine", "Winifred");
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/campaigns/run/characters/seraphine/name",
+    expect.objectContaining({ method: "PUT", body: JSON.stringify({ name: "Winifred" }) }),
+  );
+});
