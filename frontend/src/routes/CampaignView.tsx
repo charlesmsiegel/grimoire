@@ -3,9 +3,9 @@ import { Link, useMatch, useNavigate, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  api, ApiError, type Actor, type AbsorbPhase, type Dossiers, type EditConflict, type SceneMeta,
-  type Message, type RosterEntry, type SceneAbsorb, type SceneAlternates,
-  type SceneDatetime, type StagedEdit, type ProposalRecord, type SceneCheckActor,
+  api, ApiError, type Actor, type SceneMeta,
+  type Message, type RosterEntry, type SceneAlternates,
+  type SceneDatetime, type ProposalRecord, type SceneCheckActor,
   type ResponsePresetSummary, type ResponseOverride, type ResponseBundle,
   type Briefing, type Casefile, type Provenance, type SceneLocation, type SceneWeather,
   type CampaignBudget,
@@ -28,9 +28,13 @@ import { initialsOf, Portrait } from "../components/Portrait";
 import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
 import { usePublishShellContext } from "../components/ShellStatus";
 import { RollProposal, type ResolveBody } from "../components/RollProposal";
-import { ColumnSection, PageShell } from "../components/PageShell";
+import { PageShell } from "../components/PageShell";
 import { useFocus } from "../components/focus";
 import CastColumn from "../components/play/CastColumn";
+import ReviewColumn from "../components/review/ReviewColumn";
+import ReviewPanel from "../components/review/ReviewPanel";
+import ReviewTranscript from "../components/review/ReviewTranscript";
+import { useSceneReview } from "../components/review/useSceneReview";
 import DossierColumn from "../components/play/DossierColumn";
 import Conditions from "../components/play/Conditions";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
@@ -94,94 +98,6 @@ const NEAR_TOP_PX = 120;
 // so new content should keep scrolling itself into view. Farther up than this
 // they are reading something specific and must not be yanked away from it.
 const NEAR_BOTTOM_PX = 80;
-
-// Reader-facing names for the absorb steps the API reports in `phases`. The
-// wire names say where the work happens; these say what the reviewer lost.
-const PHASE_LABELS: Record<AbsorbPhase["name"], string> = {
-  extraction: "the scene summary",
-  dossiers: "NPC dossiers",
-  voice: "voice checks",
-  audit: "mechanics audit",
-};
-
-// Staged edit kinds whose payload stamps the scene the beat came from, and so
-// have to follow a scene rename made while the review is open — see
-// `reviewSceneRenamed`.
-/** Which drawer of the review a proposal belongs in.
- *
- *  Grouped by *store* rather than by edit kind, because that is the question a
- *  reviewer is actually asking — "what is this absorb claiming about her
- *  state", not "how many `bond` rows are there". Two kinds that write the same
- *  file are one group. */
-const EDIT_GROUPS: { key: string; label: string; kinds: StagedEdit["kind"][] }[] = [
-  { key: "state", label: "Character state", kinds: ["character_state", "dossier"] },
-  { key: "relationships", label: "Relationships", kinds: ["relationship", "bond"] },
-  { key: "facts", label: "Facts", kinds: ["fact"] },
-  { key: "plot", label: "Plot & commitments", kinds: ["plot", "commitment"] },
-  { key: "new", label: "New records", kinds: ["new_character", "new_location", "new_lore"] },
-  { key: "records", label: "Lore & cards", kinds: ["lore", "authored"] },
-  { key: "sheets", label: "Sheets", kinds: ["sheet"] },
-  { key: "voice", label: "Voice", kinds: ["voice_drift"] },
-];
-
-function groupOf(e: StagedEdit): string {
-  return EDIT_GROUPS.find((g) => g.kinds.includes(e.kind))?.key ?? "records";
-}
-
-/** A row nothing in the transcript was cited for. These are the ones the panel
- *  puts first and in `--alert`: an uncited proposal is not wrong, but it is the
- *  one kind of proposal a reviewer cannot check against anything, so it is the
- *  one that most needs a human. */
-function isUncited(e: StagedEdit): boolean {
-  return !e.review || !e.review.quote.trim();
-}
-
-const SCENE_STAMPED: StagedEdit["kind"][] = ["plot", "commitment", "fact"];
-
-// What the backend proved about a proposal's cited speaker (#112), said the way
-// a reviewer would say it. The wire names are tiers; these are the reason the
-// row is banded where it is, which is the only thing worth a chip.
-const AUTHORITY_LABELS: Record<NonNullable<StagedEdit["review"]>["authority"], string> = {
-  narration: "narrated",
-  self: "said of themself",
-  other: "said by someone else",
-  // Not "speaker not in this scene": the tier also covers a name TWO speakers
-  // answer to, and telling a reviewer their model invented a citation it did
-  // not invent is a worse error than the vaguer wording.
-  unattributed: "no one speaker matches",
-  uncited: "nothing cited",
-};
-
-// A row's band, with the fallback that keeps the pre-#110 behaviour intact:
-// dossier, voice and sheet proposals are staged after the extraction and rest
-// on no citation, so they route as `medium` — shown, and pre-approved.
-function editBand(e: StagedEdit): NonNullable<StagedEdit["review"]>["band"] {
-  return e.review?.band ?? "medium";
-}
-
-// Only `low` starts unticked. Withholding a default approval is the safe
-// direction and the only relaxation of the review-everything invariant this
-// ships: nothing is applied that the reviewer did not tick and Save.
-function approvedByDefault(e: StagedEdit): boolean {
-  return editBand(e) !== "low";
-}
-
-// The dossier phase has five distinguishable bad endings and the wording has to
-// match the edit list beside it: "prepared", never "refreshed" (a dossier is
-// staged here and only written on save, #235), and never "failed" for a phase
-// that produced something. Ordered most-specific first.
-function dossierNotice(d: Dossiers): string {
-  if (d.budget_exhausted && !d.attempted) return `No NPC dossier was prepared: ${d.reason}`;
-  if (d.failed.length > 0) {
-    return d.status === "failed" ? "No NPC dossier could be prepared"
-                                 : "Some NPC dossiers could not be prepared";
-  }
-  // Nothing went wrong per-NPC, so the reason is the whole phase's story: a
-  // partial run (some prepared, the rest dropped) or a phase that never got off
-  // the ground at all (an unreadable cast).
-  return d.status === "degraded" ? `Some NPC dossiers were not prepared: ${d.reason}`
-                                 : `NPC dossier refresh failed: ${d.reason}`;
-}
 
 // Resolves when the signal aborts, for racing a wait that has no cancellation
 // of its own against Stop. `once`, so a long-lived controller does not
@@ -570,133 +486,25 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  this is what the world changed underneath it — the same shape of question
    *  about a different author. */
   const [showIncoming, setShowIncoming] = useState(false);
-  const [absorb, setAbsorb] = useState<SceneAbsorb | null>(null);
   // The post a reader asked to replay FROM (#79) -- the one after the retcon,
   // since the retconned post itself stands. Held here rather than in the panel
   // because the transcript gutter is what sets it.
   const [replayAt, setReplayAt] = useState<number | null>(null);
-  // The scene this review was absorbed FROM. Switching scenes leaves the panel
-  // open, so saving against the currently selected scene would commit scene A's
-  // review onto scene B (#235).
-  const [absorbSid, setAbsorbSid] = useState<string | null>(null);
-  // Which review is open, readable AFTER an await. A scoped retry (audit or
-  // dossiers) gets a budget of its own, so it can still be in flight minutes
-  // later -- long enough for the reviewer to Discard, absorb another scene, and
-  // be sitting in a *different* review when the answer lands. Applying it then
-  // writes one scene's phase report and staged edits into another scene's
-  // review, and that review's save commits them.
-  //
-  // `commit_token` rather than the `absorb` object: it is minted per absorb
-  // (`<epoch>-<uuid4>`, so unique even across two absorbs of the same scene)
-  // and survives the object being replaced, which typing in the one-line or
-  // summary field does on every keystroke. Object identity would drop a
-  // perfectly good answer the moment the reviewer edited the summary while
-  // waiting.
-  const openReviewRef = useRef<string | null>(null);
-  useEffect(() => { openReviewRef.current = absorb?.commit_token ?? null; }, [absorb]);
-  // …and which retry, within one review. `openReviewRef` cannot separate two
-  // retries of the SAME review: both capture the same token, so both pass that
-  // check whatever order they answer in, and a first request that returns
-  // second overwrites the fresher generation the reviewer is already looking
-  // at. `disabled` below is the visible half of the fix and this is the
-  // load-bearing half — it does not rest on React having re-rendered the
-  // button between two fast clicks.
-  const auditRetryRef = useRef(0);
-  const dossierRetryRef = useRef(0);
-  // The in-flight request behind each latch. The generation above stops a stale
-  // ANSWER from landing; this stops the WORK. They are not the same thing: the
-  // endpoint runs one LLM call per present NPC on a fresh `absorb_budget`, and
-  // `0` means that budget is unbounded, so a retry nobody is waiting for any
-  // more goes on spending time and credits until it finishes on its own.
-  const auditAbortRef = useRef<AbortController | null>(null);
-  const dossierAbortRef = useRef<AbortController | null>(null);
-  // The campaign as of the latest render, for continuations to check themselves
-  // against. `cid` closed over inside an async function is the campaign that
-  // STARTED it, which is exactly what makes it a usable comparison.
-  const campaignRef = useRef(cid);
-  campaignRef.current = cid;
-  const [retryingAudit, setRetryingAudit] = useState(false);
-  const [retryingDossiers, setRetryingDossiers] = useState(false);
-  const [absorbing, setAbsorbing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  /** `approved` is what the save sends. `rejected` is the reviewer saying no
-   *  out loud, which is NOT the same as leaving a row alone: an undecided row
-   *  is one nobody has looked at yet, and the footer counts those so a save
-   *  cannot quietly drop a proposal the reviewer never saw. Both false is
-   *  undecided; both true is impossible (the controls are exclusive). */
-  const [editRows, setEditRows] =
-    useState<(StagedEdit & { approved: boolean; rejected?: boolean; judged?: boolean })[]>([]);
-  /** Which drawer of the review is open: a group key, "uncited", or
-   *  "chronicle" (the scene summary itself). */
-  const [reviewSection, setReviewSection] = useState("uncited");
-  /** The quote of the row the reviewer picked, highlighted in the transcript
-   *  pane beside it. */
-  const [reviewQuote, setReviewQuote] = useState("");
-  // Whether the collapsed low-confidence rows are showing (#110). Rows stay in
-  // `editRows` at their original index either way: the conflict verdicts the
-  // server sends back are bound to positions in the submitted batch, so the
-  // routing is a rendering decision and never a reordering one.
+  // The end-of-scene review, whole (#378): its state, the absorb and save that
+  // fill and commit it, and the counts its column and panel read off it. A
+  // review is a MODE of this page rather than a panel inside it -- the
+  // transcript, the composer and every scene control step aside for it -- so
+  // what stays here is only what genuinely straddles the two modes: the banner
+  // it reports through, the scene it absorbs, and the fact that a saved review
+  // has rewritten every file the play view's panels read.
+  const review = useSceneReview({
+    cid, activeId, rolling, fail,
+    clearError: () => setError(null),
+    dismissError: (from) => setError((e) => (e?.from === from ? null : e)),
+    onSaved: () => setCtxKey((n) => n + 1),
+  });
+  const { absorb } = review;
 
-  // Every in-flight operation that rewrites the open review. `saveAbsorb`'s
-  // conflict bookkeeping is built on "`saving` latches the panel for the whole
-  // round-trip" -- it resolves the server's batch indices against `editRows`
-  // as the array the batch was built from. A scoped retry outside that latch
-  // makes the comment false: rebuild the rows mid-PUT and a clean save commits
-  // the pre-retry batch (dropping what was just retried), while a refused one
-  // binds its indices to rows that have since moved. So the three share one
-  // latch rather than each holding its own.
-  const reviewBusy = saving || retryingAudit || retryingDossiers;
-
-  // Closing or replacing a review abandons any retry still running for the old
-  // one. Bumping the generations makes those answers land on a `!== gen` check
-  // and be dropped -- which is also what stops their `finally` from clearing a
-  // latch the NEW review now owns -- and clearing the latches here rather than
-  // waiting for that `finally` is what keeps the new review's buttons live.
-  // Waiting would disable them for as long as the abandoned request takes:
-  // the whole absorb budget, or forever, since `absorb_budget = 0` means the
-  // retry it gets is unbounded too.
-  //
-  // A scoped failure belongs to the review just as much as the latch does, so
-  // it is dropped here too. Left standing, the banner outlives the review it
-  // reports on -- Cancel, a successful save or a campaign switch all leave
-  // "the dossier retry failed" on screen for a review that no longer exists,
-  // and the cid effect below carries it into the NEXT campaign. Only the two
-  // tags this panel raises are cleared: the banner is shared, and an untagged
-  // chat error (with its generate-a-reply Retry) is not this review's to take.
-  // Just the requests, no state. Split out because unmount needs exactly this
-  // half: leaving the campaign section entirely (to Configuration, say) does not
-  // re-run the `[cid]` effect, it destroys the component -- and SPA navigation
-  // does not cancel a fetch, so without an unmount cleanup the retry keeps
-  // running with nobody left to receive it and no disconnect for the server to
-  // notice. Setting state from a cleanup on an unmounted component is the one
-  // thing that must NOT happen here, hence the split.
-  function abortRetries() {
-    auditAbortRef.current?.abort();
-    dossierAbortRef.current?.abort();
-    auditAbortRef.current = dossierAbortRef.current = null;
-  }
-
-  function releaseRetries() {
-    auditRetryRef.current++;
-    dossierRetryRef.current++;
-    abortRetries();
-    setRetryingAudit(false);
-    setRetryingDossiers(false);
-    setError((e) => (e?.from === "audit" || e?.from === "dossiers" ? null : e));
-  }
-  const [editFailures, setEditFailures] = useState<
-    { id: string; reason: string; kind: "conflict" | "error"; label: string }[]>([]);
-  // Rows the server refused because their target moved since the scene was
-  // absorbed (#111), each already bound to its index in `editRows`. The save is
-  // rejected whole and before anything is written, so this is a state the
-  // review sits IN rather than a report of what landed: it clears a row at a
-  // time as the reviewer keeps, replaces or merges.
-  const [conflicts, setConflicts] =
-    useState<{ row: number; conflict: EditConflict }[]>([]);
-  // A failed SAVE gets its own surface, not the shared `error` banner: that
-  // banner's Retry is wired to chat generation, so pointing a save failure at
-  // it invites the user to generate another reply with the review still open.
-  const [saveError, setSaveError] = useState<string | null>(null);
   const [chooserOpen, setChooserOpen] = useState(false);
   // Campaign-scoped, like `loaded`, `rollingFor` and the alternate set, and for
   // the reason all three carry a cid: scene ids repeat between campaigns. The
@@ -780,18 +588,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   }
 
   useEffect(() => {
-    // A review is campaign-scoped state. The route has no `key`, so React Router
-    // reuses this component for campaign A -> B (browser Back between two
-    // campaigns does it), leaving `absorb`/`absorbSid` pointing at A while `cid`
-    // is B -- and every request they drive, the scoped retries and the SAVE
-    // alike, would then be posted to B. Scene ids repeat across campaigns, so
-    // those requests succeed rather than 404.
-    releaseRetries();
-    setAbsorb(null);
-    setAbsorbSid(null);
-    setEditRows([]);
-    setConflicts([]);
-    setSaveError(null);
     api.getCampaign(cid).then((c) => {
       setName(c.meta.name);
       setWorldName(c.meta.world_name ?? ""); // embedded: no second fetch
@@ -805,10 +601,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     }).catch(() => {});
     api.listResponsePresets().then(setResponsePresets).catch(() => setResponsePresets([]));
     readModuleBound(true);   // new campaign: nothing known about it yet
-    // Leaving the campaign section entirely unmounts instead of re-running this,
-    // so the release above never happens on that path — abort here or the retry
-    // outlives the screen that could use it.
-    return abortRetries;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid]);
 
@@ -1039,10 +831,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // can eat the whole shared budget, and the trailing steps then come back with
   // nothing to show — which reads exactly like a model that had nothing to
   // suggest. Named up front, before the reviewer reads the (short) edit list.
-  const budgetCutPhases = useMemo(
-    () => (absorb?.phases ?? []).filter((p) => p.budget_exhausted),
-    [absorb?.phases]);
-
   // offscreen scenes take director notes instead of PC dialogue
   const activePcless = useMemo(
     () => scenes.find((s) => s.id === activeId)?.pcless ?? false,
@@ -1587,15 +1375,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   //     the value the reviewer was shown, and it is compared the same way; and
   //   - the id the reroll-alternates state is scoped to (below).
   function reviewSceneRenamed(oldId: string, newId: string) {
-    // Anchored to the END of the line, so a beat that happens to quote the old
-    // scene id in its own text is left alone — only the fingerprint moves. The
-    // beat count sits in front of this and is not matched: it is "1 beat" in the
-    // singular and "N beats" otherwise, and matching the plural alone silently
-    // skipped every commitment with exactly one beat.
-    const from = `, last moved in ${oldId}]`;
-    const to = `, last moved in ${newId}]`;
-    const repoint = (v: string) => (v.endsWith(from) ? v.slice(0, -from.length) + to : v);
-    setAbsorbSid((s) => (s === oldId ? newId : s));
+    // `absorbSid`, the staged edits' scene stamps and the unanswered conflicts
+    // all carry the old id; the review owns them and repoints its own.
+    review.sceneRenamed(oldId, newId);
     // The alternates sidecar moves with the scene file (`scene_refs.repoint`),
     // but the id this state is scoped to lives only here — left stale, the
     // scope gate reads the set as another scene's and the control vanishes
@@ -1614,28 +1396,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // its rejection says nothing about the renamed scene, and honouring that
     // rejection would hide the controls until something re-selects the scene.
     if (altsReq.current.sid === oldId) fetchAlternates(cid, newId);
-    setEditRows((rows) => rows.map((r) => {
-      if (!SCENE_STAMPED.includes(r.kind)) return r;
-      const next = { ...r };
-      if (r.payload?.scene === oldId) next.payload = { ...r.payload, scene: newId };
-      if (r.kind === "commitment") {
-        next.before = repoint(r.before);
-        if (r.resolve_from !== undefined) next.resolve_from = repoint(r.resolve_from);
-      }
-      return next;
-    }));
-    // An UNANSWERED conflict carries the same fingerprint, and it is the value
-    // `resolveConflict` copies into `resolve_from` when the reviewer clicks
-    // Replace. The server's own repoint has already moved the stored record onto
-    // the new id, so a stale snapshot here means the retry is refused as changed
-    // again — the reviewer answering a conflict that no longer exists, twice.
-    // It is also what the panel SHOWS them, so leaving it stale would display an
-    // id no scene has.
-    // No kind check needed: `repoint` only rewrites a string ENDING in the
-    // commitment fingerprint's suffix, and a plot conflict's `stored` is a
-    // `plot_line`, which does not carry one.
-    setConflicts((cs) => cs.map(({ row, conflict }) => (
-      { row, conflict: { ...conflict, stored: repoint(conflict.stored) } })));
   }
 
   // A scene's id is its filename, so a rename mints a new one and every piece
@@ -2872,582 +2632,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // A scene already in the chronicle comes back as 409 "already_absorbed" rather
   // than silently re-absorbing: lore edits append and plot movements add a beat,
   // so a second pass duplicates both (#235). Confirm, then retry with force.
-  async function endScene() {
-    // `rolling` too, not only `sceneLocked`. Absorb takes its transcript
-    // snapshot once, so a swap committing after it means the review summarises
-    // the take the reader replaced — and saving that review marks the *swapped*
-    // transcript absorbed, with staged edits derived from narration it never
-    // read. The same reasoning as the rule above, for the other latch.
-    if (!activeId || absorbing || rolling) return;
-    // Release the outgoing review's retries BEFORE issuing the absorb that will
-    // replace it, not after. A retry still running here is answering a review
-    // this call is about to discard, so leaving it up meant two expensive
-    // pipelines against the same scene at once -- duplicate dossier calls, and
-    // with `absorb_budget = 0` neither one bounded.
-    //
-    // Released rather than blocked: adding `reviewBusy` to this button's
-    // disabled condition would close the escape hatch. A wedged retry on an
-    // unbounded budget is exactly when the reader needs End scene, which is the
-    // same reason Cancel stays live during a retry.
-    releaseRetries();
-    setAbsorbing(true);
-    setError(null);
-    setEditFailures([]);
-    setConflicts([]);
-    try {
-      let a;
-      try {
-        a = await api.absorbScene(cid, activeId);
-      } catch (err: any) {
-        if (err?.kind !== "already_absorbed") throw err;
-        if (!window.confirm(
-          "This scene has already been absorbed. Absorbing again re-proposes every " +
-          "change from scratch, so appended lore and plot beats can end up duplicated. " +
-          "Absorb it again?")) return;
-        a = await api.absorbScene(cid, activeId, true);
-      }
-      // The review belongs to the campaign that asked for it. An absorb is the
-      // slowest request in the app -- several LLM calls -- so there is ample
-      // room to switch campaigns while it runs, and the `[cid]` effect that
-      // clears review state cannot touch a request already in flight. Installing
-      // this would put A's summary, timeline and staged edits in front of B,
-      // where Save posts them to B: scene ids repeat across campaigns and a
-      // fresh commit token matches, so nothing downstream would refuse them.
-      if (campaignRef.current !== cid) return;
-      setAbsorb(a);
-      setAbsorbSid(activeId);
-      setEditRows(a.edits.map((e) => ({ ...e, approved: approvedByDefault(e) })));
-      // A fresh review opens on whichever drawer needs a person, which
-      // `openSection` works out — but the *stored* choice has to be reset, or
-      // the drawer the last review left open is the one this one lands in.
-      setReviewSection("uncited");
-      setReviewQuote("");
-    } catch (err: any) {
-      // Same guard on the failure path: A's banner over B is the same category
-      // of wrong answer, just a cheaper one.
-      if (campaignRef.current !== cid) return;
-      // `false`, for the scoped retries' reason: the banner's Retry runs the
-      // CHAT retry, so it would answer a failed absorb by generating one more
-      // reply into the scene the user was trying to finish. End scene is its
-      // own recovery, and it is still right there.
-      fail(err, false);
-    } finally {
-      setAbsorbing(false);
-    }
-  }
-
-  // Commit is replayable server-side and plot movements append a beat per apply,
-  // so a second PUT of the same review duplicates them (#235) -- the `saving`
-  // latch is what keeps a double-click from being a double-commit. A failed save
-  // leaves the review standing so it can be retried rather than silently lost.
-  async function saveAbsorb() {
-    const sid = absorbSid ?? activeId;
-    if (!absorb || !sid || saving) return;
-    setSaving(true);
-    setSaveError(null);
-    // captured before editRows is cleared below -- failures only carry
-    // id/reason/kind, so the row's label has to come from what was on screen.
-    const labels = new Map(editRows.map((e) => [e.id, e.label]));
-    try {
-      const res = await api.saveChronicle(cid, sid, {
-        one_line: absorb.one_line, summary: absorb.summary, keywords: absorb.keywords,
-        timeline_events: absorb.timeline_events,
-        edits: editRows.filter((e) => e.approved).map(({ approved, ...e }) => e),
-        // Same token on every attempt, so the retry below cannot commit twice
-        // when the first PUT landed and only its response was lost (#235).
-        commit_token: absorb.commit_token });
-      setEditFailures(res.failures.map((f) => ({ ...f, label: labels.get(f.id) ?? f.id })));
-      releaseRetries();
-      setAbsorb(null);
-      setAbsorbSid(null);
-      setEditRows([]);
-      setConflicts([]);
-      setCtxKey((n) => n + 1);
-    } catch (err: any) {
-      // A contradiction is not a failed save (#111): the server refused the
-      // batch before writing anything, so the review stands exactly as it was
-      // and the same commit token is still good. Show the rows, let the
-      // reviewer answer each one, and save again -- no `saveError`, whose
-      // "Try saving again" would just re-post the batch that was refused.
-      if (err?.kind === "edit_conflicts") {
-        // Resolve each verdict to the ROW it belongs to, here and now, while
-        // `editRows` is still the exact array this batch was built from
-        // (`saving` latches the panel for the whole round-trip). The server
-        // stamps a batch index; `approvedIdx` is that batch's row numbers, so
-        // the two line up positionally even when the response has dropped the
-        // unconflicted rows in between. Storing row numbers rather than the
-        // raw verdicts also survives what comes next: unapproving a row is the
-        // keep answer, and it would shift every batch index after it.
-        const approvedIdx = editRows.flatMap((r, i) => (r.approved ? [i] : []));
-        const rows = ((err.body?.conflicts ?? []) as EditConflict[])
-          .map((c) => ({ row: approvedIdx[c.index] ?? -1, conflict: c }))
-          .filter((p) => p.row >= 0);
-        setConflicts(rows);
-        // A refusal on a collapsed row has to be answerable, and the save is
-        // refused whole -- so leaving the section shut would leave the panel
-        // insisting something is unanswered with nothing on screen to answer.
-        // Latched here rather than derived from `conflicts`: a derived flag
-        // goes false the instant the reviewer clicks Keep stored (which
-        // unapproves the row and drops its verdict), collapsing the section
-        // and the row they are looking at out from under them.
-        // A conflict on a withheld row: open the drawer holding it, or the panel
-        // insists something is unanswered with nothing on screen to answer.
-        const stuck = rows.find(({ row }) => editRows[row] && drawerKey(editRows[row]) !== "uncited"
-                                             && editBand(editRows[row]) === "low");
-        if (stuck) setReviewSection("low");
-        setSaveError(null);
-        return;
-      }
-      setSaveError(err.detail ?? String(err));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  // Conflicts still showing, keyed by their row. Already bound to a row when
-  // the refusal arrived; all that is left is to drop the ones whose row has
-  // since been unapproved, which IS the keep answer.
-  /** How a contradicted row's later scene was established, in the reviewer's
-   *  words. The three sources are not equally strong and the tooltip says which
-   *  one answered: a quote is evidence a reader can go and check, a write-back
-   *  is a record-level log entry, and a thread's last beat is neither. */
-  const CONTRADICTION_SOURCES: Record<string, string> = {
-    citation: "quoted",
-    changes: "recorded",
-    thread: "last beat",
-  };
-
-  /** Contradictions by staged-edit id (#78). Empty for the ordinary end-of-scene
-   *  absorb, which has no later scene to disagree with. */
-  const contradictionById = useMemo(
-    () => new Map((absorb?.contradictions ?? []).map((c) => [c.id, c])),
-    [absorb]);
-
-  const conflictByRow = useMemo(() => {
-    const out = new Map<number, EditConflict>();
-    for (const { row, conflict } of conflicts) {
-      if (editRows[row]?.approved) out.set(row, conflict);
-    }
-    return out;
-  }, [conflicts, editRows]);
-
-  /** Set one row's verdict. Exclusive: approving clears a rejection and vice
-   *  versa, so a row can never be counted in two columns at once. */
-  function decide(i: number, verdict: "approved" | "rejected" | "undecided") {
-    setEditRows((rows) => rows.map((r, j) => (j === i ? {
-      ...r,
-      approved: verdict === "approved",
-      rejected: verdict === "rejected",
-      // Only a verdict the reviewer *gave* folds the row away. Rows arrive
-      // pre-approved by band (`approvedByDefault`), and folding those would
-      // hide the bulk of a good absorb behind an Undo apiece — the collapse is
-      // there to clear what you have finished with, not to hide what you have
-      // not started.
-      judged: verdict !== "undecided",
-    } : r)));
-  }
-
-  /** Which drawer a row belongs in. The two NEEDS YOU drawers cut across the
-   *  stores on purpose: they hold exactly the rows that did NOT arrive
-   *  pre-approved, which is the only question a reviewer has to answer before
-   *  saving. A row is uncited *or* low, never filed in both.
-   *
-   *  This is also what retired the Show/Hide low-confidence disclosure: a
-   *  drawer with a live count in the column says "these were withheld" more
-   *  plainly than a collapsed section nested inside another drawer did, which
-   *  is exactly what that disclosure existed to say.
-   */
-  const drawerKey = (e: StagedEdit): string =>
-    isUncited(e) ? "uncited" : editBand(e) === "low" ? "low" : groupOf(e);
-
-  const approvedCount = editRows.filter((e) => e.approved).length;
-  const rejectedCount = editRows.filter((e) => e.rejected).length;
-  const undecidedCount = editRows.length - approvedCount - rejectedCount;
-  const uncitedRows = editRows.flatMap((e, i) => (isUncited(e) ? [[e, i] as const] : []));
-  /** How many proposals each store drawer holds, for the column's counts. */
-  const groupCounts = EDIT_GROUPS.map((g) => ({
-    ...g, n: editRows.filter((e) => drawerKey(e) === g.key).length,
-  })).filter((g) => g.n > 0);
-  /** The rows the open drawer shows, each carrying the index it holds in
-   *  `editRows` — which is what the conflict verdicts (#111) and the submitted
-   *  batch are both keyed on, so it travels with the row rather than being
-   *  recomputed from this list's own ordering. */
-  // The drawer to open when a review arrives: NEEDS YOU when it has anything in
-  // it, otherwise the first store that does. Landing on an empty NEEDS YOU
-  // The low-confidence rows, each carrying the index it holds in `editRows`
-  // (#110). Kept as pairs rather than filtered into a second array: every
-  // handler on a row addresses it positionally, and a row rendered under its
-  // position in the FILTERED list would edit whichever row happened to sit
-  // there in the real one.
-  const lowRows = useMemo(
-    () => editRows.flatMap((e, i) => (editBand(e) === "low" ? [[e, i] as const] : [])),
-    [editRows]);
-  // would make a fully-cited absorb look like it proposed nothing.
-  const defaultSection = uncitedRows.length > 0 ? "uncited"
-    : lowRows.length > 0 ? "low"
-    : (groupCounts[0]?.key ?? "uncited");
-  const openSection = editRows.some((e) => drawerKey(e) === reviewSection)
-    ? reviewSection : defaultSection;
-  const shownRows = editRows.flatMap((e, i) =>
-    (drawerKey(e) === openSection ? [[e, i] as const] : []));
-
-  // The reviewer's answer to one conflict. **keep** is not here: it unapproves
-  // the row, which drops it from the batch entirely -- the stored value wins by
-  // the edit never being sent. `replace` keeps the staged text, `merge` swaps in
-  // the draft the server prefilled from both sides for the reviewer to trim.
-  //
-  // `resolve_from` rides along because the flag alone is not standing
-  // permission: it records WHICH value was on screen when they answered, so a
-  // save that lands after the record has moved again is refused instead of
-  // overwriting something nobody saw.
-  function resolveConflict(i: number, conflict: EditConflict,
-                           resolve: "replace" | "merge", after?: string) {
-    setEditRows((rows) => rows.map((r, j) => (j === i
-      ? { ...r, resolve, resolve_from: conflict.stored,
-          ...(after === undefined ? {} : { after }) }
-      : r)));
-    // By row, not by edit id — the duplicate-id case: a sibling row sharing
-    // this one's id keeps its own conflict and its own unanswered badge.
-    setConflicts((cs) => cs.filter((c) => c.row !== i));
-  }
-
-  // Replaces absorb.mechanics with a fresh audit and swaps in its sheet
-  // proposals, leaving every other staged edit (prose/relationship/etc.)
-  // exactly as the reviewer had it.
-  async function retryAudit() {
-    // `absorbSid`, not `activeId` — the same reason saveAbsorb uses it. A review
-    // survives a scene switch (only Discard or a successful save clears it), so
-    // reading the rail would audit whatever the user has since opened and write
-    // that scene's verdict, sheet edits and phase row into this review.
-    const sid = absorbSid ?? activeId;
-    if (!sid) return;
-    const review = absorb?.commit_token ?? null;
-    const gen = ++auditRetryRef.current;
-    // Clear THIS retry's own previous failure on the way in -- otherwise it
-    // outlives the attempt that fixed it, and a recovery reads as a second
-    // failure. Scoped by `from`, because the banner is shared with
-    // operations that have nothing to do with this review.
-    setError((e) => (e?.from === "audit" ? null : e));
-    const ctl = new AbortController();
-    auditAbortRef.current = ctl;
-    setRetryingAudit(true);
-    try {
-      const res = await api.retryAudit(cid, sid, ctl.signal);
-      // Superseded by a later click on the same review — see `auditRetryRef`.
-      if (auditRetryRef.current !== gen) return;
-      // The review this answer was asked for is gone (discarded, or saved and
-      // replaced by another absorb) -- see `openReviewRef`. Dropping it is the
-      // whole fix: `setAbsorb`'s own null-check passes once a NEW review is
-      // open, so "is anything open" is not the question.
-      if (openReviewRef.current !== review) return;
-      // The audit phase row is a projection of `mechanics` (backend:
-      // _phase_report), so it has to move with it — otherwise the panel keeps
-      // reporting a budget that ran out for a step this retry has since run.
-      setAbsorb((a) => (a ? { ...a, mechanics: res.mechanics,
-        phases: a.phases.map((p) => (p.name === "audit"
-          ? { ...p, status: res.mechanics.status, reason: res.mechanics.reason,
-              attempted: res.mechanics.attempted,
-              budget_exhausted: res.mechanics.budget_exhausted }
-          : p)) } : a));
-      setEditRows((rows) => [
-        ...rows.filter((r) => r.kind !== "sheet"),
-        ...res.edits.map((e) => ({ ...e, approved: approvedByDefault(e) })),
-      ]);
-      // Conflicts are bound to row numbers, and this rebuilds the array — so
-      // any that survived a refusal would now point at whichever row inherited
-      // their index. Sheet edits never conflict, so there is nothing to carry
-      // over; the next save re-reports whatever is still drifted.
-      setConflicts([]);
-    } catch (err: any) {
-      // The same two guards the success path takes, for the same reason: an
-      // answer -- failure included -- that belongs to a superseded retry or a
-      // review that is gone must not reach the screen. Cancel stays enabled
-      // during a retry by design, so a request abandoned that way and rejecting
-      // later would otherwise drop its banner over a replacement review.
-      if (auditRetryRef.current !== gen || openReviewRef.current !== review) return;
-      // `false`: the banner's Retry runs the CHAT retry, which generates
-      // another scene reply. Offering it for a failed audit would extend the
-      // very scene whose end-of-scene review is open, and still not re-run the
-      // audit. The scoped Retry button in the notice is the recovery.
-      fail(err, false, "audit");
-    } finally {
-      // Only the newest retry owns the latch: an older one clearing it would
-      // re-enable the button while its successor is still in flight.
-      if (auditRetryRef.current === gen) setRetryingAudit(false);
-    }
-  }
-
-  // The dossier phase's sibling to retryAudit (#286). Replaces `absorb.dossiers`
-  // with a fresh run of that phase and swaps in its staged dossiers, leaving
-  // every other staged edit (prose/relationship/sheet/…) exactly as the reviewer
-  // had it.
-  //
-  // The backend re-runs every present NPC, but only the ones it actually
-  // re-proposed are swapped here: a retry answers for those and says nothing
-  // about the rest. It reports per-NPC failures inside a 200, so an
-  // unconditional rebuild would let a retry that failed for Mara delete Mara's
-  // perfectly good proposal from the first pass and put nothing in its place —
-  // turning "retry the one we missed" into a net loss. An NPC the retry did
-  // prepare is replaced, including over a row the reviewer had retyped: that is
-  // the fresh proposal they asked for.
-  async function retryDossiers() {
-    // `absorbSid`, not `activeId` — retryAudit's reason, verbatim: a review
-    // survives a scene switch, so reading the rail would build dossiers from
-    // whatever the user has since opened and stage them into this review.
-    const sid = absorbSid ?? activeId;
-    if (!sid) return;
-    const review = absorb?.commit_token ?? null;
-    const gen = ++dossierRetryRef.current;
-    // Clear THIS retry's own previous failure on the way in -- otherwise it
-    // outlives the attempt that fixed it, and a recovery reads as a second
-    // failure. Scoped by `from`, because the banner is shared with
-    // operations that have nothing to do with this review.
-    setError((e) => (e?.from === "dossiers" ? null : e));
-    const ctl = new AbortController();
-    dossierAbortRef.current = ctl;
-    setRetryingDossiers(true);
-    try {
-      const res = await api.retryDossiers(cid, sid, ctl.signal);
-      // Both guards, in the order they can fail: superseded by a later retry of
-      // THIS review, then belonging to a review that is no longer open. The
-      // token cannot do the first job -- two retries of one review carry the
-      // same token -- so a first request answering second would otherwise
-      // overwrite the fresher generation on screen. retryAudit's reasons.
-      if (dossierRetryRef.current !== gen) return;
-      if (openReviewRef.current !== review) return;
-      // The dossiers phase row is a projection of `dossiers` (backend:
-      // _phase_report), so it has to move with it — otherwise the panel keeps
-      // reporting a budget that ran out for a step this retry has since run.
-      setAbsorb((a) => (a ? { ...a, dossiers: res.dossiers,
-        phases: a.phases.map((p) => (p.name === "dossiers"
-          ? { ...p, status: res.dossiers.status, reason: res.dossiers.reason,
-              attempted: res.dossiers.attempted,
-              budget_exhausted: res.dossiers.budget_exhausted }
-          : p)) } : a));
-      setEditRows((rows) => {
-        // `proposed` is the phase's own list of NPCs it prepared a dossier for
-        // — the same list its status is computed from, so this cannot drift
-        // from what the notice above says. It includes an NPC whose paragraph
-        // came back unchanged, which carries no edit: dropping that row is
-        // right, because "unchanged" is this run's answer for them.
-        const reproposed = new Set(res.dossiers.proposed);
-        return [
-          ...rows.filter((r) => r.kind !== "dossier" || !reproposed.has(r.target.id)),
-          ...res.edits.map((e) => ({ ...e, approved: true })),
-        ];
-      });
-      // Rebuilding the array invalidates row-bound conflicts — retryAudit's
-      // reason. Answered ones already live on the row (`resolve`/`resolve_from`)
-      // and are untouched; the unanswered badges dropped here come back on the
-      // next save, which re-checks every edit against what is stored.
-      setConflicts([]);
-    } catch (err: any) {
-      if (dossierRetryRef.current !== gen || openReviewRef.current !== review) return;
-      fail(err, false, "dossiers");   // retryAudit's reasons, both of them
-    } finally {
-      if (dossierRetryRef.current === gen) setRetryingDossiers(false);
-    }
-  }
-
-
-  // One staged-edit row. Lifted out of the list because #110 renders the rows
-  // in two places -- the ordinary list, and the collapsed low-confidence
-  // section under it -- and both must render an identical row bound to the
-  // SAME index. `i` is the row's position in `editRows`, which is what the
-  // conflict verdicts (#111) and the submitted batch are both keyed on, so it
-  // is passed in rather than recomputed from either list's own ordering.
-  function renderEditRow(
-    e: StagedEdit & { approved: boolean; rejected?: boolean; judged?: boolean },
-    i: number,
-  ) {
-    const isNewRecord = e.kind === "new_character" || e.kind === "new_location" || e.kind === "new_lore";
-    const conflict = conflictByRow.get(i);
-    const setPayload = (patch: Record<string, unknown>) =>
-      setEditRows((rows) => rows.map((r, j) =>
-        j === i ? { ...r, payload: { ...r.payload, ...patch } } : r));
-    // An approved row collapses to one dimmed line. Not hidden — a decision you
-    // cannot see is a decision you cannot revisit, and UNDO has to have
-    // something to sit on. A row with an unanswered conflict never collapses:
-    // it is approved AND blocking, and folding it away would hide the only
-    // thing standing between the reviewer and a refused save.
-    if (e.approved && e.judged && !conflict) {
-      return (
-        <div className="absorb-edit done" key={e.id}>
-          <span className="absorb-done-mark" aria-hidden>✓</span>
-          <span className="absorb-done-label">
-            APPROVED · {e.label}{e.authored ? " · card edit" : ""}
-          </span>
-          <button className="subtle absorb-undo" aria-label={`Undo ${e.label}`}
-                  onClick={() => decide(i, "undecided")}>Undo</button>
-        </div>
-      );
-    }
-    return (
-      // `.approved` is the card's standing verdict made visible: a row that
-      // arrived pre-approved by band looks different from one still waiting on
-      // a reviewer, and that difference is the panel's whole claim about which
-      // rows need them.
-      <div className={"absorb-edit" + (e.authored ? " authored" : "")
-                      + (isUncited(e) ? " uncited" : "")
-                      + (e.approved ? " approved" : "")
-                      + (e.rejected ? " rejected" : "")} key={e.id}>
-        <div className="absorb-edit-head">
-          <span className="absorb-edit-label">
-            {e.label}{e.authored ? " · card edit" : ""}
-          </span>
-          {/* The stamp says what the row rests on, in the words the reviewer
-              needs: not "medium · self" but whether anybody was quoted and how
-              sure the model was. An uncited row reads NO QUOTE, which is the
-              whole reason it is in the panel's first drawer. */}
-          <span className={"absorb-stamp" + (isUncited(e) ? " alert" : "")}>
-            {isUncited(e) ? "NO QUOTE" : (e.review?.speaker || "NO SPEAKER")}
-            {" · "}
-            {e.review && e.review.certainty !== null
-              ? `CERTAINTY ${e.review.certainty.toFixed(2)}`
-              : "CERTAINTY UNRATED"}
-          </span>
-          {e.review && (
-            <span className={`chip absorb-band absorb-band-${e.review.band}`}
-                  title={`certainty ${e.review.certainty ?? "not given"}` +
-                         ` · score ${e.review.score}`}>
-              {e.review.band} · {AUTHORITY_LABELS[e.review.authority] ?? e.review.authority}
-            </span>)}
-          {conflict && <span className="chip on absorb-conflict-badge">Changed</span>}
-          {/* A row a LATER scene already answered differently (#78). Advisory,
-              and worded as attribution rather than as a verdict: the badge
-              names the scene and the save is unchanged by it. */}
-          {contradictionById.get(e.id) && (
-            <span className="chip absorb-contradiction-badge"
-                  title={`${CONTRADICTION_SOURCES[contradictionById.get(e.id)!.source]} in ` +
-                         `"${contradictionById.get(e.id)!.label}"`}>
-              later scene disagrees
-            </span>)}
-        </div>
-        {/* Under the label rather than the diff for the rows whose "diff" is an
-            editable textarea: the citation is what the proposal RESTS on, and a
-            reviewer weighing the row needs it before they start rewriting the
-            text. Display only — the server never reads it back. */}
-        {e.review && (e.review.quote || e.review.speaker) && (
-          <p className="field-hint absorb-evidence">
-            {e.review.quote && <q>{e.review.quote}</q>}
-            {e.review.speaker && (e.review.quote ? ` — ${e.review.speaker}` : e.review.speaker)}
-          </p>)}
-        {conflict && (
-          <div className="absorb-conflict">
-            <p className="field-hint">{conflict.reason} — it now reads:</p>
-            <div className="absorb-stored">{conflict.stored}</div>
-            <div className="form-actions">
-              <button className="subtle" aria-label={`Keep stored ${e.label}`}
-                      onClick={() => setEditRows((rows) => rows.map((r, j) =>
-                        j === i ? { ...r, approved: false } : r))}>
-                Keep stored</button>
-              <button className="subtle" aria-label={`Replace stored ${e.label}`}
-                      onClick={() => resolveConflict(i, conflict, "replace")}>
-                Replace</button>
-              {conflict.mergeable && (
-                <button className="subtle" aria-label={`Merge stored ${e.label}`}
-                        onClick={() => resolveConflict(i, conflict, "merge",
-                                                      conflict.merged)}>
-                  Merge</button>)}
-            </div>
-          </div>)}
-        {isNewRecord && (
-          <input aria-label={`Name ${e.label}`} value={(e.payload?.name as string) ?? ""}
-                 onChange={(ev) => setPayload({ name: ev.target.value })} />
-        )}
-        {e.kind === "sheet" ? (
-          <>
-            {e.before && <div className="absorb-before">{e.before}</div>}
-            <div className="absorb-after">{e.after}</div>
-            {typeof e.payload?.note === "string" && e.payload.note && (
-              <p className="field-hint">{e.payload.note}</p>
-            )}
-          </>
-        ) : e.kind === "relationship" || e.kind === "bond" ? (
-          <div className="absorb-diff">
-            {e.before && <span className="absorb-before">{e.before}</span>}
-            <span className="absorb-after">{e.after}</span>
-          </div>
-        ) : (
-          <>
-            {e.before && <div className="absorb-before">{e.before}</div>}
-            <textarea aria-label={`After ${e.label}`} rows={2} value={e.after}
-                      onChange={(ev) => setEditRows((rows) => rows.map((r, j) =>
-                        j === i ? { ...r, after: ev.target.value } : r))} />
-          </>
-        )}
-        {e.kind === "new_character" && (
-          <>
-            <textarea aria-label={`Personality ${e.label}`} rows={2}
-                      placeholder="Personality"
-                      value={(e.payload?.personality as string) ?? ""}
-                      onChange={(ev) => setPayload({ personality: ev.target.value })} />
-            <textarea aria-label={`Example dialogue ${e.label}`} rows={2}
-                      placeholder="Example dialogue"
-                      value={(e.payload?.mes_example as string) ?? ""}
-                      onChange={(ev) => setPayload({ mes_example: ev.target.value })} />
-            <textarea aria-label={`Evidence ${e.label}`} rows={2}
-                      placeholder="Evidence"
-                      value={(e.payload?.evidence as string) ?? ""}
-                      onChange={(ev) => setPayload({ evidence: ev.target.value })} />
-            <select aria-label={`Confidence ${e.label}`}
-                    value={(e.payload?.confidence as string) ?? "thin"}
-                    onChange={(ev) => setPayload({ confidence: ev.target.value })}>
-              <option value="thin">Thin</option>
-              <option value="sketched">Sketched</option>
-              <option value="established">Established</option>
-            </select>
-            <textarea aria-label={`Open questions ${e.label}`} rows={2}
-                      placeholder="Open questions"
-                      value={(e.payload?.open_questions as string) ?? ""}
-                      onChange={(ev) => setPayload({ open_questions: ev.target.value })} />
-          </>
-        )}
-        {(e.kind === "new_character" || e.kind === "new_location") && (
-          <input aria-label={`Suggested image prompt ${e.label}`}
-                 placeholder="Suggested image prompt"
-                 value={(e.payload?.sd_prompt as string) ?? ""}
-                 onChange={(ev) => setPayload({ sd_prompt: ev.target.value })} />
-        )}
-        {e.kind === "new_location" && !absorb?.location && (
-          <label>
-            <input type="checkbox" aria-label={`This is where the scene happened ${e.label}`}
-                   checked={!!e.payload?.current_setting}
-                   onChange={(ev) => setPayload({ current_setting: ev.target.checked })} />
-            This is where the scene happened
-          </label>
-        )}
-        <div className="absorb-verdict">
-          <button className="btn-accent" aria-label={`Approve ${e.label}`}
-                  onClick={() => decide(i, "approved")}>Approve</button>
-          {/* "Edit" is where the caret already is: every one of these rows
-              renders its `after` as a textarea, so the button focuses it rather
-              than opening a second editing mode nobody asked for. */}
-          <button className="subtle" aria-label={`Edit ${e.label}`}
-                  onClick={(ev) => {
-                    const card = (ev.currentTarget.closest(".absorb-edit") as HTMLElement | null);
-                    card?.querySelector("textarea")?.focus();
-                  }}>Edit</button>
-          <button className="subtle" aria-label={`Reject ${e.label}`}
-                  aria-pressed={!!e.rejected}
-                  onClick={() => decide(i, e.rejected ? "undecided" : "rejected")}>
-            {e.rejected ? "Rejected" : "Reject"}
-          </button>
-          {/* Only offered when there is something to find: a quote the
-              transcript pane can scroll to. */}
-          {!isUncited(e) && (
-            <button className="subtle absorb-find"
-                    aria-label={`Find ${e.label} in transcript`}
-                    onClick={() => setReviewQuote(e.review!.quote)}>
-              Find in transcript →
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -3538,7 +2722,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // One highlight, two sources: the dossier's provenance popover and the
   // review's "find in transcript". They can never both be open — the review
   // replaces the play view outright — so one piece of state serves both.
-  const citedNeedle = (citedQuote || reviewQuote).trim().toLowerCase();
+  const citedNeedle = (citedQuote || review.reviewQuote).trim().toLowerCase();
   const isCited = (text: string) =>
     citedNeedle !== "" && text.toLowerCase().includes(citedNeedle);
 
@@ -3573,8 +2757,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  one selected: a review survives a scene switch, and `saveAbsorb` already
    *  commits against `absorbSid` for that reason. Naming `activeId`'s title
    *  here would tell the reviewer they are judging a scene they are not. */
-  const absorbTitle = absorbSid
-    ? scenes.find((s) => s.id === absorbSid)?.title || absorbSid
+  const absorbTitle = review.absorbSid
+    ? scenes.find((s) => s.id === review.absorbSid)?.title || review.absorbSid
     : sceneTitle;
   // The global status bar can't work this out for itself: the router hands it
   // a cid, not a name, and which scene is open is state that lives only here.
@@ -3586,63 +2770,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // The column is one swap zone: cast, or one actor. `columnMode` is derived
   // from `selectedActor` rather than stored beside it, so the two can never
   // disagree about which is showing.
-  /** While a review is open the column belongs to it, not to the scene: what
-   *  you are navigating is eighteen proposals, and the cast grid behind them is
-   *  answering a question nobody is asking yet. */
-  const reviewColumn = (
-    <>
-      <div className="column-section">
-        <div className="eyebrow" style={{ padding: "0 16px" }}>Proposed</div>
-        <h3 className="review-count">
-          {editRows.length} {editRows.length === 1 ? "edit" : "edits"}
-        </h3>
-        <div className="review-tally">
-          {approvedCount} approved · {rejectedCount} rejected · {undecidedCount} left
-        </div>
-        {/* Approved and rejected are both *judged*; the bar fills with the work
-            done rather than with the work approved, or rejecting everything
-            would read as making no progress. */}
-        <div className="review-bar" role="img"
-             aria-label={`${approvedCount + rejectedCount} of ${editRows.length} judged`}>
-          <span className="review-bar-approved"
-                style={{ width: `${(approvedCount / Math.max(1, editRows.length)) * 100}%` }} />
-          <span className="review-bar-rejected"
-                style={{ width: `${(rejectedCount / Math.max(1, editRows.length)) * 100}%` }} />
-        </div>
-      </div>
-
-      {/* The two drawers that hold the rows which did NOT arrive pre-approved.
-          They cut across the stores deliberately: "what must I answer before I
-          can save" is a different question from "what is this absorb claiming
-          about her state", and it is the one with a deadline. */}
-      <ColumnSection label="Needs you">
-        <button className={"column-row alert" + (openSection === "uncited" ? " active" : "")}
-                onClick={() => setReviewSection("uncited")}>
-          <span className="column-row-label">Uncited</span>
-          <span className="column-row-count">{uncitedRows.length}</span>
-        </button>
-        {lowRows.length > 0 && (
-          <button className={"column-row alert" + (openSection === "low" ? " active" : "")}
-                  onClick={() => setReviewSection("low")}>
-            <span className="column-row-label">Low confidence</span>
-            <span className="column-row-count">{lowRows.length}</span>
-          </button>
-        )}
-      </ColumnSection>
-
-      <ColumnSection label="By store">
-        {groupCounts.map((g) => (
-          <button key={g.key}
-                  className={"column-row" + (openSection === g.key ? " active" : "")}
-                  onClick={() => setReviewSection(g.key)}>
-            <span className="column-row-label">{g.label}</span>
-            <span className="column-row-count">{g.n}</span>
-          </button>
-        ))}
-      </ColumnSection>
-    </>
-  );
-
   const column = selectedActor
     ? <DossierColumn cid={cid} casefile={casefile} provenance={provenance}
                      onHoverQuote={setCitedQuote} onGoToTurn={goToQuote}
@@ -3658,22 +2785,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                   // re-read whole rather than the cast alone.
                   onCastChanged={() => { if (activeId) refreshAndAsk(activeId); }} />;
 
-  /** Approve every proposal the transcript backs, and leave the ones it does
-   *  not. The whole routing argument in one button: a cited row is one the
-   *  reviewer can check *later* if they want to; an uncited one is the only
-   *  kind they cannot, so it is the only kind this refuses to answer for. */
-  function approveAllCited() {
-    setEditRows((rows) => rows.map((r) =>
-      (isUncited(r) ? r : { ...r, approved: true, rejected: false })));
-  }
-
   return (
     <PageShell
       className={absorb ? "review" : "play"}
       columnLabel={absorb ? "Proposals" : selectedActor ? "Dossier" : "Cast and continuity"}
-      column={absorb ? reviewColumn : column}
+      column={absorb ? <ReviewColumn review={review} /> : column}
       footer={absorb
-        ? <button className="column-primary" onClick={approveAllCited}>
+        ? <button className="column-primary" onClick={review.approveAllCited}>
             Approve all cited
           </button>
         : <Conditions cid={cid} worldName={worldName} location={sceneLocation}
@@ -3706,7 +2824,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           ) : (
             <button className="review-absorbing" aria-label="Rename scene"
                     title="Rename this scene"
-                    onClick={() => setRenamingScene({ id: absorbSid ?? activeId ?? "",
+                    onClick={() => setRenamingScene({ id: review.absorbSid ?? activeId ?? "",
                                                       title: absorbTitle })}>
               Absorbing {absorbTitle}
             </button>
@@ -3757,9 +2875,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               has not reached yet, then the partial lands underneath a scene
               already marked absorbed. That one does not come back: the review
               is committed against a transcript that no longer matches (#95). */}
-          <button className="scene-action end" onClick={endScene}
-                  disabled={!activeId || absorbing || busy || sceneLocked || rolling}>
-            {absorbing ? "Ending…" : "End scene"}
+          <button className="scene-action end" onClick={review.endScene}
+                  disabled={!activeId || review.absorbing || busy || sceneLocked || rolling}>
+            {review.absorbing ? "Ending…" : "End scene"}
           </button>
         </div>
         )}
@@ -3882,165 +3000,18 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               its instance across a campaign switch, so an unkeyed panel would
               show one campaign's pending list while another is on screen. */}
           {!focus && showIncoming && <IncomingReview key={cid} cid={cid} />}
-          {editFailures.length > 0 && (
+          {review.editFailures.length > 0 && (
             <div className="mechanics-notice">
-              <p>{editFailures.length} change{editFailures.length === 1 ? "" : "s"} did not apply</p>
-              {editFailures.map((f, i) => (
+              <p>{review.editFailures.length} change
+                 {review.editFailures.length === 1 ? "" : "s"} did not apply</p>
+              {review.editFailures.map((f, i) => (
                 <p className="field-hint" key={i}>{f.label}: {f.reason} ({f.kind})</p>
               ))}
-              <button className="subtle" onClick={() => setEditFailures([])}>Dismiss</button>
+              <button className="subtle" onClick={review.dismissFailures}>Dismiss</button>
             </div>
           )}
           </>)}
-          {absorb && (
-            <div className="absorb-panel">
-              <h4>Review scene summary</h4>
-              <label className="field-hint" htmlFor="absorb-oneline">One line</label>
-              <input id="absorb-oneline" aria-label="Scene one-line" value={absorb.one_line}
-                     onChange={(e) => setAbsorb({ ...absorb, one_line: e.target.value })} />
-              <label className="field-hint" htmlFor="absorb-summary">Summary</label>
-              <textarea id="absorb-summary" aria-label="Scene summary" rows={5} value={absorb.summary}
-                        onChange={(e) => setAbsorb({ ...absorb, summary: e.target.value })} />
-              {absorb.timeline_events.length > 0 && (
-                <ul className="absorb-timeline">
-                  {absorb.timeline_events.map((t, i) => (
-                    <li key={i}><strong>{t.date}</strong> {t.text}</li>
-                  ))}
-                </ul>
-              )}
-              {budgetCutPhases.length > 0 && (
-                <div className="mechanics-notice">
-                  <p>This scene was only partly absorbed: the absorb time budget ran out.</p>
-                  {/* Deliberately does NOT point at End scene: that button posts the
-                      *active* scene and replaces this review wholesale, discarding
-                      every edit the reviewer has already approved or typed. The audit
-                      and the dossier phase each have their own scoped Retry below
-                      (#286); the voice check does not, so the setting is still the
-                      only honest remedy for that one. */}
-                  <p className="field-hint">
-                    Cut short: {budgetCutPhases.map((p) => PHASE_LABELS[p.name]).join(", ")}. The
-                    summary and its edits above are complete and safe to save. Where a step
-                    below offers a Retry, that re-runs it alone on a fresh budget; otherwise
-                    raise the absorb budget on the Configuration page so the next scene gets
-                    the rest.
-                  </p>
-                </div>)}
-              {absorb.mechanics.status === "ok" && absorb.mechanics.warnings.length === 0 && (
-                <p className="field-hint">mechanics audited clean</p>)}
-              {absorb.mechanics.warnings.length > 0 && (
-                <ul className="mechanics-warnings">
-                  {absorb.mechanics.warnings.map((w, i) => <li key={i}>⚠ {w}</li>)}
-                </ul>)}
-              {(absorb.mechanics.status === "failed" || absorb.mechanics.status === "degraded") && (
-                <div className="mechanics-notice">
-                  {/* "never ran" vs "failed": an audit the clock refused to start
-                      asked nothing of the model, so there is no finding to doubt —
-                      only work still owed. Retry (which gets a fresh budget) is the
-                      fix for both, which is why both keep the button. */}
-                  <p>{absorb.mechanics.status !== "failed"
-                      ? "Some mechanics findings could not be validated"
-                      : absorb.mechanics.budget_exhausted && !absorb.mechanics.attempted
-                        ? `Mechanics validation never ran: ${absorb.mechanics.reason}`
-                        : `Mechanics validation failed: ${absorb.mechanics.reason}`}</p>
-                  {absorb.mechanics.dropped.map((d, i) => (
-                    <p className="field-hint" key={i}>{d.id} {d.field ?? ""}: {d.reason}</p>))}
-                  <button onClick={retryAudit} disabled={reviewBusy}>
-                    {retryingAudit ? "Retrying…" : "Retry validation"}</button>
-                </div>)}
-              {(absorb.dossiers.status === "failed" || absorb.dossiers.status === "degraded") && (
-                <div className="mechanics-notice">
-                  <p>{dossierNotice(absorb.dossiers)}</p>
-                  {absorb.dossiers.failed.map((d, i) => (
-                    <p className="field-hint" key={i}>{d.id}: {d.reason}</p>))}
-                  {absorb.dossiers.skipped.length > 0 && (
-                    <p className="field-hint">
-                      Never attempted, skipped: {absorb.dossiers.skipped.join(", ")}
-                    </p>)}
-                  {/* Offered for a budget skip and an outright failure alike, for
-                      the audit's reason: a fresh budget is what the retry gets, and
-                      a phase that broke on its own merits is still worth one more
-                      ask before the reviewer gives up on it. */}
-                  <button onClick={retryDossiers} disabled={reviewBusy}>
-                    {retryingDossiers ? "Retrying…" : "Retry dossiers"}</button>
-                </div>)}
-              {(absorb.voice.status === "failed" || absorb.voice.status === "degraded") && (
-                <div className="mechanics-notice">
-                  {/* A voice check that did not run is worth saying out loud: silence
-                      would read as "everyone stayed in voice" (#59). */}
-                  {/* Status first, then failures: a phase that only ran out of
-                      budget is degraded with an empty `failed`, and calling that
-                      "failed" would overstate it. */}
-                  <p>{absorb.voice.status === "degraded"
-                      ? "Some voice checks could not be run"
-                      : absorb.voice.failed.length > 0
-                        ? "No voice check could be run"
-                        : `Voice check failed: ${absorb.voice.reason}`}</p>
-                  {absorb.voice.failed.map((d, i) => (
-                    <p className="field-hint" key={i}>{d.id}: {d.reason}</p>))}
-                  {absorb.voice.skipped.length > 0 && (
-                    <p className="field-hint">
-                      Never attempted, skipped: {absorb.voice.skipped.join(", ")}
-                    </p>)}
-                </div>)}
-              {conflictByRow.size > 0 && (
-                <div className="mechanics-notice">
-                  <p>{conflictByRow.size === 1
-                    ? "One proposed change no longer matches what is stored"
-                    : `${conflictByRow.size} proposed changes no longer match what is stored`}
-                    {" — nothing was saved. Answer each one below, then save again."}</p>
-                </div>)}
-              {editRows.length > 0 && (
-                <div className="absorb-edits">
-                  {/* One drawer at a time, chosen in the column. `uncited` is a
-                      cross-cutting view of the same rows the store groups hold:
-                      a row can be uncited AND a fact, and it needs to be
-                      reachable as both. */}
-                  {shownRows.map(([e, i]) => renderEditRow(e, i))}
-                  {shownRows.length === 0 && (
-                    <p className="empty-state">
-                      <span className="empty-what">Nothing proposed here.</span> Pick
-                      another store from the column.
-                    </p>
-                  )}
-                  {openSection === "uncited" && uncitedRows.length === 0 && (
-                    <p className="empty-state">
-                      <span className="empty-what">Every proposal is cited.</span> The
-                      model quoted a line of transcript for all {editRows.length} of them.
-                    </p>
-                  )}
-                  {openSection === "low" && (
-                    <p className="field-hint">
-                      Not approved by default — the transcript does not clearly support
-                      them. Each one is here, in full, to be answered.
-                    </p>)}
-                </div>
-              )}
-              {saveError && (
-                <div className="mechanics-notice">
-                  <p>Could not save this review: {saveError}</p>
-                  <button className="subtle" onClick={saveAbsorb} disabled={reviewBusy}>
-                    Try saving again</button>
-                </div>
-              )}
-              <div className="review-footer">
-                <span className="review-left">
-                  {undecidedCount} still to judge
-                </span>
-                {/* Deliberately NOT disabled by `reviewBusy`: a retry runs on the
-                    absorb budget, which is unbounded at 0, so Cancel is the only
-                    way out of a request that may never answer. Safe because
-                    `releaseRetries` invalidates that request on the way out. */}
-                <button className="subtle" disabled={saving}
-                        onClick={() => { releaseRetries();
-                                         setAbsorb(null); setAbsorbSid(null); setEditRows([]);
-                                         setEditFailures([]); setSaveError(null);
-                                         setConflicts([]); setReviewQuote(""); }}>
-                  Cancel absorb</button>
-                <button className="primary" onClick={saveAbsorb} disabled={reviewBusy}>
-                  {saving ? "Saving…" : "Save chronicle"}</button>
-              </div>
-            </div>
-          )}
+          {absorb && <ReviewPanel review={review} />}
           {!absorb && (<>
           {activeId && messages.length === 0 && (
             <CastPanel
@@ -4541,18 +3512,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           workspace's column flex it was never beside the review at all, only
           stacked under it and clipped to 320px. */}
       {absorb && (
-        <aside className="review-transcript" aria-label="The scene, for checking">
-          <div className="section-label">The scene, for checking</div>
-          {messages.map((m, i) => (
-            <div className={"review-post" + (isCited(m.content) ? " cited" : "")} key={i}>
-              <div className="review-post-speaker">{speakerOf(m)}</div>
-              <div className="review-post-body">{m.content}</div>
-            </div>
-          ))}
-          {messages.length === 0 && (
-            <p className="column-empty">This scene has no transcript to check against.</p>
-          )}
-        </aside>
+        <ReviewTranscript messages={messages} speakerOf={speakerOf} isCited={isCited} />
       )}
     </PageShell>
   );
