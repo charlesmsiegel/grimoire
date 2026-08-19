@@ -1089,14 +1089,16 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
   width: 100%; text-align: left; background: none; border: none; color: var(--ink);
   padding: 6px 0; cursor: pointer; font-size: 13px;
 }
-.check-row:hover { color: var(--accent); }
+/* `:not(.static)` rather than a second rule overriding this one: `color:
+   inherit` on a static hover would have fought `.ok` below and BRIGHTENED a
+   ticked row, which is a hover shift in the other direction, not none. */
+.check-row:not(.static):hover { color: var(--accent); }
 .check-row.ok { color: var(--muted); }
 /* A row whose fix is a section of this same page, so there is nowhere to click
    through to. It is a <span>, so `display: block` is what lets it keep the
-   width and vertical padding above; dropping the pointer and the hover shift is
-   what stops it promising a jump it cannot make. */
+   width and vertical padding above; dropping the pointer and the hover is what
+   stops it promising a jump it cannot make. */
 .check-row.static { cursor: default; display: block; }
-.check-row.static:hover { color: inherit; }
 
 /* lore rail grouped by owner */
 .rail-group { margin-bottom: 8px; }
