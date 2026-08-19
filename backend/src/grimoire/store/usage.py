@@ -659,8 +659,7 @@ def _turn(row: dict) -> dict:
     completion = _int(row.get("completion_tokens"))
     return {
         "ts": _label(row.get("ts")), "task": _label(row.get("task")),
-        "model": _label(row.get("model")), "connection": _label(row.get("connection")),
-        "status": _label(row.get("status")),
+        "model": _label(row.get("model")), "status": _label(row.get("status")),
         "error": row.get("error") if isinstance(row.get("error"), str) else "",
         # `_int` floors a hand-edited negative to 0, and a call that happened
         # was attempted at least once -- the field is only written when it is
@@ -685,8 +684,10 @@ def _turn(row: dict) -> dict:
 _MAX_RENAMES = 64
 
 
-def _aliases(campaign: str, scene: str, since: str, until: str) -> set[str]:
-    """Every id this scene's rows can be filed under, `scene` included.
+def _aliases(campaign: str, scene: str, since: str, until: str) -> dict[str, str]:
+    """Every id this scene's rows can be filed under, mapped to the stamp after
+    which that id stopped being this scene's. `scene` itself maps to ``""``,
+    meaning no cutoff.
 
     A scene's id is its filename stem, so setting a date on it renames it
     (`scenes.moment`) -- and that happens to most scenes, usually a turn or two
@@ -695,31 +696,46 @@ def _aliases(campaign: str, scene: str, since: str, until: str) -> set[str]:
     last rename and call it the scene's, which is the quiet kind of wrong this
     whole module is trying not to be.
 
+    **The cutoff is not decoration.** `paths.uniquify` checks only what exists
+    *now*, so the moment a scene is renamed off ``001--x`` that id is free for
+    the next scene to take -- and its rows would then be charged to the scene
+    that used to hold it. An alias is only an alias for the rows written before
+    the rename that gave it up.
+
     A second pass over the window rather than a bigger first one: renames are
     rare, so this collects only `KIND_RENAME` rows and stays constant-memory,
     where folding it into the main scan would mean holding every row of the
     campaign to find out which ones belonged.
     """
-    forward: dict[str, str] = {}
+    forward: dict[str, tuple[str, str]] = {}
     for row in _read_rows(since, until):
         if row.get("kind") != KIND_RENAME or row.get("campaign") != campaign:
             continue
-        old, new = row.get("was"), row.get("scene")
-        if isinstance(old, str) and isinstance(new, str) and old and new and old != new:
-            # Last writer wins: a scene renamed twice files two rows for the
-            # same `was` only if it was renamed BACK and away again, and the
-            # later hop is the one that is still true.
-            forward[old] = new
-    if not forward:
-        return {scene}
-    ids = {scene}
-    for old in forward:
+        old, new, ts = row.get("was"), row.get("scene"), row.get("ts")
+        if not (isinstance(old, str) and isinstance(new, str) and isinstance(ts, str)):
+            continue
+        if old and new and old != new:
+            # Last row wins: a `was` seen twice means the scene was renamed back
+            # to it and away again, and the later hop is the one still true.
+            forward[old] = (new, ts)
+    ids = {scene: ""}
+    for old, (_, ts) in forward.items():
+        # The scene's CURRENT id never takes a cutoff, whatever the trail says.
+        # A title renamed and renamed back (a -> b -> a, one typo and its fix)
+        # walks a chain that returns to where it started, and letting that write
+        # a cutoff onto the live id would drop every row this scene has filed
+        # since -- the trail silencing the very scene it exists to follow.
+        if old == scene:
+            continue
         cursor, seen = old, 0
         while cursor in forward and seen < _MAX_RENAMES:
-            cursor = forward[cursor]
+            cursor = forward[cursor][0]
             seen += 1
             if cursor == scene:
-                ids.add(old)
+                # The cutoff is THIS id's own rename, not the end of the chain:
+                # `a` stopped being this scene the moment a->b happened, whatever
+                # b did later.
+                ids[old] = ts
                 break
     return ids
 
@@ -750,7 +766,10 @@ def scene_usage(campaign: str, scene: str, *, since: str = "",
     for row in _read_rows(start, until):
         if not _is_call(row) or row.get("campaign") != campaign:
             continue
-        if row.get("scene") not in ids:
+        cutoff = ids.get(row.get("scene"))
+        # `None` is "not this scene's id at all"; a cutoff is "not any more,
+        # after this stamp" -- see `_aliases` for why an id can change hands.
+        if cutoff is None or (cutoff and row["ts"] > cutoff):
             continue
         _add(totals, row)
         _add(by_task.setdefault(_label(row.get("task")), dict(_ZERO)), row)
@@ -791,8 +810,16 @@ OFF, OK, WARN, OVER = "off", "ok", "warn", "over"
 def normalize_period(period: object) -> str:
     """A period this module understands. Anything else is `MONTHLY`, which is
     the safer default of the two: a month's cap read as an all-time one would
-    fire the warning for spend the user had already accepted."""
-    return period if isinstance(period, str) and period in PERIODS else MONTHLY
+    fire the warning for spend the user had already accepted.
+
+    Case- and space-insensitive, because the value reaches here from a
+    hand-edited `campaign.md` as readily as from the form -- and reading
+    ``Total`` as ``monthly`` would be a silent, invisible downgrade of what
+    somebody plainly wrote."""
+    if not isinstance(period, str):
+        return MONTHLY
+    period = period.strip().lower()
+    return period if period in PERIODS else MONTHLY
 
 
 def normalize_limit(limit: object) -> float:
@@ -822,6 +849,14 @@ def period_window(period: str, until: str = "") -> tuple[str, str]:
     cost grows with the library's age is the thing `_window_files` exists to
     avoid. A campaign older than a year reports the last year of its spend, and
     the window comes back in the payload so the view can say so.
+
+    **The month is UTC, not the reader's.** Every stamp in this ledger is
+    (`_now`), so a monthly budget rolls over at UTC midnight on the 1st, which
+    is up to a day off from the month a provider's invoice or the user's own
+    calendar would draw. Stated rather than fixed: the fix is a timezone this
+    store has no way to know -- the backend serves a browser that never tells it
+    one -- and inventing the host's would make the same library report different
+    spend on two machines.
     """
     until = _valid_day(until) or _today()
     if normalize_period(period) == TOTAL:

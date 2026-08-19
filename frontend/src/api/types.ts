@@ -614,7 +614,7 @@ export type UsageBreakdown = UsageBucket & { key: string };
  *  priced nothing: no OpenAI-compatible endpoint reports a price today, and
  *  rendering those turns as free is the one thing this view must not do. */
 export type UsageTurn = {
-  ts: string; task: string; model: string; connection: string;
+  ts: string; task: string; model: string;
   status: string; error: string; attempts: number;
   prompt_tokens: number; completion_tokens: number; total_tokens: number;
   cache_read_tokens: number; cache_write_tokens: number;

@@ -159,3 +159,94 @@ test("a turn landing mid-edit does not wipe the figure being typed", async () =>
 
   expect(screen.getByLabelText("Budget in dollars")).toHaveValue(25);
 });
+
+test("a scene whose calls were all unpriced does not total to $0.00", async () => {
+  const unpriced = { ...ZERO, calls: 3, unpriced_calls: 3, total_tokens: 90 };
+  vi.mocked(api.getSceneUsage).mockResolvedValue({
+    ...USAGE, totals: unpriced, by_task: [{ key: "chat", ...unpriced }],
+    turns: [{ ...TURN, cost_usd: null }], listed: 1,
+  } as never);
+  render(<CostPanel cid="c" sid="s" />);
+
+  expect(await screen.findByText(/^unpriced · 3 turns/)).toBeInTheDocument();
+  expect(screen.getByText(/chat 3 · unpriced/)).toBeInTheDocument();
+  expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument();
+});
+
+test("one priced call among unpriced ones keeps the figure, as a floor", async () => {
+  const mixed = { ...ZERO, calls: 3, priced_calls: 1, unpriced_calls: 2, cost_usd: 0.02 };
+  vi.mocked(api.getSceneUsage).mockResolvedValue(
+    { ...USAGE, totals: mixed, by_task: [{ key: "chat", ...mixed }] } as never);
+  render(<CostPanel cid="c" sid="s" />);
+
+  expect(await screen.findByText(/^\$0\.02 · 3 turns/)).toBeInTheDocument();
+  expect(screen.getByText(/2 calls came back with no price/)).toBeInTheDocument();
+});
+
+test("a budget smaller than a cent cannot be set, since the store reads it as none", async () => {
+  render(<CostPanel cid="c" sid="s" />);
+  fireEvent.change(await screen.findByLabelText("Budget in dollars"),
+                   { target: { value: "0.004" } });
+
+  expect(screen.getByText("Set budget")).toBeDisabled();
+  expect(api.setCampaignBudget).not.toHaveBeenCalled();
+});
+
+test("turns sharing a stamp, a task and a model all render", async () => {
+  // Absorb fans its phases out concurrently now, so this is a real shape and
+  // not a contrived one: content-keyed rows would collapse into each other.
+  vi.mocked(api.getSceneUsage).mockResolvedValue({
+    ...USAGE,
+    totals: { ...ZERO, calls: 2, cost_usd: 0.0084, priced_calls: 2 },
+    turns: [TURN, { ...TURN }], listed: 2,
+  } as never);
+  render(<CostPanel cid="c" sid="s" />);
+
+  await screen.findByText(/\$0\.0084 · 2 turns/);
+  expect(screen.getAllByText("chat")).toHaveLength(2);
+});
+
+test("a slow read for the scene just left cannot land under the new scene", async () => {
+  let releaseFirst: (u: unknown) => void = () => {};
+  vi.mocked(api.getSceneUsage)
+    .mockImplementationOnce(() => new Promise((res) => { releaseFirst = res; }) as never)
+    .mockResolvedValue({
+      ...USAGE, totals: { ...ZERO, calls: 1, cost_usd: 0.5, priced_calls: 1 },
+    } as never);
+
+  const { rerender } = render(<CostPanel cid="c" sid="first" />);
+  rerender(<CostPanel cid="c" sid="second" />);
+  expect(await screen.findByText(/\$0\.50 · 1 turn/)).toBeInTheDocument();
+
+  // The first scene's answer arrives late, naming numbers that are not this
+  // scene's. It must not reach the panel.
+  releaseFirst({ ...USAGE, totals: { ...ZERO, calls: 99, cost_usd: 42, priced_calls: 99 } });
+  await waitFor(() => expect(api.getSceneUsage).toHaveBeenCalledTimes(2));
+  expect(screen.queryByText(/\$42\.00/)).not.toBeInTheDocument();
+  expect(screen.getByText(/\$0\.50 · 1 turn/)).toBeInTheDocument();
+});
+
+test("a scene that spent nothing does not head its empty list with $0.00", async () => {
+  vi.mocked(api.getSceneUsage).mockResolvedValue(
+    { ...USAGE, totals: ZERO, by_task: [], turns: [], listed: 0 } as never);
+  render(<CostPanel cid="c" sid="s" />);
+
+  await screen.findByText("Nothing metered in this scene yet.");
+  expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument();
+});
+
+test("a budget lookup that failed leaves no heading standing on its own", async () => {
+  vi.mocked(api.getCampaignBudget).mockRejectedValue(new Error("nope"));
+  render(<CostPanel cid="c" sid="s" />);
+
+  await screen.findByText(/\$0\.0084 · 2 turns/);
+  expect(screen.queryByText("Campaign budget")).not.toBeInTheDocument();
+});
+
+test("a four-figure budget is grouped like every other number here", async () => {
+  vi.mocked(api.getCampaignBudget).mockResolvedValue(
+    { ...SET, limit_usd: 2500, spent_usd: 1250, fraction: 0.5 } as never);
+  render(<CostPanel cid="c" sid="s" />);
+
+  expect(await screen.findByText(/\$1,250\.00 of \$2,500\.00/)).toBeInTheDocument();
+});

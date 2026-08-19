@@ -8111,3 +8111,12 @@ test("a budget lookup that fails leaves no banner and no error over the scene", 
 
   expect(screen.queryByText(/budget/i)).not.toBeInTheDocument();
 });
+
+test("the budget banner says where the budget can be changed", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCampaignBudget as any).mockResolvedValue(OVER_BUDGET);
+  renderCampaign();
+
+  expect(await screen.findByText(/Change it in the inspector’s Cost section\./))
+    .toBeInTheDocument();
+});

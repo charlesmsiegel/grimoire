@@ -498,3 +498,48 @@ def test_a_renamed_scene_keeps_the_cost_it_ran_up_under_its_old_id(client, home)
     body = client.get(f"/api/campaigns/{cid}/scenes/{renamed}/usage").json()
     assert body["totals"]["calls"] == 1
     assert body["totals"]["cost_usd"] == 0.0042
+
+
+def test_setting_a_date_keeps_the_cost_the_scene_ran_up_before_it(client, home):
+    """The rename path that actually happens. A title rename is deliberate and
+    rare; the FIRST DATE SET re-slugs the file on a scene most players date a
+    turn or two in (`scenes.moment`), and that is the path the per-scene cost
+    view lives or dies on."""
+    _use(client.app, FakeOpenRouter(["ok"], usage=USAGE))
+    _, cid = _campaign(client)
+    sid = _scene(client, cid, "Arrival")
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
+
+    client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime",
+               json={"datetime": "2026-06-01"})
+    dated = [s["id"] for s in client.get(f"/api/campaigns/{cid}/scenes").json()]
+    assert dated != [sid], "the date stamp has to have re-slugged the file"
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{dated[0]}/usage").json()
+    assert body["totals"]["calls"] == 1
+    assert body["totals"]["cost_usd"] == 0.0042
+
+
+def test_a_budgets_period_survives_the_round_trip(client, home):
+    _, cid = _campaign(client)
+    assert client.put(f"/api/campaigns/{cid}/budget",
+                      json={"budget_usd": 25, "budget_period": "total"}
+                      ).json()["period"] == "total"
+
+    got = client.get(f"/api/campaigns/{cid}/budget").json()
+    assert got["period"] == "total"
+    assert got["since"] < got["until"], "an all-time window, not this month's"
+
+
+def test_a_hand_edited_budget_reads_as_none_rather_than_breaking_the_page(client, home):
+    """campaign.md is a file a person opens and edits, and a budget nobody can
+    parse must not leave the play view unable to render."""
+    meta = home / "campaigns" / _campaign(client)[1] / "campaign.md"
+    meta.write_text(meta.read_text(encoding="utf-8").replace(
+        "---\n", "---\nbudget_usd: twelve\nbudget_period: fortnightly\n", 1),
+        encoding="utf-8")
+    cid = meta.parent.name
+
+    body = client.get(f"/api/campaigns/{cid}/budget").json()
+    assert body["level"] == "off"
+    assert "spent_usd" not in body

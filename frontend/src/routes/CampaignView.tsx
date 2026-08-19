@@ -1415,10 +1415,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     return () => { live = false; };
   }, [cid, ctxKey]);
 
-  // A dismissal belongs to the campaign it was made in, and to the level it was
-  // made at. Switching campaigns without this carried "I have seen it" onto a
-  // different budget entirely.
-  useEffect(() => { setBudgetSeen(null); }, [cid]);
+  // A dismissal belongs to the campaign it was made in, to the level it was
+  // made at, and to the budget it was made against. Without the campaign, "I
+  // have seen it" carried onto a different campaign's budget; without the limit
+  // and period, raising a cap that had been waved off at 80% and then filling
+  // it again said nothing, because the level had not changed since the
+  // dismissal even though the number it describes had.
+  useEffect(() => { setBudgetSeen(null); },
+            [cid, budget?.limit_usd, budget?.period]);
 
   async function removeSelectedActor() {
     if (!selectedActor || !activeId) return;
@@ -3705,7 +3709,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 {(budget.unpriced_calls ?? 0) > 0
                   && ` — ${budget.unpriced_calls} unpriced `
                      + `${budget.unpriced_calls === 1 ? "call" : "calls"} not counted`}
-                .
+                {". "}
+                {/* Where to act on it. The control is in the inspector's Cost
+                    section, which is collapsed by default and so is exactly
+                    what a reader given this banner cannot find — a warning
+                    nobody can act on is the shape this whole view avoids. */}
+                <span className="ctx-meta">Change it in the inspector’s Cost section.</span>
               </span>
               <button className="retry" onClick={() => setBudgetSeen(budget.level)}>
                 Dismiss

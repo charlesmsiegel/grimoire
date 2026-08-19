@@ -720,8 +720,16 @@ def test_a_rename_is_appended_rather_than_rewriting_what_was_already_filed(home)
 
     call, rename = _rows(home)
     assert call["scene"] == "001--arrival", "an append-only ledger rewrites nothing"
-    assert rename == {"ts": rename["ts"], "kind": "rename", "campaign": "saltmarch",
-                      "scene": "001--dated", "was": "001--arrival"}
+    # Spelled out rather than compared against a dict holding `rename["ts"]`,
+    # which would have asserted the stamp equals itself and proved nothing about
+    # it -- and the stamp is exactly what the read side windows and cuts on.
+    assert rename["kind"] == "rename"
+    assert rename["campaign"] == "saltmarch"
+    assert rename["scene"] == "001--dated"
+    assert rename["was"] == "001--arrival"
+    assert usage._valid_day(rename["ts"]) == rename["ts"][:10], \
+        "a rename outside a scannable window is a trail nothing can follow"
+    assert set(rename) == {"ts", "kind", "campaign", "scene", "was"}
 
 
 def test_a_rename_row_is_not_a_call_anybody_was_charged_for(home, monkeypatch):
@@ -777,3 +785,73 @@ def test_a_rename_nothing_can_be_written_for_does_not_fail_the_rename(home, monk
 def test_a_rename_to_the_same_id_files_nothing(home):
     usage.repoint_scenes("saltmarch", {"a": "a"})
     assert not (home / "usage").exists()
+
+
+def test_a_recycled_scene_id_is_not_charged_to_the_scene_that_gave_it_up(home, monkeypatch):
+    """`paths.uniquify` checks only what exists now, so the id a scene is
+    renamed off is free for the next scene to take. Rows written under it after
+    that rename are somebody else's."""
+    _pin(monkeypatch, "2026-08-14")
+    usage.record(task="chat", campaign="saltmarch", scene="001--x", cost_usd=0.25,
+                 ts="2026-08-14T10:00:00Z")
+    usage.repoint_scenes("saltmarch", {"001--x": "001--dated"})   # stamped 12:00
+    # A different scene, created later, takes the id the first one gave up.
+    usage.record(task="chat", campaign="saltmarch", scene="001--x", cost_usd=9.0,
+                 ts="2026-08-14T13:00:00Z")
+
+    out = usage.scene_usage("saltmarch", "001--dated", since="2026-08-01")
+    assert out["totals"]["cost_usd"] == 0.25, "only the rows written before the rename"
+    assert out["totals"]["calls"] == 1
+
+
+def test_a_chain_cuts_each_id_at_its_own_rename_not_at_the_end(home, monkeypatch):
+    _pin(monkeypatch, "2026-08-14")
+    usage.record(task="chat", campaign="c", scene="a", cost_usd=0.1,
+                 ts="2026-08-14T09:00:00Z")
+    usage.repoint_scenes("c", {"a": "b"})                          # stamped 12:00
+    # Somebody else takes `a` back, and spends under it after the rename.
+    usage.record(task="chat", campaign="c", scene="a", cost_usd=5.0,
+                 ts="2026-08-14T13:00:00Z")
+    usage.record(task="chat", campaign="c", scene="b", cost_usd=0.2,
+                 ts="2026-08-14T14:00:00Z")
+
+    out = usage.scene_usage("c", "b", since="2026-08-01")
+    assert out["totals"]["cost_usd"] == 0.3
+
+
+@pytest.mark.parametrize("stored, expected", [
+    ("total", "total"), ("Total", "total"), ("  TOTAL ", "total"),
+    ("monthly", "monthly"), ("fortnightly", "monthly"), (None, "monthly"), (7, "monthly"),
+])
+def test_a_period_is_read_as_written_whatever_case_it_was_written_in(home, stored, expected):
+    """The value reaches here from a hand-edited campaign.md as readily as from
+    the form, and reading `Total` as `monthly` would silently halve the window
+    somebody plainly asked for."""
+    assert usage.normalize_period(stored) == expected
+
+
+def test_a_title_renamed_and_renamed_back_does_not_silence_the_scene(home, monkeypatch):
+    """One typo and its fix walks a trail that returns to where it started
+    (a -> b -> a). The live id must never take a cutoff from its own trail, or
+    every row the scene has filed since would drop out of its own total."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    # Two renames at two different moments, which is what makes the trail a
+    # cycle rather than a pair of simultaneous edits.
+    stamps = ["2026-08-14T10:00:00Z", "2026-08-14T12:00:00Z"]
+    # Holds its last value rather than running out: `scene_usage` stamps its own
+    # `generated_at` from the same clock, and a StopIteration there would fail
+    # the test for a reason that has nothing to do with renames.
+    monkeypatch.setattr(usage, "_now", lambda: stamps.pop(0) if len(stamps) > 1
+                        else stamps[0])
+    usage.record(task="chat", campaign="c", scene="a", cost_usd=0.1,
+                 ts="2026-08-14T09:00:00Z")
+    usage.repoint_scenes("c", {"a": "b"})                      # 10:00
+    usage.record(task="chat", campaign="c", scene="b", cost_usd=0.2,
+                 ts="2026-08-14T11:00:00Z")
+    usage.repoint_scenes("c", {"b": "a"})                      # 12:00
+    usage.record(task="chat", campaign="c", scene="a", cost_usd=0.3,
+                 ts="2026-08-14T13:00:00Z")
+
+    out = usage.scene_usage("c", "a", since="2026-08-01")
+    assert out["totals"]["cost_usd"] == 0.6, "every row is this one scene's"
+    assert out["totals"]["calls"] == 3
