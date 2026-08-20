@@ -193,7 +193,7 @@ _STOP = frozenset((
     "the", "and", "was", "for", "are", "but", "not", "you", "all", "can",
     "her", "his", "its", "our", "who", "why", "how", "one", "two", "any",
     "few", "own", "per", "yet", "let", "she", "him", "has", "had", "did",
-    "get", "got", "too", "use", "out", "off", "now", "may", "his", "him",
+    "get", "got", "too", "use", "out", "off", "now", "may",
 ))
 
 #: Words shorter than this never count as a shared term.
