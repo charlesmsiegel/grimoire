@@ -581,14 +581,19 @@ def test_every_document_in_the_book_is_well_formed_xml(monkeypatch, tmp_path):
 def test_navigation_documents_escape_titles_that_are_xml(monkeypatch, tmp_path):
     """`toc.ncx` is a second XML document rendered from user-written text, and
     campaign/scene/location names are user-written. An ampersand in a scene
-    title is the everyday case — "Fire & Ash" — and an unescaped one makes the
-    book unparseable, not merely ugly."""
+    title is the everyday case — "Seraphine & Mara" — and an unescaped one makes
+    the book unparseable, not merely ugly.
+
+    Every name here is one the fixtures above already use, carrying the
+    metacharacters as punctuation around it (AGENTS.md: names come from the
+    placeholder set, never invented — an invented one can collide with real
+    private store content)."""
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Saltmarch")
-    cid = campaigns.create_campaign("Fire & <Ash>", wid)
+    cid = campaigns.create_campaign("Run One & <Saltmarch>", wid)
     croot = campaigns.campaign_root(cid)
-    docks = entities.create_entity(croot, "locations", 'The "Broken" & <Docks>', body="piers")
-    sid = scenes.create_scene(cid, 'Arrival & "Departure" <hr/>')
+    docks = entities.create_entity(croot, "locations", 'The "Docks" & <Keep>', body="piers")
+    sid = scenes.create_scene(cid, 'Arrival & "Below" <hr/>')
     scenes.append_message(cid, sid, "assistant", "The docks reek.")
     scenes.set_location(cid, sid, docks)
 
@@ -597,12 +602,12 @@ def test_navigation_documents_escape_titles_that_are_xml(monkeypatch, tmp_path):
     ncx = ET.fromstring(z.read("toc.ncx"))
     labels = [t.text for t in ncx.findall(".//ncx:navLabel/ncx:text", NCX_NS)]
     # …and round-trips to the original text, rather than being escaped away
-    assert '1. Arrival & "Departure" <hr/>' in labels
-    assert 'The "Broken" & <Docks>' in labels
-    assert ncx.find(".//ncx:docTitle/ncx:text", NCX_NS).text == "Fire & <Ash>"
-    assert ('text/chapter-001.xhtml', '1. Arrival & "Departure" <hr/>') in _nav_links(z, "toc")
+    assert '1. Arrival & "Below" <hr/>' in labels
+    assert 'The "Docks" & <Keep>' in labels
+    assert ncx.find(".//ncx:docTitle/ncx:text", NCX_NS).text == "Run One & <Saltmarch>"
+    assert ('text/chapter-001.xhtml', '1. Arrival & "Below" <hr/>') in _nav_links(z, "toc")
     opf = ET.fromstring(z.read("package.opf"))
-    assert opf.find(".//{http://purl.org/dc/elements/1.1/}title").text == "Fire & <Ash>"
+    assert opf.find(".//{http://purl.org/dc/elements/1.1/}title").text == "Run One & <Saltmarch>"
 
 
 def test_the_ncx_uid_matches_the_package_identifier(monkeypatch, tmp_path):
