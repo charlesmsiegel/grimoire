@@ -43,9 +43,9 @@ jobs:
       # One matrix leg's report, not both: they cover the same lines, and two
       # uploads under one artifact name is an error, not a merge. 3.11 is the
       # floor `requires-python` declares, so it is the one whose reachable
-      # code is the smaller set. `always()` and `if-no-files-found: error` for
-      # the same reasons the frontend job gives below.
-      - if: always() && matrix.python == '3.11'
+      # code is the smaller set. `!cancelled()` and `if-no-files-found: error`
+      # for the same reasons the frontend job gives below.
+      - if: ${{ !cancelled() && matrix.python == '3.11' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: backend-coverage
@@ -65,11 +65,17 @@ jobs:
       # the committed lockfile. The target does this.
       - run: make check-web
       # check-web runs vitest under coverage, so lcov.info exists by here.
-      # `always()` keeps the report retrievable when the suite fails, which is
-      # when knowing what actually ran is worth most. `if-no-files-found: error`
-      # is the same guard the apk job uses: without it, a check-web that
-      # silently stopped emitting coverage would upload nothing and stay green.
-      - if: always()
+      # `!cancelled()` keeps the report retrievable when the suite *fails*,
+      # which is when knowing what actually ran is worth most, without also
+      # demanding one from a run that was killed: `concurrency` above cancels
+      # the previous run on every push, and under `always()` that cancellation
+      # reaches this step, finds no report because pytest never finished, and
+      # `if-no-files-found: error` turns a superseded run into a red X. Seen on
+      # #389 before it was `!cancelled()`.
+      # That error is otherwise the same guard the apk job uses: without it, a
+      # check-web that silently stopped emitting coverage would upload nothing
+      # and stay green.
+      - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: frontend-coverage
