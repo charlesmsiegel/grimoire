@@ -568,10 +568,10 @@ def test_html_contents_numbers_from_the_scene_number_not_the_browser(monkeypatch
 def test_html_export_escapes_titles_that_are_markup(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Saltmarch")
-    cid = campaigns.create_campaign("Fire & <Ash>", wid)
-    sid = scenes.create_scene(cid, 'Arrival & "Departure" <hr/>')
+    cid = campaigns.create_campaign("Run One & <Saltmarch>", wid)
+    sid = scenes.create_scene(cid, 'Arrival & "Below" <hr/>')
     scenes.append_message(cid, sid, "assistant", "The docks reek.")
 
     html = export.build_html(cid)[0].decode()
     assert "<hr/>" not in html                      # the title never becomes markup
-    assert "&lt;hr/&gt;" in html and "Fire &amp; &lt;Ash&gt;" in html
+    assert "&lt;hr/&gt;" in html and "Run One &amp; &lt;Saltmarch&gt;" in html
