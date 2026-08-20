@@ -15,6 +15,8 @@ vi.mock("../api/client", async () => {
       deleteCharacter: vi.fn(), importCharacter: vi.fn(), localizeImages: vi.fn(),
       putImage: vi.fn(), deleteImage: vi.fn(), promoteImage: vi.fn(), setAvatarFocus: vi.fn(),
       setCharacterImageDescription: vi.fn(),
+      draftCharacterImageDescription: vi.fn(),
+      listUndescribedImages: vi.fn(),
       importCharacterBook: vi.fn(),
       importCharacterFromChub: vi.fn(),
       setCharacterName: vi.fn(), setCharacterBirthdate: vi.fn(), getCalendarMonths: vi.fn(),
@@ -80,6 +82,7 @@ beforeEach(() => {
   (api.deleteImage as any).mockResolvedValue({ ok: true });
   (api.promoteImage as any).mockResolvedValue({ ok: true });
   (api.setCharacterImageDescription as any).mockResolvedValue({ ok: true });
+  (api.listUndescribedImages as any).mockResolvedValue([]);
   (api.setAvatarFocus as any).mockResolvedValue({ ok: true });
   (api.deleteCharacter as any).mockResolvedValue({ ok: true });
   (api.importCharacterBook as any).mockResolvedValue({ created: [{ kind: "lore", id: "pact" }] });
@@ -158,6 +161,29 @@ test("detail shows the Images shelf with avatar tile, gallery promote, and add t
   fireEvent.click(screen.getByRole("button", { name: /set as avatar/i }));
   await waitFor(() => expect(api.promoteImage).toHaveBeenCalledWith({ kind: "world", id: "w" }, "seraphine", "default", "gallery_1"));
   expect(screen.getByRole("button", { name: /\+ add/i })).toBeInTheDocument();
+});
+
+test("the describe backlog appears as a toolbar button only when it has entries", async () => {
+  (api.listUndescribedImages as any).mockResolvedValue([
+    { kind: "characters", id: "seraphine", vid: "default", name: "gallery_1",
+      record_name: "Seraphine", url: "/img/1" },
+  ]);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  expect(await screen.findByRole("button", { name: /Describe images \(1\)/ }))
+    .toBeInTheDocument();
+});
+
+test("an empty backlog shows no button, and a campaign scope never asks for one", async () => {
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await screen.findByRole("button", { name: /\+ New character/ });
+  expect(screen.queryByRole("button", { name: /Describe images/ })).toBeNull();
+
+  (api.listUndescribedImages as any).mockClear();
+  render(<CharacterEditor scope={{ kind: "campaign", id: "c" }} wid="w" />);
+  await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
+  // World-scoped queue: a campaign reaches most of its art through its world,
+  // so there is nothing here to ask for.
+  expect(api.listUndescribedImages).not.toHaveBeenCalled();
 });
 
 test("the art shelf offers a description per image, and says which are unreviewed", async () => {

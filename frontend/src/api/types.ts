@@ -540,6 +540,13 @@ export type CampaignClock = { now: string; friendly: string; log: ClockLogEntry[
 
 /** One image in a campaign's own library (#376). `v` is the cache token an
  *  `?v=` URL is answered `immutable` for. */
+/** One stored image with no description entry at all — the describe backlog.
+ *  Key ABSENT, not empty: an image reviewed and deliberately left undescribed
+ *  is finished, and never appears here. */
+export type UndescribedImage = {
+  kind: string; id: string; vid: string; name: string;
+  record_name: string; url: string;
+};
 export type CampaignImage = {
   name: string; ext: string; v: string;
   /** What the picture shows. `described` is separate on purpose: `description`

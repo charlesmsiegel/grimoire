@@ -38,7 +38,8 @@ import {
   type SceneWeather, type ScheduledEvent, type SearchMode,
   type SearchResult, type Sheet, type SheetCoverage, type SheetExpected, type StagedEdit,
   type StoreConflicts, type Style, type StyleDetail, type StyleDraft, type Suggestion,
-  type Timeline, type TimelineEvent, type WeatherOverrideBody, type WeatherRangeBody,
+  type Timeline, type TimelineEvent, type UndescribedImage,
+  type WeatherOverrideBody, type WeatherRangeBody,
   type WeatherSpan,
   type WorldCampaignPending, type WorldMeta,
 } from "./types";
@@ -741,6 +742,11 @@ export const api = {
     request<{ greetings: string[] }>("POST", `/api/worlds/${wid}/greetings/import`, body),
   getGreetingSubjects: (wid: string, gid: string) =>
     request<Record<string, string[]>>("GET", `/api/worlds/${wid}/greetings/${gid}/subjects`),
+  /** Every stored image in this world with no description entry — the backlog
+   *  `DescribeQueue` steps through. World-scoped: a campaign's art is mostly
+   *  its world's, so describing it there is describing it once. */
+  listUndescribedImages: (wid: string) =>
+    request<UndescribedImage[]>("GET", `/api/worlds/${wid}/images/undescribed`),
   /** Describe one image. `description: ""` is meaningful and is NOT the same as
    *  never having described it: it means "reviewed, nothing to say", which
    *  takes the image out of the describe queue without offering it to the
