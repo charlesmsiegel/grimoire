@@ -179,6 +179,15 @@ oversight.
   on-disk cache and `embed_space.warm_window`'s rotation, with the same
   bounded-warm and dimension-mismatch-evicts handling `semantic.py` documents.
 
+An endpoint replaces the *scores* — the two are not on one scale, and averaging
+them would leave neither threshold meaning anything — but not the **rule that a
+record named in the scan window has its art offered**. Wholesale replacement
+did, which made "semantic as an upgrade" false: a description that never
+mentions Seraphine is not close to a sentence about her either, so configuring
+an endpoint silently switched off the commonest reason the feature is useful.
+A named record the cosine did not reach keeps a small positive floor, so it is
+offered last and only when `depth` has room left.
+
 **It fails to keyword, never to an error**, and when there is no keyword hit
 either it returns `[]` and the section does not render. No connection, no
 model, a dead endpoint, a rate limit: the turn proceeds. A scene is never worth

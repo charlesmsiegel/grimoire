@@ -156,6 +156,11 @@ KEYWORD_MIN_TERMS = 2
 #: evidence, not a trump card.
 NAME_BONUS = 1.0
 
+#: What a named record is worth in SEMANTIC mode when the cosine did not reach
+#: it. Positive, so it is offered at all; far below any usable cosine threshold,
+#: so it never outranks art the embedding actually matched.
+NAMED_FLOOR = 1e-3
+
 #: UTF-8 bytes of the scan window that get embedded, and of a description. Both
 #: bounds are `semantic.py`'s and are bytes for its reason: characters are the
 #: wrong unit for a token window in a non-Latin script.
@@ -344,7 +349,8 @@ def _record_name(cid: str, cand: dict) -> str:
     return ""
 
 
-def _keyword_scores(cid: str, cands: list[dict], recent_text: str) -> list[float]:
+def _keyword_scores(cid: str, cands: list[dict],
+                    recent_text: str) -> tuple[list[float], list[bool]]:
     """Shared content words, plus a whole-record bonus.
 
     Two ways in, and the first one is the point:
@@ -381,7 +387,7 @@ def _keyword_scores(cid: str, cands: list[dict], recent_text: str) -> list[float
     window = _terms(recent_text)
     folded = recent_text.casefold()
     names: dict[tuple[str, str, str], str] = {}
-    out = []
+    out, was_named = [], []
     for c in cands:
         shared = len(_terms(c["description"]) & window)
         key = (c["kind"], c["id"], c["vid"])
@@ -392,11 +398,14 @@ def _keyword_scores(cid: str, cands: list[dict], recent_text: str) -> list[float
         # script, which is what keeps the name rule working where splitting on
         # word characters does not.
         named = bool(name) and name.casefold() in folded
+        was_named.append(named)
         if named:
             out.append(float(shared) + NAME_BONUS)
         else:
             out.append(float(shared) if shared >= KEYWORD_MIN_TERMS else 0.0)
-    return out
+    # The flags are returned as well as folded into the scores because semantic
+    # mode replaces the SCORES and must not lose the RULE -- see `rank`.
+    return out, was_named
 
 
 def _semantic_scores(cands: list[dict], recent_text: str, cfg: dict) -> list[float] | None:
@@ -491,22 +500,32 @@ def rank(cid: str, cands: list[dict], recent_text: str) -> list[dict]:
 
     Keyword scores are computed first and always: they are the fallback, and
     computing them costs a set intersection per candidate. A configured
-    embeddings endpoint then *replaces* the ranking rather than adding to it —
-    the two scores are not on one scale and averaging them would mean neither
+    embeddings endpoint then replaces the SCORES rather than adding to them —
+    the two are not on one scale, and averaging them would mean neither
     threshold meant anything.
+
+    It does not replace the *rule* that a record named in the scan window has
+    its art offered. Wholesale replacement did, which made "semantic as an
+    upgrade" false: configuring an endpoint silently switched off the commonest
+    reason this feature is useful, because a description that never mentions
+    Seraphine is not close to a sentence about her either. So a named record
+    that the cosine did not reach keeps a floor — positive, and below any
+    sensible threshold, so it is offered last and only when `depth` has room
+    left over.
     """
     if not cands or not recent_text.strip():
         return []
     opts = settings()
     if opts["depth"] <= 0:
         return []
-    scores = _keyword_scores(cid, cands, recent_text)
+    scores, named = _keyword_scores(cid, cands, recent_text)
     space = embed_space.resolve(opts.get("cfg"))
     if space is not None:
         semantic = _semantic_scores(cands, recent_text,
                                     {**space, "threshold": opts["threshold"]})
         if semantic is not None:
-            scores = semantic
+            scores = [s if s > 0.0 else (NAMED_FLOOR if was else 0.0)
+                      for s, was in zip(semantic, named, strict=True)]
     ranked = sorted(((-s, i) for i, s in enumerate(scores) if s > 0.0))
     return [cands[i] for _, i in ranked[:opts["depth"]]]
 
