@@ -106,10 +106,10 @@ behavior lives here rather than being restated per route:
 
 | Class | Members | Exclusive | Result | Notify |
 |---|---|---|---|---|
-| `turn` | chat, retry, regenerate, replay, continuation, opener | scene key | transcript (already persisted) | yes |
+| `turn` | chat, retry, regenerate, replay, continuation | scene key | transcript (already persisted) | yes |
 | `review` | absorb, audit, dossiers | scene key (shared with `turn`) | durable `pending_reviews` | yes |
 | `background` | rolling summary, scene break | none | own store, fire-and-forget | never |
-| `draft` | suggestions, intent, voice anchors, taglines, image descriptions, scenario parse, models refresh | none | held on the run, reaped | no |
+| `draft` | opener, scene suggestions, scene intent, voice anchors, taglines, image descriptions, scenario parse, models refresh | none | held on the run, reaped | no |
 
 Three consequences worth stating, because each one deletes a special case an
 earlier draft needed:
@@ -119,10 +119,40 @@ earlier draft needed:
   exclusion key, so they cannot hold a scene's slot or strand the composer.
   That was previously a written-out warning about a bug the design could
   otherwise ship. It is now structural.
-- **The `_ephemeral_stream` bucket disappears.** The opener is a `turn`
-  (persisted through `post_first_post`, and the first thing in a scene);
-  suggestions, intent and the chub gallery are `draft`. Neither needs a
-  paragraph explaining why it is outside the mechanism.
+- **The `_ephemeral_stream` bucket disappears.** Its members become `draft`
+  runs and stop needing a paragraph explaining why they are outside the
+  mechanism.
+
+### The new-scene flow, since it is three runs and not one
+
+Worth spelling out because the obvious guess — that "new scene" is one LLM
+call — is wrong in both directions. **Creating a scene makes no LLM call at
+all**: `post_scene` (`scenes.py:93`), `post_scene_idea` and
+`post_start_from_greeting` are pure store writes. The generation happens on
+either side of it:
+
+1. `POST /campaigns/{cid}/scene-suggestions` — `draft`, campaign subject.
+2. `POST /campaigns/{cid}/scene-intent` — `draft`, campaign subject.
+3. `POST .../scenes/{sid}/create` — no run; a store write.
+4. `POST .../scenes/{sid}/opener` — `draft`, scene subject.
+
+**The opener is `draft`, not `turn`, and the distinction is about persistence
+rather than importance.** `post_opener` returns `_ephemeral_stream(...)` and
+writes nothing; the text reaches the transcript only when the player accepts
+it through `post_first_post`, which takes `body.text` and makes no LLM call.
+Classing it as a `turn` would claim its result is already in the transcript
+when nothing has been written, so a locked phone would leave the run `landed`
+with its output owned by no one.
+
+As a `draft` it is re-attachable for the whole reap window, which is the
+locked-phone case and a strict improvement on today, where backgrounding
+loses the opener outright. Only a process restart loses it, and then the
+recovery is the one that already exists: generate again on an empty scene,
+which costs one call and no state.
+
+It also takes **no exclusion key**, deliberately: an opener runs on an empty
+scene where no turn can be in flight, and re-generating an opener the player
+did not like is an ordinary thing to do twice.
 - **`turn` and `review` share one exclusion key per scene**, so an absorb
   cannot race a chat turn on the same transcript. That matches what End Scene
   already does by locking the scene, and it is now enforced server-side rather
