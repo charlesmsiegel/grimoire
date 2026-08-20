@@ -25,11 +25,9 @@ from .scenes import read as scenes_read, serialize as scenes_serialize
 from .campaigns import paths as campaigns_paths, read as campaigns_read
 from .paths import slugify
 
-# Localized app image URLs (see store.localize): every shape the app writes.
-# EVERY shape -- a URL missing from here is not a rendering bug, it is a book
-# shipped with the image silently degraded to its alt text, which is why the
-# campaign library below had to land in the same commit as the routes that
-# serve it (#376).
+# Localized app image URLs (see store.localize): EVERY shape the app writes. A
+# URL shape missing from here is not a rendering bug -- it is a book shipped
+# with that image silently degraded to its alt text.
 _IMG_URL = re.compile(
     r"/api/(?:"
     # The campaign's own image library: campaign-scoped, and the one shape with
