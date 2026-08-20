@@ -67,6 +67,16 @@ export function freeName(base: string, taken: string[]): string {
  *  is the whole difference between a text-only reader seeing something and
  *  seeing nothing: a plain-text export, and a model sent the transcript as text,
  *  get the alt text and only the alt text. */
+/** One path segment, encoded the way Python's `quote(safe="")` encodes it.
+ *
+ *  `encodeURIComponent` alone is not that rule: it deliberately leaves
+ *  `!'()*` alone, and `(` and `)` are exactly the two characters that end a
+ *  markdown destination. The tail escape is the standard RFC 3986 correction. */
+export function encodeSegment(seg: string): string {
+  return encodeURIComponent(seg).replace(
+    /[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
 export function insertion(name: string, url: string, description?: string): string {
   // A BARE url, with no `?v=` token, even though the picker has one in hand and
   // uses it for the thumbnails. A `?v=` URL is answered `immutable, max-age=1y`,
@@ -82,10 +92,17 @@ export function insertion(name: string, url: string, description?: string): stri
   // and happily accepts `art(1)`, `my art` and `a#b`. Each of those ends the
   // destination early and spills the rest of the URL into the prose.
   //
-  // Angle brackets rather than percent-encoding, because by here the URL is
-  // already assembled and re-encoding a whole URL is how double-encoding bugs
-  // start: `![alt](<...>)` is the markdown form for a destination that cannot
-  // be written bare, react-markdown reads it, and the href comes out unchanged.
+  // Percent-encoding the NAME SEGMENT, which is what `context.art.url_for`
+  // writes on the model's side of this same feature -- so a picture inserted by
+  // hand and the same picture inserted by the narrator produce byte-identical
+  // markdown. It also has to be this rather than markdown's `<...>` form:
+  // `export._resolve_image` reads an app URL out of the stored post to pack the
+  // image into a book, and an angle-bracketed destination is not a shape it
+  // matches, so the picture would quietly degrade to its alt text there.
+  //
+  // Only the last segment: `insertion` is documented to take a BARE url, so
+  // there is no query string, and re-encoding a whole assembled URL is how
+  // double-encoding bugs start.
   //
   // The DESCRIPTION is the alt text when there is one, and the name only when
   // there is not. That is the same choice `context/art.resolve_handles` makes
@@ -97,10 +114,8 @@ export function insertion(name: string, url: string, description?: string): stri
   const alt = description?.trim()
     ? description.trim().replace(/\[/g, "(").replace(/\]/g, ")").replace(/\s+/g, " ")
     : name;
-  // `<` and `>` are the two the angle-bracket form itself cannot hold, so they
-  // are percent-escaped; the serving route decodes the path parameter back.
-  const safe = url.replace(/</g, "%3C").replace(/>/g, "%3E");
-  return `![${alt}](${/[()\s]/.test(safe) || safe !== url ? `<${safe}>` : safe})`;
+  const cut = url.lastIndexOf("/");
+  return `![${alt}](${url.slice(0, cut + 1)}${encodeSegment(url.slice(cut + 1))})`;
 }
 
 const THUMB = 160;

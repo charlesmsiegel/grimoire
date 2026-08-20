@@ -254,15 +254,18 @@ test("a description carrying link punctuation cannot break the markdown", () => 
   expect(out).toBe("![A map (annotated) by the harbourmaster.](/u)");
 });
 
-test("a destination that cannot be written bare is wrapped, not left to break", () => {
+test("a name a markdown link cannot carry bare is percent-encoded", () => {
   // Only the campaign LIBRARY refuses link punctuation in a name
   // (`campaign_images.addressable`); a character or entity image is named under
-  // `assets.storable` alone, which accepts `art(1)` and `my art`.
+  // `assets.storable` alone, which accepts `art(1)`, `my art` and `a#b`.
+  // The encoding matches `context.art.url_for` exactly, so a picture inserted
+  // by hand and the same one inserted by the narrator are byte-identical -- and
+  // `export._resolve_image` reads both back.
   expect(insertion("art(1)", "/api/campaigns/c/locations/harbour/images/art(1)"))
-    .toBe("![art(1)](</api/campaigns/c/locations/harbour/images/art(1)>)");
-  expect(insertion("my art", "/img/my art")).toBe("![my art](</img/my art>)");
-  expect(insertion("a<b", "/img/a<b")).toBe("![a<b](</img/a%3Cb>)");
-  // ...and an ordinary URL is still written bare
+    .toBe("![art(1)](/api/campaigns/c/locations/harbour/images/art%281%29)");
+  expect(insertion("my art", "/img/my art")).toBe("![my art](/img/my%20art)");
+  expect(insertion("a#b", "/img/a#b")).toBe("![a#b](/img/a%23b)");
+  // ...and an ordinary name is left exactly as it was
   expect(insertion("coastline", "/api/campaigns/c/images/coastline"))
     .toBe("![coastline](/api/campaigns/c/images/coastline)");
 });

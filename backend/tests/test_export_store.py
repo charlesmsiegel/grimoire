@@ -157,6 +157,41 @@ def test_rewrite_images_honors_asset_tombstone(monkeypatch, tmp_path):
     assert images.by_path == {}
 
 
+@pytest.mark.parametrize("name,encoded", [
+    ("art(1)", "art%281%29"), ("my art", "my%20art"), ("a#b", "a%23b"),
+])
+def test_a_percent_encoded_record_image_url_still_reaches_the_book(
+        monkeypatch, tmp_path, name, encoded):
+    """`assets.storable` accepts names a markdown link cannot carry bare, so
+    `context.art.url_for` percent-encodes what it writes into a transcript. The
+    bytes are on disk under the DECODED name, and a resolver that only tried
+    the raw segment lost exactly the images the encoding existed to rescue."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    docks = entities.create_entity(croot, "locations", "The Docks", body="piers")
+    assets.put_image(croot, docks, "default", name, _img(), "png", base="locations")
+    out = export.rewrite_images(
+        f"![A pier](/api/campaigns/{cid}/locations/{docks}/images/{encoded})",
+        cid, export.Images())
+    assert out == "![A pier](images/img-000.png)"
+
+
+@pytest.mark.parametrize("kind", list(entities.ENTITY_KINDS))
+def test_every_entity_kind_can_carry_an_image_into_the_book(monkeypatch, tmp_path, kind):
+    """The URL pattern used to name `locations|lore` by hand, so the three kinds
+    added since exported as alt text and their pictures never reached the book.
+    Parametrized over the roster so a sixth kind fails here rather than
+    silently."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    eid = entities.create_entity(croot, kind, "The Thing", body="x")
+    assets.put_image(croot, eid, "default", "gallery_1", _img(), "png", base=kind)
+    out = export.rewrite_images(
+        f"![A thing](/api/campaigns/{cid}/{kind}/{eid}/images/gallery_1)",
+        cid, export.Images())
+    assert out == "![A thing](images/img-000.png)"
+
+
 def test_drop_images_strips_to_alt_text():
     text = "See ![a vista](images/img-000.png) and ![missing](https://x.example/y.png) too."
     assert export.drop_images(text) == "See a vista and missing too."

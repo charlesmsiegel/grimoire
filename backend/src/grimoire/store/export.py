@@ -14,6 +14,7 @@ import json
 import re
 import zipfile
 from pathlib import Path
+from urllib.parse import unquote
 
 import markdown as _md_lib
 from markupsafe import escape
@@ -55,7 +56,12 @@ _IMG_URL = re.compile(
     # bytes live under (#219).
     r"(?P<actor>characters|pcs)/(?P<aid>[^/\s]+)/versions/(?P<vid>[^/\s]+)"
     r"|greetings/(?P<gid>[^/\s]+)"
-    r"|(?P<kind>locations|lore)/(?P<eid>[^/\s]+)"
+    # Every entity kind, from the roster rather than a hand-written pair. It
+    # WAS `locations|lore`, and the three kinds added since (`items`, `groups`,
+    # `creatures`) were silently unexportable: a post carrying a creature's art
+    # degraded to its alt text and the picture never reached the book. Built
+    # from `entities.ENTITY_KINDS` so the two cannot drift apart again.
+    r"|(?P<kind>" + "|".join(entities.ENTITY_KINDS) + r")/(?P<eid>[^/\s]+)"
     r")/images"
     r")/(?P<name>[^/\s?#]+)")
 
@@ -160,15 +166,37 @@ def _resolve_image(cid: str, m: re.Match) -> Path | None:
         # EXPORTED, not against the id written in the URL -- which is what makes
         # a forked campaign's book carry the fork's own copy of the image rather
         # than reaching back into the campaign it branched from.
-        return campaign_images.image_path(cid, m["name"])
+        return _first(lambda n: campaign_images.image_path(cid, n), m["name"])
     if m["actor"]:
         rid, vid, base = m["aid"], m["vid"], m["actor"]
     elif m["gid"]:
         rid, vid, base = m["gid"], "default", "greetings"
     else:
         rid, vid, base = m["eid"], "default", m["kind"]
-    root = overlay.image_root(cid, rid, vid, m["name"], base=base)
-    return assets.image_path(root, rid, vid, m["name"], base=base)
+
+    def lookup(n: str) -> Path | None:
+        root = overlay.image_root(cid, rid, vid, n, base=base)
+        return assets.image_path(root, rid, vid, n, base=base)
+
+    return _first(lookup, m["name"])
+
+
+def _first(lookup, name: str) -> Path | None:
+    """`lookup(name)`, falling back to the percent-DECODED name.
+
+    `assets.storable` accepts names a markdown link cannot carry bare --
+    `art(1)`, `my art`, `a#b` -- so `context.art.url_for` percent-encodes the
+    segments it writes into a transcript. Those bytes are on disk under the
+    decoded name, and a resolver that only tried the raw segment answered None
+    for exactly the images the encoding existed to rescue: the picture vanished
+    from the book and degraded to its alt text.
+
+    Raw FIRST, decoded only as a fallback, so this can add resolutions and never
+    change one. That matters because `%` is itself a legal name character here:
+    a file genuinely called `a%2Fb` keeps resolving as itself, and only a name
+    nothing matches is retried as an escape sequence.
+    """
+    return lookup(name) or (lookup(unquote(name)) if "%" in name else None)
 
 
 def rewrite_images(text: str, cid: str, images: Images, prefix: str = "images/") -> str:
