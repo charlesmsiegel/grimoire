@@ -63,6 +63,21 @@ from grimoire.store import (  # noqa: E402 - deliberate late import; see the lin
 )
 
 OPF_NS = {"opf": "http://www.idpf.org/2007/opf"}
+XHTML = "{http://www.w3.org/1999/xhtml}"
+EPUB_TYPE = "{http://www.idpf.org/2007/ops}type"
+NCX_NS = {"ncx": "http://www.daisy.org/z3986/2005/ncx/"}
+
+
+def _nav(z, kind: str):
+    """One `<nav epub:type="...">` of the EPUB 3 nav document, as an element."""
+    root = ET.fromstring(z.read("nav.xhtml"))
+    return next(n for n in root.iter(f"{XHTML}nav") if n.get(EPUB_TYPE) == kind)
+
+
+def _nav_links(z, kind: str) -> list[tuple[str, str]]:
+    """(href, text) for every link in that nav, in document order."""
+    return [(a.get("href"), "".join(a.itertext()).strip())
+            for a in _nav(z, kind).iter(f"{XHTML}a")]
 
 
 def _png(size=(4, 4)) -> bytes:
@@ -321,8 +336,9 @@ def test_appendix_actors_and_visited_locations(monkeypatch, tmp_path):
     c = hrefs.index("text/location-the-docks.xhtml")
     assert a < b < c
     # nav lists the appendix
-    nav = z.read("nav.xhtml").decode()
-    assert "Appendix" in nav and "text/actor-pcs-elara.xhtml" in nav
+    toc = _nav_links(z, "toc")
+    assert ("text/appendix.xhtml", "Appendix") in toc
+    assert ("text/actor-pcs-elara.xhtml", "Elara") in toc
 
 
 def test_appendix_skips_unreadable_actor(monkeypatch, tmp_path):
@@ -346,6 +362,13 @@ def test_no_appendix_no_divider(monkeypatch, tmp_path):
     nav = z.read("nav.xhtml").decode()
     assert "Scenes" not in nav          # no empty Scenes <ol> in a zero-scene book
     ET.fromstring(nav)                  # nav stays well-formed XML
+    # …and neither navigation document invents a chapter that is not there
+    assert _nav_links(z, "toc") == [("text/titlepage.xhtml", "Title")]
+    assert [a.get("href") for a in _nav(z, "landmarks").iter(f"{XHTML}a")] \
+        == ["nav.xhtml#toc", "text/titlepage.xhtml"]
+    ncx = ET.fromstring(z.read("toc.ncx"))
+    assert [c.get("src") for c in ncx.findall(".//ncx:content", NCX_NS)] \
+        == ["text/titlepage.xhtml"]
 
 
 def test_epub_renders_transitions_without_a_speaker_plate(monkeypatch, tmp_path):
@@ -402,8 +425,10 @@ def test_build_epub_with_a_cover(monkeypatch, tmp_path):
     spine = [ref.get("idref") for ref in opf.findall(".//opf:itemref", OPF_NS)]
     assert items[spine[0]].get("href") == "text/cover.xhtml"
     assert items[spine[1]].get("href") == "text/titlepage.xhtml"
-    # not a ToC entry, by convention
-    assert "cover.xhtml" not in z.read("nav.xhtml").decode()
+    # not a ToC entry, by convention -- but it IS a landmark, which is where a
+    # reading system looks for "take me to the cover"
+    assert not [h for h, _ in _nav_links(z, "toc") if "cover" in h]
+    assert ("text/cover.xhtml", "Cover") in _nav_links(z, "landmarks")
 
 
 def test_build_epub_drops_a_cover_that_vanishes_mid_export(monkeypatch, tmp_path):
@@ -425,3 +450,107 @@ def test_build_epub_drops_a_cover_that_vanishes_mid_export(monkeypatch, tmp_path
     opf = ET.fromstring(z.read("package.opf"))
     assert not [i for i in opf.findall(".//opf:item", OPF_NS)
                 if i.get("properties") == "cover-image"]
+
+
+def test_nav_lists_every_scene_numbered_and_in_order(monkeypatch, tmp_path):
+    """The EPUB 3 table of contents names each scene, numbered — scene titles
+    repeat (two scenes can both be "Arrival"), and an unnumbered contents page
+    gives the reader nothing to tell two identical entries apart."""
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    z = _open(epub.build_epub(cid)[0])
+    toc = _nav_links(z, "toc")
+    assert ("text/chapter-001.xhtml", "1. Arrival") in toc
+    assert ("text/chapter-002.xhtml", "2. Below") in toc
+    assert toc.index(("text/chapter-001.xhtml", "1. Arrival")) \
+        < toc.index(("text/chapter-002.xhtml", "2. Below"))
+    # the page itself keeps the bare title: numbering belongs on the ToC entry
+    assert "<h1>Arrival</h1>" in z.read("text/chapter-001.xhtml").decode()
+
+
+def test_two_scenes_sharing_a_title_get_distinct_toc_entries(monkeypatch, tmp_path):
+    """The case the numbering exists for. Same title, so the anchors cannot be
+    slug-derived and the labels cannot be the bare title."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    for _ in range(2):
+        sid = scenes.create_scene(cid, "Arrival")
+        scenes.append_message(cid, sid, "assistant", "The docks reek.")
+
+    z = _open(epub.build_epub(cid)[0])
+    toc = _nav_links(z, "toc")
+    assert ("text/chapter-001.xhtml", "1. Arrival") in toc
+    assert ("text/chapter-002.xhtml", "2. Arrival") in toc
+
+
+def test_ncx_mirrors_the_nav_for_epub2_readers(monkeypatch, tmp_path):
+    """EPUB 3 keeps the NCX legal so a book stays navigable on readers that
+    never learned the nav document; a book that ships only `nav.xhtml` has no
+    table of contents at all on those."""
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    blob, _ = epub.build_epub(cid)
+    z = _open(blob)
+    assert "toc.ncx" in z.namelist()
+    ncx = ET.fromstring(z.read("toc.ncx"))
+    assert ncx.find(".//ncx:meta[@name='dtb:uid']", NCX_NS).get("content") \
+        == f"urn:grimoire:campaign:{cid}"
+    assert ncx.find(".//ncx:docTitle/ncx:text", NCX_NS).text == "Run One"
+    points = ncx.findall(".//ncx:navPoint", NCX_NS)
+    labels = [p.find("ncx:navLabel/ncx:text", NCX_NS).text for p in points]
+    hrefs = [p.find("ncx:content", NCX_NS).get("src") for p in points]
+    assert labels[:3] == ["Title", "1. Arrival", "2. Below"]
+    assert "Appendix" in labels and "Elara" in labels
+    # every navPoint points at a document that is actually in the book, and
+    # playOrder is 1..n in document order
+    for h in hrefs:
+        assert h.split("#")[0] in z.namelist(), h
+    assert [p.get("playOrder") for p in points] == [str(i) for i in range(1, len(points) + 1)]
+    assert len({p.get("id") for p in points}) == len(points)
+    # …and the package points the spine at it, which is how a reader finds it
+    opf = ET.fromstring(z.read("package.opf"))
+    spine = opf.find(".//opf:spine", OPF_NS)
+    assert spine.get("toc") == "ncx"
+    ncx_item = next(i for i in opf.findall(".//opf:item", OPF_NS) if i.get("id") == "ncx")
+    assert ncx_item.get("media-type") == "application/x-dtbncx+xml"
+
+
+def test_contents_page_is_in_the_reading_order(monkeypatch, tmp_path):
+    """A reading system that hides its own ToC control still leaves the reader
+    a Contents page they can turn to — so `nav.xhtml` is in the spine, between
+    the front matter and the first scene."""
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    z = _open(epub.build_epub(cid)[0])
+    opf = ET.fromstring(z.read("package.opf"))
+    items = {i.get("id"): i.get("href") for i in opf.findall(".//opf:item", OPF_NS)}
+    spine = [items[r.get("idref")] for r in opf.findall(".//opf:itemref", OPF_NS)]
+    assert spine[:3] == ["text/titlepage.xhtml", "nav.xhtml", "text/chapter-001.xhtml"]
+
+
+def test_documents_carry_epub_type_semantics(monkeypatch, tmp_path):
+    """Each document says what it is, which is what a reading system reads to
+    label a chapter boundary (and to skip the front matter on "go to start")."""
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    covers.put_cover(cid, _png(), "png")
+    z = _open(epub.build_epub(cid)[0])
+
+    def body_type(name: str) -> str:
+        return ET.fromstring(z.read(name)).find(f"{XHTML}body").get(EPUB_TYPE)
+
+    assert body_type("text/cover.xhtml") == "cover"
+    assert body_type("text/titlepage.xhtml") == "titlepage"
+    assert body_type("text/chapter-001.xhtml") == "bodymatter chapter"
+    assert body_type("text/chapter-002.xhtml") == "bodymatter chapter"
+    assert body_type("text/appendix.xhtml") == "backmatter"
+    assert body_type("text/actor-pcs-elara.xhtml") == "backmatter"
+
+
+def test_landmarks_point_at_documents_the_book_contains(monkeypatch, tmp_path):
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    z = _open(epub.build_epub(cid)[0])
+    links = _nav_links(z, "landmarks")
+    assert [h for h, _ in links] == ["nav.xhtml#toc", "text/titlepage.xhtml",
+                                     "text/chapter-001.xhtml"]  # no cover in this book
+    for href, _ in links:
+        assert href.split("#")[0] in z.namelist(), href
+    types = [a.get(EPUB_TYPE) for a in _nav(z, "landmarks").iter(f"{XHTML}a")]
+    assert types == ["toc", "titlepage", "bodymatter"]
+    # hidden, so the Contents page in the spine shows the ToC and not this
+    assert _nav(z, "landmarks").get("hidden") is not None

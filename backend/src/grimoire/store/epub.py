@@ -1,6 +1,13 @@
 """Campaign → EPUB 3 export: one chapter per scene, embedded images and fonts,
 and an appendix for every entity that appeared (cast actors + visited locations).
 
+Navigation is threefold, because reading systems disagree about where they look
+for it: `nav.xhtml` (the EPUB 3 nav document, carrying both the `toc` and the
+`landmarks` nav, and placed in the spine so it doubles as a Contents page),
+`toc.ncx` (EPUB 2's table of contents, which older readers use), and
+`epub:type` structural semantics on each document — cover, titlepage, the
+bodymatter chapters, back matter.
+
 The book is assembled in memory: `export.collect` walks scenes/appendix once
 into format-neutral data (shared with the other export renderers), markdown
 bodies become XHTML fragments (the `markdown` package), pages render from
@@ -56,18 +63,20 @@ def _message_html(speaker: str | None, content: str) -> str:
 
 
 def _chapter_doc(ch: dict) -> dict:
+    """One scene as a spine document. `label` is what the nav and the NCX list;
+    `title` is what the page itself shows, which stays the bare scene title —
+    numbering belongs on the contents entry, not on the chapter opening."""
     body = "\n".join(_message_html(m["speaker"], m["content"]) for m in ch["messages"])
     doc = _render("chapter.xhtml", title=ch["title"], date=ch["date"], location=ch["location"],
                   cast=ch["cast"], epigraph=ch["epigraph"], body=Markup(body))
-    return {"file": f"chapter-{ch['number']:03d}.xhtml", "title": ch["title"], "doc": doc}
+    return {"file": f"{_export.chapter_anchor(ch)}.xhtml", "title": ch["title"],
+            "label": _export.toc_label(ch), "doc": doc}
 
 
 def _appendix_doc(e: dict) -> dict:
     doc = _render("appendix.xhtml", name=e["name"], portrait=e["portrait"], role=e["role"],
                   sections=[{"label": s["label"], "html": Markup(_md(s["text"]))} for s in e["sections"]])
-    file = (f"actor-{e['kind']}-{e['id']}.xhtml" if e["kind"] in ("characters", "pcs")
-            else f"location-{e['id']}.xhtml")
-    return {"file": file, "title": e["name"], "doc": doc}
+    return {"file": _export.appendix_filename(e, "xhtml"), "title": e["name"], "doc": doc}
 
 
 def build_epub(cid: str) -> tuple[bytes, str]:
@@ -107,6 +116,11 @@ def build_epub(cid: str) -> tuple[bytes, str]:
     docs.append(("text/titlepage.xhtml",
                  _render("titlepage.xhtml", title=title, world=data["world_name"],
                          date_range=data["date_range"])))
+    # Where `nav.xhtml` goes in the READING order. It is the EPUB 3 nav document
+    # either way, but a nav document that is also in the spine is a Contents
+    # page the reader can simply turn to -- which is the only table of contents
+    # a reading system that hides its own ToC control leaves them.
+    contents_at = len(docs)
     docs += [(f"text/{c['file']}", c["doc"]) for c in chapters]
     if appendix:
         docs.append(("text/appendix.xhtml", _render("divider.xhtml", title="Appendix")))
@@ -120,6 +134,7 @@ def build_epub(cid: str) -> tuple[bytes, str]:
               "properties": ""}
              for i, (href, _) in enumerate(docs)]
     spine = [it["id"] for it in items]
+    spine.insert(contents_at, "nav")  # `nav` is manifested by package.opf itself
     items.append({"id": "css", "href": "css/stylesheet.css", "media_type": "text/css",
                   "properties": ""})
     items += [{"id": f"font-{i}", "href": f"fonts/{f.name}", "media_type": "font/ttf",
@@ -144,11 +159,28 @@ def build_epub(cid: str) -> tuple[bytes, str]:
                                                    "application/octet-stream"),
                       "properties": "cover-image"})
 
-    opf = _render("package.opf", identifier=f"urn:grimoire:campaign:{cid}", title=title,
+    # One identifier, rendered into both the package and the NCX: EPUB 2 readers
+    # check `dtb:uid` against `dc:identifier`, and two f-strings drifting apart
+    # is exactly the kind of mismatch that produces a book that opens fine and
+    # fails validation.
+    identifier = f"urn:grimoire:campaign:{cid}"
+    opf = _render("package.opf", identifier=identifier, title=title,
                   modified=data["updated"] or now_iso(),
                   cover_id="cover-img" if cover_bytes is not None else "",
                   items=items, spine=spine)
-    nav = _render("nav.xhtml", chapters=chapters, appendix=appendix)
+    nav = _render("nav.xhtml", chapters=chapters, appendix=appendix,
+                  cover=cover_bytes is not None)
+    # The NCX is EPUB 2's table of contents, and EPUB 3 keeps it legal precisely
+    # so a book stays navigable on the reading systems that never learned the
+    # nav document. Flat, because an NCX navPoint must point AT a document and
+    # the nav's "Scenes"/"Appendix" groupings point at nothing -- depth is a
+    # nicety, having every chapter reachable is not.
+    points = [{"label": "Title", "href": "text/titlepage.xhtml"}]
+    points += [{"label": c["label"], "href": f"text/{c['file']}"} for c in chapters]
+    if appendix:
+        points.append({"label": "Appendix", "href": "text/appendix.xhtml"})
+        points += [{"label": e["title"], "href": f"text/{e['file']}"} for e in appendix]
+    ncx = _render("toc.ncx", identifier=identifier, title=title, points=points)
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -156,6 +188,7 @@ def build_epub(cid: str) -> tuple[bytes, str]:
         z.writestr("META-INF/container.xml", _render("container.xml"))
         z.writestr("package.opf", opf)
         z.writestr("nav.xhtml", nav)
+        z.writestr("toc.ncx", ncx)
         for href, doc in docs:
             z.writestr(href, doc)
         z.writestr("css/stylesheet.css", _render("stylesheet.css"))

@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml">
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head>
   <title>{{ name }}</title>
   <link rel="stylesheet" type="text/css" href="../css/stylesheet.css"/>
 </head>
-<body class="appendix">
+<body class="appendix" epub:type="backmatter">
   <h1>{{ name }}</h1>
 {% if role %}  <p class="actor-role">{{ role }}</p>
 {% endif %}{% if portrait %}  <img class="portrait" src="{{ portrait }}" alt="{{ name }}"/>

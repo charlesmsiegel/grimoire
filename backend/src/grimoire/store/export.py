@@ -344,14 +344,43 @@ def collect(cid: str, image_prefix: str = "images/") -> dict:
     }
 
 
+def chapter_anchor(ch: dict) -> str:
+    """A scene's stable id: the EPUB chapter document's basename, and the
+    fragment a single-document format links its table of contents at.
+
+    Numbered rather than slugified on purpose -- `collect` numbers chapters in
+    scene order, and two scenes may well share a title (the app titles a scene
+    for you), which would give a slug-derived anchor two definitions and send
+    every link to the first one."""
+    return f"chapter-{ch['number']:03d}"
+
+
+def appendix_anchor(e: dict) -> str:
+    """The same, for an appendix entry -- record ids are already unique within
+    a kind, so these need no numbering."""
+    if e["kind"] == "locations":
+        return f"location-{e['id']}"
+    return f"actor-{e['kind']}-{e['id']}"
+
+
 def chapter_filename(ch: dict, ext: str) -> str:
     return f"{ch['number']:03d}-{slugify(ch['title'])}.{ext}"
 
 
 def appendix_filename(e: dict, ext: str) -> str:
-    if e["kind"] == "locations":
-        return f"location-{e['id']}.{ext}"
-    return f"actor-{e['kind']}-{e['id']}.{ext}"
+    return f"{appendix_anchor(e)}.{ext}"
+
+
+def toc_label(ch: dict) -> str:
+    """A scene's table-of-contents label, in the formats that write their own
+    numbering (EPUB nav/NCX, the plain-text contents block, the markdown
+    index). Formats whose own markup numbers the list -- an HTML `<ol>` -- link
+    the bare title instead, and get the same reading.
+
+    The number is what makes the entry usable: scene titles repeat, so an
+    unnumbered contents page can list "Arrival" three times with nothing to
+    tell the reader which one they are about to open."""
+    return f"{ch['number']}. {ch['title']}"
 
 
 def _header_lines(ch: dict) -> list[str]:
@@ -369,9 +398,17 @@ def _header_lines(ch: dict) -> list[str]:
 def build_markdown_bundle(cid: str) -> tuple[bytes, str]:
     """A zip of one markdown file per scene plus an appendix and packed
     images/, reusing the campaign's own `**Speaker:** content` transcript
-    convention — a portable, human-editable bundle."""
+    convention — a portable, human-editable bundle.
+
+    `index.md` is the table of contents; one file per scene, numbered in its
+    name and its heading, is the chapter marker this format has."""
     data = collect(cid)  # raises CampaignNotFound; image_prefix="images/"
 
+    # index.md is the bundle's table of contents -- the one file a reader opens
+    # first, and the only thing tying a directory of `001-arrival.md` back
+    # together. The scene list is an ordered list carrying explicit numbers, so
+    # it reads the same in a renderer and in a plain editor, and matches both
+    # the chapter headings and the numeric filename prefix.
     index = [f"# {data['title']}"]
     if data["world_name"]:
         index.append(f"*{data['world_name']}*")
@@ -379,16 +416,22 @@ def build_markdown_bundle(cid: str) -> tuple[bytes, str]:
         index.append(data["date_range"])
     if data["chapters"]:
         index.append("## Scenes")
-        index += [f"- [{c['title']}]({chapter_filename(c, 'md')})" for c in data["chapters"]]
+        index.append("\n".join(f"{c['number']}. [{c['title']}]({chapter_filename(c, 'md')})"
+                               for c in data["chapters"]))
     if data["appendix"]:
         index.append("## Appendix")
-        index += [f"- [{e['name']}]({appendix_filename(e, 'md')})" for e in data["appendix"]]
+        index.append("\n".join(f"- [{e['name']}]({appendix_filename(e, 'md')})"
+                               for e in data["appendix"]))
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("index.md", "\n\n".join(index) + "\n")
         for c in data["chapters"]:
-            lines = [f"# {c['title']}", *_header_lines(c), chronicle.transcript_text(c["messages"])]
+            # The heading carries the scene's number as well as its title: it is
+            # the chapter marker a markdown reader sees, and numbering it is what
+            # lets a reader landing in one file know where in the run they are.
+            lines = [f"# {toc_label(c)}", *_header_lines(c),
+                     chronicle.transcript_text(c["messages"])]
             z.writestr(chapter_filename(c, "md"), "\n\n".join(lines) + "\n")
         for e in data["appendix"]:
             lines = [f"# {e['name']}"]
@@ -412,6 +455,11 @@ h1, h2, h3 { font-weight: 600; line-height: 1.2; }
 img { max-width: 100%; }
 .titlepage { text-align: center; margin-bottom: 3em; }
 .titlepage .world { font-style: italic; }
+nav.toc { margin: 0 0 4em; }
+nav.toc h2 { margin-bottom: 0.6em; }
+nav.toc h3 { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.1em; color: #666; margin: 1.2em 0 0.3em; }
+nav.toc ol, nav.toc ul { margin: 0; padding-left: 1.6em; }
+nav.toc li { margin: 0.2em 0; }
 section.chapter, section.appendix { margin-bottom: 3em; }
 .scene-meta { font-size: 0.85em; color: #555; margin-bottom: 1.5em; }
 .scene-meta p { margin: 0.15em 0; }
@@ -436,15 +484,45 @@ def _html_message(speaker: str | None, content: str) -> str:
     return f"<p>{label}</p>\n{html}"
 
 
+def _html_toc(data: dict) -> str:
+    """The one-page export's table of contents — "" for a campaign with nothing
+    in it, rather than an empty `<nav>`.
+
+    A single scrolling document needs this more than the multi-file formats do:
+    nothing else in it tells a reader how many scenes there are, or lets them
+    jump to one. The scene list is an `<ol>`, so the browser numbers it and the
+    link text stays the bare title; the anchors are the ids `build_html` puts on
+    every section."""
+    parts = []
+    if data["chapters"]:
+        parts.append("<h3>Scenes</h3><ol>" + "".join(
+            f"<li><a href=\"#{chapter_anchor(c)}\">{escape(c['title'])}</a></li>"
+            for c in data["chapters"]) + "</ol>")
+    if data["appendix"]:
+        parts.append("<h3>Appendix</h3><ul>" + "".join(
+            f"<li><a href=\"#{appendix_anchor(e)}\">{escape(e['name'])}</a></li>"
+            for e in data["appendix"]) + "</ul>")
+    if not parts:
+        return ""
+    return "<nav class=\"toc\" id=\"contents\"><h2>Contents</h2>" + "".join(parts) + "</nav>"
+
+
 def build_html(cid: str) -> tuple[bytes, str]:
     """A single self-contained HTML page: every image inlined as a base64
-    data URI so the file has no external dependencies."""
+    data URI so the file has no external dependencies.
+
+    A `<nav class="toc">` after the title page is the table of contents, and
+    each scene is a `<section class="chapter">` with the id that nav links —
+    the chapter marker a one-document format can carry."""
     data = collect(cid)  # raises CampaignNotFound; image_prefix="images/"
 
     sections = [f"<section class=\"titlepage\"><h1>{escape(data['title'])}</h1>"
                 + (f"<p class=\"world\">{escape(data['world_name'])}</p>" if data["world_name"] else "")
                 + (f"<p class=\"daterange\">{escape(data['date_range'])}</p>" if data["date_range"] else "")
                 + "</section>"]
+    toc = _html_toc(data)
+    if toc:
+        sections.append(toc)
     for ch in data["chapters"]:
         meta = []
         if ch["date"]:
@@ -455,17 +533,20 @@ def build_html(cid: str) -> tuple[bytes, str]:
             meta.append(f"<p class=\"scene-cast\">{escape(' · '.join(ch['cast']))}</p>")
         epigraph = f"<p class=\"epigraph\">{escape(ch['epigraph'])}</p>" if ch["epigraph"] else ""
         body = "\n".join(_html_message(m["speaker"], m["content"]) for m in ch["messages"])
-        sections.append(f"<section class=\"chapter\"><h2>{escape(ch['title'])}</h2>"
+        sections.append(f"<section class=\"chapter\" id=\"{chapter_anchor(ch)}\">"
+                        f"<h2>{escape(ch['title'])}</h2>"
                         f"{''.join(meta)}{epigraph}{body}</section>")
     if data["appendix"]:
-        sections.append("<section class=\"divider\"><h2>Appendix</h2></section>")
+        sections.append("<section class=\"divider\" id=\"appendix\">"
+                        "<h2>Appendix</h2></section>")
         for e in data["appendix"]:
             role = f"<p class=\"actor-role\">{escape(e['role'])}</p>" if e["role"] else ""
             portrait = (f'<img class="portrait" src="{e["portrait"]}" alt="{escape(e["name"])}"/>'
                         if e["portrait"] else "")
             secs = "".join((f"<h3>{escape(s['label'])}</h3>" if s["label"] else "") + _html_md(s["text"])
                           for s in e["sections"])
-            sections.append(f"<section class=\"appendix\"><h2>{escape(e['name'])}</h2>"
+            sections.append(f"<section class=\"appendix\" id=\"{appendix_anchor(e)}\">"
+                            f"<h2>{escape(e['name'])}</h2>"
                             f"{role}{portrait}{secs}</section>")
 
     doc = (f"<!doctype html><html><head><meta charset=\"utf-8\"/>"
@@ -485,7 +566,13 @@ def build_html(cid: str) -> tuple[bytes, str]:
 
 def build_text(cid: str) -> tuple[bytes, str]:
     """A single plain-text transcript: speaker-prefixed message blocks,
-    images dropped to their alt text (nothing to embed in a .txt file)."""
+    images dropped to their alt text (nothing to embed in a .txt file).
+
+    A CONTENTS block lists every scene up front, and each chapter opens after a
+    form feed (U+000C) — the plain-text page break, which is what a printer and
+    a pager treat as "new chapter here", and which replaces the `---` rule this
+    used to separate scenes with. The numbered title line under it is the
+    visible half of the same marker, and matches the contents block."""
     data = collect(cid)  # raises CampaignNotFound
 
     parts = [data["title"]]
@@ -494,10 +581,12 @@ def build_text(cid: str) -> tuple[bytes, str]:
     if data["date_range"]:
         parts.append(data["date_range"])
     header = "\n".join(parts)
+    if data["chapters"]:
+        header += "\n\nCONTENTS\n\n" + "\n".join(f"  {toc_label(c)}" for c in data["chapters"])
 
     chapters = []
     for ch in data["chapters"]:
-        lines = [ch["title"]]
+        lines = [toc_label(ch)]
         meta_bits = [b for b in (ch["date"], ch["location"]) if b]
         if meta_bits:
             lines.append(" — ".join(meta_bits))
@@ -509,19 +598,27 @@ def build_text(cid: str) -> tuple[bytes, str]:
         lines.append(chronicle.transcript_text(messages))
         chapters.append("\n\n".join(lines))
 
-    body = "\n\n" + "\n\n---\n\n".join(chapters) if chapters else ""
+    sep = "\n\n\f\n"
+    body = sep + sep.join(chapters) if chapters else ""
     return (header + body + "\n").encode("utf-8"), f"{cid}.txt"
 
 
 def build_json(cid: str) -> tuple[bytes, str]:
     """Machine-readable dump: scene metas + messages verbatim, chronicle, and
-    roster — nearest to the on-disk data, no image resolution or rendering."""
+    roster — nearest to the on-disk data, no image resolution or rendering.
+
+    `contents` is this format's table of contents: the scene order the book
+    formats number their chapters by, stated rather than left implicit in the
+    order of a JSON array a consumer may well re-sort."""
     campaign = campaigns_read.read_campaign(cid)  # raises CampaignNotFound
     sids = [s["id"] for s in sorted(scenes_read.list_scenes(cid), key=lambda s: s["id"])]
+    scene_docs = [scenes_read.read_scene(cid, sid) for sid in sids]
     payload = {
         "campaign": {"id": cid, "name": campaign["meta"].get("name", cid),
                     "world": campaign["meta"].get("world", "")},
-        "scenes": [scenes_read.read_scene(cid, sid) for sid in sids],
+        "contents": [{"number": n, "id": sid, "title": doc["meta"].get("title", sid)}
+                    for n, (sid, doc) in enumerate(zip(sids, scene_docs, strict=True), start=1)],
+        "scenes": scene_docs,
         "chronicle": chronicle.read_chronicle(cid),
         "roster": appearances_cast.roster(cid),
     }

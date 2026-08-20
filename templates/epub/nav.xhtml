@@ -5,14 +5,14 @@
   <title>Contents</title>
   <link rel="stylesheet" type="text/css" href="css/stylesheet.css"/>
 </head>
-<body>
-  <nav epub:type="toc">
+<body class="nav">
+  <nav epub:type="toc" id="toc">
     <h1>Contents</h1>
     <ol>
       <li><a href="text/titlepage.xhtml">Title</a></li>
 {% if chapters %}      <li><span>Scenes</span>
         <ol>
-{% for ch in chapters %}          <li><a href="text/{{ ch.file }}">{{ ch.title }}</a></li>
+{% for ch in chapters %}          <li><a href="text/{{ ch.file }}">{{ ch.label }}</a></li>
 {% endfor %}        </ol>
       </li>
 {% endif %}{% if appendix %}      <li><a href="text/appendix.xhtml">Appendix</a>
@@ -20,6 +20,15 @@
 {% for ap in appendix %}          <li><a href="text/{{ ap.file }}">{{ ap.title }}</a></li>
 {% endfor %}        </ol>
       </li>
+{% endif %}    </ol>
+  </nav>
+  <nav epub:type="landmarks" hidden="hidden">
+    <h1>Guide</h1>
+    <ol>
+{% if cover %}      <li><a epub:type="cover" href="text/cover.xhtml">Cover</a></li>
+{% endif %}      <li><a epub:type="toc" href="nav.xhtml#toc">Contents</a></li>
+      <li><a epub:type="titlepage" href="text/titlepage.xhtml">Title Page</a></li>
+{% if chapters %}      <li><a epub:type="bodymatter" href="text/{{ chapters[0].file }}">Beginning</a></li>
 {% endif %}    </ol>
   </nav>
 </body>
