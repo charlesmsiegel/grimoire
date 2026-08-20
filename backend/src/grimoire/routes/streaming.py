@@ -133,8 +133,24 @@ def _persist_reply(cid: str, sid: str, text: str) -> int:
     leaking blocks into transcripts while the model is still complying from the
     scene it can see, and a block is unambiguous enough that stripping one
     nobody asked for costs nothing.
+
+    Art handles are resolved next, for the same reason and in the same spirit:
+    `[[art:...]]` is machine-readable output that must become markdown -- or
+    nothing -- before `split_reply` runs, so a handle can never be split into a
+    post of its own and no handle is ever written to a transcript.
+    Unconditionally, again: a model still emitting handles from a scene it can
+    see must not start leaking them the moment the section is switched off in
+    the prompt layout. `resolve_handles` deletes what it cannot resolve, so a
+    store with no described art turns every handle into nothing, which is the
+    right answer there too.
+
+    It runs BEFORE macro expansion, so a description containing `{{user}}`
+    lands as alt text that expands like any other narration, and AFTER the
+    tracker split, so a handle stranded inside a tracker block is not resolved
+    into markdown that nobody will ever render.
     """
     text, tracked = store.turnstate.split_block(text)
+    text = store.context.resolve_art_handles(cid, text)
     players = frozenset(store.appearances.player_names(cid, sid))
     subs = store.context.scene_substitutions(cid, sid)
     # Tracker values get the same one-shot macro resolution the narration below

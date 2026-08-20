@@ -36,6 +36,7 @@ from .. import tokens  # noqa: F401
 from ..tokens import _encoder, count_tokens  # noqa: F401
 from . import (  # noqa: F401
                archive,
+               art,
                assemble,
                cast,
                layout,
@@ -48,6 +49,8 @@ from . import (  # noqa: F401
                world_state,
 )
 from .archive import _archive_entries, archive_depth  # noqa: F401
+from .art import catalogue as art_catalogue  # noqa: F401
+from .art import resolve_handles as resolve_art_handles  # noqa: F401
 from .assemble import (  # noqa: F401
                OPENER_RECAP_DEPTH,
                SECTIONS,

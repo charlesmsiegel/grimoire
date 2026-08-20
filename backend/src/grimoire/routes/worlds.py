@@ -35,6 +35,7 @@ from .common import (
 from .models import (
     AvatarFocus,
     CalendarConfig,
+    ImageDescription,
     LorebookCommit,
     ModuleSetting,
     NameBody,
@@ -519,6 +520,21 @@ def put_world_pc_avatar_focus(wid: str, pid: str, vid: str, body: AvatarFocus):
                                base=store.pcs.ASSET_BASE) is None:
         raise HTTPException(status_code=404, detail="image not found")
     store.assets.write_focus(root, pid, vid, body.focus, base=store.pcs.ASSET_BASE)
+    return {"ok": True}
+
+
+@router.put("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}/description")
+def put_world_pc_image_description(wid: str, pid: str, vid: str, name: str,
+                                   body: ImageDescription):
+    root = _world_pc_version_or_404(wid, pid, vid)
+    try:
+        store.image_descriptions.set_description(root, pid, vid, name, body.description,
+                                                 base=store.pcs.ASSET_BASE)
+    except ValueError:
+        # `from None`: the strict-write ValueError is this module's own
+        # implementation detail, and chaining it onto the 404 says nothing a
+        # caller can act on.
+        raise HTTPException(status_code=404, detail="image not found") from None
     return {"ok": True}
 
 

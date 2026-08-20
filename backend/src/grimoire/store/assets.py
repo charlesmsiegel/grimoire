@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import shutil
 import threading
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 
 from . import atomic
@@ -509,10 +509,8 @@ def drop_sidecar_entry(d: Path, filename: str, key: str) -> None:
     if not isinstance(cur, dict) or key not in cur:
         return
     del cur[key]
-    try:
+    with suppress(OSError):
         atomic.write_text(p, json.dumps(cur, indent=2, sort_keys=True) + "\n")
-    except OSError:
-        pass
 
 
 def put_image(root: Path, cid: str, vid: str, name: str, data: bytes, ext: str,

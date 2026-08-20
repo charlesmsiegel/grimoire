@@ -46,7 +46,7 @@ from ..scenes import turns as scenes_turns
 
 # Module objects, not names: `_assemble` binds a local `cast` (hence the alias),
 # and `cast._drift_roster` has to stay patchable from the test that counts it.
-from . import archive, layout, macros, mechanics, pack, speaker, story, world_state
+from . import archive, art, layout, macros, mechanics, pack, speaker, story, world_state
 from . import cast as cast_data
 
 OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
@@ -268,6 +268,12 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "world_info_bodies": wi_public, "secret_world_info_bodies": wi_secret,
         "recalled_lore_bodies": recalled_public,
         "secret_recalled_lore_bodies": recalled_secret,
+        # Ranked against the same scan window world info activates on, over a
+        # pool built from what this turn already resolved -- see art.catalogue.
+        # `[]` on any failure, so a store being synced under us costs the
+        # section rather than the turn.
+        "available_art": art.catalogue(cid, cast, current_loc if not loc_excluded else None,
+                                       activated_wi + recalled_wi, recent_text),
         # Keyword activations only. A recalled group deliberately does NOT pull
         # its campaign state: that state renders into the `Group state` section,
         # which is `spotlight`, so feeding it from recall would grow a section
@@ -437,6 +443,13 @@ SECTIONS = [
     # prompt does not fit. Sharing a section with the keyword hits would let a
     # recall drop them too.
     Section("recalled_lore", "Recalled lore", "scene/sections/recalled_lore.j2", pack.RECALLED),
+    # RECALLED, beside recalled lore and for the same reason: this is content
+    # retrieved *because* the conversation touched on it, so it is the first
+    # thing that should give way when the prompt does not fit. It is also the
+    # section a reader most plausibly wants gone entirely -- and `layout.py`
+    # already makes any section switchable by id, which is this feature's whole
+    # off switch rather than a second setting of its own.
+    Section("available_art", "Available art", "scene/sections/available_art.j2", pack.RECALLED),
     Section("group_state", "Group state", "scene/sections/group_state.j2", pack.SPOTLIGHT),
     Section("mechanics_rules", "Mechanics rules",
             "scene/sections/mechanics_rules.j2", pack.SPOTLIGHT),

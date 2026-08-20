@@ -962,6 +962,10 @@ def read_character(cid: str, char_id: str) -> dict:
         v["images"] = [i["name"] for i in images]
         v["image_v"] = {i["name"]: i["v"] for i in images}
         v["avatar_focus"] = read_focus(cid, char_id, v["id"])
+        # Re-derived per image, not per folder: `read_descriptions` refuses to
+        # caption a campaign-side picture with the world's sentence about a
+        # different one. See its docstring.
+        v["image_descriptions"] = read_descriptions(cid, char_id, v["id"])
     return detail
 
 
@@ -977,6 +981,7 @@ def read_pc(cid: str, pid: str) -> dict:
     for v in detail["versions"]:
         v["images"] = [i["name"] for i in list_images(cid, pid, v["id"], pcs.ASSET_BASE)]
         v["avatar_focus"] = read_focus(cid, pid, v["id"], pcs.ASSET_BASE)
+        v["image_descriptions"] = read_descriptions(cid, pid, v["id"], pcs.ASSET_BASE)
     return detail
 
 

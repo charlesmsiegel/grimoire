@@ -18,7 +18,7 @@ import hashlib
 import shutil
 from pathlib import Path
 
-from . import assets, atomic, statcache
+from . import assets, atomic, image_descriptions, statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import safe_id, slugify, uniquify
 
@@ -194,6 +194,7 @@ def read_pc(root: Path, pid: str) -> dict:
             # image handling is one code path for both actor kinds (#219).
             "images": [i["name"] for i in assets.list_images(root, pid, v, ASSET_BASE)],
             "avatar_focus": assets.read_focus(root, pid, v, ASSET_BASE),
+            "image_descriptions": image_descriptions.read_all(root, pid, v, ASSET_BASE),
         })
     default = meta.get("default_version", "")
     return {"meta": {"id": pid, "name": meta.get("name", pid), "tags": _tags_of(meta),

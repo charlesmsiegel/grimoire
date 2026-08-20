@@ -48,8 +48,8 @@ def test_read_tolerates_garbled_sidecar(tmp_path):
 
 
 def test_read_tolerates_non_string_values(tmp_path):
-    cid, vid = _chars(tmp_path)
-    d = _dir_of(tmp_path, cid, vid)
+    _cid, vid = _chars(tmp_path)
+    d = _dir_of(tmp_path, _cid, vid)
     (d / image_descriptions.DESCRIPTIONS_FILE).write_text(
         '{"avatar": ["a", "list"], "gallery_1": "kept"}', encoding="utf-8")
     assert image_descriptions.read_in(d) == {"gallery_1": "kept"}
@@ -102,7 +102,7 @@ def test_version_wrappers(tmp_path):
 
 
 def test_version_wrappers_reject_unsafe_ids(tmp_path):
-    cid, vid = _chars(tmp_path)
+    _cid, vid = _chars(tmp_path)
     assert image_descriptions.read(tmp_path, "../evil", vid, "avatar") == ""
     with pytest.raises(ValueError):
         image_descriptions.set_description(tmp_path, "../evil", vid, "avatar", "x")

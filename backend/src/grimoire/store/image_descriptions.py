@@ -203,7 +203,6 @@ def undescribed(root: Path, base: str = "characters") -> list[dict]:
             continue
         for vdir in sorted(p for p in adir.iterdir() if p.is_dir()):
             reviewed = set(read_raw(vdir))  # key presence alone marks 'reviewed'
-            for name in sorted(_names(vdir)):
-                if name not in reviewed:
-                    out.append({"id": rec.name, "vid": vdir.name, "name": name})
+            out.extend({"id": rec.name, "vid": vdir.name, "name": name}
+                       for name in sorted(_names(vdir)) if name not in reviewed)
     return out
