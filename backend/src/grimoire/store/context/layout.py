@@ -235,5 +235,12 @@ def write_layout(entries) -> list[dict]:
 
 def apply(catalog: list) -> list:
     """The section list to render: the catalog, or the merge when the toggle is
-    on. One `read_config` and at most one small file read per assemble pass."""
+    on. One `read_config` and at most one small file read per call.
+
+    Per CALL, not per assemble pass, which is what this used to claim:
+    `_assemble` asks as well, through `_section_on`, so that a section whose
+    data is expensive to gather can be skipped when the reader has switched it
+    off. Two small reads per turn rather than one, and the alternative --
+    threading the resolved list from `_assemble` into `_render_sections` --
+    changes four signatures to save a `stat`."""
     return merge(catalog, read_layout()) if enabled() else list(catalog)

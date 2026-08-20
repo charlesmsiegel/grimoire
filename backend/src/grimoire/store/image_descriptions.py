@@ -42,7 +42,7 @@ forever.
 Two readers, and only one of them is human. The author writes it; ``search``
 can match it; and ``store.art_catalog`` ranks it against the moment and offers
 the closest few to the model. A non-empty description is also what makes an
-image *reachable* by a model handle at all — see ``art_catalog.resolve_handles``
+image *reachable* by a model handle at all — see ``context.art.resolve_handles``
 — so "described" is a deliberate act of publication, not merely a note.
 
 Nothing detects a description drifting from the art it describes. An image

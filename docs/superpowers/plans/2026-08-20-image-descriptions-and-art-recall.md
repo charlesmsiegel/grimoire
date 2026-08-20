@@ -57,10 +57,10 @@ mirroring how `assets.list_in` was split out for `campaign_images`:
 campaign; `GET .../images/undescribed`, registered **before** the generic
 `{kind}/{eid}` entity routes.
 
-### Task 4 — `store/art_catalog.py`: pool, ranking, handles
+### Task 4 — `store/context/art.py`: pool, ranking, handles
 
-- Create: `backend/src/grimoire/store/art_catalog.py`
-- Test: `backend/tests/test_art_catalog.py`
+- Create: `backend/src/grimoire/store/context/art.py`
+- Test: `backend/tests/test_context_art.py`
 
 - `candidates(cid, cast, current_loc, wi_entities) -> list[dict]` — pool
   assembly; each entry `{handle, description, url, kind, id, name}`.
