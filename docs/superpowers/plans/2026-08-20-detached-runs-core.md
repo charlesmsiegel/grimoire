@@ -125,6 +125,15 @@ module that uses it**, in the same commit; none is shared machinery:
 - `_hold_a_run(cid, sid, cls="turn")` / `_release(cid, sid)` -- take and drop an
   exclusion key directly.
 
+**One fixture is the exception and does go in `conftest.py`: `live_server`.**
+Task 3's disconnect test and Task 5's cancel tests both need a real socket,
+which `TestClient` cannot give them (the reasoning is at that test). It starts
+uvicorn on an ephemeral port once per module against the same app and
+`GRIMOIRE_HOME`, and exposes `.url`, `.app`, `.campaign_scene` and
+`.hold_provider()` — the last wrapping the `llm_fakes` provider so it blocks
+after its first delta until the test releases it. Two tasks needing it is what
+makes it shared rather than local; nothing else here is.
+
 **There is no `app` fixture.** `conftest.client` returns `TestClient(app)` and
 nothing else, so tests reach the registry through **`client.app.state.runs`**.
 An early draft of this plan declared `app` as a test parameter, which pytest
@@ -362,7 +371,24 @@ A pure data structure with no scheduling in it. Scheduling is Task 3.
   ended_at`, plus
   `finish(state: str, at: float | None = None) -> None` (defaults `at` to the
   current clock; tests pass it explicitly so reaping is deterministic) and
-  `append_frame(payload: dict) -> int` returning the absolute index assigned.
+  `append_frame(frame: str) -> int` returning the absolute index assigned.
+
+  **The parameter is a raw SSE frame — the exact bytes the producer yields —
+  not a payload dict.** The producer is `event_stream`, which yields
+  already-encoded strings, and one of them is `_HEARTBEAT` (`": heartbeat\n\n"`,
+  `streaming.py:51`), a *comment* frame with no JSON payload at all. Typed as
+  `dict`, the buffer can only take heartbeats by rejecting them, dropping them,
+  or re-encoding every other frame back out of a decode it should never have
+  done — and dropping them is the one that looks harmless and is not, because
+  a heartbeat occupies an index and a client resuming at `consumed + 1` would
+  then be off by the number of heartbeats it never saw. Store the frame
+  verbatim, index it, and let replay be a byte-for-byte concatenation.
+
+  Every registry test appends strings, and one of them appends a heartbeat
+  between two deltas and reconnects across it, asserting the resumed text
+  equals the uninterrupted text. That test is what makes the type real; a
+  suite that only ever appends `{"delta": ...}` passes just as well against
+  the wrong signature.
 
   **`labels` is `{"campaign": str, "scene": str}`, captured at start** by the
   producing route and carried on the run. The Android terminal notification
@@ -580,20 +606,24 @@ def test_one_runner_raising_does_not_cancel_its_siblings(app_with_lifespan):
     a per-run boundary one malformed scene would abort every other live run
     and stop the backup ticker."""
     app = app_with_lifespan
-    survived = threading.Event()
 
     async def boom():
         raise RuntimeError("one bad turn")
 
     async def fine():
         await anyio.sleep(0.05)
-        survived.set()
 
     bad, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
     good, _ = app.state.runs.start_or_existing(OTHER, "turn", "chat", "a2", "i", LABELS)
     runner.start(app, bad, lambda: boom())
     runner.start(app, good, lambda: fine())
-    assert survived.wait(timeout=5)
+    # NOT `survived.wait()`: `fine` sets that flag before it returns, and
+    # `_guarded` writes `landed` only after `await factory()` returns. Waking on
+    # the flag and asserting the state is a race that goes green on an idle
+    # machine and red on a loaded CI runner -- in this test, which is about
+    # isolation and would then be blamed for a defect it does not have.
+    _wait_terminal(app, bad.id)
+    _wait_terminal(app, good.id)
     assert bad.state == "failed"
     assert good.state == "landed"
 
@@ -907,15 +937,21 @@ know' into a confident wrong answer."
 def test_a_dropped_subscriber_does_not_cancel_the_run(client, campaign_scene):
     """The inverse of today's behavior, and the single most important test in
     this plan. Disconnect used to mean cancel; now it detaches a subscriber."""
-    cid, sid = campaign_scene
-    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
-                       json={"content": "Mara steps onto the wharf."}) as r:
+    cid, sid = live_server.campaign_scene
+    # A held provider makes "mid-generation" a defined moment rather than a
+    # sleep: it has emitted one delta and will not emit the next until the test
+    # releases it, so the disconnect below lands squarely inside the stream.
+    held = live_server.hold_provider()
+    with httpx.stream("POST", f"{live_server.url}/api/campaigns/{cid}/scenes/{sid}/chat",
+                      json={"content": "Mara steps onto the dock."}) as r:
         run_id = _first_run_frame(r)["run"]["id"]
-        # walk away mid-generation
-    _wait_terminal(client.app, run_id)
-    run = client.app.state.runs.get(run_id, ("scene", cid, sid))
+        held.await_first_delta()
+        r.close()                       # a real socket close, mid-generation
+    held.release()
+    _wait_terminal(live_server.app, run_id)
+    run = live_server.app.state.runs.get(run_id, ("scene", cid, sid))
     assert run.state == "landed"
-    assert "wharf" in store.scenes.read_scene(cid, sid)["messages"][-1]["content"].lower()
+    assert "dock" in store.scenes.read_scene(cid, sid)["messages"][-1]["content"].lower()
 
 
 def test_a_provider_failure_ends_failed_not_landed(client, campaign_scene):
@@ -957,10 +993,22 @@ it becomes observable only after the stream completes. Exiting the block
 therefore simulates nothing, and **an implementation that still cancels on a
 real socket close would pass the most important test in this plan.**
 
-Drive it against a live uvicorn instance on an ephemeral port, or an ASGI
-harness that injects `http.disconnect` while the fake provider is deliberately
-held open. `llm_fakes` supplies a provider that blocks until the test releases
-it, which is what makes "mid-generation" a defined moment.
+So this one test does **not** take the `client` fixture. It takes
+`live_server` — a uvicorn instance on an ephemeral port, started per module,
+sharing the app and its `GRIMOIRE_HOME` — and talks to it with a real `httpx`
+client whose `close()` puts a FIN on the wire. The alternative, if starting a
+server in-process proves unstable on CI, is an ASGI harness that sends an
+explicit `{"type": "http.disconnect"}` into the running app; either produces
+the event the feature is about, and `TestClient` produces neither.
+
+`live_server.hold_provider()` wraps the `llm_fakes` provider so it blocks
+after its first delta until released. Without it the test has no way to name a
+moment that is after the stream started and before it finished, and a sleep
+long enough to be safe is also long enough to let the whole turn complete —
+which passes vacuously, exactly like the version this replaces.
+
+Build `live_server` as a fixture in `conftest.py` alongside `client`, not
+inline in this module: Task 5's cancel tests need the same real socket.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -972,6 +1020,25 @@ Expected: FAIL — the run frame is absent and the turn aborts on disconnect
 Its `except LLMError` branch already emits an error frame and returns; record
 `"failed"` there and `"landed"` on the clean path. The runner reads that rather
 than guessing from whether the coroutine raised.
+
+**`LLMError` is not the only branch that ends badly and returns normally.**
+`_fence_stream` has a second one at `streaming.py:422`: `finalize` raising
+`store.locks.StoreBusy`, which emits a `busy` error frame and returns. That
+path is reached *after* the provider's clean EOF, so an implementation that
+sets `"landed"` on "the `async for` completed" marks the run landed, fires the
+success notification, and tells the player a turn is waiting — when the reply
+did not finish persisting and the subscriber that was still attached got an
+error. `_persist_reply`'s own `StoreBusy`/`SceneNotFound` handler at `:367` is
+the same shape: it swallows so the stream can still report the upstream
+failure, and it means the write was lost.
+
+So the rule is not "record failure in the `LLMError` branch." It is: **every
+branch that emits a terminal error frame records a failed outcome, and the
+clean outcome is recorded only where nothing was swallowed.** Write the
+outcome where the frame is emitted, so the two cannot drift apart. Test the
+`StoreBusy`-during-finalize path specifically and assert the run is `failed` —
+it is the one an implementer will not think of, because from inside the
+generator it looks like the turn succeeded.
 
 - [ ] **Step 4: Move the persist hooks onto the runner**
 
@@ -1148,6 +1215,7 @@ guessing costs a debugging cycle:
 | `set_location` / `set_datetime` setters | the scene's location and clock routes | `store/scenes/moment.py` |
 | `post_replay` / `post_replay_cancel` | `POST .../replay`, `.../replay/cancel` | `scenes.py:3186`, `:3264` |
 | `post_scene_alternate` | `POST .../alternates/{vid}` | `scenes.py:703` |
+| `put_chronicle` (review save) | `PUT .../chronicle` | `scenes.py:2483` |
 
 `post_replay` calls `store.replay.begin`, which **cuts** the transcript;
 `post_replay_cancel` can restore the cut posts; and `post_scene_alternate`
@@ -1161,6 +1229,23 @@ the transcript, and the first `set_datetime` **renames the scene** — so these
 do not merely change context the live run is generating from, they can trip the
 identity check and discard a completed result. Each gets the guard under the
 same lock hold as its mutation, and a route test.
+
+**`put_chronicle` is the subtlest entry, and the one with no fallback.** The
+review panel survives a scene switch and a stale tab, so a review prepared
+before a new turn began can be saved after it: the save writes a summary of the
+*old* transcript and marks the scene absorbed, and the live turn then appends a
+reply to a scene already declared finished. That reply is in no chronicle and
+never will be.
+
+The commit-token fence does not catch it. `store.commits.scene_epoch` advances
+on chronicle save, not on an ordinary turn append, so the token a stale tab
+holds still matches and `lookup` finds its own attempt exactly as if nothing
+had changed underneath. The registry check is the only thing that sees the live
+turn. `put_chronicle` already holds one `campaign_lock(cid)` across its whole
+four-write sequence (`scenes.py:2504`, #234), so the guard goes *inside* that
+hold, before the first write — which is also where its existing 409 is
+reported from, so the retry-safety argument in that function's comment carries
+over unchanged. Test a stale-tab save issued while a turn holds the scene.
 
 **The last two are easy to miss and belong in the same guard.** Both call
 `store.scenes.append_message(cid, sid, "assistant", line, ...)`
@@ -1298,6 +1383,24 @@ Expected: FAIL — the module does not exist
 and drops the decoded body, so `run_id` is lost and `kind === "run_in_flight"`
 cannot attach to anything. Keep the payload on the error.
 
+**Retaining the top-level body is not sufficient, because the body is
+nested.** Raising `HTTPException(409, detail={"kind": ..., "run_id": ...})`
+puts the payload one level down: the backend tests in this plan read
+`response.json()["detail"]["kind"]`, so on the wire there is no top-level
+`kind` and `data.kind` is `undefined`. `ApiError.kind` would then never equal
+`"run_in_flight"` and Step 4's whole comparison is dead code that silently
+takes the wrong branch — the failure mode being a busy scene reported as a
+generic 409, which is indistinguishable from a bug in the reservation.
+
+Pick one and make it consistent: either flatten the backend's 409 body and
+update those tests to read it at the top level, or normalize on the client by
+reading `data.detail?.kind ?? data.kind` and the same for `run_id`. Prefer
+normalizing on the client — the nested shape is what FastAPI produces for
+every other structured error in this tree, and flattening one route makes it
+the odd one out. Whichever is chosen, a frontend test asserts `ApiError.kind`
+is `"run_in_flight"` against a body in the shape the backend actually sends,
+copied from the backend test rather than hand-written.
+
 - [ ] **Step 4: A 409 is busy-state, not an adoption**
 
 A rejected send never had its prompt appended -- that is what reserving before
@@ -1411,6 +1514,8 @@ generated while the client was away."
 - Create: `android/app/src/main/java/app/grimoire/RunNotifier.kt`
 - Modify: `ServerService.kt`, `MainActivity.kt`, `AndroidManifest.xml`
 - Modify: `backend/src/grimoire/runner.py` (terminal hook)
+- Modify: `backend/src/grimoire/runs.py` (**reservation** hook — see below;
+  the runner alone cannot emit the live-count callback this task needs)
 
 **Files (additional):**
 - Modify: `android/app/src/main/python/android_entry.py` — accept and forward
@@ -1477,6 +1582,28 @@ and the process reclaimable before the detached runner ever began — losing the
 turn in precisely the window this feature exists to protect. The matching
 demotion belongs on the pre-start release path too. Test with a deliberately
 held setup.
+
+**Which means `onRunsChanged` cannot be emitted from `runner.py`**, and the
+file list above says so. The runner is not entered until after the handler's
+synchronous setup, and a run reserved by a route that then early-exits — a
+validation failure, a 409 discovered late — is released without the runner ever
+being entered at all. A callback living only where the runner can reach it
+therefore misses both transitions this step exists for: it promotes too late,
+and on the early-release path it never demotes, leaving a foreground service
+pinned by a run that no longer exists.
+
+So the live-count callback belongs to the **registry**, which owns every
+transition into and out of live: `start_or_existing` when the map gains its
+first live run, and the release path — both the pre-start release and the
+terminal one — when it drops to none. `runs.py` grows a `on_live_change`
+sink that the app sets at startup and that Task 3's runner does not touch.
+`onRunTerminal` stays on the runner, where the outcome is known. Both keep
+their own fail-soft boundary as described above.
+
+Test the held-setup case directly: reserve, do not start the runner, assert the
+promotion callback already fired; then release without starting, and assert the
+demotion fired. That pair fails against any implementation that hangs the
+callback off the runner, which is the whole point of writing it.
 **If `POST_NOTIFICATIONS` is denied, still promote** — the service runs, its
 notification simply is not shown, and runs survive backgrounding as designed.
 Only the completion notification is lost. A denied permission is not a reason
