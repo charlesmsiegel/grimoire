@@ -28,3 +28,11 @@ body.cover { display: flex; align-items: center; justify-content: center; }
 
 .appendix .portrait { max-width: 40%; float: right; margin: 0 0 1em 1em; }
 .actor-role { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.1em; color: #666; margin-top: -0.5em; }
+
+/* Contents page (nav.xhtml, which is in the spine as well as being the EPUB 3
+   nav document — a reader that hides its own ToC still has one to turn to). */
+body.nav ol { list-style: none; margin: 0; padding-left: 1.2em; }
+body.nav > nav > ol { padding-left: 0; }
+body.nav li { margin: 0.4em 0; }
+body.nav a { text-decoration: none; color: inherit; }
+body.nav span { font-family: "Cinzel", Georgia, serif; font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.1em; color: #666; }

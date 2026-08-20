@@ -369,8 +369,20 @@ touching the prompt-building code in `backend/src/`. The regular test suite
 The one non-LLM family. `store/epub.py` renders these (its own jinja2
 environment, `autoescape=True`, unlike the prompt contract above) into the
 book's XHTML/OPF/CSS. `container.xml` and `stylesheet.css` are static;
-`package.opf` takes `identifier`/`title`/`modified`/`items`/`spine`;
-`nav.xhtml` takes `chapters`/`appendix`; `titlepage.xhtml` takes
+`package.opf` takes `identifier`/`title`/`modified`/`cover_id`/`items`/`spine`
+(and manifests `nav.xhtml` and `toc.ncx` itself, rather than through `items`);
+`nav.xhtml` takes `chapters`/`appendix`/`cover`; `toc.ncx` takes
+`identifier`/`title`/`points`; `titlepage.xhtml` takes
 `title`/`world`/`date_range`; `chapter.xhtml` takes
 `title`/`date`/`location`/`cast`/`epigraph`/`body`; `divider.xhtml` takes
 `title`; `appendix.xhtml` takes `name`/`role`/`portrait`/`sections`.
+
+Navigation is deliberately threefold, because reading systems disagree about
+where they look for it: `nav.xhtml` carries both the `toc` nav (the table of
+contents, one numbered entry per scene) and a hidden `landmarks` nav, and is in
+the spine so it doubles as a Contents page; `toc.ncx` is EPUB 2's table of
+contents, for readers that never learned the nav document; and each page
+declares an `epub:type` (`cover`, `titlepage`, `bodymatter chapter`,
+`backmatter`) so a reading system can label a chapter boundary. Change one and
+change the others — `store/epub.py` builds all three from the same chapter and
+appendix lists.

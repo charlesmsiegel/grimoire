@@ -3,6 +3,7 @@
 import base64
 import io
 import json
+import re
 import zipfile
 
 import pytest
@@ -461,3 +462,95 @@ def test_cover_is_not_packed_into_the_other_exports(monkeypatch, tmp_path):
     # asserted on the BYTES, not the word "cover": the campaign's own prose can
     # contain that word, which would make a substring check fail for nothing
     assert base64.b64encode(cover_bytes) not in html
+
+
+# ---- table of contents / chapter markers, per format ----
+
+def test_markdown_bundle_index_is_a_numbered_table_of_contents(monkeypatch, tmp_path):
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    z = zipfile.ZipFile(io.BytesIO(export.build_markdown_bundle(cid)[0]))
+    index = z.read("index.md").decode()
+    assert "## Scenes" in index
+    assert "1. [Arrival](001-arrival.md)" in index
+    assert "2. [Below](002-below.md)" in index
+    assert index.index("1. [Arrival]") < index.index("2. [Below]")
+    assert "## Appendix" in index
+    assert "- [Elara](actor-pcs-elara.md)" in index
+    # every link resolves inside the bundle
+    for link in re.findall(r"\]\(([^)]+)\)", index):
+        assert link in z.namelist(), link
+    # the chapter marker: a numbered heading matching the index entry
+    assert z.read("001-arrival.md").decode().startswith("# 1. Arrival\n")
+    assert z.read("002-below.md").decode().startswith("# 2. Below\n")
+
+
+def test_html_export_has_a_contents_nav_linking_every_section(monkeypatch, tmp_path):
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    html = export.build_html(cid)[0].decode()
+    assert '<nav class="toc" id="contents">' in html
+    assert '<a href="#chapter-001">Arrival</a>' in html
+    assert '<a href="#chapter-002">Below</a>' in html
+    assert '<a href="#actor-pcs-elara">Elara</a>' in html
+    assert '<a href="#location-the-docks">The Docks</a>' in html
+    # the chapter markers those anchors land on
+    assert '<section class="chapter" id="chapter-001">' in html
+    assert '<section class="chapter" id="chapter-002">' in html
+    assert '<section class="appendix" id="actor-pcs-elara">' in html
+    assert '<section class="divider" id="appendix">' in html
+    # no link points at an id the page does not define
+    ids = set(re.findall(r'<section class="[^"]+" id="([^"]+)">', html))
+    ids.add("contents")
+    assert set(re.findall(r'href="#([^"]+)"', html)) <= ids
+
+
+def test_html_export_of_an_empty_campaign_has_no_empty_contents_nav(monkeypatch, tmp_path):
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    html = export.build_html(cid)[0].decode()
+    assert "<nav" not in html and "<h2>Contents</h2>" not in html
+    # the stylesheet still carries the ToC rules, like every other unconditional
+    # rule in it — varying the CSS per campaign would buy nothing
+    assert "nav.toc {" in html
+
+
+def test_text_export_has_a_contents_block_and_form_feed_chapter_breaks(monkeypatch, tmp_path):
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    txt = export.build_text(cid)[0].decode()
+    assert txt.startswith("Run One\nSaltmarch")
+    contents, _, body = txt.partition("\f")
+    assert "CONTENTS" in contents
+    assert "  1. Arrival" in contents and "  2. Below" in contents
+    # one form feed per scene — the plain-text page break, ahead of a numbered
+    # title line matching the contents entry
+    assert txt.count("\f") == 2
+    assert body.startswith("\n1. Arrival\n")
+    assert "\f\n2. Below\n" in txt
+    assert "---" not in txt  # the rule the form feed replaced
+
+
+def test_text_export_of_an_empty_campaign_has_no_contents_block(monkeypatch, tmp_path):
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    txt = export.build_text(cid)[0].decode()
+    assert "CONTENTS" not in txt and "\f" not in txt
+
+
+def test_json_export_states_the_scene_order_as_contents(monkeypatch, tmp_path):
+    _wid, cid, sid1, sid2 = _fixture_campaign(monkeypatch, tmp_path)
+    payload = json.loads(export.build_json(cid)[0].decode())
+    assert payload["contents"] == [{"number": 1, "id": sid1, "title": "Arrival"},
+                                   {"number": 2, "id": sid2, "title": "Below"}]
+    # every entry names a scene the dump actually carries
+    assert [c["id"] for c in payload["contents"]] == [s["meta"]["id"] for s in payload["scenes"]]
+
+
+def test_anchors_survive_scenes_that_share_a_title(monkeypatch, tmp_path):
+    """`chapter_anchor` numbers rather than slugifies, so two scenes with the
+    same title get two anchors instead of one anchor with two definitions."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    for _ in range(2):
+        sid = scenes.create_scene(cid, "Arrival")
+        scenes.append_message(cid, sid, "assistant", "The docks reek.")
+    chapters = export.collect(cid)["chapters"]
+    assert [export.chapter_anchor(c) for c in chapters] == ["chapter-001", "chapter-002"]
+    assert [export.toc_label(c) for c in chapters] == ["1. Arrival", "2. Arrival"]
+    html = export.build_html(cid)[0].decode()
+    assert html.count('id="chapter-001"') == 1 and html.count('id="chapter-002"') == 1
