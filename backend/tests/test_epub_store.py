@@ -554,3 +554,63 @@ def test_landmarks_point_at_documents_the_book_contains(monkeypatch, tmp_path):
     assert types == ["toc", "titlepage", "bodymatter"]
     # hidden, so the Contents page in the spine shows the ToC and not this
     assert _nav(z, "landmarks").get("hidden") is not None
+
+
+def test_every_document_in_the_book_is_well_formed_xml(monkeypatch, tmp_path):
+    """EPUB documents are XML, not HTML: a reading system parses them strictly
+    and a single unbalanced tag fails the whole book, not one page. Six
+    templates render into this zip, so pin all of them at once rather than
+    parsing the two or three a given test happens to look at.
+
+    Scope, so this is not read as a guarantee it does not give: this pins the
+    TEMPLATES. Message and section bodies reach the page through `_md`, which
+    passes raw HTML straight through, so campaign prose containing `<sigh>`
+    still produces a book strict readers reject — a defect that predates the
+    navigation work and is not fixed here."""
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    covers.put_cover(cid, _png(), "png")  # so cover.xhtml is in the sweep too
+    z = _open(epub.build_epub(cid)[0])
+    parsed = [n for n in z.namelist() if n.endswith((".xhtml", ".opf", ".ncx", ".xml"))]
+    for name in parsed:
+        ET.fromstring(z.read(name))  # raises ParseError on malformed XML
+    assert {"package.opf", "nav.xhtml", "toc.ncx", "META-INF/container.xml",
+            "text/cover.xhtml", "text/titlepage.xhtml", "text/chapter-001.xhtml",
+            "text/appendix.xhtml"} <= set(parsed)
+
+
+def test_navigation_documents_escape_titles_that_are_xml(monkeypatch, tmp_path):
+    """`toc.ncx` is a second XML document rendered from user-written text, and
+    campaign/scene/location names are user-written. An ampersand in a scene
+    title is the everyday case — "Fire & Ash" — and an unescaped one makes the
+    book unparseable, not merely ugly."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Saltmarch")
+    cid = campaigns.create_campaign("Fire & <Ash>", wid)
+    croot = campaigns.campaign_root(cid)
+    docks = entities.create_entity(croot, "locations", 'The "Broken" & <Docks>', body="piers")
+    sid = scenes.create_scene(cid, 'Arrival & "Departure" <hr/>')
+    scenes.append_message(cid, sid, "assistant", "The docks reek.")
+    scenes.set_location(cid, sid, docks)
+
+    z = _open(epub.build_epub(cid)[0])
+    # parses at all -- the assertion that matters
+    ncx = ET.fromstring(z.read("toc.ncx"))
+    labels = [t.text for t in ncx.findall(".//ncx:navLabel/ncx:text", NCX_NS)]
+    # …and round-trips to the original text, rather than being escaped away
+    assert '1. Arrival & "Departure" <hr/>' in labels
+    assert 'The "Broken" & <Docks>' in labels
+    assert ncx.find(".//ncx:docTitle/ncx:text", NCX_NS).text == "Fire & <Ash>"
+    assert ('text/chapter-001.xhtml', '1. Arrival & "Departure" <hr/>') in _nav_links(z, "toc")
+    opf = ET.fromstring(z.read("package.opf"))
+    assert opf.find(".//{http://purl.org/dc/elements/1.1/}title").text == "Fire & <Ash>"
+
+
+def test_the_ncx_uid_matches_the_package_identifier(monkeypatch, tmp_path):
+    """EPUB 2 readers cross-check the two; rendered from separate f-strings they
+    would drift into a book that opens fine and fails validation."""
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    z = _open(epub.build_epub(cid)[0])
+    opf = ET.fromstring(z.read("package.opf"))
+    ncx = ET.fromstring(z.read("toc.ncx"))
+    assert ncx.find(".//ncx:meta[@name='dtb:uid']", NCX_NS).get("content") \
+        == opf.find(".//{http://purl.org/dc/elements/1.1/}identifier").text
