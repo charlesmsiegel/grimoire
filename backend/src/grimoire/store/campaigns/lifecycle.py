@@ -348,6 +348,18 @@ def _prune_duplicate_files(root: Path, wroot: Path) -> None:
                 # dropping the sidecar would silently reset the crop to center.
                 if p.name == assets.FOCUS_FILE and any(p.parent.glob(f"{assets.AVATAR}.*")):
                     continue
+                # The same hazard one step broader, for the same reason:
+                # overlay.read_description treats a campaign-side IMAGE as
+                # authoritative and does not fall back to the world's sentence
+                # about it, so a description sidecar is not redundant while any
+                # campaign-side image sits beside it. Broader because focus has
+                # one key (the avatar) and this has one per image -- a single
+                # divergent gallery image is enough to make the whole file
+                # load-bearing, and pruning it would blank descriptions that
+                # only *happen* to read the same as the world's.
+                if p.name == assets.DESCRIPTIONS_FILE and any(
+                        assets._norm_ext(q.suffix) for q in p.parent.iterdir() if q.is_file()):
+                    continue
                 p.unlink()
         for d in sorted((x for x in base.rglob("*") if x.is_dir()), reverse=True):
             if not any(d.iterdir()):

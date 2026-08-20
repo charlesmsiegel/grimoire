@@ -54,6 +54,7 @@ from . import (
     entities,
     failsoft,
     greetings,
+    image_descriptions,
     pcs,
     taglines,
     voice_anchors,
@@ -845,6 +846,84 @@ def read_focus(cid: str, aid: str, vid: str, base: str = "characters") -> int | 
             or _flat_ref(base, aid) in detached(cid)):
         return assets.read_focus(croot, aid, vid, base)
     return assets.read_focus(wroot_of(cid), aid, vid, base)
+
+
+def read_description(cid: str, aid: str, vid: str, name: str,
+                     base: str = "characters") -> str:
+    """One image's description, resolved campaign-first.
+
+    The rule is per IMAGE, where `read_focus`' is per folder, because that is
+    the granularity of the thing: a description is a claim about particular
+    bytes.
+
+    - **The campaign holds the image.** Its own sidecar answers, and there is
+      NO fallback to the world's. A campaign-side `gallery_1` is different art
+      from the world's `gallery_1`, so inheriting the world's sentence about it
+      would caption one picture with a description of another -- which, since
+      the caption becomes alt text in a transcript, is worse than saying
+      nothing.
+    - **The image is inherited.** The campaign's sidecar answers if it has a
+      key (an author may describe inherited art without diverging the art
+      itself), and the world's otherwise.
+    - **Tombstoned or detached.** Campaign-side only, matching `read_focus` and
+      `image_root`: the world's id-mate is a stranger.
+
+    Reads pass the overlay-resolved union as `names`, or a description written
+    campaign-side for an image whose bytes are still inherited would be
+    filtered out as naming nothing.
+    """
+    croot = croot_of(cid)
+    union = {i["name"] for i in list_images(cid, aid, vid, base)}
+    mine = image_descriptions.read_all(croot, aid, vid, base, names=union)
+    if (assets.image_path(croot, aid, vid, name, base) is not None
+            or _asset_ref(base, aid, vid, name) in deleted(cid)
+            or _flat_ref(base, aid) in detached(cid)):
+        return mine.get(name, "")
+    if name in mine:
+        return mine[name]
+    return image_descriptions.read(wroot_of(cid), aid, vid, name, base)
+
+
+def read_descriptions(cid: str, aid: str, vid: str, base: str = "characters") -> dict[str, str]:
+    """Every visible image's description for one version, by the rule above.
+    One entry per image the overlay union lists; undescribed images are absent
+    rather than empty, so a caller can still tell "not reviewed" from
+    "reviewed, nothing to say"."""
+    out: dict[str, str] = {}
+    for i in list_images(cid, aid, vid, base):
+        text = read_description(cid, aid, vid, i["name"], base)
+        if text or _described(cid, aid, vid, i["name"], base):
+            out[i["name"]] = text
+    return out
+
+
+def _described(cid: str, aid: str, vid: str, name: str, base: str) -> bool:
+    """Is there a sidecar KEY for this image, campaign- or world-side? The
+    absent-vs-empty distinction, resolved through the overlay."""
+    croot = croot_of(cid)
+    if name in image_descriptions.raw_keys(croot, aid, vid, base):
+        return True
+    if (assets.image_path(croot, aid, vid, name, base) is not None
+            or _asset_ref(base, aid, vid, name) in deleted(cid)
+            or _flat_ref(base, aid) in detached(cid)):
+        return False
+    return name in image_descriptions.raw_keys(wroot_of(cid), aid, vid, base)
+
+
+def set_description(cid: str, aid: str, vid: str, name: str, text: str,
+                    base: str = "characters") -> None:
+    """Write one image's description campaign-side.
+
+    The write always lands in the campaign, exactly as `put_campaign_avatar_focus`
+    lands a focus there, and `read_description` then treats the campaign as
+    authoritative for that image going forward. The existence gate is the
+    overlay UNION, not this campaign's own directory: a thin campaign reaches
+    most of its art through the world, and describing an inherited picture must
+    not require diverging the picture.
+    """
+    union = {i["name"] for i in list_images(cid, aid, vid, base)}
+    image_descriptions.set_description(croot_of(cid), aid, vid, name, text, base,
+                                       names=union)
 
 
 def delete_image(cid: str, aid: str, vid: str, name: str, base: str = "characters") -> None:
