@@ -29,6 +29,7 @@ vi.mock("../api/client", () => ({
     listCharacters: vi.fn(),
     listPCs: vi.fn(),
     listEntityImages: vi.fn(),
+    setEntityImageDescription: vi.fn(),
     putEntityImage: vi.fn(),
     promoteEntityImage: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
@@ -58,6 +59,7 @@ beforeEach(() => {
   (api.listCharacters as any).mockResolvedValue([{ id: "tanaka", name: "Tanaka" }]);
   (api.listPCs as any).mockResolvedValue([]);
   (api.listEntityImages as any).mockResolvedValue([]);
+  (api.setEntityImageDescription as any).mockResolvedValue({ ok: true });
   (api.putEntityImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
   (api.promoteEntityImage as any).mockResolvedValue({ ok: true });
   (api.getSheet as any).mockResolvedValue({ sheet: null });
@@ -219,6 +221,32 @@ test("location detail shows the primary image header and Images shelf with promo
   fireEvent.click(screen.getByRole("button", { name: /set as primary/i }));
   await waitFor(() => expect(api.promoteEntityImage).toHaveBeenCalledWith(
     { kind: "world", id: "w" }, "locations", "warehouse", "gallery_1"));
+});
+
+test("an entity image carries its description, and unreviewed art says so", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "warehouse", name: "Warehouse Nine", has_image: true }]);
+  (api.readEntity as any).mockResolvedValue({ meta: { id: "warehouse", name: "Warehouse Nine" }, body: "docks" });
+  (api.listEntityImages as any).mockResolvedValue([
+    // `described` is what separates "never reviewed" from "reviewed, nothing
+    // to say" -- both arrive with an empty `description`.
+    { name: "avatar", ext: "png", description: "A grey quay.", described: true },
+    { name: "gallery_1", ext: "png", description: "", described: false },
+  ]);
+  render(<EntityEditor wid="w" kind="locations" />);
+  fireEvent.click(await screen.findByText("Warehouse Nine"));
+  await screen.findByText("Images");
+
+  expect(screen.getByRole("button", { name: /Description of avatar/ }))
+    .toHaveTextContent("A grey quay.");
+  expect(screen.getByRole("button", { name: /Description of gallery_1/ }))
+    .toHaveTextContent("Describe…");
+
+  fireEvent.click(screen.getByRole("button", { name: /Description of gallery_1/ }));
+  const box = await screen.findByRole("textbox", { name: /Description of gallery_1/ });
+  fireEvent.change(box, { target: { value: "Crates on the quay." } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setEntityImageDescription).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "locations", "warehouse", "gallery_1", "Crates on the quay."));
 });
 
 test("location detail without images shows the add tile only", async () => {

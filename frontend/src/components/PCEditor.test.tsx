@@ -11,6 +11,7 @@ vi.mock("../api/client", async () => {
       updatePC: vi.fn(), deletePC: vi.fn(), createPCVersion: vi.fn(), updatePCVersion: vi.fn(),
       getCalendarMonths: vi.fn(), putSheetCreation: vi.fn(), getSheet: vi.fn(),
       listPCImages: vi.fn(), putPCImage: vi.fn(), deletePCImage: vi.fn(),
+      setPCImageDescription: vi.fn(),
       promotePCImage: vi.fn(), setPCAvatarFocus: vi.fn(),
       actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string) =>
         `/img/${sc.id}/${k}/${a}/${v}/${n}`,
@@ -51,6 +52,7 @@ beforeEach(() => {
   (api.getCalendarMonths as any).mockResolvedValue({ months: GREG_MONTHS });
   (api.getSheet as any).mockResolvedValue({ sheet: null });
   (api.listPCImages as any).mockResolvedValue([]);
+  (api.setPCImageDescription as any).mockResolvedValue({ ok: true });
   (api.putPCImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
   (api.deletePCImage as any).mockResolvedValue({ ok: true });
   (api.promotePCImage as any).mockResolvedValue({ ok: true });
@@ -412,4 +414,33 @@ it("campaign scope addresses the campaign's own copy of the art", async () => {
   fireEvent.change(screen.getByLabelText("Add image"), { target: { files: [FILE] } });
   await waitFor(() => expect(api.putPCImage).toHaveBeenCalledWith(
     { kind: "campaign", id: "run" }, "elara", "default", "gallery_1", FILE));
+});
+
+
+test("a PC's art carries its description, and saving one names that image", async () => {
+  (api.readPC as any).mockResolvedValue({
+    ...DETAIL,
+    versions: [{ ...DETAIL.versions[0],
+                 images: ["avatar", "gallery_1"],
+                 // avatar described, gallery_1 never reviewed
+                 image_descriptions: { avatar: "Elara in travelling clothes." } }],
+  });
+  (api.listPCImages as any).mockResolvedValue([
+    { name: "avatar", v: "1" }, { name: "gallery_1", v: "1" },
+  ]);
+  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Elara" }));
+  await screen.findByText("Images");
+
+  expect(screen.getByRole("button", { name: /Description of avatar/ }))
+    .toHaveTextContent("Elara in travelling clothes.");
+  expect(screen.getByRole("button", { name: /Description of gallery_1/ }))
+    .toHaveTextContent("Describe…");
+
+  fireEvent.click(screen.getByRole("button", { name: /Description of gallery_1/ }));
+  const box = await screen.findByRole("textbox", { name: /Description of gallery_1/ });
+  fireEvent.change(box, { target: { value: "On the road north." } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setPCImageDescription).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "elara", "default", "gallery_1", "On the road north."));
 });
