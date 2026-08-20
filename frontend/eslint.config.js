@@ -5,9 +5,11 @@
 //
 // Type-checked linting is the point of the typescript-eslint half: `strict` is
 // already on in tsconfig.json, so the rules that only re-check syntax would
-// find nothing. The ones that need the type graph -- no-unsafe-*, no-floating-
-// promises, no-misused-promises -- are the ones with something to say about a
-// codebase whose API client returns `any`.
+// find nothing. The ones that need the type graph -- no-unsafe-*,
+// no-floating-promises, no-misused-promises -- are the ones with anything left
+// to say, and they say it about the places a typed client has been widened
+// back out: the module-schema editors, the sheet editor, the `any` corners of
+// api/client.ts and api/models.ts.
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 import jsxA11y from "eslint-plugin-jsx-a11y";
@@ -63,10 +65,11 @@ export default tseslint.config(
     // module out, and this suite drives the swap with `(api.x as
     // any).mockResolvedValue(...)`. Type-checking the shape of a hand-written
     // stand-in checks the stub, not the code under test -- and leaving these
-    // on would have cost more than noise. 7710 of the 8538 findings this gate
-    // records were in test files, ~7440 of them these seven rules, so a
+    // on would have cost more than noise. With them on, 7710 of 8538 findings
+    // were in test files and ~7440 of those were these seven rules, so a
     // contributor writing the 96th test file would have been blocked by the
-    // idiom the other 95 use. The rules that still mean something in a test
+    // idiom the other 95 use -- the ratchet gives a new file no allowance, on
+    // purpose. The rules that still mean something in a test
     // -- the a11y set, the hooks rules, jsx-key, no-floating-promises,
     // no-unnecessary-type-assertion -- stay on.
     files: ["src/**/*.test.{ts,tsx}"],

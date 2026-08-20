@@ -189,8 +189,8 @@ check-pydantic1:
 check-apk: web-dist
 	$(MAKE) apk BUILD_PYTHON="$(BUILD_PYTHON)"
 
-web-dist:
-	cd frontend && npm ci && npm run build
+web-dist: frontend-deps
+	cd frontend && npm run build
 
 # ---- store sync (PC <-> USB-connected phone) ----
 #
