@@ -78,8 +78,8 @@ ADB = $(call fixpath,$(SDK_DIR)/platform-tools/adb)
 
 .PHONY: apk apk-release apk-install android-bootstrap android-clean \
         check check-py check-web check-lint check-mypy check-eslint \
-        check-templates check-pydantic1 check-apk web-dist baseline \
-        sync-phone sync-phone-apply
+        check-templates check-pydantic1 check-apk web-dist frontend-deps \
+        baseline sync-phone sync-phone-apply
 
 apk:
 	$(GRADLEW) :app:assembleDebug $(if $(BUILD_PYTHON),-Pgrimoire.buildPython="$(BUILD_PYTHON)",)
@@ -129,8 +129,20 @@ check-py:
 # frontend/coverage/lcov.info. Measuring in the gate rather than in a separate
 # job is deliberate -- a coverage target nobody runs reports on a tree nobody
 # has, and the istanbul provider costs a few seconds on this suite.
-check-web:
-	cd frontend && npm ci && npm run typecheck && npm run test:coverage
+check-web: frontend-deps
+	cd frontend && npm run typecheck && npm run test:coverage
+
+# The install both frontend gates need, as a prerequisite of each rather than
+# a line in both recipes. That is what makes them safe under `make -j`: make
+# runs a target once per invocation however many things depend on it, whereas
+# two recipes each running `npm ci` in the same directory at the same time
+# would be two processes deleting and repopulating one `node_modules`. It also
+# stops `make check` installing the frontend twice.
+#
+# `npm ci`, never `npm install`: install rewrites resolution and would defeat
+# the committed lockfile.
+frontend-deps:
+	cd frontend && npm ci
 
 # The three ratcheted gates. Each runs its tool and compares the findings to
 # `lint-baselines/<tool>.json`; `scripts/ratchet.py` explains why they land
@@ -145,11 +157,7 @@ check-lint:
 check-mypy:
 	"$(call fixpath,$(PY))" scripts/ratchet.py mypy
 
-# Its own `npm ci` rather than leaning on check-web's: `make -j` gives no
-# ordering between two prerequisites of `check`, and a gate that passes only
-# when another target ran first is a gate that fails at random.
-check-eslint:
-	cd frontend && npm ci
+check-eslint: frontend-deps
 	"$(call fixpath,$(PY))" scripts/ratchet.py eslint
 
 baseline:

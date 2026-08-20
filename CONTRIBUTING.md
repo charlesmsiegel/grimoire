@@ -74,11 +74,15 @@ locally with the same one-line command.
 | `make check-lint` | ruff, against `lint-baselines/ruff.json` | lint |
 | `make check-mypy` | mypy, against `lint-baselines/mypy.json` | mypy |
 | `make check-py` | `pytest backend -q` under coverage, floored at `COV_FLOOR` | backend (py3.11, py3.14) |
-| `make check-web` | `npm ci && npm run typecheck && npm run test:coverage` in `frontend/` | frontend |
+| `make check-web` | `npm run typecheck && npm run test:coverage` in `frontend/` | frontend |
 | `make check-eslint` | eslint, against `lint-baselines/eslint.json` | eslint |
 | `make check-templates` | `scripts/verify_templates.py` — builders and templates agree byte-for-byte | templates |
 | `make check-pydantic1` | the same suite again, in a throwaway venv resolved to what the APK ships | pydantic1 |
 | `make check-apk` | builds `frontend/dist` and then the debug APK | apk |
+
+Both frontend targets take `frontend-deps` — the `npm ci` — as a prerequisite
+rather than running it themselves, so `make check` installs the frontend once
+and `make -j` cannot put two installs in one `node_modules` at the same time.
 
 `make check` runs every target in that table except **`check-apk`**, which is
 excluded deliberately: it needs a per-machine `make android-bootstrap` first,
