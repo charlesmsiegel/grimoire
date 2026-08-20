@@ -14,6 +14,7 @@ vi.mock("../api/client", async () => {
       updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
       deleteCharacter: vi.fn(), importCharacter: vi.fn(), localizeImages: vi.fn(),
       putImage: vi.fn(), deleteImage: vi.fn(), promoteImage: vi.fn(), setAvatarFocus: vi.fn(),
+      setCharacterImageDescription: vi.fn(),
       importCharacterBook: vi.fn(),
       importCharacterFromChub: vi.fn(),
       setCharacterName: vi.fn(), setCharacterBirthdate: vi.fn(), getCalendarMonths: vi.fn(),
@@ -78,6 +79,7 @@ beforeEach(() => {
   (api.putImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
   (api.deleteImage as any).mockResolvedValue({ ok: true });
   (api.promoteImage as any).mockResolvedValue({ ok: true });
+  (api.setCharacterImageDescription as any).mockResolvedValue({ ok: true });
   (api.setAvatarFocus as any).mockResolvedValue({ ok: true });
   (api.deleteCharacter as any).mockResolvedValue({ ok: true });
   (api.importCharacterBook as any).mockResolvedValue({ created: [{ kind: "lore", id: "pact" }] });
@@ -156,6 +158,45 @@ test("detail shows the Images shelf with avatar tile, gallery promote, and add t
   fireEvent.click(screen.getByRole("button", { name: /set as avatar/i }));
   await waitFor(() => expect(api.promoteImage).toHaveBeenCalledWith({ kind: "world", id: "w" }, "seraphine", "default", "gallery_1"));
   expect(screen.getByRole("button", { name: /\+ add/i })).toBeInTheDocument();
+});
+
+test("the art shelf offers a description per image, and says which are unreviewed", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", card: CARD,
+                 images: ["avatar", "gallery_1"],
+                 // avatar described, gallery_1 never reviewed -- the two states
+                 // the store keeps apart have to stay apart in the shelf.
+                 image_descriptions: { avatar: "Half-plate, rain-soaked." } }],
+  });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openDetail();
+  await openTab(/^art/i);
+  await screen.findByText("Images");
+  expect(screen.getByRole("button", { name: /Description of avatar/ }))
+    .toHaveTextContent("Half-plate, rain-soaked.");
+  expect(screen.getByRole("button", { name: /Description of gallery_1/ }))
+    .toHaveTextContent("Describe…");
+});
+
+test("describing a gallery image saves it against that image's name", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", card: CARD, images: ["avatar", "gallery_1"] }],
+  });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openDetail();
+  await openTab(/^art/i);
+  await screen.findByText("Images");
+
+  fireEvent.click(screen.getByRole("button", { name: /Description of gallery_1/ }));
+  const box = await screen.findByRole("textbox", { name: /Description of gallery_1/ });
+  fireEvent.change(box, { target: { value: "Fishing boats under fog." } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(api.setCharacterImageDescription).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "seraphine", "default", "gallery_1",
+    "Fishing boats under fog."));
 });
 
 test("detail without avatar shows the dashed placeholder tile", async () => {
