@@ -182,6 +182,13 @@ stored counter, so deleting the highest scene frees its number).
   carry the identity precisely because a `sid` goes stale on rename, so without
   an inverse the intent can only keep the stale id or fall back to the campaign
   unnecessarily. Exercise both the renamed and the deleted case.
+
+  **The store function alone is not enough** — Kotlin cannot call it. Task 4
+  adds `GET /api/campaigns/{cid}/scenes/by-identity/{identity}` returning the
+  current `sid` or 404, and Task 7 adds the `android_entry.py` resolver plus
+  the `ServerRuntime` method `MainActivity` invokes when handling the intent.
+  Without that concrete path the reverse lookup exists and nothing can reach
+  it, so taps after a rename still open a stale route.
 - Produces: `store.scenes.ensure_identity(cid, sid) -> str` — the lazy path,
   under `campaign_lock`; assigns one if absent and returns it either way.
 
@@ -362,10 +369,17 @@ A pure data structure with no scheduling in it. Scheduling is Task 3.
   producing route and carried on the run. The Android terminal notification
   reads it; resolving the names at terminal time would find nothing for a scene
   deleted mid-run, which is exactly the case the *error* notification exists to
-  report. Every run-producing route populates it when it reserves, and
-  `start_or_existing` takes it.
+  report.
+
+  **`labels` is a REQUIRED positional on `start_or_existing`, not an optional
+  keyword.** Left optional, an implementation can omit it everywhere, pass
+  every test in this plan, and ship an Android build whose notifications have
+  no campaign or scene text — a feature silently absent behind a green suite.
+  Each of the five producing routes gets a test asserting the captured display
+  names, **taken before the scene is deleted**, since reading them afterwards
+  is the failure this exists to prevent.
 - Produces: `RunRegistry` with
-  `start_or_existing(subject, cls, kind, attempt_id, scene_identity) -> tuple[Run, bool]`
+  `start_or_existing(subject, cls, kind, attempt_id, scene_identity, labels) -> tuple[Run, bool]`
   -- `(run, True)` for a new run, `(run, False)` when `attempt_id` already has
   one, and **raises `RunInFlight(run_id=...)`** when the class declares an
   exclusion key that a `running` run holds,
@@ -383,6 +397,7 @@ from grimoire.routes import runs
 SCENE = ("scene", "saltmarch", "0001--the-long-wharf")
 OTHER = ("scene", "saltmarch", "0002--the-tide-gate")
 WORLD = ("world", "realm")
+LABELS = {"campaign": "Run", "scene": "Mara"}
 
 
 def test_turn_and_review_share_one_exclusion_key_per_scene():
@@ -397,12 +412,12 @@ def test_background_and_draft_declare_no_key():
 
 def test_second_turn_on_a_busy_scene_is_refused():
     r = runs.RunRegistry()
-    first, started = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident")
+    first, started = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
     assert started
     assert r.live_for_key(runs.exclusion_key(SCENE, "turn")) is first
     # A different attempt on the same busy scene does not get a run.
     with pytest.raises(runs.RunInFlight) as exc:
-        r.start_or_existing(SCENE, "turn", "chat", "a2", "ident")
+        r.start_or_existing(SCENE, "turn", "chat", "a2", "ident", LABELS)
     assert exc.value.run_id == first.id
 
 
@@ -410,32 +425,32 @@ def test_drafts_overlap_on_one_subject_and_both_stay_discoverable():
     """The bug a most-recent pointer would ship: the second start hides the
     first, which then has no discovery path at all."""
     r = runs.RunRegistry()
-    a, _ = r.start_or_existing(WORLD, "draft", "image-description", "a1", None)
-    b, _ = r.start_or_existing(WORLD, "draft", "image-description", "a2", None)
+    a, _ = r.start_or_existing(WORLD, "draft", "image-description", "a1", None, LABELS)
+    b, _ = r.start_or_existing(WORLD, "draft", "image-description", "a2", None, LABELS)
     assert {run.id for run in r.for_subject(WORLD)} == {a.id, b.id}
 
 
 def test_repeated_attempt_id_returns_the_existing_run_even_when_terminal():
     r = runs.RunRegistry()
-    first, started = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident")
+    first, started = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
     assert started
     first.finish("landed")
-    again, started_again = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident")
+    again, started_again = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
     assert again is first and not started_again
 
 
 def test_get_refuses_a_run_id_from_another_subject():
     r = runs.RunRegistry()
-    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident")
+    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
     assert r.get(run.id, SCENE) is run
     assert r.get(run.id, OTHER) is None
 
 
 def test_reap_drops_terminal_runs_past_the_window_and_keeps_live_ones():
     r = runs.RunRegistry()
-    done, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident")
+    done, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
     done.finish("landed", at=1000.0)
-    live, _ = r.start_or_existing(OTHER, "turn", "chat", "a2", "ident")
+    live, _ = r.start_or_existing(OTHER, "turn", "chat", "a2", "ident", LABELS)
     assert r.reap(now=1000.0 + runs.REAP_SECONDS + 1) == 1
     assert r.get(done.id, SCENE) is None
     assert r.get(live.id, OTHER) is live
@@ -536,7 +551,7 @@ def test_start_works_from_a_synchronous_handler_thread(app_with_lifespan):
         done.set()
 
     def from_worker_thread():
-        run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i")
+        run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
         runner.start(app, run, lambda: work())
 
     threading.Thread(target=from_worker_thread).start()
@@ -557,8 +572,8 @@ def test_one_runner_raising_does_not_cancel_its_siblings(app_with_lifespan):
         await anyio.sleep(0.05)
         survived.set()
 
-    bad, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i")
-    good, _ = app.state.runs.start_or_existing(OTHER, "turn", "chat", "a2", "i")
+    bad, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    good, _ = app.state.runs.start_or_existing(OTHER, "turn", "chat", "a2", "i", LABELS)
     runner.start(app, bad, lambda: boom())
     runner.start(app, good, lambda: fine())
     assert survived.wait(timeout=5)
@@ -576,7 +591,7 @@ def test_shutdown_cancels_live_runs_and_they_flush(app_with_lifespan_factory):
             flushed.append("partial")
 
     with app_with_lifespan_factory() as app:
-        run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i")
+        run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
         runner.start(app, run, lambda: slow())
     assert flushed == ["partial"]
 ```
@@ -616,6 +631,16 @@ Without a scope on the run there is nothing for the cancel route to interrupt,
 and without `terminal` the route cannot wait for the abort hook — so a fast
 re-send could race the partial-persist, which is the thing the ordering exists
 to prevent.
+
+**Every pre-start exit must set the handshake events too.** The readiness
+event covers the window from `start` to the task beginning — but the run is
+indexed by `start_or_existing` *before* that, while the route is still doing
+synchronous setup, and Task 5 explicitly allows that setup to return early and
+release the reservation without ever scheduling `_guarded`. A discovery or
+cancel request landing in that window finds a real run and then waits forever
+on events no task will ever set. So a pre-start release marks the run terminal
+and sets both `ready` and `terminal`, and there is a test for **cancel racing
+an early-exit route**, not only cancel against a runner that started normally.
 
 **`runner.start` must not expose the run before its scope is installed.** The
 scope is assigned inside `_guarded`, which does not begin until the scheduled
@@ -815,7 +840,15 @@ know' into a confident wrong answer."
 - Produces: `_fence_stream(...) -> tuple[AsyncIterator[str], Callable[[], Outcome]]`
   — the frames, and a terminal-outcome getter.
 - Produces: `Outcome` — `{"state": "landed" | "failed", "error": {...} | None}`,
-  where `error` carries `{status, detail, kind, retry_after}`.
+  where `error` carries `{status, detail, kind, retry_after, post_returned}`.
+
+  **`post_returned` is not optional.** When a provider fails before producing
+  narration, `_chat_stream.on_error` takes the player's appended post back off
+  and the SSE frame says so (`streaming.py:545`; typed at `stream.ts:14`), so
+  the client can restore the text to the composer. A client that detached
+  before that frame must learn the same fact from `Run.error` — otherwise the
+  server rolls the post back, the client never hears, and the player's words
+  vanish. Test it through the poll route, not only the stream.
 
   **A bare `"failed"` is not enough.** A client that detached before the
   provider failed never saw the buffered SSE error frame, and Task 6 forbids
@@ -899,10 +932,25 @@ than guessing from whether the coroutine raised.
 
 - [ ] **Step 4: Move the persist hooks onto the runner**
 
-`finalize`, `on_error` and `on_abort` already run under the campaign lock,
-never touch the socket, and only *return* frames — they move unchanged. The
-turn-token claim, the `owned_tail` read and the restore/undo transactionality
-come along as-is. Add the scene-identity comparison before any terminal write.
+`finalize`, `on_error` and `on_abort` never touch the socket and only *return*
+frames, so they move to the runner unchanged in that respect. The turn-token
+claim, the `owned_tail` read and the restore/undo transactionality come along
+as-is.
+
+**But do not believe the "already under one campaign-lock hold" shorthand when
+adding the identity comparison.** `_persist_reply` reaches `store.scenes.
+append_reply`, which is `@_serialized` and therefore acquires the lock
+*itself*, after the hook has already begun. A comparison made before that
+acquisition leaves a window in which the scene is deleted and its `sid`
+recycled, and the old run still publishes onto the replacement — the exact
+corruption the identity was introduced to stop, surviving because the check and
+the write were not one atomic step.
+
+So either hold `campaign_lock(cid)` continuously across the comparison **and**
+every terminal mutation, or push the expected identity down into the locked
+persistence call so the store refuses the write itself. The second is the more
+robust shape, because it cannot be undone by a future caller who forgets the
+outer hold.
 
 - [ ] **Step 5: Branch on an already-known attempt BEFORE any setup**
 
@@ -1001,11 +1049,14 @@ def test_rename_is_refused_while_a_run_holds_the_scene(client, held_scene):
     assert r.status_code == 409 and r.json()["detail"]["kind"] == "scene_busy"
 
 
-def test_width_crossing_create_refused_while_any_key_in_campaign_held(client, campaign_at_99):
-    # _create_scene crossing 99 -> 100 calls lifecycle.repad, which renames
+def test_width_crossing_create_refused_while_any_key_in_campaign_held(client, campaign_at_999):
+    # 999 -> 1000, NOT 99 -> 100. scene_ids.MIN_WIDTH is 3 and `_numbering`
+    # never reports a width below it, so scene 100 is written as `100--...`
+    # with no repad at all -- a test built on 99 could never go green.
+    # _create_scene crossing 999 -> 1000 calls lifecycle.repad, which renames
     # EVERY scene in the campaign and repoints their sidecars, consulting no
     # run registry. Refusing the explicit rename route never covered this.
-    cid, busy_sid = campaign_at_99
+    cid, busy_sid = campaign_at_999
     _hold_a_run(cid, busy_sid)
     r = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Winifred"})
     assert r.status_code == 409 and r.json()["detail"]["kind"] == "scene_busy"
@@ -1050,6 +1101,16 @@ guessing costs a debugging cycle:
 | `post_scene_retcon` | `POST .../messages/{index}/retcon` | `scenes.py:3098` |
 | `post_scene_roll` | `POST .../roll` | `mechanics.py:34` |
 | `post_scene_check` | `POST .../check` | `mechanics.py:203` |
+| `post_scene_cast` / `_batch` / `post_emergent_cast` / `post_dismiss` | `POST .../cast`, `.../cast/batch`, `.../emergent-cast`, `.../dismiss` | `scenes.py:2729`+ |
+| `set_location` / `set_datetime` setters | the scene's location and clock routes | `store/scenes/moment.py` |
+
+**The cast and moment routes belong here too**, even though the UI already
+disables them with `sceneLocked`: a second tab or a direct API call is not
+bound by the UI. `appear`/`leave` and `set_location` append transition lines to
+the transcript, and the first `set_datetime` **renames the scene** — so these
+do not merely change context the live run is generating from, they can trip the
+identity check and discard a completed result. Each gets the guard under the
+same lock hold as its mutation, and a route test.
 
 **The last two are easy to miss and belong in the same guard.** Both call
 `store.scenes.append_message(cid, sid, "assistant", line, ...)`
@@ -1080,7 +1141,8 @@ So the check belongs in `post_scene` (`scenes.py:92`): take
 exclusion key in that campaign, and call the (re-entrant) store mutation from
 inside that hold. Refuse only when the create would cross the width boundary —
 `serialize._numbering(cid)` reports `number` and `width`, and
-`len(str(number)) > width` is the branch that calls `repad`, which renames
+`len(str(number)) > width` is the branch that calls `repad` — with
+`MIN_WIDTH = 3` that first bites at 999 → 1000, not 99 → 100, which renames
 every scene in the campaign rather than only the busy one.
 
 - [ ] **Step 5: Run tests to verify they pass**
@@ -1202,7 +1264,19 @@ Above `BrowserRouter`, not inside it — a provider under the router remounts on
 navigation, which is the thing this exists to prevent. Cover the real entry
 composition, not only an isolated render.
 
-It holds `Map<runId, {subject, cls, frames, consumed}>`. The consumed index is
+It holds `Map<runId, {subject, cls, frames, consumed}>` **plus a
+`Map<subject, attemptId>` of sends that have not yet resolved to a run id.**
+
+**The attempt id goes into provider state BEFORE the POST is issued.** Creating
+the entry when the leading `run` frame arrives is too late, and it fails in the
+one case the mechanism exists for: if the server accepts the request and
+mutates the scene but the response is lost before that frame, the attempt id
+lives only in hook state — which unmounts on navigation or backgrounding. On
+recovery the client then cannot call `GET .../run?attempt=...`, which is the
+only unambiguous way to learn whether *its* send landed, and #95's ambiguity is
+back. Test a response lost before the first frame, then a remount.
+
+The consumed index is
 persisted **per run as frames are read** and resume asks for `consumed + 1`.
 Never resume from `next_index` — that is the live tail, and using it drops
 everything generated while the client was away.
