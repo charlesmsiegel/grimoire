@@ -399,6 +399,63 @@ def post_character_lorebook_import(wid: str, cid: str, vid: str):
     return {"created": created}
 
 
+@router.get("/worlds/{wid}/images/undescribed")
+def list_undescribed_images(wid: str):
+    """Every stored image in this world with NO description entry — the backlog
+    `DescribeQueue` steps through.
+
+    Key ABSENT, never merely empty: an image reviewed and deliberately left
+    undescribed is finished, and re-offering it is how a queue never empties.
+
+    Registered here rather than in `entities.py` because `/{kind}/{eid}` would
+    otherwise swallow it — `entities.router` is included last precisely so a
+    named route in another module wins, the same arrangement
+    `/worlds/{wid}/subjects/untagged` relies on.
+
+    World-scoped. A campaign reaches most of its art through its world, so
+    describing it here describes it once; a campaign that has diverged an image
+    describes that one in its own editor.
+    """
+    root = _world_root_or_404(wid)
+    out = []
+    for base in ("characters", store.pcs.ASSET_BASE, *store.entities.ENTITY_KINDS):
+        for item in store.image_descriptions.undescribed(root, base):
+            name = _record_display_name(root, base, item["id"])
+            if name is None:
+                # An asset folder whose record is gone. Not listed: the queue
+                # would offer an image no route can describe, and the PUT it
+                # would issue is a 404 by design.
+                continue
+            out.append({"kind": base, "id": item["id"], "vid": item["vid"],
+                        "name": item["name"], "record_name": name,
+                        "url": _undescribed_url(wid, base, item)})
+    return out
+
+
+def _record_display_name(root, base: str, rid: str) -> str | None:
+    """What to call the record an undescribed image hangs off, or None when
+    there is no such record any more."""
+    try:
+        if base == "characters":
+            return str(store.characters.read_character(root, rid)["meta"]["name"])
+        if base == store.pcs.ASSET_BASE:
+            return str(store.pcs.read_pc(root, rid)["meta"]["name"])
+        return str(store.entities.read_entity(root, base, rid)["meta"]["name"])
+    except (store.characters.CharacterNotFound, store.pcs.PCNotFound,
+            store.entities.EntityNotFound, KeyError, OSError, UnicodeDecodeError):
+        return None
+
+
+def _undescribed_url(wid: str, base: str, item: dict) -> str:
+    """The world-scoped serving URL for one queued image. An actor's art is per
+    version; an entity's is keyed on a fixed `default`, so its URL has no
+    version segment to carry."""
+    if base in ("characters", store.pcs.ASSET_BASE):
+        return (f"/api/worlds/{wid}/{base}/{item['id']}"
+                f"/versions/{item['vid']}/images/{item['name']}")
+    return f"/api/worlds/{wid}/{base}/{item['id']}/images/{item['name']}"
+
+
 @router.get("/worlds/{wid}/characters/{cid}/versions/{vid}/images")
 def list_world_images(wid: str, cid: str, vid: str):
     return store.assets.list_images(_world_root_or_404(wid), cid, vid)

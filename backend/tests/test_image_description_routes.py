@@ -153,3 +153,47 @@ def test_library_description_for_a_missing_image_is_a_404(client, world):
     r = client.put(f"/api/campaigns/{camp}/images/nope/description",
                    json={"description": "x"})
     assert r.status_code == 404
+
+
+# ---- the describe backlog --------------------------------------------------
+
+def test_undescribed_lists_every_surface_and_drops_reviewed_images(client, world):
+    cid, vid = _char(client, world)
+    made = client.post(f"/api/worlds/{world}/pcs", json={"name": "Mara"}).json()
+    pid, pvid = made["pc"], made["version"]
+    client.put(f"/api/worlds/{world}/pcs/{pid}/versions/{pvid}/images/avatar",
+               files={"file": ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+    eid = client.post(f"/api/worlds/{world}/locations",
+                      json={"name": "Saltmarch Harbour"}).json()["id"]
+    client.put(f"/api/worlds/{world}/locations/{eid}/images/gallery_1",
+               files={"file": ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+
+    queue = client.get(f"/api/worlds/{world}/images/undescribed").json()
+    assert {(i["kind"], i["id"], i["name"]) for i in queue} == {
+        ("characters", cid, "gallery_1"), ("pcs", pid, "avatar"),
+        ("locations", eid, "gallery_1")}
+    # The URL is the one that serves the image, and its shape follows the
+    # surface: actors carry a version, entities do not.
+    by_kind = {i["kind"]: i for i in queue}
+    assert by_kind["characters"]["url"] == (
+        f"/api/worlds/{world}/characters/{cid}/versions/{vid}/images/gallery_1")
+    assert by_kind["locations"]["url"] == (
+        f"/api/worlds/{world}/locations/{eid}/images/gallery_1")
+    assert by_kind["characters"]["record_name"] == "Seraphine"
+    assert client.get(by_kind["characters"]["url"]).status_code == 200
+
+    # Describing one retires it; so does reviewing one and saying nothing.
+    client.put(f"/api/worlds/{world}/characters/{cid}/versions/{vid}"
+               f"/images/gallery_1/description", json={"description": "A grey quay."})
+    client.put(f"/api/worlds/{world}/pcs/{pid}/versions/{pvid}/images/avatar/description",
+               json={"description": ""})
+    queue = client.get(f"/api/worlds/{world}/images/undescribed").json()
+    assert {(i["kind"], i["name"]) for i in queue} == {("locations", "gallery_1")}
+
+
+def test_undescribed_is_not_swallowed_by_the_generic_entity_routes(client, world):
+    """`/{kind}/{eid}` would match `images/undescribed` if the generic entity
+    router were reached first. It is included last precisely so it is not."""
+    r = client.get(f"/api/worlds/{world}/images/undescribed")
+    assert r.status_code == 200
+    assert r.json() == []

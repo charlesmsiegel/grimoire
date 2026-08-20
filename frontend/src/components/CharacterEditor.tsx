@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Appearance, type Card, type CardFormat, type Casefile, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type ModuleDetail, type VersionRef } from "../api/client";
+import { api, type Appearance, type Card, type CardFormat, type Casefile, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type ModuleDetail, type UndescribedImage, type VersionRef } from "../api/client";
 import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import CreationWizard from "./CreationWizard";
 import { Field } from "./Field";
 import { GreetingMarkdown } from "./GreetingMarkdown";
+import { DescribeQueue } from "./DescribeQueue";
 import { HtmlNote } from "./HtmlNote";
 import { ImageDescriptionField } from "./ImageDescriptionField";
 import { OwnedLorePanel } from "./OwnedLorePanel";
@@ -215,6 +216,10 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const worldScope = scope.kind === "world";
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [detail, setDetail] = useState<CharacterDetail | null>(null);
+  // The world's describe backlog. World scope only — a campaign reaches most
+  // of its art through its world, so the queue belongs where the art does.
+  const [undescribed, setUndescribed] = useState<UndescribedImage[]>([]);
+  const [describeOpen, setDescribeOpen] = useState(false);
   const [vid, setVid] = useState("");
   const [card, setCard] = useState<Card | null>(null);
   const [greetings, setGreetings] = useState<string[]>([]);
@@ -363,6 +368,14 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   }
 
   const reload = useCallback(() => api.listCharacters(scope).then(setChars), [scope.kind, scope.id]);  // eslint-disable-line react-hooks/exhaustive-deps
+  /** Re-read the backlog. Failure leaves it empty, which hides the button —
+   *  the right answer for a count nobody can trust, and the same posture the
+   *  greeting rail takes with its untagged list. */
+  const reloadUndescribed = useCallback(() => {
+    if (scope.kind !== "world") { setUndescribed([]); return; }
+    api.listUndescribedImages(scope.id).then(setUndescribed).catch(() => setUndescribed([]));
+  }, [scope.kind, scope.id]);
+  useEffect(() => { reloadUndescribed(); }, [reloadUndescribed]);
   useEffect(() => {
     reload();
     setWizardOpen(false); // a scope change can reuse this instance; never carry a wizard across it
@@ -1399,6 +1412,11 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
         {urlPromptOpen && (
           <UrlImportPrompt onClose={() => setUrlPromptOpen(false)} onSubmit={runBulkUrlImport} />
         )}
+        {describeOpen && (
+          <DescribeQueue wid={wid} queue={undescribed}
+                         onSaved={reloadUndescribed}
+                         onClose={() => { setDescribeOpen(false); reloadUndescribed(); }} />
+        )}
         <div className="grid-toolbar">
           {worldScope && <>
             <button className="primary" onClick={newCharacter}>+ New character</button>
@@ -1409,6 +1427,11 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
             <input ref={fileRef} type="file" accept=".json,.png,.charx" multiple hidden aria-label="Import character card" onChange={onImport} />
             <button className="subtle" onClick={() => setUrlPromptOpen(true)}>Download from URL</button>
             <button className="subtle" onClick={checkChubLinks}>Check chub.ai links</button>
+            {undescribed.length > 0 && (
+              <button className="subtle" onClick={() => setDescribeOpen(true)}>
+                ▶ Describe images ({undescribed.length})
+              </button>
+            )}
           </>}
 
           {bulkLocalize && (
