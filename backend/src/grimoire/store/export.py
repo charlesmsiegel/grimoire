@@ -220,6 +220,26 @@ def drop_images(text: str) -> str:
     return _MD_IMG.sub(lambda m: m["alt"], text)
 
 
+def remove_images(text: str) -> str:
+    """Strip every markdown image out entirely, ALT TEXT INCLUDED.
+
+    The other answer to the same question, beside `drop_images`, and sharing its
+    regex so the two cannot drift. Which one a caller wants depends on whether
+    the alt text is content:
+
+    - a reader of a text-only export wants it, and gets `drop_images`;
+    - `length_drift`, measuring how much prose the MODEL wrote, does not. The
+      description came out of an author's sidecar and the model contributed a
+      ten-character handle, so counting the alt text as its prose measures the
+      wrong author.
+
+    Deliberately not `localize.strip_refs`: that reports the URL's span alone,
+    so it leaves an `![alt]()` shell behind — right for the base64-shedding job
+    it was written for, wrong here.
+    """
+    return _MD_IMG.sub("", text)
+
+
 def _friendly_or_none(provider, native: str) -> str | None:
     try:
         return calendars.friendly(provider, native)

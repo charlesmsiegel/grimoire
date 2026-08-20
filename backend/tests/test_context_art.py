@@ -331,3 +331,20 @@ def test_history_sends_a_picture_to_the_model_as_its_alt_text(world):
     assert "/api/campaigns/" not in text
     assert "![" not in text
     assert "She turns." in text and "Rain." in text
+
+
+def test_a_picture_does_not_count_against_the_length_budget(world):
+    """The model wrote a ten-character handle; the alt text came out of an
+    author's sidecar. Counting it as prose punishes the model for doing what
+    the available-art section asked -- and under a `terse` budget one image was
+    enough on its own (7 phantom words, a phantom paragraph) to trip the drift
+    correction and tell it to write less."""
+    from grimoire.store import length_drift
+    camp, char, vid = world["cid"], world["char"], world["vid"]
+    _cast(camp, char, vid)
+    prose = "She turns from the rail, rain running off the pauldron, saying nothing."
+    withart = art.resolve_handles(
+        camp, f"{prose}\n\n[[art:characters:{char}:gallery_1]]")
+    assert withart != prose                       # the picture really is in there
+    assert length_drift._words(withart) == length_drift._words(prose)
+    assert length_drift._paragraphs(withart) == length_drift._paragraphs(prose)
