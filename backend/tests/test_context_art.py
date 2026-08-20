@@ -370,3 +370,43 @@ def test_a_hand_edited_knob_falls_back_rather_than_raising(monkeypatch, tmp_path
     config.write_config(art_catalog_depth="lots", art_catalog_threshold="nan")
     got = art.settings()
     assert (got["depth"], got["threshold"]) == (art.DEFAULT_DEPTH, art.DEFAULT_THRESHOLD)
+
+
+def test_semantic_mode_replaces_the_scores_but_keeps_the_name_rule(world, monkeypatch):
+    """"Semantic as an upgrade" has to mean an upgrade. Replacing the scores
+    wholesale switched off the commonest reason this feature is useful --
+    a description that never mentions Seraphine is not close to a sentence about
+    her either -- so configuring an endpoint would have quietly stopped her art
+    being offered when the scene named her."""
+    camp, char, vid, loc = world["cid"], world["char"], world["vid"], world["loc"]
+    _cast(camp, char, vid)
+    cands = art.candidates(camp, [{"kind": "characters", "id": char, "role": "npc"}],
+                           loc, [])
+    cands = [c for c in cands if c["kind"] != art.LIBRARY]
+
+    # An endpoint that resolves, and a scorer that matches the harbour strongly
+    # and everything else not at all.
+    monkeypatch.setattr(art.embed_space, "resolve",
+                        lambda cfg=None: {"space": "s", "model": "m", "key": "k",
+                                          "base_url": "u"})
+    monkeypatch.setattr(art, "_semantic_scores",
+                        lambda cands, text, cfg: [0.9 if c["kind"] == "locations" else 0.0
+                                                  for c in cands])
+    got = art.rank(camp, cands, "Seraphine watched the boats.")
+    # The cosine hit ranks first; the named record is still offered, last.
+    assert [c["kind"] for c in got] == ["locations", "characters"]
+
+    # ...and a record neither named nor matched is not offered at all.
+    got = art.rank(camp, cands, "Nobody in particular said nothing.")
+    assert [c["kind"] for c in got] == ["locations"]
+
+
+def test_a_semantic_failure_falls_back_to_the_keyword_ranking(world, monkeypatch):
+    camp, loc = world["cid"], world["loc"]
+    cands = art.candidates(camp, [], loc, [])
+    monkeypatch.setattr(art.embed_space, "resolve",
+                        lambda cfg=None: {"space": "s", "model": "m", "key": "k",
+                                          "base_url": "u"})
+    monkeypatch.setattr(art, "_semantic_scores", lambda *a, **k: None)   # provider down
+    got = art.rank(camp, cands, "Fishing boats sat at the quay, lost in fog.")
+    assert [c["name"] for c in got] == ["gallery_1"]
