@@ -115,3 +115,22 @@ def test_describing_art_never_makes_a_record_look_edited_to_sync(pair):
     overlay.set_description(camp, cid, vid, "gallery_1", "This campaign's take.")
     image_descriptions.set_description(wroot, cid, vid, "gallery_1", "A newer world take.")
     assert sync.incoming(camp) == []
+
+
+def test_a_malformed_campaign_entry_does_not_mask_the_worlds_description(pair):
+    """The sweep and the per-image read must agree.
+
+    `read_all` drops a non-string value (a hand-edited or half-synced store must
+    not hand a list to a template) but the raw key is still there. Deciding
+    "the campaign has spoken" on raw key presence turned that into `""`: the
+    world's perfectly good sentence was masked and the image looked
+    reviewed-with-nothing-to-say. `read_description` never agreed."""
+    _wroot, camp, cid, vid = pair
+    croot = overlay.croot_of(camp)
+    d = croot / "characters" / cid / "assets" / vid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / image_descriptions.DESCRIPTIONS_FILE).write_text(
+        '{"gallery_1": ["not", "a", "string"]}\n', encoding="utf-8")
+
+    assert overlay.read_description(camp, cid, vid, "gallery_1") == "The world's quay."
+    assert overlay.read_descriptions(camp, cid, vid) == {"gallery_1": "The world's quay."}

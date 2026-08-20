@@ -27,8 +27,8 @@ export function ImageDescriptionField({ name, value, onSave, onDraft }: {
   const [busy, setBusy] = useState<"save" | "draft" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Re-sync when the record reloads under us (a save elsewhere, a version
-  // switch). Guarded on `open` so it cannot discard what is being typed.
+  // Re-sync when the record reloads under us (a save elsewhere). Guarded on
+  // `open` so a reload cannot discard what is being typed.
   useEffect(() => { if (!open) setText(value ?? ""); }, [value, open]);
 
   const reviewed = value !== undefined;

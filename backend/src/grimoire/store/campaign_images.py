@@ -225,6 +225,8 @@ def set_description(cid: str, name: str, text: str) -> None:
     about what its sidecar means, which is why the write goes through there.
     """
     with locks.campaign_lock(cid):
+        # Listed inside the lock: computed outside it, the check could pass for
+        # an image a concurrent delete had already taken away.
         image_descriptions.set_in(images_dir(cid), name, text,
                                   names={i["name"] for i in list_images(cid)})
 

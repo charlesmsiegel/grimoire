@@ -880,7 +880,7 @@ def read_description(cid: str, aid: str, vid: str, name: str,
             or _asset_ref(base, aid, vid, name) in deleted(cid)
             or _flat_ref(base, aid) in detached(cid)):
         return mine.get(name, "")
-    if name in mine:
+    if name in mine:            # typed read: a malformed entry is not an answer
         return mine[name]
     return image_descriptions.read(wroot_of(cid), aid, vid, name, base)
 
@@ -905,15 +905,19 @@ def read_descriptions(cid: str, aid: str, vid: str, base: str = "characters") ->
     union = {i["name"] for i in images}
     mine_images = {i["name"] for i in assets.list_images(croot, aid, vid, base)}
     mine = image_descriptions.read_all(croot, aid, vid, base, names=union)
-    mine_keys = image_descriptions.raw_keys(croot, aid, vid, base)
+    # From the TYPED read, not `raw_keys`. A campaign sidecar holding a non-string
+    # value for an inherited image is dropped by `read_all` but still has a raw
+    # key -- and treating that as "the campaign has spoken" turned the malformed
+    # entry into `""`, masking the world's perfectly good description and marking
+    # the image reviewed-empty. `read_description` never agreed with that: it
+    # falls through to the world for the same image.
+    mine_keys = set(mine)
     gone, detached_record = deleted(cid), _flat_ref(base, aid) in detached(cid)
     theirs: dict[str, str] = {}
-    theirs_keys: set[str] = set()
     # Only read the world side if some image might fall through to it -- a fully
     # diverged version never touches it.
     if not detached_record and not union <= mine_images:
         theirs = image_descriptions.read_all(wroot, aid, vid, base, names=union)
-        theirs_keys = image_descriptions.raw_keys(wroot, aid, vid, base)
 
     out: dict[str, str] = {}
     for name in sorted(union):
@@ -921,8 +925,8 @@ def read_descriptions(cid: str, aid: str, vid: str, base: str = "characters") ->
                          or _asset_ref(base, aid, vid, name) in gone)
         if name in mine_keys:
             out[name] = mine.get(name, "")
-        elif not campaign_side and name in theirs_keys:
-            out[name] = theirs.get(name, "")
+        elif not campaign_side and name in theirs:
+            out[name] = theirs[name]
     return out
 
 
@@ -956,10 +960,13 @@ def set_description(cid: str, aid: str, vid: str, name: str, text: str,
     there in exactly the same way. Naming it here rather than leaving the
     asymmetry to be discovered.
     """
-    union = {i["name"] for i in list_images(cid, aid, vid, base)}
     with locks.campaign_lock(cid):
-        image_descriptions.set_description(croot_of(cid), aid, vid, name, text, base,
-                                           names=union)
+        # The union is resolved INSIDE the lock, and `set_in` re-checks it inside
+        # the sidecar lock as well. Computed outside, it was a check-then-act:
+        # a slot could be promoted away between the check and the write.
+        image_descriptions.set_description(
+            croot_of(cid), aid, vid, name, text, base,
+            names={i["name"] for i in list_images(cid, aid, vid, base)})
 
 
 def delete_image(cid: str, aid: str, vid: str, name: str, base: str = "characters") -> None:

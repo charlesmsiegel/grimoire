@@ -507,6 +507,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                         </a>
                         <figcaption>primary</figcaption>
                         <ImageDescriptionField
+                          key={`${editing}:avatar`}
                           name="avatar"
                           value={images.find((i) => i.name === "avatar")?.description}
                           onSave={(d) => describeImage("avatar", d)}
@@ -520,6 +521,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                         <a href={imgSrc(n)} target="_blank" rel="noreferrer"><img alt={n} src={imgSrc(n)} /></a>
                         <button className="shelf-promote" onClick={() => promoteImage(n)}>Set as primary</button>
                         <ImageDescriptionField
+                          key={`${editing}:${n}`}
                           name={n} value={images.find((i) => i.name === n)?.description}
                           onSave={(d) => describeImage(n, d)}
                           onDraft={scope.kind === "world" ? () => draftDescription(n) : undefined} />

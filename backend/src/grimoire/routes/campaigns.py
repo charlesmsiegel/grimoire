@@ -584,29 +584,34 @@ def list_campaign_undescribed_images(cid: str):
                for image in store.campaign_images.list_images(cid)
                if image["name"] not in reviewed)
 
-    names: dict[tuple[str, str], str | None] = {}
+    # One read per record, name and versions together -- see the world queue's
+    # `_record_name_and_versions` for why both, and why one memo.
+    seen: dict[tuple[str, str], tuple[str, set[str]] | None] = {}
     for base in ("characters", store.pcs.ASSET_BASE, *store.entities.ENTITY_KINDS):
         for item in store.image_descriptions.undescribed(root, base):
             key = (base, item["id"])
-            if key not in names:
-                names[key] = _campaign_record_name(cid, base, item["id"])
-            if names[key] is None:
+            if key not in seen:
+                seen[key] = _campaign_record_name_and_versions(cid, base, item["id"])
+            found = seen[key]
+            if found is None or (found[1] and item["vid"] not in found[1]):
                 continue
             out.append({"kind": base, "id": item["id"], "vid": item["vid"],
-                        "name": item["name"], "record_name": names[key],
+                        "name": item["name"], "record_name": found[0],
                         "url": _campaign_image_url(cid, base, item)})
     return out
 
 
-def _campaign_record_name(cid: str, base: str, rid: str) -> str | None:
-    """What to call the record a queued campaign image hangs off, read through
-    the overlay, or None when nothing there answers to that id any more."""
+def _campaign_record_name_and_versions(cid: str, base: str,
+                                       rid: str) -> tuple[str, set[str]] | None:
+    """`_record_name_and_versions` (routes/characters.py) through the overlay."""
     try:
         if base == "characters":
-            return str(store.overlay.read_character(cid, rid)["meta"]["name"])
+            d = store.overlay.read_character(cid, rid)
+            return str(d["meta"]["name"]), {v["id"] for v in d["versions"]}
         if base == store.pcs.ASSET_BASE:
-            return str(store.overlay.read_pc(cid, rid)["meta"]["name"])
-        return str(store.overlay.read_entity(cid, base, rid)["meta"]["name"])
+            d = store.overlay.read_pc(cid, rid)
+            return str(d["meta"]["name"]), {v["id"] for v in d["versions"]}
+        return str(store.overlay.read_entity(cid, base, rid)["meta"]["name"]), set()
     except (store.characters.CharacterNotFound, store.pcs.PCNotFound,
             store.entities.EntityNotFound, KeyError, OSError, UnicodeDecodeError):
         return None

@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from grimoire.store import assets, characters, entities, image_descriptions
@@ -186,3 +188,51 @@ def test_stranded_promotion_residue_is_never_describable(tmp_path):
         "avatar", "gallery_1"}
     with pytest.raises(ValueError):
         image_descriptions.set_in(d, "promote-tmp", "crash residue")
+
+
+def test_a_description_save_cannot_land_in_the_middle_of_a_promotion(tmp_path, monkeypatch):
+    """One file, one lock.
+
+    A promotion snapshots the sidecar and rewrites it after the bytes have
+    moved; a save read-modify-writes the same file. They used to hold
+    *different* locks -- `_image_lock` on the slots being swapped versus
+    `locks.campaign_lock` -- so a save landing inside that window was read
+    back out and overwritten by the promotion's rewrite, and the author's
+    sentence was simply gone.
+    """
+    cid, vid = _chars(tmp_path)
+    d = _dir_of(tmp_path, cid, vid)
+    image_descriptions.write_in(d, {"avatar": "The old portrait.",
+                                    "gallery_1": "Half-plate in the rain."})
+
+    inside, release = threading.Event(), threading.Event()
+    real_put = assets.put_image
+
+    def blocking_put(*a, **kw):
+        # Called from inside the promotion, after it has taken the sidecar lock.
+        if not inside.is_set():
+            inside.set()
+            release.wait(5)
+        return real_put(*a, **kw)
+
+    monkeypatch.setattr(assets, "put_image", blocking_put)
+    promoting = threading.Thread(
+        target=assets.promote_image, args=(tmp_path, cid, vid, "gallery_1"))
+    promoting.start()
+    assert inside.wait(5)
+
+    saving = threading.Thread(target=image_descriptions.set_description,
+                              args=(tmp_path, cid, vid, "avatar", "Newly written."))
+    saving.start()
+    # It must NOT get in: the promotion is holding the sidecar mid-swap.
+    saving.join(0.2)
+    assert saving.is_alive()
+
+    release.set()
+    promoting.join(5)
+    saving.join(5)
+    assert not promoting.is_alive() and not saving.is_alive()
+    # The save landed after the swap, so it is the last word -- rather than
+    # being clobbered by the promotion's rewrite of the slot it names.
+    assert image_descriptions.read_in(d) == {"avatar": "Newly written.",
+                                             "gallery_1": "The old portrait."}
