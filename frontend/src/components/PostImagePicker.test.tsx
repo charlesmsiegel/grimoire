@@ -6,6 +6,7 @@ vi.mock("../api/client", () => ({
     listCampaignImages: vi.fn(),
     putCampaignImage: vi.fn(),
     deleteCampaignImage: vi.fn(),
+    setCampaignImageDescription: vi.fn(),
     readCharacter: vi.fn(),
     readPC: vi.fn(),
     campaignImageUrl: (cid: string, name: string) => `/api/campaigns/${cid}/images/${name}`,
@@ -268,4 +269,40 @@ test("a name a markdown link cannot carry bare is percent-encoded", () => {
   // ...and an ordinary name is left exactly as it was
   expect(insertion("coastline", "/api/campaigns/c/images/coastline"))
     .toBe("![coastline](/api/campaigns/c/images/coastline)");
+});
+
+
+test("the library shows each image's description and saves an edit", async () => {
+  (api.listCampaignImages as any).mockResolvedValue([
+    { name: "coastline", ext: "png", v: "a1",
+      description: "A hand-drawn map of the coast.", described: true },
+    { name: "the-inn", ext: "jpg", v: "b2", description: "", described: false },
+  ]);
+  (api.setCampaignImageDescription as any).mockResolvedValue({ ok: true });
+  render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
+                          onInsert={() => {}} onClose={() => {}} />);
+  expect(await screen.findByRole("button", { name: /Description of coastline/ }))
+    .toHaveTextContent("A hand-drawn map of the coast.");
+  expect(screen.getByRole("button", { name: /Description of the-inn/ }))
+    .toHaveTextContent("Describe…");
+
+  fireEvent.click(screen.getByRole("button", { name: /Description of the-inn/ }));
+  const box = await screen.findByRole("textbox", { name: /Description of the-inn/ });
+  fireEvent.change(box, { target: { value: "The common room at night." } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setCampaignImageDescription)
+    .toHaveBeenCalledWith("run", "the-inn", "The common room at night."));
+});
+
+test("inserting a described library image uses the description as alt text", async () => {
+  (api.listCampaignImages as any).mockResolvedValue([
+    { name: "coastline", ext: "png", v: "a1",
+      description: "A hand-drawn map of the coast.", described: true },
+  ]);
+  const onInsert = vi.fn();
+  render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
+                          onInsert={onInsert} onClose={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Insert coastline" }));
+  expect(onInsert).toHaveBeenCalledWith(
+    "![A hand-drawn map of the coast.](/api/campaigns/run/images/coastline)");
 });
