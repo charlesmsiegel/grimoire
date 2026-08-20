@@ -93,6 +93,14 @@ CROSSING_PAIRS = [
     # registered first, so it keeps winning.
     ("/api/campaigns/{cid}/characters/{char}/voice-anchor/generate",
      "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
+    # `/campaigns/{cid}/images/instantiate/description/draft` matches both, and
+    # the decision is every other instantiate crossing's: only an image named
+    # literally "instantiate" -- whose description draft is being asked for --
+    # could reach it, "images" is not an entity kind so the instantiate pattern
+    # can never legitimately claim a URL under it, and the library route is
+    # registered first because `entities.router` is included last.
+    ("/api/campaigns/{cid}/images/{name}/description/draft",
+     "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
     ("/api/campaigns/{cid}/scenes/{sid}/cast/batch",
      "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
     # Same shape and same decision as `cast/batch` directly above: only

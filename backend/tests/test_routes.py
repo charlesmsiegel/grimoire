@@ -745,6 +745,9 @@ def _write_request(client, method: str, url: str, gid: str):
         return client.post(url, json={"gid": gid, "name": "embed-abc123def456", "slot": "avatar"})
     if url.endswith("/subjects"):
         return client.put(url, json={"subjects": []})
+    if url.endswith("/description/draft"):
+        # No body: the draft reads an image and asks the model about it.
+        return client.post(url)
     if url.endswith("/description"):
         # A sidecar write, like /subjects above, and gated for the same reason:
         # `image_descriptions.set_in` mkdir(parents=True)s the same
@@ -885,13 +888,17 @@ def test_every_entity_image_write_route_refuses_a_kind_that_has_no_entities(clie
                       json={"name": "Opener", "character": "sera", "version": "default"}).json()["id"]
 
     entity_routes = [(m, p) for m, p in _image_write_routes(client) if _surface_seg(p) == "{kind}"]
-    # PUT/DELETE/promote/description, world + campaign. The description PUT is
-    # here for the same reason the greeting-subjects PUT is in the roster above:
-    # it writes a sidecar rather than an image, but through the same
-    # `mkdir(parents=True)` into the same `<kind>/<id>/assets/` directory, so an
-    # unchecked kind files `potions/<id>/assets/default/descriptions.json` just
-    # as readily as it files a `.png`.
-    assert len(entity_routes) == 8, entity_routes
+    # PUT/DELETE/promote/description, world + campaign, plus the world-side
+    # description DRAFT. The description PUT is here for the same reason the
+    # greeting-subjects PUT is in the roster above: it writes a sidecar rather
+    # than an image, but through the same `mkdir(parents=True)` into the same
+    # `<kind>/<id>/assets/` directory, so an unchecked kind files
+    # `potions/<id>/assets/default/descriptions.json` just as readily as it
+    # files a `.png`. The draft POST writes nothing at all, but it reads an
+    # image by kind and id and must refuse a nonsense kind for the same reason
+    # every other handler here does -- and being in this roster is what keeps
+    # that true if it ever grows a write.
+    assert len(entity_routes) == 9, entity_routes
 
     for method, path in entity_routes:
         scope_id = wid if path.startswith("/api/worlds") else cid
