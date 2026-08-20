@@ -17,6 +17,7 @@ vi.mock("../api/client", () => ({
     getCampaign: vi.fn(),
     listCampaigns: vi.fn(),
     listCharacters: vi.fn(),
+    listUndescribedImages: vi.fn(),
     listPCs: vi.fn(),
     listTags: vi.fn(),
     listEntities: vi.fn(),
@@ -67,6 +68,7 @@ beforeEach(() => {
     { id: "c3", name: "Elsewhere", world: "other" },
   ]);
   (api.listCharacters as any).mockResolvedValue([]);
+  (api.listUndescribedImages as any).mockResolvedValue([]);
   // campaign scope reads the roster to drive the Characters grid's appeared filter
   (api.listAppearances as any).mockResolvedValue([]);
   (api.listPCs as any).mockResolvedValue([]);

@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useMatch, useNavigate, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
+import { hideArtHandles } from "../artHandles";
 import remarkGfm from "remark-gfm";
 import {
   api, ApiError, type Actor, type SceneMeta,
@@ -3299,7 +3300,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 <div className="msg assistant">
                   <span className="msg-gutter" />
                   <div className="msg-body">
-                    <RenderedMarkdown content={streaming} />
+                    {/* Art handles are hidden while the deltas arrive: the
+                        server rewrites them into markdown when the reply is
+                        persisted, so the reader would otherwise watch a raw
+                        `[[art:...]]` sit in the prose and then turn into a
+                        picture. Display only -- nothing here changes what is
+                        stored. */}
+                    <RenderedMarkdown content={hideArtHandles(streaming)} />
                     <span className="cursor" />
                   </div>
                 </div>
