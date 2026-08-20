@@ -22,8 +22,9 @@ android {
         // Bumping targetSdk to 35 forces edge-to-edge; the WebView insets need
         // explicit handling first (Phase 2 of docs/android-architecture.md).
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.0.1"
+        // versionCode is derived from versionName: major*10000 + minor*100 + patch.
+        versionCode = 203
+        versionName = "0.2.3"
         ndk {
             // ~all 2026 devices; add ABIs only on demand (APK size)
             abiFilters.add("arm64-v8a")
