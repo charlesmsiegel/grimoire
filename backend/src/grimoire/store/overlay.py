@@ -979,6 +979,14 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
     """Copy-up the named image and the current avatar, then swap campaign-side."""
     croot, wroot = croot_of(cid), wroot_of(cid)
     inherits = _flat_ref(base, aid) not in detached(cid)
+    # Resolved BEFORE anything moves. Copying the bytes up is what makes this
+    # campaign hold the picture, and from that moment `read_description` stops
+    # falling through to the world for it -- deliberately, since a campaign-side
+    # image is normally different art. Here it is the SAME art, so a description
+    # not carried up with the bytes is one this campaign silently loses the
+    # instant somebody promotes the picture (PR review).
+    resolved = read_descriptions(cid, aid, vid, base)
+    copied = []
     for n in (name, assets.AVATAR):
         if (inherits and assets.image_path(croot, aid, vid, n, base) is None
                 and _asset_ref(base, aid, vid, n) not in deleted(cid)):
@@ -986,6 +994,13 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
             if src is not None:
                 assets.put_image(croot, aid, vid, n, src.read_bytes(),
                                  src.suffix.lstrip("."), base)
+                copied.append(n)
+    for n in copied:
+        # Key presence, not truthiness: `""` is "reviewed, nothing to say" and
+        # has to travel too, or the promoted image walks back into the describe
+        # queue somebody has already answered for.
+        if n in resolved:
+            image_descriptions.set_description(croot, aid, vid, n, resolved[n], base)
     assets.promote_image(croot, aid, vid, name, base)
     # When there was no avatar to swap into the promoted slot, the swap leaves
     # no campaign file at `name`, so the inherited image there would still show

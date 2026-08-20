@@ -90,6 +90,13 @@ info gating (owner gating, and which entries activated). Those depend on state
 this function is not given, and the honest description of the guarantee is the
 three rules above rather than a fourth one that only looks like the catalogue's.
 
+Nor is the DEPTH CUT part of the gate, for the same reason: an image that was
+ranked but fell outside `art_catalog_depth`, or one offered a few turns ago,
+still passes all three rules and still resolves if the model names it. That is
+the residue of not carrying the catalogue, and it is bounded by what the rules
+above already refuse -- undescribed art, invisible art, and art belonging to
+something this scene cannot show.
+
 The version is deliberately absent from the handle. It is not the model's to
 choose: resolution uses the campaign's locked version, the same one the
 catalogue was built from and the one that is actually speaking.

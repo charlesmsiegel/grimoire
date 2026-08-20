@@ -448,6 +448,10 @@ async def _draft_description(client, path, subject: str) -> dict:
         raise HTTPException(status_code=404, detail="image not found")
     try:
         messages = store.image_drafts.build_prompt(path, subject)
+    except store.image_drafts.ImageTooLargeError as exc:
+        # Refused before the bytes are read, so this is an error rather than the
+        # killed process an Android install would otherwise get. See MAX_BYTES.
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except ValueError as exc:
         # An externally-placed file with an extension we never accepted, so we
         # cannot label its bytes for the provider.

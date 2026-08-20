@@ -578,7 +578,13 @@ def delete_image(root: Path, cid: str, vid: str, name: str, base: str = "charact
     delete_in(d, name)
     # The description goes with the bytes, the way the crop already does below:
     # a re-upload under this name is different art and must inherit neither.
-    drop_sidecar_entry(d, DESCRIPTIONS_FILE, name)
+    #
+    # Only once the bytes have ACTUALLY gone. `delete_in` swallows an unlink
+    # failure by design (a scanner holding the file on Windows, a read-only
+    # directory), and dropping the sentence anyway loses what somebody wrote
+    # about a picture that is still sitting there (PR review).
+    if image_path(root, cid, vid, name, base) is None:
+        drop_sidecar_entry(d, DESCRIPTIONS_FILE, name)
     if name == AVATAR:
         clear_focus(root, cid, vid, base)
 
