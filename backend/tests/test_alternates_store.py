@@ -4,6 +4,7 @@ import json
 import pathlib
 
 import pytest
+
 from grimoire.store import (
     alternates,
     appearances,

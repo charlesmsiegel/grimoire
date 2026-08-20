@@ -12,6 +12,7 @@ import os.path
 
 import pytest
 from fastapi.testclient import TestClient
+
 from grimoire.main import SPAStaticFiles
 
 PAGE = {"accept": "text/html,application/xhtml+xml"}
@@ -44,6 +45,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("GRIMOIRE_DIST", str(dist))
 
     from fastapi import FastAPI
+
     from grimoire.routes import router
 
     app = FastAPI()

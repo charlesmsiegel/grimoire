@@ -74,6 +74,9 @@ ignore = ["E501", "E701", "E702", "E731", "E741"]
 #         docstring, annotation, copyright, exception-message, unused-argument,
 #         boolean-trap and formatting families: house style, not bug classes.
 
+[lint.isort]
+known-first-party = ["grimoire", "tests", "evals"]
+
 [lint.mccabe]
 # ruff's default is 10, and 10 is also this tree's p99 (89 of 9142 functions
 # are above it) -- the default is already calibrated to this codebase, so

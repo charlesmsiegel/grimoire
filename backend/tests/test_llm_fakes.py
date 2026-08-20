@@ -14,9 +14,9 @@ import asyncio
 import json
 
 import pytest
+
 from grimoire import prompts
 from grimoire.llm_errors import LLMError
-
 from tests import llm_fakes
 from tests.llm_fakes import (
     Cassette,

@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import pytest
+
 from grimoire.store import atomic
 
 PRIOR = "---\ntitle: before\n---\n\nthe original body\n"

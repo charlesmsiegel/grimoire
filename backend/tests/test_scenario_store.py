@@ -9,6 +9,7 @@ what it writes has to line up with what the proposal promised.
 import json
 
 import pytest
+
 from grimoire.store import assets, characters, entities, greetings, lorebook, scenario, worlds
 
 CARD = {

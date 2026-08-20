@@ -15,6 +15,7 @@ import threading
 import time
 
 import pytest
+
 from grimoire.store import (
     audit,
     calendars,
@@ -471,6 +472,7 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
     sorts by cid, so it is only distinguishable from the one that iterates
     `list_campaigns()` when those two orders disagree."""
     from fastapi.testclient import TestClient
+
     from grimoire import main
 
     wid = _three_campaigns_in_reverse_recency(monkeypatch, tmp_path)
@@ -981,6 +983,7 @@ def test_a_manual_roll_and_its_transcript_line_share_one_hold(
     whole property, and it is verified red-green.
     """
     from fastapi.testclient import TestClient
+
     from grimoire import main
     from grimoire.store import rolls
 
@@ -1027,6 +1030,7 @@ def test_the_chronicle_save_persists_under_one_hold(monkeypatch, tmp_path):
     ROUTE established -- 1 with the outer hold, 0 without.
     """
     from fastapi.testclient import TestClient
+
     from grimoire import main
     from grimoire.store import chronicle
 

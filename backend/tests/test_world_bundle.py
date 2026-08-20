@@ -14,6 +14,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+
 from grimoire.store import characters, entities, greetings, tags, world_bundle, worlds
 
 # A one-pixel PNG: real binary that must survive verbatim (deflate on an

@@ -11,6 +11,7 @@ import sys
 import time
 
 import pytest
+
 from grimoire.store import proclock
 
 _CHILD = """

@@ -9,6 +9,7 @@ and an entry only ever gains its `undone` stamp.
 import json
 
 import pytest
+
 from grimoire.store import campaigns, journal, worlds
 
 

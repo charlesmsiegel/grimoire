@@ -2,6 +2,7 @@
 weights it (#112)."""
 
 import pytest
+
 from grimoire.store import absorb, appearances, campaigns, characters, entities, pcs, scenes, worlds
 from grimoire.store.absorb import routing
 

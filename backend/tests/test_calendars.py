@@ -1,4 +1,5 @@
 import pytest
+
 from grimoire.store.calendars import (
     CalendarError,
     CalendarProvider,

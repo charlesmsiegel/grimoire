@@ -1,4 +1,5 @@
 import pytest
+
 from grimoire.store import assets, characters, greetings, image_subjects
 
 

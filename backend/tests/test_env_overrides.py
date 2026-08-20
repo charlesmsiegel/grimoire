@@ -6,6 +6,7 @@ points these env vars at the extracted copies (docs/android-architecture.md §6)
 
 import pytest
 from fastapi.testclient import TestClient
+
 from grimoire import prompts
 from grimoire.main import create_app, dist_dir
 

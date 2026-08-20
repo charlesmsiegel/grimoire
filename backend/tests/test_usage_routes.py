@@ -6,12 +6,12 @@ import importlib
 import json
 from datetime import date, timedelta
 
-import grimoire.store as store
 import pytest
 from fastapi.testclient import TestClient
+
+import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
-
 from tests.llm_fakes import FailingOpenRouter, FakeOpenRouter, FakeOpenRouterComplete
 
 USAGE = {"prompt_tokens": 900, "completion_tokens": 40, "cost_usd": 0.0042,
@@ -262,6 +262,7 @@ def test_the_whole_chain_from_the_wire_to_the_ledger(client, home):
     chunk the block rides on, and the row it becomes are checked as one thing.
     """
     import httpx
+
     from grimoire.llm import LLMClient
     from grimoire.openrouter import OpenRouterClient
 

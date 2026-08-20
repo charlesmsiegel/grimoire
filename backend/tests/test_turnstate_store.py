@@ -5,6 +5,7 @@ the prompt and promotion read."""
 import json
 
 import pytest
+
 from grimoire.store import campaigns, playstate, scenes, turnstate, worlds
 
 

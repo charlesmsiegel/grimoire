@@ -4,6 +4,7 @@ sections come and go with the setting, and a reinforced value is offered as a
 character-state edit at absorb (#121)."""
 
 from fastapi.testclient import TestClient
+
 from grimoire.main import create_app
 from grimoire.routes.streaming import _persist_reply
 from grimoire.store import (

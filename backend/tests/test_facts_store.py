@@ -10,6 +10,7 @@ it". Everything below is about that sentence being expressible and durable.
 import json
 
 import pytest
+
 from grimoire.store import campaigns, facts, worlds
 
 

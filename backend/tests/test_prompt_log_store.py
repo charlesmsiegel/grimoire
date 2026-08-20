@@ -10,6 +10,7 @@ import threading
 import time
 
 import pytest
+
 from grimoire.store import (
     campaigns,
     config,

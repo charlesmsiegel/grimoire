@@ -96,6 +96,7 @@ def start_server(home_dir: str, dist_dir: str, templates_dir: str, callback) -> 
     _open_store_to_usb(home_dir)
 
     import uvicorn
+
     from grimoire.main import create_app
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
