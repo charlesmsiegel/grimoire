@@ -393,8 +393,8 @@ A pure data structure with no scheduling in it. Scheduling is Task 3.
 # backend/tests/test_runs_registry.py
 from grimoire.routes import runs
 
-SCENE = ("scene", "saltmarch", "0001--the-long-wharf")
-OTHER = ("scene", "saltmarch", "0002--the-tide-gate")
+SCENE = ("scene", "saltmarch", "0001--mara")
+OTHER = ("scene", "saltmarch", "0002--winifred")
 WORLD = ("world", "realm")
 LABELS = {"campaign": "Saltmarch", "scene": "Mara"}
 
@@ -482,9 +482,18 @@ exactly when it matters) or invent an undocumented parse-and-re-encode step
 that can shift frame indices and corrupt replay.
 
 So a frame is `{"index": int, "raw": str}` — the wire text verbatim, comments
-included, with its absolute index alongside. The client never has to agree with
-the server about what counts as a frame, which is the whole point of the
-absolute index. Cover a reconnect whose offset lands **across a heartbeat**.
+included, with its absolute index alongside.
+
+**And the index goes ON THE WIRE, not only in the server-side buffer.** Storing
+it beside `raw` and then replaying `raw` verbatim leaves the client exactly
+where it started: `parseSSEChunk` discards heartbeat comments without a
+callback, so a cursor advanced per decoded event still lags the server's frame
+position, and `consumed + 1` after a heartbeat replays deltas already
+rendered. Every frame carries its index in the protocol — an SSE `id:` line is
+the natural place, since it survives the comment/data distinction — and
+`parseSSEChunk` is extended to surface it. Cover a reconnect whose offset lands
+**across a heartbeat**; that is the case that fails silently, by duplicating
+text mid-reply.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -650,6 +659,15 @@ on events no task will ever set. So a pre-start release marks the run terminal
 and sets both `ready` and `terminal`, and there is a test for **cancel racing
 an early-exit route**, not only cancel against a runner that started normally.
 
+**Those event updates must be marshalled onto the lifespan loop.** The
+pre-start cleanup runs in FastAPI's synchronous handler thread while a
+concurrent cancel awaits `ready`/`terminal` on the loop — and once an
+`anyio.Event` has an async waiter, calling `set()` directly from a worker
+thread is not thread-safe on the asyncio backend and may simply fail to wake
+it. The cancel-versus-early-exit race would then hang exactly as before, with
+the fix appearing to be in place. Route the updates through the
+`BlockingPortal`, or use a handshake that is explicitly thread-safe.
+
 **`runner.start` must not expose the run before its scope is installed.** The
 scope is assigned inside `_guarded`, which does not begin until the scheduled
 task is picked up — so a Stop arriving immediately after `start` returns would
@@ -732,6 +750,19 @@ backup ticker and leave through _lifespan."
 - Produces: `GET /api/campaigns/{cid}/scenes/{sid}/runs/{run_id}/stream?from=N`
 - Produces: `GET /api/campaigns/{cid}/scenes/{sid}/runs/{run_id}`
 - Produces: `POST /api/campaigns/{cid}/scenes/{sid}/runs/{run_id}/cancel`
+- Produces: `GET /api/campaigns/{cid}/scenes/by-identity/{identity}` — the
+  reverse lookup Task 1 exists for, over `store.scenes.find_by_identity`.
+  Returns `{"id": sid}`, or 404 when the identity names no live scene.
+  Registration order matters, though not against `/scenes/{sid}` — that
+  pattern is a segment shorter, so it cannot shadow this one. The collision
+  is a *crossing* with the entity catch-all: `GET
+  /api/campaigns/{cid}/{kind}/{eid}/images` matches
+  `/api/campaigns/{cid}/scenes/by-identity/images` too, so which handler runs
+  is decided by include order alone. `test_route_order` computes both
+  shadowing and crossings from the live route table, so it will fail on this
+  pair until the winner is recorded in `CROSSING_PAIRS` with the reason the
+  others carry — "scenes" is not an entity kind, so the catch-all can never
+  legitimately claim a URL under it, and `runs` is included before `entities`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1316,6 +1347,40 @@ can settle rather than spin, and never replayed: a fresh mount has no cursor
 and its scene fetch already contains the persisted reply, so replaying from 0
 renders it twice.
 
+**Discovering a terminal run must refetch the scene**, not merely unlock the
+composer. The two ways a client learns of a terminal run differ in what the
+client already holds. On a cold mount the scene fetch happens anyway and
+already carries the reply. But on `visibilitychange`, and on a live stream
+that ends, the component has been mounted the whole time holding a transcript
+from *before* the run — the reply was persisted by the backend while the tab
+was hidden or after the last frame, and nothing in the client has fetched it.
+Unlocking alone leaves a settled composer above a transcript missing its
+newest turn, which reads exactly like the turn was lost. Refetch on every
+terminal discovery; the cold-mount case is then merely redundant, which is
+cheap, rather than the only case that works. Test a hidden-then-visible
+transition across a run that completed while hidden, and assert the new
+message is on screen.
+
+- [ ] **Step 6b: Rewire Stop to the cancel endpoint**
+
+Today's Stop button aborts the `fetch` — which, once the run outlives the
+request, stops the *client's view* of a run that keeps generating, keeps
+holding the scene's exclusion key, and keeps the composer locked. The button
+would then read as broken in the one situation a user reaches for it.
+
+Point it at `POST .../runs/{run_id}/cancel` and let the terminal frame (or the
+terminal state the poll discovers) do the settling, rather than settling
+locally on abort. Detaching the local reader stays as the second half — the
+request is aborted *after* the cancel POST is issued, not instead of it.
+
+Cancel is a request, not a guarantee: a run inside a provider call ends when
+that call unwinds. Leave the button disabled and the state `cancelling` from
+the POST until a terminal frame arrives, so a second press cannot stack
+cancels, and the UI never claims the run stopped before the backend says so.
+
+Test: Stop issues the cancel POST; the composer stays locked until the
+terminal frame lands, and unlocks then.
+
 - [ ] **Step 7: Extend `sceneLocked` to the exclusion key**
 
 Key on `turn`/`review` specifically, not "any run for this scene."
@@ -1403,6 +1468,15 @@ completion notifications are permanently off for every new user and the
 - [ ] **Step 3: Promote and demote**
 
 Promote when the registry gains its first live run, demote when it has none.
+
+**"Gains a live run" means at reservation, in `start_or_existing` — not when
+the runner starts.** The registry goes live before the handler builds its
+prompt, and that setup is not always fast: context construction can involve
+semantic recall. A phone locking during it would find the service unpromoted
+and the process reclaimable before the detached runner ever began — losing the
+turn in precisely the window this feature exists to protect. The matching
+demotion belongs on the pre-start release path too. Test with a deliberately
+held setup.
 **If `POST_NOTIFICATIONS` is denied, still promote** — the service runs, its
 notification simply is not shown, and runs survive backgrounding as designed.
 Only the completion notification is lost. A denied permission is not a reason
