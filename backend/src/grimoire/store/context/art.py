@@ -117,6 +117,7 @@ from .. import (
 from ..appearances import cast as appearances_cast
 from ..appearances import paths as appearances_paths
 from ..appearances import versions as appearances_versions
+from . import world_state
 
 #: The library's own kind, in the handle grammar. Not an entity kind and not an
 #: actor kind -- `store.campaign_images` is art belonging to the campaign and to
@@ -192,6 +193,33 @@ _STOP = frozenset((
 _MIN_WORD = 4
 
 _WORD = re.compile(r"\w+", re.UNICODE)
+
+#: A name `\b` can actually bound: ASCII word characters plus the punctuation
+#: that shows up inside one (``Mara O'Dell``, ``Jean-Luc``, ``Dr. Winifred``).
+#: Anything else — a name in a script without word spacing — falls back to a
+#: substring test, because `\b` sits between a word character and a non-word
+#: one and two adjacent CJK characters are both word characters, so the
+#: boundary never appears and the name would simply never match.
+_BOUNDED_NAME = re.compile(r"^[\w\s'\-.]+$", re.ASCII)
+
+
+def _is_named(name: str, text: str) -> bool:
+    """Is `name` present in `text` as a name rather than as a substring?
+
+    `world_state.keyword_hit` is the rule wherever it can apply -- it exists,
+    in its own words, so archive retrieval "selects by exactly these semantics
+    rather than a lookalike that drifts from them", and a substring test here
+    was precisely that lookalike. Looser, too: it made a character called Rain
+    count as named by the word "training", and short names (Ash, Ari, Ivo) are
+    common enough that this is a steady source of art nobody asked for.
+
+    The fallback is not a loophole but the CJK case: see `_BOUNDED_NAME`.
+    """
+    if not name:
+        return False
+    if _BOUNDED_NAME.match(name):
+        return world_state.keyword_hit([name], text)
+    return name.casefold() in text.casefold()
 
 _CLIENT = embeddings.EmbeddingsClient()
 
@@ -392,7 +420,6 @@ def _keyword_scores(cid: str, cands: list[dict],
     times inside a single turn.
     """
     window = _terms(recent_text)
-    folded = recent_text.casefold()
     names: dict[tuple[str, str, str], str] = {}
     out, was_named = [], []
     for c in cands:
@@ -401,10 +428,7 @@ def _keyword_scores(cid: str, cands: list[dict],
         if key not in names:
             names[key] = _record_name(cid, c)
         name = names[key]
-        # Substring, not tokenized: a name matches the same way in every
-        # script, which is what keeps the name rule working where splitting on
-        # word characters does not.
-        named = bool(name) and name.casefold() in folded
+        named = _is_named(name, recent_text)
         was_named.append(named)
         if named:
             out.append(float(shared) + NAME_BONUS)
