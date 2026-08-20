@@ -6,6 +6,7 @@ import CreationWizard from "./CreationWizard";
 import { Field } from "./Field";
 import { GreetingMarkdown } from "./GreetingMarkdown";
 import { HtmlNote } from "./HtmlNote";
+import { ImageDescriptionField } from "./ImageDescriptionField";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import SheetPanel from "./SheetPanel";
 import { ErrorNote } from "./ErrorNote";
@@ -507,6 +508,12 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const chubSource = detail?.versions.find((v) => v.id === vid)?.chub_source ?? "";
   const isChub = detail?.versions.find((v) => v.id === vid)?.is_chub ?? false;
   const imageTokens = detail?.versions.find((v) => v.id === vid)?.image_v ?? {};
+  // Absent key = never reviewed, "" = reviewed and deliberately undescribed.
+  // `?? {}` collapses "this build has no descriptions" into "none reviewed",
+  // which is the right reading: both mean nothing has been said about any of
+  // them. What must NOT collapse is absent-vs-"" for one image, and indexing
+  // preserves that -- `descriptions[name]` is `undefined` or `""`.
+  const descriptions = detail?.versions.find((v) => v.id === vid)?.image_descriptions ?? {};
   const galleryImages = (detail?.versions.find((v) => v.id === vid)?.images ?? [])
     .filter((n) => n.startsWith("gallery_"))
     .sort((a, b) => Number(a.slice("gallery_".length)) - Number(b.slice("gallery_".length)));
@@ -1065,6 +1072,12 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     if (!adopt(d, scope)) return;
     loadVersion(d, vid);
     await reload();
+  }
+
+  async function describeImage(name: string, description: string) {
+    if (!detail) return;
+    await api.setCharacterImageDescription(scope, detail.meta.id, vid, name, description);
+    await refreshVersion();
   }
 
   async function promote(name: string) {
@@ -1788,6 +1801,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                           <img alt="avatar" src={avatarSrc(detail.meta.id, vid, imageTokens.avatar)} />
                         </a>
                         <figcaption>avatar</figcaption>
+                        <ImageDescriptionField name="avatar" value={descriptions.avatar}
+                                               onSave={(d) => describeImage("avatar", d)} />
                       </figure>
                     ) : (
                       <div className="shelf-tile shelf-empty">no avatar</div>
@@ -1800,6 +1815,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                         <div className="shelf-tile" key={imgName}>
                           <a href={src} target="_blank" rel="noreferrer"><img alt={imgName} src={src} /></a>
                           <button className="shelf-promote" onClick={() => promote(imgName)}>Set as avatar</button>
+                          <ImageDescriptionField name={imgName} value={descriptions[imgName]}
+                                                 onSave={(d) => describeImage(imgName, d)} />
                         </div>
                       );
                     })}

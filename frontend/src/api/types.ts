@@ -326,6 +326,12 @@ export type CharacterDetail = {
   versions: { id: string; name: string; card: Card; images?: string[];
               /** Per-image cache token, keyed by the names in `images`. */
               image_v?: Record<string, string>;
+              /** What each image DEPICTS, in the author's words, keyed by the
+               *  names in `images`. A key is absent while an image has never
+               *  been reviewed and `""` once it has been reviewed and left
+               *  deliberately undescribed — the two are not the same, and only
+               *  the first belongs in the describe queue. */
+              image_descriptions?: Record<string, string>;
               avatar_focus?: number | null; chub_source?: string; is_chub?: boolean;
               /** Embedded-lorebook entries the import would actually commit —
                *  server-side, through the same normalization the import runs,
@@ -353,6 +359,8 @@ export type PCSummary = {
 export type PCDetail = {
   meta: { id: string; name: string; tags: string[]; default_version: string };
   versions: { id: string; name: string; persona: Persona; images?: string[];
+              /** See `CharacterDetail` — absent and `""` differ. */
+              image_descriptions?: Record<string, string>;
               avatar_focus?: number | null }[];
 };
 
