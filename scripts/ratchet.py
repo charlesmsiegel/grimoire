@@ -30,6 +30,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BASELINES = ROOT / "lint-baselines"
@@ -63,6 +64,57 @@ def _rel(path: str) -> str:
     return rel.as_posix()
 
 
+def _pin(package: str) -> str:
+    """The exact version `backend/pyproject.toml` pins this tool to.
+
+    The baselines are counts, so they are only meaningful against one version
+    of the tool that produced them. Both are pinned exactly in the `dev`
+    extra for that reason; this reads the pin back rather than repeating it,
+    since a second copy would be the thing that goes stale.
+    """
+    with (ROOT / "backend" / "pyproject.toml").open("rb") as fh:
+        deps = tomllib.load(fh)["project"]["optional-dependencies"]["dev"]
+    for dep in deps:
+        name, sep, version = dep.partition("==")
+        if sep and name.strip() == package:
+            return version.strip()
+    raise ToolError(
+        f"backend/pyproject.toml's `dev` extra does not pin {package} exactly. "
+        f"The baselines are counts of what one version of it reported, so an "
+        f"unpinned one makes them unreproducible."
+    )
+
+
+def _require_version(package: str, reported: str) -> None:
+    """Fail before the findings are collected, not after they disagree.
+
+    Without this, a contributor whose environment has a different ruff runs
+    `make baseline`, commits a file CI cannot reproduce, and gets a diff full
+    of counts as the explanation.
+    """
+    want = _pin(package)
+    if want not in reported:
+        raise ToolError(
+            f"{package} {want} is what the baselines were built with, and this "
+            f"is:\n    {reported.strip()}\n"
+            f"Install the pin (`pip install -e \"./backend[dev]\"`) before "
+            f"running the gate; a different version reports a different count "
+            f"and every branch would go red."
+        )
+
+
+def _json(out: str, tool: str) -> object:
+    """`json.loads`, but a tool that printed something else is a broken tool
+    rather than a stack trace. npx prints its own diagnostics on stdout when
+    the binary is missing, which is exactly this case."""
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise ToolError(
+            f"{tool} did not print JSON ({exc}). It said:\n{out[:2000]}"
+        ) from exc
+
+
 def _run(argv: list[str], cwd: pathlib.Path, ok_codes: tuple[int, ...]) -> str:
     try:
         # check=False: a nonzero exit is how each of these tools says "I found
@@ -88,13 +140,15 @@ def _run(argv: list[str], cwd: pathlib.Path, ok_codes: tuple[int, ...]) -> str:
 
 def collect_ruff() -> Findings:
     """`ruff check --output-format json`. Exit 1 means "found violations"."""
+    _require_version("ruff", _run([sys.executable, "-m", "ruff", "--version"],
+                                  cwd=ROOT, ok_codes=(0,)))
     out = _run(
         [sys.executable, "-m", "ruff", "check", ".", "--output-format", "json",
          "--no-cache"],
         cwd=ROOT, ok_codes=(0, 1),
     )
     found: Findings = collections.Counter()
-    for item in json.loads(out):
+    for item in _json(out, "ruff"):
         # `code` is null for a syntax error, which ruff reports but cannot
         # attribute to a rule. Those must never be ratchetable.
         code = item.get("code")
@@ -119,6 +173,8 @@ def collect_mypy() -> Findings:
     decides what is checked, so the baseline cannot be regenerated against a
     different set than the gate reads.
     """
+    _require_version("mypy", _run([sys.executable, "-m", "mypy", "--version"],
+                                  cwd=ROOT, ok_codes=(0,)))
     out = _run(
         [sys.executable, "-m", "mypy", "--no-error-summary", "--no-pretty",
          "--show-error-codes"],
@@ -141,10 +197,18 @@ def collect_mypy() -> Findings:
 UNUSED_DISABLE = "(unused-eslint-disable)"
 
 
+def _node_modules_present() -> bool:
+    return (ROOT / "frontend" / "node_modules" / ".bin").is_dir()
+
+
 def collect_eslint() -> Findings:
-    """eslint over `frontend/`, which needs its `node_modules` installed."""
+    """eslint over `frontend/`, which needs its `node_modules` installed.
+
+    eslint's version is pinned by `frontend/package-lock.json` and installed by
+    `npm ci`, so there is no `_require_version` call to match the other two.
+    """
     frontend = ROOT / "frontend"
-    if not (frontend / "node_modules" / ".bin").is_dir():
+    if not _node_modules_present():
         raise ToolError(
             "frontend/node_modules is missing -- run `npm ci` in frontend/ "
             "first (`make check-eslint` does)."
@@ -155,7 +219,7 @@ def collect_eslint() -> Findings:
         cwd=frontend, ok_codes=(0, 1),
     )
     found: Findings = collections.Counter()
-    for file_report in json.loads(out):
+    for file_report in _json(out, "eslint"):
         for msg in file_report["messages"]:
             if msg.get("fatal"):
                 # A parse error. eslint linted nothing in this file, so its
@@ -184,6 +248,15 @@ COLLECTORS = {"ruff": collect_ruff, "mypy": collect_mypy, "eslint": collect_esli
 
 def baseline_path(tool: str) -> pathlib.Path:
     return BASELINES / f"{tool}.json"
+
+
+def _shown(path: pathlib.Path) -> str:
+    """Repo-relative for the message a contributor reads; absolute if it is not
+    under the checkout, which is how the tests point `BASELINES` elsewhere."""
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return str(path)
 
 
 def dumps(found: Findings) -> str:
@@ -262,7 +335,7 @@ def check(tool: str) -> int:
             f"({len(improvements)} pair(s)). That is good news the baseline has "
             f"to be told about:\n"
             f"    make baseline\n"
-            f"then commit {baseline_path(tool).relative_to(ROOT).as_posix()} "
+            f"then commit {_shown(baseline_path(tool))} "
             f"with the change that earned it.",
             file=sys.stderr,
         )
@@ -270,12 +343,42 @@ def check(tool: str) -> int:
     return 1
 
 
-def update(tool: str) -> int:
+def update(tool: str, *, accept_regressions: bool = False) -> int:
+    """Rewrite the baseline -- but by default only downward.
+
+    This is the half that makes the word "ratchet" true. Without it the file
+    is a ratchet in the check direction and a free pass in the update one:
+    `make baseline` would be the button that turns any red gate green, and
+    the only thing standing between a regression and the main branch would be
+    a reviewer noticing a number went up inside an 861-line generated file.
+
+    So counts may fall, and pairs may disappear, with no ceremony. A count
+    that would *rise* stops the write and names every pair, because there are
+    only two reasons for one -- a regression that should be fixed instead, or
+    a rename, which is real and needs saying out loud. `--accept-regressions`
+    says it, and leaves the word in the shell history and the CI log.
+    """
     found = COLLECTORS[tool]()
+    grew, _ = compare(found, read_baseline(tool))
+    if grew and not accept_regressions:
+        print(
+            f"{tool}: refusing to write a baseline that permits more than the "
+            f"current one. {len(grew)} (file, rule) pair(s) would go up:",
+            file=sys.stderr,
+        )
+        print(_report(grew), file=sys.stderr)
+        print(
+            "\nFix them, or -- if this is a rename or a deliberate widening of "
+            "the rule set -- say so:\n"
+            f"    {pathlib.Path(sys.argv[0]).name} {tool} --update "
+            f"--accept-regressions",
+            file=sys.stderr,
+        )
+        return 1
     BASELINES.mkdir(exist_ok=True)
     baseline_path(tool).write_text(dumps(found), encoding="utf-8")
     print(f"{tool}: wrote {sum(found.values())} finding(s) to "
-          f"{baseline_path(tool).relative_to(ROOT).as_posix()}")
+          f"{_shown(baseline_path(tool))}")
     return 0
 
 
@@ -286,9 +389,18 @@ def main(argv: list[str] | None = None) -> int:
         "--update", action="store_true",
         help="rewrite the baseline from the current tree instead of checking it",
     )
+    parser.add_argument(
+        "--accept-regressions", action="store_true",
+        help="with --update, allow counts to rise (a rename, or a widened rule "
+             "set). Without it --update only ever lowers them.",
+    )
     args = parser.parse_args(argv)
+    if args.accept_regressions and not args.update:
+        parser.error("--accept-regressions only means anything with --update")
     try:
-        return update(args.tool) if args.update else check(args.tool)
+        if args.update:
+            return update(args.tool, accept_regressions=args.accept_regressions)
+        return check(args.tool)
     except ToolError as exc:
         print(f"{args.tool}: {exc}", file=sys.stderr)
         return 2

@@ -136,7 +136,9 @@ check-web:
 # `lint-baselines/<tool>.json`; `scripts/ratchet.py` explains why they land
 # against a baseline rather than report-only. `make baseline` rewrites all
 # three -- run it when a change *fixes* findings, and commit the smaller
-# baseline alongside.
+# baseline alongside. It will not write one that permits *more* than the
+# current file: that direction needs `--accept-regressions` typed out, so the
+# regenerate step cannot quietly become the way a red gate goes green.
 check-lint:
 	"$(call fixpath,$(PY))" scripts/ratchet.py ruff
 
