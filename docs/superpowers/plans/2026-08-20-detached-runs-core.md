@@ -138,7 +138,7 @@ needs its own live-server harness rather than this one -- see the note there.
 store by hand.** `client` gives an app over a throwaway store with the gateway
 faked; `cid_with_sheet` and `scene_with_sheeted_cast` show the real creation
 pattern, which is `wid = worlds.create_world("Realm")` then
-`campaigns.create_campaign("Run", wid)`. Note that `create_campaign` takes
+`campaigns.create_campaign("Saltmarch", wid)`. Note that `create_campaign` takes
 `world_id` as a **required positional** and returns the **cid string**, not a
 dict -- an early draft of this plan called it `create_campaign(name,
 world=None)["id"]`, which fails twice over.
@@ -199,7 +199,7 @@ stored counter, so deleting the highest scene frees its number).
 def test_created_scene_has_a_stable_identity(tmp_path, monkeypatch):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = store.worlds.create_world("Realm")
-    cid = store.campaigns.create_campaign("Run", wid)
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
     sid = store.scenes.create_scene(cid, "Mara")
     first = store.scenes.scene_identity(cid, sid)
     assert first and len(first) == 32
@@ -214,7 +214,7 @@ def test_identity_is_not_in_the_read_scene_payload(tmp_path, monkeypatch):
     # regeneration.
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = store.worlds.create_world("Realm")
-    cid = store.campaigns.create_campaign("Run", wid)
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
     sid = store.scenes.create_scene(cid, "Mara")
     assert "identity" not in store.scenes.read_scene(cid, sid)["meta"]
 
@@ -224,7 +224,7 @@ def test_recycled_sid_gets_a_different_identity(tmp_path, monkeypatch):
     recreate can land on the same sid. Identity must still differ."""
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = store.worlds.create_world("Realm")
-    cid = store.campaigns.create_campaign("Run", wid)
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
     sid = store.scenes.create_scene(cid, "Mara")
     old = store.scenes.scene_identity(cid, sid)
     store.scenes.delete_scene(cid, sid)
@@ -236,7 +236,7 @@ def test_recycled_sid_gets_a_different_identity(tmp_path, monkeypatch):
 def test_backfill_is_idempotent_and_assigns_to_legacy_scenes(tmp_path, monkeypatch):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = store.worlds.create_world("Realm")
-    cid = store.campaigns.create_campaign("Run", wid)
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
     sid = store.scenes.create_scene(cid, "Mara")
     _strip_identity_from_disk(cid, sid)          # simulate a pre-feature scene
     assert store.scenes.scene_identity(cid, sid) is None
@@ -326,7 +326,6 @@ Nothing here needs it to.
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /home/user/grimoire
 make check-py check-lint check-mypy && make baseline
 git add backend/src/grimoire/store/scenes backend/src/grimoire/store/migrations.py \
         backend/src/grimoire/main.py backend/tests/test_scene_identity.py lint-baselines
@@ -397,7 +396,7 @@ from grimoire.routes import runs
 SCENE = ("scene", "saltmarch", "0001--the-long-wharf")
 OTHER = ("scene", "saltmarch", "0002--the-tide-gate")
 WORLD = ("world", "realm")
-LABELS = {"campaign": "Run", "scene": "Mara"}
+LABELS = {"campaign": "Saltmarch", "scene": "Mara"}
 
 
 def test_turn_and_review_share_one_exclusion_key_per_scene():
@@ -474,9 +473,18 @@ first callers different answers.
 matches; (2) raise `RunInFlight(run_id=...)` if the class has a key and it is
 held by a `running` run; (3) create, index, return.
 
-Frames are `list[dict]` and every appended frame carries its own absolute
-`index`, so the client never has to agree with the server about what counts —
-heartbeats are frames too, and `parseSSEChunk` drops them without a callback.
+**One representation, and it must hold heartbeats too.** The producer yields
+raw SSE *strings* — including the literal comment `": heartbeat\n\n"`
+(`streaming.py:51`) that keeps a long provider pause from looking like a dead
+connection. Subscribers read only from the buffer, so a buffer of `dict`
+payloads forces an implementer to either drop heartbeats (losing the keepalive
+exactly when it matters) or invent an undocumented parse-and-re-encode step
+that can shift frame indices and corrupt replay.
+
+So a frame is `{"index": int, "raw": str}` — the wire text verbatim, comments
+included, with its absolute index alongside. The client never has to agree with
+the server about what counts as a frame, which is the whole point of the
+absolute index. Cover a reconnect whose offset lands **across a heartbeat**.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -663,8 +671,12 @@ async def _guarded(run, factory):
     `_lifespan` itself -- a single bad turn ending the process.
     """
     try:
-        outcome = await factory()
-        run.finish(outcome or "landed")
+        outcome = await factory()          # an Outcome dict, or None
+        # UNPACK it. `finish` takes a state STRING; handing it the dict leaves
+        # run.state as a dict and never copies Outcome.error into Run.error,
+        # which silently breaks polling and the terminal notification.
+        run.error = (outcome or {}).get("error")
+        run.finish((outcome or {}).get("state", "landed"))
     except anyio.get_cancelled_exc_class():
         run.finish("cancelled")
         raise                      # shutdown must still propagate
@@ -1103,6 +1115,13 @@ guessing costs a debugging cycle:
 | `post_scene_check` | `POST .../check` | `mechanics.py:203` |
 | `post_scene_cast` / `_batch` / `post_emergent_cast` / `post_dismiss` | `POST .../cast`, `.../cast/batch`, `.../emergent-cast`, `.../dismiss` | `scenes.py:2729`+ |
 | `set_location` / `set_datetime` setters | the scene's location and clock routes | `store/scenes/moment.py` |
+| `post_replay` / `post_replay_cancel` | `POST .../replay`, `.../replay/cancel` | `scenes.py:3186`, `:3264` |
+| `post_scene_alternate` | `POST .../alternates/{vid}` | `scenes.py:703` |
+
+`post_replay` calls `store.replay.begin`, which **cuts** the transcript;
+`post_replay_cancel` can restore the cut posts; and `post_scene_alternate`
+promotes a different assistant run into the transcript. Each rewrites history
+underneath a live run's snapshot.
 
 **The cast and moment routes belong here too**, even though the UI already
 disables them with `sceneLocked`: a second tab or a direct API call is not
@@ -1275,6 +1294,15 @@ lives only in hook state — which unmounts on navigation or backgrounding. On
 recovery the client then cannot call `GET .../run?attempt=...`, which is the
 only unambiguous way to learn whether *its* send landed, and #95's ambiguity is
 back. Test a response lost before the first frame, then a remount.
+
+**Keep the submitted prompt text alongside the attempt**, until the outcome
+proves it durable. The id alone cannot honour `post_returned`: if the response
+is lost before the run frame, the provider then fails, and the backend takes
+the player's post back off the transcript, recovery finds a failed run whose
+error says the post was returned — and the text exists nowhere. Not in the
+transcript, not in the unmounted component. Held in provider state, it goes
+back in the composer. Test terminal recovery with `post_returned: true` after
+a remount.
 
 The consumed index is
 persisted **per run as frames are read** and resume asks for `consumed + 1`.
