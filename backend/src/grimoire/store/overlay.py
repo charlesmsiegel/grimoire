@@ -976,39 +976,60 @@ def delete_image(cid: str, aid: str, vid: str, name: str, base: str = "character
 
 
 def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characters") -> None:
-    """Copy-up the named image and the current avatar, then swap campaign-side."""
+    """Copy-up the named image and the current avatar, then swap campaign-side.
+
+    UNDER `campaign_lock`, for `set_description`'s reason and then one of its
+    own. The sidecar lock serializes each *write* to the file, which is not
+    enough here: this reads the resolved descriptions and writes them back a
+    few statements later, so a save landing in that gap was read past and then
+    overwritten with the snapshot -- losing text somebody had just written (PR
+    review). A read-modify-write needs the lock the other writer takes, and for
+    campaign-scoped state that is this one.
+    """
     croot, wroot = croot_of(cid), wroot_of(cid)
-    inherits = _flat_ref(base, aid) not in detached(cid)
-    # Resolved BEFORE anything moves. Copying the bytes up is what makes this
-    # campaign hold the picture, and from that moment `read_description` stops
-    # falling through to the world for it -- deliberately, since a campaign-side
-    # image is normally different art. Here it is the SAME art, so a description
-    # not carried up with the bytes is one this campaign silently loses the
-    # instant somebody promotes the picture (PR review).
-    resolved = read_descriptions(cid, aid, vid, base)
-    copied = []
-    for n in (name, assets.AVATAR):
-        if (inherits and assets.image_path(croot, aid, vid, n, base) is None
-                and _asset_ref(base, aid, vid, n) not in deleted(cid)):
+    with locks.campaign_lock(cid):
+        inherits = _flat_ref(base, aid) not in detached(cid)
+        # Resolved BEFORE anything moves. Copying the bytes up is what makes
+        # this campaign hold the picture, and from that moment
+        # `read_description` stops falling through to the world for it --
+        # deliberately, since a campaign-side image is normally different art.
+        # Here it is the SAME art, so a description not carried up with the
+        # bytes is one this campaign silently loses the instant somebody
+        # promotes the picture (PR review).
+        resolved = read_descriptions(cid, aid, vid, base)
+        union = {i["name"] for i in list_images(cid, aid, vid, base)}
+        for n in (name, assets.AVATAR):
+            if not (inherits and assets.image_path(croot, aid, vid, n, base) is None
+                    and _asset_ref(base, aid, vid, n) not in deleted(cid)):
+                continue
             src = assets.image_path(wroot, aid, vid, n, base)
-            if src is not None:
-                assets.put_image(croot, aid, vid, n, src.read_bytes(),
-                                 src.suffix.lstrip("."), base)
-                copied.append(n)
-    for n in copied:
-        # Key presence, not truthiness: `""` is "reviewed, nothing to say" and
-        # has to travel too, or the promoted image walks back into the describe
-        # queue somebody has already answered for.
-        if n in resolved:
-            image_descriptions.set_description(croot, aid, vid, n, resolved[n], base)
-    assets.promote_image(croot, aid, vid, name, base)
-    # When there was no avatar to swap into the promoted slot, the swap leaves
-    # no campaign file at `name`, so the inherited image there would still show
-    # through the overlay next to the new avatar. Tombstone it so promotion
-    # moves the image out of the gallery instead of duplicating it.
-    if (inherits and assets.image_path(croot, aid, vid, name, base) is None
-            and assets.image_path(wroot, aid, vid, name, base) is not None):
-        add_deleted(cid, _asset_ref(base, aid, vid, name))
+            if src is None:
+                continue
+            # The DESCRIPTION first, then the bytes. Describing an image whose
+            # bytes are still inherited is an ordinary state of this store, so
+            # a failure between the two leaves something coherent; the other
+            # order leaves the picture campaign-side with the world's sentence
+            # masked, and a retry cannot even see that it has to fix it --
+            # `image_path` is non-null by then, so the carry-up is skipped
+            # forever (PR review).
+            #
+            # Key presence, not truthiness: `""` is "reviewed, nothing to say"
+            # and has to travel too, or the promoted image walks back into the
+            # describe queue somebody has already answered for. `names` is the
+            # overlay union, since the bytes are not campaign-side yet.
+            if n in resolved:
+                image_descriptions.set_description(croot, aid, vid, n, resolved[n],
+                                                   base, names=union)
+            assets.put_image(croot, aid, vid, n, src.read_bytes(),
+                             src.suffix.lstrip("."), base)
+        assets.promote_image(croot, aid, vid, name, base)
+        # When there was no avatar to swap into the promoted slot, the swap
+        # leaves no campaign file at `name`, so the inherited image there would
+        # still show through the overlay next to the new avatar. Tombstone it so
+        # promotion moves the image out of the gallery instead of duplicating it.
+        if (inherits and assets.image_path(croot, aid, vid, name, base) is None
+                and assets.image_path(wroot, aid, vid, name, base) is not None):
+            add_deleted(cid, _asset_ref(base, aid, vid, name))
 
 
 # ---- payload patching: asset-derived fields come from the union ----

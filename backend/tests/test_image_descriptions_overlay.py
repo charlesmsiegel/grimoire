@@ -2,6 +2,8 @@
 carve-out that keeps a campaign's sidecar from being deduped out from under a
 divergent image."""
 
+import threading
+
 import pytest
 
 from grimoire.store import assets, campaigns, characters, image_descriptions, overlay, worlds
@@ -157,3 +159,45 @@ def test_a_reviewed_empty_description_travels_with_a_promotion_too(pair):
     # the demoted avatar keeps its reviewed-empty mark in the gallery slot
     assert image_descriptions.read_all(overlay.croot_of(camp), cid, vid) == {
         "avatar": "The world's quay.", "gallery_1": ""}
+
+
+def test_a_promotion_cannot_overwrite_a_description_saved_while_it_ran(pair, monkeypatch):
+    """Promotion READS the resolved descriptions and writes them back a few
+    statements later. The sidecar lock serializes each write and does not span
+    that gap, so a save landing inside it was read past and then overwritten
+    with the stale snapshot -- losing text somebody had just written. A
+    read-modify-write needs the lock the other writer takes."""
+    wroot, camp, cid, vid = pair
+    assets.put_image(wroot, cid, vid, "avatar", b"png", "png")
+    image_descriptions.set_description(wroot, cid, vid, "avatar", "The world's portrait.")
+
+    inside, done = threading.Event(), threading.Event()
+    real = overlay.read_descriptions
+
+    def slow_read(*a, **kw):
+        out = real(*a, **kw)
+        inside.set()
+        done.wait(5)
+        return out
+
+    monkeypatch.setattr(overlay, "read_descriptions", slow_read)
+    promoting = threading.Thread(target=overlay.promote_image,
+                                 args=(camp, cid, vid, "gallery_1"))
+    promoting.start()
+    assert inside.wait(5)
+
+    saving = threading.Thread(target=overlay.set_description,
+                              args=(camp, cid, vid, "avatar", "The campaign's own words."))
+    saving.start()
+    saving.join(0.2)
+    assert saving.is_alive()          # held out: the promotion has the campaign
+
+    done.set()
+    promoting.join(5)
+    saving.join(5)
+    assert not promoting.is_alive() and not saving.is_alive()
+    # The save landed after the swap, so it is the last word -- rather than
+    # being overwritten by a snapshot taken before it was ever written.
+    assert overlay.read_description(camp, cid, vid, "avatar") == "The campaign's own words."
+    # ...and the swap itself still happened: the demoted portrait keeps its own.
+    assert overlay.read_description(camp, cid, vid, "gallery_1") == "The world's portrait."

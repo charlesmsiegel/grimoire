@@ -575,7 +575,6 @@ def delete_image(root: Path, cid: str, vid: str, name: str, base: str = "charact
     if not (safe_id(cid) and safe_id(vid) and _safe_name(name)):
         return
     d = _dir(root, cid, vid, base)
-    delete_in(d, name)
     # The description goes with the bytes, the way the crop already does below:
     # a re-upload under this name is different art and must inherit neither.
     #
@@ -583,8 +582,16 @@ def delete_image(root: Path, cid: str, vid: str, name: str, base: str = "charact
     # failure by design (a scanner holding the file on Windows, a read-only
     # directory), and dropping the sentence anyway loses what somebody wrote
     # about a picture that is still sitting there (PR review).
-    if image_path(root, cid, vid, name, base) is None:
-        drop_sidecar_entry(d, DESCRIPTIONS_FILE, name)
+    #
+    # Unlink, confirmation and sidecar decision under ONE hold of this slot's
+    # lock -- `delete_in` takes and releases it, and in that gap an upload can
+    # publish replacement bytes, which reads here as "the delete failed" and
+    # leaves the removed picture's sentence captioning the new one. Reentrant,
+    # so `delete_in` taking it again inside costs nothing.
+    with _image_locks_held(d, name):
+        delete_in(d, name)
+        if image_path(root, cid, vid, name, base) is None:
+            drop_sidecar_entry(d, DESCRIPTIONS_FILE, name)
     if name == AVATAR:
         clear_focus(root, cid, vid, base)
 

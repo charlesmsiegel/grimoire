@@ -290,3 +290,41 @@ def test_a_failed_deletion_keeps_the_description_it_would_have_dropped(tmp_path,
     monkeypatch.setattr(assets, "delete_in", lambda *a, **kw: None)  # the unlink that did not
     assets.delete_image(tmp_path, cid, vid, "gallery_1")
     assert image_descriptions.read_in(d) == {"gallery_1": "Half-plate in the rain."}
+
+
+def test_a_delete_that_lost_the_race_to_an_upload_keeps_its_hands_off_the_sidecar(
+        tmp_path, monkeypatch):
+    """`delete_in` takes this slot's lock and gives it back, and in that gap an
+    upload can publish replacement bytes -- which reads as "the delete failed",
+    so the removed picture's sentence stays captioning the new one. Under one
+    hold, the upload cannot get in until the sidecar decision is made."""
+    cid, vid = _chars(tmp_path)
+    d = _dir_of(tmp_path, cid, vid)
+    image_descriptions.write_in(d, {"gallery_1": "Half-plate in the rain."})
+
+    inside, done = threading.Event(), threading.Event()
+    real_delete_in = assets.delete_in
+
+    def slow_delete_in(*a, **kw):
+        real_delete_in(*a, **kw)
+        inside.set()
+        done.wait(5)          # the window an upload used to slip through
+
+    monkeypatch.setattr(assets, "delete_in", slow_delete_in)
+    deleting = threading.Thread(
+        target=assets.delete_image, args=(tmp_path, cid, vid, "gallery_1"))
+    deleting.start()
+    assert inside.wait(5)
+
+    uploading = threading.Thread(
+        target=assets.put_image, args=(tmp_path, cid, vid, "gallery_1", b"png", "png"))
+    uploading.start()
+    uploading.join(0.2)
+    assert uploading.is_alive()          # held out until the deletion is finished
+
+    done.set()
+    deleting.join(5)
+    uploading.join(5)
+    # The delete really did happen, so its description went with it -- and the
+    # re-uploaded picture is undescribed rather than wearing the old words.
+    assert image_descriptions.read_raw(d) == {}

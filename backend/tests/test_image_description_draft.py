@@ -186,11 +186,22 @@ def test_an_oversized_image_is_refused_before_its_bytes_are_read(tmp_path, monke
     monkeypatch.setattr(store.image_drafts, "MAX_BYTES", len(PNG) - 1)
     with pytest.raises(store.image_drafts.ImageTooLargeError):
         store.image_drafts.data_uri(p)
-    # ...and the check is on `stat`, not on what was read: nothing opened it.
-    monkeypatch.setattr(type(p), "read_bytes",
-                        lambda self: pytest.fail("the bytes were read anyway"))
+    # ...and never more than one byte past the cap, however big the file is:
+    # the size and the bytes come from ONE open, so a file swapped or grown
+    # after a `stat()` would have been read unbounded.
+    read = []
+    real_open = type(p).open
+
+    def counting_open(self, *a, **kw):
+        fh = real_open(self, *a, **kw)
+        real_read = fh.read
+        fh.read = lambda n=-1: read.append(n) or real_read(n)  # type: ignore[method-assign]
+        return fh
+
+    monkeypatch.setattr(type(p), "open", counting_open)
     with pytest.raises(store.image_drafts.ImageTooLargeError):
         store.image_drafts.data_uri(p)
+    assert read == [store.image_drafts.MAX_BYTES + 1]
 
 
 def test_the_route_reports_an_oversized_image_as_a_413(client, art, monkeypatch):
