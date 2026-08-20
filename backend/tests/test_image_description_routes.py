@@ -2,6 +2,7 @@
 along with the image listings the editors already fetch."""
 
 import importlib
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -292,3 +293,55 @@ def test_deleting_a_library_image_takes_its_description_with_it(client, world):
     listing = client.get(f"/api/campaigns/{camp}/images").json()
     assert [(i["name"], i["description"], i["described"]) for i in listing] == [
         ("coastline", "", False)]
+
+
+def test_the_world_queue_previews_a_link_breaking_name(client, world):
+    """`assets.storable` accepts names URL syntax owns — `a#b` truncates at the
+    fragment, `100%25` decodes to something else. Unquoted, the queue showed a
+    broken preview for exactly the images whose (encoded) PUT would have
+    worked, so the reader was asked to describe a picture they could not see."""
+    cid, vid = _char(client, world)
+    base = f"/api/worlds/{world}/characters/{cid}/versions/{vid}/images"
+    for name in ("a#b", "my art"):
+        client.put(f"{base}/{quote(name, safe='')}",
+                   files={"file": ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+
+    queue = client.get(f"/api/worlds/{world}/images/undescribed").json()
+    urls = {i["name"]: i["url"] for i in queue}
+    assert urls["a#b"].endswith("/a%23b")
+    for name in ("a#b", "my art"):
+        assert client.get(urls[name]).status_code == 200
+
+
+def test_the_world_queue_drops_an_asset_folder_whose_version_is_gone(client, world):
+    """An asset directory can outlive its version: uploading campaign-side art
+    to a locked actor and then importing a different world version leaves the
+    old folder behind. An image queued from it can never be described — every
+    PUT 404s on the version gate — so it would be re-offered forever."""
+    cid, vid = _char(client, world)
+    root = store.worlds.world_root(world)
+    store.assets.put_image(root, cid, "a-version-that-went-away", "gallery_1",
+                           b"\x89PNG\r\n\x1a\n", "png")
+
+    queue = client.get(f"/api/worlds/{world}/images/undescribed").json()
+    assert [(i["vid"], i["name"]) for i in queue] == [(vid, "gallery_1")]
+    # ...and the route really would refuse it, which is why listing it is a trap
+    assert client.put(f"/api/worlds/{world}/characters/{cid}"
+                      f"/versions/a-version-that-went-away/images/gallery_1/description",
+                      json={"description": "x"}).status_code == 404
+
+
+def test_the_campaign_queue_drops_an_asset_folder_whose_version_is_gone(client, world):
+    """The campaign half of the same trap — and the one that actually produces
+    it: uploading campaign-side art to a locked actor, then importing a
+    different world version, leaves the old version's folder behind."""
+    cid, vid = _char(client, world)
+    camp = client.post("/api/campaigns",
+                       json={"name": "Saltmarch", "world": world}).json()["id"]
+    client.put(f"/api/campaigns/{camp}/characters/{cid}/versions/{vid}/images/gallery_1",
+               files={"file": ("b.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+    store.assets.put_image(store.overlay.croot_of(camp), cid, "a-version-that-went-away",
+                           "gallery_1", b"\x89PNG\r\n\x1a\n", "png")
+
+    queue = client.get(f"/api/campaigns/{camp}/images/undescribed").json()
+    assert [(i["vid"], i["name"]) for i in queue] == [(vid, "gallery_1")]

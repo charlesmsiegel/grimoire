@@ -527,3 +527,29 @@ def test_function_words_still_carry_no_match(world, sid):
                 & art._terms("She was not there and did not care."))
     for filler in ("the", "and", "was", "you", "how", "did", "got"):
         assert filler not in art._terms(f"{filler} something entirely")
+
+
+def test_a_near_miss_handle_is_scrubbed_rather_than_written_to_the_transcript(world, sid):
+    """A shape the strict grammar does not match used to survive verbatim.
+
+    The reader saw clean prose while the reply streamed (the view hides
+    handles) and then watched `[[art:...]]` appear when it landed. No
+    `[[art:` form reaches a transcript, well-formed or not."""
+    camp, char = world["cid"], world["char"]
+    _cast(camp, char, world["vid"], sid)
+    for near_miss in (f"[[art:characters:{char}:main:gallery_1]]",  # a version wedged in
+                      "[[art:campaign]]",                          # no image named
+                      "[[art:]]",
+                      "[[art:characters:sera:a:b:c:d]]",
+                      "`[[art:campaign:a:b:c]]`"):
+        assert art.resolve_handles(camp, f"Before {near_miss} after.", sid) == "Before  after."
+
+
+def test_the_scrub_runs_after_resolution_not_before(world, sid):
+    """`ANY_HANDLE` matches everything `HANDLE` does, so order is the whole
+    guarantee: strict first, or a well-formed handle is eaten before it can
+    become a picture."""
+    camp = world["cid"]
+    out = art.resolve_handles(camp, "[[art:campaign:coastline]] and [[art:campaign]]", sid)
+    assert out.startswith("![A hand-drawn map")
+    assert "[[art:" not in out

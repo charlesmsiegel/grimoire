@@ -4,6 +4,7 @@ import/export, localization and per-version images."""
 from __future__ import annotations
 
 import json
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
@@ -431,17 +432,23 @@ def list_undescribed_images(wid: str):
     # 300-character world, on a route that fires whenever the character page
     # mounts. The same mistake `context.art._keyword_scores` makes it easy to
     # make twice.
-    names: dict[tuple[str, str], str | None] = {}
+    # One read per RECORD, yielding both what to call it and which versions it
+    # still has. Two separate memos, or a version check outside the memo, is the
+    # same per-image re-read this exists to avoid -- which is exactly how it
+    # crept back in when the version check was added.
+    seen: dict[tuple[str, str], tuple[str, set[str]] | None] = {}
     for base in ("characters", store.pcs.ASSET_BASE, *store.entities.ENTITY_KINDS):
         for item in store.image_descriptions.undescribed(root, base):
             key = (base, item["id"])
-            if key not in names:
-                names[key] = _record_display_name(root, base, item["id"])
-            name = names[key]
-            if name is None:
-                # An asset folder whose record is gone. Not listed: the queue
-                # would offer an image no route can describe, and the PUT it
-                # would issue is a 404 by design.
+            if key not in seen:
+                seen[key] = _record_name_and_versions(root, base, item["id"])
+            found = seen[key]
+            name = found[0] if found else None
+            if name is None or (found is not None and found[1] and item["vid"] not in found[1]):
+                # An asset folder whose record -- or whose VERSION -- is gone.
+                # Not listed: the queue would offer an image no route can
+                # describe, and the PUT it issues is a 404 by design, so the
+                # entry could never be cleared and would be re-offered forever.
                 continue
             out.append({"kind": base, "id": item["id"], "vid": item["vid"],
                         "name": item["name"], "record_name": name,
@@ -449,15 +456,28 @@ def list_undescribed_images(wid: str):
     return out
 
 
-def _record_display_name(root, base: str, rid: str) -> str | None:
-    """What to call the record an undescribed image hangs off, or None when
-    there is no such record any more."""
+def _record_name_and_versions(root, base: str, rid: str) -> tuple[str, set[str]] | None:
+    """What to call the record an undescribed image hangs off, and which version
+    ids it still has — or None when there is no such record any more.
+
+    An empty version set means "this kind has no versions": entity art is keyed
+    on a fixed `default`, so the record existing is the whole question there.
+
+    The versions matter because an asset directory can outlive its version.
+    Uploading campaign-side art to a locked actor and then importing a different
+    world version leaves the old version's folder behind
+    (`appearances.import_version` removes the card, not the folder), and an
+    image queued from it can never be described: every PUT 404s on the version
+    gate, so the entry would be re-offered forever.
+    """
     try:
         if base == "characters":
-            return str(store.characters.read_character(root, rid)["meta"]["name"])
+            d = store.characters.read_character(root, rid)
+            return str(d["meta"]["name"]), {v["id"] for v in d["versions"]}
         if base == store.pcs.ASSET_BASE:
-            return str(store.pcs.read_pc(root, rid)["meta"]["name"])
-        return str(store.entities.read_entity(root, base, rid)["meta"]["name"])
+            d = store.pcs.read_pc(root, rid)
+            return str(d["meta"]["name"]), {v["id"] for v in d["versions"]}
+        return str(store.entities.read_entity(root, base, rid)["meta"]["name"]), set()
     except (store.characters.CharacterNotFound, store.pcs.PCNotFound,
             store.entities.EntityNotFound, KeyError, OSError, UnicodeDecodeError):
         return None
@@ -466,11 +486,19 @@ def _record_display_name(root, base: str, rid: str) -> str | None:
 def _undescribed_url(wid: str, base: str, item: dict) -> str:
     """The world-scoped serving URL for one queued image. An actor's art is per
     version; an entity's is keyed on a fixed `default`, so its URL has no
-    version segment to carry."""
+    version segment to carry.
+
+    Quoted segment by segment, like the campaign backlog's. `assets.storable`
+    accepts names URL syntax owns -- `a#b` truncates at the fragment, a literal
+    `%` can decode to another name -- so a raw URL here showed a broken preview
+    for exactly the images whose (encoded) description PUT would have worked.
+    """
     if base in ("characters", store.pcs.ASSET_BASE):
-        return (f"/api/worlds/{wid}/{base}/{item['id']}"
-                f"/versions/{item['vid']}/images/{item['name']}")
-    return f"/api/worlds/{wid}/{base}/{item['id']}/images/{item['name']}"
+        return (f"/api/worlds/{wid}/{base}/{quote(item['id'], safe='')}"
+                f"/versions/{quote(item['vid'], safe='')}"
+                f"/images/{quote(item['name'], safe='')}")
+    return (f"/api/worlds/{wid}/{base}/{quote(item['id'], safe='')}"
+            f"/images/{quote(item['name'], safe='')}")
 
 
 @router.get("/worlds/{wid}/characters/{cid}/versions/{vid}/images")

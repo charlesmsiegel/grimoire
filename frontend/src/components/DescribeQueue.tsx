@@ -16,7 +16,13 @@ import { api, type EntityKind, type EntityScope, type UndescribedImage } from ".
  *    queue for good, and it is never offered to the model.
  *  - **Skip** writes nothing. The image stays undescribed and comes back next
  *    time — which is the right answer for "not now", and the wrong one to
- *    conflate with "nothing to say". */
+ *    conflate with "nothing to say".
+ *
+ *  MOUNT THIS WITH A `key` NAMING THE SCOPE. `items` is seeded once, but
+ *  `write()` addresses whatever `scope` currently says — so a queue left open
+ *  across a switch from one world (or campaign) to another would save the old
+ *  scope's sentence onto a same-named image in the new one. The caller owns
+ *  that identity, because only the caller knows it changed. */
 export function DescribeQueue({ scope, wid, queue, onClose, onSaved }: {
   scope: EntityScope;
   /** The WORLD this queue's drafts go to. Drafting is world-side only (a

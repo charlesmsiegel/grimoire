@@ -270,6 +270,7 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
                   </button>
                   {isLibrary && (
                     <ImageDescriptionField
+                      key={img.name}
                       name={img.name} value={img.description}
                       onSave={async (d) => {
                         await api.setCampaignImageDescription(cid, img.name, d);

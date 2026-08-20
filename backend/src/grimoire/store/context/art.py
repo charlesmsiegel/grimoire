@@ -147,6 +147,16 @@ RECORD_KINDS: tuple[str, ...] = ACTOR_KINDS + entities.ENTITY_KINDS
 HANDLE = re.compile(
     r"(?P<tick>`?)\[\[art:([^:\]\[]+):([^:\]\[]+)(?::([^:\]\[]+))?\]\](?P=tick)")
 
+#: ANY complete `[[art:...]]`, however many fields it has. `HANDLE` is the
+#: strict grammar and only it can produce a picture; this is the scrub that runs
+#: after it, so a plausible near-miss -- `[[art:characters:sera:main:gallery_1]]`
+#: with a version wedged in, or a bare `[[art:campaign]]` -- cannot survive into
+#: stored prose. It used to: the strict pattern simply did not match, so the
+#: token was written to the transcript verbatim. Worse than merely ugly, because
+#: the streaming view hides handles while deltas arrive, so the reader saw clean
+#: prose and then watched a protocol token appear when the reply landed.
+ANY_HANDLE = re.compile(r"`?\[\[art:[^\]\[]*\]\]`?")
+
 #: The two knobs' defaults, read from `config` rather than spelled again here.
 #: They have to agree with the values `read_config` materializes into a fresh
 #: config.md -- a second copy would disagree the first time either moved, and
@@ -659,6 +669,12 @@ def resolve_handles(cid: str, text: str, sid: str) -> str:
     transcript as text, get the alt text and nothing else. `PostImagePicker
     .insertion` makes the same choice for the same reason.
 
+    **No `[[art:...]]` form survives, well-formed or not.** Only `HANDLE` can
+    become a picture; anything left over is scrubbed, because a near-miss the
+    strict grammar does not match was otherwise written into the transcript
+    verbatim -- and the streaming view hides handles, so it appeared out of
+    nowhere the moment the reply landed.
+
     **At most one picture per reply**, which is what the section asks for --
     enforced here rather than left as advice. Every other clause of that
     contract is a rule resolution applies (the handle must name a real,
@@ -689,4 +705,6 @@ def resolve_handles(cid: str, text: str, sid: str) -> str:
         alt = hit["description"].replace("[", "(").replace("]", ")").replace("\n", " ")
         return f"![{alt}]({hit['url']})"
 
-    return HANDLE.sub(sub, text)
+    # Strict resolution first, then the scrub: `ANY_HANDLE` would happily eat a
+    # well-formed handle before it could become a picture.
+    return ANY_HANDLE.sub("", HANDLE.sub(sub, text))

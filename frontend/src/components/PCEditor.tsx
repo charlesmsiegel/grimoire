@@ -351,7 +351,7 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
                     </a>
                     <figcaption>avatar</figcaption>
                     <button className="shelf-promote" onClick={() => removeImage("avatar")}>Remove</button>
-                    <ImageDescriptionField name="avatar" value={descriptions.avatar}
+                    <ImageDescriptionField key={`${vid}:avatar`} name="avatar" value={descriptions.avatar}
                                            onSave={(d) => describeImage("avatar", d)}
                                            onDraft={scope.kind === "world" ? () => draftDescription("avatar") : undefined} />
                   </figure>
@@ -363,7 +363,7 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
                     <a href={imgSrc(detail.meta.id, n)} target="_blank" rel="noreferrer"><img alt={n} src={imgSrc(detail.meta.id, n)} /></a>
                     <button className="shelf-promote" onClick={() => promoteImage(n)}>Set as avatar</button>
                     <button className="shelf-promote" onClick={() => removeImage(n)}>Remove</button>
-                    <ImageDescriptionField name={n} value={descriptions[n]}
+                    <ImageDescriptionField key={`${vid}:${n}`} name={n} value={descriptions[n]}
                                            onSave={(d) => describeImage(n, d)}
                                            onDraft={scope.kind === "world" ? () => draftDescription(n) : undefined} />
                   </div>

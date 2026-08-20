@@ -131,8 +131,9 @@ def write_in(d: Path, descriptions: dict[str, str], names: set[str] | None = Non
     if unknown:
         raise ValueError(f"unknown image(s): {sorted(unknown)}")
     trimmed = {n: str(v) for n, v in descriptions.items()}
-    d.mkdir(parents=True, exist_ok=True)
-    atomic.write_text(path_in(d), json.dumps(trimmed, indent=2, sort_keys=True) + "\n")
+    with assets.sidecar_lock(d, DESCRIPTIONS_FILE):
+        d.mkdir(parents=True, exist_ok=True)
+        atomic.write_text(path_in(d), json.dumps(trimmed, indent=2, sort_keys=True) + "\n")
 
 
 def set_in(d: Path, name: str, text: str, names: set[str] | None = None) -> None:
@@ -143,15 +144,20 @@ def set_in(d: Path, name: str, text: str, names: set[str] | None = None) -> None
     while the key being written still has to name a real image. `names`
     overrides what "real" means — see `read_in`.
     """
-    if name not in (_names(d) if names is None else names):
-        raise ValueError(f"unknown image(s): [{name!r}]")
-    cur = read_raw(d)
-    cur[name] = str(text)
-    # Not `write_in`: `cur` may legitimately carry entries for vanished images
-    # (see the docstring), which `write_in` would reject as unknown.
-    d.mkdir(parents=True, exist_ok=True)
-    atomic.write_text(path_in(d), json.dumps({k: str(v) for k, v in cur.items()},
-                                             indent=2, sort_keys=True) + "\n")
+    # Under the sidecar lock for the WHOLE read-modify-write, and the existence
+    # check with it: an image lifecycle event holds the same lock while it moves
+    # entries around, so a check made outside it could validate a slot that has
+    # already been promoted away.
+    with assets.sidecar_lock(d, DESCRIPTIONS_FILE):
+        if name not in (_names(d) if names is None else names):
+            raise ValueError(f"unknown image(s): [{name!r}]")
+        cur = read_raw(d)
+        cur[name] = str(text)
+        # Not `write_in`: `cur` may legitimately carry entries for vanished
+        # images (see the docstring), which `write_in` would reject as unknown.
+        d.mkdir(parents=True, exist_ok=True)
+        atomic.write_text(path_in(d), json.dumps({k: str(v) for k, v in cur.items()},
+                                                 indent=2, sort_keys=True) + "\n")
 
 
 # ---- per-version wrappers (characters / pcs / entity kinds) ----------------
@@ -165,17 +171,6 @@ def read_all(root: Path, aid: str, vid: str, base: str = "characters",
     if not (safe_id(aid) and safe_id(vid)):
         return {}
     return read_in(_dir(root, aid, vid, base), names)
-
-
-def raw_keys(root: Path, aid: str, vid: str, base: str = "characters") -> set[str]:
-    """The sidecar's keys as stored, unfiltered — "which images have been
-    reviewed", which is the absent-vs-empty question. Through `_dir` rather
-    than a path the caller assembles, so `tests/test_paths_guard.py`'s rule
-    that filesystem access goes through the resolvers keeps holding one module
-    further out."""
-    if not (safe_id(aid) and safe_id(vid)):
-        return set()
-    return set(read_raw(_dir(root, aid, vid, base)))
 
 
 def read(root: Path, aid: str, vid: str, name: str, base: str = "characters",

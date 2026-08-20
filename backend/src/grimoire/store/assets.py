@@ -480,6 +480,28 @@ def clear_focus(root: Path, cid: str, vid: str, base: str = "characters") -> Non
         p.unlink()
 
 
+def sidecar_lock(d: Path, filename: str) -> threading.RLock:
+    """Serialize read-modify-writes of one sidecar file.
+
+    A sidecar is rewritten whole, so every writer of it needs the SAME lock or
+    the last one wins. That is not what the callers were holding: an image
+    lifecycle event (`promote_image`, `delete_image`) takes `_image_lock` on the
+    slots it moves, while a description save takes `locks.campaign_lock` --
+    two different locks over one file, so a promotion could interleave with a
+    save and leave the sentence attached to the slot the picture just left.
+
+    Keyed on the FILE rather than on an image name, because that is the unit
+    being rewritten: a save for `gallery_1` and a promotion of `gallery_2` both
+    rewrite the whole mapping.
+
+    In-process only, like every other lock in this module; two processes on one
+    synced store still race, as they do everywhere else here. Reentrant, so a
+    caller already holding it (promotion edits the sidecar inside its own image
+    locks) pays nothing.
+    """
+    return _image_lock(d, f"\x00sidecar\x00{filename}")
+
+
 def _read_sidecar(d: Path, filename: str) -> dict:
     """A ``{name: value}`` sidecar in `d`, or ``{}`` for missing or garbled."""
     p = d / filename
@@ -512,6 +534,11 @@ def edit_sidecar(d: Path, filename: str, changes: dict[str, str | None]) -> None
     these run *after* the bytes have moved, and an image operation must not fail
     over the file that annotates it. A no-op change set never creates a file.
     """
+    with sidecar_lock(d, filename):
+        _edit_sidecar_locked(d, filename, changes)
+
+
+def _edit_sidecar_locked(d: Path, filename: str, changes: dict[str, str | None]) -> None:
     cur = _read_sidecar(d, filename)
     wanted = {k: v for k, v in changes.items() if v is not None}
     dropped = {k for k, v in changes.items() if v is None}
@@ -638,6 +665,10 @@ def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "charac
         demoted = (cur.read_bytes(), cur.suffix) if cur is not None else None
         # Snapshot BEFORE anything moves: the no-avatar branch below deletes
         # `name`, and `delete_image` takes that slot's description with it.
+        # Under the sidecar lock for the whole swap, so a description save
+        # cannot land between the snapshot and the rewrite and be overwritten.
+        sidecar = sidecar_lock(d, DESCRIPTIONS_FILE)
+        sidecar.acquire()
         described = _read_sidecar(d, DESCRIPTIONS_FILE)
         put_image(root, cid, vid, AVATAR, promoted[0], promoted[1], base)
         if demoted is None:
@@ -659,8 +690,11 @@ def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "charac
         # image's description entirely. `None` on either side removes that key
         # rather than leaving the slot's previous description behind, which
         # would caption the new occupant with the old one's words.
-        edit_sidecar(d, DESCRIPTIONS_FILE, {
-            AVATAR: described.get(name),
-            name: described.get(AVATAR) if demoted is not None else None,
-        })
+        try:
+            edit_sidecar(d, DESCRIPTIONS_FILE, {
+                AVATAR: described.get(name),
+                name: described.get(AVATAR) if demoted is not None else None,
+            })
+        finally:
+            sidecar.release()
     clear_focus(root, cid, vid, base)

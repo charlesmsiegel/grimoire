@@ -392,6 +392,19 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       .catch(() => { if (current()) setUndescribed([]); });
   }, [scope.kind, scope.id]);
   useEffect(() => { reloadUndescribed(); }, [reloadUndescribed]);
+  // A scope change RETIRES an open queue rather than carrying it across. Its
+  // entries name records of the world (or campaign) being left, while `write()`
+  // addresses whichever scope is current -- so a carried-over item would save
+  // this reader's sentence onto a same-named image somewhere else entirely. The
+  // `key` on the queue below resets what has been typed; this is what stops the
+  // stale ENTRIES being offered under the new scope at all.
+  useEffect(() => { setDescribeOpen(false); setUndescribed([]); }, [scope.kind, scope.id]);
+  // A scope change RETIRES an open queue rather than carrying it across. Its
+  // entries name records of the world (or campaign) being left, while `write()`
+  // addresses whichever scope is current -- so a carried-over item would save
+  // this reader's sentence onto a same-named image somewhere else entirely. The
+  // `key` on the queue below resets what has been typed; this is what stops the
+  // stale ENTRIES being offered under the new scope at all.
   useEffect(() => {
     reload();
     setWizardOpen(false); // a scope change can reuse this instance; never carry a wizard across it
@@ -1429,7 +1442,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
           <UrlImportPrompt onClose={() => setUrlPromptOpen(false)} onSubmit={runBulkUrlImport} />
         )}
         {describeOpen && (
-          <DescribeQueue scope={scope} wid={wid} queue={undescribed}
+          <DescribeQueue key={`${scope.kind}:${scope.id}`} scope={scope} wid={wid} queue={undescribed}
                          onSaved={reloadUndescribed}
                          onClose={() => { setDescribeOpen(false); reloadUndescribed(); }} />
         )}
@@ -1851,7 +1864,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                           <img alt="avatar" src={avatarSrc(detail.meta.id, vid, imageTokens.avatar)} />
                         </a>
                         <figcaption>avatar</figcaption>
-                        <ImageDescriptionField name="avatar" value={descriptions.avatar}
+                        <ImageDescriptionField key={`${vid}:avatar`} name="avatar" value={descriptions.avatar}
                                                onSave={(d) => describeImage("avatar", d)}
                                                onDraft={worldScope ? () => draftDescription("avatar") : undefined} />
                       </figure>
@@ -1866,7 +1879,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                         <div className="shelf-tile" key={imgName}>
                           <a href={src} target="_blank" rel="noreferrer"><img alt={imgName} src={src} /></a>
                           <button className="shelf-promote" onClick={() => promote(imgName)}>Set as avatar</button>
-                          <ImageDescriptionField name={imgName} value={descriptions[imgName]}
+                          <ImageDescriptionField key={`${vid}:${imgName}`} name={imgName} value={descriptions[imgName]}
                                                  onSave={(d) => describeImage(imgName, d)}
                                                  onDraft={worldScope ? () => draftDescription(imgName) : undefined} />
                         </div>

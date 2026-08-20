@@ -2327,3 +2327,62 @@ test("the lore tab is offered only when there is a lore view to route to", async
   await openDetail();
   expect(screen.queryByRole("tab", { name: /^lore/i })).toBeNull();
 });
+
+test("the description field belongs to one image, not to a slot in the shelf", async () => {
+  // Two versions, each with an image of the same name and a different state:
+  // described on one, never reviewed on the other. Unkeyed, the field is the
+  // same React element in the same position, so switching version left the
+  // first version's text sitting in the second version's field -- and Save
+  // would have written it there.
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [
+      { id: "default", name: "default", card: CARD, images: ["gallery_1"],
+        image_descriptions: { gallery_1: "Half-plate, rain-soaked." } },
+      { id: "winter", name: "Winter", card: CARD, images: ["gallery_1"] },
+    ],
+  });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openDetail();
+  await openTab(/^art/i);
+  await screen.findByText("Images");
+
+  fireEvent.click(screen.getByRole("button", { name: /Description of gallery_1/ }));
+  const box = await screen.findByRole("textbox", { name: /Description of gallery_1/ });
+  fireEvent.change(box, { target: { value: "A draft nobody asked to keep." } });
+
+  fireEvent.click(screen.getByRole("button", { name: "Winter" }));
+  await openTab(/^art/i);
+  await waitFor(() => expect(
+    screen.queryByRole("textbox", { name: /Description of gallery_1/ })).toBeNull());
+  expect(screen.getByRole("button", { name: /Description of gallery_1/ }))
+    .toHaveTextContent("Describe…");
+});
+
+test("an open describe queue does not follow the page to another scope", async () => {
+  // `items` is seeded once, but each Save addresses whatever `scope` currently
+  // says -- so a queue left open across a switch of world (or into a campaign)
+  // would write this reader's sentence onto a same-named image belonging to
+  // somewhere else. The switch retires the queue instead.
+  (api.listUndescribedImages as any).mockImplementation((sc: any) =>
+    Promise.resolve([{ kind: "characters", id: "seraphine", vid: "default",
+                      name: "gallery_1", record_name: `Whoever ${sc.id} means`,
+                      url: "/img/1" }]));
+
+  const { rerender } = render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Describe images/ }));
+  await screen.findByText(/Describing 1 \/ 1 — Whoever w means/);
+  fireEvent.change(screen.getByRole("textbox", { name: "Description" }),
+                   { target: { value: "Words about the other world's picture." } });
+
+  rerender(<CharacterEditor scope={{ kind: "world", id: "other" }} wid="other" />);
+  await waitFor(() =>
+    expect(screen.queryByRole("textbox", { name: "Description" })).toBeNull());
+  // ...and the new scope's own backlog is what is offered from here on
+  expect(await screen.findByRole("button", { name: /Describe images \(1\)/ }))
+    .toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /Describe images/ }));
+  expect(await screen.findByText(/Describing 1 \/ 1 — Whoever other means/))
+    .toBeInTheDocument();
+  expect(screen.getByRole("textbox", { name: "Description" })).toHaveValue("");
+});
