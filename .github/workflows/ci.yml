@@ -40,6 +40,17 @@ jobs:
       - run: pip install -e "./backend[dev]"
       - run: pip check
       - run: make check-py PY=python
+      # One matrix leg's report, not both: they cover the same lines, and two
+      # uploads under one artifact name is an error, not a merge. 3.11 is the
+      # floor `requires-python` declares, so it is the one whose reachable
+      # code is the smaller set. `always()` and `if-no-files-found: error` for
+      # the same reasons the frontend job gives below.
+      - if: always() && matrix.python == '3.11'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          if-no-files-found: error
 
   frontend:
     runs-on: ubuntu-24.04

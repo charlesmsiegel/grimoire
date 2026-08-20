@@ -60,6 +60,14 @@ else
   WITH_SRC = PYTHONPATH="$(CURDIR)/backend/src"
   rm_rf = rm -rf "$(1)"
 endif
+# The backend coverage floor, in percent: the measured total (93.07% of 23529
+# statements and 7504 branches) rounded down to the integer below it. On the
+# Makefile rather than in pyproject.toml's addopts so that the *other* pytest
+# run -- check-pydantic1, which exists to answer a different question -- is not
+# slowed down measuring it. Measuring costs this suite about 8 minutes on
+# 3.11, which is why it is not also folded into that one.
+COV_FLOOR ?= 93
+
 # Passed by the APK CI job as the Chaquopy build-machine interpreter (<= 3.12);
 # empty locally, where android/local.properties supplies it instead.
 BUILD_PYTHON ?=
@@ -103,8 +111,19 @@ android-clean:
 # un-bootstrapped machine. CI runs the two as separate jobs.
 check: check-lint check-mypy check-py check-web check-eslint check-templates check-pydantic1
 
+# --cov-fail-under is a floor, not a target: it sits just under the number the
+# suite actually reaches, so it fails on a change that *drops* coverage and
+# says nothing about one that does not raise it. Raise it when the number
+# rises; lowering it needs the same justification as any other gate being
+# weakened.
+# The xml report is what external readers want (Codecov, the coverage gutters,
+# the code-visualization atlas) and CI uploads it as `backend-coverage`; the
+# term report is for the human already reading this output.
+# One line, no backslash continuation: on Windows the recipe shell is cmd.exe
+# (pinned above), which continues lines with `^` and would take a trailing `\`
+# as an argument.
 check-py:
-	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend -q
+	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend -q --cov=grimoire --cov-config=backend/pyproject.toml --cov-report=term:skip-covered --cov-report=xml:backend/coverage.xml --cov-fail-under=$(COV_FLOOR)
 
 # `test:coverage`, not `test`: same suite, same pass/fail, plus it drops
 # frontend/coverage/lcov.info. Measuring in the gate rather than in a separate
