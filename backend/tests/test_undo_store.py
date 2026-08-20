@@ -14,6 +14,7 @@ all places where a plausible inverse is not one.
 """
 
 import pytest
+
 from grimoire.store import (
     absorb,
     appearances,

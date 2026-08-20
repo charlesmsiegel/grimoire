@@ -1,4 +1,5 @@
 import pytest
+
 from grimoire.store import characters as ch
 from grimoire.store import fetch
 

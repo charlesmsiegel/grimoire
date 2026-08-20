@@ -51,6 +51,8 @@ import pathlib  # noqa: E402 - deliberate late import; see the lines above
 import xml.etree.ElementTree as ET  # noqa: E402 - deliberate late import; see the lines above
 import zipfile  # noqa: E402 - deliberate late import; see the lines above
 
+from PIL import Image  # noqa: E402 - deliberate late import; see the lines above
+
 from grimoire.store import (  # noqa: E402 - deliberate late import; see the lines above
     appearances,
     characters,
@@ -59,7 +61,6 @@ from grimoire.store import (  # noqa: E402 - deliberate late import; see the lin
     pcs,
     scenes,
 )
-from PIL import Image  # noqa: E402 - deliberate late import; see the lines above
 
 OPF_NS = {"opf": "http://www.idpf.org/2007/opf"}
 

@@ -2,8 +2,9 @@
 
 import io
 
-from grimoire.store import assets, thumbs
 from PIL import Image
+
+from grimoire.store import assets, thumbs
 
 
 def _png_bytes(w=1200, h=800, color=(200, 30, 30)) -> bytes:

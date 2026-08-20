@@ -2,8 +2,9 @@ import io
 import pathlib
 
 import pytest
-from grimoire.store import campaigns, covers, worlds
 from PIL import Image
+
+from grimoire.store import campaigns, covers, worlds
 
 
 def _png(size=(4, 4), color=(10, 20, 30)) -> bytes:

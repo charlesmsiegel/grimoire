@@ -3,6 +3,7 @@ import math
 import pathlib
 
 import pytest
+
 from grimoire.store.weather.draw import draw, inverse_cdf
 from grimoire.store.weather.noise import field, latent_u, latent_z, quantile
 

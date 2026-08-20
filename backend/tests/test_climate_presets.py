@@ -1,4 +1,5 @@
 import pytest
+
 from grimoire.store import climates
 
 EXPECTED = {"temperate-interior", "temperate-coastal", "high-desert",

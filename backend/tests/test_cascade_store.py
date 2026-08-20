@@ -11,6 +11,7 @@ standing.
 import json
 
 import pytest
+
 from grimoire.store import (
     alternates,
     campaigns,

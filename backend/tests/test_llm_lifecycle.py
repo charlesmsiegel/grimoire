@@ -11,14 +11,15 @@ uvicorn in-process, and this suite builds an app per test.
 import importlib
 
 import anyio
-import grimoire.store as store
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+
+import grimoire.store as store
 from grimoire import main, routes
 from grimoire.llm import LLMClient
 from grimoire.main import create_app
 from grimoire.openai_compatible import OpenAICompatibleClient
-from starlette.requests import Request
 
 
 class _Recorder:

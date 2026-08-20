@@ -9,6 +9,7 @@ are the ones where it declines to make one.
 """
 
 import pytest
+
 from grimoire.store import (
     campaigns,
     changes,

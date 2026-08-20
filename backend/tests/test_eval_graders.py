@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 import pytest
+
 from grimoire import prompts
 from grimoire.store import absorb, scenes
 

@@ -7,6 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import ingest_scene
+
 from grimoire.store import campaigns, worlds
 
 

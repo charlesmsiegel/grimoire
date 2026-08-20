@@ -1,6 +1,7 @@
 import json
 
 import pytest
+
 from grimoire.store import cards, characters, entities, lorebook
 
 

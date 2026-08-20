@@ -1,5 +1,6 @@
 import httpx
 import pytest
+
 from grimoire.openrouter import OpenRouterClient, OpenRouterError
 
 SSE_BODY = (

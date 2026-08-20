@@ -10,6 +10,7 @@ refusal the caller can degrade on rather than an error the reader sees.
 from __future__ import annotations
 
 import pytest
+
 from grimoire.embeddings import EmbeddingsError
 from grimoire.store import (
     campaigns,

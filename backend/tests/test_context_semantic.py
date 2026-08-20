@@ -12,6 +12,7 @@ Two halves, deliberately kept apart:
 import struct
 
 import pytest
+
 from grimoire import embeddings
 from grimoire.store import (
     campaigns,

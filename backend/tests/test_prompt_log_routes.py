@@ -7,6 +7,7 @@ read through a scene it does not belong to.
 """
 
 import pytest
+
 from grimoire import routes, store
 
 

@@ -6,6 +6,7 @@ sees — the keyword rule, the owner gate, the cast loop, and the budget packer.
 """
 
 import pytest
+
 from grimoire.store import appearances as ap
 from grimoire.store import (
     campaigns,

@@ -33,9 +33,9 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+
 from grimoire import routes, store
 from grimoire.main import create_app
-
 from tests.fixtures.frozen_campaign import build
 from tests.fixtures.frozen_campaign import sweep as frozen
 from tests.llm_fakes import from_cassette

@@ -3,6 +3,7 @@ import struct
 import zlib
 
 import pytest
+
 from grimoire.store import vectors
 
 

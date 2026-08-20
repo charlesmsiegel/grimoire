@@ -12,6 +12,7 @@ import json
 import os
 
 import pytest
+
 from grimoire.store import (
     campaigns,
     characters,

@@ -1,6 +1,7 @@
 import threading
 
 import pytest
+
 from grimoire.store import appearances as ap
 from grimoire.store import (
     campaigns,

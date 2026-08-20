@@ -11,6 +11,7 @@ import json
 import threading
 
 import pytest
+
 from grimoire.store import (
     appearances,
     campaigns,
