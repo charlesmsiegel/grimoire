@@ -114,11 +114,20 @@ behavior lives here rather than being restated per route:
 Three consequences worth stating, because each one deletes a special case an
 earlier draft needed:
 
-- **`rolling_summary` and `scene_break` no longer need an exemption.** They are
-  fired after every turn and not awaited; as `background` they declare no
-  exclusion key, so they cannot hold a scene's slot or strand the composer.
-  That was previously a written-out warning about a bug the design could
-  otherwise ship. It is now structural.
+- **`rolling_summary` and `scene_break` no longer need an exemption.** As
+  `background` they declare no exclusion key, so they cannot hold a scene's
+  slot or strand the composer. That was previously a written-out warning about
+  a bug the design could otherwise ship; it is now structural.
+
+  **They are also scheduled by the turn runner, not by the client.** Today
+  `CampaignView.askAfterPost` fires them once the streaming promise settles —
+  which is precisely the thing that does not happen in the case this document
+  exists for: the phone locks, the JavaScript is suspended or the page is gone,
+  the turn lands server-side, and nobody is left to POST either one. A scene
+  break the player never gets asked about can then be missed indefinitely,
+  since the next opportunity only comes with the next send. The turn runner
+  schedules both after its own successful persistence, where the trigger
+  cannot be detached from the event that should cause it.
 - **The `_ephemeral_stream` bucket disappears.** Its members become `draft`
   runs and stop needing a paragraph explaining why they are outside the
   mechanism.
@@ -158,6 +167,30 @@ did not like is an ordinary thing to do twice.
   already does by locking the scene, and it is now enforced server-side rather
   than by the client behaving.
 
+### The run boundary is one route invocation, not one provider call
+
+"Every LLM call is a run" is the right instinct and the wrong unit, and the
+difference has to be settled here or the design contradicts itself.
+
+`post_absorb` fans out to four things at once — the extraction completion,
+`_stage_dossiers`, `_stage_voice_drift` and `_run_audit` — and two of those
+helpers issue a provider call **per NPC**. If each of those is its own run,
+every child collides with its parent's scene exclusion key the instant it
+starts, and an absorb deadlocks against itself. If they are not runs, the
+"35 call sites" framing is simply false.
+
+So: **a run is one route invocation.** The 25 routes are the runs; the 10
+helpers execute *inside* whichever run called them, reserve nothing, declare
+no class, and appear nowhere in the registry. What a client can discover,
+re-attach to, poll or cancel is the operation it asked for — which is also the
+only unit it has a name for.
+
+This is what the widened scope actually means: every LLM *operation a user
+initiates* survives a locked phone. It was never going to mean that the
+dossier call for the fourth NPC is independently resumable, and that would not
+help if it were — the absorb's budget and `_gather_phases` already own that
+layer, and "cancel one NPC's dossier" is not an operation anybody has.
+
 ### The reusable core
 
 What every run shares — the registry, the frame buffer and its absolute
@@ -185,13 +218,24 @@ player generates. On Android there is one process by construction.
 A **run** is one LLM job against one scene. It has:
 
 - `id` — opaque, unique per process.
-- `cid`, `sid` — the scene it belongs to. Exactly one campaign, always.
-- `kind` — `chat`, `retry`, `regenerate`, `replay`, `continuation`, `absorb`,
-  `audit`, `dossiers`.
+- `subject` — `scene(cid, sid)`, `campaign(cid)`, `world(wid)` or `global`.
+  Never a bare `(cid, sid)`: most LLM routes are not scene-scoped, and a run
+  record assuming one cannot represent a world draft or the model refresh at
+  all.
+- `class` — `turn`, `review`, `background` or `draft`, carrying the policy
+  (exclusion, durability, notification) rather than restating it per kind.
+- `kind` — the route this run came from, for display and for the ledger.
+- `attempt_id` — the client-generated id this run was started under.
+- `scene_identity` — captured at start, for scene subjects; see below.
 - `state` — `running`, `landed`, `failed`, `cancelled`.
-- `frames` — append-only list of SSE frames, for streaming kinds.
-- `result` / `error` — the terminal payload, for computing kinds.
+- `frames` — append-only, absolute-indexed, for streaming runs.
+- `result` / `error` — the terminal payload, for non-streaming runs.
 - `started_at`, `ended_at`.
+
+The lock a run's persistence takes follows from its subject —
+`campaign_lock(cid)` for scene and campaign subjects, none for world and
+global — so "exactly one campaign lock per run" still holds, trivially so for
+the subjects that take none.
 
 Runs are addressed by `id`, never by `(cid, sid)`. This is the single most
 important structural decision in this spec, and it is a correctness decision
@@ -211,7 +255,17 @@ handler.
 
 ### The registry
 
-A new module, `routes/runs.py`, holding the registry and the run type. It
+A new module, `routes/runs.py`, holding the registry type and the run type.
+
+**The registry instance lives on `app.state`, not at module scope.** A
+module-global is the natural reading of "a module holding the registry", and
+it is wrong here: this repository constructs and tears down `create_app()`
+repeatedly in one process — the suite builds an app per test, and the Android
+entry point rebuilds one inside a living process. Shutdown cancels the runners
+and the reaper, but a module-global's terminal records and its subject,
+attempt and exclusion indexes would survive into the next app, where they
+could answer a discovery query with a dead run or satisfy a fresh POST with a
+stale attempt id. Per-app ownership, exactly as `app.state.llm` already is. It
 imports from `store` but **must not import `routes.streaming` or
 `routes.scenes`** — they import it. `test_import_guard.py` requires the module
 graph stay acyclic, and this is the edge that would close a cycle.
@@ -467,10 +521,25 @@ the same way, so this is not only the review path.
 
 Every run therefore captures an **immutable scene identity** at start and
 compares it before any terminal write. Scenes carry no such field today, so
-one is added to the scene record at creation — a value nothing else derives
-from position, title or number, since all three are mutable by design
-(rename, `repad`, the front door's date slug). A run whose captured identity
-does not match publishes nothing and is marked `failed`.
+one is added to the scene record — a value nothing else derives from position,
+title or number, since all three are mutable by design (rename, `repad`, the
+front door's date slug). A run whose captured identity does not match
+publishes nothing and is marked `failed`.
+
+**Assigning it only at creation would be worse than not having it.** Every
+scene in every existing library predates the field. Compared naively, an old
+scene and the replacement that recycled its `sid` both present the same absent
+value, so the check passes and the corruption it exists to prevent is
+untouched — while the design *reads* as though it were solved. Refusing to run
+on scenes that lack one is the opposite failure: that is every scene the
+player owns today.
+
+So existing scenes are backfilled under the campaign lock before they can
+start a run. `_lifespan`'s startup hook already runs exactly this kind of
+idempotent pass (`migrate_scene_ids`, `bake_char_macros`) and this joins it,
+with a lazy backfill at run start covering any scene the migration skipped
+because the campaign was busy — the same "skipping beats failing to boot"
+posture that hook already takes.
 
 The guards cited under scene deletion protect *transcript* persistence only; a
 pending review is a sidecar write and needed its own check regardless.
@@ -574,6 +643,17 @@ renaming a scene changes that id. Once a run has landed the scene is no longer
 locked, so renaming before saving the review is ordinary use, not an exotic
 race — and without an explicit integration `GET .../{new_sid}/pending-review`
 returns 404 while the durable review sits orphaned under the old id.
+
+**Automatic repadding is refused on the same terms as a rename.** Blocking
+the explicit rename route does not cover `_create_scene` crossing a numbering
+width boundary (99 → 100), which calls `scenes.lifecycle.repad` — and that
+renames *every scene in the campaign* and repoints their sidecars, consulting
+no run registry. Creating that boundary scene while any earlier scene has a
+live `turn` or `review` moves the transcript out from under it exactly as the
+forbidden manual rename would, failing its identity check and discarding the
+result. So the width-changing create is refused while any exclusion key in
+that campaign is held. It is a rare create and a short wait; repointing live
+runs mid-repad is the alternative and is far easier to get subtly wrong.
 
 **A rename is refused while the scene's exclusion key is held.** The repoint
 below moves an *already-persisted* review; it does nothing for a `turn` or
@@ -710,6 +790,16 @@ must round-trip enough to rebuild the same client-side error: `error` carries
 `_llm_http_error` is the shape to preserve — a fatal extraction failure over a
 poll boundary must be indistinguishable, to `useSceneReview`, from today's
 synchronous one.
+
+**That includes the retry delay.** `_llm_http_error` attaches a `Retry-After`
+header for a rate limit (`common.py:168`), and the middleware and CORS config
+deliberately keep it reachable. Once the failure is delivered as a polled run
+payload and the `ApiError` is rebuilt client-side, a header on the *poll*
+response means nothing — it describes the poll, not the failed call. So the
+retry delay is stored with the terminal error and returned in the payload, and
+the client reconstructs an error carrying it. A rate limit whose actionable
+"try again in N seconds" is dropped is the one error where losing the metadata
+changes what the player should do next.
 
 ### Edges the implementer will otherwise have to guess
 
@@ -854,6 +944,22 @@ away unmounts it and aborts. That has to move up.
   controls) rather than inventing a second one.
 - `SceneReview` changes from await-the-response to start → poll → render, and
   learns to pick up a pending review on open.
+- **Every other non-streaming consumer migrates too — this is not optional and
+  not confined to End Scene.** Returning a 202 run handle changes the shape
+  every caller receives, and the ones that destructure a result immediately
+  break outright: `TaglinePrompt.generate` does `const { tagline } = await
+  api.generateCharacterTagline(...)` (`TaglinePrompt.tsx:17`),
+  `ConnectionEditor.refreshModels` reads `result.rev`, `result.models` and
+  `result.fetched_at` (`ConnectionEditor.tsx:106`), and `SceneIdeaPicker`
+  consumes the `sceneIntent` result inline. Implemented as start-only, each of
+  these receives `{run_id}` and renders blank or throws.
+
+  The migration is one shared helper rather than N hand-written poll loops:
+  *start → poll → unwrap terminal result*, returning what the caller
+  receives today, so each call site keeps its existing shape and gains
+  re-attachment for free. Recovery is uniform too — on mount, ask the
+  subject's run collection whether a run of this kind is already in flight
+  and adopt it instead of starting a second one.
 - `run_gone` from any run endpoint means refetch the scene, never surface an
   error: by then the reply is in the transcript or the review is on disk.
 
@@ -1028,6 +1134,22 @@ Widened scope:
 - every one of the 25 LLM routes starts a run and is re-attachable; a table
   test over the route inventory, so a route added later without a class is a
   failure rather than an omission.
+- an absorb's nested helper calls (`_stage_dossiers`, `_stage_voice_drift`,
+  `_run_audit`) reserve nothing and appear in no index — the parent run is the
+  only registry entry, and an absorb does not deadlock against itself.
+- a scene created before this feature gets an identity backfilled, and an old
+  scene plus a replacement recycling its `sid` do **not** compare equal.
+- rolling summary and scene break fire after a turn that landed with **no
+  client attached** — the locked-phone case, and the one the client-side
+  trigger cannot serve.
+- a width-crossing scene create is refused while an exclusion key in that
+  campaign is held.
+- two `create_app()` instances in one process do not see each other's runs,
+  attempt ids or exclusion keys.
+- a rate-limited failure delivered by polling still carries its retry delay.
+- `TaglinePrompt`, `ConnectionEditor.refreshModels` and `SceneIdeaPicker`
+  render the same result they do today through the start/poll/unwrap helper,
+  and adopt an in-flight run on mount rather than starting a second.
 - a `background` run (rolling summary, scene break) does **not** take the
   scene's exclusion key, and the composer stays enabled while one is live —
   the regression that would make the app lock itself after every turn.
