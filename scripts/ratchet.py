@@ -93,7 +93,9 @@ def _require_version(package: str, reported: str) -> None:
     of counts as the explanation.
     """
     want = _pin(package)
-    if want not in reported:
+    # A whole version token, not a substring: `"1.0" in "11.0.3"` is true, and
+    # a check that passes on the wrong tool is worse than no check.
+    if want not in re.findall(r"\d+(?:\.\d+)*", reported):
         raise ToolError(
             f"{package} {want} is what the baselines were built with, and this "
             f"is:\n    {reported.strip()}\n"

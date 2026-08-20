@@ -179,6 +179,14 @@ def test_the_pins_are_readable():
     assert re.fullmatch(r"[\d.]+", ratchet._pin("mypy"))
 
 
+def test_a_version_that_merely_contains_the_pin_is_refused(canned):
+    """The sloppy form of this check was `pin in output`, which passes for a
+    ruff 10.16.0 that has nothing to do with the pinned 0.16.0."""
+    canned(f"ruff 1{ratchet._pin('ruff')}\n")
+    with pytest.raises(ratchet.ToolError, match="baselines were built with"):
+        ratchet.collect_ruff()
+
+
 def test_a_different_tool_version_is_refused(canned):
     """The failure this prevents: a contributor regenerates a baseline with
     the ruff they happen to have, and CI -- on the pinned one -- reports a
