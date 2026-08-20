@@ -376,6 +376,10 @@ book's XHTML/OPF/CSS. `container.xml` and `stylesheet.css` are static;
 `title`/`world`/`date_range`; `chapter.xhtml` takes
 `title`/`date`/`location`/`cast`/`epigraph`/`body`; `divider.xhtml` takes
 `title`; `appendix.xhtml` takes `name`/`role`/`portrait`/`sections`.
+`divider.xhtml` is named for its shape but is specifically the **back-matter**
+divider — it hardcodes `epub:type="backmatter"`, which is right for its one
+caller (the Appendix) and would be a lie for a front-matter one. A second
+caller needs the type passed in, not the template reused as-is.
 
 Navigation is deliberately threefold, because reading systems disagree about
 where they look for it: `nav.xhtml` carries both the `toc` nav (the table of

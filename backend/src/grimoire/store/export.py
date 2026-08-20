@@ -492,15 +492,27 @@ def _html_toc(data: dict) -> str:
     nothing else in it tells a reader how many scenes there are, or lets them
     jump to one. The scene list is an `<ol>`, so the browser numbers it and the
     link text stays the bare title; the anchors are the ids `build_html` puts on
-    every section."""
+    every section, and each `<li>` carries the scene's own number rather than
+    the one the browser would have counted."""
+    # `escape` on the anchors as well as the labels, matching the rest of this
+    # module. Both anchor builders derive from stored ids, which `slugify` keeps
+    # to [a-z0-9-] -- but "the id is always a slug" is a property of the code
+    # that writes the store, not of the store, and appearances.json is a file a
+    # sync client or a hand edit can put anything into. Escaping is a call; the
+    # alternative is trusting that invariant from inside the renderer.
     parts = []
     if data["chapters"]:
+        # `value` rather than letting the browser number the <ol>: `number` is
+        # what every other format's label is built from, and two independent
+        # numberings that happen to agree today would diverge silently the day
+        # `collect` ever skips a chapter.
         parts.append("<h3>Scenes</h3><ol>" + "".join(
-            f"<li><a href=\"#{chapter_anchor(c)}\">{escape(c['title'])}</a></li>"
+            f"<li value=\"{c['number']}\">"
+            f"<a href=\"#{escape(chapter_anchor(c))}\">{escape(c['title'])}</a></li>"
             for c in data["chapters"]) + "</ol>")
     if data["appendix"]:
         parts.append("<h3>Appendix</h3><ul>" + "".join(
-            f"<li><a href=\"#{appendix_anchor(e)}\">{escape(e['name'])}</a></li>"
+            f"<li><a href=\"#{escape(appendix_anchor(e))}\">{escape(e['name'])}</a></li>"
             for e in data["appendix"]) + "</ul>")
     if not parts:
         return ""
@@ -533,7 +545,7 @@ def build_html(cid: str) -> tuple[bytes, str]:
             meta.append(f"<p class=\"scene-cast\">{escape(' · '.join(ch['cast']))}</p>")
         epigraph = f"<p class=\"epigraph\">{escape(ch['epigraph'])}</p>" if ch["epigraph"] else ""
         body = "\n".join(_html_message(m["speaker"], m["content"]) for m in ch["messages"])
-        sections.append(f"<section class=\"chapter\" id=\"{chapter_anchor(ch)}\">"
+        sections.append(f"<section class=\"chapter\" id=\"{escape(chapter_anchor(ch))}\">"
                         f"<h2>{escape(ch['title'])}</h2>"
                         f"{''.join(meta)}{epigraph}{body}</section>")
     if data["appendix"]:
@@ -545,7 +557,7 @@ def build_html(cid: str) -> tuple[bytes, str]:
                         if e["portrait"] else "")
             secs = "".join((f"<h3>{escape(s['label'])}</h3>" if s["label"] else "") + _html_md(s["text"])
                           for s in e["sections"])
-            sections.append(f"<section class=\"appendix\" id=\"{appendix_anchor(e)}\">"
+            sections.append(f"<section class=\"appendix\" id=\"{escape(appendix_anchor(e))}\">"
                             f"<h2>{escape(e['name'])}</h2>"
                             f"{role}{portrait}{secs}</section>")
 

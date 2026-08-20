@@ -29,6 +29,13 @@ body.cover { display: flex; align-items: center; justify-content: center; }
 .appendix .portrait { max-width: 40%; float: right; margin: 0 0 1em 1em; }
 .actor-role { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.1em; color: #666; margin-top: -0.5em; }
 
+/* Load-bearing, not a reset nicety: `nav.xhtml` is in the SPINE, so the
+   landmarks nav is a block on a page the reader actually turns to, and its
+   only defence is the `hidden` attribute. Reading systems ship incomplete UA
+   stylesheets; one that does not honour `hidden` would print "Guide / Cover /
+   Contents / Title Page / Beginning" under the table of contents. */
+[hidden] { display: none; }
+
 /* Contents page (nav.xhtml, which is in the spine as well as being the EPUB 3
    nav document — a reader that hides its own ToC still has one to turn to). */
 body.nav ol { list-style: none; margin: 0; padding-left: 1.2em; }

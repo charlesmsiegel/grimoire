@@ -554,3 +554,24 @@ def test_anchors_survive_scenes_that_share_a_title(monkeypatch, tmp_path):
     assert [export.toc_label(c) for c in chapters] == ["1. Arrival", "2. Arrival"]
     html = export.build_html(cid)[0].decode()
     assert html.count('id="chapter-001"') == 1 and html.count('id="chapter-002"') == 1
+
+
+def test_html_contents_numbers_from_the_scene_number_not_the_browser(monkeypatch, tmp_path):
+    """The `<li value>` is what keeps the one-page export's numbering the same
+    numbering the EPUB, markdown and text exports print."""
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    html = export.build_html(cid)[0].decode()
+    assert '<li value="1"><a href="#chapter-001">Arrival</a></li>' in html
+    assert '<li value="2"><a href="#chapter-002">Below</a></li>' in html
+
+
+def test_html_export_escapes_titles_that_are_markup(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Saltmarch")
+    cid = campaigns.create_campaign("Fire & <Ash>", wid)
+    sid = scenes.create_scene(cid, 'Arrival & "Departure" <hr/>')
+    scenes.append_message(cid, sid, "assistant", "The docks reek.")
+
+    html = export.build_html(cid)[0].decode()
+    assert "<hr/>" not in html                      # the title never becomes markup
+    assert "&lt;hr/&gt;" in html and "Fire &amp; &lt;Ash&gt;" in html
