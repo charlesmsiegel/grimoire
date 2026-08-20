@@ -521,6 +521,21 @@ watermark below would eventually refuse to publish it — but only after the
 entire absorb budget had been spent, which is the most expensive way possible
 to discover a race that ordering prevents for free.
 
+**The exclusion key blocks every transcript mutator, not just other run
+starts.** Reserving before the snapshot closes the race *before* the run; this
+closes the one *during* it. Today's guards do not: `saveEdit`
+(`CampaignView.tsx:2163`) and `saveRetcon` (`:2204`) gate on `rolling`, not on
+`sceneLocked`, and their backend routes know nothing of a run registry. So an
+edit, a retcon or a cut can rewrite the transcript underneath a ten-minute
+absorb, which then spends its entire budget producing a review whose watermark
+is guaranteed to refuse it — the same expensive failure the reserve-first
+ordering exists to avoid, entered through a different door.
+
+While a scene's exclusion key is held, its transcript-mutating routes are
+refused server-side (the client disabling them is the affordance, not the
+guarantee). This joins the rename and repad refusals under one rule: **while a
+`turn` or `review` holds a scene, that scene's shape does not change.**
+
 **`_absorb_snapshot` stays in the handler, synchronously, and its result is
 handed to the run.** This falls out of the pre-flight rule below rather than
 competing with it: `_already_absorbed(scene)` is judged from that same
@@ -965,8 +980,18 @@ away unmounts it and aborts. That has to move up.
 - A **run-registry provider above the router**, holding in-flight runs by id
   with a `(cid, sid)` index. Leaving a scene no longer tears its run down;
   returning re-attaches by id.
-- On scene-view mount and on `visibilitychange` → `GET .../run`; attach if
-  present.
+- On scene-view mount and on `visibilitychange` → `GET .../run`; attach only
+  to a **live** run.
+- **Mount discovery and lost-response recovery are different questions and must
+  not share an answer.** `GET .../run` reports terminal runs so that
+  `?attempt=` can answer "did *my* send land?" — but a fresh mount has no
+  consumed-frame cursor and no attempt id, and its scene fetch already contains
+  the persisted reply. Attaching to a terminal run there is wrong in both
+  directions: replaying from `0` renders the reply a second time, and starting
+  at `next_index` yields nothing, which is what "recovery" would amount to.
+  So the no-attempt lookup is used to discover a run still *running*; a
+  terminal one is reported for state (so the view can settle rather than
+  spin) and never replayed.
 - **The client resumes from its own last-consumed frame index, not from the
   server's `next_index`.** This is a correctness rule, not an optimization.
   `next_index` is the buffer's length *at the moment of the lookup*, so a
@@ -1054,6 +1079,14 @@ before either builder runs.
 Chaquopy callback — the same shape as `ServerRuntime`'s existing port callback —
 and posts a `NotificationCompat` on the completions channel. No JS↔Kotlin
 bridge is required, because the trigger is server-side.
+
+**A `cancelled` run does not notify at all.** Cancellation is a terminal state
+for both notifying classes, and only two texts exist — success and error — so
+without a policy an explicit Stop produces `Error on <Campaign>: <Scene>` for
+an operation the player deliberately stopped. That is most likely precisely
+when they backgrounded the app, since the abort hook can outlive the tap. A
+player who cancelled something knows they cancelled it; there is nothing to
+tell them.
 
 Text, per the player's request:
 
@@ -1232,6 +1265,17 @@ Widened scope:
   and keeps its own prompt; only a matching attempt id re-attaches.
 - a notification for a deleted scene taps through to its campaign rather than a
   dead route, and one for a renamed scene resolves to the new id.
+- a cancelled turn or review posts no notification at all.
+- Cancel after an absorb has persisted leaves nothing pollable: the run is
+  tombstoned, mount discovery does not resurrect the review, and a save
+  attempted with its commit token is refused.
+- an edit, retcon or cut is refused while a scene's exclusion key is held, and
+  the absorb it would have invalidated still publishes.
+- opening a scene within the reap window of a completed turn renders the reply
+  exactly once — not twice from a replay at 0, and not zero times from
+  `next_index`.
+- the frozen-campaign sweep's snapshot moves in exactly one way: the new scene
+  identity field, and nothing else.
 - `TaglinePrompt`, `ConnectionEditor.refreshModels` and `SceneIdeaPicker`
   render the same result they do today through the start/poll/unwrap helper,
   and adopt an in-flight run on mount rather than starting a second.
@@ -1287,9 +1331,21 @@ the same. Both become false and are updated with the implementation. Neither
 file is in `test_docs_guard.py`'s `DOCS` tuple, so nothing fails if they are
 forgotten — which is exactly why they are named here.
 
-No template changes, so `evals/run.py` and the frozen campaign's
-`snapshot.json` should not move. If the snapshot does move, something rendered
-differently and that is a finding, not a regeneration.
+No template changes, so `evals/run.py` should not move.
+
+**`snapshot.json` will move, and that is expected.** The sweep snapshots the
+full `store.scenes.read_scene` payload (`sweep.py:188`), so adding a scene
+identity to the scene record changes its output for every scene in the frozen
+fixture. An earlier draft of this section said the opposite — that a moved
+snapshot is a finding rather than a regeneration — which is exactly the
+instruction that would make an implementer chase an expected gate failure as a
+bug, or quietly leave the backfill out of the compatibility sweep.
+
+So: the sweep runs the new backfill, the resulting snapshot change is reviewed
+line by line to confirm the *only* difference is the new field, and it is
+regenerated deliberately and committed with the change, per
+`AGENTS.md` and that directory's README. `home/` is still never regenerated.
+If any *other* part of the payload moves, that is the finding.
 
 ## Risks and accepted limitations
 
