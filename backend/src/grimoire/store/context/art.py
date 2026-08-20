@@ -175,22 +175,36 @@ NAMED_FLOOR = 1e-3
 QUERY_BYTES = 3000
 DOC_BYTES = 2000
 
-#: Words too common to carry a match. Deliberately tiny -- this is not a
-#: stoplist for an index, it is the handful of words that would otherwise let
-#: any two sentences of English "share content".
+#: Words too common to carry a match. Deliberately not a stoplist for an index
+#: — it is the function words that would otherwise let any two sentences of
+#: English "share content". Three-letter entries earn their place: the floor
+#: below is 3, and without them "the", "and" and "was" would match everything.
 _STOP = frozenset((
+    # four and up
     "about", "above", "after", "again", "against", "because", "been", "before",
     "being", "below", "between", "both", "came", "come", "does", "down",
-    "during", "each", "from", "further", "have", "here", "into", "more",
-    "most", "much", "must", "once", "only", "other", "over", "same", "some",
-    "such", "than", "that", "them", "then", "there", "these", "they", "this",
-    "those", "through", "under", "until", "very", "were", "what", "when",
-    "where", "which", "while", "with", "your",
+    "during", "each", "from", "further", "have", "here", "into", "just",
+    "like", "more", "most", "much", "must", "once", "only", "other", "over",
+    "same", "some", "such", "than", "that", "them", "then", "there", "these",
+    "they", "this", "those", "through", "under", "until", "very", "were",
+    "what", "when", "where", "which", "while", "with", "your", "would",
+    "could", "should", "will", "shall", "back", "even", "also", "still",
+    # three
+    "the", "and", "was", "for", "are", "but", "not", "you", "all", "can",
+    "her", "his", "its", "our", "who", "why", "how", "one", "two", "any",
+    "few", "own", "per", "yet", "let", "she", "him", "has", "had", "did",
+    "get", "got", "too", "use", "out", "off", "now", "may", "his", "him",
 ))
 
-#: Words shorter than this never count as a shared term. With `_STOP` above,
-#: this is what keeps "the grey quay" from matching on "grey".
-_MIN_WORD = 4
+#: Words shorter than this never count as a shared term.
+#:
+#: THREE, not four. Four discarded exactly the nouns a picture description
+#: leans on — "Fog over the sea at dawn, the inn's lamp still lit" against
+#: "They came down to the sea in the fog and found the inn" shared *fog*, *sea*
+#: and *inn*, and every one of them was thrown away, so the obvious picture for
+#: that moment was not offered at all. What made four look safe was the
+#: stoplist being four-and-up; extending it downward is what buys the floor.
+_MIN_WORD = 3
 
 _WORD = re.compile(r"\w+", re.UNICODE)
 
