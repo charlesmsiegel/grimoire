@@ -125,6 +125,15 @@ module that uses it**, in the same commit; none is shared machinery:
 - `_hold_a_run(cid, sid, cls="turn")` / `_release(cid, sid)` -- take and drop an
   exclusion key directly.
 
+**There is no `app` fixture.** `conftest.client` returns `TestClient(app)` and
+nothing else, so tests reach the registry through **`client.app.state.runs`**.
+An early draft of this plan declared `app` as a test parameter, which pytest
+rejects at collection with "fixture 'app' not found" before a single assertion
+runs.
+
+That same fixture builds a `TestClient`, which is why Task 5's disconnect test
+needs its own live-server harness rather than this one -- see the note there.
+
 **Use the existing `backend/tests/conftest.py` fixtures rather than building a
 store by hand.** `client` gives an app over a throwaway store with the gateway
 faked; `cid_with_sheet` and `scene_with_sheeted_cast` show the real creation
@@ -771,7 +780,7 @@ know' into a confident wrong answer."
 
 ```python
 # backend/tests/test_runs_detach.py
-def test_a_dropped_subscriber_does_not_cancel_the_run(client, app, campaign_scene):
+def test_a_dropped_subscriber_does_not_cancel_the_run(client, campaign_scene):
     """The inverse of today's behavior, and the single most important test in
     this plan. Disconnect used to mean cancel; now it detaches a subscriber."""
     cid, sid = campaign_scene
@@ -779,23 +788,23 @@ def test_a_dropped_subscriber_does_not_cancel_the_run(client, app, campaign_scen
                        json={"content": "Mara steps onto the wharf."}) as r:
         run_id = _first_run_frame(r)["run"]["id"]
         # walk away mid-generation
-    _wait_terminal(app, run_id)
-    run = app.state.runs.get(run_id, ("scene", cid, sid))
+    _wait_terminal(client.app, run_id)
+    run = client.app.state.runs.get(run_id, ("scene", cid, sid))
     assert run.state == "landed"
     assert "wharf" in store.scenes.read_scene(cid, sid)["messages"][-1]["content"].lower()
 
 
-def test_a_provider_failure_ends_failed_not_landed(client, app, campaign_scene):
+def test_a_provider_failure_ends_failed_not_landed(client, campaign_scene):
     """_fence_stream catches LLMError, emits an SSE error frame and returns
     NORMALLY. A runner inferring success from 'did not raise' would mark the
     turn landed and fire the success notification."""
     cid, sid = campaign_scene
     run_id = _drive_failing_turn(client, cid, sid)
-    run = app.state.runs.get(run_id, ("scene", cid, sid))
+    run = client.app.state.runs.get(run_id, ("scene", cid, sid))
     assert run.state == "failed"
 
 
-def test_a_rejected_send_leaves_the_transcript_byte_identical(client, app, campaign_scene):
+def test_a_rejected_send_leaves_the_transcript_byte_identical(client, campaign_scene):
     """The slot is reserved before the FIRST mutator, not just before the
     append: retry heals and supersedes proposals, regenerate archives a reply,
     replay stages posts. A 409 after any of those tells the player nothing
@@ -808,7 +817,7 @@ def test_a_rejected_send_leaves_the_transcript_byte_identical(client, app, campa
     assert _scene_bytes(cid, sid) == before
 
 
-def test_two_scenes_in_one_campaign_do_not_cross_contaminate(client, app, two_scenes):
+def test_two_scenes_in_one_campaign_do_not_cross_contaminate(client, two_scenes):
     cid, (a, b) = two_scenes
     ra = _start_turn(client, cid, a, "Seraphine waits.")
     rb = _start_turn(client, cid, b, "Winifred does not.")
