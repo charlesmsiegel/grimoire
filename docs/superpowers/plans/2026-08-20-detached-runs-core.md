@@ -111,7 +111,7 @@ implicitly include this section.
 
 Several tests below call small local helpers -- `_strip_identity_from_disk`,
 `_read_stream`, `_finish_run`, `_wait_terminal`, `_scene_bytes`,
-`_mutating_routes`, `_hold_a_run`, `_release`. **Each is written in the test
+`_hold_a_run`, `_release`. **Each is written in the test
 module that uses it**, in the same commit; none is shared machinery:
 
 - `_strip_identity_from_disk(cid, sid)` -- rewrite the scene file's frontmatter
@@ -124,6 +124,15 @@ module that uses it**, in the same commit; none is shared machinery:
 - `_scene_bytes(cid, sid)` -- the raw scene file, for byte-identical assertions.
 - `_hold_a_run(cid, sid, cls="turn")` / `_release(cid, sid)` -- take and drop an
   exclusion key directly.
+
+**Use the existing `backend/tests/conftest.py` fixtures rather than building a
+store by hand.** `client` gives an app over a throwaway store with the gateway
+faked; `cid_with_sheet` and `scene_with_sheeted_cast` show the real creation
+pattern, which is `wid = worlds.create_world("Realm")` then
+`campaigns.create_campaign("Run", wid)`. Note that `create_campaign` takes
+`world_id` as a **required positional** and returns the **cid string**, not a
+dict -- an early draft of this plan called it `create_campaign(name,
+world=None)["id"]`, which fails twice over.
 
 Frontend helpers go in `frontend/src/testkit/runMocks.tsx` (Task 6), which the
 coverage config excludes -- not in the suite files, per `CLAUDE.md`.
@@ -167,7 +176,8 @@ stored counter, so deleting the highest scene frees its number).
 # backend/tests/test_scene_identity.py
 def test_created_scene_has_a_stable_identity(tmp_path, monkeypatch):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = store.campaigns.create_campaign("Saltmarch", world=None)["id"]
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Run", wid)
     sid = store.scenes.create_scene(cid, "Mara")
     first = store.scenes.scene_identity(cid, sid)
     assert first and len(first) == 32
@@ -181,7 +191,8 @@ def test_identity_is_not_in_the_read_scene_payload(tmp_path, monkeypatch):
     # -- and a fresh uuid4 per scene would move snapshot.json on every
     # regeneration.
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = store.campaigns.create_campaign("Saltmarch", world=None)["id"]
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Run", wid)
     sid = store.scenes.create_scene(cid, "Mara")
     assert "identity" not in store.scenes.read_scene(cid, sid)["meta"]
 
@@ -190,7 +201,8 @@ def test_recycled_sid_gets_a_different_identity(tmp_path, monkeypatch):
     """The whole point: `_numbering` frees the top number on delete, so a
     recreate can land on the same sid. Identity must still differ."""
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = store.campaigns.create_campaign("Saltmarch", world=None)["id"]
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Run", wid)
     sid = store.scenes.create_scene(cid, "Mara")
     old = store.scenes.scene_identity(cid, sid)
     store.scenes.delete_scene(cid, sid)
@@ -201,7 +213,8 @@ def test_recycled_sid_gets_a_different_identity(tmp_path, monkeypatch):
 
 def test_backfill_is_idempotent_and_assigns_to_legacy_scenes(tmp_path, monkeypatch):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = store.campaigns.create_campaign("Saltmarch", world=None)["id"]
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Run", wid)
     sid = store.scenes.create_scene(cid, "Mara")
     _strip_identity_from_disk(cid, sid)          # simulate a pre-feature scene
     assert store.scenes.scene_identity(cid, sid) is None
@@ -461,6 +474,15 @@ work as first written.
 - Create: `backend/src/grimoire/runner.py`
 - Modify: `backend/src/grimoire/main.py:157`
 - Test: `backend/tests/test_runner.py`
+
+**Fixtures this task's tests need** — written in `test_runner.py` itself:
+`app_with_lifespan` (an app whose `_lifespan` has been entered, so the portal
+and registry exist on `app.state`) and `app_with_lifespan_factory` (the same as
+a context manager, so a test can *exit* the lifespan and observe shutdown).
+The `SCENE` / `OTHER` / `WORLD` subject constants from Task 2's test module are
+re-declared here rather than imported across suites — three tuples, and a
+cross-suite import couples two files for nothing. Remember `import pytest` and
+`import anyio` where the snippets use them.
 
 **Interfaces:**
 - Consumes: `runs.RunRegistry`, `runs.Run` (Task 2).
@@ -901,15 +923,24 @@ def test_edit_retcon_and_cut_are_refused_while_a_run_holds_the_scene(client, hel
     # -- so a ten-minute absorb would spend its whole budget on a review its
     # watermark then refuses.
     cid, sid = held_scene
-    for path, body in _mutating_routes(cid, sid):
-        r = client.post(path, json=body)
-        assert r.status_code == 409, path
-        assert r.json()["detail"]["kind"] == "scene_busy", path
+    # NOTE the methods: these are NOT all POSTs. Getting that wrong makes the
+    # test fail with 405 and look like the guard works when it does not.
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    calls = [
+        ("put",    base,                          {"title": "Seraphine"}),
+        ("put",    f"{base}/messages/0",          {"content": "edited"}),
+        ("delete", f"{base}/messages/0",          None),
+        ("post",   f"{base}/messages/0/retcon",   {"content": "retconned"}),
+    ]
+    for method, path, body in calls:
+        r = getattr(client, method)(path, **({"json": body} if body else {}))
+        assert r.status_code == 409, f"{method} {path}"
+        assert r.json()["detail"]["kind"] == "scene_busy", f"{method} {path}"
 
 
 def test_rename_is_refused_while_a_run_holds_the_scene(client, held_scene):
     cid, sid = held_scene
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rename", json={"title": "Seraphine"})
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}", json={"title": "Seraphine"})
     assert r.status_code == 409 and r.json()["detail"]["kind"] == "scene_busy"
 
 
@@ -926,7 +957,7 @@ def test_width_crossing_create_refused_while_any_key_in_campaign_held(client, ca
 def test_all_of_these_are_allowed_once_the_run_is_terminal(client, held_scene):
     cid, sid = held_scene
     _release(cid, sid)
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rename", json={"title": "Seraphine"})
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}", json={"title": "Seraphine"})
     assert r.status_code == 200
 
 
@@ -935,7 +966,7 @@ def test_a_background_run_does_not_freeze_the_scene(client, campaign_scene):
     # would be followed by a window where the player could not edit anything.
     cid, sid = campaign_scene
     _hold_a_run(cid, sid, cls="background")
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rename", json={"title": "Seraphine"})
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}", json={"title": "Seraphine"})
     assert r.status_code == 200
 ```
 
@@ -950,6 +981,16 @@ In `routes/common.py`, add `_require_scene_free(app, cid, sid)` that raises the
 409 when `registry.live_for_key(runs.exclusion_key(("scene", cid, sid), "turn"))`
 returns a run. It keys on the **exclusion key**, so a `background` or `draft`
 run does not freeze anything.
+
+The four handlers to guard, by name and method. They are **not all POSTs**, and
+guessing costs a debugging cycle:
+
+| Handler | Route | Location |
+|---|---|---|
+| `put_scene` (rename) | `PUT /campaigns/{cid}/scenes/{sid}` | `scenes.py:314` |
+| `put_scene_message` (edit) | `PUT .../messages/{index}` | `scenes.py:3021` |
+| `delete_scene_messages_from` (cut) | `DELETE .../messages/{index}` | `scenes.py:3056` |
+| `post_scene_retcon` | `POST .../messages/{index}/retcon` | `scenes.py:3098` |
 
 **The check must run under the same `campaign_lock(cid)` hold as the mutation
 it guards, not as a separate step at the top of the route.** Checked and
@@ -1031,9 +1072,9 @@ it("keeps a run alive across navigation and re-attaches to the right one", async
 it("disables the composer while the scene has a live turn, and re-enables after", async () => {
   renderCampaign();
   await startTurn("scene-a", "Mara waits.");
-  expect(screen.getByPlaceholderText(/write/i)).toBeDisabled();
+  expect(screen.getByPlaceholderText(/speak your intent/i)).toBeDisabled();
   await landRun("scene-a");
-  expect(screen.getByPlaceholderText(/write/i)).toBeEnabled();
+  expect(screen.getByPlaceholderText(/speak your intent/i)).toBeEnabled();
 });
 
 it("does not disable the composer for a background run", async () => {
@@ -1042,7 +1083,7 @@ it("does not disable the composer for a background run", async () => {
   renderCampaign();
   await landRun("scene-a");
   await fireBackgroundRun("scene-a", "rolling-summary");
-  expect(screen.getByPlaceholderText(/write/i)).toBeEnabled();
+  expect(screen.getByPlaceholderText(/speak your intent/i)).toBeEnabled();
 });
 
 it("does not render one scene's frames in another scene's view", async () => {
@@ -1053,6 +1094,11 @@ it("does not render one scene's frames in another scene's view", async () => {
   expect(screen.queryByText(/Winifred/)).not.toBeInTheDocument();
 });
 ```
+
+The composer's placeholder is **`"Speak your intent…"`**
+(`CampaignView.tsx:3533`), or `"Direct the scene (optional)…"` when the scene
+is pcless. Query the real copy; do not invent a placeholder and do not edit
+production copy to match a test.
 
 - [ ] **Step 2: Run test to verify it fails**
 
