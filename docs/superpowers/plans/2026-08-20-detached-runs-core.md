@@ -145,10 +145,21 @@ stored counter, so deleting the highest scene frees its number).
 - Regenerate: `backend/tests/fixtures/frozen_campaign/snapshot.json`
 
 **Interfaces:**
-- Produces: `store.scenes.read_scene(cid, sid)["identity"] -> str` — an opaque
-  32-hex value, stable for the life of a scene record.
+- Produces: `store.scenes.scene_identity(cid, sid) -> str` — an opaque 32-hex
+  value, stable for the life of a scene record.
+
+  **Deliberately NOT exposed through `read_scene`.** That function returns
+  `{"meta": {"id": sid, **frontmatter}, "messages": [...]}` (`read.py:63`), so
+  a new frontmatter key would surface at `read_scene(...)["meta"]["identity"]`
+  and land in the frozen-campaign snapshot — which snapshots the whole payload
+  (`sweep.py:188`). A freshly minted `uuid4()` per scene would then make
+  `snapshot.json` **different on every regeneration**, destroying the fixture's
+  whole purpose. Identity is an internal correctness token, not scene content,
+  so `read_scene` filters it out of `meta` and a dedicated accessor reads it.
 - Produces: `migrations.backfill_scene_identities() -> None` — idempotent,
   per-campaign, under `campaign_lock`.
+- Produces: `store.scenes.ensure_identity(cid, sid) -> str` — the lazy path,
+  under `campaign_lock`; assigns one if absent and returns it either way.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -157,12 +168,22 @@ stored counter, so deleting the highest scene frees its number).
 def test_created_scene_has_a_stable_identity(tmp_path, monkeypatch):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = store.campaigns.create_campaign("Saltmarch", world=None)["id"]
-    sid = store.scenes.create_scene(cid, "The Long Wharf")
-    first = store.scenes.read_scene(cid, sid)["identity"]
+    sid = store.scenes.create_scene(cid, "Mara")
+    first = store.scenes.scene_identity(cid, sid)
     assert first and len(first) == 32
     # Stable across reads and across an unrelated mutation.
     store.scenes.append_message(cid, sid, "user", "hello")
-    assert store.scenes.read_scene(cid, sid)["identity"] == first
+    assert store.scenes.scene_identity(cid, sid) == first
+
+
+def test_identity_is_not_in_the_read_scene_payload(tmp_path, monkeypatch):
+    # It would land in the frozen snapshot, which snapshots the whole payload
+    # -- and a fresh uuid4 per scene would move snapshot.json on every
+    # regeneration.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = store.campaigns.create_campaign("Saltmarch", world=None)["id"]
+    sid = store.scenes.create_scene(cid, "Mara")
+    assert "identity" not in store.scenes.read_scene(cid, sid)["meta"]
 
 
 def test_recycled_sid_gets_a_different_identity(tmp_path, monkeypatch):
@@ -170,25 +191,36 @@ def test_recycled_sid_gets_a_different_identity(tmp_path, monkeypatch):
     recreate can land on the same sid. Identity must still differ."""
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = store.campaigns.create_campaign("Saltmarch", world=None)["id"]
-    sid = store.scenes.create_scene(cid, "The Long Wharf")
-    old = store.scenes.read_scene(cid, sid)["identity"]
+    sid = store.scenes.create_scene(cid, "Mara")
+    old = store.scenes.scene_identity(cid, sid)
     store.scenes.delete_scene(cid, sid)
-    again = store.scenes.create_scene(cid, "The Long Wharf")
+    again = store.scenes.create_scene(cid, "Mara")
     assert again == sid, "precondition: the sid really is recycled"
-    assert store.scenes.read_scene(cid, again)["identity"] != old
+    assert store.scenes.scene_identity(cid, again) != old
 
 
 def test_backfill_is_idempotent_and_assigns_to_legacy_scenes(tmp_path, monkeypatch):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = store.campaigns.create_campaign("Saltmarch", world=None)["id"]
-    sid = store.scenes.create_scene(cid, "The Long Wharf")
+    sid = store.scenes.create_scene(cid, "Mara")
     _strip_identity_from_disk(cid, sid)          # simulate a pre-feature scene
-    assert "identity" not in store.scenes.read_scene(cid, sid)
+    assert store.scenes.scene_identity(cid, sid) is None
     migrations.backfill_scene_identities()
-    got = store.scenes.read_scene(cid, sid)["identity"]
+    got = store.scenes.scene_identity(cid, sid)
     assert got
     migrations.backfill_scene_identities()
-    assert store.scenes.read_scene(cid, sid)["identity"] == got
+    assert store.scenes.scene_identity(cid, sid) == got
+
+
+def test_a_run_lazily_backfills_a_campaign_the_migration_skipped(tmp_path, monkeypatch, app):
+    # The startup pass skips a campaign that was locked ("skipping beats
+    # failing to boot"). Without a lazy path those scenes stay identity-less
+    # until the next restart, and two missing values compare EQUAL -- which is
+    # the corruption the identity exists to prevent.
+    cid, sid = _campaign_whose_migration_was_skipped(tmp_path, monkeypatch)
+    assert store.scenes.scene_identity(cid, sid) is None
+    _start_a_run(app, cid, sid)
+    assert store.scenes.scene_identity(cid, sid)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -236,20 +268,25 @@ a busy campaign skipped.
 Run: `cd backend && PYTHONPATH=src .venv/bin/python -m pytest tests/test_scene_identity.py -v`
 Expected: PASS
 
-- [ ] **Step 7: Regenerate the frozen-campaign snapshot — deliberately**
+- [ ] **Step 7: Confirm the frozen-campaign snapshot does NOT move**
 
-`sweep.py:188` snapshots the whole `store.scenes.read_scene` payload, so this
-**will** move `snapshot.json` for every scene in the fixture. That is expected,
-not a regression.
+Because identity is filtered out of `read_scene`'s `meta`, the snapshotted
+payload is unchanged. Verify rather than assume:
 
 ```bash
-cd backend && PYTHONPATH=src .venv/bin/python -m tests.fixtures.frozen_campaign.sweep
-git diff backend/tests/fixtures/frozen_campaign/snapshot.json
+cd backend && PYTHONPATH=src .venv/bin/python -m pytest tests/test_frozen_campaign.py -v
+git diff --exit-code backend/tests/fixtures/frozen_campaign/snapshot.json
 ```
 
-Read the diff line by line. **The only difference may be a new `identity` key
-per scene.** If anything else moved, stop — that is a real finding. Never
-regenerate `home/`.
+Expected: PASS, and an empty diff. **If the snapshot moves, stop** — it means
+identity leaked into the payload, and regenerating would bake a random UUID
+into the fixture that the next regeneration would change again. Fix the filter
+instead. Never regenerate `home/`.
+
+Note for anyone tempted to add the backfill to the sweep: `_write_snapshot`
+runs only `store.migrations.migrate_scene_ids()` (`sweep.py:208`), not the
+startup tuple, so registering a migration in `_lifespan` does not affect it.
+Nothing here needs it to.
 
 - [ ] **Step 8: Commit**
 
@@ -257,8 +294,7 @@ regenerate `home/`.
 cd /home/user/grimoire
 make check-py check-lint check-mypy && make baseline
 git add backend/src/grimoire/store/scenes backend/src/grimoire/store/migrations.py \
-        backend/src/grimoire/main.py backend/tests/test_scene_identity.py \
-        backend/tests/fixtures/frozen_campaign/snapshot.json lint-baselines
+        backend/src/grimoire/main.py backend/tests/test_scene_identity.py lint-baselines
 git commit -m "Give every scene an immutable identity, and backfill it
 
 Scene ids are recycled: serialize.py:_numbering derives the next number from
@@ -434,6 +470,11 @@ work as first written.
 - Produces: `runner.start(app, run, factory) -> None` — thread-safe from a
   synchronous handler. `factory` is a zero-arg callable returning the
   coroutine to run.
+- Produces: `Run.cancel_scope` — an `anyio.CancelScope` the producer runs
+  inside, plus `Run.terminal: anyio.Event` set once the abort hook has
+  finished. `runner.cancel(app, run) -> None` cancels the scope; the cancel
+  route awaits `run.terminal` before responding, which is what makes "the slot
+  stays held until `on_abort` returns" true rather than aspirational.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -502,15 +543,36 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'grimoire.runner'`
 
 - [ ] **Step 3: Implement the bridge**
 
-Capture the lifespan loop when `install` runs and hand work to it with
-`anyio.from_thread.run_sync` against a captured
-`anyio.from_thread.BlockingPortal` — the portal is the supported thread-safe
-door onto a running loop, and `start_soon` from a worker thread is not. Store
-the portal on `app.state`. `runner.start` must be safe from **both** the loop
-thread (async handlers like the absorb family in Phase 2) and a worker thread
-(the six sync streaming handlers), so it checks which it is on.
+`_lifespan` enters a `BlockingPortal` and stores it on `app.state`. From an
+external thread, `runner.start` calls **`portal.start_task_soon(...)`**; on the
+loop thread it uses the task group directly.
 
-- [ ] **Step 4: Implement the failure boundary**
+Do **not** reach for `anyio.from_thread.run_sync` here. That is a different
+API — a handoff for code already running inside an AnyIO *worker* thread — and
+it does not run "against" a portal. FastAPI's threadpool worker is not an
+AnyIO worker-thread context, and neither is the plain `threading.Thread` the
+test below uses, so `from_thread.run_sync` would fail at the first run rather
+than bridging anything.
+
+`runner.start` therefore checks which thread it is on and picks the right
+door.
+
+- [ ] **Step 4: Add the cancellation handle**
+
+```python
+async def _guarded(run, factory):
+    with anyio.CancelScope() as scope:
+        run.cancel_scope = scope
+        ...
+    run.terminal.set()          # AFTER the abort hook, never before
+```
+
+Without a scope on the run there is nothing for the cancel route to interrupt,
+and without `terminal` the route cannot wait for the abort hook — so a fast
+re-send could race the partial-persist, which is the thing the ordering exists
+to prevent.
+
+- [ ] **Step 5: Implement the failure boundary**
 
 ```python
 async def _guarded(run, factory):
@@ -532,7 +594,7 @@ async def _guarded(run, factory):
         run.finish("failed")
 ```
 
-- [ ] **Step 5: Wire it into the lifespan and start the reaper**
+- [ ] **Step 6: Wire it into the lifespan and start the reaper**
 
 In `main.py`, inside the existing `async with anyio.create_task_group() as tg:`,
 call `runner.install(app, tg)` before `tg.start_soon(_backup_ticker)`, and start
@@ -541,12 +603,12 @@ at module scope: this repo builds and tears down `create_app()` repeatedly in
 one process, and a module global's terminal records, attempt ids and exclusion
 keys would leak into the next app.
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [ ] **Step 7: Run tests to verify they pass**
 
 Run: `cd backend && PYTHONPATH=src .venv/bin/python -m pytest tests/test_runner.py -v`
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 make check-py check-lint check-mypy && make baseline
@@ -733,6 +795,18 @@ def test_two_scenes_in_one_campaign_do_not_cross_contaminate(client, app, two_sc
     assert "winifred" in _last_reply(cid, b).lower()
 ```
 
+**The disconnect test must not use `TestClient`.** Starlette's in-process
+client buffers a streaming response while driving the ASGI app, so the `with`
+block is not entered at the first SSE frame while the producer is still live —
+it becomes observable only after the stream completes. Exiting the block
+therefore simulates nothing, and **an implementation that still cancels on a
+real socket close would pass the most important test in this plan.**
+
+Drive it against a live uvicorn instance on an ephemeral port, or an ASGI
+harness that injects `http.disconnect` while the fake provider is deliberately
+held open. `llm_fakes` supplies a provider that blocks until the test releases
+it, which is what makes "mid-generation" a defined moment.
+
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cd backend && PYTHONPATH=src .venv/bin/python -m pytest tests/test_runs_detach.py -v`
@@ -751,21 +825,37 @@ never touch the socket, and only *return* frames — they move unchanged. The
 turn-token claim, the `owned_tail` read and the restore/undo transactionality
 come along as-is. Add the scene-identity comparison before any terminal write.
 
-- [ ] **Step 5: Reserve before the first mutator in each of the five routes**
+- [ ] **Step 5: Branch on an already-known attempt BEFORE any setup**
+
+`start_or_existing` returning `(existing, False)` means this exact POST already
+ran. The route must return or replay that run **immediately**, before any heal,
+supersede, append, archive, stage or check-resolution — otherwise a duplicate
+delivery after a lost response performs the destructive setup a second time,
+and the registry handing back the original run does nothing to undo it.
+Recording an attempt id makes recovery queryable; this branch is what makes the
+POST idempotent.
+
+- [ ] **Step 6: Reserve before the first mutator in each of the five routes**
 
 `post_chat` (before the heal/sidecar block at `scenes.py:364`), `post_retry`,
 `post_regenerate` (before the archive-and-remove), `post_replay_turn` (before
-staging), `post_roll_proposal` (before the check resolves). Release the
-reservation if the synchronous setup that follows raises.
+staging), `post_roll_proposal` (before the check resolves).
 
-- [ ] **Step 6: Emit the leading `run` frame and accept an attempt id**
+**Release the reservation on every early exit, not only on a raise.**
+`post_roll_proposal` catches check-resolution failures and *returns* an SSE
+error frame rather than raising, so a release wired only to exception unwinding
+would leave a never-started run holding that scene's exclusion key for the full
+reap window — the scene wedged with nothing running. Wrap each route's setup so
+both paths release.
 
-- [ ] **Step 7: Run tests to verify they pass**
+- [ ] **Step 7: Emit the leading `run` frame and accept an attempt id**
+
+- [ ] **Step 8: Run tests to verify they pass**
 
 Run: `cd backend && PYTHONPATH=src .venv/bin/python -m pytest tests/ -v`
 Expected: PASS, including the existing streaming suites unchanged
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 make check-py check-lint check-mypy check-pydantic1 && make baseline
@@ -819,7 +909,7 @@ def test_edit_retcon_and_cut_are_refused_while_a_run_holds_the_scene(client, hel
 
 def test_rename_is_refused_while_a_run_holds_the_scene(client, held_scene):
     cid, sid = held_scene
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rename", json={"title": "Elsewhere"})
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rename", json={"title": "Seraphine"})
     assert r.status_code == 409 and r.json()["detail"]["kind"] == "scene_busy"
 
 
@@ -829,14 +919,14 @@ def test_width_crossing_create_refused_while_any_key_in_campaign_held(client, ca
     # run registry. Refusing the explicit rename route never covered this.
     cid, busy_sid = campaign_at_99
     _hold_a_run(cid, busy_sid)
-    r = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "The Hundredth"})
+    r = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Winifred"})
     assert r.status_code == 409 and r.json()["detail"]["kind"] == "scene_busy"
 
 
 def test_all_of_these_are_allowed_once_the_run_is_terminal(client, held_scene):
     cid, sid = held_scene
     _release(cid, sid)
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rename", json={"title": "Elsewhere"})
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rename", json={"title": "Seraphine"})
     assert r.status_code == 200
 
 
@@ -845,7 +935,7 @@ def test_a_background_run_does_not_freeze_the_scene(client, campaign_scene):
     # would be followed by a window where the player could not edit anything.
     cid, sid = campaign_scene
     _hold_a_run(cid, sid, cls="background")
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rename", json={"title": "Elsewhere"})
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rename", json={"title": "Seraphine"})
     assert r.status_code == 200
 ```
 
@@ -858,9 +948,17 @@ Expected: FAIL — every mutator currently returns 200
 
 In `routes/common.py`, add `_require_scene_free(app, cid, sid)` that raises the
 409 when `registry.live_for_key(runs.exclusion_key(("scene", cid, sid), "turn"))`
-returns a run. Call it at the top of rename, edit, retcon and cut. Note it keys
-on the **exclusion key**, so a `background` or `draft` run does not freeze
-anything.
+returns a run. It keys on the **exclusion key**, so a `background` or `draft`
+run does not freeze anything.
+
+**The check must run under the same `campaign_lock(cid)` hold as the mutation
+it guards, not as a separate step at the top of the route.** Checked and
+released first, it is a check-then-act with a real gap: the edit sees no run,
+a turn then reserves and snapshots the scene, and the edit finally takes the
+lock and rewrites the transcript underneath the live run — the exact race the
+guard exists to close, reintroduced by where it was placed. Since
+`scenes/locking.py:_serialized` already wraps every scene mutator in that lock,
+the check belongs inside that hold.
 
 - [ ] **Step 4: Guard the width-crossing create**
 
@@ -903,6 +1001,10 @@ MSG
   `RunRegistryProvider.test.tsx`
 - Create: `frontend/src/testkit/runMocks.tsx`
 - Modify: `frontend/src/api/client.ts:186`
+- Modify: `frontend/src/main.tsx` — wrap `BrowserRouter` in
+  `RunRegistryProvider`. **Without this the feature does not exist in
+  production**: the provider tested in isolation is not above the real router,
+  so `useSceneRun` has no provider and navigation preserves nothing.
 - Modify: `frontend/src/routes/CampaignView.tsx`
 
 **Interfaces:**
@@ -917,8 +1019,8 @@ MSG
 it("keeps a run alive across navigation and re-attaches to the right one", async () => {
   const { user } = renderCampaign();
   await startTurn("scene-a", "Mara waits.");
-  await user.click(screen.getByRole("button", { name: /the tide gate/i }));
-  await user.click(screen.getByRole("button", { name: /the long wharf/i }));
+  await user.click(screen.getByRole("button", { name: /winifred/i }));
+  await user.click(screen.getByRole("button", { name: /mara/i }));
   // Re-attached by id, resuming from OUR consumed index -- not next_index,
   // which is the live tail and would silently drop everything generated while
   // we were away.
@@ -947,7 +1049,7 @@ it("does not render one scene's frames in another scene's view", async () => {
   renderCampaign();
   await startTurn("scene-a", "Seraphine.");
   await startTurn("scene-b", "Winifred.");
-  await user.click(screen.getByRole("button", { name: /the long wharf/i }));
+  await user.click(screen.getByRole("button", { name: /mara/i }));
   expect(screen.queryByText(/Winifred/)).not.toBeInTheDocument();
 });
 ```
@@ -973,7 +1075,11 @@ attempt id exists to end. On `run_in_flight`, compare the returned `run_id`'s
 attempt against our own: re-attach only on a match, otherwise keep the text in
 the composer and show the scene as busy.
 
-- [ ] **Step 5: Write the provider above the router**
+- [ ] **Step 5: Write the provider and mount it in `main.tsx`**
+
+Above `BrowserRouter`, not inside it — a provider under the router remounts on
+navigation, which is the thing this exists to prevent. Cover the real entry
+composition, not only an isolated render.
 
 It holds `Map<runId, {subject, cls, frames, consumed}>`. The consumed index is
 persisted **per run as frames are read** and resume asks for `consumed + 1`.
@@ -1018,10 +1124,25 @@ generated while the client was away."
 - Modify: `ServerService.kt`, `MainActivity.kt`, `AndroidManifest.xml`
 - Modify: `backend/src/grimoire/runner.py` (terminal hook)
 
+**Files (additional):**
+- Modify: `android/app/src/main/python/android_entry.py` — accept and forward
+  the run callbacks.
+- Modify: `android/app/src/main/java/app/grimoire/ServerRuntime.kt` — pass them
+  in alongside the existing `PortCallback`.
+
 **Interfaces:**
 - Consumes: `runner`'s terminal transition (Task 3).
 - Produces: `ServerRuntime.onRunsChanged(live: Int)` and
   `ServerRuntime.onRunTerminal(runId, state, campaignName, sceneTitle, cid, sceneIdentity)`.
+
+**These have to be plumbed, not just declared.** `android_entry.start_server`
+today takes only a `PortCallback` and builds `create_app()` without retaining
+any Kotlin callback, so nothing in the backend can reach `ServerRuntime`. As
+written in the first draft, the runner had no path to either method and
+foreground promotion and completion notifications would simply never fire on
+device — with every unit test still green, because none of them run the
+Android entry point. `start_server` gains the two callbacks and stashes them
+where `runner` can find them (`app.state`, beside the registry).
 
 - [ ] **Step 1: Register notification channels before anything posts**
 
@@ -1037,6 +1158,15 @@ an ongoing one (low importance, no sound) and a completions one.
 and `android:foregroundServiceType="dataSync"` on the service. `dataSync` is
 the honest type; `shortService` caps at three minutes, which a turn can exceed
 and an absorb routinely does.
+
+- [ ] **Step 2b: Request `POST_NOTIFICATIONS` at runtime**
+
+Declaring it in the manifest is not enough on Android 13+ at `targetSdk 34`:
+on a fresh install it is denied until the activity asks. Without the request,
+completion notifications are permanently off for every new user and the
+"degraded mode" below stops being a user choice and becomes the default.
+`MainActivity` requests it once, on first launch, via
+`registerForActivityResult(RequestPermission())`.
 
 - [ ] **Step 3: Promote and demote**
 
@@ -1103,9 +1233,15 @@ they are forgotten, which is exactly why they are named here.
 
 - [ ] **Step 2: Add a `CLAUDE.md` working note**
 
-One paragraph: runs live on `app.state`, not module scope; the six streaming
-handlers are sync and start runs through the portal; disconnect no longer
-cancels.
+One paragraph: runs live on `app.state`, not module scope; disconnect no longer
+cancels; and **the five scene-turn handlers** — `post_chat`, `post_retry`,
+`post_regenerate`, `post_replay_turn`, `post_roll_proposal` — are synchronous
+and start runs through the portal.
+
+Say five, not six. `post_opener` is the sixth synchronous streaming handler but
+it is a `draft`, and Phase 1 leaves every draft route unchanged. Writing "all
+six" would misstate production behavior the day it lands and mislead whoever
+picks up Phase 3.
 
 - [ ] **Step 3: Run the full gate and commit**
 
