@@ -187,7 +187,7 @@ first if you think one should be skipped.
   `check-lint`, `check-mypy` and `check-eslint` run their tool and compare the
   result to `lint-baselines/<tool>.json`, keyed by (file, rule). Landing them
   any other way was not an option: ruff's widened selection, mypy at its
-  defaults and typescript-eslint's type-checked rules report ~10 000 findings
+  defaults and typescript-eslint's type-checked rules report ~2400 findings
   against this tree between them, and report-only jobs get ignored until the
   number is unrecoverable. The consequence to remember is that **an
   improvement fails the gate too** — resolve a finding and the recorded count

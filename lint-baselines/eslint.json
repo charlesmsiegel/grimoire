@@ -1,20 +1,10 @@
 {
-  "frontend/src/App.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 19,
-    "@typescript-eslint/no-unsafe-call": 21,
-    "@typescript-eslint/no-unsafe-member-access": 20,
-    "@typescript-eslint/require-await": 1
-  },
   "frontend/src/App.tsx": {
     "@typescript-eslint/no-floating-promises": 1
   },
   "frontend/src/api/client.test.ts": {
-    "@typescript-eslint/no-explicit-any": 4,
     "@typescript-eslint/no-floating-promises": 3,
-    "@typescript-eslint/no-unnecessary-type-assertion": 52,
-    "@typescript-eslint/no-unsafe-assignment": 5,
-    "@typescript-eslint/no-unsafe-member-access": 2,
-    "@typescript-eslint/require-await": 5
+    "@typescript-eslint/no-unnecessary-type-assertion": 52
   },
   "frontend/src/api/client.ts": {
     "@typescript-eslint/no-unsafe-argument": 11,
@@ -22,14 +12,8 @@
     "@typescript-eslint/no-unsafe-member-access": 10,
     "@typescript-eslint/restrict-plus-operands": 1
   },
-  "frontend/src/api/loreOwners.test.ts": {
-    "@typescript-eslint/no-explicit-any": 6,
-    "@typescript-eslint/no-unsafe-call": 6,
-    "@typescript-eslint/no-unsafe-member-access": 6
-  },
   "frontend/src/api/models.test.ts": {
-    "@typescript-eslint/no-unnecessary-type-assertion": 3,
-    "@typescript-eslint/require-await": 4
+    "@typescript-eslint/no-unnecessary-type-assertion": 3
   },
   "frontend/src/api/models.ts": {
     "@typescript-eslint/no-explicit-any": 1,
@@ -38,23 +22,9 @@
     "@typescript-eslint/no-unsafe-member-access": 6,
     "@typescript-eslint/no-unsafe-return": 1
   },
-  "frontend/src/api/stream.test.ts": {
-    "@typescript-eslint/no-explicit-any": 3
-  },
-  "frontend/src/components/BackupsPanel.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 8,
-    "@typescript-eslint/no-unsafe-call": 8,
-    "@typescript-eslint/no-unsafe-member-access": 8
-  },
   "frontend/src/components/BackupsPanel.tsx": {
     "@typescript-eslint/no-floating-promises": 1,
     "@typescript-eslint/no-misused-promises": 1
-  },
-  "frontend/src/components/CalendarConfig.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 3,
-    "@typescript-eslint/no-unsafe-assignment": 3,
-    "@typescript-eslint/no-unsafe-call": 3,
-    "@typescript-eslint/no-unsafe-member-access": 3
   },
   "frontend/src/components/CalendarConfig.tsx": {
     "@typescript-eslint/no-explicit-any": 1,
@@ -64,21 +34,13 @@
     "@typescript-eslint/no-unsafe-member-access": 1
   },
   "frontend/src/components/CalendarDatePicker.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 6,
-    "@typescript-eslint/no-unnecessary-type-assertion": 2,
-    "@typescript-eslint/no-unsafe-call": 6,
-    "@typescript-eslint/no-unsafe-member-access": 6
+    "@typescript-eslint/no-unnecessary-type-assertion": 2
   },
   "frontend/src/components/CalendarDatePicker.tsx": {
     "react-hooks/exhaustive-deps": 3
   },
   "frontend/src/components/CampaignCover.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 17,
-    "@typescript-eslint/no-unnecessary-type-assertion": 8,
-    "@typescript-eslint/no-unsafe-call": 14,
-    "@typescript-eslint/no-unsafe-member-access": 14,
-    "@typescript-eslint/no-unsafe-return": 1,
-    "@typescript-eslint/require-await": 3
+    "@typescript-eslint/no-unnecessary-type-assertion": 8
   },
   "frontend/src/components/CampaignCover.tsx": {
     "@typescript-eslint/no-explicit-any": 2,
@@ -88,33 +50,19 @@
     "@typescript-eslint/no-unsafe-member-access": 2
   },
   "frontend/src/components/CastPanel.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 41,
-    "@typescript-eslint/no-unnecessary-type-assertion": 3,
-    "@typescript-eslint/no-unsafe-call": 41,
-    "@typescript-eslint/no-unsafe-member-access": 35,
-    "@typescript-eslint/require-await": 5
+    "@typescript-eslint/no-unnecessary-type-assertion": 3
   },
   "frontend/src/components/CastPanel.tsx": {
     "@typescript-eslint/no-explicit-any": 1,
     "@typescript-eslint/no-floating-promises": 3,
     "@typescript-eslint/no-misused-promises": 2
   },
-  "frontend/src/components/ChangesPanel.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 12,
-    "@typescript-eslint/no-unsafe-call": 12,
-    "@typescript-eslint/no-unsafe-member-access": 12
-  },
   "frontend/src/components/ChangesPanel.tsx": {
     "@typescript-eslint/no-misused-promises": 1,
     "react/no-array-index-key": 2
   },
   "frontend/src/components/CharacterEditor.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 207,
-    "@typescript-eslint/no-unnecessary-type-assertion": 10,
-    "@typescript-eslint/no-unsafe-assignment": 9,
-    "@typescript-eslint/no-unsafe-call": 202,
-    "@typescript-eslint/no-unsafe-member-access": 210,
-    "@typescript-eslint/require-await": 13
+    "@typescript-eslint/no-unnecessary-type-assertion": 10
   },
   "frontend/src/components/CharacterEditor.tsx": {
     "@typescript-eslint/no-floating-promises": 8,
@@ -150,9 +98,6 @@
     "jsx-a11y/no-static-element-interactions": 1
   },
   "frontend/src/components/ConnectionEditor.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 13,
-    "@typescript-eslint/no-unsafe-call": 12,
-    "@typescript-eslint/no-unsafe-member-access": 12,
     "@typescript-eslint/unbound-method": 1
   },
   "frontend/src/components/ConnectionEditor.tsx": {
@@ -173,11 +118,7 @@
     "react/no-array-index-key": 1
   },
   "frontend/src/components/CreationWizard.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 9,
-    "@typescript-eslint/no-unnecessary-type-assertion": 5,
-    "@typescript-eslint/no-unsafe-assignment": 11,
-    "@typescript-eslint/no-unsafe-call": 6,
-    "@typescript-eslint/no-unsafe-member-access": 6
+    "@typescript-eslint/no-unnecessary-type-assertion": 5
   },
   "frontend/src/components/CreationWizard.tsx": {
     "@typescript-eslint/no-explicit-any": 2,
@@ -192,12 +133,7 @@
     "jsx-a11y/no-static-element-interactions": 1
   },
   "frontend/src/components/EntityEditor.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 106,
-    "@typescript-eslint/no-unnecessary-type-assertion": 2,
-    "@typescript-eslint/no-unsafe-assignment": 15,
-    "@typescript-eslint/no-unsafe-call": 93,
-    "@typescript-eslint/no-unsafe-member-access": 92,
-    "@typescript-eslint/no-unsafe-return": 1
+    "@typescript-eslint/no-unnecessary-type-assertion": 2
   },
   "frontend/src/components/EntityEditor.tsx": {
     "@typescript-eslint/no-base-to-string": 1,
@@ -220,12 +156,7 @@
     "@typescript-eslint/no-unsafe-member-access": 1
   },
   "frontend/src/components/GreetingEditor.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 74,
-    "@typescript-eslint/no-unnecessary-type-assertion": 1,
-    "@typescript-eslint/no-unsafe-call": 72,
-    "@typescript-eslint/no-unsafe-member-access": 71,
-    "@typescript-eslint/no-unsafe-return": 1,
-    "@typescript-eslint/require-await": 2
+    "@typescript-eslint/no-unnecessary-type-assertion": 1
   },
   "frontend/src/components/GreetingEditor.tsx": {
     "@typescript-eslint/no-explicit-any": 2,
@@ -240,34 +171,12 @@
     "@typescript-eslint/no-unsafe-call": 1,
     "@typescript-eslint/no-unsafe-member-access": 1
   },
-  "frontend/src/components/GroupStatePanel.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 3,
-    "@typescript-eslint/no-unsafe-call": 3,
-    "@typescript-eslint/no-unsafe-member-access": 3
-  },
   "frontend/src/components/GroupStatePanel.tsx": {
     "@typescript-eslint/no-floating-promises": 1,
     "@typescript-eslint/no-misused-promises": 1
   },
-  "frontend/src/components/IncomingReview.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 24,
-    "@typescript-eslint/no-unsafe-call": 27,
-    "@typescript-eslint/no-unsafe-member-access": 27,
-    "@typescript-eslint/require-await": 1
-  },
   "frontend/src/components/IncomingReview.tsx": {
     "@typescript-eslint/no-base-to-string": 2
-  },
-  "frontend/src/components/LibraryColumn.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 7,
-    "@typescript-eslint/no-unsafe-call": 7,
-    "@typescript-eslint/no-unsafe-member-access": 7
-  },
-  "frontend/src/components/LorebookImport.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 4,
-    "@typescript-eslint/no-unsafe-assignment": 1,
-    "@typescript-eslint/no-unsafe-call": 3,
-    "@typescript-eslint/no-unsafe-member-access": 6
   },
   "frontend/src/components/LorebookImport.tsx": {
     "@typescript-eslint/no-explicit-any": 2,
@@ -277,20 +186,11 @@
     "react/no-array-index-key": 1
   },
   "frontend/src/components/MechanicsConfig.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 9,
-    "@typescript-eslint/no-unnecessary-type-assertion": 2,
-    "@typescript-eslint/no-unsafe-call": 9,
-    "@typescript-eslint/no-unsafe-member-access": 9
+    "@typescript-eslint/no-unnecessary-type-assertion": 2
   },
   "frontend/src/components/MechanicsConfig.tsx": {
     "@typescript-eslint/no-misused-promises": 1,
     "react-hooks/exhaustive-deps": 1
-  },
-  "frontend/src/components/ModuleContentEditor.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 18,
-    "@typescript-eslint/no-unsafe-assignment": 13,
-    "@typescript-eslint/no-unsafe-call": 17,
-    "@typescript-eslint/no-unsafe-member-access": 18
   },
   "frontend/src/components/ModuleContentEditor.tsx": {
     "@typescript-eslint/no-misused-promises": 1,
@@ -299,11 +199,7 @@
     "react/no-array-index-key": 3
   },
   "frontend/src/components/ModuleDisplayEditor.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 4,
-    "@typescript-eslint/no-unnecessary-type-assertion": 1,
-    "@typescript-eslint/no-unsafe-assignment": 4,
-    "@typescript-eslint/no-unsafe-call": 3,
-    "@typescript-eslint/no-unsafe-member-access": 3
+    "@typescript-eslint/no-unnecessary-type-assertion": 1
   },
   "frontend/src/components/ModuleDisplayEditor.tsx": {
     "@typescript-eslint/no-explicit-any": 10,
@@ -313,44 +209,16 @@
     "@typescript-eslint/no-unsafe-member-access": 11,
     "@typescript-eslint/no-unsafe-return": 2
   },
-  "frontend/src/components/ModuleEditor.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 10,
-    "@typescript-eslint/no-unsafe-assignment": 6,
-    "@typescript-eslint/no-unsafe-call": 7,
-    "@typescript-eslint/no-unsafe-member-access": 9
-  },
-  "frontend/src/components/ModuleRulesEditor.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 13,
-    "@typescript-eslint/no-unsafe-assignment": 17,
-    "@typescript-eslint/no-unsafe-call": 12,
-    "@typescript-eslint/no-unsafe-member-access": 14
-  },
   "frontend/src/components/ModuleRulesEditor.tsx": {
     "@typescript-eslint/no-misused-promises": 2,
     "@typescript-eslint/require-await": 1,
     "react/no-array-index-key": 6
-  },
-  "frontend/src/components/ModuleSchemaEditor.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 21,
-    "@typescript-eslint/no-unsafe-assignment": 26,
-    "@typescript-eslint/no-unsafe-call": 15,
-    "@typescript-eslint/no-unsafe-member-access": 25,
-    "@typescript-eslint/no-unsafe-return": 1,
-    "@typescript-eslint/require-await": 1
   },
   "frontend/src/components/ModuleSchemaEditor.tsx": {
     "@typescript-eslint/no-misused-promises": 2,
     "@typescript-eslint/no-unnecessary-type-assertion": 3,
     "@typescript-eslint/require-await": 2,
     "react/no-array-index-key": 5
-  },
-  "frontend/src/components/NewSceneChooser.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 27,
-    "@typescript-eslint/no-unsafe-assignment": 3,
-    "@typescript-eslint/no-unsafe-call": 23,
-    "@typescript-eslint/no-unsafe-member-access": 21,
-    "@typescript-eslint/no-unsafe-return": 2,
-    "@typescript-eslint/require-await": 3
   },
   "frontend/src/components/NewSceneChooser.tsx": {
     "jsx-a11y/click-events-have-key-events": 2,
@@ -362,33 +230,16 @@
     "@typescript-eslint/no-explicit-any": 3,
     "@typescript-eslint/no-misused-promises": 3
   },
-  "frontend/src/components/OwnedLorePanel.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 1,
-    "@typescript-eslint/no-unsafe-call": 1,
-    "@typescript-eslint/no-unsafe-member-access": 1
-  },
   "frontend/src/components/OwnedLorePanel.tsx": {
     "@typescript-eslint/no-floating-promises": 1,
     "react-hooks/exhaustive-deps": 1
-  },
-  "frontend/src/components/PCEditor.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 47,
-    "@typescript-eslint/no-unsafe-assignment": 9,
-    "@typescript-eslint/no-unsafe-call": 42,
-    "@typescript-eslint/no-unsafe-member-access": 43,
-    "@typescript-eslint/require-await": 1
   },
   "frontend/src/components/PCEditor.tsx": {
     "@typescript-eslint/no-floating-promises": 3,
     "@typescript-eslint/no-misused-promises": 17
   },
-  "frontend/src/components/PageShell.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 1,
-    "@typescript-eslint/no-unsafe-assignment": 1
-  },
   "frontend/src/components/PromptLayoutEditor.test.tsx": {
-    "@typescript-eslint/no-unnecessary-type-assertion": 2,
-    "@typescript-eslint/no-unsafe-return": 1
+    "@typescript-eslint/no-unnecessary-type-assertion": 2
   },
   "frontend/src/components/RecordDrawer.tsx": {
     "@typescript-eslint/no-floating-promises": 2,
@@ -397,20 +248,11 @@
     "jsx-a11y/no-noninteractive-element-interactions": 1,
     "jsx-a11y/no-static-element-interactions": 1
   },
-  "frontend/src/components/ReplayPanel.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 31,
-    "@typescript-eslint/no-unsafe-call": 31,
-    "@typescript-eslint/no-unsafe-member-access": 30,
-    "@typescript-eslint/require-await": 5
-  },
   "frontend/src/components/ReplayPanel.tsx": {
     "@typescript-eslint/no-misused-promises": 7
   },
   "frontend/src/components/ResponsePresetPicker.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 8,
     "@typescript-eslint/no-unnecessary-type-assertion": 1,
-    "@typescript-eslint/no-unsafe-call": 8,
-    "@typescript-eslint/no-unsafe-member-access": 8,
     "@typescript-eslint/unbound-method": 3
   },
   "frontend/src/components/ResponsePresetPicker.tsx": {
@@ -420,18 +262,8 @@
     "@typescript-eslint/no-unsafe-argument": 2,
     "@typescript-eslint/no-unsafe-member-access": 2
   },
-  "frontend/src/components/RollProposal.test.tsx": {
-    "@typescript-eslint/no-unsafe-assignment": 1
-  },
   "frontend/src/components/RollProposal.tsx": {
     "react/no-array-index-key": 1
-  },
-  "frontend/src/components/ScenarioImport.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 27,
-    "@typescript-eslint/no-unsafe-assignment": 6,
-    "@typescript-eslint/no-unsafe-call": 11,
-    "@typescript-eslint/no-unsafe-member-access": 38,
-    "@typescript-eslint/no-unsafe-return": 2
   },
   "frontend/src/components/ScenarioImport.tsx": {
     "@typescript-eslint/no-explicit-any": 2,
@@ -443,20 +275,6 @@
   "frontend/src/components/SceneCastList.tsx": {
     "@typescript-eslint/no-unnecessary-type-assertion": 1
   },
-  "frontend/src/components/SceneConfirmForm.datefill.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 6,
-    "@typescript-eslint/no-unsafe-call": 6,
-    "@typescript-eslint/no-unsafe-member-access": 6
-  },
-  "frontend/src/components/SceneConfirmForm.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 57,
-    "@typescript-eslint/no-unsafe-argument": 2,
-    "@typescript-eslint/no-unsafe-assignment": 7,
-    "@typescript-eslint/no-unsafe-call": 49,
-    "@typescript-eslint/no-unsafe-member-access": 51,
-    "@typescript-eslint/no-unsafe-return": 1,
-    "@typescript-eslint/require-await": 4
-  },
   "frontend/src/components/SceneConfirmForm.tsx": {
     "@typescript-eslint/no-explicit-any": 7,
     "@typescript-eslint/no-misused-promises": 1
@@ -466,24 +284,13 @@
     "@typescript-eslint/no-floating-promises": 1,
     "@typescript-eslint/no-misused-promises": 1
   },
-  "frontend/src/components/SceneIdeaPicker.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 24,
-    "@typescript-eslint/no-unsafe-call": 20,
-    "@typescript-eslint/no-unsafe-member-access": 20,
-    "@typescript-eslint/require-await": 3
-  },
   "frontend/src/components/SceneIdeaPicker.tsx": {
     "@typescript-eslint/no-explicit-any": 1,
     "@typescript-eslint/no-misused-promises": 1,
     "react/no-array-index-key": 1
   },
   "frontend/src/components/SceneInspector.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 174,
-    "@typescript-eslint/no-unnecessary-type-assertion": 2,
-    "@typescript-eslint/no-unsafe-assignment": 3,
-    "@typescript-eslint/no-unsafe-call": 162,
-    "@typescript-eslint/no-unsafe-member-access": 164,
-    "@typescript-eslint/require-await": 7
+    "@typescript-eslint/no-unnecessary-type-assertion": 2
   },
   "frontend/src/components/SceneInspector.tsx": {
     "@typescript-eslint/no-explicit-any": 12,
@@ -502,12 +309,7 @@
     "@typescript-eslint/no-misused-promises": 1
   },
   "frontend/src/components/SheetEditor.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 15,
-    "@typescript-eslint/no-unnecessary-type-assertion": 2,
-    "@typescript-eslint/no-unsafe-assignment": 6,
-    "@typescript-eslint/no-unsafe-call": 13,
-    "@typescript-eslint/no-unsafe-member-access": 26,
-    "@typescript-eslint/require-await": 2
+    "@typescript-eslint/no-unnecessary-type-assertion": 2
   },
   "frontend/src/components/SheetEditor.tsx": {
     "@typescript-eslint/no-explicit-any": 5,
@@ -519,11 +321,6 @@
   },
   "frontend/src/components/SheetLayout.tsx": {
     "@typescript-eslint/no-unnecessary-type-assertion": 1
-  },
-  "frontend/src/components/SheetPanel.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 6,
-    "@typescript-eslint/no-unsafe-call": 6,
-    "@typescript-eslint/no-unsafe-member-access": 6
   },
   "frontend/src/components/SheetPanel.tsx": {
     "@typescript-eslint/no-explicit-any": 3,
@@ -549,19 +346,11 @@
     "@typescript-eslint/no-floating-promises": 1,
     "@typescript-eslint/no-misused-promises": 2
   },
-  "frontend/src/components/StoreConflictNotice.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 9,
-    "@typescript-eslint/no-unsafe-call": 9,
-    "@typescript-eslint/no-unsafe-member-access": 8
-  },
   "frontend/src/components/StoreConflictNotice.tsx": {
     "@typescript-eslint/no-floating-promises": 1,
     "@typescript-eslint/no-misused-promises": 1
   },
   "frontend/src/components/StyleGuideEditor.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 7,
-    "@typescript-eslint/no-unsafe-call": 7,
-    "@typescript-eslint/no-unsafe-member-access": 7,
     "@typescript-eslint/unbound-method": 1
   },
   "frontend/src/components/StyleGuideEditor.tsx": {
@@ -571,21 +360,10 @@
     "@typescript-eslint/no-unsafe-argument": 1,
     "@typescript-eslint/no-unsafe-member-access": 1
   },
-  "frontend/src/components/SuggestedCast.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 15,
-    "@typescript-eslint/no-unsafe-assignment": 14,
-    "@typescript-eslint/no-unsafe-call": 10,
-    "@typescript-eslint/no-unsafe-member-access": 10
-  },
   "frontend/src/components/SuggestedCast.tsx": {
     "@typescript-eslint/no-explicit-any": 1,
     "@typescript-eslint/no-floating-promises": 1,
     "@typescript-eslint/no-misused-promises": 2
-  },
-  "frontend/src/components/TagEditor.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 5,
-    "@typescript-eslint/no-unsafe-call": 5,
-    "@typescript-eslint/no-unsafe-member-access": 5
   },
   "frontend/src/components/TagEditor.tsx": {
     "@typescript-eslint/no-floating-promises": 1,
@@ -596,12 +374,6 @@
     "@typescript-eslint/no-misused-promises": 2,
     "@typescript-eslint/no-unsafe-argument": 1,
     "@typescript-eslint/no-unsafe-member-access": 1
-  },
-  "frontend/src/components/TaglinePrompt.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 2,
-    "@typescript-eslint/no-unsafe-call": 2,
-    "@typescript-eslint/no-unsafe-member-access": 2,
-    "@typescript-eslint/require-await": 1
   },
   "frontend/src/components/TaglinePrompt.tsx": {
     "@typescript-eslint/no-explicit-any": 2,
@@ -620,27 +392,14 @@
     "@typescript-eslint/no-unsafe-member-access": 1
   },
   "frontend/src/components/WorldMechanics.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 6,
-    "@typescript-eslint/no-unnecessary-type-assertion": 2,
-    "@typescript-eslint/no-unsafe-call": 6,
-    "@typescript-eslint/no-unsafe-member-access": 6
+    "@typescript-eslint/no-unnecessary-type-assertion": 2
   },
   "frontend/src/components/WorldMechanics.tsx": {
     "@typescript-eslint/no-misused-promises": 1,
     "react-hooks/exhaustive-deps": 1
   },
-  "frontend/src/components/WorldOverview.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 7,
-    "@typescript-eslint/no-unsafe-call": 7,
-    "@typescript-eslint/no-unsafe-member-access": 7
-  },
   "frontend/src/components/WorldOverview.tsx": {
     "@typescript-eslint/no-floating-promises": 1
-  },
-  "frontend/src/components/WorldPushPanel.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 6,
-    "@typescript-eslint/no-unsafe-call": 6,
-    "@typescript-eslint/no-unsafe-member-access": 6
   },
   "frontend/src/components/errMsg.ts": {
     "@typescript-eslint/no-explicit-any": 1,
@@ -654,43 +413,16 @@
   "frontend/src/components/moduleEditShared.tsx": {
     "react/no-array-index-key": 2
   },
-  "frontend/src/components/play/CastChanges.test.tsx": {
-    "@typescript-eslint/no-unsafe-return": 5
-  },
   "frontend/src/components/play/CastChanges.tsx": {
     "@typescript-eslint/no-explicit-any": 1,
     "@typescript-eslint/no-misused-promises": 5,
     "@typescript-eslint/no-unsafe-argument": 1,
     "@typescript-eslint/no-unsafe-member-access": 1
   },
-  "frontend/src/components/play/Conditions.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 2,
-    "@typescript-eslint/no-unsafe-assignment": 2
-  },
-  "frontend/src/components/useSceneSuggestions.test.ts": {
-    "@typescript-eslint/no-explicit-any": 16,
-    "@typescript-eslint/no-unsafe-call": 11,
-    "@typescript-eslint/no-unsafe-member-access": 11,
-    "@typescript-eslint/require-await": 4
-  },
-  "frontend/src/markdown/commentPlugin.test.ts": {
-    "@typescript-eslint/no-explicit-any": 17,
-    "@typescript-eslint/no-unsafe-assignment": 1,
-    "@typescript-eslint/no-unsafe-call": 2,
-    "@typescript-eslint/no-unsafe-member-access": 22,
-    "@typescript-eslint/no-unsafe-return": 2
-  },
   "frontend/src/markdown/commentPlugin.ts": {
     "@typescript-eslint/no-explicit-any": 3,
     "@typescript-eslint/no-unsafe-argument": 1,
     "@typescript-eslint/no-unsafe-member-access": 9
-  },
-  "frontend/src/markdown/quotePlugin.test.ts": {
-    "@typescript-eslint/no-explicit-any": 6,
-    "@typescript-eslint/no-unsafe-assignment": 4,
-    "@typescript-eslint/no-unsafe-call": 7,
-    "@typescript-eslint/no-unsafe-member-access": 18,
-    "@typescript-eslint/no-unsafe-return": 2
   },
   "frontend/src/markdown/quotePlugin.ts": {
     "@typescript-eslint/no-explicit-any": 7,
@@ -698,15 +430,8 @@
     "@typescript-eslint/no-unsafe-member-access": 7
   },
   "frontend/src/routes/CampaignView.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 1057,
     "@typescript-eslint/no-unnecessary-type-assertion": 4,
-    "@typescript-eslint/no-unsafe-argument": 9,
-    "@typescript-eslint/no-unsafe-assignment": 35,
-    "@typescript-eslint/no-unsafe-call": 964,
-    "@typescript-eslint/no-unsafe-member-access": 1010,
-    "@typescript-eslint/no-unsafe-return": 22,
-    "@typescript-eslint/only-throw-error": 2,
-    "@typescript-eslint/require-await": 62
+    "@typescript-eslint/only-throw-error": 2
   },
   "frontend/src/routes/CampaignView.tsx": {
     "@typescript-eslint/no-explicit-any": 23,
@@ -720,12 +445,7 @@
     "react/no-array-index-key": 7
   },
   "frontend/src/routes/CampaignWizard.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 15,
-    "@typescript-eslint/no-unnecessary-type-assertion": 1,
-    "@typescript-eslint/no-unsafe-assignment": 2,
-    "@typescript-eslint/no-unsafe-call": 14,
-    "@typescript-eslint/no-unsafe-member-access": 14,
-    "@typescript-eslint/no-unsafe-return": 1
+    "@typescript-eslint/no-unnecessary-type-assertion": 1
   },
   "frontend/src/routes/CampaignWizard.tsx": {
     "@typescript-eslint/no-explicit-any": 3,
@@ -735,24 +455,13 @@
     "@typescript-eslint/no-unsafe-member-access": 3,
     "react/no-array-index-key": 1
   },
-  "frontend/src/routes/CampaignsView.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 28,
-    "@typescript-eslint/no-unsafe-assignment": 1,
-    "@typescript-eslint/no-unsafe-call": 28,
-    "@typescript-eslint/no-unsafe-member-access": 28,
-    "@typescript-eslint/no-unsafe-return": 1
-  },
   "frontend/src/routes/CampaignsView.tsx": {
     "@typescript-eslint/no-floating-promises": 3,
     "@typescript-eslint/no-misused-promises": 2,
     "jsx-a11y/no-autofocus": 1
   },
   "frontend/src/routes/ConfigView.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 39,
-    "@typescript-eslint/no-unnecessary-type-assertion": 3,
-    "@typescript-eslint/no-unsafe-call": 37,
-    "@typescript-eslint/no-unsafe-member-access": 39,
-    "@typescript-eslint/no-unsafe-return": 2
+    "@typescript-eslint/no-unnecessary-type-assertion": 3
   },
   "frontend/src/routes/ConfigView.tsx": {
     "@typescript-eslint/no-explicit-any": 2,
@@ -761,11 +470,6 @@
     "@typescript-eslint/no-unsafe-argument": 2,
     "@typescript-eslint/no-unsafe-member-access": 2
   },
-  "frontend/src/routes/LedgerView.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 23,
-    "@typescript-eslint/no-unsafe-call": 23,
-    "@typescript-eslint/no-unsafe-member-access": 23
-  },
   "frontend/src/routes/LedgerView.tsx": {
     "react/no-array-index-key": 1
   },
@@ -773,10 +477,7 @@
     "jsx-a11y/no-noninteractive-element-interactions": 1
   },
   "frontend/src/routes/ModulesView.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 15,
-    "@typescript-eslint/no-unnecessary-type-assertion": 1,
-    "@typescript-eslint/no-unsafe-call": 15,
-    "@typescript-eslint/no-unsafe-member-access": 15
+    "@typescript-eslint/no-unnecessary-type-assertion": 1
   },
   "frontend/src/routes/ModulesView.tsx": {
     "@typescript-eslint/no-explicit-any": 3,
@@ -786,11 +487,6 @@
     "@typescript-eslint/no-unsafe-member-access": 3,
     "react/no-array-index-key": 2
   },
-  "frontend/src/routes/ResponsePresetsView.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 18,
-    "@typescript-eslint/no-unsafe-call": 18,
-    "@typescript-eslint/no-unsafe-member-access": 18
-  },
   "frontend/src/routes/ResponsePresetsView.tsx": {
     "@typescript-eslint/no-explicit-any": 4,
     "@typescript-eslint/no-floating-promises": 1,
@@ -799,20 +495,8 @@
     "@typescript-eslint/no-unsafe-member-access": 4,
     "react/no-array-index-key": 3
   },
-  "frontend/src/routes/SearchView.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 26,
-    "@typescript-eslint/no-unsafe-argument": 8,
-    "@typescript-eslint/no-unsafe-call": 17,
-    "@typescript-eslint/no-unsafe-member-access": 18
-  },
   "frontend/src/routes/SearchView.tsx": {
     "react-hooks/exhaustive-deps": 1
-  },
-  "frontend/src/routes/SetupWizard.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 40,
-    "@typescript-eslint/no-unsafe-call": 31,
-    "@typescript-eslint/no-unsafe-member-access": 31,
-    "@typescript-eslint/no-unsafe-return": 1
   },
   "frontend/src/routes/SetupWizard.tsx": {
     "@typescript-eslint/no-explicit-any": 4,
@@ -822,27 +506,11 @@
     "@typescript-eslint/no-unsafe-member-access": 4,
     "react-hooks/exhaustive-deps": 2
   },
-  "frontend/src/routes/TimelineView.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 21,
-    "@typescript-eslint/no-unsafe-call": 21,
-    "@typescript-eslint/no-unsafe-member-access": 21
-  },
   "frontend/src/routes/TimelineView.tsx": {
     "react/no-array-index-key": 1
   },
-  "frontend/src/routes/WorldView.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 39,
-    "@typescript-eslint/no-unsafe-call": 39,
-    "@typescript-eslint/no-unsafe-member-access": 39
-  },
   "frontend/src/routes/WorldView.tsx": {
     "@typescript-eslint/no-floating-promises": 1
-  },
-  "frontend/src/routes/WorldsView.test.tsx": {
-    "@typescript-eslint/no-explicit-any": 15,
-    "@typescript-eslint/no-unsafe-call": 15,
-    "@typescript-eslint/no-unsafe-member-access": 15,
-    "@typescript-eslint/no-unsafe-return": 1
   },
   "frontend/src/routes/WorldsView.tsx": {
     "@typescript-eslint/no-explicit-any": 2,

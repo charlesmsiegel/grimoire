@@ -58,4 +58,28 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // A vitest module mock is `any` by construction: `vi.mock` swaps the
+    // module out, and this suite drives the swap with `(api.x as
+    // any).mockResolvedValue(...)`. Type-checking the shape of a hand-written
+    // stand-in checks the stub, not the code under test -- and leaving these
+    // on would have cost more than noise. 7710 of the 8538 findings this gate
+    // records were in test files, ~7440 of them these seven rules, so a
+    // contributor writing the 96th test file would have been blocked by the
+    // idiom the other 95 use. The rules that still mean something in a test
+    // -- the a11y set, the hooks rules, jsx-key, no-floating-promises,
+    // no-unnecessary-type-assertion -- stay on.
+    files: ["src/**/*.test.{ts,tsx}"],
+    rules: {
+      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-unsafe-argument": "off",
+      "@typescript-eslint/no-unsafe-assignment": "off",
+      "@typescript-eslint/no-unsafe-call": "off",
+      "@typescript-eslint/no-unsafe-member-access": "off",
+      "@typescript-eslint/no-unsafe-return": "off",
+      // `mockImplementation(async () => ({...}))` is how a fake returns a
+      // promise; there is nothing for it to await.
+      "@typescript-eslint/require-await": "off",
+    },
+  },
 );
