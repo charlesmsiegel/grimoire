@@ -55,6 +55,7 @@ from . import (
     failsoft,
     greetings,
     image_descriptions,
+    locks,
     pcs,
     taglines,
     voice_anchors,
@@ -935,10 +936,30 @@ def set_description(cid: str, aid: str, vid: str, name: str, text: str,
     overlay UNION, not this campaign's own directory: a thin campaign reaches
     most of its art through the world, and describing an inherited picture must
     not require diverging the picture.
+
+    UNDER `campaign_lock`, unlike almost everything else in this module.
+    `overlay` sits in `locks.UNREVIEWED` — the frozen backlog — so the guard
+    does not require it, but riding that grandfather would be taking a licence
+    granted to code that predates the lock domain and spending it on new code.
+    `store.covers` and `store.campaign_images` are the precedent for what a new
+    campaign-scoped mutator does, and both take it.
+
+    It earns it on the merits too: a description sidecar is read-modify-written
+    whole, so two unlocked writers lose one of the two — and what is lost here
+    is a sentence somebody sat and wrote, not a derived value that regenerates.
+    Two browser tabs, or the describe queue saving while an editor saves, is all
+    it takes. Reentrant, so a caller already holding it pays nothing.
+
+    The WORLD-side write (`image_descriptions.set_description` straight onto a
+    world root) is still unlocked, and that is not an oversight this closes:
+    worlds have no lock domain at all, and `focus.json` and `subjects.json` race
+    there in exactly the same way. Naming it here rather than leaving the
+    asymmetry to be discovered.
     """
     union = {i["name"] for i in list_images(cid, aid, vid, base)}
-    image_descriptions.set_description(croot_of(cid), aid, vid, name, text, base,
-                                       names=union)
+    with locks.campaign_lock(cid):
+        image_descriptions.set_description(croot_of(cid), aid, vid, name, text, base,
+                                           names=union)
 
 
 def delete_image(cid: str, aid: str, vid: str, name: str, base: str = "characters") -> None:
