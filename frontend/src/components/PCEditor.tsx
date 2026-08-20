@@ -6,6 +6,7 @@ import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import CreationWizard from "./CreationWizard";
 import { Field } from "./Field";
+import { ImageDescriptionField } from "./ImageDescriptionField";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import { Portrait } from "./Portrait";
 import SheetPanel from "./SheetPanel";
@@ -157,6 +158,8 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
     .filter((n) => n.startsWith("gallery_"))
     .sort((a, b) => Number(a.slice("gallery_".length)) - Number(b.slice("gallery_".length)));
   const avatarFocus = detail?.versions.find((v) => v.id === vid)?.avatar_focus ?? null;
+  // Absent key = never reviewed, "" = reviewed and deliberately undescribed.
+  const descriptions = detail?.versions.find((v) => v.id === vid)?.image_descriptions ?? {};
   // Only ever called from inside the `detail &&` branch, so the id is there;
   // taking it as an argument says that instead of papering it over with a
   // `?? ""` that would build a URL with an empty path segment.
@@ -193,6 +196,12 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
     } finally {
       e.target.value = "";   // same file twice in a row must still fire onChange
     }
+  }
+
+  async function describeImage(name: string, description: string) {
+    if (!detail) return;
+    await api.setPCImageDescription(scope, detail.meta.id, vid, name, description);
+    await refreshImages();
   }
 
   async function promoteImage(name: string) {
@@ -335,6 +344,8 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
                     </a>
                     <figcaption>avatar</figcaption>
                     <button className="shelf-promote" onClick={() => removeImage("avatar")}>Remove</button>
+                    <ImageDescriptionField name="avatar" value={descriptions.avatar}
+                                           onSave={(d) => describeImage("avatar", d)} />
                   </figure>
                 ) : (
                   <div className="shelf-tile shelf-empty">no avatar</div>
@@ -344,6 +355,8 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
                     <a href={imgSrc(detail.meta.id, n)} target="_blank" rel="noreferrer"><img alt={n} src={imgSrc(detail.meta.id, n)} /></a>
                     <button className="shelf-promote" onClick={() => promoteImage(n)}>Set as avatar</button>
                     <button className="shelf-promote" onClick={() => removeImage(n)}>Remove</button>
+                    <ImageDescriptionField name={n} value={descriptions[n]}
+                                           onSave={(d) => describeImage(n, d)} />
                   </div>
                 ))}
                 <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>

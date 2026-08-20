@@ -740,6 +740,28 @@ export const api = {
     request<{ greetings: string[] }>("POST", `/api/worlds/${wid}/greetings/import`, body),
   getGreetingSubjects: (wid: string, gid: string) =>
     request<Record<string, string[]>>("GET", `/api/worlds/${wid}/greetings/${gid}/subjects`),
+  /** Describe one image. `description: ""` is meaningful and is NOT the same as
+   *  never having described it: it means "reviewed, nothing to say", which
+   *  takes the image out of the describe queue without offering it to the
+   *  model. Campaign-scoped writes land campaign-side, so describing art a
+   *  thin campaign still inherits does not diverge the art itself. */
+  setCharacterImageDescription: (scope: EntityScope, cid: string, vid: string,
+                                 name: string, description: string) =>
+    request<{ ok: boolean }>("PUT",
+      `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/${name}/description`,
+      { description }),
+  setPCImageDescription: (scope: EntityScope, pid: string, vid: string,
+                          name: string, description: string) =>
+    request<{ ok: boolean }>("PUT",
+      `${entityBase(scope)}/pcs/${pid}/versions/${vid}/images/${name}/description`,
+      { description }),
+  setEntityImageDescription: (scope: EntityScope, kind: EntityKind, eid: string,
+                              name: string, description: string) =>
+    request<{ ok: boolean }>("PUT",
+      `${entityBase(scope)}/${kind}/${eid}/images/${name}/description`, { description }),
+  setCampaignImageDescription: (cid: string, name: string, description: string) =>
+    request<{ ok: boolean }>("PUT",
+      `/api/campaigns/${cid}/images/${name}/description`, { description }),
   setImageSubjects: (wid: string, gid: string, name: string, subjects: string[]) =>
     request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/greetings/${gid}/images/${name}/subjects`, { subjects }),
   listImageAppearances: (wid: string, cid: string) =>
