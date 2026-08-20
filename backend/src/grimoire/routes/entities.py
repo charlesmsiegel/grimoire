@@ -17,6 +17,7 @@ from .common import (
     _fresh_or_409,
     _serve_image,
     _upload_image_ext,
+    _with_descriptions,
     _world_root_or_404,
 )
 from .models import EntityCreate, EntityUpdate, ImageDescription
@@ -314,7 +315,10 @@ def _entity_image_promote(root, kind: str, eid: str, name: str):
 @router.get("/worlds/{wid}/{kind}/{eid}/images")
 def list_world_entity_images(wid: str, kind: str, eid: str):
     _image_kind_or_404(kind)
-    return store.assets.list_images(_world_root_or_404(wid), eid, "default", base=kind)
+    root = _world_root_or_404(wid)
+    return _with_descriptions(
+        store.assets.list_images(root, eid, "default", base=kind),
+        store.image_descriptions.read_all(root, eid, "default", base=kind))
 
 
 @router.get("/worlds/{wid}/{kind}/{eid}/images/{name}")
@@ -409,7 +413,9 @@ def put_campaign_entity_image_description(cid: str, kind: str, eid: str, name: s
 def list_campaign_entity_images(cid: str, kind: str, eid: str):
     _campaign_root_or_404(cid)
     _entity_kind_or_404(kind)
-    return store.overlay.list_images(cid, eid, "default", base=kind)
+    return _with_descriptions(
+        store.overlay.list_images(cid, eid, "default", base=kind),
+        store.overlay.read_descriptions(cid, eid, "default", base=kind))
 
 
 @router.get("/campaigns/{cid}/{kind}/{eid}/images/{name}")

@@ -426,6 +426,24 @@ _IMAGE_MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
                 "gif": "image/gif", "webp": "image/webp"}
 
 
+def _with_descriptions(images: list[dict], descriptions: dict[str, str]) -> list[dict]:
+    """One image listing, each entry carrying what it depicts.
+
+    The descriptions ride with the listing the editors already fetch rather
+    than through a second round trip -- the same choice the per-version payloads
+    make for `avatar_focus`.
+
+    `described` is separate from `description` and is not redundant: absent and
+    `""` are different states in the sidecar (never reviewed vs reviewed and
+    deliberately undescribed), and collapsing both to an empty string here would
+    throw that away at the one boundary where the UI still needs it.
+    """
+    return [{**i,
+             "description": descriptions.get(i["name"], ""),
+             "described": i["name"] in descriptions}
+            for i in images]
+
+
 def _upload_image_ext(data: bytes) -> str:
     """The extension an uploaded record image is stored under, from its bytes (#321).
 

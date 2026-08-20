@@ -607,7 +607,8 @@ export const api = {
   entityImageUrl: (scope: EntityScope, kind: EntityKind, eid: string, name: string) =>
     `${entityBase(scope)}/${kind}/${eid}/images/${name}`,
   listEntityImages: (scope: EntityScope, kind: EntityKind, eid: string) =>
-    request<{ name: string; ext: string; v: string }[]>("GET", `${entityBase(scope)}/${kind}/${eid}/images`),
+    request<{ name: string; ext: string; v: string; description?: string; described?: boolean }[]>(
+      "GET", `${entityBase(scope)}/${kind}/${eid}/images`),
   campaignCoverUrl: (cid: string, opts?: { w?: number; v?: string }) => {
     const q = new URLSearchParams();
     if (opts?.w) q.set("w", String(opts.w));
@@ -750,6 +751,13 @@ export const api = {
     request<{ ok: boolean }>("PUT",
       `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/${name}/description`,
       { description }),
+  /** Ask the model what a picture shows. A PREVIEW: the caller decides whether
+   *  to keep it and persists through `setCharacterImageDescription`. World-side
+   *  only — a description drafted from the bytes is a claim about the bytes,
+   *  and a campaign reaches most of its art through its world. */
+  draftCharacterImageDescription: (wid: string, cid: string, vid: string, name: string) =>
+    request<{ description: string }>("POST",
+      `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${name}/description/draft`),
   setPCImageDescription: (scope: EntityScope, pid: string, vid: string,
                           name: string, description: string) =>
     request<{ ok: boolean }>("PUT",

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { CampaignImage } from "../api/types";
+import { ImageDescriptionField } from "./ImageDescriptionField";
 
 /** Who is speaking in the post the picker was opened from (#376).
  *
@@ -24,7 +25,8 @@ export type PickerTarget =
   | { kind: "characters" | "pcs"; id: string; version: string; name: string }
   | { kind: "campaign"; name: string };
 
-type Group = { key: string; label: string; images: { name: string; url: string }[] };
+type Group = { key: string; label: string;
+               images: { name: string; url: string; description?: string }[] };
 
 /** A stored name derived from an uploaded file's own name.
  *
@@ -65,7 +67,7 @@ export function freeName(base: string, taken: string[]): string {
  *  is the whole difference between a text-only reader seeing something and
  *  seeing nothing: a plain-text export, and a model sent the transcript as text,
  *  get the alt text and only the alt text. */
-export function insertion(name: string, url: string): string {
+export function insertion(name: string, url: string, description?: string): string {
   // A BARE url, with no `?v=` token, even though the picker has one in hand and
   // uses it for the thumbnails. A `?v=` URL is answered `immutable, max-age=1y`,
   // and this one is about to be written into a transcript that outlives every
@@ -77,7 +79,18 @@ export function insertion(name: string, url: string): string {
   // destination, and a name can contain neither: `store.campaign_images
   // .addressable` refuses both the link punctuation and (through
   // `assets.storable`) the glob metacharacters `[` and `]`.
-  return `![${name}](${url})`;
+  //
+  // The DESCRIPTION is the alt text when there is one, and the name only when
+  // there is not. That is the same choice `context/art.resolve_handles` makes
+  // when the model inserts a picture, and the two paths writing different alt
+  // text for the same image would be a difference with no reason behind it.
+  //
+  // A description, unlike a name, can contain the link punctuation -- so it is
+  // the one half that has to be escaped.
+  const alt = description?.trim()
+    ? description.trim().replace(/\[/g, "(").replace(/\]/g, ")").replace(/\s+/g, " ")
+    : name;
+  return `![${alt}](${url})`;
 }
 
 const THUMB = 160;
@@ -121,13 +134,17 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
           setLibrary(images);
           setGroups([{
             key: "library", label: "Campaign images",
-            images: images.map((i) => ({ name: i.name, url: api.campaignImageUrl(cid, i.name) })),
+            images: images.map((i) => ({
+              name: i.name, url: api.campaignImageUrl(cid, i.name),
+              description: i.described ? (i.description ?? "") : undefined,
+            })),
           }]);
           return;
         }
         const scope = { kind: "campaign", id: cid } as const;
         const { kind, id, version } = target;
-        const detail: { versions: { id: string; name: string; images?: string[] }[] } =
+        const detail: { versions: { id: string; name: string; images?: string[];
+                                    image_descriptions?: Record<string, string> }[] } =
           kind === "characters" ? await api.readCharacter(scope, id)
                                 : await api.readPC(scope, id);
         if (!live) return;
@@ -145,6 +162,7 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
             label: v.id === version ? `${v.name} — spoke here` : v.name,
             images: (v.images ?? []).map((name) => ({
               name, url: api.actorImageUrl(scope, kind, id, v.id, name),
+              description: v.image_descriptions?.[name],
             })),
           })));
       } catch (err: any) {
@@ -230,10 +248,18 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
                 <div className="image-picker-tile" key={img.name}>
                   <button type="button" title={`Insert ${img.name}`}
                           aria-label={`Insert ${img.name}`}
-                          onClick={() => onInsert(insertion(img.name, img.url))}>
+                          onClick={() => onInsert(insertion(img.name, img.url, img.description))}>
                     <img src={`${img.url}?w=${THUMB}`} alt="" />
                     <span>{img.name}</span>
                   </button>
+                  {isLibrary && (
+                    <ImageDescriptionField
+                      name={img.name} value={img.description}
+                      onSave={async (d) => {
+                        await api.setCampaignImageDescription(cid, img.name, d);
+                        setRevision((n) => n + 1);
+                      }} />
+                  )}
                   {isLibrary && (
                     <button className="subtle image-picker-remove" type="button"
                             disabled={busy} aria-label={`Remove ${img.name}`}

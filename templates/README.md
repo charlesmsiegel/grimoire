@@ -316,6 +316,16 @@ substituted by code:
   whatever its level, because a sheet is functional data, not lore
 - `recalled_lore_bodies` / `secret_recalled_lore_bodies` — the same split for
   what `context.semantic.recall` added on top of the keyword rule
+- `available_art` — `[{handle, description}]` from `context.art.catalogue`:
+  described images this turn could use, ranked against the same scan window
+  world info activates on. The pool is the TURN (on-stage cast at their locked
+  versions, the current setting, activated and recalled entities, the
+  campaign's own library), never the whole store. Empty on a store where
+  nobody has described an image, and `sections/available_art.j2` renders
+  nothing for an empty list — which is what keeps the prompt byte-identical
+  for an install that does not use the feature. The `handle` is what the model
+  writes back; `context.art.resolve_handles` turns it into markdown, or into
+  nothing, before the reply is split into posts
 - `group_states` / `secret_group_states` — `[{name, goals, resources,
   public_perception, focus, secrets}]` from `groupstate.read_state()` for
   activated `groups` entries that have a state.md, split by the group's

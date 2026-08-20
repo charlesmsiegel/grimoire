@@ -235,3 +235,21 @@ test("Cancel closes without inserting anything", async () => {
   expect(onClose).toHaveBeenCalled();
   expect(onInsert).not.toHaveBeenCalled();
 });
+
+
+test("the alt text is the description when there is one, and the name when there is not", () => {
+  // The same choice `context/art.resolve_handles` makes on the model's side: a
+  // plain-text export, and a model later sent the transcript as text, get the
+  // alt text and nothing else.
+  expect(insertion("coastline", "/u", "A hand-drawn map of the coast."))
+    .toBe("![A hand-drawn map of the coast.](/u)");
+  expect(insertion("coastline", "/u")).toBe("![coastline](/u)");
+  expect(insertion("coastline", "/u", "   ")).toBe("![coastline](/u)");
+});
+
+test("a description carrying link punctuation cannot break the markdown", () => {
+  // A NAME can hold neither `]` nor `)` -- the store refuses both -- but a
+  // description is free prose and can hold either.
+  const out = insertion("coastline", "/u", "A map [annotated] by the\nharbourmaster.");
+  expect(out).toBe("![A map (annotated) by the harbourmaster.](/u)");
+});

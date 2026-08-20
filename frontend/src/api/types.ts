@@ -540,7 +540,13 @@ export type CampaignClock = { now: string; friendly: string; log: ClockLogEntry[
 
 /** One image in a campaign's own library (#376). `v` is the cache token an
  *  `?v=` URL is answered `immutable` for. */
-export type CampaignImage = { name: string; ext: string; v: string };
+export type CampaignImage = {
+  name: string; ext: string; v: string;
+  /** What the picture shows. `described` is separate on purpose: `description`
+   *  is `""` both for "never reviewed" and for "reviewed, nothing to say", and
+   *  only `described` tells them apart. */
+  description?: string; described?: boolean;
+};
 /** How long a record has been owed (#103), computed at read time and never
  *  stored. `overdue` needs a `due` the campaign's calendar can parse — a
  *  deadline written in the fiction's own words ("before the harvest moon") ages
