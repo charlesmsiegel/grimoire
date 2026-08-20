@@ -415,12 +415,28 @@ def list_undescribed_images(wid: str):
     World-scoped. A campaign reaches most of its art through its world, so
     describing it here describes it once; a campaign that has diverged an image
     describes that one in its own editor.
+
+    The cost is a directory walk over every record of every base, and it is
+    paid whenever the character page mounts, because the rail button shows the
+    count. Measured at ~200ms for a 300-character world with 900 undescribed
+    images — an outlier by some way, and one that shrinks as the queue is
+    worked. Worth knowing before adding anything else to this loop.
     """
     root = _world_root_or_404(wid)
     out = []
+    # One name lookup per RECORD, not per image. A character with a gallery
+    # contributes an entry per picture and `_record_display_name` opens a card
+    # file, so the naive loop re-read one card once per image in it: 395ms for a
+    # 300-character world, on a route that fires whenever the character page
+    # mounts. The same mistake `context.art._keyword_scores` makes it easy to
+    # make twice.
+    names: dict[tuple[str, str], str | None] = {}
     for base in ("characters", store.pcs.ASSET_BASE, *store.entities.ENTITY_KINDS):
         for item in store.image_descriptions.undescribed(root, base):
-            name = _record_display_name(root, base, item["id"])
+            key = (base, item["id"])
+            if key not in names:
+                names[key] = _record_display_name(root, base, item["id"])
+            name = names[key]
             if name is None:
                 # An asset folder whose record is gone. Not listed: the queue
                 # would offer an image no route can describe, and the PUT it
