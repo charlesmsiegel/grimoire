@@ -116,6 +116,20 @@ def _label(conn: dict) -> str:
     return conn.get("name") or conn.get("id") or conn.get("kind") or "?"
 
 
+#: Connection kinds whose client cannot carry OpenAI-style content PARTS: the
+#: Claude SDK path joins a message's content into one string, so a multimodal
+#: message raises deep inside it. `store.image_drafts.SUPPORTED_KINDS` states
+#: the same rule positively for the ROUTE layer, which refuses such a
+#: connection as the PRIMARY with a message the user can act on;
+#: `test_image_description_draft.py` pins the two halves to agree.
+TEXT_ONLY_KINDS = frozenset({"claude"})
+
+
+def _carries_parts(messages: list[dict]) -> bool:
+    """Does any message hold content PARTS rather than a plain string?"""
+    return any(not isinstance(m.get("content", ""), str) for m in messages)
+
+
 def _same_route(a: dict, b: dict) -> bool:
     """Whether two connections would send the same request to the same place.
 
@@ -528,6 +542,28 @@ class LLMClient:
             routes.append((fallback, 0))
         return routes
 
+    def _usable_routes(self, messages: list[dict], conn: dict) -> list[tuple[dict, int]]:
+        """`_routes`, minus a FALLBACK that cannot carry these messages.
+
+        An image description is drafted from a multimodal message, and the
+        route layer refuses a primary connection whose client would flatten it
+        (`store.image_drafts`). The fallback was never checked: with an
+        OpenRouter primary and a Claude fallback, a primary failure sent those
+        same content parts down the SDK path, which joins content as a string
+        and raises -- so the user was shown "and the fallback failed too" about
+        a connection they had not chosen for this call, in place of the real
+        error from the one they had (PR review).
+
+        The PRIMARY is never dropped here, even when it cannot carry them: the
+        route above returns a 409 the reader can act on, and answering "no
+        route at all" from this layer would replace that with something worse.
+        """
+        routes = self._routes(conn)
+        if not _carries_parts(messages):
+            return routes
+        return routes[:1] + [(c, n) for c, n in routes[1:]
+                             if c.get("kind", "openrouter") not in TEXT_ONLY_KINDS]
+
     def _dispatch(self, messages: list[dict], conn: dict, usage: dict | None = None):
         kind = conn.get("kind", "openrouter")
         if kind == "claude":
@@ -559,7 +595,8 @@ class LLMClient:
         consumed every delta. `store.usage.Meter` owns one and files it.
         """
         return _resilient(lambda route, holder: self._dispatch(messages, route, holder),
-                          self._routes(conn), self._timeout_seconds(), usage=usage)
+                          self._usable_routes(messages, conn), self._timeout_seconds(),
+                          usage=usage)
 
     async def complete(self, messages: list[dict], conn: dict,
                        usage: dict | None = None) -> str:

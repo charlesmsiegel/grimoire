@@ -39,11 +39,18 @@ forever.
 
 ## What a description is for
 
-Two readers, and only one of them is human. The author writes it; ``search``
-can match it; and ``store.art_catalog`` ranks it against the moment and offers
-the closest few to the model. A non-empty description is also what makes an
-image *reachable* by a model handle at all — see ``context.art.resolve_handles``
-— so "described" is a deliberate act of publication, not merely a note.
+Two readers, and only one of them is human. The author writes it, and
+``context.art`` ranks it against the moment and offers the closest few to the
+model. A non-empty description is also what makes an image *reachable* by a
+model handle at all — see ``context.art.resolve_handles`` — so "described" is a
+deliberate act of publication, not merely a note.
+
+``store.search`` does **not** see any of this. Its corpus is built from
+markdown records, character cards and campaign fact files; nothing walks
+``assets/*/descriptions.json``, so text that lives only in a description finds
+nothing in the search page. That is the design's choice of consumer (the
+narrator turn, not the library index) rather than an oversight, and folding the
+sidecar into the corpus is a separate change with its own indexing cost.
 
 Nothing detects a description drifting from the art it describes. An image
 replaced under the same name keeps the old text, exactly the way ``focus.json``
@@ -155,9 +162,16 @@ def set_in(d: Path, name: str, text: str, names: set[str] | None = None) -> None
         cur[name] = str(text)
         # Not `write_in`: `cur` may legitimately carry entries for vanished
         # images (see the docstring), which `write_in` would reject as unknown.
+        #
+        # Written back VERBATIM apart from the key being touched. Stringifying
+        # the whole mapping undid the tolerance `read_in` exists for: a
+        # hand-edited or half-synced non-string value, which reads ignore,
+        # became `"['not', 'a', 'string']"` -- a real description from then on,
+        # able to mask an inherited one and to reach a prompt as alt text (PR
+        # review). Leaving it as found keeps it ignorable and hand-fixable.
         d.mkdir(parents=True, exist_ok=True)
-        atomic.write_text(path_in(d), json.dumps({k: str(v) for k, v in cur.items()},
-                                                 indent=2, sort_keys=True) + "\n")
+        atomic.write_text(path_in(d),
+                          json.dumps(cur, indent=2, sort_keys=True) + "\n")
 
 
 # ---- per-version wrappers (characters / pcs / entity kinds) ----------------

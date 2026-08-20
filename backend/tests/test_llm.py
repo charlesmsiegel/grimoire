@@ -1109,3 +1109,34 @@ async def test_a_client_asked_for_no_accounting_passes_none_down():
     client = _retry_client(provider, retries=0)
     [c async for c in client.stream([], _conn("openrouter"))]
     assert provider.seen == [None]
+
+
+def _claude_route():
+    return {"id": "b", "name": "conn-b", "kind": "claude", "model": "backup"}
+
+
+async def test_a_multimodal_call_skips_a_fallback_that_cannot_carry_it():
+    """An image draft is a message of content PARTS. The route layer refuses a
+    PRIMARY whose client would flatten them, with a message the reader can act
+    on; the fallback was never checked, so a primary failure sent the same
+    parts down the SDK path -- which joins content as a string and raises. The
+    reader was then told "and the fallback failed too" about a connection they
+    had not chosen, instead of the real error from the one they had."""
+    provider = RouteRecorder(failing={"primary"})
+    client = _retry_client(provider, retries=0, fallback=_claude_route)
+    parts = [{"role": "user", "content": [{"type": "text", "text": "what is this?"}]}]
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream(parts, _route("a", "primary"))]
+
+    assert provider.models == ["primary"]              # the fallback was never asked
+    assert "fallback failed too" not in exc.value.detail
+
+
+async def test_an_ordinary_call_still_takes_that_same_fallback():
+    """The pruning is about the message, not about the connection: plain text
+    is exactly what a Claude fallback is there to serve."""
+    provider = RouteRecorder(failing={"primary"})
+    client = _retry_client(provider, retries=0, fallback=_claude_route)
+    text = [{"role": "user", "content": "what is this?"}]
+    assert [c async for c in client.stream(text, _route("a", "primary"))] == ["from backup"]
+    assert provider.models == ["primary", "backup"]

@@ -345,3 +345,18 @@ def test_the_campaign_queue_drops_an_asset_folder_whose_version_is_gone(client, 
 
     queue = client.get(f"/api/campaigns/{camp}/images/undescribed").json()
     assert [(i["vid"], i["name"]) for i in queue] == [(vid, "gallery_1")]
+
+
+def test_the_library_refuses_the_name_the_backlog_route_owns(client, world):
+    """`/campaigns/{cid}/images/undescribed` is registered before
+    `/images/{name}` so the backlog is reachable at all -- which leaves that one
+    name unserveable as an image. Reserved rather than tolerated: stored, it
+    would be listed and offered by the picker while every URL for it answered
+    with the backlog JSON."""
+    camp = client.post("/api/campaigns",
+                       json={"name": "Saltmarch", "world": world}).json()["id"]
+    for name in ("undescribed", "Undescribed"):
+        r = client.put(f"/api/campaigns/{camp}/images/{name}",
+                       files={"file": ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+        assert r.status_code == 400
+    assert client.get(f"/api/campaigns/{camp}/images").json() == []
