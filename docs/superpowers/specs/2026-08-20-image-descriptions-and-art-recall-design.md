@@ -179,10 +179,16 @@ oversight.
 
 **Ranking: keyword first, semantic as an upgrade.**
 
-- *Keyword* (always available): score the description against the scan window
-  using the term rule `search.query_terms` already defines — case-folded
-  substring, terms ANDed, quoted phrases intact. A name hit on the owning
-  record counts too, so "Seraphine" in the recent text lifts Seraphine's art.
+- *Keyword* (always available): score the description's content words against
+  the scan window, and count a hit on the owning record's **name** as evidence
+  in itself — "Seraphine draws her blade" lifts Seraphine's art whether or not
+  the picture's description shares any vocabulary with the post. The name test
+  is `world_state.keyword_hit`, the whole-word rule world-info activation
+  already uses, so the two select by one set of semantics rather than by a
+  lookalike: a substring test made a character called Rain count as named by
+  the word "training". A name a word boundary cannot bound — one in a script
+  without word spacing — falls back to a substring test, because `\b` never
+  appears between two CJK characters.
 - *Semantic* (when `embed_space.resolve` returns an endpoint): embed each
   description and the scan window and rank by cosine, reusing `vectors.py`'s
   on-disk cache and `embed_space.warm_window`'s rotation, with the same

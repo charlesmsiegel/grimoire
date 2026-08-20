@@ -466,3 +466,37 @@ def test_an_unresolvable_first_handle_does_not_spend_the_one_slot(world):
     out = art.resolve_handles(camp, "[[art:campaign:nope]] then [[art:campaign:coastline]]")
     assert out.count("![") == 1
     assert "A hand-drawn map" in out
+
+
+def test_a_short_name_is_matched_as_a_word_not_a_substring(world, monkeypatch):
+    """`world_state.keyword_hit` exists so retrieval selects by one set of
+    semantics "rather than a lookalike that drifts from them" -- and a substring
+    test here was exactly that lookalike, and looser: a character called Rain
+    counted as named by the word "training". Short names are common enough
+    (Ash, Ari, Ivo) that this was a steady source of art nobody asked for."""
+    monkeypatch.setattr(art, "_record_name", lambda cid, c: "Rain")
+    cands = [{"kind": "characters", "id": "x", "vid": "v", "description": "A portrait."}]
+    assert art._keyword_scores("c", cands, "He spent the morning training hard.")[0] == [0.0]
+    assert art._keyword_scores("c", cands, "Rain stepped through the door.")[0] == [1.0]
+    # ...and case still does not matter, which is what `keyword_hit` promises
+    assert art._keyword_scores("c", cands, "then rain came.")[0] == [1.0]
+
+
+def test_a_name_a_word_boundary_cannot_bound_still_matches(world, monkeypatch):
+    """`\\b` sits between a word character and a non-word one, and two adjacent
+    CJK characters are both word characters -- so the boundary never appears and
+    a Japanese name would simply never match. That is the fallback's whole
+    reason for existing."""
+    monkeypatch.setattr(art, "_record_name", lambda cid, c: "霧子")
+    cands = [{"kind": "characters", "id": "x", "vid": "v", "description": "A portrait."}]
+    assert art._keyword_scores("c", cands, "霧子は埠頭に立っていた。")[0] == [1.0]
+    assert art._keyword_scores("c", cands, "彼女は埠頭に立っていた。")[0] == [0.0]
+
+
+def test_a_name_with_ordinary_punctuation_is_still_bounded(world, monkeypatch):
+    """`Mara O'Dell` and `Jean-Luc` are names a boundary can bound; the
+    fallback is for scripts without word spacing, not for apostrophes."""
+    monkeypatch.setattr(art, "_record_name", lambda cid, c: "Mara O'Dell")
+    cands = [{"kind": "characters", "id": "x", "vid": "v", "description": "A portrait."}]
+    assert art._keyword_scores("c", cands, "Mara O'Dell drew her cloak in.")[0] == [1.0]
+    assert art._keyword_scores("c", cands, "Nobody was there.")[0] == [0.0]
