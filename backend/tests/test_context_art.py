@@ -410,3 +410,34 @@ def test_a_semantic_failure_falls_back_to_the_keyword_ranking(world, monkeypatch
     monkeypatch.setattr(art, "_semantic_scores", lambda *a, **k: None)   # provider down
     got = art.rank(camp, cands, "Fishing boats sat at the quay, lost in fog.")
     assert [c["name"] for c in got] == ["gallery_1"]
+
+
+def test_a_backticked_handle_still_becomes_an_image(world):
+    """The section used to print handles in backticks, under an instruction to
+    write one "exactly as spelled below" -- so a model that obliged produced a
+    code span, which renders as literal text and never shows the picture. The
+    section prints them bare now; this is the other half, because markdown habit
+    outlives a template edit."""
+    camp = world["cid"]
+    out = art.resolve_handles(camp, "Look. `[[art:campaign:coastline]]`")
+    assert out == (f"Look. ![A hand-drawn map of the northern coastline.]"
+                   f"(/api/campaigns/{camp}/images/coastline)")
+
+
+def test_a_lone_backtick_beside_a_handle_is_left_alone(world):
+    """Matched pair or nothing: a backtick that belongs to something else must
+    not be eaten."""
+    camp = world["cid"]
+    out = art.resolve_handles(camp, "a `code` span and [[art:campaign:coastline]]`")
+    assert out.startswith("a `code` span and ![")
+    assert out.endswith("`")
+
+
+def test_the_section_offers_handles_bare(world):
+    """The rendered section must not print the shape that breaks when copied."""
+    from grimoire import prompts
+    rendered = prompts.render(
+        "scene/sections/available_art.j2",
+        available_art=[{"handle": "[[art:campaign:coastline]]", "description": "A map."}])
+    assert "[[art:campaign:coastline]]" in rendered
+    assert "`[[art:" not in rendered
