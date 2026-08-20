@@ -348,3 +348,25 @@ def test_a_picture_does_not_count_against_the_length_budget(world):
     assert withart != prose                       # the picture really is in there
     assert length_drift._words(withart) == length_drift._words(prose)
     assert length_drift._paragraphs(withart) == length_drift._paragraphs(prose)
+
+
+def test_the_documented_knobs_are_actually_readable(monkeypatch, tmp_path):
+    """`read_config` narrows to `_CONFIG_KEYS`, so a key missing from that tuple
+    is dropped in silence — "no error, just the wrong budget", as the comment
+    on it says. Both of these were documented and neither was listed, so
+    `settings()` answered with its defaults whatever anyone wrote."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    from grimoire.store import config
+    config.write_config(art_catalog_depth="9", art_catalog_threshold="0.7")
+    got = art.settings()
+    assert (got["depth"], got["threshold"]) == (9, 0.7)
+
+
+def test_a_hand_edited_knob_falls_back_rather_than_raising(monkeypatch, tmp_path):
+    """A store may be hand-edited or half-synced; a preference must not be able
+    to take a turn down with it."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    from grimoire.store import config
+    config.write_config(art_catalog_depth="lots", art_catalog_threshold="nan")
+    got = art.settings()
+    assert (got["depth"], got["threshold"]) == (art.DEFAULT_DEPTH, art.DEFAULT_THRESHOLD)

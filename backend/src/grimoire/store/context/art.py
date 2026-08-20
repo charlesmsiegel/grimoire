@@ -139,13 +139,12 @@ RECORD_KINDS: tuple[str, ...] = ACTOR_KINDS + entities.ENTITY_KINDS
 #: ambiguous by a legitimately-named image.
 HANDLE = re.compile(r"\[\[art:([^:\]\[]+):([^:\]\[]+)(?::([^:\]\[]+))?\]\]")
 
-#: Candidates offered in one turn. Small on purpose: this is a menu, not a
-#: gallery, and every line costs budget in a section that renders on every turn.
-DEFAULT_DEPTH = 4
-
-#: Cosine floor for semantic ranking. Model-dependent, like
-#: `semantic_recall_threshold`, and tuned against the scene inspector.
-DEFAULT_THRESHOLD = 0.4
+#: The two knobs' defaults, read from `config` rather than spelled again here.
+#: They have to agree with the values `read_config` materializes into a fresh
+#: config.md -- a second copy would disagree the first time either moved, and
+#: the disagreement would show up as "the file says 4 and the code uses 6".
+DEFAULT_DEPTH = int(config.DEFAULT_ART_CATALOG_DEPTH)
+DEFAULT_THRESHOLD = float(config.DEFAULT_ART_CATALOG_THRESHOLD)
 
 #: Content words a description must share with the scan window to be offered at
 #: all in keyword mode. Two, because one is noise -- a description mentioning

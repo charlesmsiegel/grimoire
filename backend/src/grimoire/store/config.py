@@ -50,6 +50,17 @@ DEFAULT_SEMANTIC_RECALL_DEPTH = "0"
 # is a starting point to tune against the scene inspector, not a constant with
 # a defensible universal value.
 DEFAULT_SEMANTIC_RECALL_THRESHOLD = "0.4"
+# How many described images `context.art` may offer the model in one turn. A
+# menu, not a gallery: every line costs budget in a section that renders on
+# every turn, and the instruction beside it says most replies should use none.
+# "0" offers nothing, which is the same answer as switching the section off in
+# the prompt layout -- and cheaper to reach for a reader who only wants it quiet
+# on one install.
+DEFAULT_ART_CATALOG_DEPTH = "4"
+# Cosine floor for the semantic ranking of that offer. Model-dependent for the
+# reason the recall threshold above is, and ignored entirely in keyword mode,
+# which has a floor of its own (`art.KEYWORD_MIN_TERMS`).
+DEFAULT_ART_CATALOG_THRESHOLD = "0.4"
 # --- the two #29 layers, both off ---
 # Whether prompt_layout.json is applied (context/layout.py). Off is
 # byte-identical: the catalog renders as it always did. Off is also a BYPASS —
@@ -185,6 +196,12 @@ _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "offscene_known_limit",
                 "embeddings_connection_id", "embeddings_model",
                 "semantic_recall_depth", "semantic_recall_threshold",
+                # `context.art`'s two knobs, config.md-only like the recall pair
+                # above. Omitted at first, which is exactly the failure the
+                # comment on this tuple describes: both were documented, both
+                # were silently dropped by `read_config`, and `art.settings()`
+                # answered with its defaults no matter what anyone wrote.
+                "art_catalog_depth", "art_catalog_threshold",
                 "prompt_layout_enabled", "speaker_turn_taking",
                 "backup_enabled", "backup_interval_hours", "backup_keep",
                 "backup_dir", "replay_fork_threshold") + _LENGTH_KEYS
@@ -221,6 +238,8 @@ def read_config() -> dict[str, str]:
                 "embeddings_model": DEFAULT_EMBEDDINGS_MODEL,
                 "semantic_recall_depth": DEFAULT_SEMANTIC_RECALL_DEPTH,
                 "semantic_recall_threshold": DEFAULT_SEMANTIC_RECALL_THRESHOLD,
+                "art_catalog_depth": DEFAULT_ART_CATALOG_DEPTH,
+                "art_catalog_threshold": DEFAULT_ART_CATALOG_THRESHOLD,
                 "prompt_layout_enabled": DEFAULT_PROMPT_LAYOUT_ENABLED,
                 "speaker_turn_taking": DEFAULT_SPEAKER_TURN_TAKING,
                 "backup_enabled": DEFAULT_BACKUP_ENABLED,
