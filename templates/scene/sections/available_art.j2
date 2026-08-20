@@ -14,6 +14,13 @@
     never stored. A handle naming anything not listed here resolves to nothing
     and is deleted, so there is no failure mode worth warning the model about.
 
+    The handles are printed BARE, not in backticks. They used to be fenced for
+    legibility, right under an instruction to write one "exactly as spelled
+    below" -- so a model that obliged produced `` `![alt](url)` ``, a code span
+    that renders as literal text and never shows the picture. `resolve_handles`
+    tolerates a copied pair anyway, but not offering the shape is the half of
+    that fix which costs nothing.
+
     Vars: available_art ([{handle, description}]). -#}
 {%- if available_art %}# Available art
 
@@ -21,7 +28,7 @@ These pictures already exist in this campaign. If one of them genuinely fits a
 beat in your reply, you may include it by writing its handle on a line of its
 own, exactly as spelled below.
 
-{% for art in available_art %}- `{{ art.handle }}` — {{ art.description }}
+{% for art in available_art %}- {{ art.handle }} — {{ art.description }}
 {% endfor %}
 At most one picture per reply, and only when it earns its place. Most replies
 should include none. A picture never replaces describing something in prose:

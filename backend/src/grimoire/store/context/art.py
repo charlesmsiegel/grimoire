@@ -137,7 +137,14 @@ RECORD_KINDS: tuple[str, ...] = ACTOR_KINDS + entities.ENTITY_KINDS
 #: rejects the colon outright, and `assets.storable` rejects the glob
 #: metacharacters, which include ``]`` -- so the grammar cannot be made
 #: ambiguous by a legitimately-named image.
-HANDLE = re.compile(r"\[\[art:([^:\]\[]+):([^:\]\[]+)(?::([^:\]\[]+))?\]\]")
+#: A MATCHED pair of backticks around the handle is consumed with it. The
+#: section prints handles bare now, but markdown habit is strong and a model
+#: that fences one would otherwise get `` `![alt](url)` `` -- a code span that
+#: renders as literal text, so the picture silently never appears. Matched via
+#: a backreference, so a lone backtick belonging to something else is left
+#: where it is.
+HANDLE = re.compile(
+    r"(?P<tick>`?)\[\[art:([^:\]\[]+):([^:\]\[]+)(?::([^:\]\[]+))?\]\](?P=tick)")
 
 #: The two knobs' defaults, read from `config` rather than spelled again here.
 #: They have to agree with the values `read_config` materializes into a fresh
@@ -202,7 +209,7 @@ def parse_handle(match: re.Match) -> tuple[str, str, str] | None:
     """``(kind, rid, name)`` for one `HANDLE` match, or None if it names a kind
     this store has no images under. The library form has two fields and every
     other has three, so arity alone decides which was written."""
-    a, b, c = match.group(1), match.group(2), match.group(3)
+    a, b, c = match.group(2), match.group(3), match.group(4)
     if c is None:
         return (LIBRARY, "", b) if a == LIBRARY else None
     return (a, b, c) if a in RECORD_KINDS else None
