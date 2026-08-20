@@ -176,6 +176,12 @@ stored counter, so deleting the highest scene frees its number).
   so `read_scene` filters it out of `meta` and a dedicated accessor reads it.
 - Produces: `migrations.backfill_scene_identities() -> None` — idempotent,
   per-campaign, under `campaign_lock`.
+- Produces: `store.scenes.find_by_identity(cid, identity) -> str | None` — the
+  **reverse** lookup: current `sid` for an identity, or `None` if the scene is
+  gone. The notification tap needs this and nothing else provides it. Taps
+  carry the identity precisely because a `sid` goes stale on rename, so without
+  an inverse the intent can only keep the stale id or fall back to the campaign
+  unnecessarily. Exercise both the renamed and the deleted case.
 - Produces: `store.scenes.ensure_identity(cid, sid) -> str` — the lazy path,
   under `campaign_lock`; assigns one if absent and returns it either way.
 
@@ -234,14 +240,14 @@ def test_backfill_is_idempotent_and_assigns_to_legacy_scenes(tmp_path, monkeypat
     assert store.scenes.scene_identity(cid, sid) == got
 
 
-def test_a_run_lazily_backfills_a_campaign_the_migration_skipped(tmp_path, monkeypatch, app):
+def test_a_run_lazily_backfills_a_campaign_the_migration_skipped(client, tmp_path, monkeypatch):
     # The startup pass skips a campaign that was locked ("skipping beats
     # failing to boot"). Without a lazy path those scenes stay identity-less
     # until the next restart, and two missing values compare EQUAL -- which is
     # the corruption the identity exists to prevent.
     cid, sid = _campaign_whose_migration_was_skipped(tmp_path, monkeypatch)
     assert store.scenes.scene_identity(cid, sid) is None
-    _start_a_run(app, cid, sid)
+    _start_a_run(client.app, cid, sid)
     assert store.scenes.scene_identity(cid, sid)
 ```
 
@@ -346,10 +352,18 @@ A pure data structure with no scheduling in it. Scheduling is Task 3.
   `_dump`-able without pydantic.
 - Produces: `RunClass` — `"turn" | "review" | "background" | "draft"`.
 - Produces: `Run` with fields `id, subject, cls, kind, attempt_id,
-  scene_identity, state, frames, result, error, started_at, ended_at`, plus
+  scene_identity, labels, state, frames, result, error, started_at,
+  ended_at`, plus
   `finish(state: str, at: float | None = None) -> None` (defaults `at` to the
   current clock; tests pass it explicitly so reaping is deterministic) and
   `append_frame(payload: dict) -> int` returning the absolute index assigned.
+
+  **`labels` is `{"campaign": str, "scene": str}`, captured at start** by the
+  producing route and carried on the run. The Android terminal notification
+  reads it; resolving the names at terminal time would find nothing for a scene
+  deleted mid-run, which is exactly the case the *error* notification exists to
+  report. Every run-producing route populates it when it reserves, and
+  `start_or_existing` takes it.
 - Produces: `RunRegistry` with
   `start_or_existing(subject, cls, kind, attempt_id, scene_identity) -> tuple[Run, bool]`
   -- `(run, True)` for a new run, `(run, False)` when `attempt_id` already has
@@ -603,6 +617,15 @@ and without `terminal` the route cannot wait for the abort hook — so a fast
 re-send could race the partial-persist, which is the thing the ordering exists
 to prevent.
 
+**`runner.start` must not expose the run before its scope is installed.** The
+scope is assigned inside `_guarded`, which does not begin until the scheduled
+task is picked up — so a Stop arriving immediately after `start` returns would
+find no scope to cancel and then wait forever on `run.terminal` while the
+provider ran happily on. Add a readiness handshake: `start` waits for an
+`anyio.Event` the task sets once the scope is in place, or `cancel` waits for
+that event before acting. A test must cancel *in the same breath* as starting,
+not after a sleep, or it will not exercise this.
+
 - [ ] **Step 5: Implement the failure boundary**
 
 ```python
@@ -691,7 +714,18 @@ def test_from_is_inclusive_and_a_reconnect_reproduces_the_reply_once(client, liv
 
 
 def test_from_past_the_buffer_tails_rather_than_erroring(client, live_run):
+    # A LIVE run's stream stays open and tails; it does not return empty. An
+    # assertion of `== []` against a live run either hangs or silently tests a
+    # helper that stopped reading early.
+    live_run.finish("landed")
     assert _read_stream(client, live_run, frm=99) == []
+
+
+def test_from_past_the_buffer_on_a_live_run_receives_later_frames(client, live_run):
+    reader = _read_stream_async(client, live_run, frm=99)
+    live_run.append_frame({"delta": "later"})
+    live_run.finish("landed")
+    assert [e["delta"] for e in reader.result()] == ["later"]
 
 
 def test_a_reaped_or_unknown_run_id_is_run_gone(client, campaign_scene):
@@ -730,6 +764,11 @@ Every handler resolves the run with `registry.get(run_id, subject_from_path)`
 and returns `404 {"detail": {"kind": "run_gone"}}` on a miss — the subject
 comparison is what stops scene A's run being streamed or cancelled through
 scene B's URL.
+
+**Validate `from` as non-negative and reject it with a 400.** `-1` on a natural
+list slice starts from the tail and silently drops every earlier frame,
+rendering only the last delta while looking like a successful replay. Add a
+route test for the rejected value.
 
 The `cancel` route does **not** get `@computes_only`: cancelling a streaming
 run drives `on_abort`, whose job is to persist the partial, and that is a
@@ -773,8 +812,17 @@ know' into a confident wrong answer."
 
 **Interfaces:**
 - Consumes: `runner.start`, `runs.RunRegistry` (Tasks 2–3).
-- Produces: `_fence_stream(...) -> tuple[AsyncIterator[str], Callable[[], str]]`
-  — the frames, and a terminal-outcome getter returning `"landed"`/`"failed"`.
+- Produces: `_fence_stream(...) -> tuple[AsyncIterator[str], Callable[[], Outcome]]`
+  — the frames, and a terminal-outcome getter.
+- Produces: `Outcome` — `{"state": "landed" | "failed", "error": {...} | None}`,
+  where `error` carries `{status, detail, kind, retry_after}`.
+
+  **A bare `"failed"` is not enough.** A client that detached before the
+  provider failed never saw the buffered SSE error frame, and Task 6 forbids
+  replaying a terminal run's frames on a fresh mount — so polling would report
+  failure with no provider detail and no retry metadata, which is the one
+  situation where the detail changes what the player should do next. The
+  structured outcome is what populates `Run.error`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1000,6 +1048,15 @@ guessing costs a debugging cycle:
 | `put_scene_message` (edit) | `PUT .../messages/{index}` | `scenes.py:3021` |
 | `delete_scene_messages_from` (cut) | `DELETE .../messages/{index}` | `scenes.py:3056` |
 | `post_scene_retcon` | `POST .../messages/{index}/retcon` | `scenes.py:3098` |
+| `post_scene_roll` | `POST .../roll` | `mechanics.py:34` |
+| `post_scene_check` | `POST .../check` | `mechanics.py:203` |
+
+**The last two are easy to miss and belong in the same guard.** Both call
+`store.scenes.append_message(cid, sid, "assistant", line, ...)`
+(`mechanics.py:54` and `:221`), so a manual roll or check from a second tab
+appends narration to the transcript underneath a live run — letting a review
+spend its budget on a snapshot that will be rejected, or a turn append
+narration generated from history that predates the roll.
 
 **The check must run under the same `campaign_lock(cid)` hold as the mutation
 it guards, not as a separate step at the top of the route.** Checked and
@@ -1010,12 +1067,21 @@ guard exists to close, reintroduced by where it was placed. Since
 `scenes/locking.py:_serialized` already wraps every scene mutator in that lock,
 the check belongs inside that hold.
 
-- [ ] **Step 4: Guard the width-crossing create**
+- [ ] **Step 4: Guard the width-crossing create — in the ROUTE, not the store**
 
-`_create_scene` computes `number, width = serialize._numbering(cid)` before it
-writes. In the branch where `len(str(number)) > width` — the case that calls
-`repad` — refuse if **any** exclusion key in that campaign is held, since
-`repad` renames every scene in the campaign rather than only the busy one.
+`_create_scene` is a store-layer function with no `app` and no registry, and
+the registry deliberately lives on `app.state`. Importing route state into
+`store/scenes/lifecycle.py` would invert the dependency direction and cannot
+pick the right app instance anyway — `AGENTS.md` lists exactly that shape among
+its tripwires.
+
+So the check belongs in `post_scene` (`scenes.py:92`): take
+`campaign_lock(cid)`, consult `request.app.state.runs` for **any** held
+exclusion key in that campaign, and call the (re-entrant) store mutation from
+inside that hold. Refuse only when the create would cross the width boundary —
+`serialize._numbering(cid)` reports `number` and `width`, and
+`len(str(number)) > width` is the branch that calls `repad`, which renames
+every scene in the campaign rather than only the busy one.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -1189,6 +1255,15 @@ generated while the client was away."
 - Consumes: `runner`'s terminal transition (Task 3).
 - Produces: `ServerRuntime.onRunsChanged(live: Int)` and
   `ServerRuntime.onRunTerminal(runId, state, campaignName, sceneTitle, cid, sceneIdentity)`.
+
+**Both callbacks are invoked after run bookkeeping, each inside its own
+fail-soft boundary.** A cross-language call can raise — foreground promotion
+refused, notification construction failing — and neither outcome may touch the
+run. Inside Task 3's guarded block it would flip a successfully persisted run
+from `landed` to `failed`; outside it, the exception escapes into the lifespan
+task group and cancels sibling runs. So: bookkeeping first, then each callback
+wrapped in its own try/except that logs and swallows. A notification is the
+least important thing a terminal run does.
 
 **These have to be plumbed, not just declared.** `android_entry.start_server`
 today takes only a `PortCallback` and builds `create_app()` without retaining
