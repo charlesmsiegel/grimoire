@@ -27,7 +27,11 @@ export function DescribeQueue({ wid, queue, onClose, onSaved }: {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState<"save" | "draft" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const total = queue.length;
+  // Captured once. `onSaved` re-reads the backlog, so the `queue` PROP shrinks
+  // under us while `items` does not -- and "Describing 2 / 3" would jump back
+  // to "1 / 2" the moment the first save landed. The denominator is how much
+  // work this sitting started with.
+  const [total] = useState(queue.length);
   const cur = items[0];
 
   if (!cur) {
