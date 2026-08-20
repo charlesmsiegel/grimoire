@@ -592,7 +592,7 @@ def catalogue(cid: str, cast: list[dict], current_loc: str | None,
 
 # ---- the return path -------------------------------------------------------
 
-def _showable(cid: str, kind: str, rid: str, sid: str | None) -> bool:
+def _showable(cid: str, kind: str, rid: str, sid: str) -> bool:
     """Could this scene legitimately show something belonging to `rid`?
 
     Two rules, both cheap enough to run on every handle:
@@ -602,15 +602,17 @@ def _showable(cid: str, kind: str, rid: str, sid: str | None) -> bool:
       reads is a straight leak. `secret` is deliberately NOT refused: a secret
       entry's body *does* reach the prompt, the catalogue does offer its art,
       and refusing it here would make the two halves disagree.
-    - **An actor must be cast in this scene**, when `sid` is given. That is the
-      catalogue's own rule for actors (`_version` returns the LOCKED version,
-      which only a cast actor has), restated where statelessness would
-      otherwise drop it: without this, art of anyone the campaign has ever cast
-      resolves in any scene.
+    - **An actor must be cast in this scene.** That is the catalogue's own rule
+      for actors (`_version` returns the LOCKED version, which only a cast actor
+      has), restated where not carrying the catalogue would otherwise drop it:
+      without this, art of anyone the campaign has ever cast resolves in every
+      scene it has.
+
+    `sid` is REQUIRED rather than optional. It was optional at first, and every
+    production caller passed one -- so the only thing the default bought was a
+    weaker gate sitting one forgotten argument away from the next caller.
     """
     if kind in ACTOR_KINDS:
-        if sid is None:
-            return True   # no scene in hand; rules 1 and 2 still stand
         return any(a["kind"] == kind and a["id"] == rid
                    for a in appearances_cast.scene_cast(cid, sid))
     if kind in entities.ENTITY_KINDS:
@@ -622,8 +624,7 @@ def _showable(cid: str, kind: str, rid: str, sid: str | None) -> bool:
     return True
 
 
-def _resolved(cid: str, kind: str, rid: str, name: str,
-              sid: str | None = None) -> dict | None:
+def _resolved(cid: str, kind: str, rid: str, name: str, sid: str) -> dict | None:
     """The image a handle names, if all three rules in the module docstring
     hold. None otherwise."""
     if kind != LIBRARY and not _showable(cid, kind, rid, sid):
@@ -646,7 +647,7 @@ def _resolved(cid: str, kind: str, rid: str, name: str,
     return {"url": url_for(cid, kind, rid, vid, name), "description": text} if text else None
 
 
-def resolve_handles(cid: str, text: str, sid: str | None = None) -> str:
+def resolve_handles(cid: str, text: str, sid: str) -> str:
     """`text` with every art handle rewritten to markdown, unknown ones removed.
 
     Runs once per generation, inside `_persist_reply`, before the reply is split
