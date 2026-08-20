@@ -139,6 +139,15 @@ scene can, in the window between one run ending and the next beginning, attach
 a view that believes it is showing scene B to frames produced for scene A.
 Addressing by run id removes the class of bug instead of guarding against it.
 
+**But an id-only lookup is not sufficient on its own**, because every run route
+also carries caller-supplied `cid` and `sid` in its path. A stale client that
+sends scene A's run id through scene B's URL would otherwise stream or cancel
+A while the interface believes it is acting on B — the same cross-scene
+confusion, arrived at from the other direction. So **every lookup verifies that
+the run's stored `(cid, sid)` matches the path, and returns `run_gone` when it
+does not.** Belt and braces, and cheap: one comparison at the top of each
+handler.
+
 ### The registry
 
 A new module, `routes/runs.py`, holding the registry and the run type. It
@@ -194,11 +203,27 @@ This is a backstop, not the primary mechanism: the composer is disabled while
 the scene has a live run, so a well-behaved client never sends the second
 request. Both exist because only the server-side one is a guarantee.
 
-**The exclusivity check runs before `post_chat` appends the player's post.**
-Ordering, not detail: the append is what makes a turn transactional in #95, and
-a 409 raised after it would strand a post with no reply and no run — the exact
-orphan `undo_user_post` exists to prevent, arrived at by a different road. A
-rejected send must leave the scene byte-identical.
+**The slot is reserved before the first mutator in every run-producing route** —
+not merely before `post_chat`'s append. Ordering, not detail, and the append is
+only the most obvious case: a 409 raised after it would strand a post with no
+reply and no run, the exact orphan `undo_user_post` exists to prevent, arrived
+at by a different road.
+
+The other routes each do destructive setup of their own before a stream is ever
+constructed, and a check placed "near the append" would sail past all of it:
+
+- `post_chat` / `post_retry` heal and supersede proposals;
+- `post_regenerate` archives and removes the reply it is replacing;
+- `post_replay_turn` stages posts;
+- `POST .../roll-proposal` resolves a check before building its continuation.
+
+Reserving late in any of those returns `run_in_flight` *after* the destructive
+work has already landed, which is strictly worse than not checking at all — the
+player is told nothing happened, and something did. **Reserve first, and release
+the reservation if the synchronous setup that follows fails**, so a route that
+raises on its own validation does not leave a phantom slot holding the scene.
+
+A rejected send must leave the scene byte-identical.
 
 Concurrency **across** scenes and campaigns is allowed and is the point. It is
 already safe: `_turn_tokens` is keyed `(cid, sid)`; `campaign_lock(cid)` is
@@ -308,8 +333,52 @@ On disk it is a per-scene file beside the transcript under the campaign's
 else — `test_paths_guard.py` requires it and a hand-built path would fail
 there.
 
-A pending review is cleared when its scene is absorbed, when the reviewer
-cancels, or when a fresh absorb replaces it.
+**Retry results merge into the stored review; they never replace it.** A
+single record persisted verbatim would be wrong for two of the three computing
+kinds: `post_audit` returns `{mechanics, edits}` and `post_dossiers` returns
+`{dossiers, edits}` — partial payloads that `useSceneReview` folds into an
+existing absorb (`setAbsorb((a) => ({...a, mechanics: res.mechanics, ...}))`
+at `useSceneReview.ts:446`, and its dossier sibling at `:521`). Writing either
+one whole would destroy the absorb's prose, its staged edits and its
+`commit_token` — the token being the part nothing else can reconstruct. So a
+retry run's terminal persist is a **read-modify-write of the existing pending
+review under `campaign_lock(cid)`**, folding in exactly the keys that retry
+owns, and it fails rather than inventing a review if none is stored.
+
+### Cancellation and the terminal persist must not race
+
+The reviewer's Cancel (`DELETE .../pending-review`) and a run's terminal write
+are two operations on one record, and left unordered they lose to each other:
+the reviewer cancels while an absorb is finishing, the DELETE lands, and then
+the runner publishes and **recreates the review the player just dismissed**. A
+cancelled review that reappears minutes later is worse than one that was never
+saved.
+
+One ordering, stated so the implementation cannot pick another: **cancellation
+is recorded on the run before the record is deleted, and the terminal persist
+checks that flag and suppresses itself — both under the same
+`campaign_lock(cid)` hold**, so the check and the write cannot be split. A run
+already past its persist when Cancel arrives is fine: the DELETE then removes a
+record that exists, which is the outcome the player asked for.
+
+A pending review is otherwise cleared when its scene is absorbed or when a
+fresh absorb replaces it.
+
+### Renaming a scene must carry its pending review
+
+A pending review is keyed by `sid` and stored beside the transcript, and
+renaming a scene changes that id. Once a run has landed the scene is no longer
+locked, so renaming before saving the review is ordinary use, not an exotic
+race — and without an explicit integration `GET .../{new_sid}/pending-review`
+returns 404 while the durable review sits orphaned under the old id.
+
+So `pending_reviews` joins the **`scene_refs.repoint` fan-out** alongside the
+other scene-id-keyed stores, and is named in `store/cascade.py`. That module is
+not a courtesy list: it says outright that *"a store that persists a scene id
+and is not named here is one nobody has decided about."* A new sid-keyed
+sidecar that skips it is precisely the omission that sentence was written to
+catch, so this is an obligation rather than a nicety — and it belongs in the
+guard table below for the same reason.
 
 ### A scene deleted under a live run
 
@@ -330,7 +399,9 @@ New, under the existing scene prefix:
   run within the reap window**, live or terminal, or 404. Returns
   `{id, kind, state, next_index}`, where `next_index` is meaningful for
   streaming kinds only and is absent for the absorb family, which has no frame
-  buffer to offset into. Terminal runs are included deliberately; see below.
+  buffer to offset into. It reports the live tail and is **not** what a
+  reconnecting client resumes from — see the frontend section. Terminal runs
+  are included deliberately; see below.
 - `GET  /api/campaigns/{cid}/scenes/{sid}/runs/{run_id}/stream?from=N` — SSE;
   replays frames from `N`, then tails.
 - `GET  /api/campaigns/{cid}/scenes/{sid}/runs/{run_id}` — terminal payload for
@@ -361,16 +432,27 @@ Changed:
 
 ### Pre-flight errors stay synchronous. This is not negotiable.
 
-Everything `post_absorb` validates *before spending a token* keeps raising from
-the POST, with its status and `kind` intact:
+**Every check each computing endpoint performs today before spending a token
+runs before its 202**, with status and `kind` intact. The rule is per-endpoint,
+not just absorb's — all three detach, and each guards something different:
 
-- 409 `already_absorbed` — the #235 guard. `useSceneReview.ts:212` branches on
-  exactly this (`err?.kind !== "already_absorbed"`), and `SceneReview.test.tsx`
-  asserts it. A 202 that swallowed it into an async run payload would break a
-  tested behavior silently, which is the failure mode this whole document
-  exists to avoid.
-- 400 "nothing to absorb", 400 "no module resolved", 404 unknown scene or
-  campaign, and the `_require_connection()` check.
+- `post_absorb`: 409 `already_absorbed` (the #235 guard), 400 "nothing to
+  absorb", 400 no module resolved, 404 unknown scene or campaign, and
+  `_require_connection()`.
+- `post_audit`: `_require_scene`, `_require_connection`, and 400 when
+  `store.modules.resolve(cid)` is None.
+- `post_dossiers`: `_require_scene`, `_require_connection`, and 400 "nothing to
+  build dossiers from" on an empty transcript — a guard the audit deliberately
+  does not have, because an audit with nothing to audit finds nothing while a
+  dossier phase would stage a proposal overwriting a real dossier with
+  invention.
+
+`already_absorbed` is the one with teeth: `useSceneReview.ts:212` branches on
+it (`err?.kind !== "already_absorbed"`) and `SceneReview.test.tsx` asserts it,
+so a 202 that swallowed it into an async run payload would break a tested
+behavior silently — the failure mode this whole document exists to avoid. But
+the general rule matters as much: a caller must never receive an accepted run
+for work already known to be invalid.
 
 Only failures that happen *after* the run is accepted become run state. Those
 must round-trip enough to rebuild the same client-side error: `error` carries
@@ -409,6 +491,17 @@ never-reaped registry in a long-lived desktop process is a leak.
 All of these must be registered in an order `test_route_order.py` accepts —
 `runs/{run_id}` sits under a `{sid}` path that already captures freely, so the
 literal-segment rules there apply.
+
+**A terminal pending-review write stamps campaign activity explicitly.** The
+`_CampaignActivityStamp` middleware (`main.py:186`, installed at `:292`) moves
+a campaign up the recents rail per *request*, and skips routes marked
+`grimoire_computes_only` (`:244`). Detaching breaks that: the absorb's 202 is
+`@computes_only` and returns long before the review exists, so the write that
+does mutate the campaign happens outside any request the middleware can see. A
+completed background review would silently fail to move its campaign. The
+terminal persist therefore stamps activity itself, once, after the write —
+`@computes_only` stays correct for the 202, which really does compute and
+return nothing.
 
 **Cancel does not get `@computes_only`,** and the temptation to add it is a
 trap. Cancelling a streaming run drives `on_abort`, whose entire job is to
@@ -452,7 +545,16 @@ away unmounts it and aborts. That has to move up.
   with a `(cid, sid)` index. Leaving a scene no longer tears its run down;
   returning re-attaches by id.
 - On scene-view mount and on `visibilitychange` → `GET .../run`; attach if
-  present, from `next_index`.
+  present.
+- **The client resumes from its own last-consumed frame index, not from the
+  server's `next_index`.** This is a correctness rule, not an optimization.
+  `next_index` is the buffer's length *at the moment of the lookup*, so a
+  client that disconnected at frame 40 and looks up at frame 900 would resume
+  at 900 and silently lose 860 frames — a reply rendered with a hole in the
+  middle, in exactly the locked-phone flow this document exists to fix. The
+  registry provider persists each run's consumed index as it reads, and
+  `?from=` carries that. `next_index` is only for a client that means to
+  attach at the live tail and does not want the backlog.
 - The **composer is disabled** whenever the scene has a live run, extending the
   existing `sceneLocked` signal (already used by rename, End scene and the roll
   controls) rather than inventing a second one.
@@ -488,10 +590,23 @@ Text, per the player's request:
   they are the same review arriving, and a player who asked for one is not
   helped by a third phrasing.
 
-Display names, not slugs: campaign name from `store.campaigns`, scene title
-from the scene record. The notification id derives from the run id, so two runs
-completing cannot collapse into one notification. The tap intent carries `cid`
-and `sid`; `MainActivity` turns them into an SPA route.
+Display names, not slugs — and **captured when the run starts, not when it
+ends.** The spec allows a scene to be deleted under a live run and marks that
+run `failed`; resolving the title from the scene record at terminal time would
+then find nothing, and the error notification — the one case where the player
+most needs telling — is exactly the one that cannot be built. Campaign name
+from `store.campaigns` and scene title from the scene record, both read at run
+start and carried on the run.
+
+**The terminal notification hook is isolated and its failures are non-fatal.**
+It runs after the run's own bookkeeping, and anything it raises is swallowed and
+logged. A notification is the least important thing a terminal run does;
+letting it interrupt the persist, the state transition or the foreground-service
+demotion would trade the whole feature for a toast.
+
+The notification id derives from the run id, so two runs completing cannot
+collapse into one notification. The tap intent carries `cid` and `sid`;
+`MainActivity` turns them into an SPA route.
 
 **No notification while the app is in the foreground.** A player watching the
 tokens land does not need to be told they landed, and a notification for
@@ -518,6 +633,7 @@ broad touches nearly all of them, so they are requirements, not afterthoughts:
 |---|---|
 | `test_atomic_guard.py` | every `pending_reviews` write goes through `store.atomic` |
 | `test_lock_domain_guard.py` | `store/pending_reviews.py` classified in `DOMAIN_MODULES`; its `cid`-taking mutators take `campaign_lock(cid)` |
+| `store/cascade.py` | `pending_reviews` named there and wired into the `scene_refs.repoint` fan-out — it persists a scene id, and that module's rule is that an unnamed such store is one nobody has decided about |
 | `test_lock_order_guard.py` | one campaign lock per run, ever; no `ExitStack`, no lock carried around a loop |
 | `test_import_guard.py` | module-scope imports, acyclic: `routes/runs.py` must not import `streaming`/`scenes` |
 | `test_pydantic_guard.py` | plain `BaseModel` fields; dump via `routes.common._dump` |
@@ -562,6 +678,21 @@ Backend, with `backend/tests/llm_fakes.py` injected at
   orphaned player post.
 - a pending review is still retrievable after its run has been reaped, which is
   the case the persistence exists for.
+- a reconnect resuming from the client's consumed index reproduces the whole
+  reply; resuming from a stale `next_index` is what the test must *fail* on, so
+  it asserts frame contiguity rather than merely "some frames arrived".
+- an `audit` / `dossiers` retry landing in the background merges into the stored
+  review and leaves the absorb prose, staged edits and `commit_token` intact.
+- Cancel racing a terminal persist leaves the review deleted, never recreated,
+  in both interleavings.
+- renaming a scene carries its pending review to the new id.
+- a run id from another scene, sent through this scene's URL, returns
+  `run_gone` and neither streams nor cancels.
+- a run-producing route rejected by exclusivity mutates nothing — proposals not
+  superseded, no reply archived, no check resolved.
+- a terminal pending-review write moves its campaign up the recents rail.
+- a run whose scene was deleted still produces its error notification, from
+  labels captured at run start.
 
 Frontend (vitest, from `frontend/`):
 
