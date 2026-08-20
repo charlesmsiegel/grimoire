@@ -56,7 +56,7 @@ Five new pieces, each on rails that already exist:
 |---|---|
 | `store/image_descriptions.py` | `store/image_subjects.py`, itself modelled on `focus.json` |
 | description routes on four surfaces | the existing per-surface image routes |
-| `store/art_catalog.py` | `context/semantic.py` (retrieve, bound, degrade) |
+| `store/context/art.py` | `context/semantic.py` (retrieve, bound, degrade) |
 | `Section("available_art", …)` | `Section("recalled_lore", …)`, same `pack.RECALLED` tier |
 | handle resolution in `_persist_reply` | `turnstate.split_block`, the existing "lift machine-readable output out of a reply" step |
 
@@ -138,7 +138,16 @@ no-op — the strict-write rule surfaced as a status code.
 
 ### 3. The candidate pool and the ranking
 
-New `store/art_catalog.py`.
+New `store/context/art.py`.
+
+It lives under `context/` rather than at `store/art_catalog.py`, where this
+design first put it, for two reasons that only became clear while building it:
+the ranking needs `embed_space`/`vectors` and is the same *kind* of thing
+`context/semantic.py` is — store state turned into prompt material — and
+`routes/streaming.py` reaches the resolver through `store.context` anyway. The
+handle grammar, the section that prints it and the resolver that reads it back
+belong in one module, and that module belongs beside the other context
+builders.
 
 **The pool is the turn, not the library.** Ranking every described image in a
 world of hundreds of characters on every turn is the cost that would sink this.
@@ -372,5 +381,6 @@ the SDK path.
 | A handle is visible during streaming | Accepted, documented above. |
 | Semantic ranking blocks the event loop | Inherited from `semantic.py`, which documents it; the same tight timeout and vector cache apply, and the layer is skipped entirely with no endpoint configured. |
 | Absorb and the summary prompts still see the full markdown | `chronicle.transcript_text` serves both those prompts and the plain-text export, so stripping there would cost the export its pictures. The waste is bounded and one-off (~27 tokens per image, per absorb, not per turn), and the imitation risk does not apply — those calls return JSON and summaries, not transcript posts. Left, and named. |
+| A fork's posts point at the campaign they were written in | Pre-existing and already documented in `store/campaign_images.py` — the serving URL carries a campaign id and `store.fork` copies text verbatim — but this feature makes the shape common rather than occasional, so it is worth restating. Exports are unaffected: `export._resolve_image` resolves against the campaign being exported, not the id in the URL. Only the app's own `<img>` follows the id, and only a *deleted* source breaks it. |
 | Descriptions drift from the art they describe | Nothing detects this. An image replaced under the same name keeps the old description — the same way `focus.json` keeps a crop. Stated, not solved. |
 | The vision draft is unavailable on Claude connections | A clear refusal, not a crash. Widening `claude_agent.py` to multimodal is a separate change. |
