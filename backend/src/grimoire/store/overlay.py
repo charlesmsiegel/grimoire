@@ -885,29 +885,44 @@ def read_description(cid: str, aid: str, vid: str, name: str,
 
 
 def read_descriptions(cid: str, aid: str, vid: str, base: str = "characters") -> dict[str, str]:
-    """Every visible image's description for one version, by the rule above.
-    One entry per image the overlay union lists; undescribed images are absent
-    rather than empty, so a caller can still tell "not reviewed" from
-    "reviewed, nothing to say"."""
+    """Every visible image's description for one version, by `read_description`'s
+    per-image rule — but resolving the whole version in one pass.
+
+    Written as a sweep rather than a loop over `read_description` because the
+    loop was quadratic and it showed: each call re-listed the version's images
+    and re-read both sidecars, so a thirty-image character cost ~44ms of pure
+    directory scanning. This runs once per cast member per TURN, on the
+    synchronous path that blocks the event loop, so that was the difference
+    between a rounding error and a fifth of a second of stat() calls per reply.
+
+    One entry per image the overlay lists; an image nobody has reviewed is
+    ABSENT rather than empty, so a caller can still tell "not reviewed" from
+    "reviewed, nothing to say".
+    """
+    croot, wroot = croot_of(cid), wroot_of(cid)
+    images = list_images(cid, aid, vid, base)
+    union = {i["name"] for i in images}
+    mine_images = {i["name"] for i in assets.list_images(croot, aid, vid, base)}
+    mine = image_descriptions.read_all(croot, aid, vid, base, names=union)
+    mine_keys = image_descriptions.raw_keys(croot, aid, vid, base)
+    gone, detached_record = deleted(cid), _flat_ref(base, aid) in detached(cid)
+    theirs: dict[str, str] = {}
+    theirs_keys: set[str] = set()
+    # Only read the world side if some image might fall through to it -- a fully
+    # diverged version never touches it.
+    if not detached_record and not union <= mine_images:
+        theirs = image_descriptions.read_all(wroot, aid, vid, base, names=union)
+        theirs_keys = image_descriptions.raw_keys(wroot, aid, vid, base)
+
     out: dict[str, str] = {}
-    for i in list_images(cid, aid, vid, base):
-        text = read_description(cid, aid, vid, i["name"], base)
-        if text or _described(cid, aid, vid, i["name"], base):
-            out[i["name"]] = text
+    for name in sorted(union):
+        campaign_side = (name in mine_images or detached_record
+                         or _asset_ref(base, aid, vid, name) in gone)
+        if name in mine_keys:
+            out[name] = mine.get(name, "")
+        elif not campaign_side and name in theirs_keys:
+            out[name] = theirs.get(name, "")
     return out
-
-
-def _described(cid: str, aid: str, vid: str, name: str, base: str) -> bool:
-    """Is there a sidecar KEY for this image, campaign- or world-side? The
-    absent-vs-empty distinction, resolved through the overlay."""
-    croot = croot_of(cid)
-    if name in image_descriptions.raw_keys(croot, aid, vid, base):
-        return True
-    if (assets.image_path(croot, aid, vid, name, base) is not None
-            or _asset_ref(base, aid, vid, name) in deleted(cid)
-            or _flat_ref(base, aid) in detached(cid)):
-        return False
-    return name in image_descriptions.raw_keys(wroot_of(cid), aid, vid, base)
 
 
 def set_description(cid: str, aid: str, vid: str, name: str, text: str,

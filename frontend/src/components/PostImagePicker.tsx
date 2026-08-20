@@ -75,10 +75,17 @@ export function insertion(name: string, url: string, description?: string): stri
   // pinned to bytes that are gone for a year. Bare revalidates, which an ETag
   // answers with a 304.
   //
-  // Neither half needs escaping. `]` would close the alt text and `)` the
-  // destination, and a name can contain neither: `store.campaign_images
-  // .addressable` refuses both the link punctuation and (through
-  // `assets.storable`) the glob metacharacters `[` and `]`.
+  // The DESTINATION needs care on three of the four surfaces. The library's
+  // names are safe -- `store.campaign_images.addressable` refuses the link
+  // punctuation outright -- but a character, PC or entity image is named under
+  // `assets.storable` alone, which is `safe_id` plus a glob-metacharacter ban
+  // and happily accepts `art(1)`, `my art` and `a#b`. Each of those ends the
+  // destination early and spills the rest of the URL into the prose.
+  //
+  // Angle brackets rather than percent-encoding, because by here the URL is
+  // already assembled and re-encoding a whole URL is how double-encoding bugs
+  // start: `![alt](<...>)` is the markdown form for a destination that cannot
+  // be written bare, react-markdown reads it, and the href comes out unchanged.
   //
   // The DESCRIPTION is the alt text when there is one, and the name only when
   // there is not. That is the same choice `context/art.resolve_handles` makes
@@ -90,7 +97,10 @@ export function insertion(name: string, url: string, description?: string): stri
   const alt = description?.trim()
     ? description.trim().replace(/\[/g, "(").replace(/\]/g, ")").replace(/\s+/g, " ")
     : name;
-  return `![${alt}](${url})`;
+  // `<` and `>` are the two the angle-bracket form itself cannot hold, so they
+  // are percent-escaped; the serving route decodes the path parameter back.
+  const safe = url.replace(/</g, "%3C").replace(/>/g, "%3E");
+  return `![${alt}](${/[()\s]/.test(safe) || safe !== url ? `<${safe}>` : safe})`;
 }
 
 const THUMB = 160;

@@ -253,3 +253,16 @@ test("a description carrying link punctuation cannot break the markdown", () => 
   const out = insertion("coastline", "/u", "A map [annotated] by the\nharbourmaster.");
   expect(out).toBe("![A map (annotated) by the harbourmaster.](/u)");
 });
+
+test("a destination that cannot be written bare is wrapped, not left to break", () => {
+  // Only the campaign LIBRARY refuses link punctuation in a name
+  // (`campaign_images.addressable`); a character or entity image is named under
+  // `assets.storable` alone, which accepts `art(1)` and `my art`.
+  expect(insertion("art(1)", "/api/campaigns/c/locations/harbour/images/art(1)"))
+    .toBe("![art(1)](</api/campaigns/c/locations/harbour/images/art(1)>)");
+  expect(insertion("my art", "/img/my art")).toBe("![my art](</img/my art>)");
+  expect(insertion("a<b", "/img/a<b")).toBe("![a<b](</img/a%3Cb>)");
+  // ...and an ordinary URL is still written bare
+  expect(insertion("coastline", "/api/campaigns/c/images/coastline"))
+    .toBe("![coastline](/api/campaigns/c/images/coastline)");
+});
