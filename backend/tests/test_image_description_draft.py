@@ -173,3 +173,28 @@ def test_every_connection_kind_is_classified_as_image_capable_or_not():
     text_only = set(llm.TEXT_ONLY_KINDS)
     assert not supported & text_only
     assert supported | text_only == set(store.llm_connections.KINDS)
+
+
+def test_an_oversized_image_is_refused_before_its_bytes_are_read(tmp_path, monkeypatch):
+    """One draft holds the file three times over -- the bytes, their base64
+    buffer, and the ~4/3-sized string that sits in the request. Only the
+    campaign library caps its uploads, so a record image can be arbitrarily
+    large, and on Android (Chaquopy) that is a killed process rather than an
+    error anyone can act on."""
+    p = tmp_path / "huge.png"
+    p.write_bytes(PNG)
+    monkeypatch.setattr(store.image_drafts, "MAX_BYTES", len(PNG) - 1)
+    with pytest.raises(store.image_drafts.ImageTooLargeError):
+        store.image_drafts.data_uri(p)
+    # ...and the check is on `stat`, not on what was read: nothing opened it.
+    monkeypatch.setattr(type(p), "read_bytes",
+                        lambda self: pytest.fail("the bytes were read anyway"))
+    with pytest.raises(store.image_drafts.ImageTooLargeError):
+        store.image_drafts.data_uri(p)
+
+
+def test_the_route_reports_an_oversized_image_as_a_413(client, art, monkeypatch):
+    wid, cid, vid = art
+    monkeypatch.setattr(store.image_drafts, "MAX_BYTES", 1)
+    r = client.post(_url(wid, cid, vid))
+    assert (r.status_code, r.json()["detail"]) == (413, store.image_drafts.TOO_LARGE)

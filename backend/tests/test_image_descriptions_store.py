@@ -277,3 +277,16 @@ def test_an_unrelated_save_leaves_a_malformed_entry_exactly_as_it_found_it(tmp_p
     raw = image_descriptions.read_raw(d)
     assert raw["avatar"] == ["not", "a", "string"]     # untouched, still hand-fixable
     assert image_descriptions.read_in(d) == {"gallery_1": "Half-plate in the rain."}
+
+
+def test_a_failed_deletion_keeps_the_description_it_would_have_dropped(tmp_path, monkeypatch):
+    """`delete_in` swallows an unlink failure by design -- a scanner holding
+    the file on Windows, a read-only directory. Dropping the sentence anyway
+    loses what somebody wrote about a picture that is still sitting there."""
+    cid, vid = _chars(tmp_path)
+    d = _dir_of(tmp_path, cid, vid)
+    image_descriptions.write_in(d, {"gallery_1": "Half-plate in the rain."})
+
+    monkeypatch.setattr(assets, "delete_in", lambda *a, **kw: None)  # the unlink that did not
+    assets.delete_image(tmp_path, cid, vid, "gallery_1")
+    assert image_descriptions.read_in(d) == {"gallery_1": "Half-plate in the rain."}

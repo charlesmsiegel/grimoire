@@ -25,8 +25,12 @@ exist.
 2. During play, Grimoire ranks described art against the moment and offers the
    closest few to the model as a droppable prompt section.
 3. The model may embed one of them in its post by writing a **handle**, which
-   Grimoire rewrites into real markdown on the way in. A handle naming
-   something it was not offered resolves to nothing and disappears.
+   Grimoire rewrites into real markdown on the way in. A handle that does not
+   pass resolution's own gate — see *Resolution does not need the catalogue
+   that was offered* below — resolves to nothing and disappears, and no
+   `[[art:...]]` form survives into a transcript either way. That gate is not
+   the offered list: a described, visible, showable image that merely fell
+   below the depth cut can still land if the model names it.
 
 ## Non-goals
 

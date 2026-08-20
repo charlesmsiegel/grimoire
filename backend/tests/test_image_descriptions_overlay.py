@@ -134,3 +134,26 @@ def test_a_malformed_campaign_entry_does_not_mask_the_worlds_description(pair):
 
     assert overlay.read_description(camp, cid, vid, "gallery_1") == "The world's quay."
     assert overlay.read_descriptions(camp, cid, vid) == {"gallery_1": "The world's quay."}
+
+
+def test_promoting_inherited_art_takes_its_description_campaign_side(pair):
+    """Copying the bytes up is what makes the campaign hold the picture, and
+    from that moment the per-image rule stops falling through to the world --
+    deliberately, because a campaign-side image is normally different art. Here
+    it is the SAME art, so the sentence has to travel with it or promoting the
+    picture silently strips its description in that campaign."""
+    _wroot, camp, cid, vid = pair
+    overlay.promote_image(camp, cid, vid, "gallery_1")
+    assert overlay.read_description(camp, cid, vid, "avatar") == "The world's quay."
+
+
+def test_a_reviewed_empty_description_travels_with_a_promotion_too(pair):
+    """Key presence, not truthiness: `""` is "reviewed, nothing to say", and
+    losing it walks the image back into a queue somebody already answered."""
+    wroot, camp, cid, vid = pair
+    assets.put_image(wroot, cid, vid, "avatar", b"png", "png")
+    image_descriptions.set_description(wroot, cid, vid, "avatar", "")
+    overlay.promote_image(camp, cid, vid, "gallery_1")
+    # the demoted avatar keeps its reviewed-empty mark in the gallery slot
+    assert image_descriptions.read_all(overlay.croot_of(camp), cid, vid) == {
+        "avatar": "The world's quay.", "gallery_1": ""}

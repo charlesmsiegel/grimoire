@@ -50,12 +50,42 @@ MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
          "gif": "image/gif", "webp": "image/webp"}
 
 
+#: Ceiling on an image this will encode, and the same number and the same
+#: reason as ``campaign_images.MAX_BYTES``: the backend is packaged verbatim
+#: into the Android app (Chaquopy), and one draft holds the file THREE times
+#: over -- the bytes, their base64 buffer, and the ~4/3-sized string that then
+#: sits in the request payload. Only the campaign library caps its uploads, so
+#: a record image (or any file a sync client dropped into the store) can be
+#: arbitrarily large, and on a phone that is a killed process rather than an
+#: error anyone can act on (PR review). Checked from ``stat`` BEFORE the read,
+#: because a cap enforced after reading protects nothing.
+MAX_BYTES = 25 * 1024 * 1024
+
+#: What the route turns into a 413 when the picture is past `MAX_BYTES`.
+TOO_LARGE = "image is too large to describe (max 25 MB)"
+
+
+class ImageTooLargeError(Exception):
+    """`path` is bigger than `MAX_BYTES` (HTTP 413).
+
+    ``campaign_images.ImageTooLarge``'s idea under the name the lint gate wants
+    from new code: that one predates the widened ruff selection and sits in the
+    baseline, and renaming it would be a public-API change for another module.
+    """
+
+
 def data_uri(path: Path) -> str:
     """`path`'s bytes as a `data:` URI, typed by its stored extension."""
     ext = path.suffix.lstrip(".").lower()
     media = MEDIA.get(ext)
     if media is None:
         raise ValueError(f"unsupported image type: {ext}")
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0        # unreadable is the read's problem to report, not ours
+    if size > MAX_BYTES:
+        raise ImageTooLargeError(TOO_LARGE)
     return f"data:{media};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
 
 
