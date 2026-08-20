@@ -262,8 +262,13 @@ def _repoint_urls(staging: Path, old_wid: str, new_wid: str) -> int:
     that back out with a "not under a directory called assets" rule only traded
     one guess for another, and would have skipped a genuine ``.md`` record that
     happened to live under such a directory. The sidecars that do sit under
-    ``assets/`` (``subjects.json``, ``focus.json``) hold ids and offsets and
-    contain no URLs, so scanning them is a no-op rather than a hazard.
+    ``assets/`` are scanned along with everything else. ``subjects.json`` and
+    ``focus.json`` hold ids and offsets, so for them this is a no-op.
+    ``descriptions.json`` is the one that holds free prose an author wrote, and
+    so *can* contain a URL — which is a reason to scan it rather than to skip
+    it: a description naming an image by its world-scoped URL should follow the
+    world being renamed exactly as a record body does. The prefix carries its
+    trailing slash, so the substitution is as precise here as in a ``.md``.
     """
     old = f"/api/worlds/{old_wid}/".encode()
     new = f"/api/worlds/{new_wid}/".encode()

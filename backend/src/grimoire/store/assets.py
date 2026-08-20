@@ -21,6 +21,12 @@ from .paths import safe_id
 
 AVATAR = "avatar"
 FOCUS_FILE = "focus.json"
+#: The per-image description sidecar (`store.image_descriptions`). Its NAME
+#: lives here, with `FOCUS_FILE`, because this module owns the directories both
+#: sit in and has to take an entry with a deleted image; its SEMANTICS -- what
+#: an absent key means, what a write will accept -- live in the module named
+#: after it. Spelling the string there instead would be one rule in two places.
+DESCRIPTIONS_FILE = "descriptions.json"
 _EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
 _PROMOTE_TMP = "promote-tmp"  # the temp name the pre-#253 three-rename swap used
 
@@ -474,6 +480,41 @@ def clear_focus(root: Path, cid: str, vid: str, base: str = "characters") -> Non
         p.unlink()
 
 
+def drop_sidecar_entry(d: Path, filename: str, key: str) -> None:
+    """Remove `key` from a ``{name: value}`` sidecar in `d`, if it is there.
+
+    Deleting an image has to take its sidecar entries with it, and this module
+    is where deletion happens. It cannot call the sidecar's own module to do it:
+    `image_descriptions` enumerates its directory through `assets.list_in`, so
+    the import would be a cycle -- and a deferred import to dodge that is
+    exactly what `tests/test_import_guard.py` exists to refuse.
+
+    So the split is by *layer*, not by file: this drops a key from a flat JSON
+    mapping, knowing nothing about what the values mean, and the owning module
+    keeps every rule about them. Removing the KEY rather than blanking the value
+    is the point -- for descriptions an absent key means "never reviewed", which
+    is what a name with no image behind it now is.
+
+    Silent on a missing, garbled or unwritable sidecar, matching `clear_focus`:
+    this runs *after* the bytes are gone, and an image deletion must not fail
+    over the file that annotates it.
+    """
+    p = d / filename
+    if not p.exists():
+        return
+    try:
+        cur = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return
+    if not isinstance(cur, dict) or key not in cur:
+        return
+    del cur[key]
+    try:
+        atomic.write_text(p, json.dumps(cur, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
 def put_image(root: Path, cid: str, vid: str, name: str, data: bytes, ext: str,
               base: str = "characters") -> str:
     if not (safe_id(cid) and safe_id(vid)):
@@ -487,7 +528,11 @@ def put_image(root: Path, cid: str, vid: str, name: str, data: bytes, ext: str,
 def delete_image(root: Path, cid: str, vid: str, name: str, base: str = "characters") -> None:
     if not (safe_id(cid) and safe_id(vid) and _safe_name(name)):
         return
-    delete_in(_dir(root, cid, vid, base), name)
+    d = _dir(root, cid, vid, base)
+    delete_in(d, name)
+    # The description goes with the bytes, the way the crop already does below:
+    # a re-upload under this name is different art and must inherit neither.
+    drop_sidecar_entry(d, DESCRIPTIONS_FILE, name)
     if name == AVATAR:
         clear_focus(root, cid, vid, base)
 
