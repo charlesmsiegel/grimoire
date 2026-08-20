@@ -869,7 +869,7 @@ def test_two_scenes_in_one_campaign_do_not_cross_contaminate(client, two_scenes)
     cid, (a, b) = two_scenes
     ra = _start_turn(client, cid, a, "Seraphine waits.")
     rb = _start_turn(client, cid, b, "Winifred does not.")
-    _wait_terminal(app, ra); _wait_terminal(app, rb)
+    _wait_terminal(client.app, ra); _wait_terminal(client.app, rb)
     assert "seraphine" in _last_reply(cid, a).lower()
     assert "winifred" in _last_reply(cid, b).lower()
 ```
