@@ -35,12 +35,12 @@
     "A002": 1
   },
   "backend/src/grimoire/routes/campaigns.py": {
-    "B904": 85,
+    "B904": 87,
     "RUF003": 1
   },
   "backend/src/grimoire/routes/characters.py": {
     "A002": 2,
-    "B904": 44,
+    "B904": 42,
     "SIM105": 1
   },
   "backend/src/grimoire/routes/common.py": {
@@ -50,11 +50,11 @@
   },
   "backend/src/grimoire/routes/config.py": {
     "A002": 4,
-    "B904": 31,
+    "B904": 30,
     "PERF401": 1
   },
   "backend/src/grimoire/routes/entities.py": {
-    "B904": 21,
+    "B904": 25,
     "RUF005": 1
   },
   "backend/src/grimoire/routes/greetings.py": {
@@ -71,7 +71,7 @@
   },
   "backend/src/grimoire/routes/scenes.py": {
     "A002": 3,
-    "B904": 40,
+    "B904": 37,
     "C901": 5,
     "N818": 2,
     "RUF003": 2,
@@ -146,6 +146,9 @@
   "backend/src/grimoire/store/calendars/hebrew.py": {
     "PERF401": 1,
     "RUF012": 1
+  },
+  "backend/src/grimoire/store/campaign_images.py": {
+    "N818": 1
   },
   "backend/src/grimoire/store/campaigns/lifecycle.py": {
     "B023": 2,
@@ -688,7 +691,7 @@
     "PLW1510": 1
   },
   "evals/cases.py": {
-    "RUF005": 1
+    "RUF005": 2
   },
   "evals/graders.py": {
     "A002": 1,

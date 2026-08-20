@@ -6,7 +6,7 @@
   "backend/src/grimoire/llm.py": {
     "attr-defined": 1,
     "misc": 1,
-    "union-attr": 5
+    "union-attr": 6
   },
   "backend/src/grimoire/routes/campaigns.py": {
     "union-attr": 2
@@ -67,6 +67,9 @@
   },
   "backend/src/grimoire/store/campaign_climate.py": {
     "return-value": 1
+  },
+  "backend/src/grimoire/store/campaign_images.py": {
+    "return": 1
   },
   "backend/src/grimoire/store/cards.py": {
     "index": 2
