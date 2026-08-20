@@ -13,3 +13,6 @@ android/gradlew text eol=lf
 backend/tests/fixtures/frozen_campaign/**/*.md text eol=lf
 backend/tests/fixtures/frozen_campaign/**/*.json text eol=lf
 backend/tests/fixtures/llm/*.json text eol=lf
+# The lint baselines are the same kind of artifact: generated, compared
+# byte-for-byte by `test_ratchet_guard.py`, and read as a diff in review.
+lint-baselines/*.json text eol=lf

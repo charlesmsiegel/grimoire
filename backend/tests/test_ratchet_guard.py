@@ -127,6 +127,18 @@ def test_baseline_is_canonically_serialized(path: pathlib.Path):
 
 
 @pytest.mark.parametrize("path", BASELINES, ids=lambda p: p.name)
+def test_baseline_has_no_carriage_returns(path: pathlib.Path):
+    """Read as bytes on purpose: text mode translates CRLF away, so the test
+    above cannot see the platform difference this one is about. A baseline
+    regenerated on Windows without the `newline=` argument would land as a
+    whole-file diff and conflict with every other branch touching it."""
+    assert b"\r" not in path.read_bytes(), (
+        f"{path.name} has CRLF line endings; `make baseline` writes LF, and "
+        f".gitattributes pins the checkout to it."
+    )
+
+
+@pytest.mark.parametrize("path", BASELINES, ids=lambda p: p.name)
 def test_baseline_counts_are_positive(path: pathlib.Path):
     zero = [k for k, v in ratchet.loads(path.read_text(encoding="utf-8")).items() if v < 1]
     assert not zero, f"{path.name} records non-findings, which permit one each: {zero}"
@@ -317,6 +329,30 @@ def test_accept_regressions_is_the_way_a_rename_lands(monkeypatch, tmp_path):
     assert ratchet.loads((tmp_path / "ruff.json").read_text()) == _counter(
         [(("new.py", "F401"), 1)]
     )
+
+
+def test_a_missing_baseline_says_so_rather_than_permitting_nothing(monkeypatch, tmp_path):
+    """An empty baseline and an absent one are not the same claim. Treating
+    the second as the first turns `git checkout` on the wrong file into a wall
+    of findings about code the contributor never touched."""
+    monkeypatch.setattr(ratchet, "BASELINES", tmp_path)
+    with pytest.raises(ratchet.ToolError, match="is missing"):
+        ratchet.read_baseline("ruff")
+
+
+def test_deleting_a_baseline_is_not_a_way_round_the_refusal(monkeypatch, tmp_path):
+    """Absent has to count as zero-of-everything, or `rm lint-baselines/x.json`
+    followed by `make baseline` would be the shortest path to accepting any
+    regression -- and it would look, in review, like a file that was merely
+    regenerated."""
+    monkeypatch.setattr(ratchet, "BASELINES", tmp_path)
+    monkeypatch.setitem(ratchet.COLLECTORS, "ruff", lambda: _counter([(("a.py", "F401"), 1)]))
+    assert ratchet.update("ruff") == 1
+    assert not (tmp_path / "ruff.json").exists()
+    # Bootstrapping a genuinely new tool goes through the same door as any
+    # other widening, and leaves the same word behind.
+    assert ratchet.update("ruff", accept_regressions=True) == 0
+    assert (tmp_path / "ruff.json").exists()
 
 
 def test_accept_regressions_alone_is_an_argument_error():

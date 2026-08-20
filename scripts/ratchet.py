@@ -278,9 +278,18 @@ def loads(text: str) -> Findings:
 
 
 def read_baseline(tool: str) -> Findings:
+    """The committed counts. Missing is an error rather than an empty
+    baseline: every finding in the tree would read as brand new, and the
+    contributor would get a wall of "fix these" for code they did not touch
+    instead of the one sentence that is true."""
     path = baseline_path(tool)
     if not path.exists():
-        return collections.Counter()
+        raise ToolError(
+            f"{_shown(path)} is missing. It is a committed file, not a cache -- "
+            f"restore it (`git checkout {_shown(path)}`), or, if this tool is "
+            f"genuinely new here, create it with "
+            f"`--update --accept-regressions`."
+        )
     return loads(path.read_text(encoding="utf-8"))
 
 
@@ -361,7 +370,12 @@ def update(tool: str, *, accept_regressions: bool = False) -> int:
     says it, and leaves the word in the shell history and the CI log.
     """
     found = COLLECTORS[tool]()
-    grew, _ = compare(found, read_baseline(tool))
+    # An absent baseline is not an exemption: every finding counts as a rise,
+    # so bootstrapping a fourth tool needs `--accept-regressions` like any
+    # other widening. One rule with no exceptions, so `rm` cannot become the
+    # short way round the one above.
+    prior = read_baseline(tool) if baseline_path(tool).exists() else collections.Counter()
+    grew, _ = compare(found, prior)
     if grew and not accept_regressions:
         print(
             f"{tool}: refusing to write a baseline that permits more than the "
@@ -378,7 +392,11 @@ def update(tool: str, *, accept_regressions: bool = False) -> int:
         )
         return 1
     BASELINES.mkdir(exist_ok=True)
-    baseline_path(tool).write_text(dumps(found), encoding="utf-8")
+    # newline="\n" explicitly: text mode would translate to CRLF on Windows,
+    # so the same tree would produce a different file depending on who ran
+    # `make baseline`, and every regeneration on the other platform would
+    # land as a whole-file diff. `.gitattributes` pins the checkout to match.
+    baseline_path(tool).write_text(dumps(found), encoding="utf-8", newline="\n")
     print(f"{tool}: wrote {sum(found.values())} finding(s) to "
           f"{_shown(baseline_path(tool))}")
     return 0
