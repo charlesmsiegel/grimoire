@@ -9,15 +9,38 @@ a garbled file and return nothing: neither block is worth failing a turn over.
 from __future__ import annotations
 
 from ... import prompts
-from .. import chronicle, config, relationships
+from .. import chronicle, config, export, relationships
 
 
 def _project_history(messages: list[dict]) -> list[dict]:
     """Script lines (templates/scene/history_line.j2) -> conversation roles; merge
     consecutive same-role messages so providers that expect strict alternation are
-    happy."""
+    happy.
+
+    **Images in the transcript reach the model as their ALT TEXT, never as
+    markdown.** A post can carry a picture two ways -- a reader inserts one
+    through `PostImagePicker`, or the narrator writes an art handle that
+    `context.art.resolve_handles` rewrites -- and either way what is stored is
+    `![description](/api/campaigns/...)`. Sending that whole thing back costs
+    ~27 tokens of URL per image on every remaining turn of the scene, and buys
+    nothing: the description is the part that says what was shown.
+
+    The URL is worse than useless, in fact. Left in, it is a worked example of
+    a shape the model is not supposed to produce: art is requested by HANDLE,
+    which resolution validates, while a raw markdown URL is passed through
+    untouched -- so a model imitating what it sees in its own history can write
+    a plausible URL for a picture that does not exist, and it lands in the
+    transcript as a broken image. Not showing it is the cheapest way not to
+    teach it.
+
+    `export.drop_images` rather than a second regex here: it is the same
+    question ("this reader gets text only, give it the alt text") that a
+    plain-text export already answers, and two copies of that rule would agree
+    right up until one of them was fixed.
+    """
     out: list[dict] = []
-    for m in messages:
+    for message in messages:
+        m = {**message, "content": export.drop_images(message["content"])}
         line = prompts.render("scene/history_line.j2", m=m)
         if out and out[-1]["role"] == m["role"]:
             out[-1]["content"] += "\n\n" + line

@@ -313,3 +313,21 @@ def test_switching_the_section_off_skips_the_ranking_entirely(world, monkeypatch
     calls.clear()
     assemble._assemble(camp, sid)
     assert calls == []                        # switched off: never asked
+
+
+def test_history_sends_a_picture_to_the_model_as_its_alt_text(world):
+    """A post carries an image as `![description](url)` however it got there --
+    the picker or a resolved handle. The model gets the description and not the
+    URL: the URL costs ~27 tokens per image on every remaining turn and is a
+    worked example of a shape the model must not produce, since a raw markdown
+    URL is passed through unvalidated where a handle is checked."""
+    from grimoire.store.context import story
+    camp, char, vid = world["cid"], world["char"], world["vid"]
+    _cast(camp, char, vid)
+    md = art.resolve_handles(camp, f"She turns. [[art:characters:{char}:gallery_1]] Rain.")
+    projected = story._project_history([{"role": "assistant", "content": md, "speaker": None}])
+    text = projected[0]["content"]
+    assert "Half-plate, rain-soaked, a burning keep behind her." in text
+    assert "/api/campaigns/" not in text
+    assert "![" not in text
+    assert "She turns." in text and "Rain." in text

@@ -274,6 +274,16 @@ as text, get the alt text and nothing else. The URL is bare, with no `?v=`
 token, because a `?v=` URL is served `immutable, max-age=1y` and this one is
 about to be written into a transcript that outlives every cache.
 
+**Images reach the model as alt text, never as markdown.** Whichever way a post
+came by its picture — a reader's pick or a resolved handle — what is stored is
+`![description](/api/campaigns/...)`, and `context/story._project_history`
+strips that to the description before the history is sent. Two reasons, and
+they point the same way: the URL costs ~27 tokens per image on every remaining
+turn and says nothing the description does not, and leaving it in is a worked
+example of a shape the model must not produce — a handle is validated on the
+way back, a raw markdown URL is passed through untouched, so a model imitating
+its own history can write a plausible URL for a picture that does not exist.
+
 **Accepted cost: the handle is briefly visible while streaming.** The SSE
 deltas carry raw model text, and resolution happens at persist. So a handle
 appears in the streaming view and becomes the image when the turn lands. The
