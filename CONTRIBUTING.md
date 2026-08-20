@@ -115,8 +115,8 @@ compares what it found to a committed count per (file, rule) under
 
 `scripts/ratchet.py` opens with why these landed against a baseline instead of
 as a report nobody reads. The short version: the tools between them report
-about ten thousand things today, that is a program of work rather than one
-change, and in the meantime none of it may get worse.
+about two and a half thousand things today, that is a program of work rather
+than one change, and in the meantime none of it may get worse.
 
 ### Four things that will bite you
 
