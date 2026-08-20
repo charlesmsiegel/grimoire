@@ -95,3 +95,23 @@ def test_prune_still_drops_a_sidecar_from_a_folder_with_no_campaign_art(pair):
     lifecycle._prune_duplicate_files(croot, wroot)
     assert not (d / image_descriptions.DESCRIPTIONS_FILE).exists()
     assert overlay.read_description(camp, cid, vid, "gallery_1") == "The world's quay."
+
+
+def test_describing_art_never_makes_a_record_look_edited_to_sync(pair):
+    """The reason this is a sidecar and not a field on the card.
+
+    Images are deliberately not hashed into a character card, so editing art
+    does not make a character look edited to the world/campaign sync. A
+    description in the card would have undone that: describing a picture would
+    show up as a diverged record, and a campaign that had only ever described
+    its own art would materialize the whole card. Nothing else enforces this,
+    so it is pinned here.
+    """
+    from grimoire.store import sync
+    wroot, camp, cid, vid = pair
+    overlay.materialize_actor(camp, "characters", cid)
+    assert sync.incoming(camp) == []
+
+    overlay.set_description(camp, cid, vid, "gallery_1", "This campaign's take.")
+    image_descriptions.set_description(wroot, cid, vid, "gallery_1", "A newer world take.")
+    assert sync.incoming(camp) == []
