@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from . import fence
+from . import export, fence
 from .scenes import serialize as scenes_serialize
 
 WINDOW = 3          # turns measured; a constant, deliberately not a setting
@@ -59,12 +59,29 @@ def segment(messages: list[dict], turn_sizes: list[int]) -> list[list[dict]]:
     return turns
 
 
+def _prose(content: str) -> str:
+    """`content` with everything that is not prose the model WROTE taken out.
+
+    Two exclusions, one reason. A roll fence is machine-readable output the
+    protocol asked for; an image is a picture the reply included, and on the
+    narrator's side of #376 it was requested with a ten-character handle that
+    `context.art.resolve_handles` expanded into markdown afterwards.
+
+    Counting either as prose punishes the model for complying, and the image is
+    the sharper case: one added ~7 phantom words and a whole phantom paragraph
+    to a fifteen-word reply, which under a `terse` budget is enough on its own
+    to trip the drift correction and tell the model to write LESS -- for having
+    done exactly what the available-art section asked of it.
+    """
+    return export.remove_images(_ROLL_FENCE.sub(" ", content))
+
+
 def _words(content: str) -> int:
-    return len(_ROLL_FENCE.sub(" ", content).split())
+    return len(_prose(content).split())
 
 
 def _paragraphs(content: str) -> int:
-    return max(len([p for p in content.split("\n\n") if p.strip()]), 1)
+    return max(len([p for p in _prose(content).split("\n\n") if p.strip()]), 1)
 
 
 def _identity(speaker: str, cast_names) -> str:

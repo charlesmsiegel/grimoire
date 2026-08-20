@@ -274,6 +274,14 @@ as text, get the alt text and nothing else. The URL is bare, with no `?v=`
 token, because a `?v=` URL is served `immutable, max-age=1y` and this one is
 about to be written into a transcript that outlives every cache.
 
+**A picture does not count against the length budget.** `length_drift._words`
+already excludes roll fences — machine-readable output the protocol asked for —
+and an image is the same case: the model wrote a ten-character handle, and the
+alt text came out of an author's sidecar. Measured, one image added ~7 phantom
+words and a whole phantom paragraph to a fifteen-word reply, which under a
+`terse` budget is enough on its own to trip the drift correction and tell the
+model to write *less prose* for having included a picture.
+
 **Images reach the model as alt text, never as markdown.** Whichever way a post
 came by its picture — a reader's pick or a resolved handle — what is stored is
 `![description](/api/campaigns/...)`, and `context/story._project_history`
@@ -348,5 +356,6 @@ the SDK path.
 | The model over-reaches for art, and every post grows a picture | The instruction caps it at one per reply and the depth bound caps the offer at 4. If play feel suffers, the prompt-layout switch turns the section off without a code change — and `_assemble` skips the ranking entirely when it is off, so the switch turns off the cost too, not merely the output. |
 | A handle is visible during streaming | Accepted, documented above. |
 | Semantic ranking blocks the event loop | Inherited from `semantic.py`, which documents it; the same tight timeout and vector cache apply, and the layer is skipped entirely with no endpoint configured. |
+| Absorb and the summary prompts still see the full markdown | `chronicle.transcript_text` serves both those prompts and the plain-text export, so stripping there would cost the export its pictures. The waste is bounded and one-off (~27 tokens per image, per absorb, not per turn), and the imitation risk does not apply — those calls return JSON and summaries, not transcript posts. Left, and named. |
 | Descriptions drift from the art they describe | Nothing detects this. An image replaced under the same name keeps the old description — the same way `focus.json` keeps a crop. Stated, not solved. |
 | The vision draft is unavailable on Claude connections | A clear refusal, not a crash. Widening `claude_agent.py` to multimodal is a separate change. |
