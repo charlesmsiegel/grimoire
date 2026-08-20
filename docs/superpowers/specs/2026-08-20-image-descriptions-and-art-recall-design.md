@@ -269,6 +269,12 @@ merely resembles the catalogue's.
 
 A handle failing any rule is deleted from the text, leaving the prose intact.
 
+**At most one picture per reply is enforced here, not merely asked for.** Every
+other clause of the contract is a rule resolution applies, so leaving the count
+to the model's goodwill made it the one exception — and a model offered four
+candidates has an obvious way to use all four. The first *resolvable* handle
+wins, so a typo in an earlier one does not silently spend the slot.
+
 **URLs are percent-encoded segment by segment.** `campaign_images.addressable`
 keeps the library's names inside what a markdown link can carry; the other three
 surfaces have no such rule, and `assets.storable` accepts `art(1)`, `my art` and

@@ -441,3 +441,28 @@ def test_the_section_offers_handles_bare(world):
         available_art=[{"handle": "[[art:campaign:coastline]]", "description": "A map."}])
     assert "[[art:campaign:coastline]]" in rendered
     assert "`[[art:" not in rendered
+
+
+def test_only_one_picture_per_reply_lands(world):
+    """"At most one picture per reply" is what the section asks for, and every
+    other clause of that contract is a rule resolution applies. Left as advice,
+    a model offered four candidates has an obvious way to use all four."""
+    camp = world["cid"]
+    for name in ("the-inn", "the-keep"):
+        campaign_images.put_image(camp, name, b"png", "png")
+        image_descriptions.set_in(campaign_images.images_dir(camp), name, f"A {name}.")
+    out = art.resolve_handles(camp, "A. [[art:campaign:coastline]] B. [[art:campaign:the-inn]] "
+                                    "C. [[art:campaign:the-keep]]")
+    assert out.count("![") == 1
+    assert "[[art:" not in out
+    assert out.startswith("A. ![A hand-drawn map")     # the first one wins
+    assert "B." in out and "C." in out                 # the prose is untouched
+
+
+def test_an_unresolvable_first_handle_does_not_spend_the_one_slot(world):
+    """The cap counts pictures that LANDED, not handles that were written --
+    otherwise a typo in the first one would silently suppress a good second."""
+    camp = world["cid"]
+    out = art.resolve_handles(camp, "[[art:campaign:nope]] then [[art:campaign:coastline]]")
+    assert out.count("![") == 1
+    assert "A hand-drawn map" in out

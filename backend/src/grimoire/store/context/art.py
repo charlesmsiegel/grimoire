@@ -620,21 +620,33 @@ def resolve_handles(cid: str, text: str, sid: str | None = None) -> str:
     transcript as text, get the alt text and nothing else. `PostImagePicker
     .insertion` makes the same choice for the same reason.
 
-    Neither half needs escaping. ``]`` would close the alt text and ``)`` the
-    destination: `assets.storable` refuses both glob metacharacters (so no name
-    holds ``]``) and `campaign_images.UNADDRESSABLE` refuses the parentheses. A
-    DESCRIPTION may hold either, so it is the one thing that gets escaped.
+    **At most one picture per reply**, which is what the section asks for --
+    enforced here rather than left as advice. Every other clause of that
+    contract is a rule resolution applies (the handle must name a real,
+    described, showable image); leaving the count to the model's goodwill made
+    this one the exception, and a model offered four candidates has an obvious
+    way to use all four. The first resolvable handle wins and later ones are
+    deleted, exactly as an unresolvable one is.
+
+    Neither half of the markdown needs escaping. ``]`` would close the alt text
+    and ``)`` the destination: `assets.storable` refuses the glob
+    metacharacters (so no name holds ``]``) and `url_for` percent-encodes what
+    it writes. A DESCRIPTION may hold either, so it is the one thing escaped.
     """
     if "[[art:" not in text:
         return text   # the overwhelmingly common case, at the cost of one scan
 
+    used = False
+
     def sub(m: re.Match) -> str:
+        nonlocal used
         parsed = parse_handle(m)
-        if parsed is None:
+        if parsed is None or used:
             return ""
         hit = _resolved(cid, *parsed, sid=sid)
         if hit is None:
             return ""
+        used = True
         alt = hit["description"].replace("[", "(").replace("]", ")").replace("\n", " ")
         return f"![{alt}]({hit['url']})"
 
