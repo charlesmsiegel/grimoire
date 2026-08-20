@@ -220,6 +220,11 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   // of its art through its world, so the queue belongs where the art does.
   const [undescribed, setUndescribed] = useState<UndescribedImage[]>([]);
   const [describeOpen, setDescribeOpen] = useState(false);
+  // The scope as of NOW, readable from inside a promise that started earlier.
+  // A ref rather than the closed-over `scope`, which is the value the request
+  // was issued under and so can never notice that it has moved on.
+  const scopeRef = useRef(scope);
+  useEffect(() => { scopeRef.current = scope; }, [scope.kind, scope.id]);  // eslint-disable-line react-hooks/exhaustive-deps
   const [vid, setVid] = useState("");
   const [card, setCard] = useState<Card | null>(null);
   const [greetings, setGreetings] = useState<string[]>([]);
@@ -370,10 +375,21 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const reload = useCallback(() => api.listCharacters(scope).then(setChars), [scope.kind, scope.id]);  // eslint-disable-line react-hooks/exhaustive-deps
   /** Re-read the backlog. Failure leaves it empty, which hides the button —
    *  the right answer for a count nobody can trust, and the same posture the
-   *  greeting rail takes with its untagged list. */
+   *  greeting rail takes with its untagged list.
+   *
+   *  The response is DISCARDED if the scope moved while it was in flight. A
+   *  slow reply from the previous world would otherwise install that world's
+   *  queue under the new `wid`, and the queue carries record ids and image
+   *  names: two worlds that share a slug would then send a description written
+   *  about one record to the other. The nearby detail loaders guard the same
+   *  way. */
   const reloadUndescribed = useCallback(() => {
-    if (scope.kind !== "world") { setUndescribed([]); return; }
-    api.listUndescribedImages(scope.id).then(setUndescribed).catch(() => setUndescribed([]));
+    const asked: EntityScope = { kind: scope.kind, id: scope.id };
+    const current = () => scopeRef.current.kind === asked.kind
+                          && scopeRef.current.id === asked.id;
+    api.listUndescribedImages(asked)
+      .then((q) => { if (current()) setUndescribed(q); })
+      .catch(() => { if (current()) setUndescribed([]); });
   }, [scope.kind, scope.id]);
   useEffect(() => { reloadUndescribed(); }, [reloadUndescribed]);
   useEffect(() => {
@@ -1413,7 +1429,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
           <UrlImportPrompt onClose={() => setUrlPromptOpen(false)} onSubmit={runBulkUrlImport} />
         )}
         {describeOpen && (
-          <DescribeQueue wid={wid} queue={undescribed}
+          <DescribeQueue scope={scope} wid={wid} queue={undescribed}
                          onSaved={reloadUndescribed}
                          onClose={() => { setDescribeOpen(false); reloadUndescribed(); }} />
         )}
@@ -1427,12 +1443,15 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
             <input ref={fileRef} type="file" accept=".json,.png,.charx" multiple hidden aria-label="Import character card" onChange={onImport} />
             <button className="subtle" onClick={() => setUrlPromptOpen(true)}>Download from URL</button>
             <button className="subtle" onClick={checkChubLinks}>Check chub.ai links</button>
-            {undescribed.length > 0 && (
-              <button className="subtle" onClick={() => setDescribeOpen(true)}>
-                ▶ Describe images ({undescribed.length})
-              </button>
-            )}
           </>}
+          {/* Both scopes: a world's queue is its own art, a campaign's is what
+              the world's cannot reach -- its own image library, which hangs off
+              no record, and art it has diverged. */}
+          {undescribed.length > 0 && (
+            <button className="subtle" onClick={() => setDescribeOpen(true)}>
+              ▶ Describe images ({undescribed.length})
+            </button>
+          )}
 
           {bulkLocalize && (
             <span className="field-hint">Localizing card {bulkLocalize.current}/{bulkLocalize.cards}…</span>

@@ -204,6 +204,13 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
     await refreshImages();
   }
 
+  /** World scope only: that is where the draft route is, and offering a button
+   *  that 404s campaign-side would be worse than not offering one. */
+  async function draftDescription(name: string): Promise<string> {
+    if (!detail) return "";
+    return (await api.draftPCImageDescription(wid, detail.meta.id, vid, name)).description;
+  }
+
   async function promoteImage(name: string) {
     if (!detail) return;
     setError(null);
@@ -345,7 +352,8 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
                     <figcaption>avatar</figcaption>
                     <button className="shelf-promote" onClick={() => removeImage("avatar")}>Remove</button>
                     <ImageDescriptionField name="avatar" value={descriptions.avatar}
-                                           onSave={(d) => describeImage("avatar", d)} />
+                                           onSave={(d) => describeImage("avatar", d)}
+                                           onDraft={scope.kind === "world" ? () => draftDescription("avatar") : undefined} />
                   </figure>
                 ) : (
                   <div className="shelf-tile shelf-empty">no avatar</div>
@@ -356,7 +364,8 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
                     <button className="shelf-promote" onClick={() => promoteImage(n)}>Set as avatar</button>
                     <button className="shelf-promote" onClick={() => removeImage(n)}>Remove</button>
                     <ImageDescriptionField name={n} value={descriptions[n]}
-                                           onSave={(d) => describeImage(n, d)} />
+                                           onSave={(d) => describeImage(n, d)}
+                                           onDraft={scope.kind === "world" ? () => draftDescription(n) : undefined} />
                   </div>
                 ))}
                 <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>

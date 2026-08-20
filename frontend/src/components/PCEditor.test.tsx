@@ -12,6 +12,7 @@ vi.mock("../api/client", async () => {
       getCalendarMonths: vi.fn(), putSheetCreation: vi.fn(), getSheet: vi.fn(),
       listPCImages: vi.fn(), putPCImage: vi.fn(), deletePCImage: vi.fn(),
       setPCImageDescription: vi.fn(),
+      draftPCImageDescription: vi.fn(),
       promotePCImage: vi.fn(), setPCAvatarFocus: vi.fn(),
       actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string) =>
         `/img/${sc.id}/${k}/${a}/${v}/${n}`,

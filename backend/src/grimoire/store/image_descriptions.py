@@ -68,13 +68,20 @@ def path_in(d: Path) -> Path:
 
 
 def _names(d: Path) -> set[str]:
-    """The logical images of `d`, by the rule that resolves and serves them.
+    """The logical images of `d` that can actually be described.
 
     `assets.list_in`, not a fresh `iterdir`: one entry per logical image with
     the newest sibling winning, so a name this accepts is a name
     `assets.path_in` will hand bytes back for.
+
+    Filtered by `assets.storable`, which that listing deliberately is not.
+    `list_in` shows a stranded `promote-tmp` on purpose -- crash residue is
+    worth seeing in an editor (#253) -- but it is a name nothing can serve,
+    promote or delete. Unfiltered, it entered the describe queue and could take
+    a sidecar entry; then the next ordinary listing heals the residue into
+    `avatar`, and the description is stranded under a key no image has.
     """
-    return {i["name"] for i in assets.list_in(d)}
+    return {i["name"] for i in assets.list_in(d) if assets.storable(i["name"])}
 
 
 def read_raw(d: Path) -> dict:

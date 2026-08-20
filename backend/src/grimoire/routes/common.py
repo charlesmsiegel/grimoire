@@ -426,6 +426,40 @@ _IMAGE_MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
                 "gif": "image/gif", "webp": "image/webp"}
 
 
+async def _draft_description(client, path, subject: str) -> dict:
+    """One model-drafted first pass at what the picture at `path` shows.
+
+    Shared by the four surfaces rather than copied into each, because the only
+    thing that differs between them is how the image and the subject's NAME are
+    found -- and a copy per surface is four places for the connection-kind
+    refusal to drift.
+
+    Preview only, like `tagline/generate` and `voice-anchor/generate`: the caller
+    persists through the PUT on Save, so a draft nobody read is never written
+    (#59).
+    """
+    conn = _require_connection()
+    if conn.get("kind") not in store.image_drafts.SUPPORTED_KINDS:
+        # A refusal the user can act on, rather than a 500 out of the SDK path:
+        # `claude_agent` joins message content as a string, so a multimodal
+        # message raises deep inside it. See `store/image_drafts.py`.
+        raise HTTPException(status_code=409, detail=store.image_drafts.UNSUPPORTED)
+    if path is None:
+        raise HTTPException(status_code=404, detail="image not found")
+    try:
+        messages = store.image_drafts.build_prompt(path, subject)
+    except ValueError as exc:
+        # An externally-placed file with an extension we never accepted, so we
+        # cannot label its bytes for the provider.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        with store.usage.meter("image-description") as m:
+            text = await _bounded_call(client.complete(messages, conn, m.usage))
+    except LLMError as exc:
+        raise _llm_http_error(exc) from exc
+    return {"description": store.image_drafts.parse_output(text)}
+
+
 def _with_descriptions(images: list[dict], descriptions: dict[str, str]) -> list[dict]:
     """One image listing, each entry carrying what it depicts.
 

@@ -138,3 +138,51 @@ def test_undescribed_lists_only_images_with_no_key(tmp_path):
 
 def test_undescribed_empty_when_no_base_dir(tmp_path):
     assert image_descriptions.undescribed(tmp_path, "characters") == []
+
+
+def test_promotion_moves_descriptions_with_the_bytes(tmp_path):
+    """A description is a claim about particular bytes, so it travels with them.
+    Without this the swap left each picture wearing the other's sentence."""
+    cid, vid = _chars(tmp_path)
+    d = _dir_of(tmp_path, cid, vid)
+    image_descriptions.write_in(d, {"avatar": "The old portrait.",
+                                    "gallery_1": "Half-plate in the rain."})
+    assets.promote_image(tmp_path, cid, vid, "gallery_1")
+    assert image_descriptions.read_in(d) == {"avatar": "Half-plate in the rain.",
+                                             "gallery_1": "The old portrait."}
+
+
+def test_promotion_with_no_avatar_takes_the_description_along(tmp_path):
+    """With nothing to swap back the promoted image LEAVES its gallery slot, so
+    its description has to leave with it rather than be dropped."""
+    cid, vid = _chars(tmp_path, images=("gallery_1",))
+    d = _dir_of(tmp_path, cid, vid)
+    image_descriptions.write_in(d, {"gallery_1": "Half-plate in the rain."})
+    assets.promote_image(tmp_path, cid, vid, "gallery_1")
+    assert image_descriptions.read_in(d) == {"avatar": "Half-plate in the rain."}
+
+
+def test_promoting_an_undescribed_image_clears_the_avatars_description(tmp_path):
+    """The avatar slot must not keep words written about the picture that just
+    left it: the new occupant is different art and is simply undescribed."""
+    cid, vid = _chars(tmp_path)
+    d = _dir_of(tmp_path, cid, vid)
+    image_descriptions.write_in(d, {"avatar": "The old portrait."})
+    assets.promote_image(tmp_path, cid, vid, "gallery_1")
+    assert image_descriptions.read_raw(d) == {"gallery_1": "The old portrait."}
+
+
+def test_stranded_promotion_residue_is_never_describable(tmp_path):
+    """`assets.list_in` shows a stranded `promote-tmp` on purpose -- crash
+    residue is worth seeing (#253) -- but nothing can serve, promote or delete
+    it. Unfiltered it entered the describe queue and could take a sidecar entry
+    that the next ordinary listing would strand under a key no image has."""
+    cid, vid = _chars(tmp_path)
+    d = _dir_of(tmp_path, cid, vid)
+    (d / "promote-tmp.png").write_bytes(b"png")
+    assert "promote-tmp" in {i["name"] for i in assets.list_in(d)}   # visible...
+    assert "promote-tmp" not in image_descriptions._names(d)         # ...not describable
+    assert {i["name"] for i in image_descriptions.undescribed(tmp_path, "characters")} == {
+        "avatar", "gallery_1"}
+    with pytest.raises(ValueError):
+        image_descriptions.set_in(d, "promote-tmp", "crash residue")

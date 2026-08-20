@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { CampaignImage } from "../api/types";
+import { encodeSegment } from "../urlSegment";
 import { ImageDescriptionField } from "./ImageDescriptionField";
 
 /** Who is speaking in the post the picker was opened from (#376).
@@ -67,16 +68,6 @@ export function freeName(base: string, taken: string[]): string {
  *  is the whole difference between a text-only reader seeing something and
  *  seeing nothing: a plain-text export, and a model sent the transcript as text,
  *  get the alt text and only the alt text. */
-/** One path segment, encoded the way Python's `quote(safe="")` encodes it.
- *
- *  `encodeURIComponent` alone is not that rule: it deliberately leaves
- *  `!'()*` alone, and `(` and `)` are exactly the two characters that end a
- *  markdown destination. The tail escape is the standard RFC 3986 correction. */
-export function encodeSegment(seg: string): string {
-  return encodeURIComponent(seg).replace(
-    /[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
-}
-
 export function insertion(name: string, url: string, description?: string): string {
   // A BARE url, with no `?v=` token, even though the picker has one in hand and
   // uses it for the thumbnails. A `?v=` URL is answered `immutable, max-age=1y`,
@@ -283,7 +274,9 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
                       onSave={async (d) => {
                         await api.setCampaignImageDescription(cid, img.name, d);
                         setRevision((n) => n + 1);
-                      }} />
+                      }}
+                      onDraft={async () =>
+                        (await api.draftCampaignImageDescription(cid, img.name)).description} />
                   )}
                   {isLibrary && (
                     <button className="subtle image-picker-remove" type="button"

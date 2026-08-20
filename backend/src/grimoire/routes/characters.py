@@ -14,6 +14,7 @@ from ..llm_errors import LLMError
 from .common import (
     _bounded_call,
     _display_name_or_400,
+    _draft_description,
     _llm_http_error,
     _require_connection,
     _serve_image,
@@ -528,45 +529,22 @@ def put_world_avatar_focus(wid: str, cid: str, vid: str, body: AvatarFocus):
 @router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}/description/draft")
 async def post_world_image_description_draft(wid: str, cid: str, vid: str, name: str,
                                              client: LLMClient = Depends(get_llm)):
-    """A model-drafted first pass at what this picture shows.
+    """A model-drafted first pass at what this character's picture shows.
 
-    Preview only, like `tagline/generate` and `voice-anchor/generate` above: the
-    caller persists through the PUT on Save, so a draft nobody read is never
-    written (#59).
-
-    World-side only, and that is not an oversight. A description drafted from
-    the bytes is a claim about the bytes, and a campaign reaches most of its art
-    through the world -- so the draft belongs where the art does. A campaign
-    that has diverged an image can still describe it by hand; what it cannot do
-    is spend a model call to caption a picture its world already captioned.
+    World-side only, and that is not an oversight -- it is true of all four
+    surfaces. A description drafted from the bytes is a claim about the bytes,
+    and a campaign reaches most of its art through its world, so the draft
+    belongs where the art does. A campaign that has diverged an image can still
+    describe it by hand; what it cannot do is spend a model call to caption a
+    picture its world already captioned.
     """
     root = _world_char_version_or_404(wid, cid, vid)
-    conn = _require_connection()
-    if conn.get("kind") not in store.image_drafts.SUPPORTED_KINDS:
-        # A refusal the user can act on, rather than a 500 out of the SDK path:
-        # `claude_agent` joins message content as a string, so a multimodal
-        # message raises deep inside it. See `store/image_drafts.py`.
-        raise HTTPException(status_code=409, detail=store.image_drafts.UNSUPPORTED)
-    p = store.assets.image_path(root, cid, vid, name)
-    if p is None:
-        raise HTTPException(status_code=404, detail="image not found")
     try:
-        ch = store.characters.read_character(root, cid)
-        subject = ch["meta"]["name"]
+        subject = store.characters.read_character(root, cid)["meta"]["name"]
     except store.characters.CharacterNotFound:
         subject = ""
-    try:
-        messages = store.image_drafts.build_prompt(p, subject)
-    except ValueError as exc:
-        # An externally-placed file with an extension we never accepted, so we
-        # cannot label its bytes for the provider.
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    try:
-        with store.usage.meter("image-description") as m:
-            text = await _bounded_call(client.complete(messages, conn, m.usage))
-    except LLMError as exc:
-        raise _llm_http_error(exc) from exc
-    return {"description": store.image_drafts.parse_output(text)}
+    return await _draft_description(
+        client, store.assets.image_path(root, cid, vid, name), subject)
 
 
 @router.put("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}/description")

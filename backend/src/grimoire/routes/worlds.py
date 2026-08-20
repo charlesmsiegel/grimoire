@@ -23,6 +23,7 @@ from ..llm_errors import LLMError
 from .common import (
     _bounded_call,
     _content_fields,
+    _draft_description,
     _dump,
     _llm_http_error,
     _require_connection,
@@ -521,6 +522,20 @@ def put_world_pc_avatar_focus(wid: str, pid: str, vid: str, body: AvatarFocus):
         raise HTTPException(status_code=404, detail="image not found")
     store.assets.write_focus(root, pid, vid, body.focus, base=store.pcs.ASSET_BASE)
     return {"ok": True}
+
+
+@router.post("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}/description/draft")
+async def post_world_pc_image_description_draft(wid: str, pid: str, vid: str, name: str,
+                                                client: LLMClient = Depends(get_llm)):
+    """A model-drafted first pass at what this PC's picture shows."""
+    root = _world_pc_version_or_404(wid, pid, vid)
+    try:
+        subject = store.pcs.read_pc(root, pid)["meta"]["name"]
+    except store.pcs.PCNotFound:
+        subject = ""
+    return await _draft_description(
+        client, store.assets.image_path(root, pid, vid, name, base=store.pcs.ASSET_BASE),
+        subject)
 
 
 @router.put("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}/description")

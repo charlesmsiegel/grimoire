@@ -4,9 +4,13 @@ import { DescribeQueue } from "./DescribeQueue";
 vi.mock("../api/client", () => ({
   api: {
     setCharacterImageDescription: vi.fn(),
+    setCampaignImageDescription: vi.fn(),
     setPCImageDescription: vi.fn(),
     setEntityImageDescription: vi.fn(),
     draftCharacterImageDescription: vi.fn(),
+    draftPCImageDescription: vi.fn(),
+    draftEntityImageDescription: vi.fn(),
+    draftCampaignImageDescription: vi.fn(),
   },
 }));
 
@@ -27,7 +31,7 @@ beforeEach(() => {
 
 test("steps through the queue, saving each description against its own surface", async () => {
   const onSaved = vi.fn();
-  render(<DescribeQueue wid="w" queue={QUEUE} onClose={vi.fn()} onSaved={onSaved} />);
+  render(<DescribeQueue scope={{ kind: "world", id: "w" }} wid="w" queue={QUEUE} onClose={vi.fn()} onSaved={onSaved} />);
 
   expect(screen.getByText(/Describing 1 \/ 2 — Seraphine · gallery_1/)).toBeInTheDocument();
   fireEvent.change(screen.getByRole("textbox", { name: "Description" }),
@@ -54,14 +58,14 @@ test("steps through the queue, saving each description against its own surface",
 });
 
 test("'No description' persists an empty string and retires the image", async () => {
-  render(<DescribeQueue wid="w" queue={QUEUE} onClose={vi.fn()} onSaved={vi.fn()} />);
+  render(<DescribeQueue scope={{ kind: "world", id: "w" }} wid="w" queue={QUEUE} onClose={vi.fn()} onSaved={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: "No description" }));
   await waitFor(() => expect(api.setCharacterImageDescription).toHaveBeenCalledWith(
     { kind: "world", id: "w" }, "seraphine", "default", "gallery_1", ""));
 });
 
 test("Skip writes nothing, so the image comes back next time", async () => {
-  render(<DescribeQueue wid="w" queue={QUEUE} onClose={vi.fn()} onSaved={vi.fn()} />);
+  render(<DescribeQueue scope={{ kind: "world", id: "w" }} wid="w" queue={QUEUE} onClose={vi.fn()} onSaved={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: "Skip" }));
 
   expect(await screen.findByText(/Describing 2 \/ 2/)).toBeInTheDocument();
@@ -69,9 +73,10 @@ test("Skip writes nothing, so the image comes back next time", async () => {
   expect(api.setEntityImageDescription).not.toHaveBeenCalled();
 });
 
-test("the draft button is offered on a character and withheld elsewhere", async () => {
+test("a draft is asked for on whichever surface the image belongs to", async () => {
   (api.draftCharacterImageDescription as any).mockResolvedValue({ description: "A drafted line." });
-  render(<DescribeQueue wid="w" queue={QUEUE} onClose={vi.fn()} onSaved={vi.fn()} />);
+  (api.draftEntityImageDescription as any).mockResolvedValue({ description: "Another line." });
+  render(<DescribeQueue scope={{ kind: "world", id: "w" }} wid="w" queue={QUEUE} onClose={vi.fn()} onSaved={vi.fn()} />);
 
   fireEvent.click(screen.getByRole("button", { name: /Describe it for me/ }));
   await waitFor(() =>
@@ -81,14 +86,37 @@ test("the draft button is offered on a character and withheld elsewhere", async 
 
   fireEvent.click(screen.getByRole("button", { name: "Skip" }));
   await screen.findByText(/Describing 2 \/ 2/);
-  // The entity surface has no draft route, so the button is absent rather than
-  // present and failing.
+  fireEvent.click(screen.getByRole("button", { name: /Describe it for me/ }));
+  await waitFor(() => expect(api.draftEntityImageDescription).toHaveBeenCalledWith(
+    "w", "locations", "harbour", "gallery_1"));
+});
+
+test("a campaign queue describes the library by name and drafts campaign-side", async () => {
+  (api.setCampaignImageDescription as any).mockResolvedValue({ ok: true });
+  (api.draftCampaignImageDescription as any).mockResolvedValue({ description: "A map." });
+  const lib = [{ kind: "campaign", id: "", vid: "", name: "coastline",
+                 record_name: "Campaign library", url: "/img/lib" }];
+  render(<DescribeQueue scope={{ kind: "campaign", id: "run" }} wid="w" queue={lib}
+                        onClose={vi.fn()} onSaved={vi.fn()} />);
+
+  fireEvent.click(screen.getByRole("button", { name: /Describe it for me/ }));
+  await waitFor(() => expect(api.draftCampaignImageDescription).toHaveBeenCalledWith(
+    "run", "coastline"));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  // The library hangs off no record, so it addresses by name alone.
+  await waitFor(() => expect(api.setCampaignImageDescription).toHaveBeenCalledWith(
+    "run", "coastline", "A map."));
+});
+
+test("a campaign queue offers no draft for art whose bytes live in the world", async () => {
+  render(<DescribeQueue scope={{ kind: "campaign", id: "run" }} wid="w" queue={QUEUE}
+                        onClose={vi.fn()} onSaved={vi.fn()} />);
   expect(screen.queryByRole("button", { name: /Describe it for me/ })).toBeNull();
 });
 
 test("a failed save keeps the image in the queue and says why", async () => {
   (api.setCharacterImageDescription as any).mockRejectedValue({ detail: "image not found" });
-  render(<DescribeQueue wid="w" queue={QUEUE} onClose={vi.fn()} onSaved={vi.fn()} />);
+  render(<DescribeQueue scope={{ kind: "world", id: "w" }} wid="w" queue={QUEUE} onClose={vi.fn()} onSaved={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
   expect(await screen.findByText("image not found")).toBeInTheDocument();

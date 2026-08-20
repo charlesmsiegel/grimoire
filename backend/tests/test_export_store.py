@@ -610,3 +610,35 @@ def test_html_export_escapes_titles_that_are_markup(monkeypatch, tmp_path):
     html = export.build_html(cid)[0].decode()
     assert "<hr/>" not in html                      # the title never becomes markup
     assert "&lt;hr/&gt;" in html and "Run One &amp; &lt;Saltmarch&gt;" in html
+
+
+def test_a_canonical_url_wins_over_a_file_literally_named_like_its_escape(
+        monkeypatch, tmp_path):
+    """Both URL writers escape a literal `%` as `%25`, so `/images/my%20art` is
+    unambiguously the file `my art`. A raw-first lookup would hand back a second
+    file literally named `my%20art` and export the wrong picture."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    docks = entities.create_entity(croot, "locations", "The Docks", body="piers")
+    assets.put_image(croot, docks, "default", "my art", _img(color=(1, 2, 3)), "png",
+                     base="locations")
+    assets.put_image(croot, docks, "default", "my%20art", _img(color=(9, 9, 9)), "png",
+                     base="locations")
+    images = export.Images()
+    export.rewrite_images(
+        f"![A pier](/api/campaigns/{cid}/locations/{docks}/images/my%20art)", cid, images)
+    assert [p.stem for p in images.by_path] == ["my art"]
+
+
+def test_a_raw_name_with_a_percent_still_resolves_when_nothing_else_does(
+        monkeypatch, tmp_path):
+    """The raw attempt stays as a fallback for a URL written by hand before any
+    of the encoding existed."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    docks = entities.create_entity(croot, "locations", "The Docks", body="piers")
+    assets.put_image(croot, docks, "default", "a%2Fb", _img(), "png", base="locations")
+    out = export.rewrite_images(
+        f"![A pier](/api/campaigns/{cid}/locations/{docks}/images/a%2Fb)",
+        cid, export.Images())
+    assert out == "![A pier](images/img-000.png)"

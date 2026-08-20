@@ -64,7 +64,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import assets, locks
+from . import assets, image_descriptions, locks
 from .campaigns import paths as campaigns_paths
 
 DIRNAME = "images"
@@ -211,6 +211,24 @@ def put_image(cid: str, name: str, data: bytes, ext: str) -> str:
         return assets.put_in(d, name, data, ext, supported_only=True)
 
 
+def set_description(cid: str, name: str, text: str) -> None:
+    """Describe one library image, under `campaign_lock`.
+
+    The sidecar is read-modify-written whole, so two unlocked writers describing
+    DIFFERENT images lose one of the two sentences -- and what is lost is
+    something somebody sat and wrote. Every other campaign-scoped description
+    write takes this lock (`overlay.set_description`); this one was reaching
+    past it into `image_descriptions` directly, which made the library the one
+    surface where that race was still open.
+
+    This module owns the directory; `store.image_descriptions` owns every rule
+    about what its sidecar means, which is why the write goes through there.
+    """
+    with locks.campaign_lock(cid):
+        image_descriptions.set_in(images_dir(cid), name, text,
+                                  names={i["name"] for i in list_images(cid)})
+
+
 def delete_image(cid: str, name: str) -> None:
     """Remove `name`, and confirm it.
 
@@ -225,3 +243,8 @@ def delete_image(cid: str, name: str) -> None:
         assets.delete_in(d, name, supported_only=True)
         if assets.path_in(d, name, supported_only=True) is not None:
             raise OSError(f"image could not be removed: {name}")
+        # The description goes with the bytes, as it does on the record surfaces
+        # (`assets.delete_image`). A kept entry would caption the NEXT image
+        # uploaded under this name -- different art, immediately visible and
+        # immediately eligible for the narrator's art section.
+        assets.drop_sidecar_entry(d, assets.DESCRIPTIONS_FILE, name)
