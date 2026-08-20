@@ -80,13 +80,17 @@ def data_uri(path: Path) -> str:
     media = MEDIA.get(ext)
     if media is None:
         raise ValueError(f"unsupported image type: {ext}")
-    try:
-        size = path.stat().st_size
-    except OSError:
-        size = 0        # unreadable is the read's problem to report, not ours
-    if size > MAX_BYTES:
+    # ONE open, sized and read through the same handle. `stat()` then a separate
+    # `read_bytes()` is a check-then-act: a sync client replacing the file in
+    # between gets the replacement read with no bound at all, which is the whole
+    # thing the cap exists to prevent (PR review). The read asks for one byte
+    # past the cap rather than trusting the size it just measured, so a file
+    # growing under an append still cannot get past this.
+    with path.open("rb") as fh:
+        data = fh.read(MAX_BYTES + 1)
+    if len(data) > MAX_BYTES:
         raise ImageTooLargeError(TOO_LARGE)
-    return f"data:{media};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
+    return f"data:{media};base64,{base64.b64encode(data).decode('ascii')}"
 
 
 def build_prompt(path: Path, subject: str = "") -> list[dict]:
