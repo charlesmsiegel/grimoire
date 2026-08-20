@@ -129,7 +129,7 @@ first if you think one should be skipped.
   floors to `requires-python` and `engines.node`.
 - **Run the gate with `make check`** — the same targets `.github/workflows/ci.yml`
   runs, so a CI failure reproduces locally with one command. Individually:
-  `make check-py` (pytest), `check-web` (npm ci + typecheck +
+  `make check-py` (pytest under coverage), `check-web` (npm ci + typecheck +
   vitest under coverage),
   `check-lint` (ruff), `check-mypy` (mypy), `check-eslint` (eslint),
   `check-templates` (`verify_templates.py`),

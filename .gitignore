@@ -24,10 +24,15 @@ frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
 
-# Coverage report written by `make check-web` (lcov.info + the HTML render).
-# Regenerated on every run, so it is a build output rather than a checked-in
-# number; CI uploads it as a job artifact instead.
+# Coverage reports written by the two `check-*` targets that measure them
+# (lcov.info + the HTML render on one side, Cobertura XML and coverage.py's
+# data file on the other). Regenerated on every run, so they are build outputs
+# rather than checked-in numbers; CI uploads each as a job artifact instead.
+# The floor those runs are held to is `COV_FLOOR` in the Makefile, which *is*
+# checked in.
 frontend/coverage/
+backend/coverage.xml
+.coverage
 
 # Build outputs staged by the Makefile (APKs)
 /build/

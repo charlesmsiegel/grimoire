@@ -30,6 +30,7 @@ desktop = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
     # Pinned exactly: an unpinned linter turns a green commit red on someone
     # else's release schedule. The `lint` CI job installs this same pin.
     "ruff==0.16.0",
@@ -45,6 +46,31 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/grimoire"]
+
+[tool.coverage.run]
+# The package by import name, so coverage walks it and reports the modules no
+# test imports at 0% instead of omitting them -- exactly the gap a percentage
+# is supposed to surface. (Same argument as `all: true` on the frontend side;
+# the comments in frontend/vite.config.ts spell it out.) `check-py` passes
+# `--cov=grimoire` to say the same thing to pytest-cov, which reads its source
+# list from the command line and treats a bare `--cov` as "measure
+# everything" -- including `backend/tests`, which would have the suite grading
+# its own coverage and reporting 97%. It also passes `--cov-config` at this
+# file: coverage.py looks for its settings in the *working directory*, and
+# `make` runs from the repo root, where there is no pyproject.toml -- so
+# without it every setting in these two tables is silently inert.
+source = ["grimoire"]
+# Branch coverage, not just line: a `if x: return` whose false arm no test
+# takes is 100% covered by lines and is exactly the arm that breaks.
+branch = true
+
+[tool.coverage.report]
+exclude_also = [
+    # Neither is code a test can reach: one is the type checker's half of the
+    # file, the other is the __main__ guard.
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

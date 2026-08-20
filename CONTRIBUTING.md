@@ -73,7 +73,7 @@ locally with the same one-line command.
 |---|---|---|
 | `make check-lint` | ruff, against `lint-baselines/ruff.json` | lint |
 | `make check-mypy` | mypy, against `lint-baselines/mypy.json` | mypy |
-| `make check-py` | `pytest backend -q` | backend (py3.11, py3.14) |
+| `make check-py` | `pytest backend -q` under coverage, floored at `COV_FLOOR` | backend (py3.11, py3.14) |
 | `make check-web` | `npm ci && npm run typecheck && npm run test:coverage` in `frontend/` | frontend |
 | `make check-eslint` | eslint, against `lint-baselines/eslint.json` | eslint |
 | `make check-templates` | `scripts/verify_templates.py` — builders and templates agree byte-for-byte | templates |
@@ -135,12 +135,14 @@ change, and in the meantime none of it may get worse.
    `globals` is off and every mock-based test fails for a reason that has
    nothing to do with your change. `make check-web` gets this right.
 
-4. **`check-web` measures coverage; `npm test` does not.** Same suite and same
-   verdict either way, but the target also drops `frontend/coverage/lcov.info`,
-   which CI uploads as the `frontend-coverage` artifact. Reach for `npm test`
-   when you only want pass/fail. The provider settings in
-   `frontend/vite.config.ts` are load-bearing and their comments say why —
-   `CLAUDE.md` records the one change you must not make there.
+4. **Both suites measure coverage; a bare `pytest` or `npm test` does not.**
+   Same tests and same verdict either way, but the targets also write the two
+   reports CI uploads (`backend/coverage.xml`, `frontend/coverage/lcov.info`)
+   and hold the backend to `COV_FLOOR`, the percentage in the `Makefile`. So a
+   change that passes under `npm test` can still fail `make check` — by
+   dropping coverage rather than by breaking anything. Raise the floor when the
+   number rises; the settings behind each report are load-bearing and their
+   comments say why, and `CLAUDE.md` records the one you must not change.
 
 For a single test while iterating:
 
