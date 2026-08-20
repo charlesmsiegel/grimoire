@@ -107,6 +107,12 @@ compares what it found to a committed count per (file, rule) under
   Do that in the same commit as the fix that earned it, the way
   `snapshot.json` is committed with the change that moved it.
 
+  `make baseline` only ever writes a *smaller* file. If a count would go up it
+  stops and names the pairs, because the two things that cause one are a
+  regression (fix it) and a rename (say so, with
+  `scripts/ratchet.py <tool> --update --accept-regressions`). Otherwise
+  regenerating would be the one command that turns any red gate green.
+
 `scripts/ratchet.py` opens with why these landed against a baseline instead of
 as a report nobody reads. The short version: the tools between them report
 about ten thousand things today, that is a program of work rather than one

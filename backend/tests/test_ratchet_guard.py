@@ -21,6 +21,7 @@ from __future__ import annotations
 import collections
 import json
 import pathlib
+import re
 import sys
 
 import pytest
@@ -139,3 +140,179 @@ def test_every_baselined_file_still_exists(path: pathlib.Path):
     missing = sorted({f for f, _ in ratchet.loads(path.read_text(encoding="utf-8"))
                       if not (REPO / f).exists()})
     assert not missing, f"{path.name} names files that are not in the tree: {missing}"
+
+
+# ------------------------------------------------- the tool adapters
+#
+# The parsers are where a tool upgrade breaks this quietly, and where the
+# difference between "found nothing" and "did not run" lives. Each is driven
+# against canned output rather than the real tool: running ruff, mypy and
+# eslint from inside pytest would triple the suite and make it depend on
+# `frontend/node_modules`, which is what the `check-*` targets are for.
+
+
+@pytest.fixture
+def canned(monkeypatch):
+    """Replace the subprocess layer with a scripted reply per invocation."""
+
+    def install(*outputs: str):
+        replies = list(outputs)
+
+        def fake_run(argv, cwd, ok_codes):
+            return replies.pop(0)
+
+        monkeypatch.setattr(ratchet, "_run", fake_run)
+
+    return install
+
+
+#: What `_require_version` sees; the real pins live in backend/pyproject.toml.
+RUFF_V = f"ruff {ratchet._pin('ruff')}\n"
+MYPY_V = f"mypy {ratchet._pin('mypy')} (compiled: yes)\n"
+
+
+def test_the_pins_are_readable():
+    """`_require_version` is only as good as the pin it reads. If the `dev`
+    extra ever stops pinning exactly, this says so here rather than as a
+    confusing mid-gate failure."""
+    assert re.fullmatch(r"[\d.]+", ratchet._pin("ruff"))
+    assert re.fullmatch(r"[\d.]+", ratchet._pin("mypy"))
+
+
+def test_a_different_tool_version_is_refused(canned):
+    """The failure this prevents: a contributor regenerates a baseline with
+    the ruff they happen to have, and CI -- on the pinned one -- reports a
+    different count for reasons no diff explains."""
+    canned("ruff 0.0.1\n")
+    with pytest.raises(ratchet.ToolError, match="baselines were built with"):
+        ratchet.collect_ruff()
+
+
+def test_ruff_findings_are_counted_per_file_and_rule(canned):
+    canned(RUFF_V, json.dumps([
+        {"filename": str(REPO / "a.py"), "code": "F401", "message": "x"},
+        {"filename": str(REPO / "a.py"), "code": "F401", "message": "y"},
+        {"filename": str(REPO / "b.py"), "code": "B904", "message": "z"},
+    ]))
+    assert ratchet.collect_ruff() == _counter(
+        [(("a.py", "F401"), 2), (("b.py", "B904"), 1)]
+    )
+
+
+def test_a_ruff_finding_with_no_rule_is_not_ratchetable(canned):
+    """ruff reports a syntax error with a null code. Counting it under some
+    stand-in would let a file that does not parse sit in the baseline."""
+    canned(RUFF_V, json.dumps([
+        {"filename": str(REPO / "a.py"), "code": None, "message": "SyntaxError"},
+    ]))
+    with pytest.raises(ratchet.ToolError, match="unattributed"):
+        ratchet.collect_ruff()
+
+
+def test_output_that_is_not_json_is_a_broken_tool(canned):
+    """npx prints its own diagnostics on stdout and exits 1 when the binary is
+    missing -- indistinguishable, to the exit code, from "found violations"."""
+    canned(RUFF_V, "npm error could not determine executable to run\n")
+    with pytest.raises(ratchet.ToolError, match="did not print JSON"):
+        ratchet.collect_ruff()
+
+
+def test_mypy_errors_are_counted_and_notes_are_not(canned):
+    canned(MYPY_V, (
+        "backend/src/grimoire/a.py:12: error: Incompatible types  [assignment]\n"
+        "backend/src/grimoire/a.py:12: note: Left operand is of type X\n"
+        "backend/src/grimoire/a.py:99:4: error: Missing return  [return]\n"
+    ))
+    assert ratchet.collect_mypy() == _counter([
+        (("backend/src/grimoire/a.py", "assignment"), 1),
+        (("backend/src/grimoire/a.py", "return"), 1),
+    ])
+
+
+def test_a_mypy_error_without_a_code_stops_the_gate(canned):
+    """It cannot be keyed, so it would drop out of the comparison entirely --
+    a real error the ratchet reported as an improvement."""
+    canned(MYPY_V, "backend/src/grimoire/a.py:1: error: something went wrong")
+    with pytest.raises(ratchet.ToolError, match="no error code"):
+        ratchet.collect_mypy()
+
+
+def _eslint(*files):
+    return json.dumps([{"filePath": str(REPO / "frontend" / p), "messages": list(m)}
+                       for p, m in files])
+
+
+def test_eslint_findings_are_counted_per_rule(canned, monkeypatch):
+    monkeypatch.setattr(ratchet, "_node_modules_present", lambda: True)
+    canned(_eslint(("src/a.tsx", [
+        {"ruleId": "react/jsx-key", "message": "k"},
+        {"ruleId": "react/jsx-key", "message": "k"},
+        {"ruleId": "jsx-a11y/no-autofocus", "message": "a"},
+    ])))
+    assert ratchet.collect_eslint() == _counter([
+        (("frontend/src/a.tsx", "react/jsx-key"), 2),
+        (("frontend/src/a.tsx", "jsx-a11y/no-autofocus"), 1),
+    ])
+
+
+def test_an_unused_disable_directive_ratchets_like_a_finding(canned, monkeypatch):
+    """eslint reports it with no rule id, because the rule it names is exactly
+    the one that found nothing. Crashing on that would turn a stale
+    suppression into an unreadable harness error."""
+    monkeypatch.setattr(ratchet, "_node_modules_present", lambda: True)
+    canned(_eslint(("src/a.tsx", [{"ruleId": None, "message": "Unused eslint-disable"}])))
+    assert ratchet.collect_eslint() == _counter(
+        [(("frontend/src/a.tsx", ratchet.UNUSED_DISABLE), 1)]
+    )
+
+
+def test_a_file_eslint_could_not_parse_stops_the_gate(canned, monkeypatch):
+    """Its zero findings are not evidence that it has none."""
+    monkeypatch.setattr(ratchet, "_node_modules_present", lambda: True)
+    canned(_eslint(("src/a.tsx", [{"ruleId": None, "fatal": True, "message": "Parsing error"}])))
+    with pytest.raises(ratchet.ToolError, match="could not parse"):
+        ratchet.collect_eslint()
+
+
+# ---------------------------------------------------------------- --update
+
+def test_update_will_not_write_a_bigger_baseline(monkeypatch, tmp_path):
+    """The half that makes "ratchet" true. Regenerating has to be the way an
+    improvement is recorded, not the way a regression is accepted."""
+    monkeypatch.setattr(ratchet, "BASELINES", tmp_path)
+    (tmp_path / "ruff.json").write_text(ratchet.dumps(_counter([(("a.py", "F401"), 1)])))
+    monkeypatch.setitem(ratchet.COLLECTORS, "ruff",
+                        lambda: _counter([(("a.py", "F401"), 2)]))
+    assert ratchet.update("ruff") == 1
+    assert ratchet.loads((tmp_path / "ruff.json").read_text()) == _counter(
+        [(("a.py", "F401"), 1)]
+    ), "the baseline was rewritten despite the refusal"
+
+
+def test_update_writes_a_smaller_baseline_without_ceremony(monkeypatch, tmp_path):
+    monkeypatch.setattr(ratchet, "BASELINES", tmp_path)
+    (tmp_path / "ruff.json").write_text(ratchet.dumps(_counter([(("a.py", "F401"), 3)])))
+    monkeypatch.setitem(ratchet.COLLECTORS, "ruff",
+                        lambda: _counter([(("a.py", "F401"), 1)]))
+    assert ratchet.update("ruff") == 0
+    assert ratchet.loads((tmp_path / "ruff.json").read_text()) == _counter(
+        [(("a.py", "F401"), 1)]
+    )
+
+
+def test_accept_regressions_is_the_way_a_rename_lands(monkeypatch, tmp_path):
+    monkeypatch.setattr(ratchet, "BASELINES", tmp_path)
+    (tmp_path / "ruff.json").write_text(ratchet.dumps(_counter([(("old.py", "F401"), 1)])))
+    monkeypatch.setitem(ratchet.COLLECTORS, "ruff",
+                        lambda: _counter([(("new.py", "F401"), 1)]))
+    assert ratchet.update("ruff", accept_regressions=True) == 0
+    assert ratchet.loads((tmp_path / "ruff.json").read_text()) == _counter(
+        [(("new.py", "F401"), 1)]
+    )
+
+
+def test_accept_regressions_alone_is_an_argument_error():
+    """It only means anything with --update, and silently doing a check
+    instead would be the worst of both."""
+    with pytest.raises(SystemExit):
+        ratchet.main(["ruff", "--accept-regressions"])
