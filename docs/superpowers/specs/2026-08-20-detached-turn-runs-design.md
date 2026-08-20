@@ -395,8 +395,11 @@ the scene.
 
 New, under the existing scene prefix:
 
-- `GET  /api/campaigns/{cid}/scenes/{sid}/run` — the scene's **most recent
-  run within the reap window**, live or terminal, or 404. Returns
+- `GET  /api/campaigns/{cid}/scenes/{sid}/run[?attempt=<id>]` — with
+  `attempt`, the run carrying that attempt id, or 404: the only form that
+  answers "did my send land?". Without it, the scene's **most recent run
+  within the reap window**, live or terminal, which is what a fresh view uses
+  to discover a run in progress. Returns
   `{id, kind, state, next_index}`, where `next_index` is meaningful for
   streaming kinds only and is absent for the absorb family, which has no frame
   buffer to offset into. It reports the live tail and is **not** what a
@@ -429,6 +432,9 @@ Changed:
 - `POST .../chat`, `.../retry`, `.../regenerate`, `.../replay/turn` and
   `POST .../roll-proposal` (`mechanics.py:110`, the route that reaches
   `_continuation_stream`) keep their shape and gain the leading `run` frame.
+  Each also accepts a **client-generated attempt id**, recorded on the run so
+  recovery can ask "did *my* send land?" rather than "has anything run here
+  lately" — see the #95 obligation.
 
 ### Pre-flight errors stay synchronous. This is not negotiable.
 
@@ -532,11 +538,27 @@ contain the post and a reply, and the client would believe neither had
 happened.
 
 That is why `GET .../run` answers for terminal runs inside the reap window, not
-only live ones. The recovery is then unambiguous in every case: a run exists
-(any state) → the post landed, attach or refetch; 404 → refetch the scene and
-compare, the same move the client already makes. This is the one place where
-shortening the reap window trades against correctness, and it is why ten
-minutes rather than one.
+only live ones. But *"a run exists"* is *not* sufficient proof on its own, and
+saying otherwise would replace one ambiguity with a worse one: a run A that
+finished eight minutes ago is still inside the window, so a later POST for B
+that never reached the server at all would find A and be reported as accepted.
+That does not merely fail to fix #95 — it converts an "I don't know" into a
+confident wrong answer, and loses or duplicates B's prompt depending on which
+way the client then guesses.
+
+**So the POST carries a client-generated attempt id, and the run records it.**
+Recovery asks about *that id*, not about recency:
+
+- a run exists carrying my attempt id → my post landed; attach, or read its
+  terminal state;
+- no such run → my post never landed, whatever else the scene has been doing;
+  the send can be retried as a new attempt.
+
+The attempt id is what makes the question answerable, and it is also what makes
+the reap window a comfort rather than a correctness knob: a client whose id has
+aged out falls back to the move it already makes today — refetch the scene and
+compare — which is safe because it is the honest "I don't know" rather than a
+guess dressed as proof.
 
 The stream currently lives in the scene view's component state, so navigating
 away unmounts it and aborts. That has to move up.
@@ -666,8 +688,11 @@ Backend, with `backend/tests/llm_fakes.py` injected at
   through the run and rebuilds the same `ApiError`.
 - an absorb result survives its requester leaving; a pending review whose scene
   moved on is refused.
-- `GET .../run` answers for a run that finished while nobody was attached — the
-  #95 case, and the reason terminal runs stay in the registry.
+- `GET .../run?attempt=` answers for a run that finished while nobody was
+  attached — the #95 case, and the reason terminal runs stay in the registry.
+- **a send that never reached the server reports as not-landed even though an
+  unrelated run finished on that scene moments earlier** — the case that makes
+  recency alone an unsafe proxy for "my post landed".
 - `rolling_summary` and `scene_break` fire after a turn **without** taking the
   scene's run slot, so the composer re-enables.
 - shutdown cancels live runs and their partials are persisted through
