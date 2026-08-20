@@ -1,13 +1,21 @@
-# Detached turn runs: play that survives a locked phone
+# Detached runs: every LLM call survives a locked phone
 
 On Android, locking the phone or switching apps kills whatever the model was
 doing. On a laptop this barely registers — another window costs nothing. On a
 phone it is the dominant failure of the app, and it is worst on the operation
 that takes longest: ending a scene.
 
-This spec detaches an LLM job from the HTTP request that asked for it, lets a
-client re-attach to a job already in progress, and tells the player on Android
-when one lands.
+This spec detaches **every** LLM job in the app from the HTTP request that
+asked for it, lets a client re-attach to one already in progress, and tells the
+player on Android when a turn or a review lands.
+
+Scope is deliberately all of them rather than the two that hurt most. There are
+25 routes and 10 helpers holding an `LLMClient`, and detaching a subset means
+building the machinery anyway and then maintaining two rules about which calls
+survive a locked phone. One uniform mechanism is *less* to specify, not more:
+the taxonomy of exceptions in an earlier draft of this document — which calls
+are runs, which are "deliberately not", and why — collapses into one table of
+per-class policy.
 
 It completes two things earlier documents specified and left unbuilt:
 `docs/android-architecture.md` §4 ("foreground service during generation",
@@ -72,43 +80,66 @@ machine-local locking (`store/proclock.py`) and the synced-folder caveat in
 remains unsupported. No cloud component, no accounts, no FCM — §9 of the
 architecture doc stands.
 
-### What is a run, precisely
+### What is a run: subject and class
 
-Every LLM call in the tree falls into exactly one of three buckets, and the
-boundaries matter more than they look:
+**Every LLM call is a run.** What differs between them is two orthogonal
+properties, and pulling them apart is what makes one mechanism cover all 35
+call sites.
 
-**Runs** — persisted, scene-scoped generations the player is waiting on:
-`_chat_stream`'s four callers (`post_chat` including its `task="director"`
-branch, `post_retry`, `post_regenerate`, `post_replay_turn`),
-`_continuation_stream` (reached from `POST .../roll-proposal`,
-`mechanics.py:110`, at `mechanics.py:193` — a roll proposal's continuation,
-which streams through the same fence machinery and commits through
-`commit_narration`), and the absorb family (`post_absorb`, `post_audit`,
-`post_dossiers`).
+**Subject — what the run belongs to.** It cannot be `(cid, sid)`, because most
+LLM calls in the tree are not scene-scoped:
 
-`_continuation_stream` is in scope and not an afterthought: it is a persisted
-streaming turn on a scene, it can be slow, and a player cannot tell it apart
-from a chat turn. Detaching one and not the other would mean a roll's
-continuation may still be lost while the turn before it may not.
+| Subject | Call sites |
+|---|---|
+| `scene(cid, sid)` | chat, retry, regenerate, replay, roll-proposal continuation, opener, absorb, audit, dossiers, rolling summary, scene break |
+| `campaign(cid)` | scene suggestions, scene intent, campaign image-description drafts, campaign voice anchors |
+| `world(wid)` | character taglines and voice anchors, entity/PC image-description drafts, scenario parse and parse-url |
+| `global` | LLM-connection model refresh |
 
-**Not runs, and they must not be** — `post_rolling_summary` and
-`post_scene_break`. Both take an `LLMClient`, and both are fired by the client
-after **every turn and not awaited by it**, so their ordinary outcome is a
-no-op that touched no provider. Making them runs would hand each one the
-scene's single run slot after every turn and leave the composer disabled with
-nothing generating — an app that locks itself. They keep today's behavior: a
-plain endpoint the client does not wait on, unaffected by disconnect because
-nothing is waiting for the result. The rolling summary's in-flight coalescing
-stays as-is.
+The subject decides the lock a run's persistence takes — `campaign_lock(cid)`
+for scene and campaign subjects, nothing for world and global, which write
+through their own stores — and it is what a client asks about when it comes
+back ("is anything running for this scene / this world?").
 
-**Not runs, deliberately** — `_ephemeral_stream`: scene suggestions, the chub
-gallery, and the greeting opener (`greetings.py:324`, `task="opener"`). These
-generate something the player accepts or discards, and nothing is staged or
-persisted until they accept — for the opener, through `post_first_post`, which
-makes no LLM call at all and simply persists `body.text`. Losing one costs a
-regeneration and no state. The opener is the closest call in this bucket and
-is left out on purpose: it is the *first* thing in a scene, so the player is by
-definition sitting in front of the app when it runs.
+**Class — what policy the run gets.** Four, and the whole of the per-kind
+behavior lives here rather than being restated per route:
+
+| Class | Members | Exclusive | Result | Notify |
+|---|---|---|---|---|
+| `turn` | chat, retry, regenerate, replay, continuation, opener | scene key | transcript (already persisted) | yes |
+| `review` | absorb, audit, dossiers | scene key (shared with `turn`) | durable `pending_reviews` | yes |
+| `background` | rolling summary, scene break | none | own store, fire-and-forget | never |
+| `draft` | suggestions, intent, voice anchors, taglines, image descriptions, scenario parse, models refresh | none | held on the run, reaped | no |
+
+Three consequences worth stating, because each one deletes a special case an
+earlier draft needed:
+
+- **`rolling_summary` and `scene_break` no longer need an exemption.** They are
+  fired after every turn and not awaited; as `background` they declare no
+  exclusion key, so they cannot hold a scene's slot or strand the composer.
+  That was previously a written-out warning about a bug the design could
+  otherwise ship. It is now structural.
+- **The `_ephemeral_stream` bucket disappears.** The opener is a `turn`
+  (persisted through `post_first_post`, and the first thing in a scene);
+  suggestions, intent and the chub gallery are `draft`. Neither needs a
+  paragraph explaining why it is outside the mechanism.
+- **`turn` and `review` share one exclusion key per scene**, so an absorb
+  cannot race a chat turn on the same transcript. That matches what End Scene
+  already does by locking the scene, and it is now enforced server-side rather
+  than by the client behaving.
+
+### The reusable core
+
+What every run shares — the registry, the frame buffer and its absolute
+indices, the subscriber protocol, attempt ids, the failure boundary, cancel
+semantics, reaping — is written once. A call site provides three things: its
+subject, its class, and a coroutine that does the work. It does not implement
+detachment, re-attachment, or cancellation.
+
+Streaming and non-streaming runs differ only in whether that coroutine yields
+frames or returns a value; the buffer holds frames for the former and a result
+for the latter, and every other property is shared. This is what makes "all of
+them" cheaper than "two of them": the second call site costs a class annotation.
 
 ## Non-goals worth stating
 
@@ -140,12 +171,12 @@ a view that believes it is showing scene B to frames produced for scene A.
 Addressing by run id removes the class of bug instead of guarding against it.
 
 **But an id-only lookup is not sufficient on its own**, because every run route
-also carries caller-supplied `cid` and `sid` in its path. A stale client that
-sends scene A's run id through scene B's URL would otherwise stream or cancel
-A while the interface believes it is acting on B — the same cross-scene
-confusion, arrived at from the other direction. So **every lookup verifies that
-the run's stored `(cid, sid)` matches the path, and returns `run_gone` when it
-does not.** Belt and braces, and cheap: one comparison at the top of each
+also carries a caller-supplied subject in its path. A stale client that sends
+scene A's run id through scene B's URL — or a world run's id through a
+campaign route — would otherwise stream or cancel the wrong thing while the
+interface believes it is acting on what it is showing. So **every lookup
+verifies that the run's stored subject matches the path, and returns
+`run_gone` when it does not.** Belt and braces, and cheap: one comparison at the top of each
 handler.
 
 ### The registry
@@ -155,8 +186,9 @@ imports from `store` but **must not import `routes.streaming` or
 `routes.scenes`** — they import it. `test_import_guard.py` requires the module
 graph stay acyclic, and this is the edge that would close a cycle.
 
-The registry holds `dict[run_id, Run]` and a `dict[(cid, sid), run_id]` index
-naming each scene's **most recent** run. Both mutated under one small lock,
+The registry holds `dict[run_id, Run]`, a `dict[subject, run_id]` index naming
+each subject's **most recent** run, and a `dict[exclusion_key, run_id]` for the
+classes that declare one. All mutated under one small lock,
 get-or-create style, for the reason `locks.campaign_lock` documents: a plain
 check-then-act hands two concurrent first callers different answers.
 
@@ -191,17 +223,45 @@ never through a module global.
 
 The reaper (below) runs on the same group, alongside `_backup_ticker`.
 
-### One run per scene
+**Every runner is wrapped in its own failure boundary, and this is not
+optional.** An `anyio` task group cancels all sibling tasks and propagates the
+exception the moment any child raises — so without a boundary, one malformed
+scene or one persistence bug would abort every other live run, stop the backup
+ticker, and take the exception out through `_lifespan` itself. A single bad
+turn would end the process. The boundary catches everything that is not a
+shutdown cancellation, records the run `failed`, performs the same terminal
+bookkeeping any other failure gets (state, notification, foreground demotion),
+logs, and returns normally. Only cancellation is allowed to propagate, because
+that is the shutdown path doing its job.
 
-Starting a run for a scene that already has a live one returns **409** with
+### One run per exclusion key
+
+Only `turn` and `review` declare an exclusion key, and they share it: the
+scene. `background` and `draft` declare none and may run freely alongside
+anything, which is what keeps a rolling summary or a voice-anchor draft from
+blocking play.
+
+Starting a `turn` or `review` for a scene that already has a live one of either
+class returns **409** with
 `{"detail": ..., "kind": "run_in_flight", "run_id": ...}`. The `kind` field
 follows the existing `ApiError` convention in `frontend/src/api/client.ts`, so
 the client can tell this apart from every other 409 and attach to the named run
 rather than surface an error.
 
+**`streamPost` must be changed to carry the run id through**, or this does not
+work at all on the routes that need it most. Its non-2xx path currently builds
+`new ApiError(res.status, data.detail ?? res.statusText, data.kind)` — the
+decoded body is read and then dropped, so `kind` survives and `run_id` does
+not. `kind === "run_in_flight"` alone cannot attach to anything. Either the
+error retains the whole payload or `run_id` is lifted onto it explicitly, and
+the 409-to-attach path gets a test.
+
 This is a backstop, not the primary mechanism: the composer is disabled while
-the scene has a live run, so a well-behaved client never sends the second
-request. Both exist because only the server-side one is a guarantee.
+the scene has a live `turn` or `review`, so a well-behaved client never sends
+the second request. Both exist because only the server-side one is a guarantee.
+The composer keys on the exclusion key specifically, **not** on "any run for
+this scene" — otherwise a background rolling summary would disable it after
+every single turn.
 
 **The slot is reserved before the first mutator in every run-producing route** —
 not merely before `post_chat`'s append. Ordering, not detail, and the append is
@@ -225,7 +285,8 @@ raises on its own validation does not leave a phantom slot holding the scene.
 
 A rejected send must leave the scene byte-identical.
 
-Concurrency **across** scenes and campaigns is allowed and is the point. It is
+Concurrency across subjects — and across non-exclusive classes on one
+subject — is allowed and is the point. It is
 already safe: `_turn_tokens` is keyed `(cid, sid)`; `campaign_lock(cid)` is
 per-campaign and reentrant; `scenes/locking.py` states that no LLM call is ever
 held across it, so critical sections are one file read and one file write; the
@@ -282,6 +343,16 @@ The one real semantic change, and it applies on the laptop too.
   down, an explicit cancel and server shutdown, rather than on any closed
   socket. Its shield is what makes both safe, since in each case the
   cancellation is already in flight.
+
+  **Cancel signals the task but the run stays live until the abort hook has
+  finished.** The state moves to `cancelled` only after `on_abort` returns, and
+  the cancel response does not resolve before that transition. Freeing the slot
+  at the moment of the *request* would let a player who presses Stop and
+  immediately sends again start a new turn while the old one is still
+  persisting its partial or restoring a removed reply — two writers on one
+  transcript, which is the corruption `_serialized` and the turn-token machinery
+  exist to prevent. It would also let the foreground service demote mid-cleanup
+  and expose that write to process death.
 - **Absorb family.** `abandoned=request.is_disconnected` becomes a predicate
   reading the run's cancellation instead of the socket's. It keeps the shape
   the budget runner already expects — `request.is_disconnected` is an
@@ -333,17 +404,43 @@ On disk it is a per-scene file beside the transcript under the campaign's
 else — `test_paths_guard.py` requires it and a hand-built path would fail
 there.
 
+**The runner rechecks that the scene still exists, under the same
+`campaign_lock(cid)` hold as the pending-review write.** The guards cited under
+scene deletion protect *transcript* persistence; a pending review is a sidecar,
+so nothing stops its terminal write from recreating a file under a scene id the
+delete cascade has already swept. The run is marked `failed` and publishes
+nothing when the scene has gone.
+
 **Retry results merge into the stored review; they never replace it.** A
 single record persisted verbatim would be wrong for two of the three computing
 kinds: `post_audit` returns `{mechanics, edits}` and `post_dossiers` returns
 `{dossiers, edits}` — partial payloads that `useSceneReview` folds into an
-existing absorb (`setAbsorb((a) => ({...a, mechanics: res.mechanics, ...}))`
-at `useSceneReview.ts:446`, and its dossier sibling at `:521`). Writing either
-one whole would destroy the absorb's prose, its staged edits and its
-`commit_token` — the token being the part nothing else can reconstruct. So a
-retry run's terminal persist is a **read-modify-write of the existing pending
-review under `campaign_lock(cid)`**, folding in exactly the keys that retry
-owns, and it fails rather than inventing a review if none is stored.
+existing absorb. Writing either one whole would destroy the absorb's prose, its
+staged edits and its `commit_token` — the token being the part nothing else can
+reconstruct. So a retry run's terminal persist is a **read-modify-write of the
+existing pending review under `campaign_lock(cid)`**, and it fails rather than
+inventing a review if none is stored.
+
+**The merge is defined at edit-row granularity, because neither retry owns the
+whole `edits` key.** "Fold in the keys this retry owns" is too coarse and would
+silently discard unrelated staged work. The stored merge must reproduce what
+the client already does on screen, or reopening a pending review would differ
+from the review that was in front of the reviewer:
+
+- **audit** replaces `mechanics`, updates the `audit` row of `phases` (a
+  projection of `mechanics`, so it moves with it), and replaces **only the
+  `sheet` edit rows** — `rows.filter(r => r.kind !== "sheet")` plus the new
+  ones (`useSceneReview.ts:452`).
+- **dossiers** replaces `dossiers`, updates the `dossiers` row of `phases`,
+  and replaces **only the dossier rows whose target appears in
+  `res.dossiers.proposed`** — `rows.filter(r => r.kind !== "dossier" ||
+  !reproposed.has(r.target.id))` plus the new ones (`:533`). Prior proposals
+  for NPCs this retry did not re-propose are deliberately preserved, which is
+  what makes a partially-failed dossier phase recoverable at all.
+
+Getting either rule wrong fails quietly: the review still opens, it is just
+missing edits the reviewer had already seen, or reporting a phase status the
+retry has since superseded.
 
 ### Cancellation and the terminal persist must not race
 
@@ -361,8 +458,29 @@ checks that flag and suppresses itself — both under the same
 already past its persist when Cancel arrives is fine: the DELETE then removes a
 record that exists, which is the outcome the player asked for.
 
+**Which run gets flagged has to be unambiguous, and needs its own identifier.**
+The obvious readings both fail: the pending payload is the absorb result
+verbatim and names no producer, and the DELETE route carries no `run_id` — so
+"flag the scene's most recent run" would cancel an unrelated live *chat* run
+that happens to be newer, and "flag the run named by the stored record" finds
+nothing at all before the absorb has published one. Both are worse than not
+flagging.
+
+So a **review-generation id** is minted when an absorb run starts, carried on
+the run, and stored on the pending review; `DELETE .../pending-review` takes it
+(or the run id) and flags **only a matching absorb-family run**. Deletion stays
+idempotent — a DELETE naming a generation that has already gone removes nothing
+and reports success, because the reviewer's intent is satisfied either way.
+
 A pending review is otherwise cleared when its scene is absorbed or when a
-fresh absorb replaces it.
+fresh absorb replaces it — and the clearing belongs to **both** paths through
+`PUT /chronicle`, not only the fresh-success tail. The commit is idempotent by
+design (#235): a replay of a save whose first response was lost returns the
+recorded result through the `prior["done"]` early return. If a process exits
+after recording the commit but before deleting the review, cleanup that lives
+only on the first-execution path never runs, and an obsolete review stays
+retrievable forever for a scene that is demonstrably absorbed. The delete goes
+on the completed-save path too, under the same campaign lock.
 
 ### Renaming a scene must carry its pending review
 
@@ -443,8 +561,12 @@ runs before its 202**, with status and `kind` intact. The rule is per-endpoint,
 not just absorb's — all three detach, and each guards something different:
 
 - `post_absorb`: 409 `already_absorbed` (the #235 guard), 400 "nothing to
-  absorb", 400 no module resolved, 404 unknown scene or campaign, and
-  `_require_connection()`.
+  absorb", 404 unknown scene or campaign, and `_require_connection()`.
+  **Not** a missing-module check: `post_absorb` deliberately has none, because
+  a module-less campaign is still absorbable — `_run_audit` returns a skipped
+  mechanics block with reason `"no module"` (`scenes.py:1138`) while
+  extraction, dossiers and voice all complete normally. Adding one here would
+  reject End Scene outright for those campaigns.
 - `post_audit`: `_require_scene`, `_require_connection`, and 400 when
   `store.modules.resolve(cid)` is None.
 - `post_dossiers`: `_require_scene`, `_require_connection`, and 400 "nothing to
@@ -452,6 +574,13 @@ not just absorb's — all three detach, and each guards something different:
   does not have, because an audit with nothing to audit finds nothing while a
   dossier phase would stage a proposal overwriting a real dossier with
   invention.
+- **Both retries additionally require a stored pending review to exist.** Their
+  terminal step is a merge into one, so without it the run is guaranteed to
+  fail at the end — and a 202 that accepts work whose result the design has
+  already promised to refuse is exactly what the pre-flight rule exists to
+  prevent. A stale tab retrying after the reviewer cancelled would otherwise
+  spend a full budget on an unusable answer. A review deleted *after*
+  acceptance is a different case and keeps the cancellation ordering below.
 
 `already_absorbed` is the one with teeth: `useSceneReview.ts:212` branches on
 it (`err?.kind !== "already_absorbed"`) and `SceneReview.test.tsx` asserts it,
@@ -575,8 +704,19 @@ away unmounts it and aborts. That has to move up.
   at 900 and silently lose 860 frames — a reply rendered with a hole in the
   middle, in exactly the locked-phone flow this document exists to fix. The
   registry provider persists each run's consumed index as it reads, and
-  `?from=` carries that. `next_index` is only for a client that means to
-  attach at the live tail and does not want the backlog.
+  `?from=` carries that.
+- **The server stamps an absolute frame index on every frame, and the client
+  resumes from the last one it saw.** Counting `ChatEvent`s client-side does
+  not work and the difference is silent: heartbeats are SSE comments with no
+  `data:` line, and `parseSSEChunk` drops them without invoking the callback.
+  A cursor advanced per event therefore lags the server's raw frame position
+  by however many heartbeats went by — and a generation that waited on the
+  model emits a great many. Reconnecting from that short index replays frames
+  already rendered and **duplicates text in the middle of the reply**, the
+  mirror of the bug above and just as invisible. An index carried on the frame
+  itself removes the need for the two sides to agree on what counts.
+- `next_index` is only for a client that means to attach at the live tail and
+  does not want the backlog.
 - The **composer is disabled** whenever the scene has a live run, extending the
   existing `sceneLocked` signal (already used by rename, End scene and the roll
   controls) rather than inventing a second one.
@@ -598,10 +738,20 @@ first live run and demotes when it has none. Manifest additions:
 on the service. `dataSync` is the honest type; `shortService` caps at three
 minutes, which an absorb exceeds routinely.
 
+**Notification channels are registered before the first promotion or
+notification.** The app has none today, and on Android 8.0+ — which is every
+supported device, given `minSdk 26` — posting to an unregistered channel
+suppresses a completion notification outright and makes a foreground-service
+notification invalid. That last part is not cosmetic: an invalid foreground
+notification undermines the process-lifetime guarantee this whole feature rests
+on. Two channels with explicit ids, one for the ongoing service notification
+(low importance, no sound) and one for completions, created at service start
+before either builder runs.
+
 **Notification.** Python fires a terminal-state hook; Kotlin receives it over a
 Chaquopy callback — the same shape as `ServerRuntime`'s existing port callback —
-and posts a `NotificationCompat`. No JS↔Kotlin bridge is required, because the
-trigger is server-side.
+and posts a `NotificationCompat` on the completions channel. No JS↔Kotlin
+bridge is required, because the trigger is server-side.
 
 Text, per the player's request:
 
@@ -660,10 +810,32 @@ broad touches nearly all of them, so they are requirements, not afterthoughts:
 | `test_import_guard.py` | module-scope imports, acyclic: `routes/runs.py` must not import `streaming`/`scenes` |
 | `test_pydantic_guard.py` | plain `BaseModel` fields; dump via `routes.common._dump` |
 | `test_paths_guard.py` | filesystem through the resolvers |
-| `test_usage_guard.py` | the meter moves into the runner keeping the `client` receiver name and the `<something>.usage` argument shape, or the guard reads the runner as unmetered |
+| `test_usage_guard.py` | **the guard must be taught to follow the runner, or the widened scope blinds it** — see below |
 | `test_route_order.py` | new routes registered where they are reachable |
 | `check-pydantic1` | the whole suite passes under the Android dependency set |
 | ratchet baselines | `make baseline` and commit the smaller files with the change |
+
+### The usage guard is the sharp edge of this refactor
+
+`test_usage_guard.py` exists because the ledger is only worth reading if it is
+complete, and completeness decays silently. It is honest about how it works:
+it scans `routes/` and recognizes an LLM call **by the receiver name `client`**,
+counting a call metered when it is passed `<something>.usage`. That is the
+codebase's own convention, not a proof.
+
+Moving all 35 call sites behind a uniform runner is exactly the change that
+convention does not survive by accident. If the call migrates into a runner
+factory — or out of `routes/` entirely — the guard stops seeing it, reports
+nothing, and goes green over a ledger that has quietly stopped recording.
+A guard that fails open is worse than no guard, because the number it produces
+still looks like an answer.
+
+So this is a requirement of the work, not a consequence to notice afterwards:
+either the meter stays at each call site with the receiver still named
+`client`, or the guard is rewritten to follow runs and its docstring updated to
+say what it now recognizes. Whichever is chosen, the guard must be shown
+failing on a deliberately unmetered run before the work is called done — the
+same standard the module already holds itself to.
 
 ## Testing
 
@@ -719,6 +891,20 @@ Backend, with `backend/tests/llm_fakes.py` injected at
 - a run whose scene was deleted still produces its error notification, from
   labels captured at run start.
 
+Widened scope:
+
+- every one of the 25 LLM routes starts a run and is re-attachable; a table
+  test over the route inventory, so a route added later without a class is a
+  failure rather than an omission.
+- a `background` run (rolling summary, scene break) does **not** take the
+  scene's exclusion key, and the composer stays enabled while one is live —
+  the regression that would make the app lock itself after every turn.
+- a `draft` run for a world subject and a `turn` for a scene run concurrently
+  without either blocking the other.
+- the global models-refresh run detaches with no campaign lock taken at all.
+- a run id from one subject, sent through another subject's route, returns
+  `run_gone`.
+
 Frontend (vitest, from `frontend/`):
 
 - composer disabled while a run is live, and re-enabled once it lands —
@@ -765,7 +951,11 @@ differently and that is a finding, not a regeneration.
 - **`dataSync` foreground services are capped at roughly six hours per day on
   Android 15+.** Runs are minutes; a player would have to be generating
   continuously for hours to reach it. Noted so it is not discovered.
-- **Memory.** One run per scene, frames measured in kilobytes. Terminal runs
+- **Memory.** Bounded by one exclusive run per scene plus whatever
+  non-exclusive `background`/`draft` runs a user has triggered, with frames
+  measured in kilobytes. Widening scope widens this: `draft` runs are the ones
+  with no natural cap, so they are reaped on the same TTL and hold results
+  rather than frame buffers wherever they do not stream. Terminal runs
   are reaped on a TTL so a late re-attach can still catch the tail, after which
   the transcript is the record.
 - **Disconnect no longer cancels.** A deliberate behavior change on every
