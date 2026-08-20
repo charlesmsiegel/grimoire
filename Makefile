@@ -109,7 +109,12 @@ android-clean:
 # check-apk is deliberately excluded: it needs a per-machine
 # `make android-bootstrap`, so folding it in would break `make check` on any
 # un-bootstrapped machine. CI runs the two as separate jobs.
-check: check-lint check-mypy check-py check-web check-eslint check-templates check-pydantic1
+#
+# Cheapest first, and that ordering is the point: serial `make check` is now
+# half an hour, most of it the two full test runs at the end, and there is no
+# reason to spend eighteen minutes of it before finding out that a nine-second
+# lint is red. CI runs these as parallel jobs, so the order only matters here.
+check: check-lint check-mypy check-templates check-eslint check-web check-py check-pydantic1
 
 # --cov-fail-under is a floor, not a target: it sits just under the number the
 # suite actually reaches, so it fails on a change that *drops* coverage and
