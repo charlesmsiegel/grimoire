@@ -265,7 +265,10 @@ places. A handle resolves if and only if:
 3. it carries a **non-empty description**, so only art an author deliberately
    wrote up is reachable, never any file in the store;
 4. its record is one this scene could legitimately show: a `gm-only` entity is
-   refused outright, and an actor must actually be cast in the scene.
+   refused outright, and an actor must actually be cast in the scene. The scene
+   id is a **required** argument, not an optional one — every caller has one,
+   so an optional parameter would only have left the weaker gate sitting one
+   forgotten argument away from the next caller.
 
 Rules 3 and 4 are what close the gap that not carrying the catalogue opens.
 Without them a model could compose a plausible handle for an image that exists
