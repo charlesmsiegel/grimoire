@@ -105,10 +105,26 @@ otherwise. Two edits keep that honest:
   only the claim needs correcting, rather than being left to quietly outlive
   its truth.
 
-**Deletion.** `assets.delete_image` already clears `focus.json` when the avatar
-goes; it gains the matching drop of the image's description entry.
-`delete_version_images` needs nothing — it removes the folder, sidecar and all,
-and says so.
+**The sidecar follows the bytes through every lifecycle event**, not just
+writes — the half easiest to get partly right:
+
+- `assets.delete_image` already clears `focus.json` when the avatar goes; it
+  gains the matching drop of the image's description entry, and
+  `campaign_images.delete_image` the same, or a kept entry captions the next
+  image uploaded under that name.
+- `assets.promote_image` **swaps** the two entries with the two images. Without
+  it a promotion left each picture wearing the other's sentence, and — with no
+  avatar to swap back — lost the promoted image's description entirely.
+- `delete_version_images` needs nothing: it removes the folder, sidecar and
+  all, and says so.
+
+**Every campaign-scoped write takes `campaign_lock`.** The sidecar is
+read-modify-written whole, so two unlocked writers describing *different*
+images lose one of the two sentences, and what is lost is something somebody
+sat and wrote. That covers `overlay.set_description` and
+`campaign_images.set_description` alike — the library reaching past the lock
+into `image_descriptions` directly was the one surface where the race stayed
+open. World-side writes remain unlocked, as every other world sidecar is.
 
 **Guards** (CLAUDE.md): writes through `store.atomic`, filesystem access
 through the resolvers, module-scope acyclic imports, and a classification in
@@ -128,10 +144,25 @@ world-side, beside the image routes that already exist:
 campaigns/{cid}/images/{name}/description
 ```
 
+Plus a draft endpoint per surface (`POST .../description/draft`), all four
+sharing one `_draft_description` helper so the connection-kind refusal cannot
+drift between them. World-side only for record art — a description drafted from
+the bytes is a claim about the bytes, and a campaign reaches most of its art
+through its world — and campaign-side for the library, which has no world copy.
+
 Plus one enumeration used by the authoring backlog:
 `GET {world|campaign}/images/undescribed` → every stored image with no sidecar
 key, mirroring `subjects/untagged`. Route ordering matters the same way it did
-there: it must register before the generic `{kind}/{eid}` entity routes.
+there: the world route must register before the generic `{kind}/{eid}` entity
+routes, and the campaign route before `/campaigns/{cid}/images/{name}`, which
+would otherwise match "undescribed" as an image name.
+
+**The two scopes enumerate different things**, and the split is what makes the
+campaign half worth having. A world's queue is its own art. A campaign's is
+only what the world's cannot reach: its own image library, which hangs off no
+record at all, and images it has diverged, whose bytes differ from the world's
+and so need words of their own. Inherited art is left to the world, where
+describing it once serves every campaign on it.
 
 A `PUT` against an image the surface does not hold is a 404, not a silent
 no-op — the strict-write rule surfaced as a status code.
@@ -343,9 +374,9 @@ selected image, saved explicitly. The four are `CharacterEditor`, `PCEditor`,
 position counter. Save and "No description" both `PUT` (the second writes
 `""` — reviewed, not offered); Skip advances and leaves the image undescribed.
 
-**"Describe it for me".** A button that asks the active LLM connection for a
-first draft the author then edits. Human text always wins; nothing is ever
-auto-saved.
+**"Describe it for me".** A button on every surface, asking the active LLM
+connection for a first draft the author then edits. Human text always wins;
+nothing is ever auto-saved.
 
 This is the one place the feature adds a genuinely new capability to the LLM
 layer, and it has a sharp edge worth stating: **`claude_agent.py` cannot carry

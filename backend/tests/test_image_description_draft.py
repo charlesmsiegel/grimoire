@@ -100,3 +100,64 @@ def test_data_uri_refuses_a_type_we_cannot_label(tmp_path):
     p.write_bytes(b"II*\x00")
     with pytest.raises(ValueError):
         store.image_drafts.data_uri(p)
+
+
+# ---- the other three surfaces ---------------------------------------------
+
+def test_a_pc_image_can_be_drafted(client, art):
+    wid, _cid, _vid = art
+    made = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Mara"}).json()
+    pid, pvid = made["pc"], made["version"]
+    client.put(f"/api/worlds/{wid}/pcs/{pid}/versions/{pvid}/images/avatar",
+               files={"file": ("a.png", PNG, "image/png")})
+    fake = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = client.post(f"/api/worlds/{wid}/pcs/{pid}/versions/{pvid}"
+                    f"/images/avatar/description/draft")
+    assert r.status_code == 200
+    user = next(m for m in fake.messages if m["role"] == "user")
+    assert "Mara" in {p["type"]: p for p in user["content"]}["text"]["text"]
+
+
+def test_an_entity_image_can_be_drafted(client, art):
+    wid, _cid, _vid = art
+    eid = client.post(f"/api/worlds/{wid}/locations",
+                      json={"name": "Saltmarch Harbour"}).json()["id"]
+    client.put(f"/api/worlds/{wid}/locations/{eid}/images/gallery_1",
+               files={"file": ("a.png", PNG, "image/png")})
+    fake = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = client.post(f"/api/worlds/{wid}/locations/{eid}/images/gallery_1/description/draft")
+    assert r.status_code == 200
+    user = next(m for m in fake.messages if m["role"] == "user")
+    assert "Saltmarch Harbour" in {p["type"]: p for p in user["content"]}["text"]["text"]
+
+
+def test_a_library_image_can_be_drafted_with_no_subject(client, art):
+    """Library art belongs to the campaign and to no record -- which is the
+    whole reason the library exists -- so there is no name to offer."""
+    wid, _cid, _vid = art
+    camp = client.post("/api/campaigns",
+                       json={"name": "Saltmarch", "world": wid}).json()["id"]
+    client.put(f"/api/campaigns/{camp}/images/coastline",
+               files={"file": ("a.png", PNG, "image/png")})
+    fake = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = client.post(f"/api/campaigns/{camp}/images/coastline/description/draft")
+    assert r.status_code == 200
+    user = next(m for m in fake.messages if m["role"] == "user")
+    assert "belongs to a record" not in {p["type"]: p for p in user["content"]}["text"]["text"]
+
+
+def test_every_surface_refuses_a_claude_connection_the_same_way(client, art):
+    """One helper serves all four, so the refusal cannot drift between them."""
+    wid, cid, vid = art
+    client.put("/api/config", json={"active_connection_id": "claude"})
+    client.app.dependency_overrides[routes.get_llm] = CapturingOpenRouter
+    eid = client.post(f"/api/worlds/{wid}/locations", json={"name": "Harbour"}).json()["id"]
+    client.put(f"/api/worlds/{wid}/locations/{eid}/images/gallery_1",
+               files={"file": ("a.png", PNG, "image/png")})
+    for url in (_url(wid, cid, vid),
+                f"/api/worlds/{wid}/locations/{eid}/images/gallery_1/description/draft"):
+        r = client.post(url)
+        assert (r.status_code, "cannot read images" in str(r.json()["detail"])) == (409, True), url

@@ -17,7 +17,11 @@ import { api, type EntityKind, type EntityScope, type UndescribedImage } from ".
  *  - **Skip** writes nothing. The image stays undescribed and comes back next
  *    time — which is the right answer for "not now", and the wrong one to
  *    conflate with "nothing to say". */
-export function DescribeQueue({ wid, queue, onClose, onSaved }: {
+export function DescribeQueue({ scope, wid, queue, onClose, onSaved }: {
+  scope: EntityScope;
+  /** The WORLD this queue's drafts go to. Drafting is world-side only (a
+   *  description drafted from the bytes is a claim about the bytes), so a
+   *  campaign queue simply offers no draft button. */
   wid: string;
   queue: UndescribedImage[];
   onClose: () => void;
@@ -46,7 +50,7 @@ export function DescribeQueue({ wid, queue, onClose, onSaved }: {
   }
 
   const pos = total - items.length + 1;
-  const scope: EntityScope = { kind: "world", id: wid };
+  const worldScope = scope.kind === "world";
 
   function advance() {
     setItems((it) => it.slice(1));
@@ -58,6 +62,10 @@ export function DescribeQueue({ wid, queue, onClose, onSaved }: {
    *  endpoints differ only in their URL shape — an actor's art is per version,
    *  an entity's is keyed on a fixed "default". */
   function write(description: string) {
+    if (cur.kind === "campaign") {
+      // The library hangs off no record, so it addresses by name alone.
+      return api.setCampaignImageDescription(scope.id, cur.name, description);
+    }
     if (cur.kind === "characters") {
       return api.setCharacterImageDescription(scope, cur.id, cur.vid, cur.name, description);
     }
@@ -82,14 +90,23 @@ export function DescribeQueue({ wid, queue, onClose, onSaved }: {
     }
   }
 
+  /** Ask for a draft on whichever surface this image belongs to. Every surface
+   *  has a route now; only the SCOPE limits it, because a description drafted
+   *  from the bytes is a claim about the bytes and belongs where the art does. */
+  function askForDraft() {
+    if (cur.kind === "campaign") return api.draftCampaignImageDescription(scope.id, cur.name);
+    if (cur.kind === "pcs") return api.draftPCImageDescription(wid, cur.id, cur.vid, cur.name);
+    if (cur.kind === "characters") {
+      return api.draftCharacterImageDescription(wid, cur.id, cur.vid, cur.name);
+    }
+    return api.draftEntityImageDescription(wid, cur.kind as EntityKind, cur.id, cur.name);
+  }
+
   async function draft() {
     setBusy("draft");
     setError(null);
     try {
-      // Characters only: that is the surface the draft route serves today, and
-      // the button is hidden elsewhere rather than offered and failing.
-      const r = await api.draftCharacterImageDescription(wid, cur.id, cur.vid, cur.name);
-      setText(r.description);
+      setText((await askForDraft()).description);
     } catch (err: unknown) {
       setError((err as { detail?: string })?.detail ?? String(err));
     } finally {
@@ -114,7 +131,9 @@ export function DescribeQueue({ wid, queue, onClose, onSaved }: {
         </button>
         <button className="subtle" disabled={busy !== null}
                 onClick={() => { void save(""); }}>No description</button>
-        {cur.kind === "characters" && (
+        {/* The campaign library drafts campaign-side (it has no world copy);
+            everything else drafts world-side, where its bytes live. */}
+        {(worldScope || cur.kind === "campaign") && (
           <button className="subtle" disabled={busy !== null}
                   onClick={() => { void draft(); }}>
             {busy === "draft" ? "Looking…" : "Describe it for me"}

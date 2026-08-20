@@ -10,6 +10,8 @@ Scenes, weather, mechanics and greetings have their own modules; the generic
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
@@ -21,6 +23,7 @@ from .common import (
     _campaign_root_or_404,
     _content_fields,
     _display_name_or_400,
+    _draft_description,
     _dump,
     _llm_http_error,
     _page_of,
@@ -521,13 +524,24 @@ def delete_campaign_cover(cid: str):
 # Declared here for the same reason the cover is: `routes/__init__` includes
 # `campaigns` before `entities`, whose `/campaigns/{cid}/{kind}` would otherwise
 # capture `images`.
+@router.post("/campaigns/{cid}/images/{name}/description/draft")
+async def post_campaign_library_description_draft(cid: str, name: str,
+                                                  client: LLMClient = Depends(get_llm)):
+    """A model-drafted first pass at what a library picture shows.
+
+    No subject name: this art belongs to the campaign and to no record, which is
+    the whole reason the library exists. The template simply asks what is in the
+    picture.
+    """
+    _campaign_root_or_404(cid)
+    return await _draft_description(client, store.campaign_images.image_path(cid, name), "")
+
+
 @router.put("/campaigns/{cid}/images/{name}/description")
 def put_campaign_library_image_description(cid: str, name: str, body: ImageDescription):
     _campaign_root_or_404(cid)
-    d = store.campaign_images.images_dir(cid)
-    names = {i["name"] for i in store.campaign_images.list_images(cid)}
     try:
-        store.image_descriptions.set_in(d, name, body.description, names=names)
+        store.campaign_images.set_description(cid, name, body.description)
     except ValueError:
         # `from None`: the strict-write ValueError is this module's own
         # implementation detail, and chaining it onto the 404 says nothing a
@@ -544,6 +558,67 @@ def list_campaign_library(cid: str):
         images,
         store.image_descriptions.read_in(store.campaign_images.images_dir(cid),
                                          names={i["name"] for i in images}))
+
+
+@router.get("/campaigns/{cid}/images/undescribed")
+def list_campaign_undescribed_images(cid: str):
+    """This campaign's OWN undescribed art — the queue's campaign half.
+
+    Registered before `/images/{name}`, which would otherwise match
+    "undescribed" as an image name.
+
+    Campaign-side only, and deliberately so: art the campaign inherits belongs
+    to the world's queue, where describing it once serves every campaign on
+    that world. What is left is exactly what the world queue cannot reach —
+    the campaign's own image library, which hangs off no record at all, and
+    images a campaign has diverged, whose bytes differ from the world's and so
+    need words of their own.
+    """
+    root = _campaign_root_or_404(cid)
+    out: list[dict] = []
+    lib = store.campaign_images.images_dir(cid)
+    reviewed = store.image_descriptions.read_raw(lib)
+    out.extend({"kind": "campaign", "id": "", "vid": "", "name": image["name"],
+                "record_name": "Campaign library",
+                "url": f"/api/campaigns/{cid}/images/{quote(image['name'], safe='')}"}
+               for image in store.campaign_images.list_images(cid)
+               if image["name"] not in reviewed)
+
+    names: dict[tuple[str, str], str | None] = {}
+    for base in ("characters", store.pcs.ASSET_BASE, *store.entities.ENTITY_KINDS):
+        for item in store.image_descriptions.undescribed(root, base):
+            key = (base, item["id"])
+            if key not in names:
+                names[key] = _campaign_record_name(cid, base, item["id"])
+            if names[key] is None:
+                continue
+            out.append({"kind": base, "id": item["id"], "vid": item["vid"],
+                        "name": item["name"], "record_name": names[key],
+                        "url": _campaign_image_url(cid, base, item)})
+    return out
+
+
+def _campaign_record_name(cid: str, base: str, rid: str) -> str | None:
+    """What to call the record a queued campaign image hangs off, read through
+    the overlay, or None when nothing there answers to that id any more."""
+    try:
+        if base == "characters":
+            return str(store.overlay.read_character(cid, rid)["meta"]["name"])
+        if base == store.pcs.ASSET_BASE:
+            return str(store.overlay.read_pc(cid, rid)["meta"]["name"])
+        return str(store.overlay.read_entity(cid, base, rid)["meta"]["name"])
+    except (store.characters.CharacterNotFound, store.pcs.PCNotFound,
+            store.entities.EntityNotFound, KeyError, OSError, UnicodeDecodeError):
+        return None
+
+
+def _campaign_image_url(cid: str, base: str, item: dict) -> str:
+    if base in ("characters", store.pcs.ASSET_BASE):
+        return (f"/api/campaigns/{cid}/{base}/{quote(item['id'], safe='')}"
+                f"/versions/{quote(item['vid'], safe='')}"
+                f"/images/{quote(item['name'], safe='')}")
+    return (f"/api/campaigns/{cid}/{base}/{quote(item['id'], safe='')}"
+            f"/images/{quote(item['name'], safe='')}")
 
 
 @router.get("/campaigns/{cid}/images/{name}")

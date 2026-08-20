@@ -163,6 +163,28 @@ test("detail shows the Images shelf with avatar tile, gallery promote, and add t
   expect(screen.getByRole("button", { name: /\+ add/i })).toBeInTheDocument();
 });
 
+test("a backlog reply that arrives after a world switch is discarded", async () => {
+  // The queue carries record ids and image names, so installing the previous
+  // world's under the new `wid` can send a description written about one record
+  // to another that happens to share its slug.
+  let release: (q: unknown[]) => void = () => {};
+  (api.listUndescribedImages as any).mockImplementation((sc: any) =>
+    sc.id === "w"
+      ? new Promise<unknown[]>((resolve) => { release = resolve; })
+      : Promise.resolve([]));
+
+  const { rerender } = render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await screen.findByRole("button", { name: /\+ New character/ });
+  rerender(<CharacterEditor scope={{ kind: "world", id: "other" }} wid="other" />);
+  await waitFor(() => expect(api.listUndescribedImages).toHaveBeenCalledWith(
+    { kind: "world", id: "other" }));
+
+  release([{ kind: "characters", id: "seraphine", vid: "default", name: "gallery_1",
+             record_name: "Seraphine", url: "/img/1" }]);
+  await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
+  expect(screen.queryByRole("button", { name: /Describe images/ })).toBeNull();
+});
+
 test("the describe backlog appears as a toolbar button only when it has entries", async () => {
   (api.listUndescribedImages as any).mockResolvedValue([
     { kind: "characters", id: "seraphine", vid: "default", name: "gallery_1",
@@ -180,10 +202,10 @@ test("an empty backlog shows no button, and a campaign scope never asks for one"
 
   (api.listUndescribedImages as any).mockClear();
   render(<CharacterEditor scope={{ kind: "campaign", id: "c" }} wid="w" />);
-  await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
-  // World-scoped queue: a campaign reaches most of its art through its world,
-  // so there is nothing here to ask for.
-  expect(api.listUndescribedImages).not.toHaveBeenCalled();
+  // A campaign has a queue too -- its own library and its diverged art, which
+  // the world's queue cannot reach -- so it asks, scoped to itself.
+  await waitFor(() => expect(api.listUndescribedImages).toHaveBeenCalledWith(
+    { kind: "campaign", id: "c" }));
 });
 
 test("the art shelf offers a description per image, and says which are unreviewed", async () => {

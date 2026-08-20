@@ -182,21 +182,29 @@ def _resolve_image(cid: str, m: re.Match) -> Path | None:
 
 
 def _first(lookup, name: str) -> Path | None:
-    """`lookup(name)`, falling back to the percent-DECODED name.
+    """`lookup` on the CANONICAL reading of `name`, then on the raw segment.
 
     `assets.storable` accepts names a markdown link cannot carry bare --
-    `art(1)`, `my art`, `a#b` -- so `context.art.url_for` percent-encodes the
-    segments it writes into a transcript. Those bytes are on disk under the
-    decoded name, and a resolver that only tried the raw segment answered None
-    for exactly the images the encoding existed to rescue: the picture vanished
-    from the book and degraded to its alt text.
+    `art(1)`, `my art`, `a#b` -- so `context.art.url_for` and the picker's
+    `encodeSegment` percent-encode the segment they write into a transcript.
+    The bytes are on disk under the decoded name, and a resolver that only
+    tried the raw segment answered None for exactly the images that encoding
+    existed to rescue: the picture vanished from the book and degraded to alt
+    text.
 
-    Raw FIRST, decoded only as a fallback, so this can add resolutions and never
-    change one. That matters because `%` is itself a legal name character here:
-    a file genuinely called `a%2Fb` keeps resolving as itself, and only a name
-    nothing matches is retried as an escape sequence.
+    DECODED first, raw second, and the order matters where the two disagree.
+    Both writers escape a literal percent as ``%25``, so a URL reading
+    ``/images/my%20art`` is unambiguously the file ``my art`` -- while a store
+    that also holds a file literally named ``my%20art`` would, under raw-first,
+    hand back that second file and export the wrong picture. The canonical
+    interpretation is the one our own URLs carry; the raw attempt stays only as
+    a fallback for a URL written by hand before any of this existed.
     """
-    return lookup(name) or (lookup(unquote(name)) if "%" in name else None)
+    if "%" in name:
+        decoded = unquote(name)
+        if decoded != name:
+            return lookup(decoded) or lookup(name)
+    return lookup(name)
 
 
 def rewrite_images(text: str, cid: str, images: Images, prefix: str = "images/") -> str:

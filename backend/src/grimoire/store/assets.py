@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import shutil
 import threading
-from contextlib import ExitStack, contextmanager, suppress
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from . import atomic
@@ -480,37 +480,58 @@ def clear_focus(root: Path, cid: str, vid: str, base: str = "characters") -> Non
         p.unlink()
 
 
-def drop_sidecar_entry(d: Path, filename: str, key: str) -> None:
-    """Remove `key` from a ``{name: value}`` sidecar in `d`, if it is there.
-
-    Deleting an image has to take its sidecar entries with it, and this module
-    is where deletion happens. It cannot call the sidecar's own module to do it:
-    `image_descriptions` enumerates its directory through `assets.list_in`, so
-    the import would be a cycle -- and a deferred import to dodge that is
-    exactly what `tests/test_import_guard.py` exists to refuse.
-
-    So the split is by *layer*, not by file: this drops a key from a flat JSON
-    mapping, knowing nothing about what the values mean, and the owning module
-    keeps every rule about them. Removing the KEY rather than blanking the value
-    is the point -- for descriptions an absent key means "never reviewed", which
-    is what a name with no image behind it now is.
-
-    Silent on a missing, garbled or unwritable sidecar, matching `clear_focus`:
-    this runs *after* the bytes are gone, and an image deletion must not fail
-    over the file that annotates it.
-    """
+def _read_sidecar(d: Path, filename: str) -> dict:
+    """A ``{name: value}`` sidecar in `d`, or ``{}`` for missing or garbled."""
     p = d / filename
     if not p.exists():
-        return
+        return {}
     try:
         cur = json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return {}
+    return cur if isinstance(cur, dict) else {}
+
+
+def edit_sidecar(d: Path, filename: str, changes: dict[str, str | None]) -> None:
+    """Apply `changes` to a ``{name: value}`` sidecar in `d`; ``None`` removes.
+
+    Image lifecycle events have to take the sidecar entries with them, and this
+    module is where they happen. It cannot call the sidecar's own module to do
+    it: `image_descriptions` enumerates its directory through `assets.list_in`,
+    so the import would be a cycle -- and a deferred import to dodge that is
+    exactly what `tests/test_import_guard.py` exists to refuse.
+
+    So the split is by *layer*, not by file: this edits a flat JSON mapping,
+    knowing nothing about what the values mean, and the owning module keeps
+    every rule about them.
+
+    SEVERAL changes at once, because promotion needs two: a swap applied as two
+    writes is a window in which one picture holds the other's description.
+
+    Silent on a missing, garbled or unwritable sidecar, matching `clear_focus`:
+    these run *after* the bytes have moved, and an image operation must not fail
+    over the file that annotates it. A no-op change set never creates a file.
+    """
+    cur = _read_sidecar(d, filename)
+    wanted = {k: v for k, v in changes.items() if v is not None}
+    dropped = {k for k, v in changes.items() if v is None}
+    if not any(cur.get(k) != v for k, v in wanted.items()) and not (dropped & set(cur)):
         return
-    if not isinstance(cur, dict) or key not in cur:
-        return
-    del cur[key]
-    with suppress(OSError):
-        atomic.write_text(p, json.dumps(cur, indent=2, sort_keys=True) + "\n")
+    cur = {k: v for k, v in cur.items() if k not in dropped}
+    cur.update(wanted)
+    p = d / filename
+    try:
+        if cur:
+            atomic.write_text(p, json.dumps(cur, indent=2, sort_keys=True) + "\n")
+        elif p.exists():
+            p.unlink()
+    except OSError:
+        pass
+
+
+def drop_sidecar_entry(d: Path, filename: str, key: str) -> None:
+    """Remove `key` from a ``{name: value}`` sidecar in `d`, if it is there."""
+    edit_sidecar(d, filename, {key: None})
 
 
 def put_image(root: Path, cid: str, vid: str, name: str, data: bytes, ext: str,
@@ -615,6 +636,9 @@ def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "charac
                 raise ValueError(f"unsupported image type: {p.name}")
         promoted = (src.read_bytes(), src.suffix)
         demoted = (cur.read_bytes(), cur.suffix) if cur is not None else None
+        # Snapshot BEFORE anything moves: the no-avatar branch below deletes
+        # `name`, and `delete_image` takes that slot's description with it.
+        described = _read_sidecar(d, DESCRIPTIONS_FILE)
         put_image(root, cid, vid, AVATAR, promoted[0], promoted[1], base)
         if demoted is None:
             # Nothing to swap back in, so the promoted image has to LEAVE this
@@ -629,4 +653,14 @@ def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "charac
                 raise OSError(f"promoted image could not be cleared: {name}")
         else:
             put_image(root, cid, vid, name, demoted[0], demoted[1], base)
+        # A description is a claim about particular bytes, so it travels with
+        # them. Without this the swap left each picture wearing the other's
+        # sentence -- and, with no avatar to swap back, lost the promoted
+        # image's description entirely. `None` on either side removes that key
+        # rather than leaving the slot's previous description behind, which
+        # would caption the new occupant with the old one's words.
+        edit_sidecar(d, DESCRIPTIONS_FILE, {
+            AVATAR: described.get(name),
+            name: described.get(AVATAR) if demoted is not None else None,
+        })
     clear_focus(root, cid, vid, base)

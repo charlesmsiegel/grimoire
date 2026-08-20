@@ -301,6 +301,11 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     reloadImages(editing);
   }
 
+  async function draftDescription(name: string): Promise<string> {
+    if (!editing) return "";
+    return (await api.draftEntityImageDescription(wid, kind, editing, name)).description;
+  }
+
   async function promoteImage(name: string) {
     if (!editing) return;
     setError(null);
@@ -504,7 +509,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                         <ImageDescriptionField
                           name="avatar"
                           value={images.find((i) => i.name === "avatar")?.description}
-                          onSave={(d) => describeImage("avatar", d)} />
+                          onSave={(d) => describeImage("avatar", d)}
+                          onDraft={scope.kind === "world" ? () => draftDescription("avatar") : undefined} />
                       </figure>
                     ) : (
                       <div className="shelf-tile shelf-empty">no image</div>
@@ -515,7 +521,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                         <button className="shelf-promote" onClick={() => promoteImage(n)}>Set as primary</button>
                         <ImageDescriptionField
                           name={n} value={images.find((i) => i.name === n)?.description}
-                          onSave={(d) => describeImage(n, d)} />
+                          onSave={(d) => describeImage(n, d)}
+                          onDraft={scope.kind === "world" ? () => draftDescription(n) : undefined} />
                       </div>
                     ))}
                     <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>

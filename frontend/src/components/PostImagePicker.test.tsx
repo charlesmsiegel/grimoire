@@ -7,6 +7,7 @@ vi.mock("../api/client", () => ({
     putCampaignImage: vi.fn(),
     deleteCampaignImage: vi.fn(),
     setCampaignImageDescription: vi.fn(),
+    draftCampaignImageDescription: vi.fn(),
     readCharacter: vi.fn(),
     readPC: vi.fn(),
     campaignImageUrl: (cid: string, name: string) => `/api/campaigns/${cid}/images/${name}`,

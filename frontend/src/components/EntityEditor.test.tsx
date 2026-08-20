@@ -30,6 +30,7 @@ vi.mock("../api/client", () => ({
     listPCs: vi.fn(),
     listEntityImages: vi.fn(),
     setEntityImageDescription: vi.fn(),
+    draftEntityImageDescription: vi.fn(),
     putEntityImage: vi.fn(),
     promoteEntityImage: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,

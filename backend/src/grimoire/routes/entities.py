@@ -9,16 +9,19 @@ registered before these. That is the one ordering rule the package has, and
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from .. import store
+from ..llm import LLMClient
 from .common import (
     _campaign_root_or_404,
+    _draft_description,
     _fresh_or_409,
     _serve_image,
     _upload_image_ext,
     _with_descriptions,
     _world_root_or_404,
+    get_llm,
 )
 from .models import EntityCreate, EntityUpdate, ImageDescription
 
@@ -375,6 +378,19 @@ def put_campaign_entity(cid: str, kind: str, eid: str, body: EntityUpdate):
 def delete_campaign_entity(cid: str, kind: str, eid: str):
     _campaign_root_or_404(cid)
     return _campaign_entity_delete(cid, kind, eid)
+
+
+@router.post("/worlds/{wid}/{kind}/{eid}/images/{name}/description/draft")
+async def post_world_entity_image_description_draft(wid: str, kind: str, eid: str, name: str,
+                                                    client: LLMClient = Depends(get_llm)):
+    """A model-drafted first pass at what this entity's picture shows."""
+    root = _world_entity_or_404(wid, kind, eid)
+    try:
+        subject = store.entities.read_entity(root, kind, eid)["meta"]["name"]
+    except store.entities.EntityNotFound:
+        subject = ""
+    return await _draft_description(
+        client, store.assets.image_path(root, eid, "default", name, base=kind), subject)
 
 
 @router.put("/worlds/{wid}/{kind}/{eid}/images/{name}/description")

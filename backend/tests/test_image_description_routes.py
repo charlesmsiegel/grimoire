@@ -217,3 +217,78 @@ def test_the_backlog_reads_each_record_once_not_once_per_image(client, world, mo
     queue = client.get(f"/api/worlds/{world}/images/undescribed").json()
     assert len(queue) == 3                     # three images...
     assert reads.count(cid) == 1               # ...one card read
+
+
+def test_the_campaign_queue_covers_its_library_and_its_diverged_art(client, world):
+    """The half the world's queue cannot reach. A campaign's own library hangs
+    off no record at all, so those images were previously unreachable from any
+    queue -- and art a campaign has diverged has bytes of its own that need
+    words of their own."""
+    cid, vid = _char(client, world)
+    camp = client.post("/api/campaigns",
+                       json={"name": "Saltmarch", "world": world}).json()["id"]
+    client.put(f"/api/campaigns/{camp}/images/coastline",
+               files={"file": ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+    # ...and a diverged character image
+    client.put(f"/api/campaigns/{camp}/characters/{cid}/versions/{vid}/images/gallery_1",
+               files={"file": ("b.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+
+    queue = client.get(f"/api/campaigns/{camp}/images/undescribed").json()
+    assert {(i["kind"], i["name"]) for i in queue} == {
+        ("campaign", "coastline"), ("characters", "gallery_1")}
+    lib = next(i for i in queue if i["kind"] == "campaign")
+    assert lib["record_name"] == "Campaign library"
+    assert client.get(lib["url"]).status_code == 200
+    assert client.get(next(i for i in queue if i["kind"] == "characters")["url"]).status_code == 200
+
+
+def test_the_campaign_queue_leaves_inherited_art_to_the_world(client, world):
+    """Describing inherited art once, world-side, serves every campaign on that
+    world -- so the campaign queue must not offer it again."""
+    _cid, _vid = _char(client, world)
+    camp = client.post("/api/campaigns",
+                       json={"name": "Saltmarch", "world": world}).json()["id"]
+    assert client.get(f"/api/campaigns/{camp}/images/undescribed").json() == []
+    # the world's own queue still has it
+    assert len(client.get(f"/api/worlds/{world}/images/undescribed").json()) == 1
+
+
+def test_undescribed_is_not_swallowed_by_the_library_image_route(client, world):
+    """`/campaigns/{cid}/images/{name}` would match "undescribed" as an image
+    name if it were registered first."""
+    camp = client.post("/api/campaigns",
+                       json={"name": "Saltmarch", "world": world}).json()["id"]
+    r = client.get(f"/api/campaigns/{camp}/images/undescribed")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_describing_a_library_image_survives_a_concurrent_sibling_write(client, world):
+    """The sidecar is read-modify-written whole, so the write must be locked --
+    what is lost otherwise is a sentence somebody sat and wrote."""
+    camp = client.post("/api/campaigns",
+                       json={"name": "Saltmarch", "world": world}).json()["id"]
+    for name in ("coastline", "the-inn"):
+        client.put(f"/api/campaigns/{camp}/images/{name}",
+                   files={"file": ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+        client.put(f"/api/campaigns/{camp}/images/{name}/description",
+                   json={"description": f"A picture of {name}."})
+    assert store.image_descriptions.read_in(store.campaign_images.images_dir(camp)) == {
+        "coastline": "A picture of coastline.", "the-inn": "A picture of the-inn."}
+
+
+def test_deleting_a_library_image_takes_its_description_with_it(client, world):
+    """A kept entry would caption the NEXT image uploaded under this name --
+    different art, immediately visible and immediately offerable."""
+    camp = client.post("/api/campaigns",
+                       json={"name": "Saltmarch", "world": world}).json()["id"]
+    client.put(f"/api/campaigns/{camp}/images/coastline",
+               files={"file": ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+    client.put(f"/api/campaigns/{camp}/images/coastline/description",
+               json={"description": "A hand-drawn map."})
+    client.delete(f"/api/campaigns/{camp}/images/coastline")
+    client.put(f"/api/campaigns/{camp}/images/coastline",
+               files={"file": ("b.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+    listing = client.get(f"/api/campaigns/{camp}/images").json()
+    assert [(i["name"], i["description"], i["described"]) for i in listing] == [
+        ("coastline", "", False)]
