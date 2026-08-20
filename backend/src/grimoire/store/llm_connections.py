@@ -15,7 +15,12 @@ from . import atomic, config
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, now_iso, slugify, uniquify
 
-_KINDS = ("openrouter", "claude", "openai_compatible")
+#: Every connection kind a stored connection may declare. Public, because
+#: whether a kind can carry an image is answered in two places -- `llm
+#: .TEXT_ONLY_KINDS` for the fallback route and `store.image_drafts
+#: .SUPPORTED_KINDS` for the primary -- and a test partitions THIS roster
+#: between them, so a new kind cannot be added without classifying it.
+KINDS = ("openrouter", "claude", "openai_compatible")
 _FIELDS = ("kind", "name", "base_url", "api_key", "model", "post_process")
 
 
@@ -59,7 +64,7 @@ def _read(id: str) -> dict | None:
         meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError):
         return None
-    if meta.get("kind") not in _KINDS:
+    if meta.get("kind") not in KINDS:
         return None
     return {"id": id, **{k: meta.get(k, "") for k in _FIELDS}, "rev": meta.get("rev", "")}
 

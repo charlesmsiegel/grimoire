@@ -663,38 +663,41 @@ def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "charac
                 raise ValueError(f"unsupported image type: {p.name}")
         promoted = (src.read_bytes(), src.suffix)
         demoted = (cur.read_bytes(), cur.suffix) if cur is not None else None
-        # Snapshot BEFORE anything moves: the no-avatar branch below deletes
-        # `name`, and `delete_image` takes that slot's description with it.
-        # Under the sidecar lock for the whole swap, so a description save
-        # cannot land between the snapshot and the rewrite and be overwritten.
-        sidecar = sidecar_lock(d, DESCRIPTIONS_FILE)
-        sidecar.acquire()
-        described = _read_sidecar(d, DESCRIPTIONS_FILE)
-        put_image(root, cid, vid, AVATAR, promoted[0], promoted[1], base)
-        if demoted is None:
-            # Nothing to swap back in, so the promoted image has to LEAVE this
-            # slot, matching the rename this replaced. `delete_image` swallows
-            # unlink failures by design (a lost cleanup self-heals there), but
-            # here the unlink IS the operation: `overlay.promote_image` reads
-            # this slot's emptiness to decide whether to tombstone an inherited
-            # image, so a silently-kept source becomes a visible duplicate.
-            # Confirm it, rather than report a move that did not happen.
-            delete_image(root, cid, vid, name, base)
-            if image_path(root, cid, vid, name, base) is not None:
-                raise OSError(f"promoted image could not be cleared: {name}")
-        else:
-            put_image(root, cid, vid, name, demoted[0], demoted[1], base)
-        # A description is a claim about particular bytes, so it travels with
-        # them. Without this the swap left each picture wearing the other's
-        # sentence -- and, with no avatar to swap back, lost the promoted
-        # image's description entirely. `None` on either side removes that key
-        # rather than leaving the slot's previous description behind, which
-        # would caption the new occupant with the old one's words.
-        try:
+        # The sidecar is held across the WHOLE swap, `with` rather than a manual
+        # acquire: every step below can raise -- an unwritable directory, a
+        # source that would not clear -- and a hand-rolled acquire whose release
+        # sat in the last statement's `finally` leaked the lock on any of them,
+        # wedging every later save, delete and promotion for this directory (PR
+        # review). The snapshot is taken BEFORE anything moves, because the
+        # no-avatar branch deletes `name` and `delete_image` takes that slot's
+        # description with it; holding the lock over both is what keeps a
+        # description save from landing between the snapshot and the rewrite.
+        with sidecar_lock(d, DESCRIPTIONS_FILE):
+            described = _read_sidecar(d, DESCRIPTIONS_FILE)
+            put_image(root, cid, vid, AVATAR, promoted[0], promoted[1], base)
+            if demoted is None:
+                # Nothing to swap back in, so the promoted image has to LEAVE
+                # this slot, matching the rename this replaced. `delete_image`
+                # swallows unlink failures by design (a lost cleanup self-heals
+                # there), but here the unlink IS the operation:
+                # `overlay.promote_image` reads this slot's emptiness to decide
+                # whether to tombstone an inherited image, so a silently-kept
+                # source becomes a visible duplicate. Confirm it, rather than
+                # report a move that did not happen.
+                delete_image(root, cid, vid, name, base)
+                if image_path(root, cid, vid, name, base) is not None:
+                    raise OSError(f"promoted image could not be cleared: {name}")
+            else:
+                put_image(root, cid, vid, name, demoted[0], demoted[1], base)
+            # A description is a claim about particular bytes, so it travels
+            # with them. Without this the swap left each picture wearing the
+            # other's sentence -- and, with no avatar to swap back, lost the
+            # promoted image's description entirely. `None` on either side
+            # removes that key rather than leaving the slot's previous
+            # description behind, which would caption the new occupant with the
+            # old one's words.
             edit_sidecar(d, DESCRIPTIONS_FILE, {
                 AVATAR: described.get(name),
                 name: described.get(AVATAR) if demoted is not None else None,
             })
-        finally:
-            sidecar.release()
     clear_focus(root, cid, vid, base)

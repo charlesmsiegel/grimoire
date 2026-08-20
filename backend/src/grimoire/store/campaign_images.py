@@ -103,6 +103,20 @@ TOO_LARGE = "image is too large (max 25 MB)"
 UNADDRESSABLE = frozenset("()<>#?%\"'`\\") | frozenset(" \t\n\r\v\f")
 
 
+#: Names the routes have spent on something else. ``GET
+#: /campaigns/{cid}/images/undescribed`` is the library's describe backlog, and
+#: it is registered BEFORE ``/images/{name}`` so that it is reachable at all --
+#: which means an image stored under that name could never be served: every URL
+#: for it would answer with the backlog JSON, so the picker tile showed a broken
+#: preview and an inserted post rendered as broken markdown (PR review).
+#:
+#: Reserved rather than tolerated, exactly as ``assets`` reserves
+#: ``promote-tmp``, and case-folded for its reason: on Windows and macOS
+#: ``Undescribed.png`` *is* ``undescribed.png``, so a case variant would claim
+#: the same file as the name the route owns.
+RESERVED = frozenset({"undescribed"})
+
+
 class ImageTooLarge(Exception):
     """The upload is bigger than `MAX_BYTES` (HTTP 413)."""
 
@@ -134,13 +148,15 @@ def addressable(name: str) -> bool:
 
     So it is a conjunction, not just the URL half. ``assets.storable`` is what
     ``put_in`` will write under and ``path_in`` will resolve back (``safe_id``,
-    no ``.``, no glob metacharacter, ``promote-tmp`` reserved); ``UNADDRESSABLE``
-    is what a link can carry. Dropping the first half is not hypothetical: this
+    no ``.``, no glob metacharacter, ``promote-tmp`` reserved); ``RESERVED`` is
+    what the routes have already spent; ``UNADDRESSABLE`` is what a link can
+    carry. Dropping the first half is not hypothetical: this
     directory is one a sync client writes into, ``assets.list_in`` shows a
     ``promote-tmp.png`` deliberately (it is crash residue worth seeing in a
     per-version folder), and here that is simply a file nothing can ever serve.
     """
-    return assets.storable(name) and not any(c in UNADDRESSABLE for c in name)
+    return (assets.storable(name) and name.casefold() not in RESERVED
+            and not any(c in UNADDRESSABLE for c in name))
 
 
 def images_dir(cid: str) -> Path:

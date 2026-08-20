@@ -236,3 +236,44 @@ def test_a_description_save_cannot_land_in_the_middle_of_a_promotion(tmp_path, m
     # being clobbered by the promotion's rewrite of the slot it names.
     assert image_descriptions.read_in(d) == {"avatar": "Newly written.",
                                              "gallery_1": "The old portrait."}
+
+
+def test_a_failed_promotion_does_not_wedge_the_directory(tmp_path, monkeypatch):
+    """Every step of the swap can raise, and a hand-rolled `acquire()` whose
+    `release()` sat in the last statement's `finally` leaked the lock on any of
+    them -- wedging every later description save, deletion and promotion for
+    this directory, on a worker thread that had already returned."""
+    cid, vid = _chars(tmp_path)
+    d = _dir_of(tmp_path, cid, vid)
+    image_descriptions.write_in(d, {"avatar": "The old portrait."})
+
+    def boom(*a, **kw):
+        raise OSError("the disk went away mid-swap")
+
+    monkeypatch.setattr(assets, "put_image", boom)
+    with pytest.raises(OSError):
+        assets.promote_image(tmp_path, cid, vid, "gallery_1")
+    monkeypatch.undo()
+
+    # The lock is free, so ordinary work still lands. (Same thread, so an RLock
+    # left owned here would not block -- ask it directly.)
+    assert assets.sidecar_lock(d, image_descriptions.DESCRIPTIONS_FILE).acquire(blocking=False)
+    assets.sidecar_lock(d, image_descriptions.DESCRIPTIONS_FILE).release()
+    image_descriptions.set_in(d, "gallery_1", "Half-plate in the rain.")
+    assert image_descriptions.read_in(d)["gallery_1"] == "Half-plate in the rain."
+
+
+def test_an_unrelated_save_leaves_a_malformed_entry_exactly_as_it_found_it(tmp_path):
+    """`read_in` drops a non-string value rather than handing a list to a
+    template. Stringifying the whole mapping on the way out undid that: the
+    next read accepted `"['not', 'a', 'string']"` as somebody's description,
+    where it could mask an inherited one and reach a prompt as alt text."""
+    cid, vid = _chars(tmp_path)
+    d = _dir_of(tmp_path, cid, vid)
+    (d / image_descriptions.DESCRIPTIONS_FILE).write_text(
+        '{"avatar": ["not", "a", "string"]}\n', encoding="utf-8")
+
+    image_descriptions.set_in(d, "gallery_1", "Half-plate in the rain.")
+    raw = image_descriptions.read_raw(d)
+    assert raw["avatar"] == ["not", "a", "string"]     # untouched, still hand-fixable
+    assert image_descriptions.read_in(d) == {"gallery_1": "Half-plate in the rain."}

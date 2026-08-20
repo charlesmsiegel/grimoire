@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import routes
+from grimoire import llm, routes
 from grimoire.main import create_app
 from tests.llm_fakes import CapturingOpenRouter, FakeOpenRouterComplete
 
@@ -161,3 +161,15 @@ def test_every_surface_refuses_a_claude_connection_the_same_way(client, art):
                 f"/api/worlds/{wid}/locations/{eid}/images/gallery_1/description/draft"):
         r = client.post(url)
         assert (r.status_code, "cannot read images" in str(r.json()["detail"])) == (409, True), url
+
+
+def test_every_connection_kind_is_classified_as_image_capable_or_not():
+    """The rule lives in two places for two different callers -- the route
+    refuses an unsupported PRIMARY with a message the reader can act on, and
+    `llm` silently drops an unsupported FALLBACK it never chose. Neither can
+    be right on its own, and a new connection kind that lands in neither list
+    is a kind whose behaviour with an image is nobody's decision."""
+    supported = set(store.image_drafts.SUPPORTED_KINDS)
+    text_only = set(llm.TEXT_ONLY_KINDS)
+    assert not supported & text_only
+    assert supported | text_only == set(store.llm_connections.KINDS)
