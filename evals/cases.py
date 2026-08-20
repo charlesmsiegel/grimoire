@@ -39,6 +39,7 @@ from pathlib import Path
 from grimoire.store import absorb as absorb_store
 from grimoire.store import (
     appearances,
+    assets,
     campaigns,
     characters,
     checks,
@@ -49,6 +50,7 @@ from grimoire.store import (
     entities,
     facts,
     groupstate,
+    image_descriptions,
     lengths,
     pcs,
     playstate,
@@ -59,6 +61,7 @@ from grimoire.store import (
     sheets,
     worlds,
 )
+from grimoire.store.context import art
 
 from . import graders
 from .graders import Check
@@ -151,6 +154,16 @@ def build_scene_length() -> dict:
     pier = entities.create_entity(wroot, "locations", "Saltmarch Pier",
                                   "Fog-slick planks stacked with unlogged crates.",
                                   keys="pier, dock")
+    # A described picture of the pier, so the `available_art` section has
+    # something to render. Its wording deliberately shares two content words
+    # with the player's post below ("crates", "step") -- `context/art` offers a
+    # candidate only when two land, and a check that silently graded an EMPTY
+    # section would pass for the wrong reason.
+    assets.put_image(wroot, pier, "default", "gallery_1", b"art", "png", base="locations")
+    image_descriptions.set_description(
+        wroot, pier, "default", "gallery_1",
+        "Crates stacked on the planks, and a step down to the black water.",
+        base="locations")
     cid = campaigns.create_campaign("Saltmarch Nights", wid)
     # Campaign scope, not global: this also proves the resolution cascade
     # actually reaches the prompt, which is half of what the knobs are for.
@@ -172,7 +185,8 @@ def build_scene_length() -> dict:
 
     return {"cid": cid, "sid": sid, "budget": _budget(cid, sid),
             "players": frozenset(appearances.player_names(cid, sid)),
-            "cast_names": _npc_names(cid, sid)}
+            "cast_names": _npc_names(cid, sid),
+            "art_handle": art.handle_for("locations", pier, "gallery_1")}
 
 
 def grade_scene_length(ctx: dict, output: str) -> list[Check]:
@@ -191,6 +205,15 @@ def grade_scene_length(ctx: dict, output: str) -> list[Check]:
         + graders.grade_prompt_section(ctx["messages"], "reply_format",
                                        "scene/sections/response_format.j2",
                                        player_names=sorted(ctx["players"]))
+        # The art offer, whole. Replay can only ever prove the INSTRUCTION is
+        # in the prompt -- whether a model reaches for a picture when one fits
+        # is a question only --live can put -- but that is the half a template
+        # edit can break silently, and this is where it stops being silent.
+        + graders.grade_prompt_section(
+            ctx["messages"], "available_art", "scene/sections/available_art.j2",
+            available_art=[{"handle": ctx["art_handle"],
+                            "description": "Crates stacked on the planks, "
+                                           "and a step down to the black water."}])
         + graders.grade_length(output, budget, ctx["players"], ctx["cast_names"]))
 
 

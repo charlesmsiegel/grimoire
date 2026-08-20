@@ -5,6 +5,7 @@ import { ApiError, api, ENTITY_FIELDS, SECRECY_LABELS, SECRECY_LEVELS, type Enti
 import { loreOwnerOptions, type LoreOwner } from "../api/loreOwners";
 import CreationWizard from "./CreationWizard";
 import { Field } from "./Field";
+import { ImageDescriptionField } from "./ImageDescriptionField";
 import { GroupStatePanel } from "./GroupStatePanel";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import { Portrait } from "./Portrait";
@@ -112,7 +113,10 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   // refusal, with the on-disk rev an overwrite would have to be based on.
   const [rev, setRev] = useState<string | null>(null);
   const [stale, setStale] = useState<{ rev: string | null } | null>(null);
-  const [images, setImages] = useState<{ name: string; v: string }[]>([]); // selected location's assets
+  // `description` is undefined until the listing says otherwise, and that is
+  // load-bearing: undefined means never reviewed, "" means reviewed and
+  // deliberately undescribed. `described` from the server is what separates them.
+  const [images, setImages] = useState<{ name: string; v: string; description?: string }[]>([]);
   const [contentPreview, setContentPreview] = useState<ModuleContentEntry | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
   const shelfFileRef = useRef<HTMLInputElement>(null);
@@ -159,7 +163,10 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
 
   const reloadImages = useCallback((id: string) => {
     api.listEntityImages(scope, kind, id)
-      .then((imgs) => setImages(imgs.map((i) => ({ name: i.name, v: i.v }))))
+      .then((imgs) => setImages(imgs.map((i) => ({
+        name: i.name, v: i.v,
+        description: i.described ? (i.description ?? "") : undefined,
+      }))))
       .catch(() => setImages([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, scope.kind, scope.id]);
@@ -287,6 +294,12 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     const v = images.find((i) => i.name === n)?.v;
     return v ? `${base}?v=${v}` : base;
   };
+
+  async function describeImage(name: string, description: string) {
+    if (!editing) return;
+    await api.setEntityImageDescription(scope, kind, editing, name, description);
+    reloadImages(editing);
+  }
 
   async function promoteImage(name: string) {
     if (!editing) return;
@@ -488,6 +501,10 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                           <img alt="primary" src={imgSrc("avatar")} />
                         </a>
                         <figcaption>primary</figcaption>
+                        <ImageDescriptionField
+                          name="avatar"
+                          value={images.find((i) => i.name === "avatar")?.description}
+                          onSave={(d) => describeImage("avatar", d)} />
                       </figure>
                     ) : (
                       <div className="shelf-tile shelf-empty">no image</div>
@@ -496,6 +513,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                       <div className="shelf-tile" key={n}>
                         <a href={imgSrc(n)} target="_blank" rel="noreferrer"><img alt={n} src={imgSrc(n)} /></a>
                         <button className="shelf-promote" onClick={() => promoteImage(n)}>Set as primary</button>
+                        <ImageDescriptionField
+                          name={n} value={images.find((i) => i.name === n)?.description}
+                          onSave={(d) => describeImage(n, d)} />
                       </div>
                     ))}
                     <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>

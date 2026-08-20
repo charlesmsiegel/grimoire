@@ -1080,6 +1080,14 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     await refreshVersion();
   }
 
+  /** World scope only: that is where the route is, and offering a button that
+   *  404s campaign-side would be worse than not offering one. */
+  async function draftDescription(name: string): Promise<string> {
+    if (!detail) return "";
+    const r = await api.draftCharacterImageDescription(wid, detail.meta.id, vid, name);
+    return r.description;
+  }
+
   async function promote(name: string) {
     if (!detail) return;
     setError(null);
@@ -1802,7 +1810,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                         </a>
                         <figcaption>avatar</figcaption>
                         <ImageDescriptionField name="avatar" value={descriptions.avatar}
-                                               onSave={(d) => describeImage("avatar", d)} />
+                                               onSave={(d) => describeImage("avatar", d)}
+                                               onDraft={worldScope ? () => draftDescription("avatar") : undefined} />
                       </figure>
                     ) : (
                       <div className="shelf-tile shelf-empty">no avatar</div>
@@ -1816,7 +1825,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                           <a href={src} target="_blank" rel="noreferrer"><img alt={imgName} src={src} /></a>
                           <button className="shelf-promote" onClick={() => promote(imgName)}>Set as avatar</button>
                           <ImageDescriptionField name={imgName} value={descriptions[imgName]}
-                                                 onSave={(d) => describeImage(imgName, d)} />
+                                                 onSave={(d) => describeImage(imgName, d)}
+                                                 onDraft={worldScope ? () => draftDescription(imgName) : undefined} />
                         </div>
                       );
                     })}

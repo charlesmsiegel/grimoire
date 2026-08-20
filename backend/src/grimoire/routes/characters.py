@@ -452,6 +452,50 @@ def put_world_avatar_focus(wid: str, cid: str, vid: str, body: AvatarFocus):
     return {"ok": True}
 
 
+@router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}/description/draft")
+async def post_world_image_description_draft(wid: str, cid: str, vid: str, name: str,
+                                             client: LLMClient = Depends(get_llm)):
+    """A model-drafted first pass at what this picture shows.
+
+    Preview only, like `tagline/generate` and `voice-anchor/generate` above: the
+    caller persists through the PUT on Save, so a draft nobody read is never
+    written (#59).
+
+    World-side only, and that is not an oversight. A description drafted from
+    the bytes is a claim about the bytes, and a campaign reaches most of its art
+    through the world -- so the draft belongs where the art does. A campaign
+    that has diverged an image can still describe it by hand; what it cannot do
+    is spend a model call to caption a picture its world already captioned.
+    """
+    root = _world_char_version_or_404(wid, cid, vid)
+    conn = _require_connection()
+    if conn.get("kind") not in store.image_drafts.SUPPORTED_KINDS:
+        # A refusal the user can act on, rather than a 500 out of the SDK path:
+        # `claude_agent` joins message content as a string, so a multimodal
+        # message raises deep inside it. See `store/image_drafts.py`.
+        raise HTTPException(status_code=409, detail=store.image_drafts.UNSUPPORTED)
+    p = store.assets.image_path(root, cid, vid, name)
+    if p is None:
+        raise HTTPException(status_code=404, detail="image not found")
+    try:
+        ch = store.characters.read_character(root, cid)
+        subject = ch["meta"]["name"]
+    except store.characters.CharacterNotFound:
+        subject = ""
+    try:
+        messages = store.image_drafts.build_prompt(p, subject)
+    except ValueError as exc:
+        # An externally-placed file with an extension we never accepted, so we
+        # cannot label its bytes for the provider.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        with store.usage.meter("image-description") as m:
+            text = await _bounded_call(client.complete(messages, conn, m.usage))
+    except LLMError as exc:
+        raise _llm_http_error(exc) from exc
+    return {"description": store.image_drafts.parse_output(text)}
+
+
 @router.put("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}/description")
 def put_world_image_description(wid: str, cid: str, vid: str, name: str,
                                 body: ImageDescription):

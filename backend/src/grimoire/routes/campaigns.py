@@ -30,6 +30,7 @@ from .common import (
     _serve_image,
     _serve_image_file,
     _upload_image_ext,
+    _with_descriptions,
     _write_response,
     computes_only,
     get_llm,
@@ -538,7 +539,11 @@ def put_campaign_library_image_description(cid: str, name: str, body: ImageDescr
 @router.get("/campaigns/{cid}/images")
 def list_campaign_library(cid: str):
     _campaign_root_or_404(cid)
-    return store.campaign_images.list_images(cid)
+    images = store.campaign_images.list_images(cid)
+    return _with_descriptions(
+        images,
+        store.image_descriptions.read_in(store.campaign_images.images_dir(cid),
+                                         names={i["name"] for i in images}))
 
 
 @router.get("/campaigns/{cid}/images/{name}")
