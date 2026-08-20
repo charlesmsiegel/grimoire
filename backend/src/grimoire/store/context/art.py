@@ -18,9 +18,20 @@ their locked versions, the current setting's location, the entities world info
 activated or recalled, and the campaign's own image library, which belongs to
 no record and is always in scope.
 
-Cost therefore scales with scene size, not library size: a handful of small
-JSON reads per turn, the same order as `image_subjects.appearances`, which the
-store already treats as cheap.
+Cost therefore scales with the SCENE for the record half — a handful of small
+JSON reads, the same order as `image_subjects.appearances`, which the store
+already treats as cheap.
+
+The campaign's own library is the exception, and it is stated rather than
+hidden: it has no record to be in scope through, so it is included whole. An
+earlier draft of this docstring claimed cost scaled with scene size and not
+library size, which was simply false of that half. Measured, a 300-image
+described library costs ~9ms to assemble and ~4ms to rank by keyword, and
+~19ms more to read its cached vectors when an embeddings endpoint is
+configured. That is a real per-turn cost on a blocking path, and it is the one
+that would grow without bound if somebody kept a thousand described maps — so
+if this ever needs a limit, the library half is where it goes, and it should be
+a limit the reader can see rather than a silent truncation.
 
 ## What this layer does not decide
 
@@ -140,6 +151,11 @@ DEFAULT_THRESHOLD = 0.4
 #: all in keyword mode. Two, because one is noise -- a description mentioning
 #: "night" would otherwise surface in every night scene in the campaign.
 KEYWORD_MIN_TERMS = 2
+
+#: What being named in the scan window is worth. One, so a named record with no
+#: shared words still ranks below a description that shares two -- naming is
+#: evidence, not a trump card.
+NAME_BONUS = 1.0
 
 #: UTF-8 bytes of the scan window that get embedded, and of a description. Both
 #: bounds are `semantic.py`'s and are bytes for its reason: characters are the
@@ -332,10 +348,31 @@ def _record_name(cid: str, cand: dict) -> str:
 def _keyword_scores(cid: str, cands: list[dict], recent_text: str) -> list[float]:
     """Shared content words, plus a whole-record bonus.
 
-    The bonus is what makes "Seraphine draws her blade" surface Seraphine's art
-    even when the description happens to share no vocabulary with the post —
-    the record being named in the scene is itself evidence, and it is the
-    commonest way this feature is useful.
+    Two ways in, and the first one is the point:
+
+    - **The record is NAMED in the scan window.** That alone makes its art
+      eligible, scored above an equal number of shared words. "Seraphine draws
+      her blade" surfaces Seraphine's art even when her picture's description
+      happens to share no vocabulary with the post — the record being named is
+      itself the evidence, and it is the commonest way this feature is useful.
+      (An earlier version still demanded one shared word here, which made the
+      sentence above false of the exact example it used.)
+    - **Two shared content words**, for a record nothing named. One is noise: a
+      description mentioning "night" would otherwise surface in every night
+      scene in the campaign.
+
+    Offering four pictures of whoever just spoke, when nothing else matches, is
+    the accepted cost of the first rule. `depth` caps the menu and the section
+    tells the model most replies should use none of it.
+
+    **The shared-word half only works in a script that separates words.** The
+    scan splits on runs of word characters, so an unsegmented Japanese or
+    Chinese clause comes back as
+    one enormous token and never matches another — meaning a CJK library gets
+    the name rule and nothing else from keyword mode. Stated rather than left
+    to be discovered: an embeddings endpoint is the answer for those languages,
+    and a good one, since the models handle them natively. Segmenting properly
+    is a dependency and a judgement call this module should not make alone.
 
     Names are resolved once per RECORD, not once per candidate: a record with a
     gallery contributes one candidate per picture, and `_record_name` opens a
@@ -352,12 +389,14 @@ def _keyword_scores(cid: str, cands: list[dict], recent_text: str) -> list[float
         if key not in names:
             names[key] = _record_name(cid, c)
         name = names[key]
+        # Substring, not tokenized: a name matches the same way in every
+        # script, which is what keeps the name rule working where splitting on
+        # word characters does not.
         named = bool(name) and name.casefold() in folded
-        # A named record needs one shared term rather than two; naming alone is
-        # not enough, or every described picture of whoever just spoke would be
-        # offered on every turn.
-        floor = 1 if named else KEYWORD_MIN_TERMS
-        out.append(float(shared) if shared >= floor else 0.0)
+        if named:
+            out.append(float(shared) + NAME_BONUS)
+        else:
+            out.append(float(shared) if shared >= KEYWORD_MIN_TERMS else 0.0)
     return out
 
 

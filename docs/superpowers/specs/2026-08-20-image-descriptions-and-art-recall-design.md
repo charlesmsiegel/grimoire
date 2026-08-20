@@ -153,9 +153,13 @@ already has in hand:
 - entities activated or recalled into world info this turn;
 - the campaign's own image library, always.
 
-Cost therefore scales with scene size, not library size: a handful of small
+Cost therefore scales with the scene for the record half: a handful of small
 JSON reads per turn, the same order as `image_subjects.appearances`, which the
-store already considers cheap.
+store already considers cheap. The campaign's own library is the exception —
+it has no record to be in scope through, so it is included whole. Measured, a
+300-image described library costs ~9ms to assemble, ~4ms to rank by keyword and
+~19ms more to read its cached vectors. Acceptable, and stated rather than left
+inside a claim that cost never touches library size.
 
 **Exclusions are inherited, not re-implemented.** An actor removed by a pin
 exclude is already out of `cast` before this module sees it; a GM-only location

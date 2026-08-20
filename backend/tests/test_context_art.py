@@ -130,14 +130,33 @@ def test_keyword_ranking_needs_two_shared_terms(world):
     assert [c["name"] for c in got] == ["gallery_1"]
 
 
-def test_naming_the_record_lowers_the_bar_to_one_term(world):
+def test_naming_the_record_is_enough_on_its_own(world):
+    """The commonest useful case, and the one the docstring advertises: the
+    record being named in the scene IS the evidence, so its art is eligible
+    even when the description shares no vocabulary with the post."""
     camp, char, vid = world["cid"], world["char"], world["vid"]
     _cast(camp, char, vid)
     cands = art.candidates(camp, [{"kind": "characters", "id": char, "role": "npc"}], None, [])
     cands = [c for c in cands if c["kind"] == "characters"]
+    # Not named, one shared word ("rain") -- below the two an unnamed record needs.
     assert art.rank(camp, cands, "The rain kept on.") == []
-    got = art.rank(camp, cands, "Seraphine stood in the rain.")
+    # Named, and sharing NOTHING: still offered.
+    got = art.rank(camp, cands, "Seraphine draws her blade.")
     assert [c["name"] for c in got] == ["gallery_1"]
+
+
+def test_shared_words_outrank_a_bare_name(world):
+    """Naming is evidence, not a trump card: a description that actually
+    describes the moment sorts above art whose record merely got mentioned."""
+    camp, char, vid, loc = world["cid"], world["char"], world["vid"], world["loc"]
+    _cast(camp, char, vid)
+    cands = art.candidates(camp, [{"kind": "characters", "id": char, "role": "npc"}],
+                           loc, [])
+    cands = [c for c in cands if c["kind"] != art.LIBRARY]
+    got = art.rank(camp, cands, "Seraphine watched the fishing boats at the quay, lost in fog.")
+    # The harbour picture shares "fishing"/"boats"/"quay"/"fog"; Seraphine's
+    # shares nothing and rides on her name alone.
+    assert [c["kind"] for c in got] == ["locations", "characters"]
 
 
 def test_rank_respects_depth(world, monkeypatch):
