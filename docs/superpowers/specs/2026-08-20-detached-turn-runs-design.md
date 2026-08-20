@@ -368,8 +368,22 @@ Starting a `turn` or `review` for a scene that already has a live one of either
 class returns **409** with
 `{"detail": ..., "kind": "run_in_flight", "run_id": ...}`. The `kind` field
 follows the existing `ApiError` convention in `frontend/src/api/client.ts`, so
-the client can tell this apart from every other 409 and attach to the named run
-rather than surface an error.
+the client can tell this apart from every other 409.
+
+**But the rejected caller must not adopt that run as its own unless the attempt
+ids match.** This is a correction to the obvious reading, and the two halves of
+the design contradict each other without it. A rejected send never had its
+prompt appended — that is the whole point of reserving before the first
+mutator. If the loser of two concurrent tabs then attaches to the winner's
+stream and treats it as its result, it renders *another tab's reply* while its
+own prompt has silently gone nowhere, which is exactly the "did my send land?"
+ambiguity the attempt id was introduced to end.
+
+So the 409 exposes the run for what it is useful for — showing the scene as
+busy, and letting a client that recognises its **own** attempt id re-attach
+after a lost response — and nothing more. A caller whose attempt id does not
+match keeps its prompt and reports the scene busy; the text stays in the
+composer where the player can send it when the scene frees up.
 
 **`streamPost` must be changed to carry the run id through**, or this does not
 work at all on the routes that need it most. Its non-2xx path currently builds
@@ -1211,6 +1225,13 @@ Widened scope:
 - two image-description drafts for different images in one world are each
   re-adopted by their own attempt id, never each other's.
 - `run_gone` on a draft offers regeneration; `run_gone` on a turn refetches.
+- an edit, a retcon, a cut, a manual roll and a check each still schedule the
+  rolling summary and scene break — the seven non-turn triggers the runner
+  does not cover.
+- a send rejected by exclusivity does **not** render the winning run's reply,
+  and keeps its own prompt; only a matching attempt id re-attaches.
+- a notification for a deleted scene taps through to its campaign rather than a
+  dead route, and one for a renamed scene resolves to the new id.
 - `TaglinePrompt`, `ConnectionEditor.refreshModels` and `SceneIdeaPicker`
   render the same result they do today through the start/poll/unwrap helper,
   and adopt an in-flight run on mount rather than starting a second.
