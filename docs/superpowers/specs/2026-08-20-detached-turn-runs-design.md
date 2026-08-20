@@ -307,6 +307,25 @@ inside it.** Nothing else in this design is acceptable:
   something deterministically cancels runs at shutdown.
 - A task group opened per request dies with the request, which is the bug.
 
+**Every run-producing streaming handler is a synchronous `def`, and that has
+to be dealt with explicitly or none of this works.** `post_chat`
+(`scenes.py:359`), `post_retry` (`:419`), `post_regenerate` (`:491`),
+`post_replay_turn` (`:3212`), `post_opener` (`greetings.py:318`) and
+`post_roll_proposal` (`mechanics.py:111`) are all `def`, not `async def`, so
+FastAPI runs them in a threadpool worker. `start_soon` on an `anyio` task group
+is **not** safe to call from another thread: reaching for the stashed group
+directly from those handlers would fail, and fail at the worst possible
+moment — every run, immediately.
+
+Two ways out, and the choice belongs in the plan rather than here: convert
+those six handlers to `async def` (they already delegate their blocking work,
+and the streaming ones return a generator rather than doing the work inline),
+or keep them synchronous and bridge the start back onto the lifespan loop
+through a thread-safe hand-off. What must not happen is a design that assumes
+handler and task group share a thread, because in this codebase they do not.
+The absorb family is unaffected — `post_absorb`, `post_audit`, `post_dossiers`
+and both scenario routes are already `async def`.
+
 Starting inside the lifespan group gives the property the whole feature rests
 on: the group's `cancel_scope.cancel()` on the way out cancels every live run,
 each one unwinds through its existing abort hook, and partials are persisted by
@@ -479,6 +498,14 @@ A new store module, **`store/pending_reviews.py`**, holds at most one pending
 review per `(cid, sid)`: the absorb payload verbatim, including its
 `commit_token`. Written through `store.atomic` and classified in
 `locks.DOMAIN_MODULES` with its mutators taking `campaign_lock(cid)`.
+
+**The review slot is reserved *before* the snapshot is taken**, and released
+if any synchronous pre-flight check then fails. Snapshot-then-reserve leaves a
+gap in which a fast chat turn can reserve, append, finish and release, after
+which the absorb is accepted against a transcript that has already moved. The
+watermark below would eventually refuse to publish it — but only after the
+entire absorb budget had been spent, which is the most expensive way possible
+to discover a race that ordering prevents for free.
 
 **`_absorb_snapshot` stays in the handler, synchronously, and its result is
 handed to the run.** This falls out of the pre-flight rule below rather than
@@ -768,6 +795,13 @@ not just absorb's — all three detach, and each guards something different:
   does not have, because an audit with nothing to audit finds nothing while a
   dossier phase would stage a proposal overwriting a real dossier with
   invention.
+- **Both retries validate the stored review's transcript watermark, not just
+  its existence**, under the campaign lock. Existence alone still accepts a
+  retry against a review the transcript has outgrown: the retry then spends its
+  full budget on the *new* transcript, merges the result into the *old* payload,
+  and the unchanged watermark guarantees that retrieval or save refuses it
+  afterwards. A stale review needs a fresh absorb, and the cheapest place to
+  say so is before the tokens are spent.
 - **Both retries additionally require a stored pending review to exist.** Their
   terminal step is a merge into one, so without it the run is guaranteed to
   fail at the end — and a 202 that accepts work whose result the design has
@@ -957,9 +991,25 @@ away unmounts it and aborts. That has to move up.
   The migration is one shared helper rather than N hand-written poll loops:
   *start → poll → unwrap terminal result*, returning what the caller
   receives today, so each call site keeps its existing shape and gains
-  re-attachment for free. Recovery is uniform too — on mount, ask the
-  subject's run collection whether a run of this kind is already in flight
-  and adopt it instead of starting a second one.
+  re-attachment for free.
+
+  **Recovery adopts a run by attempt id or resource key — never by kind
+  alone.** The design deliberately lets `draft` runs overlap on one coarse
+  subject, so "the world's in-flight `image-description` run" is ambiguous the
+  moment two images are being described at once, and a remounted editor would
+  cheerfully adopt the other image's run and offer its text for the wrong
+  picture. The caller persists the attempt id it started under (the same id
+  the idempotency rule already needs) and re-attaches with that.
+
+  **And `run_gone` does not mean "refetch the scene" for a draft.** That
+  recovery was written when every run was scene-scoped and is wrong for most
+  of them now: world, campaign and global drafts have no scene to refetch, an
+  opener is not in a transcript until it is accepted, and a tagline, voice
+  anchor, image description or scenario proposal exists *only* on the run that
+  produced it. Refetching recovers nothing. So `run_gone` resolves by class:
+  a `turn` or `review` refetches, because the transcript or the stored review
+  is the record; a `draft` surfaces an expired state and offers to regenerate,
+  which costs one call and is the honest answer.
 - `run_gone` from any run endpoint means refetch the scene, never surface an
   error: by then the reply is in the transcript or the review is on disk.
 
@@ -1147,6 +1197,20 @@ Widened scope:
 - two `create_app()` instances in one process do not see each other's runs,
   attempt ids or exclusion keys.
 - a rate-limited failure delivered by polling still carries its retry delay.
+- a run started from a synchronous handler actually reaches the lifespan task
+  group — the six streaming routes are `def`, not `async def`, so this is the
+  test that would have caught the whole design failing at runtime.
+- `scenario/parse` succeeds when its 202 returns before the runner starts: the
+  upload is read in the handler, and closing it afterwards changes nothing.
+- an absorb rejected by exclusivity has spent no budget, because the slot is
+  reserved before the snapshot.
+- a retry against a review the transcript has outgrown is refused at pre-flight,
+  before tokens are spent, not at save.
+- server-scheduled rolling summary and scene break receive the completed turn's
+  `upto`, and a fast next send appended after them does not corrupt the fold.
+- two image-description drafts for different images in one world are each
+  re-adopted by their own attempt id, never each other's.
+- `run_gone` on a draft offers regeneration; `run_gone` on a turn refetches.
 - `TaglinePrompt`, `ConnectionEditor.refreshModels` and `SceneIdeaPicker`
   render the same result they do today through the start/poll/unwrap helper,
   and adopt an in-flight run on mount rather than starting a second.
