@@ -227,21 +227,41 @@ four streaming call sites and the greeting-opener adoption all pass through it.
 Handle resolution happens there, immediately after `turnstate.split_block` and
 before `split_reply`, so no handle ever becomes a post and none is ever stored.
 
-**Resolution is stateless.** It does not need the catalogue that was offered,
-which matters because `_persist_reply` takes only `(cid, sid, text)` and is
-reached from five places. A handle resolves if and only if:
+**Resolution does not need the catalogue that was offered**, which matters
+because `_persist_reply` takes only `(cid, sid, text)` and is reached from five
+places. A handle resolves if and only if:
 
-1. it parses;
-2. the named record and image exist and are visible in this campaign — through
+1. it parses, and names a kind this store has images under;
+2. the named image exists and is visible in this campaign — through
    `overlay.image_root`, so a tombstoned or detached image resolves to nothing;
-3. the image carries a **non-empty description**.
+3. it carries a **non-empty description**, so only art an author deliberately
+   wrote up is reachable, never any file in the store;
+4. its record is one this scene could legitimately show: a `gm-only` entity is
+   refused outright, and an actor must actually be cast in the scene.
 
-Rule 3 is what closes the gap statelessness opens. Without it a model could
-compose a plausible handle for an image that exists but was never offered — one
-that scored below the floor, or belongs to an absent character — and have it
-land. With it, the only images reachable are ones the author explicitly wrote
-up, which is exactly the pool the feature is about. A handle failing any of the
-three is deleted from the text, leaving the prose intact.
+Rules 3 and 4 are what close the gap that not carrying the catalogue opens.
+Without them a model could compose a plausible handle for an image that exists
+but was never offered and have it land — and the first draft of this design
+asserted that visibility rules were "inherited, never re-implemented" here,
+which was simply false: a `gm-only` location's described art resolved, though
+its body never reaches a prompt at all.
+
+`secret` is deliberately **not** refused by rule 4. A secret entry's body does
+reach the prompt, and the catalogue does offer its art, so refusing it here
+would make the two halves disagree about the same picture. What rule 4 does not
+re-derive is the scene-scoped part of world-info gating (owner gating, and which
+entries activated): those depend on state this function is not given, and the
+honest statement of the guarantee is the four rules rather than a fifth that
+merely resembles the catalogue's.
+
+A handle failing any rule is deleted from the text, leaving the prose intact.
+
+**URLs are percent-encoded segment by segment.** `campaign_images.addressable`
+keeps the library's names inside what a markdown link can carry; the other three
+surfaces have no such rule, and `assets.storable` accepts `art(1)`, `my art` and
+`a#b` — each of which ends a markdown destination early and spills the rest of
+the URL into the prose. Encoding rather than refusing, because the image is real
+and the author's.
 
 What replaces it is campaign-scoped markdown, `![description](url)`, with the
 description as alt text — the same choice `PostImagePicker.insertion` makes and
@@ -311,7 +331,7 @@ the SDK path.
 
 | risk | disposition |
 |---|---|
-| The model over-reaches for art, and every post grows a picture | The instruction caps it at one per reply and the depth bound caps the offer at 4. If play feel suffers, the prompt-layout switch turns the section off without a code change. |
+| The model over-reaches for art, and every post grows a picture | The instruction caps it at one per reply and the depth bound caps the offer at 4. If play feel suffers, the prompt-layout switch turns the section off without a code change — and `_assemble` skips the ranking entirely when it is off, so the switch turns off the cost too, not merely the output. |
 | A handle is visible during streaming | Accepted, documented above. |
 | Semantic ranking blocks the event loop | Inherited from `semantic.py`, which documents it; the same tight timeout and vector cache apply, and the layer is skipped entirely with no endpoint configured. |
 | Descriptions drift from the art they describe | Nothing detects this. An image replaced under the same name keeps the old description — the same way `focus.json` keeps a crop. Stated, not solved. |

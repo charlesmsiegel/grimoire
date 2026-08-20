@@ -150,7 +150,7 @@ def _persist_reply(cid: str, sid: str, text: str) -> int:
     into markdown that nobody will ever render.
     """
     text, tracked = store.turnstate.split_block(text)
-    text = store.context.resolve_art_handles(cid, text)
+    text = store.context.resolve_art_handles(cid, text, sid)
     players = frozenset(store.appearances.player_names(cid, sid))
     subs = store.context.scene_substitutions(cid, sid)
     # Tracker values get the same one-shot macro resolution the narration below

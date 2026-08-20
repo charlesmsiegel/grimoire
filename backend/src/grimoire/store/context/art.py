@@ -60,11 +60,24 @@ offered catalogue to all of them, through the streaming finalizers, is a much
 larger change than the feature; resolving statelessly needs nothing carried.
 
 What statelessness costs is that "the model wrote a handle" and "the model was
-offered that handle" stop being the same question, and `resolve_handles` closes
-that with its third rule: **the image must carry a non-empty description.** A
-composed-but-plausible handle can then only reach art an author deliberately
-wrote up — which is exactly the pool the feature is about — instead of any file
-in the store.
+offered that handle" stop being the same question. `resolve_handles` therefore
+carries its OWN gate rather than inheriting the pool's — the first draft of this
+module claimed visibility rules were inherited here too, and that claim was
+simply false: a handle naming a `gm-only` location's art resolved, though the
+catalogue would never offer it and that location's body never reaches a prompt
+at all. A handle is not a lucky guess to be indulged. So resolution requires:
+
+1. the image exists and is visible in this campaign (`overlay.image_root`);
+2. it carries a **non-empty description** — so only art an author deliberately
+   wrote up is reachable, never any file in the store;
+3. its record is one this scene could legitimately show — a `gm-only` entity is
+   refused outright, and, when the caller passes `sid`, an actor must actually
+   be cast in that scene.
+
+What rule 3 deliberately does NOT re-derive is the scene-scoped part of world-
+info gating (owner gating, and which entries activated). Those depend on state
+this function is not given, and the honest description of the guarantee is the
+three rules above rather than a fourth one that only looks like the catalogue's.
 
 The version is deliberately absent from the handle. It is not the model's to
 choose: resolution uses the campaign's locked version, the same one the
@@ -74,6 +87,7 @@ catalogue was built from and the one that is actually speaking.
 from __future__ import annotations
 
 import re
+from urllib.parse import quote
 
 from ... import embeddings
 from ...llm_errors import LLMError
@@ -89,6 +103,7 @@ from .. import (
     pcs,
     vectors,
 )
+from ..appearances import cast as appearances_cast
 from ..appearances import paths as appearances_paths
 from ..appearances import versions as appearances_versions
 
@@ -196,13 +211,27 @@ def url_for(cid: str, kind: str, rid: str, vid: str, name: str) -> str:
     be written into a transcript that outlives every cache: replacing the image
     under the same name would leave the post pinned for a year to bytes that are
     gone. Bare revalidates, which an ETag answers with a 304.
+
+    **Percent-encoded, segment by segment.** `campaign_images.addressable` keeps
+    the library's names inside what a markdown link can carry, but the other
+    three surfaces have no such rule: `assets.storable` is `safe_id` plus a
+    glob-metacharacter ban, and it accepts ``art(1)``, ``my art`` and ``a#b``
+    -- each of which ends a markdown destination early and leaves the rest of
+    the URL loose in the prose. Encoding rather than refusing, because the image
+    is real and the author's: `quote` with no safe set turns the name into
+    something a link can hold, and the serving route decodes the path parameter
+    straight back. (`safe=""` also encodes ``/``, so a name cannot invent a path
+    segment.)
     """
+    def e(seg: str) -> str:
+        return quote(str(seg), safe="")
+
     base = f"/api/campaigns/{cid}"
     if kind == LIBRARY:
-        return f"{base}/images/{name}"
+        return f"{base}/images/{e(name)}"
     if kind in ACTOR_KINDS:
-        return f"{base}/{kind}/{rid}/versions/{vid}/images/{name}"
-    return f"{base}/{kind}/{rid}/images/{name}"
+        return f"{base}/{kind}/{e(rid)}/versions/{e(vid)}/images/{e(name)}"
+    return f"{base}/{kind}/{e(rid)}/images/{e(name)}"
 
 
 # ---- the candidate pool ----------------------------------------------------
@@ -307,13 +336,22 @@ def _keyword_scores(cid: str, cands: list[dict], recent_text: str) -> list[float
     even when the description happens to share no vocabulary with the post —
     the record being named in the scene is itself evidence, and it is the
     commonest way this feature is useful.
+
+    Names are resolved once per RECORD, not once per candidate: a record with a
+    gallery contributes one candidate per picture, and `_record_name` opens a
+    card file — so the naive version re-read one character's whole card a dozen
+    times inside a single turn.
     """
     window = _terms(recent_text)
     folded = recent_text.casefold()
+    names: dict[tuple[str, str, str], str] = {}
     out = []
     for c in cands:
         shared = len(_terms(c["description"]) & window)
-        name = _record_name(cid, c)
+        key = (c["kind"], c["id"], c["vid"])
+        if key not in names:
+            names[key] = _record_name(cid, c)
+        name = names[key]
         named = bool(name) and name.casefold() in folded
         # A named record needs one shared term rather than two; naming alone is
         # not enough, or every described picture of whoever just spoke would be
@@ -452,10 +490,42 @@ def catalogue(cid: str, cast: list[dict], current_loc: str | None,
 
 # ---- the return path -------------------------------------------------------
 
-def _resolved(cid: str, kind: str, rid: str, name: str) -> dict | None:
-    """The image a handle names, if it exists, is visible here, and is
-    described. None otherwise — see the module docstring for why the third
-    condition is what makes stateless resolution safe."""
+def _showable(cid: str, kind: str, rid: str, sid: str | None) -> bool:
+    """Could this scene legitimately show something belonging to `rid`?
+
+    Two rules, both cheap enough to run on every handle:
+
+    - **A `gm-only` entity is refused.** Its body never reaches a prompt (see
+      `world_state.activate`), so a picture of it appearing in a post the player
+      reads is a straight leak. `secret` is deliberately NOT refused: a secret
+      entry's body *does* reach the prompt, the catalogue does offer its art,
+      and refusing it here would make the two halves disagree.
+    - **An actor must be cast in this scene**, when `sid` is given. That is the
+      catalogue's own rule for actors (`_version` returns the LOCKED version,
+      which only a cast actor has), restated where statelessness would
+      otherwise drop it: without this, art of anyone the campaign has ever cast
+      resolves in any scene.
+    """
+    if kind in ACTOR_KINDS:
+        if sid is None:
+            return True   # no scene in hand; rules 1 and 2 still stand
+        return any(a["kind"] == kind and a["id"] == rid
+                   for a in appearances_cast.scene_cast(cid, sid))
+    if kind in entities.ENTITY_KINDS:
+        try:
+            meta = overlay.read_entity(cid, kind, rid)["meta"]
+        except (entities.EntityNotFound, OSError, UnicodeDecodeError, KeyError):
+            return False
+        return entities.normalize_secrecy(meta.get("secrecy")) != entities.GM_ONLY
+    return True
+
+
+def _resolved(cid: str, kind: str, rid: str, name: str,
+              sid: str | None = None) -> dict | None:
+    """The image a handle names, if all three rules in the module docstring
+    hold. None otherwise."""
+    if kind != LIBRARY and not _showable(cid, kind, rid, sid):
+        return None
     if kind == LIBRARY:
         if campaign_images.image_path(cid, name) is None:
             return None
@@ -474,7 +544,7 @@ def _resolved(cid: str, kind: str, rid: str, name: str) -> dict | None:
     return {"url": url_for(cid, kind, rid, vid, name), "description": text} if text else None
 
 
-def resolve_handles(cid: str, text: str) -> str:
+def resolve_handles(cid: str, text: str, sid: str | None = None) -> str:
     """`text` with every art handle rewritten to markdown, unknown ones removed.
 
     Runs once per generation, inside `_persist_reply`, before the reply is split
@@ -498,7 +568,7 @@ def resolve_handles(cid: str, text: str) -> str:
         parsed = parse_handle(m)
         if parsed is None:
             return ""
-        hit = _resolved(cid, *parsed)
+        hit = _resolved(cid, *parsed, sid=sid)
         if hit is None:
             return ""
         alt = hit["description"].replace("[", "(").replace("]", ")").replace("\n", " ")

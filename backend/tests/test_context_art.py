@@ -210,3 +210,87 @@ def test_resolve_escapes_brackets_in_the_alt_text(world):
 def test_resolve_leaves_text_with_no_handles_untouched(world):
     text = "Ordinary narration, with a [markdown link](http://example.invalid) in it."
     assert art.resolve_handles(world["cid"], text) == text
+
+
+# ---- what statelessness would otherwise let through ------------------------
+
+def test_a_link_breaking_image_name_is_percent_encoded(world):
+    """`assets.storable` accepts `art(1)`, `my art` and `a#b` -- names
+    `campaign_images.addressable` refuses precisely because each of them ends a
+    markdown destination early and spills the rest of the URL into the prose.
+    Only the library has that rule, so the other three surfaces have to encode."""
+    camp, loc, wroot = world["cid"], world["loc"], world["wroot"]
+    for raw, encoded in [("art(1)", "art%281%29"), ("my art", "my%20art"),
+                         ("a#b", "a%23b")]:
+        assets.put_image(wroot, loc, "default", raw, b"png", "png", base="locations")
+        image_descriptions.set_description(wroot, loc, "default", raw, "A quay.",
+                                           base="locations")
+        out = art.resolve_handles(camp, f"[[art:locations:{loc}:{raw}]]")
+        assert out == f"![A quay.](/api/campaigns/{camp}/locations/{loc}/images/{encoded})"
+        # the whole destination is inside the parens -- nothing spilled
+        assert out.count("(") == out.count(")") == 1
+
+
+def test_a_gm_only_entitys_art_never_resolves(world):
+    """A `gm-only` entry's body never reaches a prompt at all, so a picture of
+    it appearing in a post the player reads is a straight leak. The catalogue
+    would never offer it; the stateless resolver has to refuse it too."""
+    camp, wroot = world["cid"], world["wroot"]
+    sec = entities.create_entity(wroot, "locations", "The Vault", "hidden",
+                                 secrecy="gm-only")
+    assets.put_image(wroot, sec, "default", "gallery_1", b"png", "png", base="locations")
+    image_descriptions.set_description(wroot, sec, "default", "gallery_1",
+                                       "A locked door.", base="locations")
+    assert art.resolve_handles(camp, f"[[art:locations:{sec}:gallery_1]]") == ""
+
+
+def test_a_secret_entitys_art_still_resolves(world):
+    """`secret` is not `gm-only`: its body DOES reach the prompt, and the
+    catalogue does offer its art -- so refusing it here would make the two
+    halves disagree about the same picture."""
+    camp, wroot = world["cid"], world["wroot"]
+    sec = entities.create_entity(wroot, "locations", "The Cellar", "quiet",
+                                 secrecy="secret")
+    assets.put_image(wroot, sec, "default", "gallery_1", b"png", "png", base="locations")
+    image_descriptions.set_description(wroot, sec, "default", "gallery_1",
+                                       "A cellar.", base="locations")
+    assert art.resolve_handles(camp, f"[[art:locations:{sec}:gallery_1]]").startswith("![A cellar.]")
+
+
+def test_an_actor_not_cast_in_this_scene_does_not_resolve(world):
+    """Given a scene, an actor must be in it. Without this, art of anyone the
+    campaign has ever cast resolves in every scene it has."""
+    camp, char, vid = world["cid"], world["char"], world["vid"]
+    here = _cast(camp, char, vid)
+    elsewhere = scenes.create_scene(camp, "Scene two")
+    handle = f"[[art:characters:{char}:gallery_1]]"
+    assert art.resolve_handles(camp, handle, sid=here).startswith("![")
+    assert art.resolve_handles(camp, handle, sid=elsewhere) == ""
+    # ...and with no scene in hand the other two rules still stand
+    assert art.resolve_handles(camp, handle).startswith("![")
+
+
+def test_switching_the_section_off_skips_the_ranking_entirely(world, monkeypatch):
+    """The prompt-layout toggle is this feature's off switch, so it has to turn
+    off the WORK, not just the output: with an embeddings endpoint configured
+    the catalogue makes a blocking HTTP call, and paying for one whose section
+    will not render is the one case where "assemble everything, render what
+    survives" costs real money."""
+    from grimoire.store import config
+    from grimoire.store.context import assemble, layout
+
+    calls = []
+    monkeypatch.setattr(assemble.art, "catalogue",
+                        lambda *a, **k: calls.append(1) or [])
+    camp, char, vid = world["cid"], world["char"], world["vid"]
+    sid = _cast(camp, char, vid)
+
+    assemble._assemble(camp, sid)
+    assert calls == [1]                       # on by default
+
+    layout.write_layout([{"id": s.id, "enabled": s.id != "available_art"}
+                         for s in assemble.SECTIONS])
+    config.write_config(prompt_layout_enabled="on")
+    calls.clear()
+    assemble._assemble(camp, sid)
+    assert calls == []                        # switched off: never asked

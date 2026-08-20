@@ -272,8 +272,18 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # pool built from what this turn already resolved -- see art.catalogue.
         # `[]` on any failure, so a store being synced under us costs the
         # section rather than the turn.
-        "available_art": art.catalogue(cid, cast, current_loc if not loc_excluded else None,
-                                       activated_wi + recalled_wi, recent_text),
+        #
+        # SKIPPED ENTIRELY when the reader has switched the section off. Every
+        # other key here is a cheap read that the packer may then drop; this one
+        # walks the cast's asset sidecars and, with an embeddings endpoint
+        # configured, makes a blocking HTTP call -- so computing it for a
+        # section that will not render is the one case where "assemble
+        # everything, render what survives" costs real money. It also makes the
+        # prompt-layout toggle mean what this feature's design says it means:
+        # the off switch, not a way to hide output you are still paying for.
+        "available_art": (art.catalogue(cid, cast, current_loc if not loc_excluded else None,
+                                        activated_wi + recalled_wi, recent_text)
+                          if _section_on("available_art") else []),
         # Keyword activations only. A recalled group deliberately does NOT pull
         # its campaign state: that state renders into the `Group state` section,
         # which is `spotlight`, so feeding it from recall would grow a section
@@ -339,6 +349,21 @@ _GROUP_STATE_SECTION = "group_state"
 #: A pinned location that IS the current setting renders there, not in World
 #: info (see `world_state._world_info`), so that is the section it protects.
 _SETTING_SECTION = "current_setting"
+
+
+def _section_on(section_id: str) -> bool:
+    """Will `section_id` render at all, under the reader's prompt layout?
+
+    Asked in `_assemble` only for data that is expensive to gather -- see the
+    `available_art` key. `layout.apply` is what `_render_sections` will consult
+    a moment later, so this cannot disagree with it; it costs one `read_config`
+    and at most one small file read, which is what that function already
+    promises per assemble pass.
+
+    Never raises: `read_layout` answers every malformed file with "no layout",
+    and a preference must not be able to take a generation down.
+    """
+    return any(sec.id == section_id for sec in layout.apply(SECTIONS))
 
 
 def _pinned_sections(pinned_refs: frozenset, cast: list[dict], activated_wi: list[dict],
