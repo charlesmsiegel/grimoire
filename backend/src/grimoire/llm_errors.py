@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import math
 
-
 #: Every failure kind an `LLMError` carries.
 #:
 #: A named set rather than the comment this used to be, because something now

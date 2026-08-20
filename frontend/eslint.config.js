@@ -72,7 +72,13 @@ export default tseslint.config(
     // purpose. The rules that still mean something in a test
     // -- the a11y set, the hooks rules, jsx-key, no-floating-promises,
     // no-unnecessary-type-assertion -- stay on.
-    files: ["src/**/*.test.{ts,tsx}"],
+    // `src/testkit/**` is in this set for the same reason and not as an
+    // afterthought: it is the shared half of the same mocks, extracted so two
+    // suites can drive one set of `vi.mock` factories (CLAUDE.md says where it
+    // goes and why). Scoping this to `*.test.tsx` alone would have held the
+    // scaffolding to rules the suites using it are exempt from -- 186 findings
+    // in two files, every one of them `(api.x as any).mockResolvedValue(...)`.
+    files: ["src/**/*.test.{ts,tsx}", "src/testkit/**/*.{ts,tsx}"],
     rules: {
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unsafe-argument": "off",

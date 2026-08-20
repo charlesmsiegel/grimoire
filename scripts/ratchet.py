@@ -364,10 +364,11 @@ def update(tool: str, *, accept_regressions: bool = False) -> int:
     a reviewer noticing a number went up inside an 861-line generated file.
 
     So counts may fall, and pairs may disappear, with no ceremony. A count
-    that would *rise* stops the write and names every pair, because there are
-    only two reasons for one -- a regression that should be fixed instead, or
-    a rename, which is real and needs saying out loud. `--accept-regressions`
-    says it, and leaves the word in the shell history and the CI log.
+    that would *rise* stops the write and names every pair, because the
+    reasons for one are all worth saying out loud: a regression that should be
+    fixed instead, a rename, a widened rule set, or code arriving from a
+    branch that predates the gate. `--accept-regressions` says it, and leaves
+    the word in the shell history and the CI log.
     """
     found = COLLECTORS[tool]()
     # An absent baseline is not an exemption: every finding counts as a rise,
@@ -384,8 +385,9 @@ def update(tool: str, *, accept_regressions: bool = False) -> int:
         )
         print(_report(grew), file=sys.stderr)
         print(
-            "\nFix them, or -- if this is a rename or a deliberate widening of "
-            "the rule set -- say so:\n"
+            "\nFix them, or -- if this is a rename, a deliberate widening of "
+            "the rule set, or a merge bringing code the gate has not seen -- "
+            "say so:\n"
             f"    {pathlib.Path(sys.argv[0]).name} {tool} --update "
             f"--accept-regressions",
             file=sys.stderr,
@@ -411,8 +413,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--accept-regressions", action="store_true",
-        help="with --update, allow counts to rise (a rename, or a widened rule "
-             "set). Without it --update only ever lowers them.",
+        help="with --update, allow counts to rise (a rename, a widened rule "
+             "set, or a merge bringing code the gate has not seen). Without it "
+             "--update only ever lowers them.",
     )
     args = parser.parse_args(argv)
     if args.accept_regressions and not args.update:

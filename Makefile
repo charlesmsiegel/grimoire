@@ -165,10 +165,21 @@ check-mypy:
 check-eslint: frontend-deps
 	"$(call fixpath,$(PY))" scripts/ratchet.py eslint
 
-baseline:
-	"$(call fixpath,$(PY))" scripts/ratchet.py ruff --update
-	"$(call fixpath,$(PY))" scripts/ratchet.py mypy --update
-	"$(call fixpath,$(PY))" scripts/ratchet.py eslint --update
+# `frontend-deps` for the same reason `check-eslint` takes it: regenerating the
+# eslint baseline against a `node_modules` that is not the lockfile's would
+# write counts the gate then cannot reproduce -- and the whole file is only
+# worth anything if the number in it is the number CI gets.
+#
+# `make baseline ACCEPT=1` passes --accept-regressions, for the rise that is
+# not a regression: a rename, a widened rule set, or a merge bringing code the
+# gate has not seen. One entry point either way, because the alternative is a
+# documented longhand that people reach for by muscle memory and stop reading.
+BASELINE_FLAGS = $(if $(ACCEPT),--accept-regressions,)
+
+baseline: frontend-deps
+	"$(call fixpath,$(PY))" scripts/ratchet.py ruff --update $(BASELINE_FLAGS)
+	"$(call fixpath,$(PY))" scripts/ratchet.py mypy --update $(BASELINE_FLAGS)
+	"$(call fixpath,$(PY))" scripts/ratchet.py eslint --update $(BASELINE_FLAGS)
 
 check-templates:
 	"$(call fixpath,$(PY))" scripts/verify_templates.py
