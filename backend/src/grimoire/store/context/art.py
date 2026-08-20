@@ -135,12 +135,15 @@ DOC_BYTES = 2000
 #: Words too common to carry a match. Deliberately tiny -- this is not a
 #: stoplist for an index, it is the handful of words that would otherwise let
 #: any two sentences of English "share content".
-_STOP = frozenset("""
-about above after again against because been before being below between both
-came come does down during each from further have here into more most much
-must once only other over same some such than that them then there these they
-this those through under until very were what when where which while with your
-""".split())
+_STOP = frozenset((
+    "about", "above", "after", "again", "against", "because", "been", "before",
+    "being", "below", "between", "both", "came", "come", "does", "down",
+    "during", "each", "from", "further", "have", "here", "into", "more",
+    "most", "much", "must", "once", "only", "other", "over", "same", "some",
+    "such", "than", "that", "them", "then", "there", "these", "they", "this",
+    "those", "through", "under", "until", "very", "were", "what", "when",
+    "where", "which", "while", "with", "your",
+))
 
 #: Words shorter than this never count as a shared term. With `_STOP` above,
 #: this is what keeps "the grey quay" from matching on "grey".
@@ -347,7 +350,7 @@ def _semantic_scores(cands: list[dict], recent_text: str, cfg: dict) -> list[flo
     query = vectors.unit(got[0])
     if query is None:
         return None
-    for text, raw in zip(missing, got[1:]):
+    for text, raw in zip(missing, got[1:], strict=False):
         vectors.save(cfg["space"], text, raw)
         fresh = vectors.unit(raw)
         if fresh is not None:

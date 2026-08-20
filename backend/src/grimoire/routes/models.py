@@ -418,6 +418,15 @@ class AvatarFocus(BaseModel):
     focus: int
 
 
+class ImageDescription(BaseModel):
+    """One image's description. An empty string is meaningful and is NOT the
+    same as never having written one: it means "reviewed, nothing to say", and
+    it is what takes an image out of the undescribed queue without offering it
+    to the model. Plain field, no `Field(...)`, per the pydantic v1/v2 rule."""
+
+    description: str
+
+
 class PCCreate(BaseModel):
     name: str
     tags: list[str] = []

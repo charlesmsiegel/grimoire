@@ -1,0 +1,30 @@
+{#- Art from this campaign's own library that the moment could use, ranked by
+    store/context/art.py. Selection happens in code -- which pictures are even
+    candidates (the on-stage cast, the current setting, activated and recalled
+    entities, the campaign library) and which of those clear the floor. This
+    template only lists what it is handed.
+
+    Renders NOTHING when the catalogue is empty, which is every turn on a store
+    where nobody has described an image. That is what keeps an install that
+    never uses this feature at a byte-identical prompt.
+
+    The handle, not a URL: the model writes the handle back and
+    art.resolve_handles rewrites it into markdown before the reply is split
+    into posts, so a URL never has to survive being retyped and a handle is
+    never stored. A handle naming anything not listed here resolves to nothing
+    and is deleted, so there is no failure mode worth warning the model about.
+
+    Vars: available_art ([{handle, description}]). -#}
+{%- if available_art %}# Available art
+
+These pictures already exist in this campaign. If one of them genuinely fits a
+beat in your reply, you may include it by writing its handle on a line of its
+own, exactly as spelled below.
+
+{% for art in available_art %}- `{{ art.handle }}` — {{ art.description }}
+{% endfor %}
+At most one picture per reply, and only when it earns its place. Most replies
+should include none. A picture never replaces describing something in prose:
+write the scene as you always would, and add the handle only if the image
+shows what you have just written. Never invent a handle that is not on this
+list, and never describe a picture that is not on it as though it existed.{% endif -%}

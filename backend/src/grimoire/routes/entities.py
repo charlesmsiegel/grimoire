@@ -19,7 +19,7 @@ from .common import (
     _upload_image_ext,
     _world_root_or_404,
 )
-from .models import EntityCreate, EntityUpdate
+from .models import EntityCreate, EntityUpdate, ImageDescription
 
 router = APIRouter()
 
@@ -371,6 +371,38 @@ def put_campaign_entity(cid: str, kind: str, eid: str, body: EntityUpdate):
 def delete_campaign_entity(cid: str, kind: str, eid: str):
     _campaign_root_or_404(cid)
     return _campaign_entity_delete(cid, kind, eid)
+
+
+@router.put("/worlds/{wid}/{kind}/{eid}/images/{name}/description")
+def put_world_entity_image_description(wid: str, kind: str, eid: str, name: str,
+                                       body: ImageDescription):
+    root = _world_entity_or_404(wid, kind, eid)
+    try:
+        store.image_descriptions.set_description(root, eid, "default", name,
+                                                 body.description, base=kind)
+    except ValueError:
+        # `from None`: the strict-write ValueError is this module's own
+        # implementation detail, and chaining it onto the 404 says nothing a
+        # caller can act on.
+        raise HTTPException(status_code=404, detail="image not found") from None
+    return {"ok": True}
+
+
+@router.put("/campaigns/{cid}/{kind}/{eid}/images/{name}/description")
+def put_campaign_entity_image_description(cid: str, kind: str, eid: str, name: str,
+                                          body: ImageDescription):
+    _campaign_entity_or_404(cid, kind, eid)
+    try:
+        # Through the overlay: the write lands campaign-side, and the existence
+        # gate is the overlay union, so a thin campaign can describe art whose
+        # bytes it still inherits without diverging the art itself.
+        store.overlay.set_description(cid, eid, "default", name, body.description, base=kind)
+    except ValueError:
+        # `from None`: the strict-write ValueError is this module's own
+        # implementation detail, and chaining it onto the 404 says nothing a
+        # caller can act on.
+        raise HTTPException(status_code=404, detail="image not found") from None
+    return {"ok": True}
 
 
 @router.get("/campaigns/{cid}/{kind}/{eid}/images")

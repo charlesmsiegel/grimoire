@@ -29,6 +29,7 @@ from .models import (
     ChubImportBody,
     ChubSourceBody,
     DefaultVersion,
+    ImageDescription,
     NameBody,
     TaglineSave,
     VersionCreate,
@@ -448,4 +449,18 @@ def put_world_avatar_focus(wid: str, cid: str, vid: str, body: AvatarFocus):
     if store.assets.image_path(root, cid, vid, store.assets.AVATAR) is None:
         raise HTTPException(status_code=404, detail="image not found")
     store.assets.write_focus(root, cid, vid, body.focus)
+    return {"ok": True}
+
+
+@router.put("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}/description")
+def put_world_image_description(wid: str, cid: str, vid: str, name: str,
+                                body: ImageDescription):
+    root = _world_char_version_or_404(wid, cid, vid)
+    try:
+        store.image_descriptions.set_description(root, cid, vid, name, body.description)
+    except ValueError:
+        # The strict-write rule as a status code: describing an image this
+        # version does not hold is a 404, never a silently-kept orphan entry.
+        # `from None` -- the ValueError is the store's detail, not the caller's.
+        raise HTTPException(status_code=404, detail="image not found") from None
     return {"ok": True}

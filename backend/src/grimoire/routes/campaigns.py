@@ -43,6 +43,7 @@ from .models import (
     DefaultVersion,
     ForkCampaign,
     GroupStateSave,
+    ImageDescription,
     NameBody,
     NewCampaign,
     PCCreate,
@@ -519,6 +520,21 @@ def delete_campaign_cover(cid: str):
 # Declared here for the same reason the cover is: `routes/__init__` includes
 # `campaigns` before `entities`, whose `/campaigns/{cid}/{kind}` would otherwise
 # capture `images`.
+@router.put("/campaigns/{cid}/images/{name}/description")
+def put_campaign_library_image_description(cid: str, name: str, body: ImageDescription):
+    _campaign_root_or_404(cid)
+    d = store.campaign_images.images_dir(cid)
+    names = {i["name"] for i in store.campaign_images.list_images(cid)}
+    try:
+        store.image_descriptions.set_in(d, name, body.description, names=names)
+    except ValueError:
+        # `from None`: the strict-write ValueError is this module's own
+        # implementation detail, and chaining it onto the 404 says nothing a
+        # caller can act on.
+        raise HTTPException(status_code=404, detail="image not found") from None
+    return {"ok": True}
+
+
 @router.get("/campaigns/{cid}/images")
 def list_campaign_library(cid: str):
     _campaign_root_or_404(cid)
@@ -1400,6 +1416,20 @@ def put_campaign_avatar_focus(cid: str, char: str, vid: str, body: AvatarFocus):
     return {"ok": True}
 
 
+@router.put("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}/description")
+def put_campaign_image_description(cid: str, char: str, vid: str, name: str,
+                                   body: ImageDescription):
+    _campaign_char_version_or_404(cid, char, vid)
+    try:
+        store.overlay.set_description(cid, char, vid, name, body.description)
+    except ValueError:
+        # `from None`: the strict-write ValueError is this module's own
+        # implementation detail, and chaining it onto the 404 says nothing a
+        # caller can act on.
+        raise HTTPException(status_code=404, detail="image not found") from None
+    return {"ok": True}
+
+
 @router.post("/campaigns/{cid}/characters/{char}/versions/{vid}/images/copy-from-greeting")
 def post_copy_campaign_image_from_greeting(cid: str, char: str, vid: str, body: CopyFromGreeting):
     root = _campaign_char_version_or_404(cid, char, vid)
@@ -1671,6 +1701,21 @@ def _campaign_pc_version_or_404(cid: str, pid: str, vid: str):
     except store.pcs.PCVersionNotFound:
         raise HTTPException(status_code=404, detail="version not found")
     return root
+
+
+@router.put("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/{name}/description")
+def put_campaign_pc_image_description(cid: str, pid: str, vid: str, name: str,
+                                      body: ImageDescription):
+    _campaign_pc_version_or_404(cid, pid, vid)
+    try:
+        store.overlay.set_description(cid, pid, vid, name, body.description,
+                                      base=store.pcs.ASSET_BASE)
+    except ValueError:
+        # `from None`: the strict-write ValueError is this module's own
+        # implementation detail, and chaining it onto the 404 says nothing a
+        # caller can act on.
+        raise HTTPException(status_code=404, detail="image not found") from None
+    return {"ok": True}
 
 
 @router.get("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images")

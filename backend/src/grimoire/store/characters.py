@@ -13,7 +13,7 @@ import json
 import shutil
 from pathlib import Path
 
-from . import assets, atomic, cards, chub, fetch, lorebook, statcache, taglines
+from . import assets, atomic, cards, chub, fetch, image_descriptions, lorebook, statcache, taglines
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import safe_id, slugify, uniquify
 
@@ -246,6 +246,9 @@ def read_character(root: Path, cid: str) -> dict:
             # `?v=` URL will return -- and that URL is cached immutable.
             "image_v": {i["name"]: i["v"] for i in version_images},
             "avatar_focus": assets.read_focus(root, cid, vid),
+            # Beside `images`/`image_v`/`avatar_focus`: asset-derived, so it
+            # travels with them rather than through a second round trip.
+            "image_descriptions": image_descriptions.read_all(root, cid, vid),
             "chub_source": chub_source,
             "is_chub": bool(chub_source) and chub.parse_full_path(chub_source) is not None,
             "importable_lore": _importable_lore(card),
