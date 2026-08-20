@@ -500,3 +500,22 @@ def test_a_name_with_ordinary_punctuation_is_still_bounded(world, monkeypatch):
     cands = [{"kind": "characters", "id": "x", "vid": "v", "description": "A portrait."}]
     assert art._keyword_scores("c", cands, "Mara O'Dell drew her cloak in.")[0] == [1.0]
     assert art._keyword_scores("c", cands, "Nobody was there.")[0] == [0.0]
+
+
+def test_three_letter_nouns_count_as_shared_terms(world):
+    """A four-letter floor discarded exactly the nouns a picture description
+    leans on. "Fog over the sea at dawn" and "down to the sea in the fog and
+    found the inn" share fog, sea and inn -- and every one of them was thrown
+    away, so the obvious picture for that moment was never offered."""
+    shared = art._terms("Fog over the sea at dawn, the inn's lamp still lit.") & art._terms(
+        "They came down to the sea in the fog and found the inn.")
+    assert shared == {"fog", "sea", "inn"}
+
+
+def test_function_words_still_carry_no_match(world):
+    """The floor only works because the stoplist reaches down to meet it: two
+    unrelated sentences of English must share nothing."""
+    assert not (art._terms("A red door and a low wall.")
+                & art._terms("She was not there and did not care."))
+    for filler in ("the", "and", "was", "you", "how", "did", "got"):
+        assert filler not in art._terms(f"{filler} something entirely")
