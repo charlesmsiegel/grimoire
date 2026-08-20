@@ -216,18 +216,27 @@ imports from `store` but **must not import `routes.streaming` or
 `routes.scenes`** — they import it. `test_import_guard.py` requires the module
 graph stay acyclic, and this is the edge that would close a cycle.
 
-The registry holds `dict[run_id, Run]`, a `dict[subject, run_id]` index naming
-each subject's **most recent** run, and a `dict[exclusion_key, run_id]` for the
-classes that declare one. All mutated under one small lock,
+The registry holds `dict[run_id, Run]`, a `dict[subject, list[run_id]]` index
+of every run for a subject inside the reap window, a
+`dict[(subject, attempt_id), run_id]` for idempotent starts, and a
+`dict[exclusion_key, run_id]` for the classes that declare one. All mutated
+under one small lock,
 get-or-create style, for the reason `locks.campaign_lock` documents: a plain
 check-then-act hands two concurrent first callers different answers.
 
-Note that the index is *most recent*, not *live*. Those differ, and the
-difference is load-bearing: exclusivity asks whether the indexed run is still
-`running`, while `GET .../run` needs to find a terminal one too (see the #95
-obligation below). One index answers both; an index of live runs only would
-make the second question unanswerable, which is the bug this spec would
-otherwise ship.
+The subject index is a **collection, not a most-recent pointer**, and holds
+terminal runs as well as live ones. Both properties are load-bearing and each
+was a bug in an earlier draft:
+
+- *Terminal, not just live*, because `GET .../run` must be able to find a run
+  that finished while nobody was attached — the #95 obligation below.
+- *A collection, not one pointer*, because `draft` and `background` declare no
+  exclusion key and therefore legitimately overlap on one coarse subject: two
+  image-description drafts in a world, a rolling summary alongside a scene
+  break. A single pointer is overwritten by the second start, and the first
+  live run then has no discovery path at all — its result sits in the registry
+  until it is reaped, unreachable. Widening the scope to every LLM call is
+  precisely what made one pointer insufficient.
 
 ### What actually runs the runner
 
@@ -252,6 +261,17 @@ the only case it will now see. Handlers reach the group through `request.app`,
 never through a module global.
 
 The reaper (below) runs on the same group, alongside `_backup_ticker`.
+
+**A streaming run's terminal state comes from an explicit outcome, not from
+whether the coroutine raised.** `_fence_stream` catches `LLMError`, emits an
+SSE `error` frame, and then *returns normally* — finalization contention is
+handled the same way. A runner that inferred success from "the coroutine
+finished without raising" would mark every provider failure `landed`, fire the
+success notification, and leave a terminal state contradicting the error the
+subscriber just received. So the streaming producer returns an explicit
+terminal outcome (`landed` / `failed`, with the error payload), and the runner
+takes that rather than guessing. The exception boundary below is for the
+*unexpected* failures, which are a different thing entirely.
 
 **Every runner is wrapped in its own failure boundary, and this is not
 optional.** An `anyio` task group cancels all sibling tasks and propagates the
@@ -434,12 +454,26 @@ On disk it is a per-scene file beside the transcript under the campaign's
 else — `test_paths_guard.py` requires it and a hand-built path would fail
 there.
 
-**The runner rechecks that the scene still exists, under the same
-`campaign_lock(cid)` hold as the pending-review write.** The guards cited under
-scene deletion protect *transcript* persistence; a pending review is a sidecar,
-so nothing stops its terminal write from recreating a file under a scene id the
-delete cascade has already swept. The run is marked `failed` and publishes
-nothing when the scene has gone.
+**The runner verifies the scene's *identity*, not merely its existence,
+under the same `campaign_lock(cid)` hold as the pending-review write.** An
+existence check is not enough, and the reason is specific to this codebase:
+`scenes/serialize.py:_numbering` derives the next scene number from **the
+files on disk with no stored counter** (`top + 1`), so deleting the
+highest-numbered scene frees its number and the next create takes it back — and
+with the same title slug, the identical `sid`. An existence-only recheck then
+passes against a *different* scene and publishes the old review onto it. The
+unchanged turn finalizer can append old narration to a replacement transcript
+the same way, so this is not only the review path.
+
+Every run therefore captures an **immutable scene identity** at start and
+compares it before any terminal write. Scenes carry no such field today, so
+one is added to the scene record at creation — a value nothing else derives
+from position, title or number, since all three are mutable by design
+(rename, `repad`, the front door's date slug). A run whose captured identity
+does not match publishes nothing and is marked `failed`.
+
+The guards cited under scene deletion protect *transcript* persistence only; a
+pending review is a sidecar write and needed its own check regardless.
 
 **Retry results merge into the stored review; they never replace it.** A
 single record persisted verbatim would be wrong for two of the three computing
@@ -502,6 +536,27 @@ the run, and stored on the pending review; `DELETE .../pending-review` takes it
 idempotent — a DELETE naming a generation that has already gone removes nothing
 and reports success, because the reviewer's intent is satisfied either way.
 
+### A landed review does not freeze the transcript
+
+The commit epoch is not sufficient to keep a stored review honest, and this is
+the subtlest hazard in the design. Once a review lands its exclusion slot is
+released and the composer re-enables, so the player can keep playing — append
+turns, retcon, cut posts — while the review sits on disk. **None of those
+advance the epoch**: `commits.reserve` is called from exactly one place,
+`PUT /chronicle` (`scenes.py:2629`), so only a chronicle-save claim moves it.
+The token minted from the older snapshot therefore still passes both the
+read-time check and the save, and the scene is marked absorbed while the posts
+made after the review was prepared were never reviewed at all — silently, since
+every check involved returned green.
+
+So the review carries a **transcript watermark** — a digest, or the length plus
+a digest — captured from the same snapshot the review was built on, validated
+under the campaign lock both when the review is retrieved and again at save. A
+mismatch means the scene moved on: the reviewer is told to re-run rather than
+shown a review of a transcript that no longer exists. This is what the epoch
+does for *competing saves* (#271) and it does not overlap: one guards against
+another review committing, this guards against play continuing.
+
 A pending review is otherwise cleared when its scene is absorbed or when a
 fresh absorb replaces it — and the clearing belongs to **both** paths through
 `PUT /chronicle`, not only the fresh-success tail. The commit is idempotent by
@@ -519,6 +574,16 @@ renaming a scene changes that id. Once a run has landed the scene is no longer
 locked, so renaming before saving the review is ordinary use, not an exotic
 race — and without an explicit integration `GET .../{new_sid}/pending-review`
 returns 404 while the durable review sits orphaned under the old id.
+
+**A rename is refused while the scene's exclusion key is held.** The repoint
+below moves an *already-persisted* review; it does nothing for a `turn` or
+`review` still in flight, whose run and persistence hooks hold the old `sid`.
+Renaming underneath one makes its terminal identity check fail, which discards
+an absorb result or leaves a moved transcript without the reply that was being
+generated for it. Rejecting the rename for the seconds-to-minutes a run is live
+is a far smaller cost than repointing a live run and its hooks mid-flight, and
+it cannot be got subtly wrong. Renames outside a live run are unaffected, which
+is the ordinary case: the reviewer renaming a scene before saving its review.
 
 So `pending_reviews` joins the **`scene_refs.repoint` fan-out** alongside the
 other scene-id-keyed stores, and is named in `store/cascade.py`. That module is
@@ -558,6 +623,25 @@ New, under the existing scene prefix:
 - `GET  /api/campaigns/{cid}/scenes/{sid}/runs/{run_id}` — terminal payload for
   computing kinds: `{state, result?, error?}`.
 - `POST /api/campaigns/{cid}/scenes/{sid}/runs/{run_id}/cancel`.
+**The run routes exist at every subject level, not only under a scene.** The
+scene-scoped forms above are the specific case; the same four operations are
+mounted for each subject, because otherwise a campaign-, world- or
+global-scoped run has no way to be discovered, polled, streamed or cancelled
+after its response is lost — which is every one of scene suggestions, intent,
+taglines, voice anchors, image-description drafts, scenario parse and the
+model refresh:
+
+- `GET  /api/campaigns/{cid}/runs[?attempt=]`, `.../runs/{run_id}`,
+  `.../runs/{run_id}/stream`, `POST .../runs/{run_id}/cancel`
+- `GET  /api/worlds/{wid}/runs[...]` — the same four
+- `GET  /api/runs[...]` — the same four, for the global subject
+
+The subject-scoped collection `GET` returns the subject's runs inside the reap
+window rather than a single one, since non-exclusive classes overlap. Every
+one of the 25 POSTs returns its `run_id` — in the leading `run` frame for
+streaming kinds, in the 202 body for the rest — so a client always has the
+handle before it can lose the connection.
+
 - `GET  /api/campaigns/{cid}/scenes/{sid}/pending-review` — the stored review
   for this scene, or 404. **Not reachable through the run**, deliberately: a
   review outlives its run by design (disk versus a ten-minute registry), so
@@ -629,6 +713,15 @@ synchronous one.
 
 ### Edges the implementer will otherwise have to guess
 
+- **`from` is the first index to send, inclusive.** So a client that has
+  consumed through index `N` must request `from = N + 1`; requesting `from = N`
+  replays the frame it already rendered and duplicates that delta. Stated
+  because "resume from the last index you saw" and "`from` replays frame `N`"
+  are each individually reasonable and jointly an off-by-one that produces
+  doubled text in the middle of a reply. The client persists `next = last_seen
+  + 1` rather than `last_seen`, and the contiguity test pins this boundary
+  explicitly — a reconnect at every offset from 0 to the buffer length must
+  reproduce the reply exactly once.
 - **`?from=N` beyond the buffer** — return no frames and tail; do not error. A
   client that raced ahead is asking a legitimate question.
 - **`?from=N` against a terminal run** — replay the remainder and close. A run
@@ -712,6 +805,15 @@ Recovery asks about *that id*, not about recency:
   terminal state;
 - no such run → my post never landed, whatever else the scene has been doing;
   the send can be retried as a new attempt.
+
+**Starting a run is get-or-return-existing on `(subject, attempt_id)`, for the
+whole reap window and including terminal runs.** Recording the id makes
+recovery *queryable*; it does not by itself make the POST *idempotent*, and
+without that the fix is half-done. A duplicate delivery arriving after the
+first run has gone terminal finds the exclusion slot free, starts a second run,
+and appends the player's prompt a second time — and `GET .../run?attempt=` then
+has two runs to choose between. Returning the existing run for a repeated
+attempt id closes both.
 
 The attempt id is what makes the question answerable, and it is also what makes
 the reap window a comfort rather than a correctness knob: a client whose id has
@@ -934,6 +1036,22 @@ Widened scope:
 - the global models-refresh run detaches with no campaign lock taken at all.
 - a run id from one subject, sent through another subject's route, returns
   `run_gone`.
+- two `draft` runs overlapping on one world subject are both discoverable —
+  the second start does not hide the first.
+- campaign-, world- and global-scoped runs are reachable through their own
+  collection, poll, stream and cancel routes.
+- a provider failure on a streaming run ends `failed`, not `landed`, and fires
+  no success notification — `_fence_stream` returns normally after its error
+  frame, so nothing raises.
+- a repeated attempt id returns the existing run and appends the prompt once,
+  including after that run has gone terminal.
+- deleting a scene and creating a new one that takes the same recycled `sid`
+  does not let the old run publish onto the replacement.
+- a rename is refused while the scene's exclusion key is held.
+- a review whose transcript grew after it landed is refused at retrieval and at
+  save, even though the commit epoch is unchanged.
+- a reconnect at every offset from 0 to the buffer length reproduces the reply
+  exactly once — the test that pins `from` as inclusive.
 
 Frontend (vitest, from `frontend/`):
 
