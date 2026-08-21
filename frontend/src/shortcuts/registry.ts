@@ -45,10 +45,22 @@ export type Hotkey = {
  *  Held as a live object whose fields the owning component rewrites each
  *  render, so a binding table needs no memoization from its caller, always
  *  reflects the current render — and costs no allocation on the dispatch path,
- *  which every keystroke in a writing app runs down. */
-export type Scope = { keys: Hotkey[]; modal?: boolean };
+ *  which every keystroke in a writing app runs down.
+ *
+ *  `seq` is birth order, which is NOT the order the list below is in: opening
+ *  an overlay moves its scope to the end (that is how z-order is kept), and
+ *  the help sheet does it to itself. Dispatch wants the moving order; the
+ *  sheet's own list wants the fixed one, or its rows shuffle between one
+ *  opening and the next. */
+export type Scope = { keys: Hotkey[]; modal?: boolean; seq: number };
 
 const scopes: Scope[] = [];
+let born = 0;
+
+/** The next birth number. Taken once, when a component first builds its scope. */
+export function scopeSeq(): number {
+  return ++born;
+}
 
 /** The first binding in `scope` that answers this keystroke, run. */
 function fire(
@@ -138,7 +150,8 @@ export function activeHotkeys(ignoring?: Scope): HotkeyRow[] {
   for (let i = scopes.length - 1; i >= 0; i--) {
     if (scopes[i] !== ignoring && scopes[i].modal) { modal = scopes[i]; break; }
   }
-  return scopes.flatMap((scope) => scope.keys.map((key) => ({
+  // Birth order, not the dispatch order: see `Scope.seq`.
+  return [...scopes].sort((a, b) => a.seq - b.seq).flatMap((scope) => scope.keys.map((key) => ({
     key,
     reachable: key.enabled !== false
       && (!modal || scope === modal || scope === ignoring || !!key.global),

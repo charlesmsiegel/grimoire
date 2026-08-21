@@ -130,6 +130,20 @@ test("it takes focus, and gives it back to where the reader was", () => {
   expect(document.activeElement).toBe(before);
 });
 
+// Opening the sheet re-registers its own scope, which is how it becomes the
+// thing on top -- and would reorder its own rows between the first opening and
+// every later one if the list were read in that order.
+test("the rows are in the same order every time it opens", () => {
+  render(<><Bind keys={[NEW_SCENE]} /><ShortcutsHelp /></>);
+  const labels = () => [...document.querySelectorAll(".shortcuts-label")].map((e) => e.textContent);
+  press("?");
+  const first = labels();
+  press("Escape");
+  press("?");
+  expect(labels()).toEqual(first);
+  expect(first.length).toBeGreaterThan(1);
+});
+
 test("the sections read most-specific first", () => {
   render(
     <>
