@@ -6,7 +6,6 @@ import json
 import threading
 import time
 
-import anyio
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
@@ -15,7 +14,7 @@ import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
 from grimoire.store import appearances, campaigns, characters, modules, scenes, sheets, worlds
-from tests.llm_fakes import FakeLLM, FakeOpenRouter
+from tests.llm_fakes import FakeOpenRouter, HeldOpenRouter
 
 
 @pytest.fixture
@@ -134,44 +133,6 @@ def scene_with_sheeted_cast(user_pack_path):
 # load-bearing for detached runs -- a subscriber dropping mid-generation, and
 # two scenes generating at once -- so those tests take a real server.
 
-class HeldProvider(FakeLLM):
-    """A provider that stops after its first delta until the test lets it go.
-
-    This is what makes "mid-generation" a defined moment. A `sleep` long enough
-    to be safe is also long enough to let the whole turn finish, which passes
-    vacuously -- the exact failure the disconnect test exists to avoid.
-    """
-
-    def __init__(self, reply: str = "The lamps are already lit.", *, per_scene=None):
-        # Two deltas: the first arrives immediately, the second only after
-        # `release()`, so a test can act between them.
-        head, _, tail = reply.partition(" ")
-        super().__init__([[head + " ", tail]])
-        self.per_scene = per_scene or {}
-        self._first = threading.Event()
-        self._go = threading.Event()
-
-    def await_first_delta(self, timeout: float = 5.0) -> None:
-        assert self._first.wait(timeout), "the provider never produced a delta"
-
-    def release(self) -> None:
-        self._go.set()
-
-    async def stream(self, messages, conn, usage=None):
-        first = True
-        async for delta in super().stream(messages, conn, usage):
-            yield delta
-            if first:
-                first = False
-                self._first.set()
-                # A checkpoint per tick rather than `await`-ing an anyio Event:
-                # `release()` is called from the TEST thread, and setting an
-                # anyio event from off-loop is not safe. A threading.Event
-                # polled here is, and the interval is invisible next to a
-                # provider call.
-                await anyio.to_thread.run_sync(self._go.wait)
-
-
 class LiveServer:
     """uvicorn on an ephemeral port, sharing this test's store."""
 
@@ -180,13 +141,28 @@ class LiveServer:
         self.url = url
         self.campaign_scene = campaign_scene
         self.two_scenes = two_scenes
-        self._held = None
+        self._held: list = []
 
-    def hold_provider(self, reply: str = "The lamps are already lit.") -> HeldProvider:
-        held = HeldProvider(reply)
+    def hold_provider(self, replies="The lamps are already lit.") -> HeldOpenRouter:
+        """A provider held after its first delta. `replies` may be a marker ->
+        reply mapping, so two concurrent turns are distinguishable."""
+        held = HeldOpenRouter(replies)
         self.app.dependency_overrides[routes.get_llm] = lambda: held
-        self._held = held
+        self._held.append(held)
         return held
+
+    def release_all(self) -> None:
+        """Let every held provider finish.
+
+        Called from teardown as well as by tests. A test that fails between
+        `hold_provider()` and `release()` would otherwise leave a worker thread
+        blocked on the hold -- `anyio.to_thread.run_sync` does not abandon its
+        worker on cancellation -- so the lifespan never completes, the server
+        thread outlives the test, and the original failure gets buried under
+        whatever that breaks next.
+        """
+        for held in self._held:
+            held.release()
 
 
 @pytest.fixture
@@ -217,7 +193,10 @@ def live_server(monkeypatch, tmp_path):
     assert server.started, "uvicorn never came up"
     port = server.servers[0].sockets[0].getsockname()[1]
 
-    yield LiveServer(app, f"http://127.0.0.1:{port}", (cid, a), (cid, (a, b)))
-
-    server.should_exit = True
-    thread.join(timeout=10)
+    live = LiveServer(app, f"http://127.0.0.1:{port}", (cid, a), (cid, (a, b)))
+    try:
+        yield live
+    finally:
+        live.release_all()
+        server.should_exit = True
+        thread.join(timeout=10)

@@ -50,7 +50,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
+
+import anyio
 
 from grimoire.llm import effective_model
 from grimoire.llm_errors import LLMError
@@ -320,3 +323,59 @@ class QuietThenAnswers(FakeLLM):
 
     def __init__(self, text="At last."):
         super().__init__([["", text]])
+
+
+class HeldOpenRouter(FakeLLM):
+    """A provider that stops after its first delta until the test releases it.
+
+    What makes "mid-generation" a defined MOMENT rather than a hopeful sleep: a
+    sleep long enough to be safe is also long enough to let the whole turn
+    finish, which passes vacuously -- and the detach tests exist precisely to
+    catch a turn that did not survive. Only useful against a real server, since
+    `TestClient` buffers a streaming response to completion.
+
+    `replies` maps a marker to the reply a request carrying that marker gets, so
+    two concurrent turns are distinguishable. A single string answers every
+    request the same way. Matching on the request rather than on call order
+    because concurrent calls have no order: that is the whole point of the tests
+    that use this, and a scripted-by-position fake would make "no cross-
+    contamination" unfalsifiable.
+    """
+
+    def __init__(self, replies: str | dict[str, str] = "The lamps are already lit."):
+        self._replies = ({"": replies} if isinstance(replies, str) else dict(replies))
+        super().__init__([["…"]])          # never consulted; `_next` is overridden
+        self._first = threading.Event()
+        self._go = threading.Event()
+
+    def await_first_delta(self, timeout: float = 5.0) -> None:
+        assert self._first.wait(timeout), "the provider never produced a delta"
+
+    def release(self) -> None:
+        self._go.set()
+
+    def _reply_for(self, messages) -> str:
+        text = " ".join(str(m.get("content", "")) for m in messages)
+        for marker, reply in self._replies.items():
+            if marker and marker in text:
+                return reply
+        return self._replies.get("", next(iter(self._replies.values())))
+
+    def _next(self, messages, conn):
+        # Two deltas: the first arrives immediately, the second only after
+        # `release()`, so a test can act between them.
+        reply = self._reply_for(messages)
+        head, _, tail = reply.partition(" ")
+        return [head + " ", tail]
+
+    async def stream(self, messages, conn, usage=None):
+        first = True
+        async for delta in super().stream(messages, conn, usage):
+            yield delta
+            if first:
+                first = False
+                self._first.set()
+                # A worker thread rather than an anyio Event: `release()` is
+                # called from the TEST thread, and setting an anyio event from
+                # off-loop is not safe.
+                await anyio.to_thread.run_sync(self._go.wait)

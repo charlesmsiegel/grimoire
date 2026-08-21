@@ -257,7 +257,7 @@ stored counter, so deleting the highest scene frees its number).
   unnecessarily. Exercise both the renamed and the deleted case.
 
   **The store function alone is not enough** — Kotlin cannot call it. Task 4
-  adds `GET /api/campaigns/{cid}/scenes/by-identity/{identity}` returning the
+  adds `GET /api/campaigns/{cid}/scene-by-identity?identity=...` returning the
   current `sid` or 404, and Task 7 adds the `android_entry.py` resolver plus
   the `ServerRuntime` method `MainActivity` invokes when handling the intent.
   Without that concrete path the reverse lookup exists and nothing can reach
@@ -984,19 +984,19 @@ backup ticker and leave through _lifespan."
 - Produces: `GET /api/campaigns/{cid}/scenes/{sid}/runs/{run_id}/stream?from=N`
 - Produces: `GET /api/campaigns/{cid}/scenes/{sid}/runs/{run_id}`
 - Produces: `POST /api/campaigns/{cid}/scenes/{sid}/runs/{run_id}/cancel`
-- Produces: `GET /api/campaigns/{cid}/scenes/by-identity/{identity}` — the
+- Produces: `GET /api/campaigns/{cid}/scene-by-identity?identity=...` — the
   reverse lookup Task 1 exists for, over `store.scenes.find_by_identity`.
   Returns `{"id": sid}`, or 404 when the identity names no live scene.
-  Registration order matters, though not against `/scenes/{sid}` — that
-  pattern is a segment shorter, so it cannot shadow this one. The collision
-  is a *crossing* with the entity catch-all: `GET
-  /api/campaigns/{cid}/{kind}/{eid}/images` matches
-  `/api/campaigns/{cid}/scenes/by-identity/images` too, so which handler runs
-  is decided by include order alone. `test_route_order` computes both
-  shadowing and crossings from the live route table, so it will fail on this
-  pair until the winner is recorded in `CROSSING_PAIRS` with the reason the
-  others carry — "scenes" is not an entity kind, so the catch-all can never
-  legitimately claim a URL under it, and `runs` is included before `entities`.
+
+  **The identity is a query parameter and the path is NOT under `/scenes/`.**
+  This paragraph used to specify `/scenes/by-identity/{identity}` and predicted
+  a single crossing with the entity catch-all. That was wrong, and the
+  route-order guard said so in seconds: putting a literal where a `sid` goes
+  and a parameter where a literal goes crosses EVERY `/scenes/{sid}/<name>`
+  route -- a dozen ambiguous pairs, each needing its own `CROSSING_PAIRS`
+  entry. Twelve exemptions to add one lookup is the guard reporting that the
+  URL is shaped wrong. The shape above has zero crossings and needs no
+  exemptions; Task 7's notification tap consumes THIS contract.
 
 - [ ] **Step 1: Write the failing test**
 

@@ -56,7 +56,7 @@ def test_a_dropped_subscriber_does_not_cancel_the_run(live_server):
     below lands squarely inside the stream rather than after it.
     """
     cid, sid = live_server.campaign_scene
-    held = live_server.hold_provider(reply="Mist over the dock.")
+    held = live_server.hold_provider("Mist over the dock.")
 
     with httpx.stream("POST", f"{live_server.url}/api/campaigns/{cid}/scenes/{sid}/chat",
                       json={"content": "Mara steps onto the dock."},
@@ -93,7 +93,12 @@ def test_two_scenes_generate_at_once_without_cross_contamination(live_server):
     """
     import threading
     cid, (a, b) = live_server.two_scenes
-    held = live_server.hold_provider(reply="Seraphine waits.")
+    # DISTINCT replies, keyed on each request's own prompt. Giving both scenes
+    # the same text made this unfalsifiable: a producer that swapped or
+    # duplicated buffered output between them would have passed, which is the
+    # only thing the test is for.
+    held = live_server.hold_provider({"Seraphine?": "Seraphine waits.",
+                                      "Winifred?": "Winifred does not."})
     results = {}
 
     def post(sid, text, key):
@@ -113,6 +118,11 @@ def test_two_scenes_generate_at_once_without_cross_contamination(live_server):
     assert results["a"] != results["b"], "both scenes shared one run"
     _wait_terminal(live_server.app, results["a"], ("scene", cid, a))
     _wait_terminal(live_server.app, results["b"], ("scene", cid, b))
+
+    reply_a = store.scenes.read_scene(cid, a)["messages"][-1]["content"].lower()
+    reply_b = store.scenes.read_scene(cid, b)["messages"][-1]["content"].lower()
+    assert "seraphine" in reply_a and "winifred" not in reply_a
+    assert "winifred" in reply_b and "seraphine" not in reply_b
 
 
 def test_a_second_send_while_a_turn_holds_the_scene_is_refused(live_server):
