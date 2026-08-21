@@ -101,7 +101,7 @@ def test_get_refuses_a_run_id_from_another_subject():
 def test_reap_drops_terminal_runs_past_the_window_and_keeps_live_ones():
     r = runs.RunRegistry()
     done, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
-    done.finish("landed", at=1000.0)
+    done.finish("landed", at=1000.0, monotonic_at=1000.0)
     live, _ = r.start_or_existing(OTHER, "turn", "chat", "a2", "ident", LABELS)
     assert r.reap(now=1000.0 + runs.REAP_SECONDS + 1) == 1
     assert r.get(done.id, SCENE) is None
@@ -114,7 +114,7 @@ def test_reaping_clears_every_index_not_just_the_run_table():
     permanently -- neither is visible through `get`."""
     r = runs.RunRegistry()
     done, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
-    done.finish("landed", at=1000.0)
+    done.finish("landed", at=1000.0, monotonic_at=1000.0)
     assert r.reap(now=1000.0 + runs.REAP_SECONDS + 1) == 1
 
     assert r.for_subject(SCENE) == []
@@ -223,3 +223,37 @@ def test_the_event_factory_is_injectable_for_the_portal():
     run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
     assert len(made) == 2                       # ready and terminal
     assert run.ready is not None and run.terminal is not None
+
+
+def test_expiry_survives_a_wall_clock_jump():
+    """A phone that corrects a stale clock on reconnect moves wall time by
+    minutes or more. Measuring the retention window against it would reap a run
+    that just finished -- destroying the reconnect window this feature exists
+    to provide -- or, on a backward correction, keep every run's frames far
+    longer than intended."""
+    r = runs.RunRegistry()
+    fresh, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    # Finished a moment ago by the monotonic clock, but stamped as if the wall
+    # clock had since jumped an hour forward.
+    fresh.finish("landed", at=1000.0, monotonic_at=r._now())
+    assert r.reap(now=r._now() + 1) == 0, "a just-finished run was reaped"
+    assert r.get(fresh.id, SCENE) is fresh
+
+
+def test_get_refuses_a_recycled_sid_when_the_identity_moved():
+    """A scene deleted and replaced inside the retention window lands on the
+    same `sid`, so the subject alone says the replacement owns the dead scene's
+    run -- and the stream and cancel routes all resolve through here."""
+    r = runs.RunRegistry()
+    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-old", LABELS)
+    assert r.get(run.id, SCENE, identity="ident-old") is run
+    assert r.get(run.id, SCENE, identity="ident-new") is None
+    # No identity asked for: unchanged behaviour, for subjects that have none.
+    assert r.get(run.id, SCENE) is run
+
+
+def test_for_subject_filters_by_identity_too():
+    r = runs.RunRegistry()
+    old, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-old", LABELS)
+    assert r.for_subject(SCENE, identity="ident-new") == []
+    assert r.for_subject(SCENE, identity="ident-old") == [old]

@@ -313,3 +313,63 @@ def test_a_legacy_identity_that_is_not_a_token_is_replaced(tmp_path, monkeypatch
     got = store.scenes.ensure_identity(cid, sid)
     assert len(got) == 32 and all(c in "0123456789abcdef" for c in got)
     assert store.scenes.scene_identity(cid, sid) == got
+
+
+def test_backfill_preserves_crlf_line_endings(tmp_path, monkeypatch):
+    """`Path.read_text` performs universal-newline translation, so a CRLF scene
+    comes back with every `\\r\\n` already collapsed and `atomic.write_text`
+    publishes the normalized copy. The backfill touches every file in the
+    library unprompted, so it has to work in bytes."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    sid = store.scenes.create_scene(cid, "Mara")
+    p = store.scenes.paths._scene_path(cid, sid)
+    p.write_bytes(b"---\r\ntitle: Mara\r\n---\r\n\r\n**Mara:** hello\r\n")
+
+    migrations.backfill_scene_identities()
+
+    raw = p.read_bytes()
+    assert b"\r\n" in raw, "CRLF was normalized away"
+    assert raw.count(b"\n") == raw.count(b"\r\n"), "line endings became mixed"
+    assert b"identity:" in raw
+
+
+def test_one_corrupt_scene_does_not_abort_startup(tmp_path, monkeypatch, caplog):
+    """`list_scenes` reads frontmatter as UTF-8 and raises on bytes that are
+    not. `_lifespan` catches only StoreBusy, so before this a single unreadable
+    scene in the user's library stopped the app from booting -- every launch,
+    with no way back except finding and deleting the file."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    good = store.scenes.create_scene(cid, "Mara")
+    _strip_identity_from_disk(cid, good)
+    bad = store.scenes.paths._scenes_dir(cid) / "0002--broken.md"
+    bad.write_bytes(b"---\ntitle: \xff\xfe\n---\n\nbody\n")
+
+    with caplog.at_level(logging.WARNING):
+        migrations.backfill_scene_identities()          # must not raise
+
+    assert store.scenes.scene_identity(cid, good), "the readable scene was skipped"
+
+
+def test_a_duplicated_identity_is_re_minted(tmp_path, monkeypatch):
+    """Two scenes carrying the same token make the reverse lookup return
+    whichever file sorts first, so a notification for one opens the other."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    a = store.scenes.create_scene(cid, "Mara")
+    b = store.scenes.create_scene(cid, "Winifred")
+    shared = store.scenes.scene_identity(cid, a)
+    pb = store.scenes.paths._scene_path(cid, b)
+    pb.write_text(
+        pb.read_text(encoding="utf-8").replace(
+            f"identity: {store.scenes.scene_identity(cid, b)}", f"identity: {shared}"),
+        encoding="utf-8")
+    assert store.scenes.scene_identity(cid, b) == shared     # precondition
+
+    migrations.backfill_scene_identities()
+
+    ia, ib = store.scenes.scene_identity(cid, a), store.scenes.scene_identity(cid, b)
+    assert ia and ib and ia != ib
+    assert store.scenes.find_by_identity(cid, ia) == a
+    assert store.scenes.find_by_identity(cid, ib) == b

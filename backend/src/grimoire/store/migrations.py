@@ -26,7 +26,7 @@ from .frontmatter import parse_frontmatter
 from .paths import home, safe_id, slugify, uniquify
 from .scenes import identity as scenes_identity
 from .scenes import lifecycle as scenes_lifecycle
-from .scenes import read as scenes_read
+from .scenes import paths as scenes_paths
 
 _log = logging.getLogger(__name__)
 
@@ -68,15 +68,38 @@ def _backfill_campaign(cid: str) -> None:
     `_migrate_campaign` -- a second backend serving this campaign must not be
     read-modify-writing the same scene files underneath us."""
     with locks.campaign_lock(cid):
-        for meta in scenes_read.list_scenes(cid):
+        seen: set[str] = set()
+        for sid in _scene_ids(cid):
             # Check with the head-only read before calling `ensure_identity`,
-            # which parses the whole file. This runs at every startup for the
+            # which reads the whole file. This runs at every startup for the
             # life of the install, and after the first pass every scene already
             # has one -- so without this precheck the steady state is reading
             # every transcript in the library, in full, on every boot.
-            # `list_scenes` avoids the body for the same reason.
-            if scenes_identity.scene_identity(cid, meta["id"]) is None:
-                scenes_identity.ensure_identity(cid, meta["id"])
+            token = scenes_identity.scene_identity(cid, sid)
+            if token is None:
+                token = scenes_identity.ensure_identity(cid, sid)
+            elif token in seen:
+                # Two scenes carrying the same token: the reverse lookup would
+                # answer with whichever file sorts first, so a notification for
+                # one would open the other. Re-mint the later one.
+                token = scenes_identity.ensure_identity(cid, sid, replace=True)
+            seen.add(token)
+
+
+def _scene_ids(cid: str) -> list[str]:
+    """Scene ids by filename, without parsing anything.
+
+    Deliberately not `list_scenes`: that reads each file's frontmatter as UTF-8
+    and raises on bytes that are not, and this runs at STARTUP -- where
+    `_lifespan` catches only StoreBusy, so one unreadable scene in the user's
+    library would stop the app booting at all, every launch, with no way back
+    except finding and deleting the file. Enumerating names cannot fail that
+    way, and `ensure_identity` is tolerant of a file it cannot read.
+    """
+    d = scenes_paths._scenes_dir(cid)
+    if not d.exists():
+        return []
+    return sorted(p.stem for p in d.glob("*.md") if safe_id(p.stem))
 
 
 def _migrate_campaign(cid: str) -> None:
