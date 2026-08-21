@@ -311,8 +311,16 @@ held at `:492`:
 Leaving it set through the reply is what makes regenerate work — the durability
 requirement that sent this to frontmatter in the first place. `post_regenerate`
 parks the trailing reply and streams a fresh one without appending a user post,
-so the still-set flag applies and the re-roll wraps too. It clears on the next
-ordinary send, which is the player saying they are still playing.
+and `post_retry` likewise; the still-set flag applies, so both re-roll a
+wrap-up rather than silently reverting to a mid-scene reply. It clears on the
+next ordinary send, which is the player saying they are still playing.
+
+**The clear must also run on the ephemeral path.** An empty "next NPC round"
+send carries no `/end` and so must clear the flag — but it takes the
+`ephemeral` branch, which today performs no scene write of its own. Clearing
+only where a post is appended would leave a wrap-up scene stuck wrapping every
+subsequent NPC round. The clear therefore hangs off the send, not off the
+append, inside the campaign-lock hold at `:492`.
 
 Two accepted losses, both stated rather than solved: a turn that errors clears
 a flag that a *previous* `/end` may have set, and a rewind clears it
