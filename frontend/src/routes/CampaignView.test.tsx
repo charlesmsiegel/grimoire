@@ -1218,6 +1218,24 @@ test("a Stop that cannot reach the server does not settle the turn", async () =>
   expect(await screen.findByText(/may still be generating/i)).toBeInTheDocument();
 });
 
+test("Stop that runs out of rounds leaves the turn unsettled", async () => {
+  // A provider still stuck after the last round is not a stopped one. Resolving
+  // there settles the turn on a guess: the backend still holds the scene, Send
+  // comes back, and the next turn is refused with `run_in_flight`. Exhaustion
+  // is an unconfirmed cancellation and takes the same path as one that never
+  // reached the server at all.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(hangingChat());
+  (api.cancelAttempt as any).mockResolvedValue(
+    { run: { id: "r", attempt_id: "a", state: "running", next_index: 0 } });
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+
+  expect(await screen.findByText(/may still be generating/i)).toBeInTheDocument();
+});
+
 test("Stop keeps asking while the server says the run is still unwinding", async () => {
   // The cancel route waits for the run, but that wait is bounded (30s) and can
   // answer while it is still `running`. Reading that as "it is over" put Send
