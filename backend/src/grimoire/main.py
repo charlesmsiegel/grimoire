@@ -143,7 +143,7 @@ async def _lifespan(app: FastAPI):
     # visible in the log.
     log = logging.getLogger(__name__)
     for step in (migrations.migrate_scene_ids, migrations.bake_char_macros,
-                 module_edit.recover):
+                 migrations.backfill_scene_identities, module_edit.recover):
         try:
             step()
         except locks.StoreBusy as exc:

@@ -166,6 +166,12 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     "store.scenes.write",
     "store.scenes.moment",
     "store.scenes.lifecycle",
+    # `ensure_identity` is a read-modify-write of a whole scene file like every
+    # other mutator in the package, and wears the same `@locking._serialized`.
+    # Two unserialized callers would each mint an identity and one would win,
+    # handing the loser a token that no longer matches what is on disk -- which
+    # is the publish fence failing open in exactly the case it exists for.
+    "store.scenes.identity",
     # `commitments.json` is rewritten whole by `set_movement` and
     # `repoint_scenes`, exactly like `plot.json` -- but this module is new
     # (#115), so it starts inside the exclusion rather than joining the
