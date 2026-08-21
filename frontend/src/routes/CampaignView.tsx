@@ -2730,6 +2730,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       for (let tries = 0; state === "running" && tries < STOP_POLLS; tries++) {
         state = (await api.cancelAttempt(from, sid, attempt)).run?.state;
       }
+      if (state === "running") {
+        // Out of rounds with the run still going. Resolving here would settle
+        // the turn on a guess: the backend still holds the scene, so Send comes
+        // back and the next turn is refused. Exhaustion is an UNCONFIRMED
+        // cancellation, which is the same answer as one that never arrived --
+        // and it takes the same path below.
+        throw new Error("the run did not stop");
+      }
     } catch {
       // The cancel never reached the server -- connectivity dropped as the
       // phone was backgrounded, most likely. Swallowing this and settling would
