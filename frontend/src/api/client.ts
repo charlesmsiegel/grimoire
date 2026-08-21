@@ -1012,8 +1012,12 @@ export const api = {
   availableGreetings: (cid: string, after?: string) =>
     request<Availability[]>("GET",
       `/api/campaigns/${cid}/greetings/available${after ? `?after=${encodeURIComponent(after)}` : ""}`),
-  startFromGreeting: (cid: string, sid: string, greeting: string) =>
-    request<{ ok: boolean; id: string }>("POST", `/api/campaigns/${cid}/scenes/${sid}/start-from-greeting`, { greeting }),
+  /** `seedLocation` false means the caller has already decided this scene's
+   *  location (including deciding it has none), so the greeting's own must not
+   *  be seeded over that — see StartFromGreeting.seed_location (#218). */
+  startFromGreeting: (cid: string, sid: string, greeting: string, seedLocation = true) =>
+    request<{ ok: boolean; id: string }>("POST", `/api/campaigns/${cid}/scenes/${sid}/start-from-greeting`,
+                                         { greeting, seed_location: seedLocation }),
   getSceneLocation: (cid: string, sid: string) =>
     request<SceneLocation>("GET", `/api/campaigns/${cid}/scenes/${sid}/location`),
   setSceneLocation: (cid: string, sid: string, location: string) =>

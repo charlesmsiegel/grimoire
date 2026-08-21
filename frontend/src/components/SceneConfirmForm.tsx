@@ -283,7 +283,12 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
     //    scene goes; anything after has, so nothing does.
     if (draft.source === "greeting" && firstPost === "greeting") {
       try {
-        const r = await api.startFromGreeting(cid, sid, draft.gid);
+        // `false`: this pane owns the location. Its picker is pre-filled from
+        // the greeting, so whatever sits in it at Create is the reader's
+        // answer -- and an empty one means they cleared it, not that nobody
+        // looked. Letting the server seed would put the greeting's location
+        // back on a scene they deliberately emptied (#218).
+        const r = await api.startFromGreeting(cid, sid, draft.gid, false);
         sid = r.id;
       } catch (err: any) {
         if (live.current) { setError(await deleteAndReport(sid, errorText(err))); setWriting(false); }

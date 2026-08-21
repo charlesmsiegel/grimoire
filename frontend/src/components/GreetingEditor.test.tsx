@@ -782,3 +782,21 @@ test("a location the picker cannot offer is shown rather than silently blanked",
   expect(select.value).toBe("the-drowned-library");
   expect(within(select).getByText(/the-drowned-library \(missing\)/)).toBeInTheDocument();
 });
+
+test("a failed locations read shows the stored id without calling it missing", async () => {
+  // An empty list means three different things -- not read yet, read and
+  // failed, read and there are none -- and only the last is evidence about
+  // this greeting's location. Saying "missing" on the others invents a fact.
+  (api.listEntities as any).mockRejectedValue(new Error("offline"));
+  withLocation("counting-house");
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Open"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+
+  const select = await screen.findByLabelText<HTMLSelectElement>("Location");
+  expect(select.value).toBe("counting-house");
+  expect(within(select).getByText("counting-house")).toBeInTheDocument();
+  expect(within(select).queryByText(/missing/)).toBeNull();
+});

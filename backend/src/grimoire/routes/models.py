@@ -624,6 +624,13 @@ class ImportGreetings(BaseModel):
 
 class StartFromGreeting(BaseModel):
     greeting: str
+    # Whether the greeting's own location should seed a scene that has none
+    # (#218). The confirm pane sets this false: it pre-fills its location picker
+    # from the greeting and applies whatever the reader leaves there, so an
+    # empty scene means the reader CHOSE none -- seeding over that would put the
+    # greeting's location back on a scene they deliberately cleared. Every other
+    # caller has made no location decision at all, and gets the greeting's.
+    seed_location: bool = True
 
 
 class Opener(BaseModel):

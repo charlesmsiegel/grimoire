@@ -134,6 +134,10 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
     if (!committed) return;
     setError(null);
     try {
+      // No `seedLocation` argument, unlike SceneConfirmForm's call: this step
+      // has no location picker, so nothing here has decided where the opening
+      // scene is and the greeting's own location is the only answer available
+      // (#218). The default is load-bearing -- do not "tidy" it away.
       await api.startFromGreeting(committed.cid, committed.sid, gid);
       navigate(`/campaigns/${committed.cid}`);
     } catch (err: unknown) {

@@ -17,6 +17,11 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
   const [greetings, setGreetings] = useState<Greeting[]>([]);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [locations, setLocations] = useState<EntitySummary[]>([]);
+  // Whether that read has come back CLEANLY. An empty list means three
+  // different things -- not read yet, read and failed, read and there are
+  // none -- and only the third licenses telling the reader their greeting's
+  // location is missing.
+  const [locationsRead, setLocationsRead] = useState(false);
   const [tags, setTags] = useState<Record<string, string>>({});
   const [gid, setGid] = useState<string | null>(null); // null = new
   const [form, setForm] = useState(BLANK);
@@ -57,7 +62,10 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
     // locations are neither. A failed read leaves the picker empty and the
     // stored id still renders as its raw slug, which is the same thing a
     // deleted location does.
-    api.listEntities(scope, "locations").then(setLocations).catch(() => setLocations([]));
+    setLocationsRead(false);
+    api.listEntities(scope, "locations")
+      .then((ls) => { setLocations(ls); setLocationsRead(true); })
+      .catch(() => setLocations([]));
     if (worldScope) api.listUntaggedImages(wid).then(setUntagged).catch(() => setUntagged([]));
     // The rail filters describe THIS scope's list and must not survive into the
     // next one: this component is reused across a scope change, so a search and
@@ -465,14 +473,17 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
                     onChange={(e) => setForm({ ...form, location: e.target.value })}>
               <option value="">— no location —</option>
               {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-              {/* A stored id the list does not offer — deleted since, or a
-                  failed read. Without this the controlled select renders
-                  blank, which claims the greeting has no location while the
-                  field still holds one, and the next save would silently
-                  carry it through. Shown as itself, so it can be seen and
-                  cleared. */}
+              {/* A stored id the list does not offer. Without this the
+                  controlled select renders blank, which claims the greeting
+                  has no location while the field still holds one, and the next
+                  save would silently carry it through. Shown as itself, so it
+                  can be seen and cleared — but called "missing" only once the
+                  list has actually come back, because until then its absence
+                  says nothing about the location. */}
               {form.location && !locations.some((l) => l.id === form.location) && (
-                <option value={form.location}>{form.location} (missing)</option>
+                <option value={form.location}>
+                  {locationsRead ? `${form.location} (missing)` : form.location}
+                </option>
               )}
             </select>
           </Field>

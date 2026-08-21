@@ -4951,6 +4951,15 @@ def test_greeting_location_roundtrips_and_seeds_the_scene(client):
                       json={"greeting": gid}).json()["id"]
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/location").json()["current"]["id"] == loc
 
+    # a caller that owns the location decision opts out, and is taken at its word
+    sid2 = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Second"}).json()["id"]
+    gid2 = client.post(f"/api/worlds/{wid}/greetings",
+                       json={"name": "Elsewhere", "character": "mara", "version": "default",
+                             "body": "Later.", "location": loc}).json()["id"]
+    sid2 = client.post(f"/api/campaigns/{cid}/scenes/{sid2}/start-from-greeting",
+                       json={"greeting": gid2, "seed_location": False}).json()["id"]
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid2}/location").json()["current"] is None
+
     # and the field is editable after the fact, in both scopes
     rev = client.get(f"/api/worlds/{wid}/greetings/{gid}").json()["rev"]
     assert client.put(f"/api/worlds/{wid}/greetings/{gid}",

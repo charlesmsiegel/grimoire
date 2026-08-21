@@ -1,8 +1,9 @@
 """World greeting objects + the plot map.
 
 A greeting is a markdown file under <world>/greetings/<gid>.md that references a
-character + version and carries scalar gating attributes. The directed plot-map
-edges (leads_to / excludes) are nested data, so they live in <world>/plotmap.json
+character + version, the cast present at the opener and the location the scene
+opens at, and carries scalar gating attributes. The directed plot-map edges
+(leads_to / excludes) are nested data, so they live in <world>/plotmap.json
 keyed by greeting id.
 """
 

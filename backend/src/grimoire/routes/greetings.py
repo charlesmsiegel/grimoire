@@ -314,7 +314,8 @@ def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting, reques
         # cast and writes the greeting as the opener, and can RENAME the scene
         # while doing it.
         with runs.scene_held_free(request.app, cid, sid):
-            new_sid = store.playing.start_from_greeting(cid, sid, body.greeting)
+            new_sid = store.playing.start_from_greeting(cid, sid, body.greeting,
+                                                        seed_location=body.seed_location)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     except (store.playing.PlayError, store.appearances.AppearError) as exc:
