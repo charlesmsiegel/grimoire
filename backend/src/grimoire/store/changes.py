@@ -52,9 +52,23 @@ def line_diff(before: str, after: str) -> list[dict]:
     SequenceMatcher goes quadratic on the same repetitive input. Measured, one
     edit in 10,000 identical lines: 13.7s. Trimming instead answers the same
     case in 0.011s AND exactly, because a one-line edit leaves a one-line
-    middle. `EXACT_DIFF_LIMIT` covers what trimming cannot -- two long spans
-    that genuinely differ throughout -- by handing those back to the heuristic,
-    where an imprecise diff of two texts with nothing in common is no loss.
+    middle. `EXACT_DIFF_LIMIT` covers what trimming cannot, by handing those
+    back to the heuristic.
+
+    The fallback's cost, stated rather than implied, because the obvious claim
+    for it ("an imprecise diff of two texts with nothing in common is no loss")
+    is not true in every case and review was right to say so. Above the limit,
+    a middle whose lines are mostly DUPLICATES of each other is reported as one
+    full-span replacement rather than as the few edits it contains: nothing can
+    anchor, so 4000 identical lines with both ends edited come back as 4002
+    deletions and 4002 insertions. What saves this in practice is that the
+    heuristic only bites on duplicate-dominated content, and real sections are
+    not -- a 5000-line transcript with its front trimmed and an exchange
+    appended reports 40 deletions and 2 insertions, and a 4000-entry fact list
+    with both ends edited reports 2 and 2 (`test_changes_store.py` holds all
+    three). Fixing the remaining case needs a different algorithm -- collapsing
+    runs of identical consecutive lines before diffing would do it -- which is
+    more machinery than this helper has earned.
     """
     a, b = before.splitlines(), after.splitlines()
     head = 0
