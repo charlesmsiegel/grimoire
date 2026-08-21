@@ -19,6 +19,15 @@ those ports and never let a verification backend default to `~/.grimoire`.
    `data: [DONE]`. A working copy lives in past session scratchpads as
    `verify_launcher.py`.
 
+   **Three URLs, not one.** `API_URL` is generation; `MODELS_URL` is the model
+   catalog the pickers list (#149) and `KEY_URL` is what "Test connection"
+   asks (#146). All three are module globals read at call time, so patch each
+   — leave one and the launcher reaches the real openrouter.ai the moment
+   somebody opens the Connections page. `{"data": [...]}` answers the first
+   (entries want `id`, and may carry `name`, `context_length`, `pricing`) and
+   any 200 answers the second; a 401 from it is how you drive the failing
+   half of the status dot.
+
    **Take the reply bodies from the test cassette**, don't invent new ones:
    `backend/tests/fixtures/llm/campaign_flow.json` already covers every prompt
    the app sends (scene turn, absorb, audit, dossier, voice, suggestions,

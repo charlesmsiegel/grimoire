@@ -22,6 +22,7 @@ vi.mock("../components/PostImagePicker", async () =>
   (await import("../testkit/campaignMocks")).componentStubs.PostImagePicker());
 vi.mock("../api/models", () => ({ getModels: vi.fn() }));
 import { api, ApiError } from "../api/client";
+import { onConfigChanged } from "../appEvents";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import {
   here, Here, installCampaignMocks, ONE_SCENE, openScene, playRoutes,
@@ -2423,6 +2424,46 @@ test("a remembered reroll does not follow the player to another scene", async ()
   await waitFor(() => expect(api.retry).toHaveBeenCalled());
   expect((api.retry as any).mock.calls[0][1]).toBe("s2");   // this scene
   expect(api.regenerate).toHaveBeenCalledTimes(1);          // not s1's reroll again
+});
+
+test("a turn that the provider refused tells the shell its status is stale", async () => {
+  // The server records what a provider did as it happens (#146), but a turn
+  // fails over SSE — it never passes through the api client's rejection path,
+  // where every other provider call raises this. Without it the status dot
+  // keeps saying "connected" until the reader navigates somewhere.
+  const seen: string[] = [];
+  const off = onConfigChanged(() => seen.push("config"));
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => {
+      onEvent({ error: { detail: "No auth credentials found", kind: "auth" } });
+    });
+  renderCampaign();
+  await screen.findByRole("textbox");
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "onward" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+
+  await screen.findByText(/No auth credentials found/);
+  expect(seen).toEqual(["config"]);
+  off();
+});
+
+test("a turn that failed for a reason of ours leaves the status alone", async () => {
+  // A scene that is busy, a stale write, a 404 — none of them are a statement
+  // about the provider, and re-reading the config over one is noise.
+  const seen: string[] = [];
+  const off = onConfigChanged(() => seen.push("config"));
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => {
+      onEvent({ error: { detail: "that scene is busy", kind: "scene_busy" } });
+    });
+  renderCampaign();
+  await screen.findByRole("textbox");
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "onward" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+
+  await screen.findByText(/that scene is busy/);
+  expect(seen).toEqual([]);
+  off();
 });
 
 test("End scene stays disabled while the cancelled turn's flush is still coming", async () => {

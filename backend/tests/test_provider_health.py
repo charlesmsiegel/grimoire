@@ -8,6 +8,7 @@ structure and needs no app; the observer is a facade concern and needs a real
 neither, because by the time they run the verdict is already a dict.
 """
 
+import asyncio
 import importlib
 
 import pytest
@@ -243,6 +244,23 @@ def test_check_short_circuits_a_connection_with_no_credential(client):
     assert fake.checked == []
 
 
+def test_a_check_that_never_answers_becomes_a_verdict_rather_than_a_held_request(client):
+    """The HTTP probes carry their own bound, but the Claude path is a
+    subprocess with no client to configure — and an unbounded check is the one
+    that hangs on exactly the connection the reader already suspects."""
+    class _NeverAnswers(FakeCatalog):
+        async def check(self, conn):
+            await asyncio.sleep(30)      # bounded, so a regression fails fast
+
+    store.write_config(llm_call_budget="0.05")
+    stalled = _NeverAnswers()
+    client.app.dependency_overrides[routes.get_llm] = lambda: stalled
+
+    r = client.post("/api/llm-connections/claude/health")
+
+    assert (r.status_code, r.json()["ok"], r.json()["kind"]) == (200, False, "timeout")
+
+
 def test_check_404s_for_a_connection_that_does_not_exist(client):
     assert client.post("/api/llm-connections/nope/health").status_code == 404
 
@@ -311,6 +329,21 @@ def test_a_connections_detail_carries_its_own_verdict(client):
     assert client.get(f"/api/llm-connections/{cid}").json()["health"]["kind"] == "network"
     # ...and the connection nobody checked is still unknown, not inheriting it
     assert client.get("/api/llm-connections/openrouter").json()["health"]["state"] == "unknown"
+
+
+def test_the_connection_list_carries_each_ones_verdict(client):
+    """The two places a reader picks between connections — the Connections rail
+    and the Configuration page's select — both have a list and neither has a
+    detail, and "key set" is the claim #146 exists to qualify."""
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeCatalog(health_error=LLMError("auth", "bad key"))
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-dead"})
+    client.post("/api/llm-connections/openrouter/health")
+
+    listed = {c["id"]: c["health"]["state"] for c in client.get("/api/llm-connections").json()}
+
+    assert listed["openrouter"] == "error"
+    assert listed["claude"] == "unknown"
 
 
 def test_editing_a_connection_clears_the_verdict_its_old_settings_earned(client):

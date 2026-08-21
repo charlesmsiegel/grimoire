@@ -1,6 +1,7 @@
 import { parseSSEChunk, type ChatEvent, type LocalizeEvent, type ChubGalleryEvent,
   type RunHandle, type TaglineBatchEvent } from "./stream";
 import { campaignsChanged, configChanged } from "../appEvents";
+import { isProviderFailure } from "./errors";
 import { encodeSegment } from "../urlSegment";
 // `errorText` and `isOffline` used to live here, next to `ApiError`. They are
 // in `./errors` now — a leaf with no imports of its own, for the reason its
@@ -96,7 +97,16 @@ async function requestRaw<T>(method: string, path: string, body?: unknown,
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, data.detail ?? res.statusText, data.kind, data);
+    const err = new ApiError(res.status, data.detail ?? res.statusText, data.kind, data);
+    // A provider that just refused us has changed what the status bar is
+    // claiming about it (#146). The server recorded the failure as it
+    // happened; this is what makes the client go and read it, rather than
+    // showing yesterday's verdict until the next navigation.
+    if (isProviderFailure(err)) {
+      invalidateConfigCache();
+      configChanged();
+    }
+    throw err;
   }
   return res.json() as Promise<T>;
 }

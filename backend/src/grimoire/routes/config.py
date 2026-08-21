@@ -12,6 +12,7 @@ from ..llm import LLMClient
 from ..llm_errors import LLMError
 from . import runs
 from .common import (
+    _bounded_call,
     _connection_problem,
     _dump,
     _llm_http_error,
@@ -347,8 +348,14 @@ def _with_effective(conn: dict) -> dict:
 
 
 @router.get("/llm-connections")
-def get_connections():
-    return [_with_effective(c) for c in store.llm_connections.list_connections()]
+def get_connections(registry: health.ProviderHealth = Depends(get_health)):
+    # Each entry carries what its provider last did (#146). On the list rather
+    # than only on the detail read because the two places a reader chooses
+    # between connections -- the Connections rail and the Configuration page's
+    # picker -- both have a list and neither has a detail, and "key set" is
+    # exactly the claim #146 is about.
+    return [{**_with_effective(conn), "health": registry.status(conn["id"])}
+            for conn in store.llm_connections.list_connections()]
 
 
 @router.post("/llm-connections")
@@ -486,7 +493,13 @@ async def post_connection_health(
     if problem is not None:
         return _health_body(registry.record(conn, LLMError("missing_key", problem)))
     try:
-        await client.check(conn)
+        # Under the same total-duration ceiling the one-shot generation routes
+        # take (#272). The HTTP probes carry a tighter bound of their own, but
+        # the Claude path is a subprocess with no httpx client to configure —
+        # and an unbounded check is the one that holds a request open forever
+        # on exactly the connection the reader already suspects. An overrun
+        # arrives as `timeout`, which is a health verdict like any other.
+        await _bounded_call(client.check(conn))
     except LLMError as exc:
         return _health_body(registry.record(conn, exc))
     return _health_body(registry.record(conn))
