@@ -45,8 +45,6 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
-import shutil
-import uuid
 import zipfile
 from pathlib import Path
 
@@ -238,10 +236,12 @@ def import_bundle(path: Path) -> str:
                              max_uncompressed=MAX_UNCOMPRESSED, err=BundleError)
         manifest = _read_manifest(z, infos)
         members = _world_members(infos)
-        base = worlds_staging.staging_root() / uuid.uuid4().hex
-        try:
-            staging = base / WORLD_PREFIX
-            staging.mkdir(parents=True)
+        # The work directory is the context manager's to name and to remove.
+        # It used to be this function's, held in the same name as the world's
+        # slug -- which the slug then overwrote, so the cleanup `rmtree`'d a
+        # bare relative name against the process working directory and the
+        # staging tree leaked on every import (see `worlds.staging`).
+        with worlds_staging.staging_tree() as staging:
             ziputil.extract(z, members, staging, strip=1, err=BundleError)
             base = slugify(_world_name(staging, manifest))
             wid = uniquify(base, lambda c: worlds_paths.world_root(c).exists())
@@ -254,5 +254,3 @@ def import_bundle(path: Path) -> str:
                 # keep one exception family to catch, and the route keeps
                 # answering 409 for it.
                 raise BundleConflict(str(e)) from e
-        finally:
-            shutil.rmtree(base, ignore_errors=True)

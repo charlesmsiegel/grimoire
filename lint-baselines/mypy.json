@@ -262,9 +262,5 @@
     "misc": 2,
     "operator": 8,
     "type-var": 1
-  },
-  "backend/src/grimoire/store/world_bundle.py": {
-    "arg-type": 2,
-    "assignment": 1
   }
 }
