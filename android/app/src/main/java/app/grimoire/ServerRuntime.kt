@@ -62,6 +62,20 @@ object ServerRuntime {
     @Volatile
     var runs: RunCallback? = null
 
+    /**
+     * Whether the activity is resumed -- set by `MainActivity`'s lifecycle.
+     *
+     * Read by `RunNotifier` to skip the COMPLETION notification while the
+     * player is already watching. Not the ongoing one: that is what holds the
+     * process, and it has to be posted whether or not anyone is looking.
+     *
+     * On the runtime rather than the activity because the activity is exactly
+     * what may not exist, and a null check on an activity reference cannot tell
+     * "gone" from "backgrounded".
+     */
+    @Volatile
+    var foreground: Boolean = false
+
     private val portListeners = mutableListOf<(Int) -> Unit>()
     private val failureListeners = mutableListOf<(String) -> Unit>()
     private var started = false

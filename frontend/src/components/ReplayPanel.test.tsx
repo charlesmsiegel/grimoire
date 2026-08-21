@@ -1,6 +1,8 @@
 import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ReplayPanel } from "./ReplayPanel";
+import { RunRegistryProvider, useRunRegistry, type RunRegistry }
+  from "../runs/RunRegistryProvider";
 
 vi.mock("../api/client", () => ({
   api: {
@@ -281,4 +283,41 @@ test("a request that outlives the panel tells nobody its transcript moved", asyn
   unmount();
   await act(async () => { land(); });
   expect(onChanged).not.toHaveBeenCalled();
+});
+
+test("a replayed turn is recorded in the run registry before it is sent", async () => {
+  // `/replay/turn` and `/regenerate` are detached server-side, so a WebView
+  // suspended mid-walk leaves the backend generating while `guard` releases
+  // this panel's latch: nothing can cancel that run, nothing reattaches when
+  // the tab comes back, `refresh()` is never reached, and the panel shows
+  // replay state that is stale until a manual reload (codex, P2).
+  //
+  // Registered BEFORE the request, like every other producer: the window worth
+  // recovering from is the one where the server accepted the work and no frame
+  // ever came back.
+  const seen: { attempt: string | null } = { attempt: null };
+  (api.getReplay as any).mockResolvedValue(SESSION);
+  (api.replayTurn as any).mockImplementation(
+    async (_c: string, _s: string, _on: unknown, _sig: unknown, attempt: string) => {
+      // Asked DURING the request, which is the whole point: a record written
+      // after the stream returns is written after the window it is for.
+      seen.attempt = registry.pending("c1", "s1")?.attempt ?? null;
+      expect(attempt).toBe(seen.attempt);
+    });
+
+  let registry!: RunRegistry;
+  function Probe() { registry = useRunRegistry(); return null; }
+  render(
+    <RunRegistryProvider>
+      <Probe />
+      <MemoryRouter>
+        <ReplayPanel cid="c1" sid="s1" startAt={null} onStartHandled={noop}
+                     onChanged={noop} onForked={noop} />
+      </MemoryRouter>
+    </RunRegistryProvider>);
+  await act(async () => {});
+  fireEvent.click(screen.getByText("Replay next turn"));
+
+  await waitFor(() => expect(api.replayTurn).toHaveBeenCalled());
+  expect(seen.attempt, "no attempt was recorded before the request").not.toBeNull();
 });

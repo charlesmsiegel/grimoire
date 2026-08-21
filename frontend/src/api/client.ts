@@ -596,17 +596,23 @@ export const api = {
       `/api/campaigns/${cid}/scenes/${sid}/run?attempt=${encodeURIComponent(attempt)}`,
       undefined, { fresh: true }),
 
+  // `attempt`/`onIndex` ride every turn producer, not just `chat`. All five are
+  // detached server-side, so a call that omits the attempt lets the server mint
+  // its own -- and then the id this client recorded names a run the server never
+  // had. Stop addresses nothing and recovery asks about an attempt that does not
+  // exist, which is precisely the window the registry was built for (codex, P1).
   retry: (cid: string, sid: string, onEvent: (e: ChatEvent) => void, response?: ResponseOverride,
-          signal?: AbortSignal) =>
+          signal?: AbortSignal, attempt?: string, onIndex?: (i: number) => void) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/retry`,
-               response ? { response } : undefined, onEvent, signal),
+               response ? { response } : undefined, onEvent, signal, attempt, onIndex),
   regenerate: (cid: string, sid: string, onEvent: (e: ChatEvent) => void, guidance?: string,
-               response?: ResponseOverride, signal?: AbortSignal) =>
+               response?: ResponseOverride, signal?: AbortSignal, attempt?: string,
+               onIndex?: (i: number) => void) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/regenerate`,
                (guidance || response)
                  ? { ...(guidance ? { guidance } : {}), ...(response ? { response } : {}) }
                  : undefined,
-               onEvent, signal),
+               onEvent, signal, attempt, onIndex),
 
   // Reroll alternates: every variant of the generation a reroll would replace,
   // `active` being the one the transcript is showing (null once a reroll's
@@ -645,8 +651,10 @@ export const api = {
                     body: { proposal: string; action: "accept" | "decline";
                             check?: string; actor?: string;
                             difficulty?: number; modifier?: number },
-                    onEvent: (e: ChatEvent) => void, signal?: AbortSignal) =>
-    streamPost(`/api/campaigns/${cid}/scenes/${sid}/roll-proposal`, body, onEvent, signal),
+                    onEvent: (e: ChatEvent) => void, signal?: AbortSignal,
+                    attempt?: string, onIndex?: (i: number) => void) =>
+    streamPost(`/api/campaigns/${cid}/scenes/${sid}/roll-proposal`, body, onEvent, signal,
+               attempt, onIndex),
   getSceneChecks: (cid: string, sid: string) =>
     request<{ actors: SceneCheckActor[] }>("GET", `/api/campaigns/${cid}/scenes/${sid}/checks`),
   rollCheck: (cid: string, sid: string,
@@ -1308,8 +1316,9 @@ export const api = {
   // words and then generates one reply against the edited history. Rerolling
   // that reply is plain `regenerate` — it is the trailing run.
   replayTurn: (cid: string, sid: string, onEvent: (e: ChatEvent) => void,
-               signal?: AbortSignal) =>
-    streamPost(`/api/campaigns/${cid}/scenes/${sid}/replay/turn`, undefined, onEvent, signal),
+               signal?: AbortSignal, attempt?: string, onIndex?: (i: number) => void) =>
+    streamPost(`/api/campaigns/${cid}/scenes/${sid}/replay/turn`, undefined, onEvent, signal,
+               attempt, onIndex),
   acceptReplay: (cid: string, sid: string) =>
     request<ReplaySession | null>("POST", `/api/campaigns/${cid}/scenes/${sid}/replay/accept`),
   // `restore` defaults to putting the unreplayed originals back — sent

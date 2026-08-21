@@ -980,3 +980,47 @@ test("the campaign image library's four URLs are the four routes that serve it",
   expect(fetchMock).toHaveBeenLastCalledWith(
     "/api/campaigns/run/images/coastline", expect.objectContaining({ method: "DELETE" }));
 });
+
+// ---- the attempt rides every turn producer, not just `chat` ----
+
+/** Each detached turn route, called with an attempt and an index callback.
+ *
+ *  Written as calls rather than as argument positions on purpose: what broke
+ *  was the trailing arguments quietly not being forwarded, and a test that
+ *  described the signature by index would have been edited to match rather
+ *  than failing.
+ */
+const TURN_PRODUCERS: [string,
+                       (on: (e: unknown) => void, attempt: string,
+                        onIndex: (i: number) => void) => Promise<void>][] = [
+  ["chat", (on, a, oi) => api.chat("c1", "s1", "hi", on, undefined, undefined, a, oi)],
+  ["retry", (on, a, oi) => api.retry("c1", "s1", on, undefined, undefined, a, oi)],
+  ["regenerate",
+   (on, a, oi) => api.regenerate("c1", "s1", on, undefined, undefined, undefined, a, oi)],
+  ["resolveProposal",
+   (on, a, oi) => api.resolveProposal("c1", "s1", { proposal: "pr-1", action: "decline" },
+                                      on, undefined, a, oi)],
+  ["replayTurn", (on, a, oi) => api.replayTurn("c1", "s1", on, undefined, a, oi)],
+];
+
+test.each(TURN_PRODUCERS)(
+  "%s sends its attempt and reports the wire index", async (_name, call) => {
+    // All five routes are detached server-side. One that drops the attempt lets
+    // the server mint its own, so the id the caller recorded names a run that
+    // never existed -- Stop addresses nothing and recovery asks about an
+    // attempt no route ever heard of. Four of the five dropped it (codex, P1).
+    const fetchMock = vi.fn().mockResolvedValue(
+      sseResponse(['id: 4\ndata: {"delta":"The lamps are lit."}\n\n']));
+    // No `as unknown as typeof fetch` here, unlike its neighbours: the ratchet
+    // counts that assertion and this file is already carrying 61 of them.
+    globalThis.fetch = fetchMock;
+    const indexes: number[] = [];
+
+    await call(() => {}, "a-7", (i) => indexes.push(i));
+
+    expect(fetchMock.mock.calls[0][1].headers["X-Grimoire-Attempt"]).toBe("a-7");
+    // and the resume cursor is fed the WIRE index, which is the other half of
+    // the pair -- a producer that forwarded one and not the other would leave
+    // a reattach resuming from zero and replaying the whole reply.
+    expect(indexes).toEqual([4]);
+  });

@@ -144,11 +144,18 @@ streaming handler, but it is a `draft` and Phase 1 leaves draft routes alone.)
 - Every terminal write is **fenced** on that identity under the campaign lock,
   and every route that changes a scene's *shape* is refused with `scene_busy`
   while a turn holds it: rename, delete, message edit, cut, retcon, alternate
-  promotion, replay begin/accept/cancel, a manual roll or check, and a
-  width-crossing create. The check is taken **inside** the campaign-lock hold
-  that covers the mutation — checking first and locking after leaves room for a
-  send to reserve in between. `test_scene_freeze.py` is one case per door,
-  because the guard is applied per call site.
+  promotion, replay begin/accept/cancel, a manual roll or check, every cast
+  route (`appear`/`leave` append a transition line), location and datetime (the
+  first `set_datetime` **renames** the scene), the review save, both greeting
+  routes in `greetings.py`, and a width-crossing create. The check is taken
+  **inside** the campaign-lock hold that covers the mutation — checking first
+  and locking after leaves room for a send to reserve in between.
+  `test_scene_freeze.py` is one case per door, because the guard is applied per
+  call site, and the doors an inventory misses are the ones in another module.
+- **`PUT /config/data-dir` is refused while any run is live**, anywhere
+  (`runs_in_flight`). The frontend registry deliberately lets a turn survive
+  navigation, so the player can now reach Configuration mid-turn; the root is
+  global, so a run in any campaign would be persisted into the wrong tree.
 - `store.attempts` is the durable half: whether a send's post is still in the
   transcript, recorded beside the append and cleared inside the rollback. It is
   what lets recovery after the run record expired ask a question that has a
