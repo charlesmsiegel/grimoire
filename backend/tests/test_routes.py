@@ -32,6 +32,26 @@ from tests.llm_fakes import (  # the shared gateway fakes (#204)
 )
 
 
+def _unfenced_stream(*args, **kw):
+    """`_chat_stream` with the publish fence and the outcome box switched off.
+
+    Both are keyword-only and REQUIRED on the real function, deliberately: a
+    producing route being migrated to detached runs must not be able to forget
+    the fence and quietly keep appending to a scene that recycled its id, nor
+    keep reporting `landed` for a turn that failed. Requiring them is what makes
+    that a loud error instead of a silent one -- and it landed here, on every
+    test that drives `_chat_stream` directly.
+
+    These tests predate the fence and exercise the hooks AROUND it -- what a
+    disconnect, a cancel, or an upstream failure persists -- on scenes nothing
+    else touches, so `identity=None, outcome=None` is the behaviour they mean.
+    Said once, here, and named, so a reader can tell it is a choice rather than
+    an omission. Looked up on the module at call time so monkeypatching
+    `routes.streaming._chat_stream` still works.
+    """
+    return routes.streaming._chat_stream(*args, identity=None, outcome=None, **kw)
+
+
 def _world(client, name="W"):
     return client.post("/api/worlds", json={"name": name}).json()["id"]
 
@@ -3214,7 +3234,7 @@ async def test_a_disconnect_mid_turn_still_persists_what_arrived(monkeypatch, tm
     LLMError — so the handler that saves partial replies never ran and the text
     was dropped silently."""
     cid, sid, _at = _scene_with_a_pending_post(tmp_path, monkeypatch)
-    resp = routes.streaming._chat_stream(
+    resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
         StallingOpenRouter(["The tide ", "turns."]))
     frames = resp.body_iterator
@@ -3230,7 +3250,7 @@ async def test_a_cancelled_turn_keeps_the_post_it_could_not_answer(monkeypatch, 
     so the post stays put even though nothing came back. The rollback below is
     reserved for turns that failed."""
     cid, sid, at = _scene_with_a_pending_post(tmp_path, monkeypatch)
-    resp = routes.streaming._chat_stream(
+    resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
         # One empty frame, so the generator is suspended on a heartbeat yield
         # when the close arrives. Two ways this test can pass without testing
@@ -3255,7 +3275,7 @@ async def test_a_cancelled_turn_drops_its_partial_once_a_newer_turn_owns_the_tai
     question it never answered, and a closed fence would mint a proposal that
     displaces the live one. Losing the partial is the cheaper outcome."""
     cid, sid, _at = _scene_with_a_pending_post(tmp_path, monkeypatch)
-    resp = routes.streaming._chat_stream(
+    resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
         StallingOpenRouter(["The tide ", "turns."]))
     frames = resp.body_iterator
@@ -3277,12 +3297,12 @@ async def test_a_cancelled_turn_drops_its_partial_when_a_newer_turn_appended_not
     cid, sid, _at = _scene_with_a_pending_post(tmp_path, monkeypatch)
     msgs = [{"role": "user", "content": "and then?"}]
     conn = {"kind": "openrouter", "model": "m"}
-    older = routes.streaming._chat_stream(       # a retry, appending nothing
+    older = _unfenced_stream(       # a retry, appending nothing
         cid, sid, msgs, conn, StallingOpenRouter(["The tide ", "turns."]))
     frames = older.body_iterator
     await frames.__anext__()
     await frames.__anext__()
-    routes.streaming._chat_stream(               # a second retry claims the scene
+    _unfenced_stream(               # a second retry claims the scene
         cid, sid, msgs, conn, StallingOpenRouter(["Something else."]))
     await frames.aclose()
     assert [m["content"] for m in store.scenes.read_scene(cid, sid)["messages"]] == [
@@ -3294,7 +3314,7 @@ async def test_a_cancelled_turn_still_persists_while_it_owns_the_tail(monkeypatc
     nothing written behind it, the cancelled turn is still the tail and its text
     is kept. This is the case the whole safety net exists for."""
     cid, sid, _at = _scene_with_a_pending_post(tmp_path, monkeypatch)
-    resp = routes.streaming._chat_stream(
+    resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
         StallingOpenRouter(["The tide ", "turns."]))
     frames = resp.body_iterator
@@ -3482,10 +3502,10 @@ async def test_a_failed_turn_does_not_roll_back_once_a_newer_turn_claimed(monkey
     newer reply is about to answer."""
     cid, sid, at = _scene_with_a_pending_post(tmp_path, monkeypatch)
     conn = {"kind": "openrouter", "model": "m"}
-    older = routes.streaming._chat_stream(
+    older = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}], conn, FailingOpenRouter(),
         undo_user_post=lambda: store.scenes.remove_trailing_user_post(cid, sid, at, "and then?"))
-    routes.streaming._chat_stream(          # a retry claims the scene, appending nothing
+    _unfenced_stream(          # a retry claims the scene, appending nothing
         cid, sid, [{"role": "user", "content": "and then?"}], conn, StallingOpenRouter())
     frames = [f async for f in older.body_iterator]
 
@@ -3528,7 +3548,7 @@ async def test_a_cancelled_reroll_puts_the_old_reply_back(monkeypatch, tmp_path)
     store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "The tide turns."}])
     removed = store.scenes.remove_trailing_assistant_run(cid, sid)   # as regenerate does
 
-    resp = routes.streaming._chat_stream(
+    resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
         StallingOpenRouter([""]),
         restore_removed=lambda: store.scenes.restore_trailing_assistant_run(cid, sid, removed))
@@ -3646,7 +3666,7 @@ def test_a_turn_claims_its_scene_under_the_campaign_lock(monkeypatch, tmp_path):
     monkeypatch.setattr(routes.streaming, "_claim_turn",
                         lambda c, s: (held_at_claim.append(depth[0]), real_claim(c, s))[1])
 
-    routes.streaming._chat_stream(
+    _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}],
         {"kind": "openrouter", "model": "m"}, StallingOpenRouter())
 
@@ -3680,7 +3700,7 @@ async def test_a_failed_turns_rollback_runs_under_the_campaign_lock(monkeypatch,
         held_at_undo.append(depth[0])
         return store.scenes.remove_trailing_user_post(cid, sid, at, "and then?")
 
-    resp = routes.streaming._chat_stream(
+    resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}],
         {"kind": "openrouter", "model": "m"}, FailingOpenRouter(),
         undo_user_post=undo)
@@ -3706,7 +3726,7 @@ async def test_a_cancelled_reroll_restores_past_an_unrelated_transition(monkeypa
     store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "The tide turns."}])
     removed = store.scenes.remove_trailing_assistant_run(cid, sid)   # as regenerate does
 
-    resp = routes.streaming._chat_stream(
+    resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
         StallingOpenRouter([""]),
         restore_removed=lambda: store.scenes.restore_trailing_assistant_run(cid, sid, removed))
@@ -3740,7 +3760,7 @@ async def test_a_cancelled_reroll_restores_instead_of_minting_a_proposal(monkeyp
     # The fence opens on the first delta and never closes; the empty one behind
     # it parks the generator on a heartbeat *after* the opener, which is where
     # a cancel has an open fence and no narration to weigh against each other.
-    resp = routes.streaming._chat_stream(
+    resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
         StallingOpenRouter(['```roll\n{"check": "wits"}\n', ""]),
         restore_removed=lambda: store.scenes.restore_trailing_assistant_run(cid, sid, removed))
@@ -10955,7 +10975,7 @@ async def test_a_disconnect_on_a_closed_fence_still_writes_the_proposal(client):
     cid, sid, _ = _mech_scene(client)
     one_chunk = ('She lunges—\n```roll\n'
                  '{"check": "brawl", "actor": "characters:mara"}\n```')
-    resp = routes.streaming._chat_stream(
+    resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "go"}], {"kind": "openrouter", "model": "m"},
         FakeOpenRouter([one_chunk]))
     frames = resp.body_iterator
@@ -13172,7 +13192,7 @@ async def test_a_failure_mid_tracker_block_shows_what_it_persists(monkeypatch, t
             yield 'She waits.\n\n```state\n{"W": {"mood": "wry"}}\n```\n\nShe turns back.'
             raise LLMError("network", "connection reset")
 
-    resp = routes.streaming._chat_stream(
+    resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}],
         {"kind": "openrouter", "model": "m"}, BlockThenNarrationThenFails())
     streamed = "".join([f async for f in resp.body_iterator])
@@ -13196,7 +13216,7 @@ async def test_a_tracker_only_regenerate_puts_the_old_reply_back(monkeypatch, tm
         async def stream(self, messages, cfg, usage=None):
             yield '```state\n{"W": {"mood": "wry"}}\n```'
 
-    resp = routes.streaming._chat_stream(
+    resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}],
         {"kind": "openrouter", "model": "m"}, TrackerOnly(),
         restore_removed=lambda: store.scenes.restore_trailing_assistant_run(cid, sid, token))
@@ -13246,7 +13266,7 @@ async def test_a_bare_speaker_marker_regenerate_puts_the_old_reply_back(
         async def stream(self, messages, cfg, usage=None):
             yield "**Mara:**"
 
-    resp = routes.streaming._chat_stream(
+    resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "and then?"}],
         {"kind": "openrouter", "model": "m"}, BareMarker(),
         restore_removed=lambda: store.scenes.restore_trailing_assistant_run(cid, sid, token))
