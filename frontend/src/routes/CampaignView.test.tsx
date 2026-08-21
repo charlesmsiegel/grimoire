@@ -1236,6 +1236,47 @@ test("Stop that runs out of rounds leaves the turn unsettled", async () => {
   expect(await screen.findByText(/may still be generating/i)).toBeInTheDocument();
 });
 
+test("an unstopped turn keeps Stop, so the player can try again", async () => {
+  // The failure this prevents: the cancel never reached the server, the banner
+  // said so, and the composer went back to Send anyway. The backend run may
+  // still hold the scene, so the next send is refused with `run_in_flight` --
+  // and Stop is gone, so there is no way to try the cancel again. The turn is
+  // not settled, so it stays as it was.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(hangingChat());
+  (api.cancelAttempt as any).mockRejectedValue(new Error("offline"));
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+
+  expect(await screen.findByText(/may still be generating/i)).toBeInTheDocument();
+  // still Stop, not Send: the run may be alive and the player needs the button
+  expect(screen.getByRole("button", { name: /stop ■/i })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /(send ▸|continue ▶)/i })).toBeNull();
+});
+
+test("and the recovery pass is what eventually lets go", async () => {
+  // The counterweight to the test above. A composer locked forever would be
+  // worse than one unlocked early -- so the adoption pass, which runs when the
+  // tab comes back, is what resolves the send and releases the scene.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(hangingChat());
+  (api.cancelAttempt as any).mockRejectedValue(new Error("offline"));
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await screen.findByText(/may still be generating/i);
+
+  // The run ended on its own while we could not reach it.
+  (api.findRun as any).mockResolvedValue({
+    run: { id: "r", attempt_id: "a", state: "landed", next_index: 2 } });
+  act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+
+  await screen.findByRole("button", { name: /(send ▸|continue ▶)/i });
+});
+
 test("Stop keeps asking while the server says the run is still unwinding", async () => {
   // The cancel route waits for the run, but that wait is bounded (30s) and can
   // answer while it is still `running`. Reading that as "it is over" put Send
@@ -1264,8 +1305,14 @@ test("Stop holds the scene until the run is really over", async () => {
   // while Send came back, so the next send was refused with `run_in_flight`.
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   let release: (() => void) | null = null;
+  // Resolves with a real payload, not bare: `stopRun` reads the run's state to
+  // decide whether the cancel was CONFIRMED, and an undefined body is -- quite
+  // correctly -- treated as unconfirmed, which leaves the composer locked.
   (api.cancelRun as any).mockImplementation(
-    () => new Promise<void>((r) => { release = () => r(); }));
+    () => new Promise((r) => {
+      release = () => r({ run: { id: "r", attempt_id: "a", state: "cancelled",
+                                 next_index: 0 } });
+    }));
   (api.chat as any).mockImplementation(async (
     _c: string, _s: string, _t: string, onEvent: any, _r: unknown, signal: AbortSignal) => {
     onEvent({ run: { id: "run-7", attempt_id: "a1", state: "running", next_index: 1 } });

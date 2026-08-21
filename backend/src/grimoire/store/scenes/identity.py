@@ -104,13 +104,25 @@ def _drop_identity_line(raw: bytes) -> bytes:
         head = b"---" + eol
         if not raw.startswith(head):
             continue
-        end = raw.find(eol + b"---", len(head) - len(eol))
+        # The closing fence is found INDEPENDENTLY of the opener's newline
+        # style, exactly as `_splice` does. Matching it to the opener meant a
+        # header that opens CRLF and closes LF -- hand-edited, or rewritten
+        # halfway by a tool -- found no fence here and returned unchanged,
+        # while `_splice` (which does search style-independently) went on to
+        # add the replacement. The file was left holding TWO `identity` keys:
+        # the parser lets the later one win today, so it reads as fixed, and
+        # deleting or reordering that line resurrects the token this path
+        # exists to retire.
+        end = raw.find(b"\n---", len(head) - 1)
         if end == -1:
             return raw
-        block, rest = raw[len(head):end + len(eol)], raw[end + len(eol):]
-        kept = [ln for ln in block.split(eol)
+        at = end + 1                       # the start of the closing fence
+        block, rest = raw[len(head):at], raw[at:]
+        # Split on the bare newline for the same reason, and strip any carriage
+        # return the CRLF case leaves on each line before comparing the key.
+        kept = [ln for ln in block.split(b"\n")
                 if ln.split(b":", 1)[0].strip() != b"identity"]
-        return head + eol.join(kept) + rest
+        return head + b"\n".join(kept) + rest
     return raw
 
 

@@ -603,3 +603,31 @@ def test_a_scan_that_read_everything_still_reports_a_missing_identity(tmp_path,
     store.scenes.create_scene(cid, "Mara")
 
     assert store.scenes.find_by_identity(cid, "f" * 32) is None
+
+
+def test_a_duplicate_in_a_mixed_newline_header_is_really_removed(tmp_path, monkeypatch):
+    """Opening fence CRLF, closing fence LF, and an identity already in it.
+
+    `_splice` finds that closing fence style-independently; the line-dropper
+    used to match it to the OPENER's style, find nothing, and return the header
+    unchanged. The splice then added the replacement anyway, leaving two
+    `identity` keys in the transcript. The parser lets the later one win, so it
+    reads as fixed -- and one header edit that deletes or reorders a line
+    resurrects the token this path exists to retire.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    sid = store.scenes.create_scene(cid, "Mara")
+    p = store.scenes.paths._scene_path(cid, sid)
+    p.write_bytes(b"---\r\ntitle: Mara\nidentity: " + b"a" * 32
+                  + b"\nmodel: m\n---\n\n**Mara:** hello\n")
+
+    minted = store.scenes.ensure_identity(cid, sid, replace=True)
+
+    raw = p.read_bytes()
+    assert raw.count(b"identity:") == 1, \
+        f"the old identity line survived the replacement: {raw!r}"
+    assert minted.encode() in raw
+    assert b"a" * 32 not in raw, "the retired token is still in the file"
+    assert b"**Mara:** hello" in raw, "the body was rewritten"
+    assert store.scenes.read_scene(cid, sid)["meta"]["title"] == "Mara"
