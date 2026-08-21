@@ -53,6 +53,20 @@ function readCounter() {
   };
 }
 
+test("resolves the model this campaign's turns run on, for the header (#142)", async () => {
+  (api.getCampaignRouting as any).mockResolvedValue({
+    scope: "campaign", routes: { scene: "cheap" }, effective: { scene: "cheap" },
+    provenance: { scene: { scope: "campaign" } }, catalog: [],
+    active_connection_id: "openrouter",
+    connections: [{ id: "openrouter", name: "OpenRouter", kind: "openrouter", model: "vendor/opus" },
+                  { id: "cheap", name: "Cheap", kind: "openrouter", model: "vendor/haiku" }],
+  });
+  renderCampaign();
+  // The page is the only thing that can answer: the header has a pathname and
+  // no cid, and the cascade it would have to walk is campaign-scoped.
+  await waitFor(() => expect(api.getCampaignRouting).toHaveBeenCalledWith("run"));
+});
+
 test("the pinned conditions block names where, when and the campaign's world copy", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getSceneDatetime as any).mockResolvedValue({

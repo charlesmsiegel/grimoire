@@ -73,9 +73,13 @@ export function ModelRoutingPicker({ scope, cid }: { scope: "global" | "campaign
 
   const nameOf = (id: string) => bundle.connections.find((c) => c.id === id)?.name ?? id;
   const inherited = (route: string) => {
-    const eff = bundle.effective[route] ?? "";
+    // `effective` is "" when the cascade reached its base, so the base has to be
+    // named from `active_connection_id` -- "inherit (the active connection)"
+    // answers a different question than the one the row is asking, which is
+    // WHICH model this job runs on.
+    const eff = bundle.effective[route] || bundle.active_connection_id;
     const from = scopeLabel(bundle.provenance[route]?.scope);
-    return eff ? `— inherit (${nameOf(eff)}, from ${from}) —` : "— inherit (the active connection) —";
+    return eff ? `— inherit (${nameOf(eff)}, from ${from}) —` : "— inherit —";
   };
 
   return (
@@ -87,10 +91,16 @@ export function ModelRoutingPicker({ scope, cid }: { scope: "global" | "campaign
           : "Overrides for this campaign only. Anything left on inherit follows the global routing."}
       </div>
       {bundle.catalog.map((route) => (
-        <label key={route.key} className="model-routing-row">
-          {route.label}
+        // `htmlFor`/`id` rather than a wrapping label, matching the config
+        // fields: a hint nested inside the label is read out as part of the
+        // control's name, so a screen reader would announce the whole sentence
+        // every time the select takes focus. `aria-describedby` says the same
+        // thing in the place meant for it.
+        <div key={route.key} className="model-routing-row">
+          <label htmlFor={`route-${route.key}`}>{route.label}</label>
           <select
-            aria-label={route.label}
+            id={`route-${route.key}`}
+            aria-describedby={`route-${route.key}-hint`}
             value={bundle.routes[route.key] ?? ""}
             disabled={busy === route.key}
             onChange={(e) => void choose(route.key, e.target.value)}
@@ -107,8 +117,8 @@ export function ModelRoutingPicker({ scope, cid }: { scope: "global" | "campaign
               <option value={bundle.routes[route.key]}>{bundle.routes[route.key]}</option>
             )}
           </select>
-          <span className="field-hint">{route.hint}</span>
-        </label>
+          <p className="field-hint" id={`route-${route.key}-hint`}>{route.hint}</p>
+        </div>
       ))}
     </div>
   );

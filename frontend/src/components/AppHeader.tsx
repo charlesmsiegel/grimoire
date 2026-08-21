@@ -43,7 +43,11 @@ export default function AppHeader(
 ) {
   const { setOpen } = usePalette();
   const { setFocus } = useFocus();
-  const { context, usage } = useShellStatus();
+  const { context, usage, sceneModel } = useShellStatus();
+  // The open campaign's scene model wins over the global one: with per-task
+  // routing (#142) the active connection is not necessarily what writes this
+  // campaign's prose, and the header exists to name what the next turn costs.
+  const shown = sceneModel ?? model;
 
   const where = context
     ? (context.scene ? `${context.campaign} / ${context.scene}` : context.campaign)
@@ -67,7 +71,7 @@ export default function AppHeader(
       <span className="header-spacer" />
 
       <div className="header-status">
-        {model && <span className="header-model">{model.toUpperCase()}</span>}
+        {shown && <span className="header-model">{shown.toUpperCase()}</span>}
         {usage !== null && (
           <span className="header-ctx" title="How full the last prompt left the context budget">
             CTX {Math.round(usage)}%

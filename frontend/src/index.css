@@ -2688,17 +2688,16 @@ a.column-back { text-decoration: none; }
 /* A row per route: the job's name, the connection it runs on, and one line
    saying what that covers. `.field`'s control styling already fits the select,
    so this only lays the rows out and keeps the hint tied to its row. */
-.model-routing-row {
-  display: block; margin: 12px 0; color: var(--muted); font-size: 13px;
-}
+.model-routing-row { margin: 12px 0; }
+.model-routing-row label { display: block; color: var(--muted); font-size: 13px; }
 .model-routing-row select {
   display: block; width: 100%; margin-top: 4px;
   background: var(--surface); color: var(--ink);
   border: 1px solid var(--rule); padding: 8px;
   font-family: var(--fb); font-size: 17px;
 }
-/* The hint belongs to the row above it, not to the next one down. */
-.model-routing-row .field-hint { margin-top: 4px; }
+/* The hint belongs to the select above it, not to the next row down. */
+.model-routing-row .field-hint { margin: 4px 0 0; }
 
 .prompt-layout-row {
   display: flex; align-items: center; gap: 10px;

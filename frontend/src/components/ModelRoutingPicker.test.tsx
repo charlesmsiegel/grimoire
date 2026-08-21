@@ -49,8 +49,10 @@ test("lists a row per route, each inheriting the active connection", async () =>
 
   const scene = await screen.findByLabelText<HTMLSelectElement>("Scene turns");
   expect(scene.value).toBe("");
-  // One per row, and both rows inherit here.
-  expect(screen.getAllByText("— inherit (the active connection) —")).toHaveLength(2);
+  // One per row, and both rows inherit -- naming the connection that inheriting
+  // actually reaches, which is the question the row is asking.
+  expect(screen.getAllByText("— inherit (Big, from the active connection) —"))
+    .toHaveLength(2);
   expect(screen.getByLabelText("Dossier refresh")).toBeInTheDocument();
   expect(screen.getByText("One call per present character.")).toBeInTheDocument();
 });

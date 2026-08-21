@@ -200,6 +200,13 @@ export function installCampaignMocks() {
     // chip on every player post is a string in it. The tests that want one set
     // it themselves.
     by_task: [], by_post: [], turns: [], listed: 0, truncated: false });
+  // Nothing routed: the page publishes the active connection's model, which is
+  // what the header showed before #142 existed.
+  (api.getCampaignRouting as any).mockResolvedValue({
+    scope: "campaign", routes: {}, effective: {}, provenance: {}, catalog: [],
+    active_connection_id: "openrouter",
+    connections: [{ id: "openrouter", name: "OpenRouter", kind: "openrouter",
+                    model: "vendor/opus" }] });
   (getModels as any).mockResolvedValue([]);
   (api.absorbScene as any).mockResolvedValue({
     one_line: "They met.", summary: "A met B.", keywords: ["salt"],

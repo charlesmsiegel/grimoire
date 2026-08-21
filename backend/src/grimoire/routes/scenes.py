@@ -2118,18 +2118,23 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     # Each phase resolves its OWN connection (#142): they are four different
     # routes -- extraction, the per-NPC dossier loop, voice drift and the
     # mechanics audit -- and sharing one `conn` would make three of those four
-    # settings do nothing whenever an absorb was what ran them. Resolved here,
-    # before the fan-out, so a 409 for a misrouted phase is raised once and
-    # up-front rather than from inside a gather.
+    # settings do nothing whenever an absorb was what ran them.
+    #
+    # All three resolved HERE, before the meter opens and before a single
+    # coroutine is built. Resolved inline in the `_gather_phases(...)` argument
+    # list instead, a 409 from the third would leave the first two coroutines
+    # created and never awaited, and would file a failed absorb row for a call
+    # that was never made.
+    dossier_conn = _require_connection("dossier", cid)
+    voice_conn = _require_connection("voice-drift", cid)
+    audit_conn = _require_connection("audit", cid)
     with store.usage.meter("absorb", campaign=cid, scene=sid) as m:
         results = await _gather_phases(
             budget.run(client.complete(messages, conn, m.usage),
                        on_timeout=_noting(client, conn, m.usage)),
-            _stage_dossiers(cid, sid, transcript, client,
-                            _require_connection("dossier", cid), budget),
-            _stage_voice_drift(cid, sid, transcript, client,
-                               _require_connection("voice-drift", cid), budget),
-            _run_audit(cid, sid, client, _require_connection("audit", cid), budget),
+            _stage_dossiers(cid, sid, transcript, client, dossier_conn, budget),
+            _stage_voice_drift(cid, sid, transcript, client, voice_conn, budget),
+            _run_audit(cid, sid, client, audit_conn, budget),
             limit=store.config.absorb_concurrency())
     text, dossier_result, voice_result, audit_result = results
     if isinstance(text, BaseException):

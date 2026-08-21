@@ -541,7 +541,7 @@ def _routing_fields(scope: str, body) -> dict:
     if not isinstance(routes, dict):
         raise HTTPException(status_code=400, detail="routes must be an object")
     fields = {store.routing.config_key(str(k)): str(v or "").strip() for k, v in routes.items()}
-    refused = store.routing.writable(scope, fields)
+    refused = store.routing.refused(scope, fields)
     if refused:
         raise HTTPException(
             status_code=400,
@@ -978,7 +978,7 @@ def _require_connection(task: str = "", cid: str = "") -> dict:
         # not choose and never say so.
         raise HTTPException(status_code=409, detail={
             "detail": f"{problem} ({conn.get('name') or conn['id']}, routed for "
-                      f"{store.routing.route_by_key(resolution['route']).label.lower()})",
+                      f"{store.routing.label_for(resolution['route']).lower()})",
             "kind": "missing_key"})
     if problem is not None:
         # Deliberately *before* the facade, so a configured fallback does not

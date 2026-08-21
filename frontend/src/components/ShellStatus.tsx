@@ -14,6 +14,11 @@ type Ctx = {
    *  then says nothing rather than claiming 0%. */
   usage: number | null;
   setUsage: (next: number | null) => void;
+  /** The model this campaign's scene turns will actually run on (#142), when
+   *  that is not simply the active connection's. `null` outside a campaign, and
+   *  the header falls back to the global one. */
+  sceneModel: string | null;
+  setSceneModel: (next: string | null) => void;
 };
 
 // A no-op default rather than a thrown error: every editor test renders its
@@ -21,12 +26,16 @@ type Ctx = {
 // shell to be mounted around it just to be tested.
 const ShellStatusCtx = createContext<Ctx>({
   context: null, setContext: () => {}, usage: null, setUsage: () => {},
+  sceneModel: null, setSceneModel: () => {},
 });
 
 export function ShellStatusProvider({ children }: { children: ReactNode }) {
   const [context, setContext] = useState<ShellContext>(null);
   const [usage, setUsage] = useState<number | null>(null);
-  const value = useMemo(() => ({ context, setContext, usage, setUsage }), [context, usage]);
+  const [sceneModel, setSceneModel] = useState<string | null>(null);
+  const value = useMemo(
+    () => ({ context, setContext, usage, setUsage, sceneModel, setSceneModel }),
+    [context, usage, sceneModel]);
   return <ShellStatusCtx.Provider value={value}>{children}</ShellStatusCtx.Provider>;
 }
 
@@ -60,4 +69,21 @@ export function usePublishContextUsage(usage: number | null): void {
     setUsage(usage);
     return () => setUsage(null);
   }, [usage, setUsage]);
+}
+
+/** Same contract again, for the model the open campaign's scene turns run on.
+ *
+ *  The header names the model you are about to spend on, and until #142 there
+ *  was only one it could be. Now a campaign can route its scene turns to a
+ *  different connection than the active one — so the header would have gone on
+ *  naming a model this campaign never uses, which is worse than naming none.
+ *  Only the page that knows the campaign can answer, hence publishing upward
+ *  rather than the chrome resolving a cascade it has no cid for.
+ */
+export function usePublishSceneModel(model: string | null): void {
+  const { setSceneModel } = useShellStatus();
+  useEffect(() => {
+    setSceneModel(model);
+    return () => setSceneModel(null);
+  }, [model, setSceneModel]);
 }
