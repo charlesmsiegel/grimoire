@@ -169,8 +169,8 @@ def test_a_long_differing_middle_stays_bounded():
     so any margin in between catches a regression and none of it flakes.
     """
     n = changes.EXACT_DIFF_LIMIT * 4
-    before = "\n".join(["head"] + ["- item"] * n + ["tail"])
-    after = "\n".join(["HEAD"] + ["- item"] * n + ["TAIL"])
+    before = "\n".join(["head", *["- item"] * n, "tail"])
+    after = "\n".join(["HEAD", *["- item"] * n, "TAIL"])
 
     started = time.perf_counter()
     ops = changes.line_diff(before, after)
@@ -186,13 +186,13 @@ def test_a_long_distinct_middle_still_diffs_precisely():
     lines[1::2] = [""] * 2_500
     # a transcript with its front trimmed by the packer and an exchange appended
     ops = changes.line_diff("\n".join(lines[:5_000]),
-                            "\n".join(lines[40:5_000] + ["**Mara:** and then?", ""]))
+                            "\n".join([*lines[40:5_000], "**Mara:** and then?", ""]))
     assert sum(1 for o in ops if o["op"] == "delete") == 40
     assert sum(1 for o in ops if o["op"] == "insert") == 2
 
     entries = [f"- {k}: a fact about the marsh" for k in range(4_000)]
-    ops = changes.line_diff("\n".join(["header A"] + entries + ["footer A"]),
-                            "\n".join(["header B"] + entries + ["footer B"]))
+    ops = changes.line_diff("\n".join(["header A", *entries, "footer A"]),
+                            "\n".join(["header B", *entries, "footer B"]))
     assert sum(1 for o in ops if o["op"] == "delete") == 2
     assert sum(1 for o in ops if o["op"] == "insert") == 2
 
@@ -207,11 +207,11 @@ def test_a_duplicate_dominated_middle_over_the_limit_degrades():
     makes this the bound talking rather than the diff being wrong.
     """
     n = changes.EXACT_DIFF_LIMIT * 4
-    ops = changes.line_diff("\n".join(["x"] + ["- item"] * n + ["y"]),
-                            "\n".join(["p"] + ["- item"] * n + ["q"]))
+    ops = changes.line_diff("\n".join(["x", *["- item"] * n, "y"]),
+                            "\n".join(["p", *["- item"] * n, "q"]))
     assert sum(1 for o in ops if o["op"] == "delete") == n + 2
 
     small = changes.EXACT_DIFF_LIMIT // 2
-    ops = changes.line_diff("\n".join(["x"] + ["- item"] * small + ["y"]),
-                            "\n".join(["p"] + ["- item"] * small + ["q"]))
+    ops = changes.line_diff("\n".join(["x", *["- item"] * small, "y"]),
+                            "\n".join(["p", *["- item"] * small, "q"]))
     assert sum(1 for o in ops if o["op"] == "delete") == 2
