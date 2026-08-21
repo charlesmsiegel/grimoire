@@ -63,6 +63,11 @@ from an up-to-date world.
 - **Lorebooks / world info** — parse and import character-book / world-info
   entries into a world's lore.
 - **LLM-generated taglines** and **image localization** for characters.
+- **Model routing** — scene prose, absorb, dossier refreshes, summaries and the
+  one-shot utilities can each run on a connection of their own, set under
+  Configuration → Model routing and overridable per campaign from the scene
+  inspector. Anything left on inherit uses the active connection, so an install
+  that never opens the page keeps the single model it always had.
 - **EPUB export** — turn a finished campaign into a readable book.
 - **Editable prompts** — every prompt Grimoire sends to the model lives as a
   Jinja2 template under [`templates/`](templates/README.md). Edit a template

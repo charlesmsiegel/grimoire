@@ -283,7 +283,7 @@ async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: 
         store.campaigns.read_campaign(cid)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
-    conn = _require_connection()
+    conn = _require_connection("suggestions", cid)
     # A refresh passes rank=false: re-ranking would reshuffle the greeting cards
     # under the user's cursor, and the ranking is the expensive half of the prompt.
     candidates = store.suggest.greeting_candidates(cid, after, pcless=offscreen) if rank else []
@@ -319,7 +319,7 @@ async def post_scene_intent(cid: str, body: SceneIntent,
         raise HTTPException(status_code=404, detail="campaign not found")
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="empty scene description")
-    conn = _require_connection()
+    conn = _require_connection("intent", cid)
     messages = store.suggest.build_intent_prompt(cid, body.text, offscreen=body.offscreen)
     try:
         with store.usage.meter("intent", campaign=cid) as m:
@@ -542,7 +542,7 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
     if replay is not None:
         return replay
     _require_scene(cid, sid)
-    conn = _require_connection()
+    conn = _require_connection("chat", cid)
     # RESERVED BEFORE THE FIRST MUTATOR. `heal` can append a line and the
     # sidecar block can retire a proposal, so a 409 raised after them would
     # tell the player nothing happened when something already had. The
@@ -725,7 +725,7 @@ def post_retry(cid: str, sid: str, request: Request, body: RetryBody | None = No
     if replay is not None:
         return replay
     scene = _require_scene(cid, sid)
-    conn = _require_connection()
+    conn = _require_connection("retry", cid)
     # Ahead of the retirement, not behind it: a refusal must not cost a decision
     # for a request that then does nothing at all. Ahead of the RESERVATION too:
     # a run reserved for a request that was never going to do anything has to be
@@ -2087,7 +2087,7 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     # treatment `streaming.py` gives its blocking finalizers.
     _campaign_root_or_404(cid)
     epoch, scene, ledger = await run_in_threadpool(_absorb_snapshot, cid, sid)
-    conn = _require_connection()
+    conn = _require_connection("absorb", cid)
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to absorb")
     # Absorb is not idempotent: lore edits append and plot movements add a beat,
@@ -2115,13 +2115,21 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     # The extraction is first in the list so it claims the first semaphore slot:
     # it is the one phase whose failure is fatal, so it must never be the one
     # left queued.
+    # Each phase resolves its OWN connection (#142): they are four different
+    # routes -- extraction, the per-NPC dossier loop, voice drift and the
+    # mechanics audit -- and sharing one `conn` would make three of those four
+    # settings do nothing whenever an absorb was what ran them. Resolved here,
+    # before the fan-out, so a 409 for a misrouted phase is raised once and
+    # up-front rather than from inside a gather.
     with store.usage.meter("absorb", campaign=cid, scene=sid) as m:
         results = await _gather_phases(
             budget.run(client.complete(messages, conn, m.usage),
                        on_timeout=_noting(client, conn, m.usage)),
-            _stage_dossiers(cid, sid, transcript, client, conn, budget),
-            _stage_voice_drift(cid, sid, transcript, client, conn, budget),
-            _run_audit(cid, sid, client, conn, budget),
+            _stage_dossiers(cid, sid, transcript, client,
+                            _require_connection("dossier", cid), budget),
+            _stage_voice_drift(cid, sid, transcript, client,
+                               _require_connection("voice-drift", cid), budget),
+            _run_audit(cid, sid, client, _require_connection("audit", cid), budget),
             limit=store.config.absorb_concurrency())
     text, dossier_result, voice_result, audit_result = results
     if isinstance(text, BaseException):
@@ -2183,7 +2191,7 @@ async def post_audit(cid: str, sid: str, request: Request,
     otherwise leave this call running against a provider that dribbles inside
     the idle bound -- forever, when `absorb_budget = 0`."""
     _require_scene(cid, sid)
-    conn = _require_connection()
+    conn = _require_connection("audit", cid)
     if store.modules.resolve(cid) is None:
         raise HTTPException(status_code=400, detail="no module resolved")
     # A retry gets its own budget — it never inherits the deadline of whatever
@@ -2549,7 +2557,7 @@ async def _rolling_once(cid: str, sid: str, force: bool, upto: int | None,
         # digest, what gets folded, what `covered` records -- then works from the
         # same bounded transcript, rather than each having to remember the bound.
         scene = {**scene, "messages": scene["messages"][:upto]}
-    conn = _require_connection()
+    conn = _require_connection("rolling-summary", cid)
     every = store.config.rolling_summary_every()
     facts = store.chronicle.scene_facts(cid, sid)
     view = _rolling_view(cid, sid, scene, facts)
@@ -2778,7 +2786,7 @@ async def post_scene_break(cid: str, sid: str, force: bool = False,
         if upto < 0:
             raise HTTPException(status_code=400, detail="upto must not be negative")
         scene = {**scene, "messages": scene["messages"][:upto]}
-    conn = _require_connection()
+    conn = _require_connection("scene-break", cid)
     every = store.config.scene_break_every()
     provider = _break_provider(cid)
     view = _break_view(scene, every, provider)
@@ -2940,7 +2948,7 @@ async def post_dossiers(cid: str, sid: str, request: Request,
     for a review that no longer exists, unbounded when `absorb_budget = 0`. The
     loop is given the request's own disconnect check instead."""
     scene = _require_scene(cid, sid)
-    conn = _require_connection()
+    conn = _require_connection("dossier", cid)
     if not scene["messages"]:
         # A dossier is a paragraph the model rewrites FROM the transcript, so an
         # empty one can only produce invention. The audit needs no equivalent
@@ -3837,7 +3845,7 @@ def post_replay_turn(cid: str, sid: str, request: Request,
     if replay is not None:
         return replay
     _require_scene(cid, sid)
-    conn = _require_connection()
+    conn = _require_connection("replay", cid)
     _replay_session(cid, sid)
     run, fresh = runs.reserve_turn(request.app, cid, sid, "replay",
                                    x_grimoire_attempt)

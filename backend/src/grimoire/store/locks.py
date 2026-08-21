@@ -311,7 +311,10 @@ OUTSIDE_DOMAIN: dict[str, str] = {
         "for the same reason as the frontmatter writers above. Fixing these "
         "is a concurrency "
         "change that needs its own review, which is why this guard classifies "
-        "them rather than closing them."
+        "them rather than closing them. `set_campaign_routing` (#142) writes "
+        "the same file and does NOT join them: it takes the lock. Inheriting a "
+        "known gap and adding to it knowingly are not the same thing, and this "
+        "module stays out here for the mutators above rather than for that one."
     ),
     "store.campaigns.read": (
         "`touch` read-modify-writes the campaign meta file unlocked, so it can "

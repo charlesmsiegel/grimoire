@@ -18,6 +18,7 @@ import { ClockPanel } from "./ClockPanel";
 import { ErrorNote } from "./ErrorNote";
 import { EventsPanel } from "./EventsPanel";
 import { WeatherWidget } from "./WeatherWidget";
+import { ModelRoutingPicker } from "./ModelRoutingPicker";
 import { ResponsePresetPicker } from "./ResponsePresetPicker";
 import { LOCKED_WHILE_GENERATING } from "./sceneLock";
 import { taskLabel, whenLabel } from "./turnLabels";
@@ -1353,6 +1354,16 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
 
       <SideSection id="style" title="Response preset" collapsed={!!collapsed.style} onToggle={toggleSection}>
         <ResponsePresetPicker scope="scene" cid={cid} sid={sid} onChanged={onSceneChanged} />
+      </SideSection>
+
+      {/* Beside the response preset, and campaign-scoped like the Cost section's
+          budget: the two questions a reader asks here are "how long should
+          replies be" and "which model is writing them" (#142). Collapsed by
+          default -- most campaigns never set a route, and the ones that do set
+          it once. */}
+      <SideSection id="routing" title="Model routing" collapsed={collapsed.routing ?? true}
+                   onToggle={toggleSection}>
+        <ModelRoutingPicker scope="campaign" cid={cid} />
       </SideSection>
 
       <SideSection id="when" title="When" collapsed={!!collapsed.when} onToggle={toggleSection}>

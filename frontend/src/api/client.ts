@@ -41,7 +41,7 @@ import {
   type RecordChange, type RegenerateOverrides, type ReplayPreview, type ReplaySession, type ResponseBundle, type ResponseFields, type ResponseOverride,
   type ResponsePresetDetail, type ResponsePresetDraft, type ResponsePresetSummary,
   type ResponsePresetUsage, type RollEntry, type RollingSummary, type RollingSummaryRefresh,
-  type RetconReport, type RosterEntry, type ScenarioImportResult, type ScenarioProposal, type SceneAbsorb,
+  type RetconReport, type RosterEntry, type RoutingBundle, type ScenarioImportResult, type ScenarioProposal, type SceneAbsorb,
   type SceneAlternates, type SceneCheckActor, type SceneContext, type SceneDatetime,
   type SceneIdea, type SceneIdeaDraft, type SceneImportDraft, type SceneIntentResult,
   type SceneLocation,
@@ -1298,6 +1298,17 @@ export const api = {
     request<ResponseBundle>("GET", `/api/campaigns/${cid}/scenes/${sid}/response`),
   setSceneResponse: (cid: string, sid: string, patch: Partial<ResponseFields>) =>
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/response`, patch),
+
+  // Per-task model routing (#142), both scopes. `fresh` on the reads: the
+  // bundle carries what OTHER scopes resolve to, so a cached copy would show
+  // an inherited value from before the write that prompted the reload.
+  getGlobalRouting: () => request<RoutingBundle>("GET", "/api/routing", undefined, { fresh: true }),
+  setGlobalRouting: (routes: Record<string, string>) =>
+    request<RoutingBundle>("PUT", "/api/routing", { routes }),
+  getCampaignRouting: (cid: string) =>
+    request<RoutingBundle>("GET", `/api/campaigns/${cid}/routing`, undefined, { fresh: true }),
+  setCampaignRouting: (cid: string, routes: Record<string, string>) =>
+    request<RoutingBundle>("PUT", `/api/campaigns/${cid}/routing`, { routes }),
 
   // Cost (#153). `fresh` on both: a turn that just landed is exactly what makes
   // a reader open the Cost section, and a cached read issued before it would

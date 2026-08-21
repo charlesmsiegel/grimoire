@@ -10,6 +10,7 @@ import { ContextBudgetBar } from "../components/ContextBudgetBar";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import PricingEditor from "../components/PricingEditor";
 import { PromptLayoutEditor } from "../components/PromptLayoutEditor";
+import { ModelRoutingPicker } from "../components/ModelRoutingPicker";
 import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
 import { StorageLocation } from "../components/StorageLocation";
 import { StoreConflictNotice } from "../components/StoreConflictNotice";
@@ -86,11 +87,11 @@ function draftOf(c: Config): Draft {
 }
 
 type SectionId =
-  | "storage" | "backups" | "logging" | "connection" | "timeouts" | "pricing"
+  | "storage" | "backups" | "logging" | "connection" | "routing" | "timeouts" | "pricing"
   | "context" | "layout" | "transient" | "semantic" | "system-prompt" | "response"
   | "transcript" | "playing" | "appearance";
 
-/** The column, as data: three groups, twelve sections, and which draft fields
+/** The column, as data: three groups, thirteen sections, and which draft fields
  *  each one owns — the last part is what lets a section carry an unsaved dot,
  *  so the footer's count is always findable rather than being a number about
  *  somewhere else. */
@@ -103,6 +104,9 @@ const SECTIONS: SectionDef[] = [
     fields: ["log_level"] },
   { id: "connection", group: "The install", label: "Connection",
     fields: ["active_connection_id", "fallback_connection_id", "llm_retries"] },
+  // No `fields`: routing writes its own records as you set them, like the
+  // response preset below, so it can never carry an unsaved dot.
+  { id: "routing", group: "The install", label: "Model routing", fields: [] },
   { id: "timeouts", group: "The install", label: "Timeouts",
     fields: ["llm_timeout", "absorb_budget", "llm_call_budget"] },
   // No draft fields: the rate table is a file of its own behind its own route,
@@ -592,7 +596,8 @@ export default function ConfigView() {
         {draft && section === "connection" && (
           <>
             <p className="config-copy">
-              Which connection every scene, absorb and one-shot call goes to. Manage
+              Which connection a call goes to unless <em>Model routing</em> sends that
+              kind of call somewhere else. Manage
               connections (add a custom OpenAI-compatible endpoint, edit keys, pull a
               model list) on the <Link to="/connections">Connections</Link> page.
             </p>
@@ -671,6 +676,24 @@ export default function ConfigView() {
                 </p>
               </div>
             </div>
+          </>
+        )}
+
+        {draft && section === "routing" && (
+          <>
+            <p className="config-copy">
+              Different jobs want different models: scene prose is worth the expensive
+              one, while a tagline or a dossier refresh is not. Each job below can name
+              its own connection — and because it is a whole connection rather than a
+              model name, it can be a different provider entirely.
+            </p>
+            <p className="config-copy">
+              Anything left on inherit uses the active connection, which is what every
+              install does until it says otherwise. A campaign can override any of these
+              for itself, from <em>Model routing</em> in the scene inspector. Like the
+              response preset, this block saves as you set it.
+            </p>
+            <ModelRoutingPicker scope="global" />
           </>
         )}
 

@@ -645,7 +645,7 @@ async def post_scenario_parse(wid: str, file: UploadFile = File(...), format: st
     # "you have no model configured" is a setup mistake, and reporting it only
     # after the user has fixed a card (or waited on a slow host) tells them the
     # wrong thing first.
-    conn = _require_connection()
+    conn = _require_connection("scenario")
     data = await file.read()
     try:
         card = store.cards.loads(data, format)
@@ -658,7 +658,7 @@ async def post_scenario_parse(wid: str, file: UploadFile = File(...), format: st
 async def post_scenario_parse_url(wid: str, body: ScenarioUrlBody,
                                   client: LLMClient = Depends(get_llm)):
     root = _world_root_or_404(wid)
-    conn = _require_connection()
+    conn = _require_connection("scenario")
     try:
         # The download is blocking and this route is async, so it goes to the
         # threadpool rather than stalling the event loop for a slow host --

@@ -15,6 +15,7 @@ from .lifecycle import (  # noqa: F401
     rename_campaign,
     set_campaign_budget,
     set_campaign_response,
+    set_campaign_routing,
 )
 from .paths import (  # noqa: F401
     CampaignNotFound,

@@ -31,6 +31,8 @@ from .common import (
     _page_window,
     _require_connection,
     _response_body,
+    _routing_body,
+    _routing_fields,
     _serve_image,
     _serve_image_file,
     _upload_image_ext,
@@ -60,6 +62,7 @@ from .models import (
     PinRule,
     RefList,
     ResponseSettings,
+    RoutingUpdate,
     ScheduledEventCreate,
     ScheduledEventEdit,
     VersionCreate,
@@ -540,7 +543,8 @@ async def post_campaign_library_description_draft(cid: str, name: str,
     picture.
     """
     _campaign_root_or_404(cid)
-    return await _draft_description(client, store.campaign_images.image_path(cid, name), "")
+    return await _draft_description(client, store.campaign_images.image_path(cid, name), "",
+                                    cid=cid)
 
 
 @router.put("/campaigns/{cid}/images/{name}/description")
@@ -760,6 +764,32 @@ def put_campaign_response(cid: str, body: ResponseSettings):
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     return {"ok": True}
+
+
+# ---- per-task routing (#142) ----
+def _campaign_meta_or_404(cid: str) -> dict:
+    try:
+        return store.campaigns.read_campaign(cid)["meta"]
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
+
+
+@router.get("/campaigns/{cid}/routing")
+def get_campaign_routing(cid: str):
+    return _routing_body("campaign", _campaign_meta_or_404(cid))
+
+
+@router.put("/campaigns/{cid}/routing")
+def put_campaign_routing(cid: str, body: RoutingUpdate):
+    fields = _routing_fields("campaign", body)
+    _campaign_meta_or_404(cid)
+    try:
+        store.campaigns.set_campaign_routing(cid, fields)
+    except store.campaigns.CampaignNotFound as exc:
+        # Between the check above and the write: a campaign deleted in another
+        # tab. A 404 either way, rather than a 500 out of the store.
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
+    return _routing_body("campaign", _campaign_meta_or_404(cid))
 
 
 # ---- campaign sync ----
@@ -1636,7 +1666,7 @@ async def post_campaign_voice_anchor_generate(cid: str, char: str,
     a campaign-local character (which has no world copy) can use it too. Preview
     only — the caller persists with PUT."""
     _campaign_root_or_404(cid)
-    conn = _require_connection()
+    conn = _require_connection("voice-anchor", cid)
     root = store.overlay.char_root(cid, char)
     try:
         ch = store.characters.read_character(root, char)

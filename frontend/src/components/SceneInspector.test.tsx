@@ -39,6 +39,11 @@ vi.mock("./ResponsePresetPicker", () => ({
     <div data-testid="response-preset-picker" data-scope={scope} data-cid={cid} data-sid={sid} />
   ),
 }));
+vi.mock("./ModelRoutingPicker", () => ({
+  ModelRoutingPicker: ({ scope, cid }: any) => (
+    <div data-testid="model-routing-picker" data-scope={scope} data-cid={cid} />
+  ),
+}));
 import { api } from "../api/client";
 import { getModels } from "../api/models";
 
@@ -539,6 +544,22 @@ test("mounts the response preset picker scoped to this scene", async () => {
   expect(picker).toHaveAttribute("data-scope", "scene");
   expect(picker).toHaveAttribute("data-cid", "c");
   expect(picker).toHaveAttribute("data-sid", "s");
+});
+
+test("the routing section is shut until asked for, then scoped to this campaign", async () => {
+  renderInspector();
+  const header = await screen.findByRole("button", { name: /model routing/i });
+  // Collapsed by default, and `SideSection` renders no body while collapsed --
+  // so a campaign that never routes anything makes no request for a picker
+  // nobody opened.
+  expect(header).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByTestId("model-routing-picker")).not.toBeInTheDocument();
+
+  fireEvent.click(header);
+
+  const picker = await screen.findByTestId("model-routing-picker");
+  expect(picker).toHaveAttribute("data-scope", "campaign");
+  expect(picker).toHaveAttribute("data-cid", "c");
 });
 
 test("clicking a section header collapses its body and toggles aria-expanded", async () => {

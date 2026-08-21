@@ -11,7 +11,7 @@ import json
 import secrets
 from pathlib import Path
 
-from . import atomic, config
+from . import atomic, config, routing
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, now_iso, safe_id, slugify, uniquify
 
@@ -175,9 +175,17 @@ def delete_connection(id: str) -> None:
     # list rather than two branches, so the next key that references a
     # connection is one entry rather than a third copy of this reasoning.
     cfg = config.read_config()
-    dangling = {key: "" for key in ("active_connection_id", "embeddings_connection_id",
-                                    "fallback_connection_id")
-                if cfg.get(key) == id}
+    # The three single-purpose keys, plus every per-task route (#142) -- built
+    # from `routing.CONFIG_KEYS` rather than listed, so a route added later is
+    # swept by construction instead of by somebody remembering this line.
+    #
+    # A campaign's own routes are NOT reachable from here, and deliberately not
+    # chased: sweeping them would mean rewriting every campaign.md on a delete,
+    # under every campaign's lock. `routing.resolve` walks past a reference to a
+    # connection that no longer exists for exactly this reason.
+    named = ("active_connection_id", "embeddings_connection_id",
+             "fallback_connection_id", *routing.CONFIG_KEYS)
+    dangling = {key: "" for key in named if cfg.get(key) == id}
     if dangling:
         # Clear these BEFORE unlinking the file, not after — otherwise a
         # failure between the two steps (disk error, process death) leaves
