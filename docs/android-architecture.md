@@ -127,11 +127,26 @@ android/                          ← new top-level Gradle project
   desktop. We deliberately do not use `WebViewAssetLoader` for the static files —
   splitting origins between assets and API would reintroduce CORS and cookie/URL
   subtleties for zero benefit.
-- **Foreground service during generation.** Android kills backgrounded processes
-  freely. A scene stream in flight promotes the service to foreground (with the
-  standard notification) until the reply is persisted by `_persist_reply`, then demotes.
-  At every other moment we simply accept process death — the store's file-per-record
-  design makes restart lossless.
+- **Foreground service while a run is live.** *Implemented* — `ServerService`
+  promotes on the first live run and demotes on the last, `dataSync` type,
+  with two notification channels registered at service start. Android kills
+  backgrounded processes freely, and a turn now outlives the request that
+  started it: the backend can buffer frames and survive a socket all it likes,
+  but a reclaimed process has nothing left to buffer into.
+
+  The promotion fires at **reservation**, not when the runner starts. The
+  registry goes live before the handler has built its prompt, and that setup can
+  reach semantic recall — a phone locking during it would find the service
+  unpromoted and the process reclaimable before generation ever began, which is
+  precisely the window the service exists to cover.
+
+  A completion notification is posted when a run ends, carrying the scene's
+  stable **identity** rather than its id: a notification can sit unread for a
+  long time and an id moves on rename, so the tap resolves through
+  `GET /scene-by-identity`. `POST_NOTIFICATIONS` is requested at runtime on 13+;
+  denied, the app is degraded but not broken — the reply is on disk and shows on
+  next open. At every other moment we still accept process death — the store's
+  file-per-record design makes restart lossless.
 - **Back button / predictive back** maps to SPA history (`WebView.canGoBack()`),
   falling through to app exit at the history root. Keyboard insets handled with
   `windowSoftInputMode=adjustResize` + the standard edge-to-edge inset listener so
@@ -241,7 +256,7 @@ Nothing in `routes/` or `store/` changes.
 | 3 | **`Pillow` wheel (C).** | Low | In Chaquopy's official repo. Thumbnails (`store/thumbs.py`) work. |
 | 4 | Remaining deps (`httpx`, `jinja2`, `holidays`, `pyluach`, `certifi`, `python-multipart`, `uvicorn` sans extras) | None | Pure Python. |
 | 5 | Cold start: interpreter + FastAPI import on mid-range hardware. | Medium | Splash screen until the port callback fires. Lazy imports are gone — every import in `backend/src/grimoire/` is at module scope (`backend/tests/test_import_guard.py`). `tiktoken` and `claude_agent_sdk` stay absent on Android and cost nothing: each is guarded by a module-level sentinel (`store/tokens.py`, `claude_agent.py`). `jinja2` is a base dep, so its import cost now lands when `grimoire.prompts` is imported rather than at first render — the one cold-start cost this buys. Budget: ≤2.5 s cold on a mid-range device; measure in Phase 0. |
-| 6 | Android kills the process mid-stream → reply lost. | Medium | Foreground service during generation (§4); store design makes every other kill free. |
+| 6 | Android kills the process mid-stream → reply lost. | ~~Medium~~ Mitigated | Foreground service while any run is live (§4), promoted at reservation so the setup window is covered too; the turn is detached from its request, so a dropped socket loses a subscriber rather than the work. Store design makes every other kill free. |
 | 7 | WebView version spread on old devices. | Low | `minSdk 26+`; WebView is auto-updated via Play on effectively all such devices. Fetch-streaming has been in Chromium for years. |
 | 8 | Desktop UI on a 6″ screen unusable without work. | Certain, bounded | Phase 2 responsive pass on the shared frontend (§6.4). |
 | 9 | APK size (~40–60 MB, arm64-only). | Cosmetic | Ship `arm64-v8a` only (covers ~all 2026 devices); add ABIs only if someone asks. |
@@ -269,9 +284,10 @@ all covered by vitest per the existing pattern conventions.
 
 **Phase 3 — device integration.**
 Synced-folder mode (All-files-access flow + native folder picker feeding the existing
-data-dir API), foreground-service polish, share/OPEN intents for character-card
+data-dir API), share/OPEN intents for character-card
 PNG/JSON import (feeding the existing `/characters/import` endpoint), optional
-tiktoken wheel, optional localhost bearer-token hardening.
+tiktoken wheel, optional localhost bearer-token hardening. The foreground
+service and completion notifications landed early, with detached runs — see §4.
 
 ## 9. What we are explicitly not doing
 

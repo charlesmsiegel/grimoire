@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
+import { RunRegistryProvider } from "./runs/RunRegistryProvider";
 import "@fontsource/cinzel/600.css";
 import "@fontsource/cinzel/700.css";
 import "@fontsource/cinzel/900.css";
@@ -16,8 +17,15 @@ import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
+    {/* ABOVE the router, not inside it. A provider under `BrowserRouter`
+        remounts on navigation, and surviving navigation is the one thing this
+        exists to do -- so mounted there it would compile, pass its own tests,
+        and lose every unresolved send the moment the player opened another
+        scene. */}
+    <RunRegistryProvider>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </RunRegistryProvider>
   </React.StrictMode>,
 );

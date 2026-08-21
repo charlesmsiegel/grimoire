@@ -117,6 +117,32 @@ If a gate surfaces findings, address them (or explicitly note why not) before
 moving on. Don't skip a gate because a change feels small — ask the user
 first if you think one should be skipped.
 
+## Detached runs: a turn outlives the request that asked for it
+
+A dropped connection used to cancel generation. It no longer does — it drops a
+subscriber. **Five scene-turn handlers** start detached runs: `post_chat`,
+`post_retry`, `post_regenerate`, `post_replay_turn` and
+`post_roll_proposal`. (Five, not six: `post_opener` is the sixth synchronous
+streaming handler, but it is a `draft` and Phase 1 leaves draft routes alone.)
+
+- The run registry lives on **`app.state.runs`**, not at module scope: a
+  `TestClient` builds an app per test, and module state would leak runs between
+  them. `runner.install` adds the parts that need a running loop.
+- Those handlers are `def`, so FastAPI runs them in a threadpool worker. Work is
+  handed to the lifespan loop through an `anyio` **`BlockingPortal`** —
+  `tg.start_soon` is not thread-safe from a worker.
+- A scene run's subject is **`("scene", cid, identity)`**. The `sid` moves on
+  rename and is reissued after a delete, so it cannot name a run that outlives
+  its request.
+- Every terminal write is **fenced** on that identity under the campaign lock,
+  and every route that changes a scene's *shape* (rename, delete, message edit,
+  cut, retcon, and a width-crossing create) is refused with `scene_busy` while a
+  turn holds it.
+- `store.attempts` is the durable half: whether a send's post is still in the
+  transcript, recorded beside the append and cleared inside the rollback. It is
+  what lets recovery after the run record expired ask a question that has a
+  right answer, instead of matching text.
+
 ## Working notes
 
 - Backend tests isolate the store via `monkeypatch.setenv("GRIMOIRE_HOME", tmp_path)`.

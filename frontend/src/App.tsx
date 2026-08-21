@@ -12,6 +12,7 @@ import { ShellStatusProvider } from "./components/ShellStatus";
 import { onConfigChanged } from "./appEvents";
 import CampaignsView from "./routes/CampaignsView";
 import CampaignWizard from "./routes/CampaignWizard";
+import OpenScene from "./routes/OpenScene";
 import CampaignView from "./routes/CampaignView";
 import LedgerView from "./routes/LedgerView";
 import TimelineView from "./routes/TimelineView";
@@ -74,6 +75,8 @@ function Shell(
             ? <SetupWizard onDone={(dir) => onLeftSetup(dir ?? dataDir)} />
             : <Navigate to="/" replace />} />
         <Route path="/campaigns/new" element={<CampaignWizard ready={ready} />} />
+        {/* Where a completion-notification tap lands; see `OpenScene`. */}
+        <Route path="/open" element={<OpenScene />} />
         {/* Keyed so a campaign→campaign move remounts. The palette made that
             transition reachable: it stays on this route and only changes the
             param, so React reuses the component, and CampaignView's [cid]

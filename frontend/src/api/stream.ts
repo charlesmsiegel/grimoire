@@ -87,13 +87,25 @@ export function parseSSEChunk<T = ChatEvent>(
   buffer: string,
   chunk: string,
   emit: (event: T) => void,
+  onIndex?: (index: number) => void,
 ): string {
   buffer += chunk;
   let idx: number;
   while ((idx = buffer.indexOf("\n\n")) !== -1) {
     const raw = buffer.slice(0, idx);
     buffer = buffer.slice(idx + 2);
-    const line = raw.split("\n").find((l) => l.startsWith("data:"));
+    const lines = raw.split("\n");
+    // BEFORE the `data:` check, and for every frame including comment ones.
+    // The resume cursor has to come from the wire index, not from counting the
+    // events this function surfaced: heartbeats are comment frames with no
+    // `data:` line at all, so a counter undercounts by one per heartbeat and
+    // resumes early, replaying text the reader has already seen mid-reply.
+    const id = lines.find((l) => l.startsWith("id:"));
+    if (id && onIndex) {
+      const n = Number(id.slice("id:".length).trim());
+      if (Number.isInteger(n)) onIndex(n);
+    }
+    const line = lines.find((l) => l.startsWith("data:"));
     if (!line) continue;
     const data = line.slice("data:".length).trim();
     if (!data) continue;

@@ -12,6 +12,7 @@ import {
   type CampaignBudget,
 } from "../api/client";
 import { isAbortError, newAttemptId, type ChatEvent } from "../api/stream";
+import { useRunRegistry } from "../runs/RunRegistryProvider";
 import { forkNotes } from "../components/forkNotes";
 import { ErrorNote } from "../components/ErrorNote";
 import { errorText } from "../api/errors";
@@ -362,6 +363,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // discovery by attempt when it has not.
   const runRef = useRef<
     { cid: string; sid: string; attempt: string; id: string | null } | null>(null);
+  // The half of that which has to outlive this component -- see
+  // `RunRegistryProvider`. `runRef` is the live turn's handle for Stop; this is
+  // the record that a send happened at all, and it is the only thing left after
+  // a navigation or a suspended tab.
+  const registry = useRunRegistry();
   // The in-flight `cancelRun`, so the stream's teardown can wait for it before
   // releasing the scene. The route answers only once the run is really
   // terminal, which is the authoritative "the partial is written and the
@@ -1816,12 +1822,136 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       .catch(() => {});
   }
 
+  /** Resolve a send this client made and never heard the end of.
+   *
+   *  Runs on mount and whenever the tab becomes visible, which are the two
+   *  moments a phone comes back. Four outcomes, and the fourth is the one an
+   *  implementation forgets:
+   *
+   *  - **live** -- the turn is still generating. Attach to its buffer from one
+   *    past the last frame we actually read and render the rest.
+   *  - **terminal** -- it finished while we were away. Refetch the scene; the
+   *    reply is in the transcript.
+   *  - **gone** -- it finished, nobody attached, and the retention window
+   *    passed. Indistinguishable from the above by looking at the registry, and
+   *    surfacing the 404 would report a lost turn that landed perfectly.
+   *  - **rolled back** -- it FAILED after the post was appended, the backend
+   *    took the post off, and the record expired. The refetched transcript is
+   *    correctly missing the post, so settling would discard the only surviving
+   *    copy of what the player typed. `attempt-state` is what tells these last
+   *    two apart, and where it cannot, the text is kept.
+   */
+  /** Read a run's buffered frames from where we left off, then keep reading.
+   *
+   *  The same rendering the live path does, driven from the run's buffer
+   *  instead of from the POST's own response: deltas accumulate into the
+   *  streaming preview, a proposal opens its chip, and `done` or an error ends
+   *  it. The cursor is `resumeFrom` -- one past the last frame actually read --
+   *  so nothing is replayed and nothing is skipped.
+   */
+  const attachToRun = useCallback(async (cid: string, sid: string, runId: string) => {
+    const controller = new AbortController();
+    abortRef.current = controller;
+    runRef.current = { cid, sid, attempt: registry.pending(cid, sid)?.attempt ?? "", id: runId };
+    setBusy(true);
+    setStreamingId(sid);
+    let acc = "";
+    let finished = false;
+    try {
+      await api.attachRun(cid, sid, runId, registry.resumeFrom(runId), (e) => {
+        if (e.delta) { acc += e.delta; setStreaming(acc); }
+        else if (e.error) { fail(e.error, true); finished = true; }
+        else if (e.proposal) {
+          setProposalNow({ id: e.proposal.id, status: "pending",
+                           payload: e.proposal, resolution: null });
+        } else if (e.done) { finished = true; }
+      }, controller.signal, (index) => registry.consume(runId, index));
+    } catch (err) {
+      // A reattach that fails is not a failed turn: the run is on the server
+      // and the reply is heading for the transcript either way. Left unsettled
+      // so the next visibility change tries again.
+      if (!isAbortError(err)) setStreaming("");
+      abortRef.current = null;
+      setBusy(false);
+      setStreamingId(null);
+      return;
+    }
+    if (finished) registry.settle(cid, sid);
+    abortRef.current = null;
+    setBusy(false);
+    setStreamingId(null);
+    // The refetch FIRST, and the preview cleared after it. Clearing first
+    // leaves a window with the text nowhere -- and that window is not
+    // theoretical: the aborted turn's flush poll is still refreshing this
+    // scene, and `selectScene`'s window token retires whichever refetch loses.
+    // Holding the preview means the reader sees the reply either way.
+    await selectScene(sid).catch(() => -1);
+    setStreaming("");
+  }, [registry]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const adoptPendingRun = useCallback(async (cid: string, sid: string) => {
+    const held = registry.pending(cid, sid);
+    if (!held) return;
+    // Not while this component is already driving a turn. Adoption is for a
+    // send we LOST -- the socket died, the tab was suspended, the view
+    // unmounted -- and running it alongside a live stream has two of them
+    // rendering into one scene, refetching over each other and racing to
+    // settle. `abortRef` is set for exactly as long as this view owns a
+    // stream, which is the question being asked.
+    if (abortRef.current) return;
+    // By ATTEMPT, not by the run id we may or may not have seen. The id is a
+    // shortcut; the attempt is what names this send in the window where no
+    // frame ever arrived, which is the window worth recovering from.
+    const handle = await api.findRun(cid, sid, held.attempt)
+      .then((r) => r.run).catch(() => null);
+    if (handle && handle.state === "running") {
+      // STILL GENERATING, and this is the case the whole feature is for. Read
+      // the frames produced while we were away and keep reading live -- the
+      // backend buffered every one of them. Returning here instead (which an
+      // earlier revision of this function did, under a comment claiming
+      // otherwise) leaves the turn running perfectly on the server and the
+      // screen showing nothing until a manual reload.
+      await attachToRun(cid, sid, handle.id);
+      return;
+    }
+    // Either it finished, or its record is gone. Ask the durable question.
+    const durable = await api.attemptState(cid, sid, held.attempt)
+      .then((r) => r.retained)
+      .catch(() => false);   // unresolvable means keep the text; see below
+    registry.settle(cid, sid);
+    await selectScene(sid).catch(() => -1);
+    if (!durable) {
+      // The post is not in the scene. Either it was rolled back or it never
+      // landed -- and both mean the player's words exist only here. Ambiguity
+      // resolves toward the recoverable error every time: wrong this way costs
+      // one duplicate they can see and delete, wrong the other way costs them
+      // their words with no trace at all.
+      if (held.text) recoverPrompt(sid, held.text);
+    }
+  }, [registry, recoverPrompt]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!activeId) return;
+    void adoptPendingRun(cid, activeId);
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && activeIdRef.current) {
+        void adoptPendingRun(cid, activeIdRef.current);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [cid, activeId, adoptPendingRun]);
+
   async function runStream(
     id: string,
     start: (onEvent: (e: ChatEvent) => void, signal: AbortSignal,
-            attempt: string) => Promise<void>,
+            attempt: string, onIndex: (i: number) => void) => Promise<void>,
     onPromptUnstored?: () => void,
     rerolling = false,
+    // What the player typed into this turn, kept in the registry until the
+    // outcome proves it durable. Empty for the turns that submit no text of
+    // their own -- a reroll, a retry -- which have nothing to give back.
+    recoverableText = "",
   ) {
     // The authoritative rename guard, not the ones in `send`/`retry`/`reroll`.
     // Those stop the optimistic UI work before it happens, but they are a list
@@ -1837,6 +1967,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // addressable in the window between the server accepting it and its first
     // frame arriving -- see `runRef`.
     const attempt = newAttemptId();
+    // Registered BEFORE the request goes out. Registering when the leading
+    // frame arrives would leave nothing recorded in exactly the window this is
+    // for: the server accepts the send, mutates the scene, and the response
+    // dies before any frame reaches us.
+    registry.begin({ cid, sid: id, attempt, text: recoverableText, runId: null });
     // The CAMPAIGN travels with the handle. React Router reuses this component
     // across `/campaigns/A` -> `/campaigns/B`, so `cid` is whichever campaign
     // is on screen when Stop is pressed -- and scene ids are campaign-local, so
@@ -1901,6 +2036,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           // discovery round trip. It is a shortcut, not the mechanism: the
           // attempt id above already names this turn.
           if (runRef.current?.attempt === attempt) runRef.current.id = e.run.id;
+          registry.attach(cid, id, e.run.id);
         } else if (e.error) {
           fail(e.error, !(rerolling && acc.trim().length > 0));
           errored = true;
@@ -1914,7 +2050,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         } else if (e.done) {
           finished = true;
         }
-      }, controller.signal, attempt);
+      }, controller.signal, attempt, (index) => {
+        // The WIRE index, so a resume asks for one past what was really read.
+        // Counting the events this callback's sibling surfaced would undercount
+        // by every heartbeat and replay text mid-reply.
+        if (runRef.current?.id) registry.consume(runRef.current.id, index);
+      });
     } catch (err: any) {
       // A cancel is the user getting what they asked for, so it raises no error
       // banner. `done` is parsed before the body reports EOF and Stop stays live
@@ -1948,6 +2089,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // it does for `unreached` (review, #95).
       else if (err instanceof ApiError) refused = true;
     } finally {
+      // The outcome is established, however it ended: a `done` frame, an error
+      // frame the backend chose to send, or a refusal. Recovery is for the
+      // sends whose outcome nobody ever learned, so anything that got this far
+      // with an answer stops being one of those. A stream that was cut without
+      // an answer deliberately does NOT settle -- that is the case the registry
+      // exists for, and it is left for the adoption pass to resolve.
+      if (finished || errored || refused) registry.settle(cid, id);
       abortRef.current = null;
       // Beside `abortRef`, and load-bearing for the same reason: left set, a
       // Stop pressed while the NEXT turn is still connecting would address this
@@ -1972,6 +2120,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         // not swallowed -- the player pressed a button and it did not work.
         try {
           await pending;
+          // A CONFIRMED stop is an established outcome. The player asked for
+          // it and the server said the run is terminal, so there is nothing
+          // for recovery to resolve -- and leaving it pending would have the
+          // adoption pass re-litigate a turn the player already ended.
+          registry.settle(cid, id);
         } catch {
           setError({ text: "could not reach the server to stop this turn — it "
                            + "may still be generating", retryable: false });
@@ -2188,9 +2341,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (activePcless || !content) {
       if (activePcless) setDirectorNote(content || null);
       try {
-        const landed = await runStream(id, (onEvent, signal, attempt) => pendingResponse
-          ? api.chat(cid, id!, content, onEvent, pendingResponse, signal, attempt)
-          : api.chat(cid, id!, content, onEvent, undefined, signal, attempt));
+        const landed = await runStream(id,
+          (onEvent, signal, attempt, onIndex) => pendingResponse
+            ? api.chat(cid, id!, content, onEvent, pendingResponse, signal, attempt, onIndex)
+            : api.chat(cid, id!, content, onEvent, undefined, signal, attempt, onIndex));
         if (landed) setPendingResponse(null);
       } finally {
         setDirectorNote(null);
@@ -2212,10 +2366,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // moved on. The appending rule that used to live here moved with it — see
     // `giveBackPrompt`. `id`, captured here, is the scene this prompt was
     // written for, and it stays right however long the recovery takes.
-    const landed = await runStream(id, (onEvent, signal, attempt) => pendingResponse
-      ? api.chat(cid, id!, content, onEvent, pendingResponse, signal, attempt)
-      : api.chat(cid, id!, content, onEvent, undefined, signal, attempt),
-      () => recoverPrompt(id!, content));
+    const landed = await runStream(id,
+      (onEvent, signal, attempt, onIndex) => pendingResponse
+        ? api.chat(cid, id!, content, onEvent, pendingResponse, signal, attempt, onIndex)
+        : api.chat(cid, id!, content, onEvent, undefined, signal, attempt, onIndex),
+      () => recoverPrompt(id!, content), false,
+      // The words the player typed, held until the outcome proves them durable.
+      content);
     if (landed) setPendingResponse(null);
   }
 

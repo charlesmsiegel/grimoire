@@ -107,6 +107,22 @@ def _date_hint(cid: str, suggested_date: str | None) -> str:
         return ""
 
 
+def create_would_repad(cid: str) -> bool:
+    """Whether the next scene created here would widen the whole campaign.
+
+    Asked by the route before it creates, because a repad renames every scene
+    in the campaign and a live turn holds the path it captured. Read-only and
+    lock-free: it is a hint the caller acts on under its own guard, not a
+    promise -- another create landing in between simply means the guard is
+    consulted a scene later than it might have been.
+    """
+    try:
+        number, width = serialize._numbering(cid)
+    except (OSError, campaigns_paths.CampaignNotFound):
+        return False        # nothing to widen, or nothing readable to widen
+    return len(str(number)) > width
+
+
 @locking._serialized
 def _create_scene(cid: str, title: str, pcless: bool, date_hint: str) -> str:
     paths._require_campaign(cid)

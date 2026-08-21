@@ -151,6 +151,11 @@ class LiveServer:
         self._held.append(held)
         return held
 
+    def set_provider(self, provider) -> None:
+        """Install a plain (unheld) provider -- for the setup a test needs
+        before the moment it wants to hold."""
+        self.app.dependency_overrides[routes.get_llm] = lambda: provider
+
     def release_all(self) -> None:
         """Let every held provider finish.
 

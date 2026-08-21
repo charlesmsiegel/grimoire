@@ -32,6 +32,7 @@ from . import (
     appearances,
     assets,
     atomic,
+    attempts,
     audit,
     backups,
     birthdays,
@@ -164,6 +165,7 @@ from .worlds import WorldNotFound
 __all__ = [
     "absorb",
     "alternates",
+    "attempts",
     "backups",
     "briefing",
     "cascade",

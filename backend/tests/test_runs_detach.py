@@ -16,6 +16,7 @@ import time
 import httpx
 
 import grimoire.store as store
+from tests.llm_fakes import FakeOpenRouter
 
 
 def _subject(cid, sid):
@@ -208,3 +209,60 @@ def test_a_reply_never_lands_on_a_scene_that_recycled_the_id(live_server):
     assert run.error and run.error["kind"] == "scene_replaced"
     assert not store.scenes.read_scene(cid, recycled)["messages"], \
         "the dead scene's reply was appended to its replacement"
+
+
+def _mech_scene(url: str) -> tuple[str, str]:
+    """A module-bound campaign with one sheeted, cast character, built over
+    HTTP so it works against the live server exactly as a client would."""
+    httpx.put(f"{url}/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    wid = httpx.post(f"{url}/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = httpx.post(f"{url}/api/campaigns",
+                     json={"name": "Saltmarch", "world": wid}).json()["id"]
+    httpx.put(f"{url}/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    chid = httpx.post(f"{url}/api/worlds/{wid}/characters",
+                      json={"name": "Mara"}).json()["character"]
+    sid = httpx.post(f"{url}/api/campaigns/{cid}/scenes",
+                     json={"title": "Dock"}).json()["id"]
+    httpx.post(f"{url}/api/campaigns/{cid}/scenes/{sid}/cast",
+               json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
+    store.sheets.write(cid, "characters", chid, "medium",
+                       {"vigor": 3, "brawl": 2, "wits": 2, "occult": 1}, expected=None)
+    return cid, sid
+
+
+def test_a_dropped_subscriber_does_not_cancel_a_roll_continuation(live_server):
+    """The same guarantee, through the OTHER kind of producer.
+
+    `post_roll_proposal` streams `_continuation_stream`, not `_chat_stream`,
+    and it lives in a different module -- so an implementation that migrated
+    the chat path and stopped would pass every other detach test here while
+    locking the phone during an accepted roll still cancelled it and dropped
+    the narration. A roll is exactly when a player looks away.
+    """
+    url = live_server.url
+    cid, sid = _mech_scene(url)
+    # A fence in the reply mints the pending proposal, the way play does it.
+    live_server.set_provider(FakeOpenRouter(
+        ["She lunges—\n", "```roll\n",
+         '{"check": "brawl", "actor": "characters:mara", "difficulty": 6}',
+         "\n```", "trailing"]))
+    httpx.post(f"{url}/api/campaigns/{cid}/scenes/{sid}/chat",
+               json={"content": "go"}, timeout=15)
+    rec = httpx.get(f"{url}/api/campaigns/{cid}/scenes/{sid}/roll-proposal"
+                    ).json()["record"]
+    assert rec and rec["status"] == "pending", "the premise failed: no proposal"
+
+    held = live_server.hold_provider("The lamps gutter, then hold.")
+    body = {"proposal": rec["id"], "action": "accept", "check": "brawl",
+            "actor": "characters:mara", "difficulty": 6, "modifier": 0}
+    with httpx.stream("POST", f"{url}/api/campaigns/{cid}/scenes/{sid}/roll-proposal",
+                      json=body, timeout=15) as r:
+        run_id = _first_run_frame(r)["run"]["id"]
+        held.await_first_delta()
+        r.close()                       # the phone locks, mid-narration
+
+    held.release()
+    run = _wait_terminal(live_server.app, run_id, _subject(cid, sid))
+    assert run.state == "landed", f"the continuation was {run.state}, not landed"
+    reply = store.scenes.read_scene(cid, sid)["messages"][-1]["content"]
+    assert "gutter" in reply.lower(), "the accepted roll's narration was dropped"

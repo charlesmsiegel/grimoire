@@ -846,7 +846,7 @@ test("Enter sends a message in the active scene", async () => {
   fireEvent.change(ta, { target: { value: "hello" } });
   fireEvent.keyDown(ta, { key: "Enter" });
   await waitFor(() =>
-    expect(api.chat).toHaveBeenCalledWith("run", "s1", "hello", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String)),
+    expect(api.chat).toHaveBeenCalledWith("run", "s1", "hello", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String), expect.any(Function)),
   );
 });
 
@@ -903,7 +903,7 @@ test("sends the one-shot override in the chat request payload", async () => {
   fireEvent.click(screen.getByRole("button", { name: /Send/ }));
   await waitFor(() => expect(api.chat).toHaveBeenCalledWith(
     "run", "s1", "Go on.", expect.any(Function), { response_preset: "terse" },
-    expect.any(AbortSignal), expect.any(String)));
+    expect.any(AbortSignal), expect.any(String), expect.any(Function)));
 });
 
 test("a failed stream keeps the override, and retry carries it", async () => {
@@ -932,7 +932,7 @@ test("sending with no scene creates one first", async () => {
   fireEvent.change(ta, { target: { value: "hi" } });
   fireEvent.keyDown(ta, { key: "Enter" });
   await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("run"));
-  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "hi", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String)));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "hi", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String), expect.any(Function)));
 });
 
 test("+ New Scene opens the chooser without creating a scene", async () => {
@@ -1706,8 +1706,13 @@ test("Stop during the preflight read does not strand the turn", async () => {
   fireEvent.change(ta, { target: { value: "I draw my blade." } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
-  // the turn unwinds instead of hanging: Send comes back and so does the prompt
-  await screen.findByRole("button", { name: /continue ▶/i });
+  // The turn unwinds instead of hanging: the composer accepts input again and
+  // the prompt comes back. Asserted as "Stop is gone", not as a specific
+  // label -- the composer reads `Continue ▶` while it is empty and `Send ▸`
+  // once the text is restored, so naming one pins whichever happens to win the
+  // race between the unwind and the recovery rather than the guarantee.
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: /stop ■/i })).toBeNull());
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
 });
 
@@ -3651,7 +3656,7 @@ test("offscreen scene: empty Continue sends an empty note", async () => {
   (api.listScenes as any).mockResolvedValue(OFFSCREEN_SCENE);
   renderCampaign();
   fireEvent.click(await screen.findByRole("button", { name: /continue ▶/i }));
-  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String)));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String), expect.any(Function)));
 });
 
 test("offscreen scene: typed note shows transiently, never lands in messages", async () => {
@@ -3680,7 +3685,7 @@ test("normal scene: empty Continue sends an ephemeral round, no user message add
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
   fireEvent.click(await screen.findByRole("button", { name: /continue ▶/i }));
-  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String)));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String), expect.any(Function)));
 });
 
 test("Roll dice is disabled on a fresh scene until the opener/cast setup produces a message", async () => {
@@ -5056,7 +5061,8 @@ test("the first send into an empty campaign puts its new scene in the URL", asyn
 
   await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1"));
   expect(api.chat).toHaveBeenCalledWith("run", "s1", "we begin",
-    expect.anything(), undefined, expect.anything(), expect.any(String));
+    expect.anything(), undefined, expect.anything(), expect.any(String),
+    expect.any(Function));
 });
 
 test("a scene list arriving after a campaign switch does not strand the view", async () => {
@@ -6057,4 +6063,91 @@ test("the budget banner says where the budget can be changed", async () => {
 
   expect(await screen.findByText(/Change it in the inspector’s Cost section\./))
     .toBeInTheDocument();
+});
+
+
+test("a turn that kept generating while the tab was away is read back on return", async () => {
+  // THE feature. A send goes out, the socket dies mid-generation, the phone
+  // locks. The backend keeps going and buffers every frame. When the tab comes
+  // back this has to read the frames produced while nobody was listening --
+  // an earlier revision detected the live run and returned, under a comment
+  // claiming it attached, so the turn finished perfectly on the server and the
+  // screen showed nothing until a manual reload.
+  //
+  // The asserted text is the narration generated WHILE AWAY, never the player's
+  // own post: the post comes back with the scene refetch whether or not a
+  // single buffered frame was applied, so asserting on it would pass against an
+  // implementation that requests the right offset and drops everything it gets.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  // The socket DIES -- it is not stopped. A confirmed Stop is an established
+  // outcome and settles; this is the case where nobody ever learned anything,
+  // which is the only one recovery is for.
+  (api.chat as any).mockImplementation(async (
+    _c: string, _s: string, _t: string, onEvent: any) => {
+    onEvent({ run: { id: "run-9", attempt_id: "a", state: "running", next_index: 1 } });
+    throw new Error("network");
+  });
+  (api.findRun as any).mockResolvedValue({
+    run: { id: "run-9", attempt_id: "a", state: "running", next_index: 4 } });
+  // The transcript grows ONLY once the reattach has actually run, which is
+  // what makes this discriminate. Returning the narration unconditionally
+  // would let the refetch that follows Stop show it, and the test would pass
+  // against an implementation that detects the live run and returns.
+  let attached = false;
+  (api.getScene as any).mockImplementation(async () => ({
+    meta: {},
+    messages: attached
+      ? [{ role: "assistant", content: "The lamps are already lit." }]
+      : [],
+  }));
+  (api.attachRun as any).mockImplementation(async (
+    _c: string, _s: string, _r: string, _from: number, onEvent: any) => {
+    attached = true;
+    onEvent({ delta: "The lamps are already lit." });
+    onEvent({ done: true });
+  });
+
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Mara waits." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalled());
+  await screen.findByRole("button", { name: /(send ▸|continue ▶)/i });
+
+  act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+
+  await waitFor(() => expect(api.attachRun).toHaveBeenCalled());
+  expect(await screen.findByText(/The lamps are already lit\./)).toBeInTheDocument();
+});
+
+test("the reattach asks from one past what was read, not from the live tail", async () => {
+  // `next_index` is where the run is NOW. Resuming from it drops everything
+  // generated while the client was away -- which, in the case this exists for,
+  // is the entire reply. The cursor has to be one past the last frame actually
+  // read, and the run frame this send received was index 0.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(async (
+    _c: string, _s: string, _t: string, onEvent: any, _r: unknown,
+    _signal: AbortSignal, _a: string, onIndex: (i: number) => void) => {
+    // The wire order the backend actually produces: `tail_response` yields the
+    // lead run frame with NO `id:` prefix, and the buffered frames follow it
+    // starting at index 0. So the run is named before any index arrives.
+    onEvent({ run: { id: "run-9", attempt_id: "a", state: "running", next_index: 1 } });
+    onIndex(0);
+    onEvent({ delta: "The lamps " });
+    throw new Error("network");           // the socket dies after one frame
+  });
+  (api.findRun as any).mockResolvedValue({
+    run: { id: "run-9", attempt_id: "a", state: "running", next_index: 12 } });
+
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Mara waits." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalled());
+  await screen.findByRole("button", { name: /(send ▸|continue ▶)/i });
+
+  act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+
+  await waitFor(() => expect(api.findRun).toHaveBeenCalled());
+  await waitFor(() => expect(api.attachRun).toHaveBeenCalled());
+  expect((api.attachRun as any).mock.calls[0][3]).toBe(1);   // not 12
 });

@@ -823,14 +823,34 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
 
 
 def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
-                         conn: dict, client: LLMClient):
+                         conn: dict, client: LLMClient, *,
+                         identity: str | None, outcome: StreamOutcome | None):
     """Stream a proposal's continuation and commit it atomically. A supersede
     that lands mid-stream makes ``commit_narration`` return False and the
     streamed text is dropped. A follow-up fence in the continuation hands off
     under one lock: commit the old record's narration, then mint the new
-    pending record, then emit its proposal event."""
+    pending record, then emit its proposal event.
+
+    `identity` and `outcome` mean what they do on `_chat_stream`, and are
+    keyword-only and required for the same reason: this producer is detached
+    too, so an adjudicated roll survives a locked phone -- which is exactly
+    when a player looks away."""
+    box = outcome if outcome is not None else StreamOutcome()
     def finalize(watcher) -> list[str]:
-        frames: list[str] = []
+        # Under one acquisition with the fence, like `_chat_stream`'s: the
+        # commit below is a terminal write and the check that guards it cannot
+        # be split from it. Reentrant, so `commit_narration`'s own take is free.
+        with store.locks.campaign_lock(cid):
+            if _scene_moved(cid, sid, identity):
+                box.fail("scene_replaced", _MOVED)
+                frames = [_sse({"error": {"kind": "scene_replaced", "detail": _MOVED}})]
+            else:
+                frames = _finalize_continuation(watcher, [])
+        # Outside the `with`, so this has one exit mypy can see -- see the same
+        # shape in `_chat_stream.finalize`.
+        return frames
+
+    def _finalize_continuation(watcher, frames: list[str]) -> list[str]:
         # A continuation whose entire output was a tracker block persists no
         # post, and `commit_narration` marks the record `narrated` on the
         # strength of having CALLED persist, not on what it wrote. The proposal
@@ -865,7 +885,8 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
     # cleanly. Persisting here would be worse than losing the text — narration
     # committed outside `commit_narration` is narration a supersede can no
     # longer displace.
-    return _fence_stream(cid, sid, messages, conn, client, finalize, task="continuation")
+    return _fence_stream(cid, sid, messages, conn, client, finalize,
+                         task="continuation", outcome=box)
 
 
 def _ephemeral_stream(messages: list[dict], conn: dict, client: LLMClient,

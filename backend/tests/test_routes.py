@@ -52,6 +52,12 @@ def _unfenced_stream(*args, **kw):
     return routes.streaming._chat_stream(*args, identity=None, outcome=None, **kw)
 
 
+def _unfenced_continuation(*args, **kw):
+    """ with the fence and the outcome box off, for the
+    same reason as  above."""
+    return routes.streaming._continuation_stream(*args, identity=None, outcome=None, **kw)
+
+
 def _world(client, name="W"):
     return client.post("/api/worlds", json={"name": name}).json()["id"]
 
@@ -13243,7 +13249,7 @@ async def test_a_tracker_only_continuation_stays_retryable(monkeypatch, tmp_path
         async def stream(self, messages, cfg, usage=None):
             yield '```state\n{"W": {"mood": "wry"}}\n```'
 
-    resp = routes.streaming._continuation_stream(
+    resp = _unfenced_continuation(
         cid, sid, rec["id"], [{"role": "user", "content": "and then?"}],
         {"kind": "openrouter", "model": "m"}, TrackerOnly())
     frames = "".join([f async for f in resp.body_iterator])

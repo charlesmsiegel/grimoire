@@ -1333,19 +1333,27 @@ forgotten — which is exactly why they are named here.
 
 No template changes, so `evals/run.py` should not move.
 
-**`snapshot.json` will move, and that is expected.** The sweep snapshots the
-full `store.scenes.read_scene` payload (`sweep.py:188`), so adding a scene
-identity to the scene record changes its output for every scene in the frozen
-fixture. An earlier draft of this section said the opposite — that a moved
-snapshot is a finding rather than a regeneration — which is exactly the
-instruction that would make an implementer chase an expected gate failure as a
-bug, or quietly leave the backfill out of the compatibility sweep.
+**`snapshot.json` must NOT move.** *(Amended 2026-08-21, during
+implementation; supersedes this section's original text, which said the
+snapshot would move and that this was expected. See
+`docs/superpowers/plans/2026-08-20-detached-runs-core.md` Task 1.)*
 
-So: the sweep runs the new backfill, the resulting snapshot change is reviewed
-line by line to confirm the *only* difference is the new field, and it is
-regenerated deliberately and committed with the change, per
-`AGENTS.md` and that directory's README. `home/` is still never regenerated.
-If any *other* part of the payload moves, that is the finding.
+The identity is a correctness token, not scene content, and `read.read_scene`
+filters it out of the payload the sweep snapshots. That is deliberate and it is
+why the snapshot holds still.
+
+The original reasoning was sound about the mechanism — the sweep snapshots the
+full `read_scene` payload — and wrong about the conclusion. A scene identity is
+a fresh `uuid4()` per scene, so a snapshot containing one would produce
+different bytes on every regeneration, destroying the single property that
+fixture exists for: being old, and stable, and therefore able to catch a change
+that breaks reading what an *older* version wrote. Filtering the field out keeps
+an unchanged `snapshot.json` a real assertion rather than a chore.
+
+So: the sweep runs the new backfill, and the snapshot is expected to be
+byte-identical afterwards. `home/` is still never regenerated. **A moved
+snapshot is a finding**, and the first thing to check is whether the identity
+has leaked into the read payload.
 
 ## Risks and accepted limitations
 

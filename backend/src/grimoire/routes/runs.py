@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import threading
 import time
 import uuid
@@ -37,6 +38,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from .. import runner, store
+from ..store import attempts as scenes_attempts
 from ..store import scenes
 from ..store.campaigns import read as campaigns_read
 from ..store.campaigns.paths import CampaignNotFound
@@ -289,7 +291,50 @@ class RunRegistry:
         # so the oldest can be dropped when the cap is reached -- see
         # `cancel_or_precancel`. The values are unused; only membership matters.
         self._precancelled: dict[tuple[Subject, str], None] = {}
+        # Which runs are live, and who to tell when that set becomes empty or
+        # stops being empty. The Android shell promotes its server to a
+        # foreground service on the first and demotes on the second, which is
+        # what stops the OS reclaiming the process mid-turn.
+        self._live: set[str] = set()
+        self._on_live_change: Callable[[int], None] | None = None
         self._by_key: dict[str, str] = {}
+
+    def set_live_sink(self, sink: Callable[[int], None] | None) -> None:
+        """Who to tell when the live-run count crosses zero.
+
+        Set by the app at startup. Absent -- every desktop install -- the
+        transitions are computed and dropped, which costs a set operation.
+        """
+        self._on_live_change = sink
+
+    def _fire_live(self, count: int | None) -> None:
+        """Announce a crossing, OUTSIDE the registry lock and fail-soft.
+
+        Outside, because the sink calls into the Android runtime and a
+        cross-language call under this lock is the same deadlock shape the
+        portal events already taught us. Fail-soft, because a foreground
+        promotion the OS refuses must not take down a run that is generating
+        perfectly well -- a notification is the least important thing here.
+        """
+        if count is None or self._on_live_change is None:
+            return
+        try:
+            self._on_live_change(count)
+        except Exception:                                    # noqa: BLE001
+            _log.exception("live-run callback failed")
+
+    def retire(self, run_id: str) -> None:
+        """Note that a run is no longer live, and announce it if it was the last.
+
+        Called by the runner on every terminal path, including the pre-start
+        release: a run reserved by a route that then refuses is never entered by
+        the runner at all, and a demotion hung off the runner would leave the
+        service pinned by a run that no longer exists.
+        """
+        with self._lock:
+            self._live.discard(run_id)
+            count = len(self._live) if not self._live else None
+        self._fire_live(count)
 
     def set_event_factory(self, factory: Callable[[], HandshakeEvent]) -> None:
         """Swap the factory used for runs published from here on.
@@ -302,7 +347,8 @@ class RunRegistry:
 
     def start_or_existing(self, subject: Subject, cls: RunClass, kind: str,
                           attempt_id: str | None, scene_identity: str | None,
-                          labels: dict) -> tuple[Run, bool]:
+                          labels: dict, adopt_terminal: bool = True,
+                          ) -> tuple[Run, bool]:
         """Reserve a run, or hand back the one this attempt already made.
 
         ``labels`` is required, not optional: left defaultable, an
@@ -330,10 +376,18 @@ class RunRegistry:
                 # client retrying an old attempt id after the scene was deleted
                 # and its id recycled would otherwise adopt the dead scene's run
                 # and receive its frames.
-                if existing is not None and self._owns(existing, subject, scene_identity):
-                    # Returned even when terminal: a client whose response was
-                    # lost re-sends with the same id and must adopt the original
-                    # outcome rather than start the work a second time.
+                if existing is not None and self._owns(existing, subject, scene_identity) \
+                        and (adopt_terminal or existing.state == "running"):
+                    # Returned even when terminal, for a CLIENT's id: a client
+                    # whose response was lost re-sends the same one and must
+                    # adopt the original outcome rather than do the work twice.
+                    #
+                    # `adopt_terminal=False` is for an id the SERVER derived --
+                    # from a proposal, say. That is only a dedupe key for
+                    # concurrent duplicates, not a promise from anyone that this
+                    # is the same logical request, so a later retry of a turn
+                    # that FAILED has to be allowed to actually retry. Adopting
+                    # there would make one crashed adjudication permanent.
                     return existing, False
 
             key = exclusion_key(subject, cls)
@@ -360,7 +414,16 @@ class RunRegistry:
                     run.cancel_requested = True
             if key is not None:
                 self._by_key[key] = run.id
-            return run, True
+            self._live.add(run.id)
+            # Announced at RESERVATION, not when the runner starts. The registry
+            # goes live before the handler has built its prompt, and that setup
+            # is not always fast -- context construction can reach semantic
+            # recall. A phone locking during it would find the service
+            # unpromoted and the process reclaimable before the runner ever
+            # began, losing the turn in exactly the window this protects.
+            crossed = len(self._live) if len(self._live) == 1 else None
+        self._fire_live(crossed)
+        return run, True
 
     @staticmethod
     def _now() -> float:
@@ -448,6 +511,22 @@ class RunRegistry:
             run = self._runs.get(known) if known else None
             return run if self._owns(run, subject, identity) else None
 
+    def live_running_in(self, cid: str) -> Run | None:
+        """Any live run anywhere in this campaign, for the operations that
+        reshape a campaign rather than one scene.
+
+        `repad` is the one: crossing 999 -> 1000 scenes renames EVERY scene in
+        the campaign and repoints their sidecars, so every live turn in it
+        loses the path it captured. Asking scene by scene cannot express that
+        question, and refusing the explicit rename route never covered it.
+        """
+        with self._lock:
+            for run in self._runs.values():
+                if (run.state == "running" and run.subject[0] == "scene"
+                        and run.subject[1] == cid):
+                    return run
+            return None
+
     def live_for_key(self, key: str | None) -> Run | None:
         """The running holder of an exclusion key, if there is one."""
         if key is None:
@@ -515,6 +594,8 @@ def install_registry(app) -> None:
 # response. Nothing here imports `streaming` or `scenes` -- the registry is
 # reachable from the whole route layer, and a dependency in that direction
 # would make the module graph cyclic (`test_import_guard`).
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -743,6 +824,37 @@ def post_attempt_cancel(cid: str, sid: str, request: Request,
     return {"run": _run_payload(run)}
 
 
+@router.get("/campaigns/{cid}/scenes/{sid}/attempt-state")
+def get_attempt_state(cid: str, sid: str, request: Request,
+                      attempt: str = Query(...)) -> dict:
+    """Whether this attempt's post is still in the scene, and its run if one
+    is still known.
+
+    The question a client asks when it comes back after the run record expired.
+    Every other route here reads the in-memory registry, which by definition no
+    longer has a reaped run -- so without this the client cannot ask the only
+    decisive question at all, and #95's ambiguity returns the moment
+    `REAP_SECONDS` passes.
+
+    `retained` is the durable half and comes from `store.attempts`. It answers
+    False for everything unresolved -- no identity, no record, an unreadable
+    file -- because the caller's rule is that ambiguity keeps the player's
+    text: wrong this way costs one duplicate they can see and delete, wrong the
+    other way costs them their words with no trace.
+
+    Scene-scoped like every route here, so an attempt belonging to another
+    scene answers about nothing rather than about that scene.
+    """
+    subject, identity = _scene_subject(cid, sid)
+    run = request.app.state.runs.for_attempt(subject, attempt, identity)
+    return {
+        "attempt": attempt,
+        "retained": scenes_attempts.retained(
+            cid, None if identity == UNRESOLVED else identity, attempt),
+        "run": _run_payload(run) if run is not None else None,
+    }
+
+
 @router.get("/campaigns/{cid}/scenes/{sid}/runs/{run_id}/stream")
 def get_run_stream(cid: str, sid: str, run_id: str, request: Request,
                    from_: int = Query(0, alias="from")):
@@ -859,6 +971,23 @@ def start_detached(app, run: Run, producer, outcome=None) -> None:
     # reads the flag until this route returns, so there is no window here.
     runner.start(app, run, pump)
     run.started = True
+
+
+def answer_without_running(app, run: Run, frames: list[str]):
+    """End a reserved run that answered on its own, and hand back its answer.
+
+    For the exits that produce a complete response without generating anything
+    -- an already-narrated proposal, a check that would not resolve. Returning
+    those frames directly would leave the run holding an empty buffer, and a
+    duplicate request adopting it by attempt id (which is the whole point of
+    the id) would then be handed a stream containing nothing at all. Buffering
+    them first makes the run the single record of what this request answered,
+    however it answered.
+    """
+    for frame in frames:
+        run.append_frame(frame)
+    release_before_start(app, run, "landed")
+    return tail_response(run, 0, lead=lead_frame(run))
 
 
 @contextlib.contextmanager
@@ -984,8 +1113,13 @@ def require_scene_free(app, cid: str, sid: str) -> None:
         return                       # no identity, so no run can name this scene
     live = app.state.runs.live_for_key(exclusion_key(("scene", cid, identity), "turn"))
     if live is not None:
+        # `scene_busy`, not `run_in_flight`. They are different refusals and the
+        # client acts on them differently: `run_in_flight` answers "you cannot
+        # start another turn here", which resolves itself when this one lands;
+        # this one answers "you cannot change the SHAPE of this scene while a
+        # turn is reading it", which is about renaming, editing and cutting.
         raise HTTPException(status_code=409, detail={
-            "kind": "run_in_flight", "run_id": live.id,
+            "kind": "scene_busy", "run_id": live.id,
             "detail": "a turn is running on this scene; stop it first"})
 
 
@@ -993,6 +1127,13 @@ def require_scene_free(app, cid: str, sid: str) -> None:
 def scene_held_free(app, cid: str, sid: str):
     """Hold the campaign lock across BOTH the scene-free check and the mutation
     it guards.
+
+    Every route that changes a scene's SHAPE goes through this -- rename,
+    delete, message edit, message cut, retcon -- because detaching a turn made
+    all of them concurrent with generation. A turn composes its prompt from the
+    transcript as it stood and finalizes against the transcript as it is, so a
+    post edited or cut underneath it produces a reply answering a question
+    nobody asked any more, appended to history that has moved.
 
     Checking and then mutating is two steps, and a reservation fits between
     them: the check sees no run, a send reserves and detaches, and the rename
@@ -1010,8 +1151,19 @@ def scene_held_free(app, cid: str, sid: str):
         yield
 
 
+def require_campaign_free(app, cid: str) -> None:
+    """Refuse an operation that reshapes EVERY scene in a campaign while any of
+    them is generating -- see `RunRegistry.live_running_in`."""
+    live = app.state.runs.live_running_in(cid)
+    if live is not None:
+        raise HTTPException(status_code=409, detail={
+            "kind": "scene_busy", "run_id": live.id,
+            "detail": "a turn is running in this campaign; stop it first"})
+
+
 def reserve_turn(app, cid: str, sid: str, kind: str,
-                 attempt_id: str | None) -> tuple[Run, bool]:
+                 attempt_id: str | None,
+                 adopt_terminal: bool = True) -> tuple[Run, bool]:
     """Reserve a `turn` run for this scene, or raise 409 if one is in flight.
 
     `attempt_id` comes from the `X-Grimoire-Attempt` header. Absent or
@@ -1055,7 +1207,8 @@ def reserve_turn(app, cid: str, sid: str, kind: str,
         # serialized on it) and it is reentrant, so this costs nothing.
         with store.locks.campaign_lock(cid):
             run, fresh = app.state.runs.start_or_existing(
-                subject, "turn", kind, attempt, identity, labels)
+                subject, "turn", kind, attempt, identity, labels,
+                adopt_terminal=adopt_terminal)
     except RunInFlightError as exc:
         raise HTTPException(status_code=409, detail={
             "kind": "run_in_flight", "run_id": exc.run_id,

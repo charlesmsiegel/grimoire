@@ -320,3 +320,25 @@ def test_the_ordinary_end_of_scene_review_badges_nothing(client):
         '{"one_line": "They entered.", "summary": "The party entered.",'
         ' "keywords": [], "timeline_events": []}')
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["contradictions"] == []
+
+
+def test_a_replay_turn_detaches_like_any_other(client, scene):
+    """The replay producer is a scene turn too, and a phone locking during one
+    must not kill it. Covered here rather than beside the other producers
+    because only this suite has the staged session it needs."""
+    cid, sid = scene
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    from grimoire import routes
+    from tests.llm_fakes import FakeOpenRouter
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["a reply"])
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/replay", json={"index": 1})
+
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/replay/turn")
+
+    assert r.status_code == 200, r.text
+    first = json.loads(r.text.split("data: ", 1)[1].split("\n", 1)[0])
+    assert "run" in first, "the replay turn sent no leading run frame"
+    found = client.app.state.runs.for_subject(
+        ("scene", cid, store.scenes.scene_identity(cid, sid)))
+    assert found and found[-1].kind == "replay"
+    assert found[-1].state == "landed", found[-1].error

@@ -37,6 +37,12 @@ export async function campaignApiMock() {
       // attempt id the client minted. Defaults to "no such run", which is the
       // answer for a send the server never accepted.
       findRun: vi.fn(() => Promise.resolve({ run: null })),
+      // Reattachment: the buffered frames of a run that outlived its socket.
+      // Defaults to producing nothing, so a suite that does not care about
+      // recovery sees the same behaviour it always did.
+      attachRun: vi.fn(() => Promise.resolve()),
+      attemptState: vi.fn(() => Promise.resolve({ attempt: "", retained: true, run: null })),
+      sceneByIdentity: vi.fn(),
       // Stop when no leading frame arrived: cancel by attempt id, which the
       // server consumes at reservation time. Defaults to a terminal answer so
       // the poll loop settles on the first round.

@@ -87,7 +87,21 @@ def _open_store_to_usb(home_dir: str) -> None:
         pass
 
 
-def start_server(home_dir: str, dist_dir: str, templates_dir: str, callback) -> None:
+def start_server(home_dir: str, dist_dir: str, templates_dir: str, callback,
+                 runs=None) -> None:
+    """Serve the app, and -- on Android -- let the shell know about live runs.
+
+    `runs` is the Kotlin `RunCallback`, or `None` on any host that has no
+    shell to tell (the desktop entry point, and every test). It is what makes a
+    detached turn survive a locked phone: without a foreground service the OS
+    may reclaim this process mid-generation, and without the terminal callback
+    nothing tells the player their reply arrived.
+
+    Stashed on `app.state` rather than passed down, because the two things that
+    need it -- the run registry and the runner -- are reached from request
+    handlers and from the lifespan loop respectively, and neither takes a
+    parameter from here.
+    """
     os.environ["HOME"] = home_dir
     os.environ["GRIMOIRE_DIST"] = dist_dir
     os.environ["GRIMOIRE_TEMPLATES"] = templates_dir
@@ -105,8 +119,15 @@ def start_server(home_dir: str, dist_dir: str, templates_dir: str, callback) -> 
     sock.listen(64)
     callback.onPort(sock.getsockname()[1])
 
+    app = create_app()
+    if runs is not None:
+        # Fail-soft at the boundary, and again at each call site: a shell that
+        # cannot promote itself is a degraded install, not a broken turn.
+        app.state.runs.set_live_sink(runs.onRunsChanged)
+        app.state.on_run_terminal = runs.onRunTerminal
+
     config = uvicorn.Config(
-        create_app(),
+        app,
         # explicit pure-python implementations: uvicorn[standard]'s compiled
         # extras live in the pyproject `desktop` extra and aren't installed here
         http="h11",

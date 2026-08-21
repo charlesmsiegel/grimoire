@@ -372,3 +372,73 @@ def test_a_stop_after_the_reservation_finds_the_run_itself():
     assert found is run
     assert not run.cancel_requested, "the registry cancelled it rather than the caller"
     assert not reg._precancelled, "a record was left for an attempt that had a run"
+
+
+# --- the live-run count the Android shell promotes on -----------------------
+
+def test_the_live_callback_fires_at_reservation_not_when_the_runner_starts():
+    """The promotion has to happen the moment a run is RESERVED.
+
+    The registry goes live before the handler has built its prompt, and that
+    setup is not always fast -- context construction can reach semantic recall.
+    A phone locking during it would find the service unpromoted and the process
+    reclaimable before the detached runner ever began, losing the turn in
+    exactly the window the foreground service exists to protect.
+
+    So this asserts the callback has ALREADY fired with the runner untouched,
+    which fails against any implementation that hangs it off `runner.start`.
+    """
+    reg = runs.RunRegistry()
+    seen: list[int] = []
+    reg.set_live_sink(seen.append)
+
+    reg.start_or_existing(SCENE, "turn", "chat", "a1", "i1", LABELS)
+
+    assert seen == [1], f"promotion did not fire at reservation: {seen}"
+
+
+def test_the_live_callback_fires_on_a_release_that_never_started():
+    """And the matching demotion. A run reserved by a route that then refuses
+    is never entered by the runner at all, so a demotion hung off the runner
+    would leave the service pinned by a run that no longer exists."""
+    reg = runs.RunRegistry()
+    seen: list[int] = []
+    reg.set_live_sink(seen.append)
+    run, _ = reg.start_or_existing(SCENE, "turn", "chat", "a1", "i1", LABELS)
+
+    reg.retire(run.id)                  # what the pre-start release path does
+
+    assert seen == [1, 0], f"demotion did not fire on release: {seen}"
+
+
+def test_the_callback_only_speaks_at_the_crossings():
+    """Not once per run. The shell promotes on the first live run and demotes
+    on the last, and a callback per reservation would have it thrashing the
+    foreground state on every turn of a busy campaign."""
+    reg = runs.RunRegistry()
+    seen: list[int] = []
+    reg.set_live_sink(seen.append)
+    a, _ = reg.start_or_existing(SCENE, "turn", "chat", "a1", "i1", LABELS)
+    b, _ = reg.start_or_existing(OTHER, "turn", "chat", "a2", "i2", LABELS)
+
+    reg.retire(a.id)
+    reg.retire(b.id)
+
+    assert seen == [1, 0], f"the callback spoke between crossings: {seen}"
+
+
+def test_a_failing_callback_does_not_reach_the_run():
+    """Fail-soft, and this is the direction that matters: a foreground
+    promotion the OS refuses, or a notification that cannot be built, must not
+    take down a turn that is generating perfectly well."""
+    reg = runs.RunRegistry()
+
+    def refuse(_count):
+        raise RuntimeError("the OS said no")
+
+    reg.set_live_sink(refuse)
+
+    run, fresh = reg.start_or_existing(SCENE, "turn", "chat", "a1", "i1", LABELS)
+
+    assert fresh and run.state == "running"
+    reg.retire(run.id)                  # and the other direction too
