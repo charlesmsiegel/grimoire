@@ -23,7 +23,7 @@ from grimoire.store import atomic
 from tests.llm_fakes import (  # the shared gateway fakes (#204)
     CapturingOpenRouter,
     FailingOpenRouter,
-    FakeModelsClient,
+    FakeCatalog,
     FakeOpenRouter,
     FakeOpenRouterComplete,
     QuietThenAnswers,
@@ -186,8 +186,13 @@ def test_delete_connection_not_found_404(client):
     assert client.delete("/api/llm-connections/nope").status_code == 404
 
 
-def test_models_refresh_400_for_openrouter_and_claude(client):
-    assert client.post("/api/llm-connections/openrouter/models/refresh").status_code == 400
+def test_models_refresh_400_only_for_the_kind_with_no_catalog(client):
+    """#149: OpenRouter is listable now — server-side, with the key attached —
+    and only `claude`, whose models are SDK aliases with nothing to enumerate,
+    is refused."""
+    fake = FakeCatalog(models=[])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    assert client.post("/api/llm-connections/openrouter/models/refresh").status_code == 200
     assert client.post("/api/llm-connections/claude/models/refresh").status_code == 400
 
 
@@ -195,18 +200,21 @@ def test_models_refresh_404_for_missing_connection(client):
     assert client.post("/api/llm-connections/nope/models/refresh").status_code == 404
 
 
-def test_models_refresh_fetches_and_caches(client):
+def test_models_refresh_asks_the_connections_own_provider(client):
+    """The whole of #149's remaining gap: the catalog comes from the connection
+    being refreshed, not from a hardcoded OpenRouter URL."""
     r = client.post("/api/llm-connections", json={
         "kind": "openai_compatible", "name": "Endpoint", "base_url": "https://x", "api_key": "sk-x"})
     cid = r.json()["id"]
-    fake = FakeModelsClient(models=[
+    fake = FakeCatalog(models=[
         {"id": "glm-4.6", "name": "GLM-4.6", "context": 128000, "prompt": None, "completion": None}])
-    client.app.dependency_overrides[routes.get_openai_compatible_client] = lambda: fake
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
     r = client.post(f"/api/llm-connections/{cid}/models/refresh")
     assert r.status_code == 200
     assert r.json()["models"] == fake.models
-    assert fake.calls == [("https://x", "sk-x")]
+    assert [(c["kind"], c["base_url"], c["api_key"]) for c in fake.listed] == [
+        ("openai_compatible", "https://x", "sk-x")]
 
     # persisted: a plain GET now shows the cached list without another fetch
     detail = client.get(f"/api/llm-connections/{cid}").json()
@@ -214,13 +222,26 @@ def test_models_refresh_fetches_and_caches(client):
     assert detail["fetched_at"]
 
 
+def test_models_refresh_for_openrouter_presents_the_stored_key(client):
+    """The browser-side fetch this replaced was unauthenticated by
+    construction: it had no key to send. A key that OpenRouter rejects is now
+    a 502 from the refresh instead of a surprise on the first turn."""
+    fake = FakeCatalog(models=[{"id": "a/b", "name": "B", "context": 8, "prompt": "0",
+                                "completion": "0"}])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-live"})
+
+    assert client.post("/api/llm-connections/openrouter/models/refresh").status_code == 200
+    assert [(c["kind"], c["api_key"]) for c in fake.listed] == [("openrouter", "sk-or-live")]
+
+
 def test_models_refresh_upstream_error_normalized(client):
     from grimoire.llm_errors import LLMError
     r = client.post("/api/llm-connections", json={
         "kind": "openai_compatible", "name": "Endpoint", "base_url": "https://x", "api_key": "sk-x"})
     cid = r.json()["id"]
-    fake = FakeModelsClient(error=LLMError("auth", "bad key"))
-    client.app.dependency_overrides[routes.get_openai_compatible_client] = lambda: fake
+    fake = FakeCatalog(error=LLMError("auth", "bad key"))
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
     r = client.post(f"/api/llm-connections/{cid}/models/refresh")
     assert r.status_code == 502
@@ -241,12 +262,12 @@ def test_models_refresh_route_write_hidden_if_connection_changes_during_the_fetc
         "kind": "openai_compatible", "name": "Endpoint", "base_url": "https://old", "api_key": "sk-x"})
     cid = r.json()["id"]
 
-    class MutatingFakeClient:
-        async def list_models(self, base_url, key):
+    class MutatingFakeClient(FakeCatalog):
+        async def list_models(self, conn):
             store.llm_connections.update_connection(cid, base_url="https://mutated-during-fetch")
             return [{"id": "m", "name": "m", "context": None, "prompt": None, "completion": None}]
 
-    client.app.dependency_overrides[routes.get_openai_compatible_client] = lambda: MutatingFakeClient()
+    client.app.dependency_overrides[routes.get_llm] = lambda: MutatingFakeClient()
     r = client.post(f"/api/llm-connections/{cid}/models/refresh")
     assert r.status_code == 200
     assert r.json()["models"] == [{"id": "m", "name": "m", "context": None, "prompt": None, "completion": None}]
@@ -261,15 +282,15 @@ def test_models_refresh_route_write_hidden_after_delete_and_recreate_during_fetc
         "kind": "openai_compatible", "name": "Reused Name", "base_url": "https://old", "api_key": "sk-x"})
     cid = r.json()["id"]
 
-    class DeleteRecreateFakeClient:
-        async def list_models(self, base_url, key):
+    class DeleteRecreateFakeClient(FakeCatalog):
+        async def list_models(self, conn):
             store.llm_connections.delete_connection(cid)
             new_id = store.llm_connections.create_connection(
                 "openai_compatible", "Reused Name", base_url="https://new")
             assert new_id == cid  # same freed slug — the whole point of this race
             return [{"id": "m", "name": "m", "context": None, "prompt": None, "completion": None}]
 
-    client.app.dependency_overrides[routes.get_openai_compatible_client] = lambda: DeleteRecreateFakeClient()
+    client.app.dependency_overrides[routes.get_llm] = lambda: DeleteRecreateFakeClient()
     r = client.post(f"/api/llm-connections/{cid}/models/refresh")
     assert r.status_code == 200
 

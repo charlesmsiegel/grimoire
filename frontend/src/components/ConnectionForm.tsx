@@ -26,14 +26,19 @@ export const BLANK_CONNECTION: ConnectionFormValue = {
  *  Claude wants neither, a custom endpoint wants a base URL and its own model
  *  list) is the part worth having exactly once.
  *
- *  Kept dumb on purpose — no fetching, no saving. `orModels`/`cachedModels`
- *  arrive as data and `modelsHint` as a slot, because the affordance that
- *  belongs there differs by caller: the editor offers a refresh of a saved
- *  connection's cached model list, and a wizard creating its first connection
- *  has nothing to refresh yet. */
+ *  Kept dumb on purpose — no fetching, no saving. `models` arrives as data and
+ *  `modelsHint` as a slot, because the affordance that belongs there differs by
+ *  caller: the editor offers a refresh of a saved connection's cached model
+ *  list, and a wizard creating its first connection has nothing to refresh yet.
+ *
+ *  One `models` list, not one per kind (#149). It used to take OpenRouter's
+ *  catalog and a custom endpoint's separately, which is what let the OpenRouter
+ *  field show OpenRouter's models no matter which provider was configured; the
+ *  caller now resolves "this connection's catalog" once and the branching here
+ *  is only over which *fields* a kind has. */
 export function ConnectionForm({
   value, onChange, apiKey, onApiKey, keySet = false, lockKind = false,
-  orModels = [], orError = false, cachedModels = [], modelsHint,
+  models = [], modelsError = false, modelsHint,
 }: {
   value: ConnectionFormValue;
   onChange: (next: ConnectionFormValue) => void;
@@ -43,9 +48,10 @@ export function ConnectionForm({
   keySet?: boolean;
   /** Kind is immutable once a connection exists — the stored shape depends on it. */
   lockKind?: boolean;
-  orModels?: Model[];
-  orError?: boolean;
-  cachedModels?: Model[];
+  /** This connection's own catalog, however the caller got it. */
+  models?: Model[];
+  /** The catalog could not be loaded — the combobox falls back to free text. */
+  modelsError?: boolean;
   modelsHint?: ReactNode;
 }) {
   const set = (patch: Partial<ConnectionFormValue>) => onChange({ ...value, ...patch });
@@ -72,8 +78,9 @@ export function ConnectionForm({
           </Field>
           <Field label="Model">
             <ModelCombobox value={value.model} onChange={(v) => set({ model: v })}
-                           models={orModels} error={orError} />
+                           models={models} error={modelsError} />
           </Field>
+          {modelsHint}
         </>
       )}
 
@@ -110,7 +117,7 @@ export function ConnectionForm({
           </Field>
           <Field label="Model">
             <ModelCombobox value={value.model} onChange={(v) => set({ model: v })}
-                           models={cachedModels} />
+                           models={models} error={modelsError} />
           </Field>
           {modelsHint}
           <Field label="Prompt post-processing"

@@ -7,7 +7,7 @@ docs/superpowers/specs/2026-07-10-claude-provider-design.md for the policy notes
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 
 from . import llm_usage
 from .llm_errors import LLMError
@@ -139,9 +139,16 @@ def _flatten(turns: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
+#: What `probe` sends. Short on both sides on purpose: the reply is discarded
+#: at its first word, and a prompt long enough to be interesting would be a
+#: prompt long enough to be worth caching, billing and reading.
+_PROBE_MESSAGES = [{"role": "system", "content": "Reply with the single word: ok"},
+                   {"role": "user", "content": "ping"}]
+
+
 class ClaudeAgentClient:
     async def stream(self, messages: list[dict], model: str,
-                     usage: dict | None = None) -> AsyncIterator[str]:
+                     usage: dict | None = None) -> AsyncGenerator[str, None]:
         """`usage`, when given, is filled in place from the run's trailing
         `ResultMessage` — see `_capture_usage`."""
         if query is None:
@@ -175,6 +182,38 @@ class ClaudeAgentClient:
             raise
         except Exception as exc:
             raise ClaudeAgentError("network", str(exc)) from exc
+
+    async def probe(self, model: str) -> None:
+        """Ask whether this path can generate. Returns on yes, raises on no.
+
+        The other two kinds have a free endpoint that answers "is this
+        credential good" without generating anything. This one has none: auth
+        is the host's Claude Code login, and the only thing that knows whether
+        it is still valid is the CLI, which learns it by running. So the probe
+        is a real (tiny, capped-at-one-turn) generation — the cheapest honest
+        answer, and one that costs a subscription turn rather than money.
+
+        It stops at the first word rather than reading the reply out: closing
+        the iterator unwinds `query`, which is the same shutdown the facade's
+        idle bound already performs on every cancelled generation. A run that
+        ends having said nothing at all still counts as healthy — the question
+        asked here is whether the path works, not whether the model was
+        talkative.
+
+        A missing or broken SDK never reaches the subprocess: `stream` raises
+        `missing_dependency` from the captured import failure, which is the
+        answer, and a cheaper one than spawning to find out.
+        """
+        # Typed as a generator rather than an iterator (see `stream`) precisely
+        # so this close is checkable: an iterator has no `aclose`, and an
+        # abandoned SDK query would then be left to the garbage collector.
+        agen = self.stream(_PROBE_MESSAGES, model)
+        try:
+            async for chunk in agen:
+                if chunk:
+                    return
+        finally:
+            await agen.aclose()
 
     async def complete(self, messages: list[dict], model: str,
                        usage: dict | None = None) -> str:

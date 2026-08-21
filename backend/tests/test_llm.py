@@ -85,6 +85,90 @@ async def test_missing_kind_defaults_to_openrouter():
     assert [c async for c in client.stream([], conn)] == ["or"]
 
 
+# ---- the catalog and the probe are dispatched by kind too (#146, #149) ----
+class _Asked:
+    """Records what it was asked, for the two non-generating calls."""
+
+    def __init__(self, models=()):
+        self.models = list(models)
+        self.listed = []
+        self.probed = []
+
+    async def list_models(self, *args):
+        self.listed.append(args)
+        return self.models
+
+    async def probe(self, *args):
+        self.probed.append(args)
+
+
+def _asking_client(**kinds):
+    return LLMClient(openrouter=kinds.get("openrouter", _Asked()),
+                     claude=kinds.get("claude", _Asked()),
+                     openai_compatible=kinds.get("openai_compatible", _Asked()))
+
+
+async def test_list_models_asks_openrouter_for_an_openrouter_connection():
+    """#149's gap in one assertion: the catalog comes from the connection's own
+    provider, with its own key, rather than from a hardcoded URL."""
+    op = _Asked(models=[{"id": "a/b"}])
+    client = _asking_client(openrouter=op)
+
+    assert await client.list_models(_conn("openrouter", api_key="sk-or-x")) == [{"id": "a/b"}]
+    assert op.listed == [("sk-or-x",)]
+
+
+async def test_list_models_asks_the_endpoint_for_a_custom_connection():
+    oc = _Asked()
+    client = _asking_client(openai_compatible=oc)
+
+    await client.list_models(_conn("openai_compatible", base_url="https://x/v1", api_key="k"))
+
+    assert oc.listed == [("https://x/v1", "k")]
+
+
+async def test_list_models_refuses_the_kind_with_no_catalog():
+    """A backstop: the route already refuses this, and what it must not do is
+    reach a provider with no `list_models` and raise an AttributeError."""
+    client = _asking_client()
+    with pytest.raises(LLMError) as exc:
+        await client.list_models(_conn("claude"))
+    assert "catalog" in exc.value.detail
+
+
+async def test_check_probes_the_connections_own_provider():
+    op, cl, oc = _Asked(), _Asked(), _Asked()
+    client = _asking_client(openrouter=op, claude=cl, openai_compatible=oc)
+
+    await client.check(_conn("openrouter", api_key="sk-or-x"))
+    await client.check(_conn("claude", model=""))
+    await client.check(_conn("openai_compatible", base_url="https://x/v1", api_key="k"))
+
+    assert op.probed == [("sk-or-x",)]
+    assert cl.probed == [("opus",)]        # the effective model, as a turn would run
+    assert oc.probed == [("https://x/v1", "k")]
+
+
+async def test_a_failing_check_is_not_retried_or_fallen_back_to_another_provider():
+    """"Is this connection healthy" answered by trying a different connection
+    is not an answer, and a retry would report a rate-limited provider as
+    healthy after waiting out the very window being asked about."""
+    class _Refuses(_Asked):
+        async def probe(self, *args):
+            self.probed.append(args)
+            raise LLMError("rate_limit", "slow down")
+
+    op, oc = _Refuses(), _Asked()
+    client = LLMClient(openrouter=op, claude=_Asked(), openai_compatible=oc,
+                       retries=3, fallback=lambda: _conn("openai_compatible", id="fb"))
+
+    with pytest.raises(LLMError) as exc:
+        await client.check(_conn("openrouter", id="or"))
+
+    assert exc.value.kind == "rate_limit"
+    assert len(op.probed) == 1 and oc.probed == []
+
+
 
 # ---- idle timeout (#243) ----
 

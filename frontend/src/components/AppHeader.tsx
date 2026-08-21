@@ -1,4 +1,5 @@
 import { NavLink } from "react-router-dom";
+import type { ProviderHealth } from "../api/client";
 import { useFocus } from "./focus";
 import { usePalette } from "./palette";
 import { useShellStatus } from "./ShellStatus";
@@ -12,8 +13,33 @@ import { useShellStatus } from "./ShellStatus";
  *  connection is usable — and CONFIG.
  *
  *  There is no nav sidebar and no scene rail. That is not an omission. */
+/** The dot's three states, and the words that go with them.
+ *
+ *  `ready` is a statement about the *stored settings* — a key string is
+ *  present, a base URL is set — and until #146 it was the only thing the header
+ *  had, so a revoked key drew the same green dot as a working one. `health` is
+ *  what the provider last actually did: a real turn's outcome, or an explicit
+ *  Test connection.
+ *
+ *  A configured-but-unproven connection stays green rather than going amber.
+ *  It is the state every app start begins in, and a warning shown to everyone
+ *  every morning is a warning nobody reads by lunchtime; the tooltip says "not
+ *  checked" for the reader who looks.
+ */
+function verdict(connection: string, ready: boolean, health: ProviderHealth | null) {
+  if (!connection) return { tone: "off", words: "No connection" };
+  if (!ready) return { tone: "off", words: `${connection}, not ready` };
+  if (health?.state === "error") {
+    return { tone: "bad", words: `${connection}, failing: ${health.detail || health.kind}` };
+  }
+  if (health?.state === "ok") return { tone: "ok", words: `${connection}, connected` };
+  return { tone: "ok", words: `${connection}, not checked yet` };
+}
+
 export default function AppHeader(
-  { model, connection, ready }: { model: string; connection: string; ready: boolean },
+  { model, connection, ready, health }: {
+    model: string; connection: string; ready: boolean; health: ProviderHealth | null;
+  },
 ) {
   const { setOpen } = usePalette();
   const { setFocus } = useFocus();
@@ -22,6 +48,7 @@ export default function AppHeader(
   const where = context
     ? (context.scene ? `${context.campaign} / ${context.scene}` : context.campaign)
     : "go anywhere";
+  const status = verdict(connection, ready, health);
 
   return (
     <header className="app-header">
@@ -49,14 +76,11 @@ export default function AppHeader(
         {/* The dot is the whole connection widget. Its title carries the name
             and the verdict, because a coloured dot that cannot be hovered —
             on a phone — must still not be the only place a broken connection
-            is reported; Config says it in words. */}
-        <span className={"conn-dot" + (ready ? " ok" : " off")}
-              title={connection ? `${connection} · ${ready ? "connected" : "not ready"}`
-                                : "No connection"}>
+            is reported; the Connections page says it in words, beside the
+            key it is about. */}
+        <span className={"conn-dot " + status.tone} title={status.words}>
           <span aria-hidden>●</span>
-          <span className="sr-only">
-            {connection ? `${connection}, ${ready ? "connected" : "not ready"}` : "No connection"}
-          </span>
+          <span className="sr-only">{status.words}</span>
         </span>
       </div>
 

@@ -6,6 +6,8 @@ these fakes implement exactly the surface `llm.LLMClient` exposes to routes:
 
     async def stream(messages, conn, usage=None) -> AsyncIterator[str]
     async def complete(messages, conn, usage=None) -> str
+    async def list_models(conn) -> list[dict]
+    async def check(conn) -> None
 
 `usage` is the accounting holder the real facade fills in place (#152). Every
 call stamps the route it ran on, exactly as `llm._stamp` does -- not a courtesy,
@@ -155,7 +157,10 @@ class FakeLLM:
     def __init__(self, turns: list[list[str]] | None = None, *,
                  cassette: Cassette | None = None,
                  error: LLMError | None = None, stall: bool = False,
-                 fail_after: int = 0, usage: dict | None = None):
+                 fail_after: int = 0, usage: dict | None = None,
+                 models: list[dict] | None = None,
+                 models_error: LLMError | None = None,
+                 health_error: LLMError | None = None):
         if (turns is None) == (cassette is None):
             raise ValueError("FakeLLM takes exactly one of `turns` or `cassette`")
         if turns is not None and not turns:
@@ -174,8 +179,20 @@ class FakeLLM:
         self.fail_after = fail_after
         self.stall = stall
         self.usage = usage
+        #: The catalog `list_models` answers, and the failures the two
+        #: non-generating halves of the surface raise (#146, #149). Separate
+        #: from `error` on purpose: a connection whose *generation* fails is
+        #: not thereby one whose catalog fails, and a test that conflated them
+        #: could not tell a route that asks the wrong provider from one that
+        #: asks the right provider badly.
+        self.models = list(models or [])
+        self.models_error = models_error
+        self.health_error = health_error
         self.requests: list[dict] = []
         self.calls = 0
+        #: The connections `list_models`/`check` were asked about, in order.
+        self.listed: list[dict] = []
+        self.checked: list[dict] = []
 
     # ---- the LLMClient surface ----
     async def stream(self, messages, conn, usage=None):
@@ -216,6 +233,25 @@ class FakeLLM:
         # suggestions) sail past the very condition the test set up. One call is
         # still recorded, because `stream` records exactly once.
         return "".join([delta async for delta in self.stream(messages, conn, usage)])
+
+    async def list_models(self, conn) -> list[dict]:
+        """The catalog half of the facade's surface (#149).
+
+        Records the whole connection, not just its base URL: which *provider*
+        a catalog was fetched from is the entire question the issue is about,
+        and a fake that only kept the URL could not tell an OpenRouter fetch
+        from a custom endpoint's.
+        """
+        self.listed.append(conn)
+        if self.models_error is not None:
+            raise self.models_error
+        return list(self.models)
+
+    async def check(self, conn) -> None:
+        """The health half (#146). Returns on healthy, raises on not."""
+        self.checked.append(conn)
+        if self.health_error is not None:
+            raise self.health_error
 
     # ---- inspection ----
     @property
@@ -302,27 +338,25 @@ class FailingOpenRouter(FakeLLM):
                          fail_after=fail_after)
 
 
-class FakeModelsClient:
-    """Stands in for `OpenAICompatibleClient` at the
-    `routes.get_openai_compatible_client` seam.
+class FakeCatalog(FakeLLM):
+    """A gateway that answers catalog and health questions, for the routes that
+    ask them (#146, #149).
 
-    Not a `FakeLLM`: model listing is a different dependency with a one-method
-    surface, and inheriting the gateway fake would mean answering `stream` and
-    `complete` calls this seam never receives. It lives here anyway, so the
-    "never write another inline fake" rule has somewhere to point for the second
-    seam as well as the first.
+    There used to be a second fake here for a second seam: model listing was a
+    dependency of its own, injected at `routes.get_openai_compatible_client`,
+    because the gateway dispatched generation by connection kind and knew
+    nothing about catalogs. #149 made listing kind-dispatched too — an
+    OpenRouter connection lists OpenRouter's models and a custom endpoint lists
+    its own — so it moved onto the facade, and the seam it needed went with it.
+
+    `turns` is defaulted rather than required: these tests drive a route that
+    never generates, and a fake that demanded a script for a call it will not
+    receive would be noise in every one of them.
     """
 
-    def __init__(self, models=None, error=None):
-        self.models = models or []
-        self.error = error
-        self.calls = []
-
-    async def list_models(self, base_url, key):
-        self.calls.append((base_url, key))
-        if self.error:
-            raise self.error
-        return self.models
+    def __init__(self, models=None, error=None, health_error=None, turns=(("ok",),)):
+        super().__init__([list(t) for t in turns], models=models,
+                         models_error=error, health_error=health_error)
 
 
 class StallingOpenRouter(FakeLLM):

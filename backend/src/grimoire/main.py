@@ -17,6 +17,7 @@ from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import runner
+from .health import ProviderHealth
 from .routes import build_llm, build_openai_compatible_client, router, runs
 from .store import backups, campaigns, locks, logs, migrations, module_edit
 
@@ -280,12 +281,17 @@ def create_app() -> FastAPI:
     # attaches to and, more importantly, what it deliberately does not.
     logs.install()
     app = FastAPI(title="grimoire", lifespan=_lifespan)
+    # What each connection's provider last did, for this app (#146). Built
+    # before the gateway because the gateway reports into it: every generation
+    # that settles tells the registry what happened, which is what keeps the
+    # status bar honest between explicit checks.
+    app.state.health = ProviderHealth()
     # The gateway clients belong to the app, not the module (#215): each owns an
     # `httpx` connection pool, and `_lifespan` closes both on shutdown. Built
     # here rather than in the lifespan so the dependency resolves for a
     # `TestClient` that never runs one -- and it costs nothing to, since neither
     # client opens a socket before its first call.
-    app.state.llm = build_llm()
+    app.state.llm = build_llm(app.state.health)
     app.state.openai_compatible = build_openai_compatible_client()
     # Same reasoning as the gateway clients directly above: the run registry is
     # pure data with nothing to close, and a bare `TestClient` never runs a

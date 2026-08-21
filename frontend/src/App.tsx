@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { api } from "./api/client";
+import { api, type ProviderHealth } from "./api/client";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import { DEFAULT_MODE } from "./theme/themes";
 import AppHeader from "./components/AppHeader";
@@ -36,9 +36,10 @@ import SetupWizard from "./routes/SetupWizard";
  *  the ⌘K hotkey can live *under* `PaletteProvider` — a hook cannot read a
  *  context its own component renders. */
 function Shell(
-  { inSetup, dataDir, ready, connection, model, onLeftSetup }: {
+  { inSetup, dataDir, ready, connection, model, health, onLeftSetup }: {
     inSetup: boolean; dataDir: string; ready: boolean;
-    connection: string; model: string; onLeftSetup: (dir: string) => void;
+    connection: string; model: string; health: ProviderHealth | null;
+    onLeftSetup: (dir: string) => void;
   },
 ) {
   const location = useLocation();
@@ -56,7 +57,8 @@ function Shell(
           ~300px of chrome that, on a phone, left a transcript about half the
           viewport. */}
       {focus ? <FocusRestore />
-             : <AppHeader model={model} connection={connection} ready={ready} />}
+             : <AppHeader model={model} connection={connection} ready={ready}
+                          health={health} />}
       <AppPaletteSource />
       <CommandPalette />
       {/* `?`, and the sheet that lists whatever is bound where you are
@@ -172,6 +174,11 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [connection, setConnection] = useState("");
   const [model, setModel] = useState("");
+  // What the active provider last did (#146). It rides the config read the
+  // header already makes rather than a poll of its own: every navigation
+  // refreshes it, and the server updates it from real turns and from an
+  // explicit Test connection, so the dot tracks the thing it claims to.
+  const [health, setHealth] = useState<ProviderHealth | null>(null);
 
   const location = useLocation();
 
@@ -210,6 +217,7 @@ export default function App() {
       setDataDir(c.data_dir);
       setConnection(c.active_connection ? c.active_connection.name.toUpperCase() : "");
       setModel(c.active_connection?.model ?? "");
+      setHealth(c.health);
     });
     return () => { live = false; };
   }, [location.pathname, configRev]);
@@ -222,7 +230,7 @@ export default function App() {
         <FocusProvider>
           <PaletteProvider>
             <Shell inSetup={inSetup} dataDir={dataDir} ready={ready}
-                   connection={connection} model={model}
+                   connection={connection} model={model} health={health}
                    onLeftSetup={setLeftSetupFor} />
           </PaletteProvider>
         </FocusProvider>

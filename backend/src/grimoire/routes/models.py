@@ -94,6 +94,26 @@ class ConnectionUpdate(BaseModel):
     post_process: Literal["none", "strict"] | None = None
 
 
+class CatalogProbe(BaseModel):
+    """A connection described but not saved, for the sake of listing its models.
+
+    The setup wizard and the New-connection form both need a catalog before
+    there is anything on disk to hang one on (#149) — the wizard's whole job is
+    picking a model for a connection that does not exist yet. Same fields as
+    `ConnectionCreate` minus the ones a catalog cannot use: no name (nothing is
+    being named), no model (that is what this is for), no post-processing (a
+    prompt-shaping rule with no prompt to shape).
+
+    The key travels as it does on create: this route is how a typed-but-unsaved
+    key gets exercised, and refusing to carry one would leave the wizard listing
+    only the catalogs that need no auth.
+    """
+
+    kind: Literal["openrouter", "claude", "openai_compatible"]
+    base_url: str = ""
+    api_key: str = ""
+
+
 class DataDirUpdate(BaseModel):
     data_dir: str | None = None
 

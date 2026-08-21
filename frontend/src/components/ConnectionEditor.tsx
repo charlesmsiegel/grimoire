@@ -1,8 +1,31 @@
-import { useCallback, useEffect, useState } from "react";
-import { api, type LLMConnection, type LLMConnectionDetail } from "../api/client";
-import { getModels, type Model } from "../api/models";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  api, type HealthCheckResult, type LLMConnection, type LLMConnectionDetail,
+  type LLMConnectionKind, type Model, type ProviderHealth,
+} from "../api/client";
 import { BLANK_CONNECTION, ConnectionForm } from "./ConnectionForm";
 import { ErrorNote } from "./ErrorNote";
+
+/** Connection kinds whose provider can be asked for a catalog (#149).
+ *
+ *  Mirrors `llm.LISTABLE_KINDS`, and is checked here for the same reason the
+ *  route checks it there: `claude`'s models are SDK aliases with no endpoint to
+ *  enumerate, so the form offers that kind a fixed list and this must not offer
+ *  it a Fetch button that can only ever 400. */
+const LISTABLE: LLMConnectionKind[] = ["openrouter", "openai_compatible"];
+
+/** What the last thing this connection's provider did says, in words.
+ *
+ *  Words rather than only a colour, and beside the credential rather than only
+ *  in the status bar: the dot in the header cannot be hovered on a phone, and
+ *  the reader who needs the *reason* is the one already looking at the key
+ *  (#146). */
+function healthLabel(health: ProviderHealth): string {
+  if (health.state === "unknown") return "Not checked yet.";
+  const when = health.at ? ` · ${new Date(health.at).toLocaleString()}` : "";
+  if (health.state === "ok") return `Working${when}`;
+  return `${health.detail || health.kind}${when}`;
+}
 
 export function ConnectionEditor() {
   const [connections, setConnections] = useState<LLMConnection[]>([]);
@@ -15,18 +38,36 @@ export function ConnectionEditor() {
   // Raw: fetching a model catalog goes out to the provider, so this banner
   // is one of the places being offline shows up (#210).
   const [error, setError] = useState<unknown>(null);
-  const [orModels, setOrModels] = useState<Model[]>([]);
-  const [orError, setOrError] = useState(false);
+  const [models, setModels] = useState<Model[]>([]);
+  const [modelsError, setModelsError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [checked, setChecked] = useState<HealthCheckResult | null>(null);
+  // Connections whose empty catalog has already been fetched once this mount.
+  // Without it, a connection whose provider is unreachable re-fetches on every
+  // re-render that reselects it — and the failure is exactly the case where
+  // retrying in a loop is worst.
+  const fetchedOnce = useRef(new Set<string>());
 
   const reload = useCallback(() => api.listConnections().then(setConnections), []);
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => { api.getConfig().then((c) => setActiveId(c.active_connection_id)); }, []);
+
+  // The catalog for a connection that does not exist yet (#149). OpenRouter's
+  // is public and needs no key, so the New-connection form can fill its picker
+  // the moment the kind is chosen — which is what it did before, except that it
+  // did it for every kind. A custom endpoint has nothing to fetch until a base
+  // URL is typed, so that one waits for the button.
   useEffect(() => {
+    if (id !== null) return;              // a saved connection reads its cache
+    setModelsError(false);
+    if (form.kind !== "openrouter") { setModels([]); return; }
     let alive = true;
-    getModels().then((m) => alive && setOrModels(m)).catch(() => alive && setOrError(true));
+    api.previewModels({ kind: "openrouter" })
+      .then((r) => alive && setModels(r.models))
+      .catch(() => alive && setModelsError(true));
     return () => { alive = false; };
-  }, []);
+  }, [id, form.kind]);
 
   function resetForm() {
     setId(null);
@@ -35,16 +76,35 @@ export function ConnectionEditor() {
     setKey("");
     setMode("edit");
     setError(null);
+    setChecked(null);
   }
 
   async function select(cid: string) {
     setError(null);
+    setChecked(null);
+    setModelsError(false);
     const d = await api.readConnection(cid);
     setId(cid);
     setDetail(d);
     setForm({ kind: d.kind, name: d.name, base_url: d.base_url, model: d.model, post_process: d.post_process });
     setKey("");
     setMode("view");
+    setModels(d.models);
+    // An OpenRouter connection that has never been fetched has an empty
+    // picker, which is how all of them arrive the first time after #149 —
+    // their catalog used to be fetched by the browser on mount and cached
+    // nowhere. Filling it on open keeps that behaviour rather than making the
+    // reader press a button nobody told them about.
+    //
+    // OpenRouter only, and not `LISTABLE`: its catalog is public, served by a
+    // host that is up, and costs one cheap GET. A custom endpoint can be a
+    // local server that is switched off, where the same courtesy is a stall on
+    // merely *looking* at a connection — so that kind keeps its explicit
+    // button, exactly as it had before.
+    if (d.kind === "openrouter" && d.models.length === 0 && !fetchedOnce.current.has(cid)) {
+      fetchedOnce.current.add(cid);
+      await refreshModels(cid, { quiet: true });
+    }
   }
 
   async function save() {
@@ -57,6 +117,10 @@ export function ConnectionEditor() {
         };
         if (key) patch.api_key = key;
         await api.updateConnection(id, patch);
+        // The saved settings are new ones, so whatever their predecessors
+        // fetched is not this connection's catalog any more — let the reselect
+        // below fetch it again rather than showing the old endpoint's models.
+        fetchedOnce.current.delete(id);
         await reload();
         await select(id);
       } else {
@@ -72,6 +136,7 @@ export function ConnectionEditor() {
   async function remove(c: LLMConnection) {
     if (!window.confirm(`Delete connection '${c.name}'?`)) return;
     await api.deleteConnection(c.id);
+    fetchedOnce.current.delete(c.id);
     if (id === c.id) resetForm();
     await reload();
   }
@@ -81,7 +146,7 @@ export function ConnectionEditor() {
     setActiveId(next.active_connection_id);
   }
 
-  /** Fetch this connection's model catalog from its provider.
+  /** Fetch this connection's model catalog from its own provider (#149).
    *
    *  A failure here is reported and nothing else: the connection is NOT marked
    *  unreachable, and the cached list it already has stays exactly where it is
@@ -89,14 +154,20 @@ export function ConnectionEditor() {
    *  endpoint — it can be a proxy, a cold local server, or the reader having
    *  clicked while their laptop's wifi was reassociating — and a rail badge
    *  saying "unreachable" would outlive the condition with nothing to clear
-   *  it. "Is this endpoint up" is a poll with its own lifecycle, which is
-   *  #146; this stays a per-call failure. */
-  async function refreshModels() {
-    if (!id) return;
-    const forId = id;
+   *  it. "Is this endpoint up" is a question with its own button now (#146),
+   *  and its verdict is cleared by editing the connection; this stays a
+   *  per-call failure.
+   *
+   *  `quiet` is for the fetch nobody asked for (the one on open): it degrades
+   *  the picker to free text and says so *there*, without raising a banner
+   *  about a request the reader did not make. A click still reports.
+   */
+  async function refreshModels(forId: string, { quiet = false } = {}) {
     setRefreshing(true);
+    setModelsError(false);
     try {
       const result = await api.refreshConnectionModels(forId);
+      setModels(result.models);
       // Discard a response that arrived after the open form moved on to a
       // different connection or a newer revision of this one (e.g. the
       // user saved a base_url change while the fetch was in flight) — the
@@ -107,13 +178,56 @@ export function ConnectionEditor() {
         ? { ...d, models: result.models, fetched_at: result.fetched_at }
         : d));
     } catch (err: unknown) {
+      setModelsError(true);
+      if (!quiet) setError(err);
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  /** The same fetch for a connection that has not been saved: the credentials
+   *  come off the form rather than off disk, and nothing is cached. */
+  async function previewModels() {
+    setRefreshing(true);
+    setModelsError(false);
+    try {
+      const r = await api.previewModels({
+        kind: form.kind, base_url: form.base_url, api_key: key,
+      });
+      setModels(r.models);
+    } catch (err: unknown) {
+      setModelsError(true);
       setError(err);
     } finally {
       setRefreshing(false);
     }
   }
 
-  const customModels = detail?.models ?? [];
+  /** Ask the provider whether this connection can serve, right now (#146).
+   *
+   *  Reports a failing connection through `checked` rather than the error
+   *  banner: "your key is rejected" is the answer to the question that was
+   *  asked, not a failure of the app to answer it. */
+  async function check(forId: string) {
+    setChecking(true);
+    setChecked(null);
+    try {
+      const result = await api.checkConnection(forId);
+      setChecked(result);
+      setDetail((d) => (d && d.id === forId
+        ? { ...d, health: {
+              state: result.ok ? "ok" : "error", kind: result.kind,
+              detail: result.detail, at: result.checked_at } }
+        : d));
+    } catch (err: unknown) {
+      setError(err);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  const listable = LISTABLE.includes(form.kind);
+  const fetchLabel = refreshing ? "Fetching…" : "Fetch models";
 
   return (
     <div className="editor">
@@ -156,13 +270,28 @@ export function ConnectionEditor() {
                       {detail.key_set ? "Key set" : "No key set"}
                     </span>}
               </div>
-              {detail.kind === "openai_compatible" && (
+              <div className="side-section">
+                <h4>Status</h4>
+                {/* The verdict, then the button that produces one. A key being
+                    present has never meant it works, and until #146 that was
+                    the only thing this page could say. */}
+                <div className={"field-hint health-" + detail.health.state}>
+                  {healthLabel(detail.health)}
+                </div>
+                <button className="subtle" onClick={() => { void check(id); }} disabled={checking}>
+                  {checking ? "Testing…" : "Test connection"}
+                </button>
+                {checked && !checked.ok && (
+                  <div className="field-hint">Reported as: {checked.kind}</div>
+                )}
+              </div>
+              {LISTABLE.includes(detail.kind) && (
                 <div className="side-section">
                   <h4>Cached models</h4>
                   <div className="field-hint">
                     {detail.fetched_at ? `Last fetched ${detail.fetched_at}` : "Never fetched"}
                   </div>
-                  <button className="subtle" onClick={refreshModels} disabled={refreshing}>
+                  <button className="subtle" onClick={() => refreshModels(id)} disabled={refreshing}>
                     {refreshing ? "Refreshing…" : "Refresh models"}
                   </button>
                 </div>
@@ -176,12 +305,15 @@ export function ConnectionEditor() {
               value={form} onChange={setForm}
               apiKey={key} onApiKey={setKey}
               keySet={!!detail?.key_set} lockKind={!!id}
-              orModels={orModels} orError={orError} cachedModels={customModels}
-              modelsHint={id ? (
+              models={models} modelsError={modelsError}
+              modelsHint={listable ? (
                 <p className="field-hint">
-                  {detail?.fetched_at ? `Cached models last fetched ${detail.fetched_at}. ` : "No cached models yet. "}
-                  <button className="link" onClick={refreshModels} disabled={refreshing}>
-                    {refreshing ? "Refreshing…" : "Fetch models"}
+                  {id
+                    ? (detail?.fetched_at ? `Cached models last fetched ${detail.fetched_at}. ` : "No cached models yet. ")
+                    : "Models are listed from this endpoint. "}
+                  <button className="link" disabled={refreshing}
+                          onClick={() => (id ? refreshModels(id) : previewModels())}>
+                    {fetchLabel}
                   </button>
                 </p>
               ) : undefined}

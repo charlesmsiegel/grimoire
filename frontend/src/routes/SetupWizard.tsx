@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, type Config } from "../api/client";
-import { getModels, type Model } from "../api/models";
+import { api, type Config, type HealthCheckResult } from "../api/client";
+import { type Model } from "../api/models";
 import {
   BLANK_CONNECTION, ConnectionForm, type ConnectionFormValue,
 } from "../components/ConnectionForm";
@@ -60,9 +60,13 @@ export default function SetupWizard(
   // step 2 — the connection, unsaved until "Save connection"
   const [form, setForm] = useState<ConnectionFormValue>(BLANK_CONNECTION);
   const [key, setKey] = useState("");
-  const [orModels, setOrModels] = useState<Model[]>([]);
-  const [orError, setOrError] = useState(false);
+  const [models, setModels] = useState<Model[]>([]);
+  const [modelsError, setModelsError] = useState(false);
   const [connected, setConnected] = useState<string | null>(null);
+  /** What the provider said when the finished connection was tested (#146).
+   *  Null while nothing has been checked — including the whole time before the
+   *  connection is saved, since there is nothing to check yet. */
+  const [health, setHealth] = useState<HealthCheckResult | null>(null);
   // Creating the connection and activating it are two requests, and the second
   // can fail on its own. Holding the id from a successful create is what makes
   // the retry activate that connection rather than create a second one —
@@ -138,11 +142,20 @@ export default function SetupWizard(
     }
   }, []);
 
+  // The catalog for a connection that does not exist yet (#149): the wizard's
+  // whole job on this step is picking a model for one. OpenRouter's list is
+  // public, so it fills in before a key is typed; a custom endpoint has nothing
+  // to list until its base URL is, and falls back to free-text entry until the
+  // connection is saved and the Connections page can fetch it.
   useEffect(() => {
     let alive = true;
-    getModels().then((m) => alive && setOrModels(m)).catch(() => alive && setOrError(true));
+    setModelsError(false);
+    if (form.kind !== "openrouter") { setModels([]); return; }
+    api.previewModels({ kind: "openrouter" })
+      .then((r) => alive && setModels(r.models))
+      .catch(() => alive && setModelsError(true));
     return () => { alive = false; };
-  }, []);
+  }, [form.kind]);
 
   useEffect(() => {
     let alive = true;
@@ -201,6 +214,17 @@ export default function SetupWizard(
       }
       await api.putConfig({ active_connection_id: id });
       setConnected(form.name.trim());
+      // Then ask the provider whether the thing just saved actually works
+      // (#146). Deliberately after `setConnected`, and deliberately unable to
+      // undo it: the connection IS saved and active either way, and a wizard
+      // that refused to move on because a key was rejected would trap someone
+      // whose provider is merely down. A failed check is a warning beside the
+      // tick, not a gate.
+      try {
+        setHealth(await api.checkConnection(id));
+      } catch {
+        /* the check is a courtesy; a connection that saved is still saved */
+      }
     } catch (err: any) {
       setError(err.detail ?? String(err));
     } finally {
@@ -299,6 +323,16 @@ export default function SetupWizard(
               skip — you can play by hand and set this up later on the Connections page.
             </p>
             {connected && <p className="config-msg save-flash">Connected to {connected} ✓</p>}
+            {/* "Connected" has meant "saved and made active" since this wizard
+                was written, which is not the same as "it works" — the whole of
+                #146. When the check disagrees, say so here rather than letting
+                the first scene be where they find out. */}
+            {connected && health && !health.ok && (
+              <p className="field-hint">
+                Saved, but the provider refused: {health.detail || health.kind}. You can
+                carry on and fix it later on the Connections page.
+              </p>
+            )}
             {/* Created but not active: the form is gone because re-submitting it
                 would create a second connection, and what is left to do is the
                 activation that failed. */}
@@ -311,7 +345,7 @@ export default function SetupWizard(
               <ConnectionForm
                 value={form} onChange={setForm}
                 apiKey={key} onApiKey={setKey}
-                orModels={orModels} orError={orError}
+                models={models} modelsError={modelsError}
               />
             )}
             <div className="wizard-footer">

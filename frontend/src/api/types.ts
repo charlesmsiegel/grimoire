@@ -10,8 +10,22 @@
  *  Nothing in this module may import from `client.ts`: the types describe the
  *  wire format and know nothing about how a request is made.
  */
-import type { Model } from "./models";
 import type { RollProposalPayload } from "./stream";
+
+/** One entry of a provider's model catalog, as the backend normalizes it.
+ *
+ *  A wire shape since #149: the catalog is fetched server-side, from whichever
+ *  provider the connection names, so the browser no longer parses OpenRouter's
+ *  response format. `models.ts` re-exports this and owns the labels drawn from
+ *  it. `null` where a provider volunteered no metadata — distinct from `0`,
+ *  which is a context length of zero and a price of free. */
+export type Model = {
+  id: string;
+  name: string;
+  context: number | null;
+  prompt: string | null;
+  completion: string | null;
+};
 
 export type LLMConnectionKind = "openrouter" | "claude" | "openai_compatible";
 // `model` is what is STORED (what the connection editor edits); `effective_model`
@@ -24,7 +38,9 @@ export type LLMConnection = {
   post_process: "none" | "strict";
   key_set: boolean; rev: string;
 };
-export type LLMConnectionDetail = LLMConnection & { models: Model[]; fetched_at: string };
+export type LLMConnectionDetail = LLMConnection & {
+  models: Model[]; fetched_at: string; health: ProviderHealth;
+};
 /** The active connection as `GET /config` reports it — id, kind, name, and the
  *  EFFECTIVE model (a `claude` connection with none configured still runs one).
  *  Named rather than inlined on `Config` because two surfaces read it: the
@@ -37,12 +53,34 @@ export type LLMConnectionDraft = {
   model?: string; post_process?: "none" | "strict";
 };
 export type ModelsRefreshResult = { models: Model[]; fetched_at: string; rev: string };
+/** A connection described but not saved, for the sake of listing its models. */
+export type CatalogDraft = { kind: LLMConnectionKind; base_url?: string; api_key?: string };
+/** What a connection's provider last actually did (#146).
+ *
+ *  `unknown` is not a third kind of failure: it means nothing has been
+ *  observed yet — a fresh app, or a connection nothing has used. `kind` is the
+ *  same vocabulary a generation failure carries, so the dot's tooltip and the
+ *  scene's error say the same thing about the same connection. */
+export type ProviderHealth = {
+  state: "unknown" | "ok" | "error";
+  kind: string;
+  detail: string;
+  at: string;
+};
+/** The answer to one on-demand check. `ok: false` is a successful request. */
+export type HealthCheckResult = {
+  ok: boolean; kind: string; detail: string; checked_at: string;
+};
 export type Config = {
   theme: string; system_prompt: string;
   quote_color: string; user_label: string; assistant_label: string;
   active_connection_id: string;
   active_connection: ActiveConnection | null;
   ready: boolean;
+  /** What the active connection's provider last did (#146), or null when there
+   *  is no active connection. Read from the server's registry — no network
+   *  call to the provider happens on a config read. */
+  health: ProviderHealth | null;
   /** Seconds of silence before an LLM call is abandoned; "0" disables. */
   llm_timeout: string;
   /** Seconds one absorb's whole LLM sequence may take; "0" disables. */

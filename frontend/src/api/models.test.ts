@@ -1,38 +1,38 @@
-import { fetchModels, getModels, invalidateModelsCache, tokensPerDollar, priceLabel, contextLabel } from "./models";
+vi.mock("./client", () => ({ api: { getConfig: vi.fn(), readConnection: vi.fn() } }));
 
-function mockFetch(data: unknown, ok = true) {
-  globalThis.fetch = vi.fn().mockResolvedValue({
-    ok,
-    json: async () => data,
-  }) as unknown as typeof fetch;
+import { api } from "./client";
+import { configChanged } from "../appEvents";
+import { getModels, invalidateModelsCache, tokensPerDollar, priceLabel, contextLabel } from "./models";
+
+const ACTIVE = { id: "local", kind: "openai_compatible", name: "Local", model: "m" };
+
+function serving(models: unknown[], active: unknown = ACTIVE) {
+  (api.getConfig as any).mockResolvedValue({ active_connection: active });
+  (api.readConnection as any).mockResolvedValue({ models });
 }
 
-test("fetchModels maps fields and sorts by id", async () => {
-  mockFetch({
-    data: [
-      {
-        id: "z/model",
-        name: "Zed",
-        context_length: 131072,
-        pricing: { prompt: "0.00001", completion: "0.00002" },
-      },
-      { id: "a/model", name: "Aaa", context_length: 8192, pricing: { prompt: "0", completion: "0" } },
-    ],
-  });
-  const models = await fetchModels();
-  expect(models.map((m) => m.id)).toEqual(["a/model", "z/model"]);
-  expect(models[1]).toEqual({
-    id: "z/model",
-    name: "Zed",
-    context: 131072,
-    prompt: "0.00001",
-    completion: "0.00002",
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  invalidateModelsCache();
 });
 
-test("fetchModels throws on a non-OK response", async () => {
-  mockFetch({}, false);
-  await expect(fetchModels()).rejects.toThrow();
+test("the catalog comes from the connection that is actually configured", async () => {
+  // #149: this used to fetch OpenRouter's catalog from the browser whichever
+  // provider was configured, so a reader on a local endpoint was picking from
+  // a list of models their connection could not run.
+  serving([{ id: "local-model", name: "Local", context: 8192, prompt: null, completion: null }]);
+
+  const models = await getModels();
+
+  expect(api.readConnection).toHaveBeenCalledWith("local");
+  expect(models.map((m) => m.id)).toEqual(["local-model"]);
+});
+
+test("no active connection means no catalog, not a failed request", async () => {
+  serving([], null);
+
+  await expect(getModels()).resolves.toEqual([]);
+  expect(api.readConnection).not.toHaveBeenCalled();
 });
 
 test("tokensPerDollar formats compactly", () => {
@@ -71,21 +71,32 @@ test("contextLabel formats compactly and omits when unknown", () => {
 });
 
 test("getModels fetches once and serves later mounts from cache", async () => {
-  invalidateModelsCache();
-  const f = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [] }) });
-  globalThis.fetch = f as unknown as typeof fetch;
+  serving([]);
   await getModels();
   await getModels();
-  expect(f).toHaveBeenCalledTimes(1);
+  expect(api.readConnection).toHaveBeenCalledTimes(1);
 });
 
 test("getModels does not cache a failure", async () => {
-  invalidateModelsCache();
-  const f = vi.fn()
-    .mockResolvedValueOnce({ ok: false, status: 502, json: async () => ({}) })
-    .mockResolvedValue({ ok: true, json: async () => ({ data: [] }) });
-  globalThis.fetch = f as unknown as typeof fetch;
+  (api.getConfig as any).mockResolvedValue({ active_connection: ACTIVE });
+  (api.readConnection as any)
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue({ models: [] });
+
   await expect(getModels()).rejects.toThrow();
   await expect(getModels()).resolves.toEqual([]);
-  expect(f).toHaveBeenCalledTimes(2);
+  expect(api.readConnection).toHaveBeenCalledTimes(2);
+});
+
+test("a connection change drops the cached catalog", async () => {
+  // The cache is keyed on nothing, so switching the active connection would
+  // otherwise leave one provider's models describing another's (#149). Every
+  // mutator that could move it emits this signal already.
+  serving([{ id: "first", name: "First", context: null, prompt: null, completion: null }]);
+  expect((await getModels()).map((m) => m.id)).toEqual(["first"]);
+
+  configChanged();
+  serving([{ id: "second", name: "Second", context: null, prompt: null, completion: null }]);
+
+  expect((await getModels()).map((m) => m.id)).toEqual(["second"]);
 });
