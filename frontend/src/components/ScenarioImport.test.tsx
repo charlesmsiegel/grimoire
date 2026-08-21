@@ -230,7 +230,6 @@ test("a card the model could not be read for offers the local-model recovery", a
   expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
 });
 
-
 test("the entry category options are the server's kinds, and an unknown one commits as itself", async () => {
   // Same contract as the lorebook dialog (#138): both review tables ask the
   // server what a row may be filed under instead of shipping their own list.

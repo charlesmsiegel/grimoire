@@ -5582,7 +5582,7 @@ def test_lorebook_parse_then_import(client):
     assert [e["name"] for e in client.get(f"/api/worlds/{wid}/locations").json()] == ["The Docks"]
 
 
-def test_entity_kinds_endpoint_lists_the_store_s_kinds(client):
+def test_entity_kinds_endpoint_is_the_stores_own_tuple(client):
     # The dialog's category dropdown is built from this, so it is the store's
     # own tuple rather than a hand-kept copy -- a kind added to ENTITY_KINDS
     # reaches the review table with no frontend edit (#138).

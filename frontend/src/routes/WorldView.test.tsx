@@ -39,10 +39,9 @@ vi.mock("../api/client", () => ({
     getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
     getCampaignModule: vi.fn(), readModule: vi.fn(), getWorldSheetsIndex: vi.fn(), getSheet: vi.fn(),
     worldCampaigns: vi.fn(),
-    // Both import panels live on this page and ask what a row may be filed
-    // under (#138). Declared rather than left off: the hook falls back to the
-    // build's own kinds when the read fails, so an absent mock would pass for
-    // the wrong reason.
+    // Both import panels live on this page, but only ask what a row may be
+    // filed under once a review table is up (#138) -- which no test here
+    // reaches. Declared anyway, so that changing does not fail as a crash.
     entityKinds: vi.fn(async () => ({
       kinds: ["locations", "lore", "items", "groups", "creatures"],
     })),
