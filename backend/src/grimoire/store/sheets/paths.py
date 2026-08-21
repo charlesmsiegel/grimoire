@@ -98,3 +98,49 @@ def _world_dir(wid: str, mid: str) -> Path:
 
 def _world_path(wid: str, mid: str, kind: str, eid: str) -> Path:
     return _world_dir(wid, mid) / f"{kind}--{eid}.json"
+
+
+def _repoint_in(directory: Path, mapping: dict[str, str]) -> None:
+    """Rename every `<kind>--<eid>.json` in one sheet directory per `mapping`.
+
+    A sheet is keyed by FILENAME, not by a field, so following a reclassified
+    record means moving the file -- the same shape `alternates` is in for scene
+    renames, and the reason it sits outside the field-rewriting fan-out.
+
+    A destination that already exists is left alone rather than overwritten: the
+    reclassify only lands on a free record slug, so a sheet already filed there
+    belongs to a record this move knows nothing about, and losing somebody's
+    sheet is worse than leaving one behind. Missing sources are simply skipped —
+    most records have no sheet at all.
+    """
+    if not directory.is_dir():
+        return
+    for old, new in mapping.items():
+        okind, _, oid = old.partition("/")
+        nkind, _, nid = new.partition("/")
+        if not (okind and oid and nkind and nid):
+            continue
+        src = directory / f"{okind}--{oid}.json"
+        dst = directory / f"{nkind}--{nid}.json"
+        if src.exists() and not dst.exists():
+            src.replace(dst)
+
+
+def repoint_records(cid: str, mapping: dict[str, str]) -> None:
+    """Follow reclassified records (#119) through this campaign's sheets."""
+    mapping = {old: new for old, new in mapping.items() if old != new}
+    if mapping:
+        _repoint_in(_campaign_dir(cid), mapping)
+
+
+def repoint_world_records(wid: str, mapping: dict[str, str]) -> None:
+    """`repoint_records` for a world's sheets, which are filed per module id —
+    so this walks every module directory rather than one."""
+    mapping = {old: new for old, new in mapping.items() if old != new}
+    if not mapping:
+        return
+    root = worlds_paths.world_root(wid) / "sheets"
+    if not root.is_dir():
+        return
+    for module_dir in sorted(root.iterdir()):
+        _repoint_in(module_dir, mapping)

@@ -413,6 +413,15 @@ class EntityCreate(BaseModel):
     fields: dict | None = None
 
 
+class EntityReclassify(BaseModel):
+    # The kind to move the record to. `rev` is the same precondition
+    # `EntityUpdate` carries and for the same reason (#35): a reclassify moves
+    # the record the editor is looking at, and doing that to text somebody else
+    # has since rewritten is the write that precondition exists to refuse.
+    to: str
+    rev: str | None = None
+
+
 class EntityUpdate(BaseModel):
     name: str | None = None
     body: str | None = None

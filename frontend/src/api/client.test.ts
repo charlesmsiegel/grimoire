@@ -1101,3 +1101,28 @@ test.each(TURN_PRODUCERS)(
     // a reattach resuming from zero and replaying the whole reply.
     expect(indexes).toEqual([4]);
   });
+
+test("reclassifyEntity posts the destination kind under the record's current one", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "tidewatch", campaigns: ["saltmarch"] }));
+  vi.stubGlobal("fetch", fetchMock);
+  const out = await api.reclassifyEntity({ kind: "world", id: "realm" }, "lore", "tidewatch",
+                                         "locations", "r1");
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/worlds/realm/lore/tidewatch/reclassify",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ to: "locations", rev: "r1" }),
+    }),
+  );
+  expect(out).toEqual({ id: "tidewatch", campaigns: ["saltmarch"] });
+});
+
+test("reclassifyEntity omits an absent rev rather than sending a null precondition", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "tidewatch" }));
+  vi.stubGlobal("fetch", fetchMock);
+  await api.reclassifyEntity({ kind: "campaign", id: "saltmarch" }, "lore", "tidewatch", "items");
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/campaigns/saltmarch/lore/tidewatch/reclassify",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ to: "items" }) }),
+  );
+});

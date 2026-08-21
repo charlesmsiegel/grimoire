@@ -617,9 +617,17 @@ def update_entity(cid: str, kind: str, eid: str, *, name: str | None = None,
                            fields=fields, secrecy=secrecy)
 
 
+def _would_inherit(cid: str, kind: str, eid: str) -> bool:
+    """Would this campaign read the world's `<kind>/<eid>` if it held none of
+    its own? The predicate `delete_entity` and `hide_inherited` both turn on,
+    named once so the two cannot answer it differently."""
+    return (_inherits_world(cid, _flat_ref(kind, eid))
+            and _flat_path(wroot_of(cid), kind, eid).exists())
+
+
 def delete_entity(cid: str, kind: str, eid: str) -> None:
     ref = _flat_ref(kind, eid)
-    in_world = _inherits_world(cid, ref) and _flat_path(wroot_of(cid), kind, eid).exists()
+    in_world = _would_inherit(cid, kind, eid)
     try:
         entities.delete_entity(croot_of(cid), kind, eid)
         _drop_manifest_ref(cid, ref)
@@ -630,6 +638,150 @@ def delete_entity(cid: str, kind: str, eid: str) -> None:
         add_deleted(cid, ref)   # keep the world's copy from showing through
     _drop_record_dir(croot_of(cid), kind, eid)
     _undetach(cid, ref)
+
+
+def has_own_copy(cid: str, kind: str, eid: str) -> bool:
+    """Does this campaign hold its own file for `<kind>/<eid>`, rather than
+    reading the world's? The question a world-side sweep has to ask before it
+    touches a campaign: a campaign that never materialized the record has
+    nothing to move, and materializing one now would fork it off the world for
+    a change it agreed with."""
+    return kind in entities.ENTITY_KINDS and safe_id(eid) and _flat_path(croot_of(cid), kind, eid).exists()
+
+
+def reclassify_entity(cid: str, kind: str, eid: str, new_kind: str,
+                      prefer: str | None = None) -> str:
+    """Move this campaign's copy of `kind`/`eid` to `new_kind`; return its id.
+
+    Materializes first, because a campaign that reclassifies an inherited record
+    is disagreeing with its world about what that record *is* -- and there is no
+    way to say that without holding a copy. `EntityNotFound` for a record this
+    campaign cannot see at all, tombstoned ones included, exactly as a read of
+    it would raise.
+
+    `prefer` is the id the caller needs this copy to land on: a world-side
+    reclassify has already moved the world record, and a campaign copy that took
+    a different id would stop being a copy *of* it. Passed, it is tried alone --
+    if it is occupied here the caller is told (the returned id differs) rather
+    than being given a silently forked pair.
+    """
+    croot, wroot = croot_of(cid), wroot_of(cid)
+    materialize_entity(cid, kind, eid)
+
+    def taken(c: str) -> bool:
+        # the destination's namespace as this campaign sees it: what the world
+        # holds there (which the campaign inherits), plus what it has tombstoned
+        # (which `create_entity` already counts, for #225's reason)
+        return (_flat_path(wroot, new_kind, c).exists()
+                or _record_dir(wroot, new_kind, c).is_dir()
+                or _flat_ref(new_kind, c) in deleted(cid))
+
+    if prefer is None:
+        return entities.reclassify(croot, kind, eid, new_kind, taken=taken)
+    if (_flat_path(croot, new_kind, prefer).exists()
+            or _record_dir(croot, new_kind, prefer).is_dir()):
+        # Occupied campaign-side. Land it anywhere free and report that; the
+        # caller decides what a copy that could not follow its world record is.
+        return entities.reclassify(croot, kind, eid, new_kind, taken=taken)
+    return entities.reclassify(croot, kind, eid, new_kind,
+                               taken=lambda c: c != prefer)
+
+
+def rewrite_owner_refs(cid: str, old: str, new: str) -> list[tuple[str, str]]:
+    """`entities.rewrite_owner_refs` through the overlay: repoint every
+    `owners:` entry this campaign can SEE, not merely the copies it holds.
+
+    The distinction is the whole reason this is here rather than a call on the
+    campaign root. A campaign reclassifying an inherited record usually holds no
+    copy of the records that named it as an owner -- they are still the world's
+    -- so a croot-only sweep would rewrite nothing at all and leave every one of
+    them pointing at a kind that, in this campaign, the record no longer has.
+
+    Rewriting one materializes it, which is a real consequence and the correct
+    one: the campaign has made a campaign-local decision about what a record is,
+    and an entry gated on that record is part of what the decision changes. It
+    is bounded to entries that actually name it, which is normally none.
+    """
+    touched: list[tuple[str, str]] = []
+    for kind in entities.ENTITY_KINDS:
+        for meta in list_entities(cid, kind):
+            record = read_entity(cid, kind, meta["id"])
+            refs = entities.owner_refs(record["meta"].get("owners", ""))
+            if old not in refs:
+                continue
+            rewritten: list[str] = []
+            for ref in refs:
+                candidate = new if ref == old else ref
+                if candidate not in rewritten:
+                    rewritten.append(candidate)
+            update_entity(cid, kind, meta["id"], owners=", ".join(rewritten))
+            touched.append((kind, meta["id"]))
+    return touched
+
+
+def hide_inherited(cid: str, kind: str, eid: str) -> bool:
+    """Tombstone `<kind>/<eid>` if this campaign would otherwise read the world's
+    record there. True when a tombstone was written.
+
+    What a campaign-side reclassify needs and a campaign-side *delete* already
+    does (`delete_entity`), named once so the two cannot drift: moving the
+    campaign's copy out of a kind leaves the world's copy of it free to show
+    through, and the record would then be listed twice -- under its old kind,
+    inherited, and under its new one.
+
+    `_inherits_world` is the gate for `delete_entity`'s reason. A ref that is
+    already detached has no world copy to hide; whatever holds that id in the
+    world is a stranger, and tombstoning would hide the stranger permanently for
+    a move that was never about it.
+    """
+    if not _would_inherit(cid, kind, eid):
+        return False
+    add_deleted(cid, _flat_ref(kind, eid))
+    return True
+
+
+def repoint_record(cid: str, old_ref: str, new_ref: str, *, keep_base: bool) -> None:
+    """Follow a reclassified record through the three ledgers that say what this
+    campaign's copy *is* relative to its world: `sync.md`, `deleted.json` and
+    `detached.json` (#119).
+
+    They stay here rather than joining `record_refs`' fan-out because each is a
+    statement about inheritance, and only the caller knows whether the world
+    moved too -- which is exactly what `keep_base` says. **True** (a world-side
+    reclassify) carries the sync base over to the new key: the world file's
+    bytes did not change, only its kind directory, so the hash the base records
+    still describes it and the campaign's copy is still in sync or still
+    diverged, unchanged. **False** (a campaign-side one) drops it: the world
+    record is still filed under the old kind, so there is no longer a world
+    record at this ref for a base to be about, and a base left standing would
+    have `sync.incoming` compare this record against whatever claims the old
+    slug next.
+
+    Both tombstone shapes move: the whole-record one, and the per-asset
+    `assets/<kind>/<id>/<version>/<name>` slots, which hide by slot and would
+    otherwise blank an image of the record under its new kind while un-hiding
+    the one it was hidden under. A detachment moves for the same reason -- it is
+    a statement about a record, and the record is still here.
+    """
+    if old_ref == new_ref:
+        return
+    manifest = campaigns_paths.read_manifest(cid)
+    base = manifest.pop(old_ref, None)
+    if base is not None:
+        if keep_base:
+            manifest[new_ref] = base
+        campaigns_paths.write_manifest(cid, manifest)
+    old_assets, new_assets = f"assets/{old_ref}/", f"assets/{new_ref}/"
+    gone = deleted(cid)
+    moved = {r for r in gone if r == old_ref or r.startswith(old_assets)}
+    if moved:
+        kept = (gone - moved) | {new_ref if r == old_ref else new_assets + r[len(old_assets):]
+                                 for r in moved}
+        atomic.write_text(_deleted_path(cid), json.dumps(sorted(kept), indent=2) + "\n")
+    severed = detached(cid)
+    if old_ref in severed:
+        atomic.write_text(_detached_path(cid),
+                          json.dumps(sorted((severed - {old_ref}) | {new_ref}), indent=2) + "\n")
 
 
 # ---- greetings + plot map ----
@@ -1467,7 +1619,7 @@ def _drop_record_dir(root: Path, kind: str, rid: str) -> None:
                     "%r will inherit what is still in it", d, exc, rid)
 
 
-def _dependent_campaigns(wroot: Path) -> list[str]:
+def dependent_campaigns(wroot: Path) -> list[str]:
     """Ids of the campaigns that inherit from `wroot`.
 
     `world_refs`, not `list_campaigns`, because it reads each campaign.md
@@ -1555,7 +1707,7 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
         return
     _drop_record_dir(wroot, kind, rid)
     try:
-        cids = _dependent_campaigns(wroot)
+        cids = dependent_campaigns(wroot)
     except (OSError, UnicodeDecodeError) as exc:
         log.warning("could not enumerate the campaigns of %s (%s) -- state they "
                     "filed against %s/%s stays, and a record recreated under that "

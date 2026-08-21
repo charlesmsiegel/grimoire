@@ -411,7 +411,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         {section === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore} module={moduleCtx} />}
         {!campaign && section === "tags" && <TagEditor wid={wid} />}
         {section === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations" nav={navFor("locations")}
-                                          onNavConsumed={() => setEntityNav(null)} onOpenLore={openLore} module={moduleCtx} />}
+                                          onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity} onOpenLore={openLore} module={moduleCtx} />}
         {section === "lore" && (
           <>
             {/* Controlled so the column's pinned import row can open it: the
@@ -423,15 +423,15 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
               <LorebookImport wid={wid} onImported={() => setLoreReset((n) => n + 1)} />
             </details>}
             <EntityEditor key={loreReset} wid={wid} scope={scope} kind="lore" nav={navFor("lore")}
-                          onNavConsumed={() => setEntityNav(null)} onOpenOwner={openOwner} module={moduleCtx} />
+                          onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity} onOpenOwner={openOwner} module={moduleCtx} />
           </>
         )}
         {section === "items" && <EntityEditor wid={wid} scope={scope} kind="items" nav={navFor("items")}
-                                          onNavConsumed={() => setEntityNav(null)} module={moduleCtx} />}
+                                          onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity} module={moduleCtx} />}
         {section === "groups" && <EntityEditor wid={wid} scope={scope} kind="groups" nav={navFor("groups")}
-                                          onNavConsumed={() => setEntityNav(null)} module={moduleCtx} />}
+                                          onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity} module={moduleCtx} />}
         {section === "creatures" && <EntityEditor wid={wid} scope={scope} kind="creatures" nav={navFor("creatures")}
-                                          onNavConsumed={() => setEntityNav(null)} module={moduleCtx} />}
+                                          onNavConsumed={() => setEntityNav(null)} onReclassified={openEntity} module={moduleCtx} />}
         {section === "greetings" && <GreetingEditor scope={scope} wid={wid} onOpenCharacter={openCharacter}
                                           onOpenLocation={(id) => openEntity("locations", id)} focus={focusGreeting} />}
       </div>

@@ -8,11 +8,14 @@ A "container root" is a world dir or a campaign dir; entities live at
 from __future__ import annotations
 
 import hashlib
+import logging
 from pathlib import Path
 
 from . import atomic, statcache, tokens
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import safe_id, slugify, uniquify
+
+log = logging.getLogger(__name__)
 
 ENTITY_KINDS: tuple[str, ...] = ("locations", "lore", "items", "groups", "creatures")
 
@@ -62,6 +65,17 @@ class UnknownKind(Exception):
     pass
 
 
+class SameKindError(Exception):
+    """`reclassify` was asked to move a record to the kind it already has.
+
+    Its own type rather than a silent no-op: every caller of reclassify rewrites
+    a pile of refs from an old key to a new one, and a no-op that returned the
+    id unchanged would run all of that against `old == new` -- which is a
+    delete-then-write of the same value in some ledgers and a dropped entry in
+    others. A request that cannot mean anything is refused where it is made.
+    """
+
+
 def _check_kind(kind: str) -> None:
     if kind not in ENTITY_KINDS:
         raise UnknownKind(kind)
@@ -73,6 +87,14 @@ def _kind_dir(root: Path, kind: str) -> Path:
 
 def _entity_path(root: Path, kind: str, eid: str) -> Path:
     return root / kind / f"{eid}.md"
+
+
+def _record_dir(root: Path, kind: str, eid: str) -> Path:
+    """`<root>/<kind>/<eid>/` — what is filed *beside* a record rather than in
+    it: its `assets/`, its descriptions sidecar, a group's state.md. Named here
+    as well as in `overlay` because reclassify has to carry it, and a record
+    that arrived under a new kind without its art would look like data loss."""
+    return root / kind / eid
 
 
 def list_entities(root: Path, kind: str) -> list[dict]:
@@ -163,7 +185,7 @@ def create_entity(root: Path, kind: str, name: str, body: str = "", keys: str = 
         # `instantiate` rollback honest -- that rollback deletes the record
         # directory, and it must never be one that predates the create (Codex
         # review).
-        return (_entity_path(root, kind, c).exists() or _kind_dir(root, kind).joinpath(c).is_dir()
+        return (_entity_path(root, kind, c).exists() or _record_dir(root, kind, c).is_dir()
                 or (taken is not None and taken(c)))
 
     eid = uniquify(slugify(name), exists)
@@ -228,6 +250,96 @@ def delete_entity(root: Path, kind: str, eid: str) -> None:
     if not safe_id(eid) or not p.exists():
         raise EntityNotFound(f"{kind}/{eid}")
     p.unlink()
+
+
+def reclassify(root: Path, kind: str, eid: str, new_kind: str, taken=None) -> str:
+    """Move `kind`/`eid` to `new_kind` in this root; return the id it landed on.
+
+    The id is preserved -- that is the whole point, and the invariant every
+    caller's ref rewrite is built on: a reclassify changes the kind directory
+    and nothing else, so `(kind, id)` refs can be repointed key-for-key instead
+    of re-resolved. It is preserved *where it can be*: a destination that
+    already holds that slug (a record, or the orphaned asset directory of one,
+    or whatever `taken` adds) gets the same `-2` suffix a create would take,
+    and the id this returns is the one to rewrite refs to.
+
+    Two moves, record first and record directory second, and the order is the
+    one that fails safely. Crash between them and the record is readable under
+    its new kind with its art stranded under the old -- visible on disk, nothing
+    lost. The other order strands the art under the NEW kind, where a retry
+    reads it as a taken slug and forks the record away from its own images.
+
+    Which is also why a directory that will not move is logged rather than
+    raised: the record has already moved by then, and answering with a 500 for
+    art that is still on disk would tell the caller the reclassify did not
+    happen when it did.
+    """
+    _check_kind(new_kind)
+    src = require_entity(root, kind, eid)   # checks `kind`, `eid` and the file
+    if kind == new_kind:
+        raise SameKindError(f"{kind}/{eid}")
+    _kind_dir(root, new_kind).mkdir(parents=True, exist_ok=True)
+
+    def exists(c: str) -> bool:
+        # The same three questions `create_entity` asks, for the same reasons:
+        # a record there, a record DIRECTORY there (#225's orphaned assets), or
+        # a caller-supplied namespace (overlay: the world's files, tombstones).
+        return (_entity_path(root, new_kind, c).exists()
+                or _record_dir(root, new_kind, c).is_dir()
+                or (taken is not None and taken(c)))
+
+    new_eid = uniquify(eid, exists)
+    src.replace(_entity_path(root, new_kind, new_eid))
+    old_dir = _record_dir(root, kind, eid)
+    if old_dir.is_dir():
+        try:
+            old_dir.replace(_record_dir(root, new_kind, new_eid))
+        except OSError as exc:
+            log.warning("reclassified %s/%s to %s/%s but could not move %s (%s) -- "
+                        "its images stay there, reachable only on disk",
+                        kind, eid, new_kind, new_eid, old_dir, exc)
+    return new_eid
+
+
+def owner_refs(value: str) -> list[str]:
+    """The `owners:` frontmatter line as the list of refs it names.
+
+    One parse, here, rather than the split-strip-filter that
+    `context.world_state._world_info` and every rewriter would each carry: an
+    owner is a `<kind>:<id>` ref, and reclassify has to be able to find one.
+    """
+    return [o.strip() for o in (value or "").split(",") if o.strip()]
+
+
+def rewrite_owner_refs(root: Path, old: str, new: str) -> list[tuple[str, str]]:
+    """Repoint every `owners:` entry naming `old` at `new`, across every kind in
+    this root. Returns the `(kind, id)` of each record it rewrote.
+
+    An owner ref is `<kind>:<id>` and it is matched against the present-set
+    `context.assemble` builds, so a location that stops being a location can
+    never be present again -- by either spelling. Rewriting anyway is not about
+    keeping the gate working; it is about not leaving a live ref pointing at a
+    slug the reclassify just freed. Leave `locations:tidewatch` behind and the
+    next location named Tidewatch inherits an owner gate written about a record
+    it has never met, which is #225 through the one door that is plain text.
+
+    Order-preserving and duplicate-collapsing: a record that already owned both
+    spellings ends with one, in the position the old one held.
+    """
+    touched: list[tuple[str, str]] = []
+    for kind in ENTITY_KINDS:
+        for meta in list_entities(root, kind):
+            refs = owner_refs(meta.get("owners", ""))
+            if old not in refs:
+                continue
+            rewritten: list[str] = []
+            for ref in refs:
+                candidate = new if ref == old else ref
+                if candidate not in rewritten:
+                    rewritten.append(candidate)
+            update_entity(root, kind, meta["id"], owners=", ".join(rewritten))
+            touched.append((kind, meta["id"]))
+    return touched
 
 
 def content_hash(text: str) -> str:

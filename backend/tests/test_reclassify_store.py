@@ -1,0 +1,310 @@
+"""Reclassification (#119): a generic entity changes kind, and everything that
+named it follows -- in the world, and in every campaign that inherits it."""
+
+import json
+
+import pytest
+
+from grimoire.store import (
+    campaigns,
+    changes,
+    entities,
+    journal,
+    overlay,
+    pins,
+    provenance,
+    reclassify,
+    sheets,
+    sync,
+    worlds,
+)
+
+
+def _world(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    return wid, worlds.world_root(wid)
+
+
+def _world_and_campaign(monkeypatch, tmp_path):
+    wid, wroot = _world(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "lore", "Tidewatch", "A stretch of grey coast.")
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    return wid, wroot, cid
+
+
+# ---- world scope ----
+
+def test_world_move_keeps_the_id_and_the_body(monkeypatch, tmp_path):
+    wid, wroot = _world(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "lore", "Tidewatch", "A stretch of grey coast.")
+    out = reclassify.world_entity(wid, "lore", "tidewatch", "locations")
+    assert out == {"id": "tidewatch", "campaigns": []}
+    assert (entities.read_entity(wroot, "locations", "tidewatch")["body"].strip()
+            == "A stretch of grey coast.")
+
+
+def test_world_move_leaves_a_clean_sync_for_an_inheriting_campaign(monkeypatch, tmp_path):
+    # The issue's headline failure: without the campaign sweep the old ref reads
+    # as a world-side deletion (skipped) and the new one arrives as `new`, so the
+    # campaign ends with a stale copy under the old kind and a duplicate.
+    wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    overlay.materialize_entity(cid, "lore", "tidewatch")
+    assert reclassify.world_entity(wid, "lore", "tidewatch", "locations")["campaigns"] == [cid]
+    assert sync.incoming(cid) == []
+    assert [e["id"] for e in overlay.list_entities(cid, "lore")] == []
+    assert [e["id"] for e in overlay.list_entities(cid, "locations")] == ["tidewatch"]
+
+
+def test_world_move_carries_the_campaign_copys_divergence(monkeypatch, tmp_path):
+    wid, wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    overlay.update_entity(cid, "lore", "tidewatch", body="mine")   # materializes, diverged
+    reclassify.world_entity(wid, "lore", "tidewatch", "locations")
+    assert overlay.read_entity(cid, "locations", "tidewatch")["body"].strip() == "mine"
+    # still diverged, and still against the same world record: one conflict, not
+    # a duplicate pair
+    entities.update_entity(wroot, "locations", "tidewatch", body="theirs")
+    pend = sync.incoming(cid)
+    assert [(p["ref"], p["status"]) for p in pend] == [
+        ({"kind": "locations", "id": "tidewatch"}, "conflict")]
+
+
+def test_world_move_leaves_an_uninvolved_campaign_alone(monkeypatch, tmp_path):
+    wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    other_wid = worlds.create_world("Elsewhere")
+    entities.create_entity(worlds.world_root(other_wid), "lore", "Tidewatch")
+    other = campaigns.create_campaign("Other", other_wid)
+    assert reclassify.world_entity(wid, "lore", "tidewatch", "locations")["campaigns"] == [cid]
+    assert [e["id"] for e in overlay.list_entities(other, "lore")] == ["tidewatch"]
+
+
+def test_world_move_follows_a_campaign_tombstone(monkeypatch, tmp_path):
+    # The campaign deleted the record; the world then reclassifies it. A
+    # tombstone left on the old ref would let the world's copy reappear under
+    # its new kind as a record the user had already thrown away.
+    wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    overlay.delete_entity(cid, "lore", "tidewatch")
+    reclassify.world_entity(wid, "lore", "tidewatch", "locations")
+    assert overlay.deleted(cid) == {"locations/tidewatch"}
+    assert [e["id"] for e in overlay.list_entities(cid, "locations")] == []
+    assert [e["id"] for e in overlay.list_entities(cid, "lore")] == []
+
+
+def test_world_move_follows_a_detached_campaign_copy(monkeypatch, tmp_path):
+    wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    overlay.update_entity(cid, "lore", "tidewatch", body="mine")
+    overlay.add_detached(cid, "lore/tidewatch")
+    reclassify.world_entity(wid, "lore", "tidewatch", "locations")
+    assert overlay.detached(cid) == {"locations/tidewatch"}
+
+
+def test_world_move_repoints_per_asset_tombstones(monkeypatch, tmp_path):
+    wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    overlay.add_deleted(cid, "assets/lore/tidewatch/default/avatar")
+    reclassify.world_entity(wid, "lore", "tidewatch", "locations")
+    assert overlay.deleted(cid) == {"assets/locations/tidewatch/default/avatar"}
+
+
+def test_world_move_rewrites_owners_in_the_world(monkeypatch, tmp_path):
+    wid, wroot = _world(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "locations", "Tidewatch")
+    entities.create_entity(wroot, "lore", "Rumour", owners="locations:tidewatch")
+    reclassify.world_entity(wid, "locations", "tidewatch", "lore")
+    assert entities.read_entity(wroot, "lore", "rumour")["meta"]["owners"] == "lore:tidewatch"
+
+
+def test_world_move_takes_the_world_sheet_with_it(monkeypatch, tmp_path):
+    wid, wroot = _world(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "lore", "Tidewatch")
+    sheet_dir = wroot / "sheets" / "mod1"
+    sheet_dir.mkdir(parents=True)
+    (sheet_dir / "lore--tidewatch.json").write_text('{"sheet_type": "place"}', encoding="utf-8")
+    reclassify.world_entity(wid, "lore", "tidewatch", "locations")
+    assert not (sheet_dir / "lore--tidewatch.json").exists()
+    assert json.loads((sheet_dir / "locations--tidewatch.json").read_text()) == {
+        "sheet_type": "place"}
+
+
+def test_world_move_uniquifies_against_the_destination(monkeypatch, tmp_path):
+    wid, wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "locations", "Tidewatch", "the real place")
+    out = reclassify.world_entity(wid, "lore", "tidewatch", "locations")
+    assert out["id"] == "tidewatch-2"
+    assert overlay.read_entity(cid, "locations", "tidewatch")["body"].strip() == "the real place"
+
+
+def test_world_move_reports_a_campaign_copy_that_could_not_follow(monkeypatch, tmp_path):
+    # The campaign already holds a local `locations/tidewatch-2`, which is the id
+    # the world record lands on. Its copy cannot be a copy of that, so it becomes
+    # campaign-local instead of quietly shadowing a stranger.
+    wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    overlay.update_entity(cid, "lore", "tidewatch", body="mine")
+    entities.create_entity(worlds.world_root(wid), "locations", "Tidewatch")
+    croot = overlay.croot_of(cid)
+    (croot / "locations").mkdir(parents=True, exist_ok=True)
+    (croot / "locations" / "tidewatch-2.md").write_text(
+        "---\nname: Squatter\n---\nnot the same record\n", encoding="utf-8")
+    out = reclassify.world_entity(wid, "lore", "tidewatch", "locations")
+    assert out["id"] == "tidewatch-2"
+    ids = [e["id"] for e in overlay.list_entities(cid, "locations")]
+    assert ids == ["tidewatch", "tidewatch-2", "tidewatch-3"]
+    assert overlay.read_entity(cid, "locations", "tidewatch-3")["body"].strip() == "mine"
+    assert "locations/tidewatch-3" not in campaigns.read_manifest(cid)
+
+
+# ---- campaign scope ----
+
+def test_campaign_move_materializes_and_hides_the_world_copy(monkeypatch, tmp_path):
+    _wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    assert reclassify.campaign_entity(cid, "lore", "tidewatch", "locations") == "tidewatch"
+    assert [e["id"] for e in overlay.list_entities(cid, "locations")] == ["tidewatch"]
+    assert [e["id"] for e in overlay.list_entities(cid, "lore")] == []
+    assert overlay.deleted(cid) == {"lore/tidewatch"}
+    # campaign-local now: no base, so no incoming change is ever offered for it
+    assert campaigns.read_manifest(cid) == {}
+    assert sync.incoming(cid) == []
+
+
+def test_campaign_move_leaves_the_world_alone(monkeypatch, tmp_path):
+    _wid, wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    reclassify.campaign_entity(cid, "lore", "tidewatch", "locations")
+    assert [e["id"] for e in entities.list_entities(wroot, "lore")] == ["tidewatch"]
+    assert entities.list_entities(wroot, "locations") == []
+
+
+def test_campaign_move_of_a_local_record_writes_no_tombstone(monkeypatch, tmp_path):
+    _wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    overlay.create_entity(cid, "lore", "Saltmarch Rumour")
+    reclassify.campaign_entity(cid, "lore", "saltmarch-rumour", "locations")
+    assert overlay.deleted(cid) == set()
+    assert [e["id"] for e in overlay.list_entities(cid, "locations")] == ["saltmarch-rumour"]
+
+
+def test_campaign_move_uniquifies_against_what_it_inherits(monkeypatch, tmp_path):
+    _wid, wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "locations", "Tidewatch", "the real place")
+    assert reclassify.campaign_entity(cid, "lore", "tidewatch", "locations") == "tidewatch-2"
+    assert overlay.read_entity(cid, "locations", "tidewatch")["body"].strip() == "the real place"
+
+
+def test_campaign_move_rejects_a_record_it_cannot_see(monkeypatch, tmp_path):
+    _wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    overlay.delete_entity(cid, "lore", "tidewatch")
+    with pytest.raises(entities.EntityNotFound):
+        reclassify.campaign_entity(cid, "lore", "tidewatch", "locations")
+    with pytest.raises(entities.EntityNotFound):
+        reclassify.campaign_entity(cid, "lore", "nobody", "locations")
+
+
+def test_campaign_move_refuses_same_and_unknown_kinds(monkeypatch, tmp_path):
+    _wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    with pytest.raises(entities.SameKindError):
+        reclassify.campaign_entity(cid, "lore", "tidewatch", "lore")
+    with pytest.raises(entities.UnknownKind):
+        reclassify.campaign_entity(cid, "lore", "tidewatch", "characters")
+
+
+# ---- the ledgers ----
+
+def _ledgered(cid):
+    changes.record(cid, "s1", {"lore/tidewatch": [{"field": "body", "before": "a", "after": "b"}]})
+    provenance.record(cid, {"lore/tidewatch#body": {"quote": "the coast", "scene": "s1"}})
+    pins.set_rule(cid, "lore:tidewatch", pins.PIN, scope=pins.CAMPAIGN)
+    journal.append(cid, [{"scene": "s1", "kind": "lore",
+                          "ref": {"kind": "lore", "id": "tidewatch"},
+                          "field": "body", "label": "Tidewatch -- lore",
+                          "undo": {"target": {"w": "entity", "kind": "lore", "id": "tidewatch"},
+                                   "restore": "a", "expect": "b"}}])
+    sheet_dir = overlay.croot_of(cid) / "sheets"
+    sheet_dir.mkdir(parents=True, exist_ok=True)
+    (sheet_dir / "lore--tidewatch.json").write_text('{"sheet_type": "place"}', encoding="utf-8")
+
+
+def _assert_repointed(cid):
+    assert list(changes.read(cid)) == ["locations/tidewatch"]
+    assert list(provenance.read(cid)) == ["locations/tidewatch#body"]
+    assert [r["ref"] for r in pins.read(cid).values()] == ["locations:tidewatch"]
+    assert list(pins.read(cid)) == ["*:locations:tidewatch"]
+    entry = journal.read(cid)[0]
+    assert entry["ref"] == {"kind": "locations", "id": "tidewatch"}
+    assert entry["undo"]["target"] == {"w": "entity", "kind": "locations", "id": "tidewatch"}
+    croot = overlay.croot_of(cid)
+    assert not (croot / "sheets" / "lore--tidewatch.json").exists()
+    assert (croot / "sheets" / "locations--tidewatch.json").exists()
+
+
+def test_campaign_move_repoints_every_ledger(monkeypatch, tmp_path):
+    _wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    _ledgered(cid)
+    reclassify.campaign_entity(cid, "lore", "tidewatch", "locations")
+    _assert_repointed(cid)
+
+
+def test_world_move_repoints_every_dependent_ledger(monkeypatch, tmp_path):
+    wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    _ledgered(cid)
+    reclassify.world_entity(wid, "lore", "tidewatch", "locations")
+    _assert_repointed(cid)
+
+
+def test_a_scene_scoped_pin_is_rekeyed_with_its_scene(monkeypatch, tmp_path):
+    _wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    pins.set_rule(cid, "lore:tidewatch", pins.EXCLUDE, scope=pins.SCENE, sid="s1")
+    reclassify.campaign_entity(cid, "lore", "tidewatch", "locations")
+    assert list(pins.read(cid)) == ["s1:locations:tidewatch"]
+    assert pins.read(cid)["s1:locations:tidewatch"]["sid"] == "s1"
+
+
+def test_an_unrelated_ledger_row_is_untouched(monkeypatch, tmp_path):
+    _wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    changes.record(cid, "s1", {"lore/other": [{"field": "body", "before": "a", "after": "b"}]})
+    provenance.record(cid, {"characters/mara#body": {"quote": "hers", "scene": "s1"}})
+    reclassify.campaign_entity(cid, "lore", "tidewatch", "locations")
+    assert list(changes.read(cid)) == ["lore/other"]
+    assert list(provenance.read(cid)) == ["characters/mara#body"]
+
+
+def test_the_campaign_sheet_is_not_overwritten_by_the_move(monkeypatch, tmp_path):
+    _wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    sheet_dir = overlay.croot_of(cid) / "sheets"
+    sheet_dir.mkdir(parents=True, exist_ok=True)
+    (sheet_dir / "lore--tidewatch.json").write_text('{"sheet_type": "rumour"}', encoding="utf-8")
+    (sheet_dir / "locations--tidewatch.json").write_text('{"sheet_type": "place"}', encoding="utf-8")
+    sheets.repoint_records(cid, {"lore/tidewatch": "locations/tidewatch"})
+    assert json.loads((sheet_dir / "locations--tidewatch.json").read_text()) == {
+        "sheet_type": "place"}
+    assert (sheet_dir / "lore--tidewatch.json").exists()
+
+
+# ---- owners ----
+
+def test_campaign_move_rewrites_owners_it_only_inherits(monkeypatch, tmp_path):
+    # The campaign holds no copy of the owning record, so a croot-only sweep
+    # would rewrite nothing and leave it gated on a kind that, here, is gone.
+    _wid, wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "lore", "Rumour", owners="lore:tidewatch")
+    reclassify.campaign_entity(cid, "lore", "tidewatch", "locations")
+    assert (overlay.read_entity(cid, "lore", "rumour")["meta"]["owners"]
+            == "locations:tidewatch")
+    # ...campaign-side only: the world's record still says what it always did
+    assert entities.read_entity(wroot, "lore", "rumour")["meta"]["owners"] == "lore:tidewatch"
+
+
+def test_campaign_move_leaves_unrelated_owners_unmaterialized(monkeypatch, tmp_path):
+    _wid, wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "lore", "Rumour", owners="characters:mara")
+    reclassify.campaign_entity(cid, "lore", "tidewatch", "locations")
+    assert not (overlay.croot_of(cid) / "lore" / "rumour.md").exists()
+
+
+def test_world_move_leaves_a_campaigns_own_copy_of_an_owner_alone(monkeypatch, tmp_path):
+    wid, wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "lore", "Rumour", owners="lore:tidewatch")
+    overlay.update_entity(cid, "lore", "rumour", body="mine")   # materialized copy
+    reclassify.world_entity(wid, "lore", "tidewatch", "locations")
+    assert entities.read_entity(wroot, "lore", "rumour")["meta"]["owners"] == "locations:tidewatch"
+    # the campaign's own text is not rewritten under it; the world's edit arrives
+    # as an ordinary sync update instead
+    assert overlay.read_entity(cid, "lore", "rumour")["meta"]["owners"] == "lore:tidewatch"
+    assert [(p["ref"], p["status"]) for p in sync.incoming(cid)] == [
+        ({"kind": "lore", "id": "rumour"}, "conflict")]

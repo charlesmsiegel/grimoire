@@ -23,7 +23,14 @@ from .common import (
     _world_root_or_404,
     get_llm,
 )
-from .models import DemoteBody, EntityCreate, EntityUpdate, ImageDescription, PushBody
+from .models import (
+    DemoteBody,
+    EntityCreate,
+    EntityReclassify,
+    EntityUpdate,
+    ImageDescription,
+    PushBody,
+)
 
 router = APIRouter()
 
@@ -198,6 +205,62 @@ def _campaign_entity_delete(cid: str, kind: str, eid: str):
     except store.entities.EntityNotFound:
         raise HTTPException(status_code=404, detail="entity not found")
     return {"ok": True}
+
+
+def _reclassify_target(kind: str, body: EntityReclassify) -> str:
+    """The kind to move to, refused here rather than in the store when the
+    request cannot mean anything.
+
+    Both refusals are 400s and not 404s: the record and its kind are real, and
+    it is the *destination* the caller named that is wrong -- a 404 would read
+    as "no such record" and send them looking for the wrong thing. `characters`
+    is the one worth naming, because it is a real kind and an obvious thing to
+    ask for; it is a conversion rather than a move (a folder plus a card per
+    version, no id to keep) and is not built.
+    """
+    to = (body.to or "").strip()
+    if to not in store.entities.ENTITY_KINDS:
+        raise HTTPException(status_code=400,
+                            detail=f"cannot reclassify as {to or '(nothing)'} (expected one of "
+                                   f"{', '.join(store.entities.ENTITY_KINDS)})")
+    if to == kind:
+        raise HTTPException(status_code=400, detail=f"already a {kind} record")
+    return to
+
+
+@router.post("/worlds/{wid}/{kind}/{eid}/reclassify")
+def post_world_entity_reclassify(wid: str, kind: str, eid: str, body: EntityReclassify):
+    """Move a world record to another generic kind, and sweep every campaign of
+    that world so none of them ends up with a stale copy under the old kind and
+    a duplicate under the new one (#119)."""
+    _entity_kind_or_404(kind)
+    to = _reclassify_target(kind, body)
+    root = _world_root_or_404(wid)
+    # Kind, then destination, then freshness, then existence -- the same order
+    # `_entity_update` documents: a malformed request is a 400 whether or not
+    # the record also moved on disk, and a caller carrying a rev for a record
+    # that has since been deleted is told it is a conflict rather than a 404,
+    # because `entity_hash` answers None for both and the conflict is the truer
+    # of the two. A caller with no rev falls through to the existence check.
+    _fresh_or_409(body.rev, store.entities.entity_hash(root, kind, eid))
+    _world_entity_or_404(wid, kind, eid)
+    return store.reclassify.world_entity(wid, kind, eid, to)
+
+
+@router.post("/campaigns/{cid}/{kind}/{eid}/reclassify")
+def post_campaign_entity_reclassify(cid: str, kind: str, eid: str, body: EntityReclassify):
+    """Move this campaign's copy of a record to another generic kind. The world
+    keeps its own; the campaign's copy is materialized first and the world's is
+    tombstoned, so the record is listed once, under its new kind (#119)."""
+    _entity_kind_or_404(kind)
+    to = _reclassify_target(kind, body)
+    _campaign_root_or_404(cid)
+    _fresh_or_409(body.rev, store.overlay.entity_rev(cid, kind, eid))
+    # Resolves through the overlay, so an inherited record passes and a
+    # tombstoned one does not -- the same two answers the reclassify itself
+    # would give, asked where they can be reported as a 404.
+    _campaign_entity_or_404(cid, kind, eid)
+    return {"id": store.reclassify.campaign_entity(cid, kind, eid, to)}
 
 
 @router.get("/worlds/{wid}/{kind}")
