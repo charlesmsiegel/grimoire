@@ -17,10 +17,12 @@ def cast_detail(cid: str, sid: str, kind: str, actor_id: str) -> dict:
     """Read-only display info for an actor in a scene, from the campaign copy.
 
     `source` is the provenance badge (`versions.actor_source`, #99). Scene cast
-    is always locked -- `scene_cast` reads the appearance record -- so the
-    comparison it makes against the recorded base always has a lock to make it
-    against, and it cannot raise here for an actor that got past the
-    membership check above.
+    is by definition locked -- `scene_cast` is built from the appearance record
+    -- so the base it compares against is always there for an actor that got
+    past the membership check above. Nothing here holds the campaign lock,
+    though, so a concurrent delete between the two reads of that record can
+    still make it raise; the route already answers `AppearError` with a 404,
+    which is the right answer for an actor who has just left.
     """
     if not any(a["kind"] == kind and a["id"] == actor_id for a in scene_cast(cid, sid)):
         raise paths.AppearError(f"{kind}/{actor_id} is not in scene {sid}")

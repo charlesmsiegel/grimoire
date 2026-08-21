@@ -4,6 +4,7 @@ import pytest
 
 from grimoire.store import appearances as ap
 from grimoire.store import assets, campaigns, characters, dossiers, overlay, pcs, scenes, worlds
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 
 def _world_with_char(monkeypatch, tmp_path):
@@ -476,16 +477,23 @@ def test_actor_source_reads_emergent_once_the_world_original_is_deleted(monkeypa
     overlay.forget_world_record(wroot, "characters", "seraphine")
     assert "characters/seraphine" in overlay.detached(cid)
     assert ap.actor_source(cid, "characters", "seraphine") == "emergent"
-    # and still emergent once a stranger takes the freed slug
-    characters.create_character(wroot, "Seraphine", "Corrupted",
-                               characters.blank_card("Seraphine"))
+    # and still emergent once a stranger takes the freed slug. The assert on
+    # the id is the test: without it a `seraphine-2` would pass this for the
+    # trivial reason that nothing claimed the slug at all.
+    stranger, _ = characters.create_character(wroot, "Seraphine", "Corrupted",
+                                              characters.blank_card("Seraphine"))
+    assert stranger == "seraphine"
     assert ap.actor_source(cid, "characters", "seraphine") == "emergent"
 
 
 def test_actor_source_reads_emergent_when_the_world_directory_is_gone(monkeypatch, tmp_path):
     """A campaign whose world is no longer on disk inherits nothing -- the same
     reading `world_root_of` already gives it -- so every actor in it is its own
-    rather than the library's."""
+    rather than the library's.
+
+    Only reachable by hand: `delete_world` refuses a world a campaign still
+    depends on. A restored or hand-managed store gets here anyway, which is
+    why `world_root_of` answers a path rather than raising."""
     wid, cid = _world_with_char(monkeypatch, tmp_path)
     ap.appear(cid, "s1", "characters", "seraphine", "corrupted", "npc")
     shutil.rmtree(worlds.world_root(wid))
@@ -522,3 +530,48 @@ def test_actor_source_reads_library_while_a_world_edit_is_still_pending(monkeypa
     characters.update_version(wroot, "seraphine", "corrupted",
                               {**card, "data": {**card["data"], "description": "rewritten upstream"}})
     assert ap.actor_source(cid, "characters", "seraphine") == "library"
+
+
+def test_actor_source_reads_library_then_override_for_a_pc(monkeypatch, tmp_path):
+    """The PC half of the comparison is a different hash function
+    (`pcs.version_hash`) reached through a different existence check, so it
+    gets its own pass through all of it rather than riding the character's."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    pid, vid = pcs.create_pc(wroot, "Elara", [])
+    cid = campaigns.create_campaign("Run", wid)
+    ap.appear(cid, "s1", "pcs", pid, vid, "player")
+    assert ap.actor_source(cid, "pcs", pid) == "library"
+    assert ap.cast_detail(cid, "s1", "pcs", pid)["source"] == "library"
+
+    croot = campaigns.campaign_root(cid)
+    persona = pcs.read_persona(croot, pid, vid)
+    pcs.update_version(croot, pid, vid, {**persona, "description": "On the run, and lying about it."})
+    assert ap.actor_source(cid, "pcs", pid) == "override"
+    assert ap.cast_detail(cid, "s1", "pcs", pid)["source"] == "override"
+
+
+def test_actor_source_reads_override_when_the_campaign_copy_is_gone(monkeypatch, tmp_path):
+    """A campaign-side delete does not sweep the appearance record, so the
+    record can outlive the card it names. With nothing to hash, the badge must
+    not claim the card is the library's -- it cannot read the card at all."""
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    ap.appear(cid, "s1", "characters", "seraphine", "corrupted", "npc")
+    characters.delete_character(campaigns.campaign_root(cid), "seraphine")
+    assert ap.actor_source(cid, "characters", "seraphine") == "override"
+
+
+def test_actor_source_reads_emergent_for_a_campaign_whose_world_ref_is_blank(monkeypatch, tmp_path):
+    """The other half of "no world": not a missing directory but a reference
+    that names none. `world_root_of` answers a path *below campaign.md*, a
+    regular file, so the library lookup stats through a non-directory rather
+    than through nothing -- a different failure inside `Path.exists` and worth
+    its own pass."""
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    ap.appear(cid, "s1", "characters", "seraphine", "corrupted", "npc")
+    mp = campaigns.campaign_root(cid) / "campaign.md"
+    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    mp.write_text(dump_frontmatter({**meta, "world": ""}, body), encoding="utf-8")
+    assert not campaigns.world_root_of(cid).is_dir()
+    assert ap.actor_source(cid, "characters", "seraphine") == "emergent"

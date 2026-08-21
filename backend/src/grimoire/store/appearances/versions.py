@@ -2,6 +2,13 @@
 purging siblings, and the sync-base bookkeeping that goes with it -- plus
 ``actor_source``, which is that bookkeeping read back rather than written.
 
+``actor_source`` is a read, so ``cast.py`` -- this package's read-only
+queries -- is where it looks like it belongs. It is here because what it
+reads is the `base` this module writes: it is the same comparison ``_lock``
+sets up and ``store/sync.py`` makes, and splitting the two halves of that
+contract across modules is how they drift. It also needs ``overlay`` and
+``campaigns.read``, which this module already binds and ``cast.py`` does not.
+
 ``_lock`` lives here rather than in ``paths.py``: it calls ``actor_hash``,
 ``_copy_actor``, ``_purge_other_versions``, ``_set_default`` and
 ``_drop_manifest_ref``, all defined here, and those call back into
@@ -33,10 +40,6 @@ def actor_hash(root: Path, kind: str, actor_id: str, vid: str) -> str | None:
     if kind == "characters":
         return characters.card_hash(root, actor_id, vid)
     return pcs.version_hash(root, actor_id, vid)
-
-
-#: What `actor_source` answers, and what `cast.cast_detail` reports as "source".
-SOURCES = ("library", "override", "emergent")
 
 
 def actor_source(cid: str, kind: str, actor_id: str) -> str:
@@ -73,6 +76,13 @@ def actor_source(cid: str, kind: str, actor_id: str) -> str:
     Raises `AppearError` for an actor that has not appeared: there is no lock
     to compare against, and unpicked actors take world changes wholesale
     through sync rather than holding a version of their own.
+
+    `overlay.detached` is fail-soft, so a corrupt `detached.json` loses the
+    first test above -- and the actor then falls to the hash comparison against
+    a base recorded from the original the world no longer has, which cannot
+    match. The badge degrades to "override", never to "library": a wrong answer
+    that overstates the campaign's ownership, rather than one that promises a
+    library record stands behind a card the library never wrote.
     """
     ref = paths._ref(kind, actor_id)
     rec = paths.record(cid).get(ref)
@@ -80,16 +90,23 @@ def actor_source(cid: str, kind: str, actor_id: str) -> str:
         raise paths.AppearError(f"{ref} has not appeared in campaign {cid}")
     if ref in overlay.detached(cid):
         return "emergent"
-    wroot = campaigns_read.world_root_of(cid)
-    if not (characters.character_exists(wroot, actor_id) if kind == "characters"
-            else pcs.pc_exists(wroot, actor_id)):
+    if not _actor_exists(campaigns_read.world_root_of(cid), kind, actor_id):
         return "emergent"
-    # A `None` here is the locked copy having gone missing from under its own
-    # record, which `paths.locked_actor_root` says cannot happen -- but if it
-    # has, "override" is the answer to give. The one thing this must never do
-    # is call a card the library's when it could not read the card at all.
+    # `None` means the campaign copy is not there to hash. It is reachable: a
+    # campaign-side `delete_character` rmtree's the actor dir and deliberately
+    # does NOT sweep `appearances.json` (the emergent-cast route says so where
+    # it handles the consequence), so the record can outlive the card. Answer
+    # "override" rather than "library": the one thing this must never do is
+    # call a card the library's when it could not read the card at all.
     mine = actor_hash(paths.locked_actor_root(cid), kind, actor_id, rec["version"])
-    return "library" if mine is not None and mine == rec.get("base") else "override"
+    return "library" if mine is not None and mine == rec["base"] else "override"
+
+
+def _actor_exists(root: Path, kind: str, actor_id: str) -> bool:
+    """Does `root` hold this actor at all? Kind dispatch, like `actor_hash`."""
+    if kind == "characters":
+        return characters.character_exists(root, actor_id)
+    return pcs.pc_exists(root, actor_id)
 
 
 def _version_ext(kind: str) -> str:

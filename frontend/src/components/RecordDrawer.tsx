@@ -34,8 +34,17 @@ export function RecordDrawer({ cid, sid, target, onClose }:
     // for the next target, and a stale badge would sit under a location's
     // title — or under the next actor's, claiming her predecessor's provenance.
     setSource(null);
+    // And the same hazard from the other end: two clicks in a row leave two
+    // reads in flight, and the slower one lands last. Title and body have
+    // always raced here, and a badge is the field where losing that race stops
+    // being a smudge and becomes a lie — "Library" over a character whose card
+    // this campaign has rewritten. The whole reply is dropped rather than the
+    // one field, since a title from one actor and a badge from another is not
+    // an improvement.
+    let live = true;
     if (target.type === "actor") {
       api.getCastDetail(cid, sid, target.kind, target.id).then((d: CastDetail) => {
+        if (!live) return;
         setTitle(d.name);
         setBody(d.body);
         setSource(d.source);
@@ -45,13 +54,19 @@ export function RecordDrawer({ cid, sid, target, onClose }:
       });
     } else {
       api.readEntity({ kind: "campaign", id: cid }, "locations", target.id).then((e) => {
+        if (!live) return;
         setTitle(e.meta.name);
         setBody(e.body);
       });
     }
+    return () => { live = false; };
   }, [cid, sid, target]);
 
-  const badge = source ? SOURCE[source] : undefined;
+  // Annotated rather than inferred: `SOURCE` is keyed by `CastSource` so that
+  // adding a fourth badge is a compile error here, but the value arrives over
+  // HTTP and is not checked by anything — the miss below is real at runtime
+  // even though the index signature says it cannot be.
+  const badge: { label: string; hint: string } | undefined = source ? SOURCE[source] : undefined;
   return (
     <div className="drawer-backdrop" onClick={onClose}>
       <aside className="drawer" onClick={(e) => e.stopPropagation()}>
