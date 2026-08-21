@@ -279,6 +279,29 @@ def _dropped_text(transcript: str) -> list[str]:
     return warnings
 
 
+def _moves_left_behind(times: list[str], places: list[str]) -> list[str]:
+    """A warning when the file records a scene that MOVED.
+
+    Only the first entry of each history is carried: it is the scene's start,
+    which is what the id is stamped from and what the rail shows. Replaying the
+    rest is not available -- `set_location` and `set_datetime` append their own
+    transition line for every move after the first, so importing a three-stop
+    history would write three transitions into a transcript that already
+    contains them.
+
+    The transitions the file's own transcript carries still import and still
+    read, so nothing in the scene is lost; what the imported copy does not have
+    is the metadata behind them. Said out loud, because the alternative is a
+    reader noticing months later that a scene whose text moves to the quay is
+    filed at the keep.
+    """
+    moves = [(len(h) - 1, what) for h, what in ((times, "moment"), (places, "location"))
+             if len(h) > 1]
+    return [f"this scene changed {what} {n} more time(s) after it began — only the "
+            f"first is carried, though the transitions still read in the transcript."
+            for n, what in moves]
+
+
 def parse(cid: str, data: bytes) -> dict:
     """`data` as a reviewable draft. Writes nothing, in either scope.
 
@@ -293,9 +316,13 @@ def parse(cid: str, data: bytes) -> dict:
     head, transcript = _split_chapter_header(body)
 
     warnings: list[str] = []
-    times = [t for t in meta.get("time_history", "").split(",") if t.strip()]
-    places = [p for p in meta.get("location_history", "").split(",") if p.strip()]
+    # The store's own reader, not a second copy of the split: `histories` exists
+    # because four copies of `[x for x in raw.split(",") if x]` is four places
+    # to forget the empty entry a bare `"".split(",")` produces.
+    history = scenes.histories(meta)
+    times, places = history["times"], history["locations"]
     date, location = (times[0].strip() if times else ""), (places[0].strip() if places else "")
+    warnings += _moves_left_behind(times, places)
     if date or location:
         location, place_hints = _known_location(cid, location)
         warnings += place_hints

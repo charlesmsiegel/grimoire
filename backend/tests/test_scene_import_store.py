@@ -166,6 +166,23 @@ def test_a_single_header_bit_is_reported_rather_than_guessed(monkeypatch, tmp_pa
     assert any("either the date or the location" in w for w in draft["warnings"])
 
 
+def test_a_scene_that_moved_says_what_is_not_carried(monkeypatch, tmp_path):
+    """Only the first entry of each history is carried -- replaying the rest
+    would append a fresh transition line for every move into a transcript that
+    already contains them. The transitions still read; the metadata behind them
+    does not come with, and a reader should not have to notice that months
+    later when a scene whose text moves to the quay is filed at the keep."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    overlay.create_entity(cid, "locations", "The Keep")
+
+    draft = scene_import.parse(cid, (
+        "---\ntitle: T\ntime_history: 2026-01-02,2026-01-03\n"
+        "location_history: the-keep,the-quay\n---\n\n**You:** hi\n").encode())
+
+    assert draft["date"] == "2026-01-02" and draft["location"] == "the-keep"
+    assert sum("only the first is carried" in w for w in draft["warnings"]) == 2
+
+
 def test_an_unknown_location_is_reported_not_invented(monkeypatch, tmp_path):
     _wid, cid = _campaign(monkeypatch, tmp_path)
     draft = scene_import.parse(cid, CHAPTER.encode())
