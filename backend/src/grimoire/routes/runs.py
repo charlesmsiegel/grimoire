@@ -268,7 +268,7 @@ class RunRegistry:
         self._by_attempt: dict[tuple[Subject, str], str] = {}
         # Stops that arrived before their attempt had a run. Insertion-ordered
         # so the oldest can be dropped when the cap is reached -- see
-        # `precancel`. The values are unused; only membership matters.
+        # `cancel_or_precancel`. The values are unused; only membership matters.
         self._precancelled: dict[tuple[Subject, str], None] = {}
         self._by_key: dict[str, str] = {}
 
@@ -330,6 +330,15 @@ class RunRegistry:
             self._by_subject.setdefault(subject, []).append(run.id)
             if attempt_id is not None:
                 self._by_attempt[(subject, attempt_id)] = run.id
+                # Consumed HERE, under the acquisition that publishes the run,
+                # and not by the caller afterwards. Two acquisitions left the
+                # window this record exists to close: the cancel route looks up
+                # and finds nothing, we publish and see no record, and only then
+                # does the route write one -- which nothing will ever read. One
+                # lock for each side makes the two total: either the record is
+                # already here, or the cancel finds this run.
+                if self._precancelled.pop((subject, attempt_id), "miss") is None:
+                    run.cancel_requested = True
             if key is not None:
                 self._by_key[key] = run.id
             return run, True
@@ -377,30 +386,28 @@ class RunRegistry:
             return [self._runs[rid] for rid in self._by_subject.get(subject, [])
                     if self._owns(self._runs.get(rid), subject, identity)]
 
-    def precancel(self, subject: Subject, attempt_id: str) -> None:
-        """Record a Stop for an attempt that has not reserved a run yet.
+    def cancel_or_precancel(self, subject: Subject, attempt_id: str,
+                            identity: str | None = None) -> Run | None:
+        """The run this attempt reserved, or -- if it has not yet -- a record
+        that it was stopped, kept for the reservation to find.
 
-        The window is real and not small: the POST is accepted, and the route's
-        synchronous setup can then block for as long as the campaign lock is
-        held before it reaches `reserve_turn`. A Stop in there finds no run to
-        cancel -- discovery answers "no such attempt" -- and the route goes on
-        to reserve and detach a turn the user already stopped. Polling for the
-        reservation only narrows that; refusing to forget the cancel closes it,
-        because the reservation is the thing that has to consume it.
-
-        Bounded by `_MAX_PRECANCEL`: these are client-supplied ids that may
-        never be reserved at all (the request died before the handler ran), so
-        the set has to be able to forget the oldest rather than grow forever.
+        ONE acquisition, deliberately, and this is the whole point of the
+        method. Asking and then recording is two, and a reservation fits
+        between them: the lookup finds nothing, the run is published seeing no
+        record, and the record is written afterwards for nobody. Doing both
+        under one lock makes the orderings total -- either this runs first and
+        the reservation consumes the record, or the reservation runs first and
+        this finds the run.
         """
         with self._lock:
+            known = self._by_attempt.get((subject, attempt_id))
+            run = self._runs.get(known) if known else None
+            if self._owns(run, subject, identity):
+                return run
             self._precancelled[(subject, attempt_id)] = None
             while len(self._precancelled) > _MAX_PRECANCEL:
                 self._precancelled.pop(next(iter(self._precancelled)))
-
-    def take_precancel(self, subject: Subject, attempt_id: str) -> bool:
-        """Whether this attempt was stopped before it reserved. Consumes it."""
-        with self._lock:
-            return self._precancelled.pop((subject, attempt_id), "miss") is None
+            return None
 
     def for_attempt(self, subject: Subject, attempt_id: str | None,
                     identity: str | None = None) -> Run | None:
@@ -688,9 +695,10 @@ def post_attempt_cancel(cid: str, sid: str, attempt_id: str, request: Request) -
     is capped and forgotten oldest-first.
     """
     subject, identity = _scene_subject(cid, sid)
-    run = request.app.state.runs.for_attempt(subject, attempt_id, identity)
+    # One call, because looking up and then recording is two acquisitions with a
+    # reservation-shaped gap between them -- see `cancel_or_precancel`.
+    run = request.app.state.runs.cancel_or_precancel(subject, attempt_id, identity)
     if run is None:
-        request.app.state.runs.precancel(subject, attempt_id)
         return {"run": None}
     if run.state == "running":
         runner.cancel(request.app, run)
@@ -986,12 +994,10 @@ def reserve_turn(app, cid: str, sid: str, kind: str,
         raise HTTPException(status_code=409, detail={
             "kind": "run_in_flight", "run_id": exc.run_id,
             "detail": "a turn is already running on this scene"}) from exc
-    # A Stop that arrived while this route was still in setup named this
-    # attempt and found nothing to cancel. Consume it now, before the producer
-    # is ever handed over: `runner` reads the same flag when it installs the
-    # cancel scope, so the turn ends without reaching a provider.
-    if fresh and app.state.runs.take_precancel(subject, attempt):
-        run.cancel_requested = True
+    # A Stop that arrived while this route was still in setup is already on the
+    # run: `start_or_existing` consumes the record under the same lock that
+    # publishes it. `runner` reads the flag when it installs the cancel scope,
+    # so the turn ends without ever reaching a provider.
     return run, fresh
 
 

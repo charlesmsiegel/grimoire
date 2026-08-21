@@ -307,3 +307,68 @@ def test_reaping_an_old_run_keeps_a_newer_attempt_mapping():
     adopted, started_again = r.start_or_existing(SCENE, "turn", "chat", "a1",
                                                  "ident-new", LABELS)
     assert adopted is new and not started_again
+
+
+class _CountingLock:
+    """The registry's lock, counting acquisitions. A context manager, because
+    that is the only way the registry ever uses it."""
+
+    def __init__(self, inner):
+        self._inner, self.acquisitions = inner, 0
+
+    def __enter__(self):
+        self.acquisitions += 1
+        return self._inner.__enter__()
+
+    def __exit__(self, *exc):
+        return self._inner.__exit__(*exc)
+
+
+def test_a_stop_cannot_slip_between_the_lookup_and_the_reservation():
+    """The precancel record is worth nothing unless writing it is ATOMIC with
+    looking for the run, and the same for consuming it and publishing one.
+
+    Asking and then recording is two acquisitions, and a reservation fits
+    between them: the lookup finds nothing, the run publishes seeing no record,
+    and the record lands afterwards for nobody to read -- the Stop is lost, in
+    exactly the window the record was added to close.
+
+    Asserted by counting acquisitions rather than by racing threads. The first
+    version of this test tried to drive the interleaving with a blocked thread
+    and passed against the two-acquisition version about as often as not, which
+    is worse than no test: the property is "one lock, so no interleaving is
+    possible", and a scheduler that happens to cooperate proves nothing about
+    it. Counting says the thing directly and fails the moment it stops being
+    true.
+    """
+    reg = runs.RunRegistry()
+    lock = _CountingLock(reg._lock)
+    reg._lock = lock
+    subject = ("scene", "saltmarch", "001--mara")
+
+    assert reg.cancel_or_precancel(subject, "a-1", "i1") is None
+    assert lock.acquisitions == 1, (
+        "recording a Stop took more than one acquisition, so a reservation "
+        "can land in the gap and never see it")
+
+    lock.acquisitions = 0
+    run, fresh = reg.start_or_existing(subject, "turn", "chat", "a-1", "i1", {})
+    assert lock.acquisitions == 1, (
+        "the record is consumed outside the acquisition that publishes the "
+        "run, so a Stop can land in the gap and be dropped")
+    assert fresh and run.cancel_requested, "the Stop did not reach the run"
+
+
+def test_a_stop_after_the_reservation_finds_the_run_itself():
+    """The other ordering, which must not start recording a phantom precancel:
+    a run that exists is cancelled through the run, and nothing is left behind
+    for a later attempt with the same id to pick up."""
+    reg = runs.RunRegistry()
+    subject = ("scene", "saltmarch", "001--mara")
+    run, _ = reg.start_or_existing(subject, "turn", "chat", "a-1", "i1", {})
+
+    found = reg.cancel_or_precancel(subject, "a-1", "i1")
+
+    assert found is run
+    assert not run.cancel_requested, "the registry cancelled it rather than the caller"
+    assert not reg._precancelled, "a record was left for an attempt that had a run"
