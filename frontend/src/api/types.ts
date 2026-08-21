@@ -861,7 +861,16 @@ export type SceneBreak = {
 /** `asked` is false whenever the call spent nothing: the heuristic declined, a
  *  forced call found nothing new, or the transcript moved under the answer. */
 export type SceneBreakAnswer = SceneBreak & { asked: boolean };
-export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
+/** Where a cast member's text came from (#99). `library` is the world's record
+ *  as this campaign locked it; `override` is that record with campaign edits on
+ *  top; `emergent` is a character the campaign owns outright, with no library
+ *  record behind it. Derived per read from hashes the lock already records —
+ *  see `store/appearances/versions.py:actor_source`. */
+export type CastSource = "library" | "override" | "emergent";
+export type CastDetail = {
+  kind: "characters" | "pcs"; id: string; name: string; version: string; body: string;
+  source: CastSource;
+};
 /** One feeling this actor holds toward another in the room. The three axes run
  *  0–5 and the column draws them as five pips each. */
 export type Feeling = {

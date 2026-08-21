@@ -319,6 +319,11 @@ def pc_count(root: Path) -> int:
                if p.is_dir() and (p / _META_NAME).exists() and safe_id(p.name)) if d.exists() else 0
 
 
+def pc_exists(root: Path, pid: str) -> bool:
+    """Whether `root` holds a PC under this id -- see `characters.character_exists`."""
+    return safe_id(pid) and _meta_path(root, pid).exists()
+
+
 def pc_refs(root: Path) -> list[str]:
     d = _pcs_dir(root)
     if not d.exists():

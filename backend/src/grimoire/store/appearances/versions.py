@@ -1,5 +1,6 @@
 """Version locking: materializing a picked version into the campaign tree,
-purging siblings, and the sync-base bookkeeping that goes with it.
+purging siblings, and the sync-base bookkeeping that goes with it -- plus
+``actor_source``, which is that bookkeeping read back rather than written.
 
 ``_lock`` lives here rather than in ``paths.py``: it calls ``actor_hash``,
 ``_copy_actor``, ``_purge_other_versions``, ``_set_default`` and
@@ -32,6 +33,63 @@ def actor_hash(root: Path, kind: str, actor_id: str, vid: str) -> str | None:
     if kind == "characters":
         return characters.card_hash(root, actor_id, vid)
     return pcs.version_hash(root, actor_id, vid)
+
+
+#: What `actor_source` answers, and what `cast.cast_detail` reports as "source".
+SOURCES = ("library", "override", "emergent")
+
+
+def actor_source(cid: str, kind: str, actor_id: str) -> str:
+    """Where an appeared actor's text came from: `"library"`, `"override"` or
+    `"emergent"` (#99).
+
+    Derived, never stored. A campaign is a copy-on-create deep copy of its
+    world, so nothing on disk says "this one is the library's" outright -- and
+    a field that did would go stale on the first edit, which is the whole
+    reason the answer is computed from hashes that already exist:
+
+    - **emergent** -- this campaign owns the actor outright, and no library
+      record stands behind it. Either the world never had one under that id
+      (`overlay.create_character`, the emergent-cast route, #98), or it had one
+      and it was deleted -- which `overlay.detached` records precisely because
+      whatever claims the freed slug next is a stranger. A campaign whose world
+      is missing entirely reads the same way, and deliberately: that campaign
+      inherits nothing, which is the reading `campaigns.read.world_root_of`
+      already gives it by answering an unoccupiable path.
+    - **library** -- the campaign's copy still hashes to the `base` recorded
+      when the version was locked, so nobody has edited it here.
+    - **override** -- it does not, so the text under the lock is this
+      campaign's own.
+
+    Provenance, not sync state. A *world*-side edit since the lock leaves this
+    on "library": the campaign is still holding the library's text as it took
+    it, and the fact that the library has moved on is a pending update
+    `store/sync.py` reports (#71 is that axis). The two are separate on purpose
+    -- accepting an update advances `base` and copies, so the badge stays
+    "library"; rejecting one advances `base` without copying, which is a
+    campaign that has deliberately pinned its own text and reads as "override"
+    from then on.
+
+    Raises `AppearError` for an actor that has not appeared: there is no lock
+    to compare against, and unpicked actors take world changes wholesale
+    through sync rather than holding a version of their own.
+    """
+    ref = paths._ref(kind, actor_id)
+    rec = paths.record(cid).get(ref)
+    if rec is None:
+        raise paths.AppearError(f"{ref} has not appeared in campaign {cid}")
+    if ref in overlay.detached(cid):
+        return "emergent"
+    wroot = campaigns_read.world_root_of(cid)
+    if not (characters.character_exists(wroot, actor_id) if kind == "characters"
+            else pcs.pc_exists(wroot, actor_id)):
+        return "emergent"
+    # A `None` here is the locked copy having gone missing from under its own
+    # record, which `paths.locked_actor_root` says cannot happen -- but if it
+    # has, "override" is the answer to give. The one thing this must never do
+    # is call a card the library's when it could not read the card at all.
+    mine = actor_hash(paths.locked_actor_root(cid), kind, actor_id, rec["version"])
+    return "library" if mine is not None and mine == rec.get("base") else "override"
 
 
 def _version_ext(kind: str) -> str:

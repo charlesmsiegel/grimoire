@@ -1705,6 +1705,13 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .drawer-close { float: right; background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 16px; }
 .drawer-close:hover { color: var(--accent); }
 .drawer-avatar { max-width: 180px; height: auto; display: block; border: 1px solid var(--muted); margin: 8px 0; }
+/* Cast provenance (#99). "Library" is the ordinary case and stays in the
+   role-chip's muted default -- only the two states that say "this is not the
+   library's text as it stands" take a colour, so the badge reads as
+   information rather than as three competing labels. */
+.cast-source { display: inline-block; margin: 2px 0 6px; }
+.cast-source.override { border-color: var(--accent); color: var(--accent); }
+.cast-source.emergent { border-color: var(--alert); color: var(--alert); }
 /* Below this the inspector stops being a column and becomes an overlay. It used
    to be 1100px and hid `.inspector-tab` along with the panel, so the scene
    details simply vanished with no affordance to bring them back -- which was a
