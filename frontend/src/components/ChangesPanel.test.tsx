@@ -54,6 +54,20 @@ test("lists changed records and shows a field diff on select", async () => {
   expect(screen.getByText("A busy port town.").className).toContain("diff-equal");
 });
 
+test("a change to any entity kind is listed, not just lore and locations", async () => {
+  // Absorb can evolve the body of all five kinds (#224). A ref whose kind no
+  // heading claims would be fetched, counted and then never rendered.
+  (api.campaignChanges as any).mockResolvedValue(
+    ["items", "groups", "creatures"].map((kind) => ({
+      ...HARBOR, ref: { kind, id: "the-ledger" }, name: `The Ledger (${kind})`,
+    })));
+  await renderPanel();
+  for (const kind of ["Items", "Groups", "Creatures"]) {
+    expect(await screen.findByRole("heading", { name: kind })).toBeInTheDocument();
+  }
+  expect(await screen.findByRole("button", { name: /The Ledger \(items\)/ })).toBeInTheDocument();
+});
+
 test("shows an empty state when nothing has changed", async () => {
   (api.campaignChanges as any).mockResolvedValue([]);
   await renderPanel();

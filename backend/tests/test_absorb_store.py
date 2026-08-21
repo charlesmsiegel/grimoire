@@ -131,10 +131,152 @@ def test_materialize_builds_before_after(monkeypatch, tmp_path):
     cs = edits[f"character_state:{ch}"]
     assert cs["kind"] == "character_state" and cs["before"] == "Wary of the party." \
         and cs["after"] == "Now travels with them." and cs["authored"] is False
-    lore = edits["lore:salt-cathedral"]
+    lore = edits["lore:lore/salt-cathedral"]
     assert lore["before"] == "A ruined cathedral." and lore["after"].endswith("Now flooded.")
     auth = edits[f"authored:{ch}:personality"]
     assert auth["authored"] is True and auth["before"] == "aloof" and auth["after"] == "guardedly loyal"
+
+
+def test_append_kinds_covers_every_entity_kind():
+    """A body append is the one edit that can evolve a record of ANY kind, and
+    for three of the five it could not (#224). The guard is against the next
+    kind: `entities.ENTITY_KINDS` is where a sixth would be added, and nothing
+    else would notice that absorb had quietly left it out."""
+    from grimoire.store import entities
+    assert sorted(absorb.APPEND_KINDS) == sorted(entities.ENTITY_KINDS)
+    assert len(absorb.APPEND_KINDS) == len(set(absorb.APPEND_KINDS))
+
+
+def test_materialize_evolves_items_groups_and_creatures(monkeypatch, tmp_path):
+    """Items, groups and creatures were unreachable from `lore_edits` (#224), so
+    a group could only move through its campaign-side state and an item or a
+    creature was static from the day it was created."""
+    from grimoire.store import entities, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "items", "The Ledger", body="A tally of bribes.")
+    entities.create_entity(croot, "groups", "Salt Circle", body="A quiet cabal.")
+    entities.create_entity(croot, "creatures", "Fen Drake", body="It hunts the shallows.")
+    sid = scenes.create_scene(cid, "S")
+    parsed = {"lore_edits": [
+        {"id": "the-ledger", "append": "It names the harbourmaster."},
+        {"id": "salt-circle", "append": "It has lost the pier."},
+        {"id": "fen-drake", "append": "One was seen inland."}]}
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    assert set(edits) == {"lore:items/the-ledger", "lore:groups/salt-circle",
+                          "lore:creatures/fen-drake"}
+    ledger = edits["lore:items/the-ledger"]
+    assert ledger["kind"] == "lore" and ledger["target"] == {"kind": "items", "id": "the-ledger"}
+    assert ledger["before"] == "A tally of bribes."
+    assert ledger["after"] == "A tally of bribes.\n\nIt names the harbourmaster."
+    # The label names the kind, which is what lets a reviewer catch a bare id
+    # that resolved to a record the model did not mean.
+    assert ledger["label"] == "The Ledger — items"
+
+
+@pytest.mark.parametrize("raw", ["items/the-ledger", "items:the-ledger"])
+def test_materialize_lore_edit_id_may_name_its_kind(monkeypatch, tmp_path, raw):
+    """Both prefix spellings, because `group_state_edits` already accepts both
+    and the model has no way to know the two sections differ."""
+    from grimoire.store import entities, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "The Ledger", body="A rumour of a tally.")
+    entities.create_entity(croot, "items", "The Ledger", body="A tally of bribes.")
+    sid = scenes.create_scene(cid, "S")
+    edits = {e["id"]: e for e in absorb.materialize(
+        cid, sid, {"lore_edits": [{"id": raw, "append": "It names the harbourmaster."}]})}
+    assert list(edits) == ["lore:items/the-ledger"]
+    assert edits["lore:items/the-ledger"]["before"] == "A tally of bribes."
+
+
+def test_materialize_qualified_lore_edit_id_does_not_fall_back_to_another_kind(
+        monkeypatch, tmp_path):
+    """Naming a kind is the model saying the bare id is ambiguous. Falling back
+    to the scan on a miss would answer a question it did not ask — and would
+    write the item's paragraph into a same-slugged lore entry."""
+    from grimoire.store import entities, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "The Ledger", body="A rumour of a tally.")
+    sid = scenes.create_scene(cid, "S")
+    assert absorb.materialize(cid, sid, {"lore_edits": [
+        {"id": "items/the-ledger", "append": "It names the harbourmaster."}]}) == []
+    assert entities.read_entity(croot, "lore", "the-ledger")["body"].strip() \
+        == "A rumour of a tally."
+
+
+def test_materialize_bare_lore_edit_id_still_prefers_lore_then_locations(
+        monkeypatch, tmp_path):
+    """The two kinds this resolver knew before the other three joined it keep
+    the order they were tried in. Slugs are per-kind, so one id can name up to
+    five records, and reordering would silently move an append that has been
+    landing on a lore entry onto a same-slugged location."""
+    from grimoire.store import entities, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    for kind in ("locations", "lore", "items", "groups", "creatures"):
+        entities.create_entity(croot, kind, "The Ledger", body=f"The {kind} one.")
+    sid = scenes.create_scene(cid, "S")
+    edits = absorb.materialize(cid, sid, {"lore_edits": [{"id": "the-ledger", "append": "x"}]})
+    assert [e["target"] for e in edits] == [{"kind": "lore", "id": "the-ledger"}]
+    entities.delete_entity(croot, "lore", "the-ledger")
+    edits = absorb.materialize(cid, sid, {"lore_edits": [{"id": "the-ledger", "append": "x"}]})
+    assert [e["target"] for e in edits] == [{"kind": "locations", "id": "the-ledger"}]
+
+
+def test_materialize_lore_edit_drops_an_id_naming_a_kind_that_is_not_a_record(
+        monkeypatch, tmp_path):
+    """`characters/seraphine` is a real ref elsewhere in this contract, and a
+    body append is not a thing a character has. It must be dropped, not read as
+    a bare id that happens to contain a slash."""
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    sid = scenes.create_scene(cid, "S")
+    assert absorb.materialize(cid, sid, {"lore_edits": [
+        {"id": f"characters/{ch}", "append": "x"}, {"id": "lore/", "append": "x"}]}) == []
+
+
+def test_materialize_lore_edit_reaches_an_inherited_item(monkeypatch, tmp_path):
+    """A thin campaign never copies the world's records, so resolution has to go
+    through the overlay for every kind — not just the two it used to."""
+    from grimoire.store import entities, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    wid = campaigns.read_campaign(cid)["meta"]["world"]
+    entities.create_entity(worlds.world_root(wid), "items", "The Ledger", body="A tally.")
+    assert not (campaigns.campaign_root(cid) / "items" / "the-ledger.md").exists()
+    sid = scenes.create_scene(cid, "S")
+    edits = absorb.materialize(cid, sid, {"lore_edits": [
+        {"id": "the-ledger", "append": "It names the harbourmaster."}]})
+    assert [e["id"] for e in edits] == ["lore:items/the-ledger"]
+    assert edits[0]["before"] == "A tally."
+
+
+def test_apply_edits_writes_a_body_append_onto_every_entity_kind(monkeypatch, tmp_path):
+    """The apply side was always kind-generic (it writes `target["kind"]`); this
+    holds it that way now that materialize can actually stage the other three,
+    and that the write-back is logged under the record's own ref."""
+    from grimoire.store import entities, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    sid = scenes.create_scene(cid, "S")
+    for kind in ("items", "groups", "creatures"):
+        entities.create_entity(croot, kind, "The Ledger", body="Before.")
+    applied, failures = absorb.apply_edits(cid, [
+        {"id": f"lore:{kind}/the-ledger", "kind": "lore",
+         "target": {"kind": kind, "id": "the-ledger"}, "field": "body",
+         "label": f"The Ledger — {kind}", "after": f"Before.\n\nAfter the {kind} scene."}
+        for kind in ("items", "groups", "creatures")], sid=sid)
+    assert failures == []
+    assert applied == ["lore:items/the-ledger", "lore:groups/the-ledger",
+                       "lore:creatures/the-ledger"]
+    for kind in ("items", "groups", "creatures"):
+        assert entities.read_entity(croot, kind, "the-ledger")["body"].strip() \
+            == f"Before.\n\nAfter the {kind} scene."
+    assert set(changes.read(cid)) == {"items/the-ledger", "groups/the-ledger",
+                                      "creatures/the-ledger"}
 
 
 def test_materialize_character_state_edit_strips_kind_prefix(monkeypatch, tmp_path):

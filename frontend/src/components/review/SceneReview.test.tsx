@@ -2156,7 +2156,7 @@ test("each routed row shows its band, why it was banded, and its citation", asyn
   expect(screen.getByText("She pressed a hand to her side.")).toBeTruthy();
   expect(screen.getByText(/— Grimoire/)).toBeTruthy();
 
-  fireEvent.click(column.getByRole("button", { name: /lore & cards/i }));
+  fireEvent.click(column.getByRole("button", { name: /world records & cards/i }));
   expect(screen.getByText(/medium · said by someone else/)).toBeTruthy();
 
   fireEvent.click(column.getByRole("button", { name: /low confidence/i }));

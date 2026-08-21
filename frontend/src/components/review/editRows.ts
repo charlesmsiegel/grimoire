@@ -40,7 +40,9 @@ export const EDIT_GROUPS: { key: string; label: string; kinds: StagedEdit["kind"
   { key: "facts", label: "Facts", kinds: ["fact"] },
   { key: "plot", label: "Plot & commitments", kinds: ["plot", "commitment"] },
   { key: "new", label: "New records", kinds: ["new_character", "new_location", "new_lore"] },
-  { key: "records", label: "Lore & cards", kinds: ["lore", "authored"] },
+  // "World records", not "Lore": a `lore` row is a body append onto any of the
+  // five entity kinds (#224) — an item or a creature lands here too.
+  { key: "records", label: "World records & cards", kinds: ["lore", "authored"] },
   { key: "sheets", label: "Sheets", kinds: ["sheet"] },
   { key: "voice", label: "Voice", kinds: ["voice_drift"] },
 ];

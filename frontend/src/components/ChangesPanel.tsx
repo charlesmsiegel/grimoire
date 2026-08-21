@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, api, type JournalEntry, type RecordChange } from "../api/client";
 
+// Every ref kind a write-back can carry, because a row filed under a kind no
+// heading claims is not rendered at all. Absorb evolves the body of any of the
+// five entity kinds (#224), not just lore and locations, so a group's or an
+// item's change would otherwise be logged and then be invisible here.
 const GROUPS: { kind: string; label: string }[] = [
   { kind: "characters", label: "Characters" },
   { kind: "lore", label: "Lore" },
   { kind: "locations", label: "Locations" },
+  { kind: "items", label: "Items" },
+  { kind: "groups", label: "Groups" },
+  { kind: "creatures", label: "Creatures" },
 ];
 
 /** The two things this panel answers, which are different questions (#31).

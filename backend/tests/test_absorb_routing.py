@@ -428,11 +428,11 @@ def test_a_review_block_is_not_permission_to_write(monkeypatch, tmp_path):
     entities.create_entity(wroot, "lore", "The Ledger", "It lists bribes.", keys="ledger")
     staged = _materialized(cid, sid, {"lore_edits": [
         {"id": "the-ledger", "append": "It names the harbourmaster.",
-         "speaker": "Nobody At All", "certainty": 0.1}]})["lore:the-ledger"]
+         "speaker": "Nobody At All", "certainty": 0.1}]})["lore:lore/the-ledger"]
     assert staged["review"]["band"] == "low"
 
     applied, failures = absorb.apply_edits(cid, [staged], sid)
-    assert (applied, failures) == (["lore:the-ledger"], [])
+    assert (applied, failures) == (["lore:lore/the-ledger"], [])
     assert "harbourmaster" in entities.read_entity(campaigns.campaign_root(cid),
                                                    "lore", "the-ledger")["body"]
 
