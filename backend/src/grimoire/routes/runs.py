@@ -28,7 +28,20 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from typing import Literal
+from typing import Literal, Protocol
+
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
+
+from .. import runner
+from ..store import scenes
+
+CANCEL_TIMEOUT_SECONDS = 30.0
+"""How long the cancel route waits for the abort hook before answering anyway.
+
+Bounded because a provider that never unwinds must not hold an HTTP worker
+forever; long enough that a normal unwind always fits inside it.
+"""
 
 REAP_SECONDS = 600
 """How long a terminal run stays discoverable.
@@ -60,6 +73,22 @@ A turn appends to the transcript and a review reads it whole and marks it
 absorbed; either running while the other mutates loses work that cannot be
 regenerated.
 """
+
+
+class HandshakeEvent(Protocol):
+    """What a run's `ready`/`terminal` events must do.
+
+    Two implementations satisfy it: `_PlainEvent` (no event loop, for a
+    registry built in `create_app` and used by tests that never start a
+    lifespan) and `runner._PortalEvent` (created and mutated only on the
+    lifespan loop, so an async waiter is woken correctly). Typing the factory
+    as returning `object` compiled but left every caller of `.wait()`
+    unchecked, which is how a protocol earns its place.
+    """
+
+    def set(self) -> None: ...
+    def is_set(self) -> bool: ...
+    def wait(self, timeout: float | None = None) -> bool: ...
 
 
 class RunInFlightError(Exception):
@@ -119,7 +148,7 @@ class Run:
 
     def __init__(self, subject: Subject, cls: RunClass, kind: str,
                  attempt_id: str | None, scene_identity: str | None,
-                 labels: dict, event_factory: Callable[[], object]) -> None:
+                 labels: dict, event_factory: Callable[[], HandshakeEvent]) -> None:
         self.id = uuid.uuid4().hex
         self.subject = subject
         self.cls = cls
@@ -205,7 +234,7 @@ class RunRegistry:
     a view showing scene B to frames produced for scene A.
     """
 
-    def __init__(self, event_factory: Callable[[], object] | None = None) -> None:
+    def __init__(self, event_factory: Callable[[], HandshakeEvent] | None = None) -> None:
         self._event_factory = event_factory or _PlainEvent
         self._lock = threading.Lock()
         self._runs: dict[str, Run] = {}
@@ -213,7 +242,7 @@ class RunRegistry:
         self._by_attempt: dict[tuple[Subject, str], str] = {}
         self._by_key: dict[str, str] = {}
 
-    def set_event_factory(self, factory: Callable[[], object]) -> None:
+    def set_event_factory(self, factory: Callable[[], HandshakeEvent]) -> None:
         """Swap the factory used for runs published from here on.
 
         The lifespan calls this to install one that builds events on the event
@@ -358,3 +387,159 @@ def install_registry(app) -> None:
     assertion. It is pure data and needs no running loop, so this costs nothing.
     """
     app.state.runs = RunRegistry()
+
+
+# --- routes -----------------------------------------------------------------
+#
+# Deliberately thin. Everything above this line is pure data with no FastAPI in
+# it, and these handlers only resolve a subject, look a run up, and shape a
+# response. Nothing here imports `streaming` or `scenes` -- the registry is
+# reachable from the whole route layer, and a dependency in that direction
+# would make the module graph cyclic (`test_import_guard`).
+
+router = APIRouter()
+
+
+def _scene_subject(cid: str, sid: str) -> tuple[Subject, str | None]:
+    """The subject for a scene, plus the scene's current identity.
+
+    The identity is what distinguishes a scene from a *replacement* that
+    recycled its id -- ids are recycled by design, and a terminal run stays
+    readable for the whole retention window, so the subject alone would let the
+    replacement read or cancel the dead scene's run.
+    """
+    return ("scene", cid, sid), scenes.scene_identity(cid, sid)
+
+
+def _gone(kind: str, detail: str) -> HTTPException:
+    """A 404 whose body is FLAT.
+
+    `main` installs an exception handler that emits a dict `detail` as the
+    response body directly, so `kind` lands at the top level -- which is how
+    every other structured error in this tree is asserted.
+    """
+    return HTTPException(status_code=404, detail={"kind": kind, "detail": detail})
+
+
+def _run_payload(run: Run) -> dict:
+    """What a client needs to decide what to do, and nothing it does not.
+
+    `next_index` rather than the frames themselves: a poll is for state, and a
+    terminal run's buffer can be the whole reply. The client asks for frames
+    over the stream route, from the cursor it kept.
+    """
+    return {
+        "id": run.id,
+        "state": run.state,
+        "kind": run.kind,
+        "cls": run.cls,
+        "attempt_id": run.attempt_id,
+        "labels": run.labels,
+        "next_index": len(run.frames),
+        "error": run.error,
+        "result": run.result,
+        "started_at": run.started_at,
+        "ended_at": run.ended_at,
+    }
+
+
+def _resolve(app, cid: str, sid: str, run_id: str) -> Run:
+    subject, identity = _scene_subject(cid, sid)
+    run = app.state.runs.get(run_id, subject, identity=identity)
+    if run is None:
+        raise _gone("run_gone", "no such run for this scene")
+    return run
+
+
+@router.get("/campaigns/{cid}/scene-by-identity")
+def get_scene_by_identity(cid: str, identity: str) -> dict:
+    """The scene an identity names right now, or 404.
+
+    What a notification tap resolves through: the intent carries the identity
+    precisely because a `sid` goes stale on rename, so without this the tap
+    could only open a stale route or fall back to the campaign.
+
+    The identity is a QUERY parameter, and the path deliberately does not sit
+    under `/scenes/`. `/scenes/by-identity/{identity}` puts a literal where a
+    `sid` goes and a parameter where a literal goes, so it crosses EVERY
+    `/scenes/{sid}/<name>` route -- a dozen ambiguous pairs, each needing its
+    own entry in `test_route_order.CROSSING_PAIRS`. Twelve exemptions to add
+    one lookup is the guard reporting that the URL is shaped wrong, not that
+    the guard is in the way.
+    """
+    sid = scenes.find_by_identity(cid, identity)
+    if sid is None:
+        raise _gone("scene_gone", "no scene carries that identity")
+    return {"id": sid}
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/run")
+def get_scene_run(cid: str, sid: str, request: Request,
+                  attempt: str | None = None) -> dict:
+    """Discovery. With `attempt`, an exact match; without, the newest run.
+
+    "Newest" is a decision, not an implementation detail. The subject index
+    routinely holds several -- a terminal run stays readable for the whole
+    retention window while a new one is already live -- and answering with the
+    older, terminal one makes the client settle and miss the live reply
+    entirely, which is the failure this endpoint exists to prevent.
+
+    A scene with no runs answers `{"run": None}`, not 404: that is the ordinary
+    case on every mount, and an error there would make every quiet scene look
+    broken.
+    """
+    subject, identity = _scene_subject(cid, sid)
+    found = request.app.state.runs.for_subject(subject, identity=identity)
+    if attempt is not None:
+        found = [r for r in found if r.attempt_id == attempt]
+    if not found:
+        return {"run": None}
+    newest = max(found, key=lambda r: r.started_at)
+    return {"run": _run_payload(newest)}
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/runs/{run_id}")
+def get_run(cid: str, sid: str, run_id: str, request: Request) -> dict:
+    return {"run": _run_payload(_resolve(request.app, cid, sid, run_id))}
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/runs/{run_id}/cancel")
+def post_run_cancel(cid: str, sid: str, run_id: str, request: Request) -> dict:
+    """Ask a run to stop, and answer once it really has.
+
+    A terminal run is NOT an error here: Stop races the reply landing, and
+    reporting a failure for a turn that succeeded a moment earlier is worse
+    than doing nothing.
+    """
+    run = _resolve(request.app, cid, sid, run_id)
+    if run.state == "running":
+        runner.cancel(request.app, run)
+        # Wait for the abort hook, not just for the cancel to be delivered:
+        # answering earlier lets a fast re-send race the partial-persist, which
+        # is the ordering the handshake exists to guarantee.
+        run.terminal.wait(timeout=CANCEL_TIMEOUT_SECONDS)
+    return {"run": _run_payload(run)}
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/runs/{run_id}/stream")
+def get_run_stream(cid: str, sid: str, run_id: str, request: Request,
+                   from_: int = Query(0, alias="from")):
+    """Replay this run's frames from `from_`, INCLUSIVE.
+
+    A client that consumed through N asks for N+1. Exclusive would drop one
+    frame per reconnect -- invisible until someone reads the text and finds a
+    word missing mid-sentence.
+
+    Every frame goes out with its absolute index on an SSE `id:` line. The
+    client cannot derive that by counting what it decoded, because a comment
+    frame (the heartbeat) carries no event at all -- so a per-event cursor lags
+    the server's position and `consumed + 1` replays text already rendered.
+    """
+    run = _resolve(request.app, cid, sid, run_id)
+    frames = run.frames_since(from_)
+
+    async def event_stream():
+        for frame in frames:
+            yield f"id: {frame['index']}\n{frame['raw']}"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
