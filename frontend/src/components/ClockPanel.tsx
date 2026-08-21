@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { agingLabel } from "../aging";
 import { api, type AdvanceDigest, type CalendarConfig, type CampaignClock,
          type ClockLogEntry } from "../api/client";
@@ -97,6 +97,19 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // The campaign this panel is showing RIGHT NOW, readable from inside a call
+  // that started before the reader navigated. `cid` inside an async function is
+  // the one captured when it was called, which is what the request needed and
+  // exactly what cannot answer "is this still the campaign on screen?".
+  //
+  // Without it a pricing reply for campaign A, landing after a move to B,
+  // installs A's digest and opens A's checkpoint question — and the buttons
+  // under it belong to the current render, so answering would fork and skip B
+  // on the strength of a span measured in A. The reset effect below does not
+  // help: it runs when `cid` changes, which is BEFORE the late reply arrives.
+  const showing = useRef(cid);
+  showing.current = cid;
+
   const reload = useCallback(
     () => api.getCampaignClock(cid).then(setClock).catch(() => setClock(null)),
     [cid]);
@@ -131,6 +144,19 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     setDigest(null); setGate(null); setCheckpointed(false); setPricedNow(null);
   }, [clock, outcome, pricedNow]);
 
+  // A taken checkpoint stops being one the moment the campaign moves on. The
+  // marker says "a copy of this campaign AS IT STANDS exists", which is what
+  // lets a retry skip the fork — and a turn played, or any scene edit, between
+  // the copy and the retry makes that false: the reader would be handed a
+  // restore point missing everything since.
+  //
+  // `refreshKey` IS the right signal here, where it was the wrong one for the
+  // question above, because the two fail in opposite directions. Firing too
+  // often there blanks a question under a reader mid-decision; firing too often
+  // here costs one extra copy of a campaign that may not have needed it, which
+  // is the side to be wrong on.
+  useEffect(() => { setCheckpointed(false); }, [refreshKey]);
+
   const request = () => (mode === "days" ? { days: parseInt(days, 10) } : { to: target });
   const ready = mode === "days" ? !isNaN(parseInt(days, 10)) : !!target;
 
@@ -139,6 +165,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     setBusy(true);
     try {
       const r = await api.previewAdvance(cid, request());
+      if (showing.current !== cid) return;    // the reader moved on; this is A's answer
       setDigest(r.digest);
       setPricedNow(clock?.now ?? "");
       setOutcome("preview");
@@ -198,6 +225,9 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     setBusy(true);
     try {
       const { digest: priced } = await api.previewAdvance(cid, request());
+      // Never install a verdict for a campaign that is no longer on screen: the
+      // question would be answered with the current campaign's id.
+      if (showing.current !== cid) return;
       setDigest(priced);
       setPricedNow(clock?.now ?? "");
       setOutcome("preview");
@@ -299,8 +329,15 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
                                 onChange={setTarget} ariaLabel="Skip to" disabled={busy} />}
       </div>
 
+      {/* Frozen while the question is open, as well as while a call is in
+          flight. The endpoint requires a reason and the gate's actions do not
+          re-check one, so a reason cleared here and then answered with
+          "Checkpoint, then advance" forks the campaign and *then* earns a 400 —
+          leaving a full copy on the shelf for a skip that never happened. The
+          reason is part of what was confirmed; Cancel is how it is changed. */}
       <input aria-label="Reason" placeholder="Why time passes…" value={reason}
-             disabled={busy} onChange={(e) => setReason(e.target.value)} />
+             disabled={busy || gate !== null}
+             onChange={(e) => setReason(e.target.value)} />
 
       {/* The question replaces the controls it was asked from, so there is only
           ever one live decision on screen. Changing the skip takes it back. */}
