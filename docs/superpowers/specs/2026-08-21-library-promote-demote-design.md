@@ -108,11 +108,54 @@ overwrite the campaign's edit with the world's older text.
 already have their copy plus a world record still standing — the state before
 the demote, for the campaigns not yet reached.
 
+## What the copy-down has to carry
+
+Assets overlay *per file*, from the world, which is why `materialize_entity`
+deliberately does not copy them: a campaign that diverged on wording should go
+on reading the world's pictures rather than forking them.
+
+That reasoning ends at demote. The delete takes the world's record directory
+with it (`overlay.forget_world_record`), so a copy-down that moved only the
+text would leave every dependent campaign holding a record whose art is gone
+for good, silently. So the art goes down too — for every dependent, including
+the ones that already have their own text.
+
+Two rules govern that copy, and both are the overlay's own rather than this
+feature's: a file the campaign already has is never overwritten (the per-file
+overlay rule), and a tombstoned asset stays gone (`image_root` checks the
+campaign's file *before* the tombstone, so a blind copy would hand back exactly
+the image the user deleted).
+
 ## Referential integrity
 
 A greeting names the character it belongs to. Promoting one whose character is
 still campaign-local would publish a library greeting pointing at nothing, so
 that is refused, naming the character to promote first.
+
+A *detached* character is refused for the opposite reason: the world does hold
+that slug, but detachment is the statement that whatever holds it is a stranger
+to this campaign's character of the same id (#225). Filing the greeting against
+that stranger is worse than a dangling reference, because it reads as working.
+
+## Two guards every move takes first
+
+- **The id, before it is joined onto a world root.** `kind` and `eid` arrive as
+  path parameters and a path parameter can carry an encoded slash. The
+  campaign-side readers do refuse an unsafe id, but relying on that would make
+  these functions safe only for as long as the order of their own checks never
+  changed — and everything here writes to the world, which no campaign resolver
+  guards.
+- **The world, before anything writes into it.** `campaigns.read.world_root_of`
+  answers with a path whether or not a world is there. Every move then does
+  `mkdir(parents=True)` on the way to its write, which would rebuild a deleted
+  world's directory around the record: a tree with no `world.md`, which nothing
+  lists as a world and no route can reach, holding the only copy of a record
+  the campaign had just recorded a sync base for.
+
+`demote` also refuses a `target` that is not a dependent rather than filtering
+to nothing — the delete runs regardless of `target`, so a typo otherwise meant
+"copy this down nowhere, then take it away from every campaign", the most
+destructive reading of the request, chosen silently.
 
 ## Not in scope
 

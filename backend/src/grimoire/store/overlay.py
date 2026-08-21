@@ -405,6 +405,60 @@ def dependent_campaigns(wroot: Path) -> list[str]:
     return _dependent_campaigns(wroot)
 
 
+def copy_record_dir_down(cid: str, kind: str, rid: str) -> None:
+    """Give this campaign its own copy of everything filed beside a world
+    record — its `assets/`, and for a greeting its localized images.
+
+    `_materialize_flat` deliberately does not do this: assets overlay per file,
+    so a campaign that merely diverged on TEXT should keep reading the world's
+    pictures rather than forking them. That reasoning ends the moment the world
+    record is about to be deleted (`sync.demote`), because the files it points
+    at go with it — leaving the campaigns holding the demoted record with its
+    text and none of its art, permanently and with nothing to say so.
+
+    Two rules, both the overlay's own, and both the reason this lives here
+    rather than in the caller:
+
+    - **A file the campaign already has wins**, and is not overwritten. That is
+      the whole per-file overlay rule, and `image_root` checks the campaign's
+      own file *before* anything else, so copying over one would replace a
+      picture this campaign chose with the world's.
+    - **A tombstoned asset stays gone.** `image_root` checks the campaign file
+      first and the tombstone second, so a blind copy would hand back exactly
+      the image the user deleted here — the deletion undone by an operation
+      aimed at a different record entirely.
+    """
+    if kind not in INHERITED_KINDS or not safe_id(rid):
+        return
+    src = _record_dir(wroot_of(cid), kind, rid)
+    if not src.is_dir():
+        return
+    dst = _record_dir(croot_of(cid), kind, rid)
+    gone = deleted(cid)
+    for p in sorted(src.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(src)
+        if _tombstoned_asset(kind, rid, rel, gone):
+            continue
+        target = dst / rel
+        if target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(p, target)
+
+
+def _tombstoned_asset(kind: str, rid: str, rel: Path, gone: set[str]) -> bool:
+    """Does a per-asset tombstone hide `rel`? `assets/<vid>/<name>.<ext>` is the
+    layout `assets._dir` writes, and `_asset_ref` keys the tombstone on
+    (base, id, vid, name) — the extension is not part of it, because deleting
+    an image and uploading a different format of it is the same slot."""
+    parts = rel.parts
+    if len(parts) != 3 or parts[0] != "assets":
+        return False
+    return _asset_ref(kind, rid, parts[1], Path(parts[2]).stem) in gone
+
+
 def _put_base(cid: str, ref: str, base: str) -> None:
     manifest = campaigns_paths.read_manifest(cid)
     manifest[ref] = base
