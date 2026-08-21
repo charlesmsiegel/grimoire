@@ -71,6 +71,12 @@ function onKeyDown(e: KeyboardEvent) {
   // Enter, a `<select>` swallowing an arrow. Handling it again would be the
   // second half of a double send.
   if (e.defaultPrevented) return;
+  // Auto-repeat is the key still being held, not pressed again. Nothing bound
+  // here wants a second firing from that -- ⌘⏎ held for half a second would
+  // send the turn several times over, since `busy` cannot come back through
+  // the closure until React has re-rendered -- and a binding that ever does
+  // want it (arrow-key travel) can ask for it then.
+  if (e.repeat) return;
   // An IME sends a keydown for every keystroke that is still assembling a
   // character (`keyCode` 229 is what a browser without `isComposing` sends),
   // and none of them is a chord the reader typed.

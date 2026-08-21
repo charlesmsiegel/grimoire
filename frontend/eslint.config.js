@@ -45,6 +45,20 @@ export default tseslint.config(
         { checkFragmentShorthand: true, checkKeyMustBeforeSpread: true, warnOnDuplicates: true },
       ],
       "react/no-array-index-key": "error",
+      // One keyboard, one listener (#193). A component that adds its own
+      // `keydown` listener cannot see the overlay on top of it, cannot tell
+      // prose from a chord, and cannot be listed in the shortcuts sheet --
+      // which is how this tree ended up with three of them and a drawer that
+      // answered no key at all. `src/shortcuts/registry.ts` is the one file
+      // allowed to install it, exempted below.
+      "no-restricted-syntax": ["error", {
+        selector:
+          "CallExpression[callee.property.name='addEventListener']"
+          + "[arguments.0.value=/^key(down|up|press)$/]",
+        message:
+          "Register the binding with `useHotkeys` (src/shortcuts) instead of "
+          + "adding a keyboard listener; one dispatcher decides what a keystroke means.",
+      }],
       // The two idioms the default settings call unused and this codebase
       // uses on purpose: `const { drop, ...rest } = x` to omit a key, and a
       // leading underscore to say "required by the signature, unread here".
@@ -59,6 +73,12 @@ export default tseslint.config(
         },
       ],
     },
+  },
+  {
+    // The one file that may install the keyboard listener the rule above
+    // forbids -- it is the dispatcher every other caller reaches through.
+    files: ["src/shortcuts/registry.ts"],
+    rules: { "no-restricted-syntax": "off" },
   },
   {
     // A vitest module mock is `any` by construction: `vi.mock` swaps the

@@ -187,6 +187,18 @@ test("a keystroke the page already handled is left alone", () => {
   expect(run).not.toHaveBeenCalled();
 });
 
+// A held key repeats at ~30ms. `busy` cannot come back through the closure
+// until React has re-rendered, so a send chord held down would send the turn
+// several times over before the guard it reads caught up.
+test("a held key fires once, not once per repeat", () => {
+  const run = vi.fn();
+  render(<Bind keys={[{ keys: "mod+enter", whileTyping: true, run }]} />);
+  press("Enter", { metaKey: true });
+  press("Enter", { metaKey: true, repeat: true });
+  press("Enter", { metaKey: true, repeat: true });
+  expect(run).toHaveBeenCalledTimes(1);
+});
+
 // An IME sends keydown for every keystroke that is still assembling a
 // character; none of them is a chord the reader typed.
 test("a composing keystroke is not a chord", () => {
