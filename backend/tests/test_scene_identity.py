@@ -705,3 +705,43 @@ def test_a_cr_only_header_is_spliced_rather_than_buried(tmp_path, monkeypatch):
     assert meta.get("title") == "Mara", f"the header was buried: {meta}"
     assert identity.scene_identity(cid, sid) == token
     assert p.read_bytes().count(b"---") == 2, "a second header was prepended"
+
+
+def test_an_unlistable_scenes_directory_is_not_an_absent_one(tmp_path, monkeypatch):
+    """`Path.exists()` suppresses `OSError` here too, and the cost is the same
+    shape as the per-file case: a scenes directory on a store that is
+    momentarily unresolvable read as "this campaign has no scenes", the route
+    reported `scene_gone`, and the notification tap took the give-up path
+    instead of the retry-on-`busy` one it has for exactly this.
+
+    A symlink loop again: `exists()` genuinely answers False for it while
+    listing raises, which is the disagreement rather than an imitation of it.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    token = identity.scene_identity(cid, sid)
+    assert identity.find_by_identity(cid, token) == sid
+
+    d = store.scenes.paths._scenes_dir(cid)
+    for f in d.iterdir():
+        f.unlink()
+    d.rmdir()
+    d.symlink_to(d)
+    assert not d.exists(), "the premise: exists() cannot see this"
+
+    with pytest.raises(identity.UnreadableError):
+        identity.find_by_identity(cid, token)
+
+
+def test_a_campaign_with_no_scenes_directory_still_answers_none(tmp_path,
+                                                                monkeypatch):
+    """The counterweight: a campaign that has never had a scene is a real
+    answer, and raising on it would make every notification for a deleted
+    campaign a 500 rather than a fallback."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+
+    assert identity.find_by_identity(cid, "f" * 32) is None

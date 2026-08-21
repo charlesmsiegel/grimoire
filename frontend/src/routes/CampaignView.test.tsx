@@ -1337,6 +1337,91 @@ test("a send whose socket AND lookup both died stays pending", async () => {
   expect(screen.getByRole("textbox")).toHaveValue("");
 });
 
+test("a reattach that could not connect keeps the scene locked", async () => {
+  // A reattach failing is the same outage as the socket dying, so clearing
+  // `busy` here put Send back over a run that still owns the scene -- and the
+  // next send's `registry.begin()` overwrites this scene's one pending entry,
+  // so a rollback by the original run takes the held words with it.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(async () => {
+    throw Object.assign(new Error("network error"), { beforeResponse: true });
+  });
+  (api.findRun as any)
+    .mockResolvedValueOnce({ run: null })          // the mount pass
+    .mockResolvedValue(
+      { run: { id: "r-live", attempt_id: "a", state: "running", next_index: 0 } });
+  (api.attachRun as any).mockRejectedValue(new Error("offline"));
+
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await waitFor(() => expect(api.attachRun).toHaveBeenCalled());
+
+  // Nothing established what became of that run, so nothing acts as if it had.
+  expect(screen.getByRole("button", { name: /stop ■/i })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /(send ▸|continue ▶)/i })).toBeNull();
+});
+
+test("and a later pass that finds nothing running is what releases it", async () => {
+  // The counterweight. A view locked by a failed reattach with no pending
+  // attempt has no other pass that would ever let go, so the attemptless
+  // lookup answering "nothing is running here" has to be the release.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.findRun as any).mockResolvedValue(
+    { run: { id: "r-live", attempt_id: "x", state: "running", next_index: 0 } });
+  (api.attachRun as any).mockRejectedValue(new Error("offline"));
+
+  renderCampaign();
+  await waitFor(() => expect(api.attachRun).toHaveBeenCalled());
+  await screen.findByRole("button", { name: /stop ■/i });
+
+  // The run ended while we could not reach it.
+  (api.findRun as any).mockResolvedValue(
+    { run: { id: "r-live", attempt_id: "x", state: "landed", next_index: 4 } });
+  act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+
+  await screen.findByRole("button", { name: /(send ▸|continue ▶)/i });
+});
+
+test("Stop on an adopted run keeps polling by run id, not by an empty attempt", async () => {
+  // An adopted run is recorded with `attempt: ""` -- the provider was recreated
+  // empty, so this client never knew the id the backend reserved under.
+  // Switching to `cancelAttempt(..., "")` after the first round matched nothing,
+  // so every poll answered null and a cancellation that was completing normally
+  // was reported unconfirmed, leaving the composer locked.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.findRun as any).mockResolvedValue(
+    { run: { id: "r-live", attempt_id: "x", state: "running", next_index: 0 } });
+  // Honours the signal, which is the point: `attachRun` is a real fetch in
+  // production, so a Stop aborts it and `attachToRun`'s catch is what has to
+  // wait for the cancel. A mock that ignored the signal would hang forever and
+  // the branch under test would never run.
+  (api.attachRun as any).mockImplementation(
+    async (_c: string, _s: string, _r: string, _from: number, onEvent: any,
+           signal: AbortSignal) => {
+      onEvent({ delta: "The tide " });
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          const err = new Error("The operation was aborted.");
+          err.name = "AbortError";
+          reject(err);
+        });
+      });
+    });
+  (api.cancelRun as any)
+    .mockResolvedValueOnce({ run: { id: "r-live", attempt_id: "x", state: "running", next_index: 0 } })
+    .mockResolvedValue({ run: { id: "r-live", attempt_id: "x", state: "cancelled", next_index: 0 } });
+
+  renderCampaign();
+  await screen.findByText(/The tide/);
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+
+  await screen.findByRole("button", { name: /(send ▸|continue ▶)/i });
+  // both rounds by id; the empty attempt was never asked about
+  expect((api.cancelRun as any).mock.calls.length).toBeGreaterThan(1);
+  expect(api.cancelAttempt).not.toHaveBeenCalled();
+});
+
 test("an adopted run that fails and rolls back hands the words back", async () => {
   // An adopted run fails the same way a watched one does, and rolls the post
   // back the same way -- `post_returned` says so. At that moment the registry
