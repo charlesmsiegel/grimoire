@@ -417,3 +417,37 @@ def _wait_for(seen, at=1, timeout=10.0):
     while len(seen) < at:
         assert time.monotonic() < deadline, "the provider was never reached"
         time.sleep(0.01)
+
+
+def test_cancel_answers_only_once_the_run_it_stopped_has_stopped(client, scene,
+                                                                 monkeypatch):
+    """Cancel means stopped, the way it does for a turn.
+
+    The caller's next act is usually "end the scene again", and `review` holds
+    the scene's exclusion key exactly as a turn does -- so a DELETE that
+    answered while its run was still unwinding would have that fresh absorb
+    refused with `run_in_flight` by a review it had just discarded.
+    """
+    cid, sid = scene
+    monkeypatch.setattr(routes.scenes, "ABANDON_POLL", 0.02)
+    held = _Wedged()
+    client.app.dependency_overrides[routes.get_llm] = lambda: _facade(held)
+
+    started = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    generation = started.json()["generation"]
+    _wait_for(held.frames_seen)
+
+    cancelled = review_runs.cancel(client, cid, sid, generation)
+    assert cancelled.json()["stopped"] == 1
+    # Terminal ALREADY, with no polling in between: that is the whole claim.
+    run = client.get(f"/api/campaigns/{cid}/scenes/{sid}/runs/"
+                     f"{started.json()['run']['id']}").json()["run"]
+    assert run["state"] == "cancelled", run
+
+    # ...and the scene is free, so the absorb the reviewer reaches for next is
+    # accepted rather than refused by the review they just discarded.
+    client.app.dependency_overrides[routes.get_llm] = _fake
+    again = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert again.status_code == 202, again.json()
+    review_runs.wait_for_run(client, cid, sid, again.json()["run"]["id"])
+    assert _pending(client, cid, sid)["review"]["one_line"] == "They met."

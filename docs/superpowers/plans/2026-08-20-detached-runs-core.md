@@ -28,8 +28,10 @@ complete and shippable on its own:
 - **Phase 1 (this plan)** — the run core, the five scene-turn routes, the
   frontend run registry, the Android foreground service and notification.
   Delivers the actual reported problem: a locked phone no longer loses a turn.
-- **Phase 2** — the absorb family: `store/pending_reviews.py`, durable review
-  results, the 202/poll contract, retry merges, the transcript watermark.
+- **Phase 2** *(landed, #396)* — the absorb family: `store/pending_reviews.py`,
+  durable review results, the 202/poll contract, retry merges, the transcript
+  watermark. The "Out of scope for Phase 1" section below is history from here
+  on: `post_absorb`, `post_audit` and `post_dossiers` are `review` runs now.
 - **Phase 3** — the remaining `draft` and `background` routes (19 of them) and
   the shared start/poll/unwrap client helper.
 
@@ -2399,7 +2401,8 @@ git commit -m "Document what detached runs changed"
 State plainly rather than leaving it implied:
 
 - `post_absorb`, `post_audit`, `post_dossiers` keep today's synchronous
-  behavior. Phase 2.
+  behavior. Phase 2 — **since landed (#396)**; they answer 202 and persist to
+  `store/pending_reviews.py`.
 - `post_rolling_summary` / `post_scene_break` keep their client trigger.
   Phase 3 adds the server-side one *in addition* — `askAfterPost` has eight
   call sites and only one is the end of a generated turn.
