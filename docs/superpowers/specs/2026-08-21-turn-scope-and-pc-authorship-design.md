@@ -121,24 +121,49 @@ always-on blocks with no ordering between them would be that finding, tripled.
    global system prompt. It is the one rule in the corpus about whose words
    these are rather than what they sound like, and a style that wants the
    narrator inside the PC's head is asking for something the player owns.
-3. **`turn_scope` vs. the prose style** — see the open question below. Two
-   shipped styles (`superheroes.md`, `pulp-adventure.md`) explicitly ask for
-   cliffhangers and cutting away at the moment of impact, which collides with
-   "do not land a closing image".
+3. **`turn_scope` outranks the prose style.** This is the one place the
+   hierarchy differs from `natural_prose.j2`, which yields its rhythm guidance
+   to a set style. Pacing is not rhythm: a style describes how prose *sounds*,
+   and letting it also decide how much story a turn consumes reintroduces the
+   bug this spec exists to fix, for whoever picked that style.
+
+   The apparent conflict is smaller than it looks. `superheroes.md` asks to
+   *"cut away at the moment of impact, mid-sentence, mid-fall"* and
+   `pulp-adventure.md` wants cliffhangers — both of which are **exactly**
+   `turn_scope`'s "leave it open", not a contradiction of it. The only clause
+   genuinely in tension is "do not land a closing image", and a style that
+   cuts away mid-fall was never landing one. Nothing in either style file
+   needs editing.
 4. **`/end` outranks `turn_scope`,** by replacing it rather than contradicting
    it (below).
 
 ## Design
 
-### 1. `templates/scene/sections/turn_scope.j2` — new lock-in section
+### 1. `templates/scene/sections/turn_scope/` — new lock-in section
 
-Placed immediately after `natural_prose`. Vars: `wrap` (bool).
+Placed immediately after `natural_prose`.
 **Registered `except_opener=True`** — an opener has no scene to continue, and
 `opener_shape.j2` (sent last, explicitly to outrank the system prompt) orders
 the establishing block this section forbids. `transient_tracker` already uses
 that flag for the same class of reason.
 
-Default branch (`not wrap`):
+**Three variants, selected through `_VARIANTS`** — the same mechanism
+`opener_instruction` (standard/offscreen) and `story_so_far` (full/compact)
+already use, keyed on data the assembler already carries:
+
+```python
+"scene/sections/turn_scope":
+    lambda d: "wrap" if d["wrap"] else ("pcless" if d["pcless"] else "standard"),
+```
+
+The variant exists because the hand-off sentence names the player, and in a
+pcless scene there isn't one — the director is driving. `pcless.j2` is
+`standard.j2` with that sentence rewritten ("what comes next is the other half
+of this one") and nothing else changed. Rendering the standard text there
+would state something false about who posts next, in a section whose whole job
+is telling the model where its turn stops.
+
+`standard.j2`:
 
 ```
 # Turn scope
@@ -161,13 +186,15 @@ trailing it, deliberately. The natural-prose spec's stated mitigation for
 prompt-level ban lists is *"pair every 'avoid' with a positive direction"*, and
 an earlier draft of this bullet was three stacked negations.
 
-`wrap` branch — replaces the section wholesale rather than appending an
-exception, because a contradicted rule reads worse than a replaced one:
+`wrap.j2` — replaces the section wholesale rather than appending an exception,
+because a contradicted rule reads worse than a replaced one. Worded so one
+file serves both the player and the director, which is why there is no fourth
+`wrap_pcless` variant:
 
 ```
 # Turn scope
 
-The player has asked to end the scene. This reply closes it: bring the current
+You have been asked to close this scene. This reply ends it: bring the current
 beat to rest, let it land, and stop. Do not open anything new, and do not
 leave a thread mid-gesture for a reply that is not coming.
 ```
@@ -295,8 +322,30 @@ direction — the player retypes three characters.
 **Reading** — `context.assemble._assemble` reads `wrap_next` and passes `wrap`
 to `turn_scope` and `response_format`.
 
+**The user turn has to agree with the system section.** `routes/scenes.py:526`
+builds the ephemeral note as
+
+```python
+note = turn.content.strip() or prompts.render("scene/director_note.j2")
+```
+
+and `director_note.j2` is the single line **"Continue the scene."** A bare
+`/end` scrubs to `""`, so without a change the model receives *"Continue the
+scene."* as its user turn directly beneath a system section saying the scene
+has been asked to close — the two halves of the prompt contradicting each
+other at the exact moment the feature is supposed to be unambiguous.
+
+New sibling template `scene/wrap_note.j2` — **"Bring the scene to a close."** —
+selected in place of `director_note.j2` when `wrap_next` is set and the note
+would otherwise be the default. A send that carries `/end` *and* prose keeps
+the prose as its note, unchanged; only the defaulted case swaps.
+
 **Effect is prompt-only.** `scene_break`, its watermark, and the review flow
-are untouched.
+are untouched. A player typing `/end` has authoritatively answered the question
+the confirming call spends an LLM call to ask, and pre-answering it would save
+that call — but it would couple the prompt flag to the break watermark, which
+is the coupling "prompt-only" was chosen to avoid. Left on the table
+deliberately; see *Known interactions*.
 
 ### 5. Section registration
 
@@ -330,6 +379,11 @@ naming in the spec rather than discovering in a token breakdown.
   pcless and renders plural with two seated players; `turn_scope` is absent
   from an opener; `response_format` omits the closing-narration rule under
   `wrap`.
+- **Variant selection** — `standard` / `pcless` / `wrap`, with `wrap` winning
+  over `pcless` when both hold (a director scene that was asked to close).
+- **The note agrees with the section** — a bare `/end` produces
+  `wrap_note.j2`, not "Continue the scene."; a `/end` sent alongside prose
+  keeps the prose.
 - **Registration** — both appear in the assembled prompt and the inspector
   breakdown; neither is droppable.
 
@@ -367,7 +421,9 @@ be measured. Whether "advance one beat" is obeyed remains a question only
   Expect more "still mid-beat" verdicts and some wasted calls, with `/end`
   becoming the ordinary way a scene ends. That is the intended shape of the
   feature, not a regression — but it is a real change in how the break flow
-  behaves and should be watched in play.
+  behaves and should be watched in play. **The first thing to reach for if it
+  does cost calls** is letting `/end` pre-answer the judge rather than
+  loosening `turn_scope`; the flag already carries the player's verdict.
 - **Replay.** `post_replay_turn` and `store/alternates.py` reconstruct turns.
   With a scene-level boolean there are no indices to keep in step, so replay
   simply sees whatever the flag currently says.
