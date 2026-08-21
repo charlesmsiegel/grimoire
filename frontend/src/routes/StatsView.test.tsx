@@ -145,7 +145,7 @@ it("aggregates errors per module, with each module's own kinds", async () => {
 
 it("says nothing has gone wrong rather than drawing an empty table", async () => {
   vi.mocked(api.getErrorSummary).mockResolvedValue(
-    { ...ERRORS, total: 0, modules: [], kinds: [], daily: [], rows: [] } as never);
+    { ...ERRORS, total: 0, modules: [], kinds: [], daily: [], rows: [] });
   vi.mocked(api.getStats).mockResolvedValue({
     ...structuredClone(STATS),
     errors: { ...ERRORS, total: 0, modules: [], kinds: [], daily: [], rows: [] },
@@ -186,7 +186,7 @@ it("keeps every module in the picker after one of them is picked", async () => {
 
 it("says which module is empty, and offers the way back", async () => {
   vi.mocked(api.getErrorSummary).mockResolvedValue(
-    { ...ERRORS, total: 0, modules: [], kinds: [], daily: [], rows: [] } as never);
+    { ...ERRORS, total: 0, modules: [], kinds: [], daily: [], rows: [] });
   view();
   await screen.findByRole("heading", { name: "Performance" });
   fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
@@ -236,6 +236,64 @@ it("re-reads with the filters a user picked", async () => {
 
   await waitFor(() => expect(api.getLogs).toHaveBeenLastCalledWith(
     expect.objectContaining({ level: "warning", module: "runner", q: "turn" })));
+});
+
+it("shows the traceback the bridge captured, collapsed", async () => {
+  vi.mocked(api.getLogs).mockResolvedValue({
+    ...structuredClone(PAGE),
+    rows: [{ ts: "2026-08-21T10:00:00.000Z", level: "error", module: "store.fork",
+             message: "could not fork", kind: "ValueError",
+             trace: "Traceback...\nValueError: bad frontmatter" }],
+  } as never);
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+
+  // Recorded since the first version and rendered by nothing until now: the
+  // most useful half of an error row was write-only.
+  const trace = await screen.findByText("traceback");
+  expect(trace.closest("details")).not.toHaveAttribute("open");
+  expect(within(trace.closest("details")!).getByText(/bad frontmatter/)).toBeInTheDocument();
+});
+
+it("stops reporting a failure that has stopped happening", async () => {
+  vi.mocked(api.getLogs).mockRejectedValueOnce(new Error("the log is unreadable"));
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+  expect(await screen.findByText("Error: the log is unreadable")).toBeInTheDocument();
+
+  // A read that now works must take the banner down. An error message that
+  // outlives its error is a page lying about the present.
+  fireEvent.change(screen.getByLabelText("Quietest level to show"),
+                   { target: { value: "warning" } });
+
+  await waitFor(() =>
+    expect(screen.queryByText("Error: the log is unreadable")).not.toBeInTheDocument());
+});
+
+it("reopens the live tail once per typed word, not once per letter", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    view();
+    await screen.findByRole("heading", { name: "Performance" });
+    fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+    await screen.findByLabelText("Module to show");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Live" }));
+    await waitFor(() => expect(api.streamLogTail).toHaveBeenCalledTimes(1));
+
+    for (const q of ["r", "ra", "rat", "rate"]) {
+      fireEvent.change(screen.getByLabelText("Filter by text"), { target: { value: q } });
+    }
+    vi.advanceTimersByTime(400);
+
+    await waitFor(() => expect(api.streamLogTail).toHaveBeenLastCalledWith(
+      expect.objectContaining({ q: "rate" }), expect.anything(), expect.anything()));
+    // One reconnect for the word, not one per keystroke.
+    expect(api.streamLogTail).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("warns that a quieter line was never written, which is why it is not here", async () => {

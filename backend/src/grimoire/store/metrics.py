@@ -125,8 +125,10 @@ class _Series:
         # The exact ends win over the sample's, always -- see the class
         # docstring. Equal when nothing was sampled, so this is a no-op on
         # every real library.
-        out["min"] = self.low or 0
-        out["max"] = self.high or 0
+        # `is not None`, not `or`: a bucket whose fastest call genuinely took
+        # 0ms is not a bucket with no data, and `or` cannot tell them apart.
+        out["min"] = self.low if self.low is not None else 0
+        out["max"] = self.high if self.high is not None else 0
         return out
 
 

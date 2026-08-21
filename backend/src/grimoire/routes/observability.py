@@ -82,6 +82,7 @@ def get_errors(days: int = _DAYS, module: str = Query(""),
 def get_logs(level: str = Query("debug"), module: str = Query(""),
              since: str = Query(""), until: str = Query(""),
              q: str = Query(""), campaign: str = Query(""),
+             days: int = Query(store.logs.DEFAULT_DAYS),
              limit: int = Query(store.logs.DEFAULT_LIMIT)):
     """The structured log, filtered, newest first (#155).
 
@@ -92,9 +93,14 @@ def get_logs(level: str = Query("debug"), module: str = Query(""),
     `modules`, `counts` and `levels` describe the whole window rather than the
     page, so the filter controls the client builds out of them do not lose an
     option every time something else gets chatty.
+
+    The window is `days` back from today unless `since`/`until` name one, and
+    is never unbounded: an open-ended read would open every month file the
+    install has ever written, on the one page somebody reaches for *because*
+    something is wrong.
     """
     return store.logs.read(level=level, module=module, since=since, until=until,
-                           contains=q, campaign=campaign, limit=limit)
+                           contains=q, campaign=campaign, days=days, limit=limit)
 
 
 @router.get("/logs/level")

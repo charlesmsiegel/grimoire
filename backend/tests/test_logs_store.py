@@ -291,6 +291,25 @@ def test_a_reversed_day_range_is_read_rather_than_refused(home):
     assert [r["message"] for r in out["rows"]] == ["tick"]
 
 
+def test_a_read_with_no_dates_is_still_bounded(home):
+    """An absent `since` used to mean "no lower bound", so the default read
+    opened every month file the install had ever written -- a cost that grew
+    with the age of the library, on the page somebody opens BECAUSE something
+    is wrong."""
+    logs.record("info", "runner", "ancient", ts="2019-01-01T00:00:00.000Z")
+    logs.record("info", "runner", "recent")
+
+    out = logs.read()
+    assert [r["message"] for r in out["rows"]] == ["recent"]
+    assert out["since"]                      # a real day, not ""
+
+    # `days` widens only as far as the ceiling -- 366 back from today does not
+    # reach 2019, which is the ceiling doing its job. Naming the dates is how
+    # you read further back than that.
+    assert len(logs.read(days=4000)["rows"]) == 1
+    assert len(logs.read(since="2019-01-01", until="2026-12-31")["rows"]) == 2
+
+
 def test_a_window_skips_month_files_it_cannot_overlap(home, monkeypatch):
     logs.record("info", "runner", "july", ts="2026-07-01T01:00:00.000Z")
     logs.record("info", "runner", "august", ts="2026-08-01T01:00:00.000Z")

@@ -3301,6 +3301,19 @@ a.column-back { text-decoration: none; }
    half that says what went wrong to keep the column tidy is the wrong trade. */
 .stats-log-message { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .stats-log-kind { margin-left: 8px; }
+/* The captured stack, collapsed. `pre` scrolls in its own box rather than
+   widening the page — a traceback holds absolute paths that are wider than any
+   column, and the rule everywhere else here is that wide content scrolls
+   itself. */
+.stats-log-trace { margin-top: 4px; }
+.stats-log-trace summary {
+  cursor: pointer; color: var(--muted); font-size: 10px; letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.stats-log-trace pre {
+  margin: 6px 0 0; padding: 8px 10px; background: var(--track);
+  overflow-x: auto; font-size: 11px; line-height: 1.5; color: var(--ink);
+}
 
 /* The phone: the fixed columns stop fitting well before 720px, so the row
    becomes two lines with the metadata above the message it describes. */
