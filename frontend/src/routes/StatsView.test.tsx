@@ -1,0 +1,292 @@
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+
+vi.mock("../api/client", () => ({
+  api: {
+    getStats: vi.fn(),
+    getErrorSummary: vi.fn(),
+    getLogs: vi.fn(),
+    getLogLevel: vi.fn(),
+    streamLogTail: vi.fn(),
+  },
+}));
+vi.mock("../api/errors", () => ({ errorText: (e: unknown) => String(e) }));
+
+import { api } from "../api/client";
+import StatsView from "./StatsView";
+
+const bucket = (over: Record<string, unknown> = {}) => ({
+  key: "chat", calls: 4, errors: 0, error_rate: 0, sampled: false,
+  p50: 250, p90: 380, p99: 400, min: 100, max: 400, ...over,
+});
+
+const ERRORS = {
+  since: "2026-07-23", until: "2026-08-21", days: 30,
+  total: 3,
+  modules: [{ module: "dossier", count: 2,
+              kinds: [{ kind: "empty_reply", count: 2 }],
+              last: "2026-08-21T10:00:00.000Z", last_detail: "Mara came back empty" },
+            { module: "chat", count: 1,
+              kinds: [{ kind: "rate_limit", count: 1 }],
+              last: "2026-08-20T10:00:00.000Z", last_detail: "429 Too Many Requests" }],
+  kinds: [{ kind: "empty_reply", count: 2 }, { kind: "rate_limit", count: 1 }],
+  daily: [{ day: "2026-08-20", count: 1 }, { day: "2026-08-21", count: 2 }],
+  rows: [{ ts: "2026-08-21T10:00:00.000Z", level: "error", module: "dossier",
+           message: "Mara came back empty", kind: "empty_reply" }],
+  truncated: false,
+};
+
+const STATS = {
+  days: 30, since: "2026-07-23", until: "2026-08-21", campaign: "",
+  generated_at: "2026-08-21T12:00:00Z",
+  percentiles: [50, 90, 99],
+  totals: bucket({ key: "", calls: 5, errors: 1, error_rate: 0.2 }),
+  by_task: [bucket(), bucket({ key: "dossier", calls: 1, p50: 9000, p90: 9000, p99: 9000, max: 9000 })],
+  by_model: [bucket({ key: "realm/opus" })],
+  by_day: [bucket({ key: "2026-08-20", calls: 2, p50: 150 }),
+           bucket({ key: "2026-08-21", calls: 3, p50: 9000 })],
+  errors: ERRORS,
+};
+
+const PAGE = {
+  rows: [
+    { ts: "2026-08-21T10:00:00.000Z", level: "error", module: "dossier",
+      message: "Mara came back empty", kind: "empty_reply" },
+    { ts: "2026-08-21T09:00:00.000Z", level: "info", module: "runner",
+      message: "started a turn" },
+  ],
+  modules: ["dossier", "runner"],
+  counts: { debug: 0, info: 1, warning: 0, error: 1, critical: 0 },
+  total: 2, truncated: false, level: "debug",
+  since: "2026-07-23", until: "2026-08-21",
+  levels: ["debug", "info", "warning", "error", "critical"],
+};
+
+const view = () => render(<MemoryRouter><StatsView /></MemoryRouter>);
+
+beforeEach(() => {
+  // Call counts are not reset between tests by this project's vitest config,
+  // and half the assertions here are about how many times a stream was opened.
+  vi.clearAllMocks();
+  vi.mocked(api.getStats).mockResolvedValue(structuredClone(STATS) as never);
+  vi.mocked(api.getLogs).mockResolvedValue(structuredClone(PAGE) as never);
+  vi.mocked(api.getLogLevel).mockResolvedValue(
+    { level: "info", levels: PAGE.levels } as never);
+  vi.mocked(api.streamLogTail).mockReturnValue(new Promise(() => {}) as never);
+});
+
+// ---- performance (#154) ----
+it("lands on the performance readings", async () => {
+  view();
+
+  expect(await screen.findByRole("heading", { name: "Performance" })).toBeInTheDocument();
+  const cards = screen.getByText("Median").closest("dl")!;
+  expect(within(cards).getByText("Median").closest("div")).toHaveTextContent("250ms");
+  // The tail is the whole point of a percentile, so p90 and p99 are headline
+  // numbers rather than something behind a control.
+  expect(within(cards).getByText("p90").closest("div")).toHaveTextContent("380ms");
+  expect(within(cards).getByText("p99").closest("div")).toHaveTextContent("400ms");
+});
+
+it("breaks latency down by task and by model", async () => {
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+
+  const byTask = screen.getByText("By task").parentElement!;
+  const byModel = screen.getByText("By model").parentElement!;
+  expect(within(byTask).getByText("dossier")).toBeInTheDocument();
+  expect(within(byModel).getByText("realm/opus")).toBeInTheDocument();
+  // Seconds past a second, milliseconds under one: the trailing digits of
+  // 9000ms mean nothing to a reader.
+  expect(within(byTask).getAllByText("9.0s").length).toBeGreaterThan(0);
+});
+
+it("shows a failure rate against the calls that succeeded", async () => {
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+
+  expect(screen.getByText("Failed calls").closest("div")).toHaveTextContent("1 · 20.0%");
+});
+
+it("says so when the window held no calls at all, rather than showing bare zeroes", async () => {
+  vi.mocked(api.getStats).mockResolvedValue({
+    ...structuredClone(STATS), totals: bucket({ key: "", calls: 0, p50: 0, p90: 0, p99: 0, max: 0 }),
+    by_task: [], by_model: [], by_day: [],
+  } as never);
+  view();
+
+  expect(await screen.findByText(/No calls in this window yet/)).toBeInTheDocument();
+});
+
+it("re-reads the window when the day control moves", async () => {
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  expect(api.getStats).toHaveBeenCalledWith(30);
+
+  fireEvent.change(screen.getByLabelText("How many days to report on"),
+                   { target: { value: "7" } });
+
+  await waitFor(() => expect(api.getStats).toHaveBeenCalledWith(7));
+});
+
+// ---- errors (#156) ----
+it("aggregates errors per module, with each module's own kinds", async () => {
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+
+  fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
+
+  const byModule = (await screen.findByText("By module")).parentElement!;
+  const row = within(byModule).getByText("dossier").closest("tr")!;
+  expect(within(row).getByText("empty_reply 2")).toBeInTheDocument();
+  expect(within(row).getByText("Mara came back empty")).toBeInTheDocument();
+});
+
+it("says nothing has gone wrong rather than drawing an empty table", async () => {
+  vi.mocked(api.getStats).mockResolvedValue({
+    ...structuredClone(STATS),
+    errors: { ...ERRORS, total: 0, modules: [], kinds: [], daily: [], rows: [] },
+  } as never);
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+
+  fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
+
+  expect(await screen.findByText(/Nothing has gone wrong in this window/)).toBeInTheDocument();
+});
+
+// ---- the log (#155) ----
+it("reads the log only once its section is opened", async () => {
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  expect(api.getLogs).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+
+  await waitFor(() => expect(api.getLogs).toHaveBeenCalled());
+  expect(await screen.findByText("started a turn")).toBeInTheDocument();
+});
+
+it("builds its filter dropdowns from the window, not from the page", async () => {
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+
+  const modules = await screen.findByLabelText("Module to show");
+  expect(within(modules).getByRole("option", { name: "dossier" })).toBeInTheDocument();
+  expect(within(modules).getByRole("option", { name: "runner" })).toBeInTheDocument();
+});
+
+it("re-reads with the filters a user picked", async () => {
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+  await screen.findByLabelText("Module to show");
+
+  fireEvent.change(screen.getByLabelText("Quietest level to show"),
+                   { target: { value: "warning" } });
+  fireEvent.change(screen.getByLabelText("Module to show"),
+                   { target: { value: "runner" } });
+  fireEvent.change(screen.getByLabelText("Filter by text"),
+                   { target: { value: "turn" } });
+
+  await waitFor(() => expect(api.getLogs).toHaveBeenLastCalledWith(
+    expect.objectContaining({ level: "warning", module: "runner", q: "turn" })));
+});
+
+it("warns that a quieter line was never written, which is why it is not here", async () => {
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+
+  expect(await screen.findByText(/Recording at/)).toHaveTextContent("info");
+});
+
+it("says nothing about the threshold when everything is being recorded", async () => {
+  vi.mocked(api.getLogLevel).mockResolvedValue(
+    { level: "debug", levels: PAGE.levels } as never);
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+  await screen.findByLabelText("Module to show");
+
+  expect(screen.queryByText(/Recording at/)).not.toBeInTheDocument();
+});
+
+// ---- the live tail ----
+it("opens no stream until Live is switched on", async () => {
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+  await screen.findByLabelText("Module to show");
+  expect(api.streamLogTail).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("checkbox", { name: "Live" }));
+
+  await waitFor(() => expect(api.streamLogTail).toHaveBeenCalled());
+});
+
+it("appends tailed rows newest first, like the page they sit above", async () => {
+  vi.mocked(api.streamLogTail).mockImplementation(((_opts: unknown, onEvent: (e: unknown) => void) => {
+    onEvent({ cursor: "2026-08.jsonl:10", rows: [
+      { ts: "2026-08-21T11:00:00.000Z", level: "info", module: "runner", message: "older" },
+      { ts: "2026-08-21T11:00:01.000Z", level: "warning", module: "runner", message: "newer" },
+    ] });
+    return new Promise(() => {});
+  }) as never);
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+  await screen.findByLabelText("Module to show");
+
+  fireEvent.click(screen.getByRole("checkbox", { name: "Live" }));
+
+  const live = (await screen.findByText("Live", { selector: "h2" })).parentElement!;
+  const rows = within(live).getAllByRole("listitem").map((li) => li.textContent);
+  expect(rows[0]).toContain("newer");
+  expect(rows[1]).toContain("older");
+});
+
+it("reopens the tail against the new filter rather than keeping the old one", async () => {
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+  await screen.findByLabelText("Module to show");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Live" }));
+  await waitFor(() => expect(api.streamLogTail).toHaveBeenCalledTimes(1));
+
+  fireEvent.change(screen.getByLabelText("Quietest level to show"),
+                   { target: { value: "error" } });
+
+  await waitFor(() => expect(api.streamLogTail).toHaveBeenLastCalledWith(
+    expect.objectContaining({ level: "error" }), expect.anything(), expect.anything()));
+});
+
+it("does not report the abort it caused by switching Live off", async () => {
+  vi.mocked(api.streamLogTail).mockImplementation(((_o: unknown, _e: unknown, signal: AbortSignal) =>
+    new Promise((_res, rej) => {
+      signal.addEventListener("abort", () => rej(new Error("aborted")));
+    })) as never);
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+  await screen.findByLabelText("Module to show");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Live" }));
+  await waitFor(() => expect(api.streamLogTail).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByRole("checkbox", { name: "Live" }));
+
+  // The rejection is this page's own cleanup arriving; reporting it would put
+  // an error on screen every time a user stopped watching.
+  await waitFor(() => expect(screen.getByRole("checkbox", { name: "Live" }))
+    .not.toBeChecked());
+  expect(screen.queryByText(/aborted/)).not.toBeInTheDocument();
+});
+
+// ---- failure ----
+it("reports a stats read that failed instead of spinning forever", async () => {
+  vi.mocked(api.getStats).mockRejectedValue(new Error("the ledger is unreadable") as never);
+  view();
+
+  expect(await screen.findByText("Error: the ledger is unreadable")).toBeInTheDocument();
+});

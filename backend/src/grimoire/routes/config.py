@@ -92,6 +92,11 @@ def _public_config(cfg: dict[str, str]) -> dict:
                                              store.config.DEFAULT_REPLAY_FORK_THRESHOLD),
             "advance_fork_threshold": cfg.get("advance_fork_threshold",
                                               store.config.DEFAULT_ADVANCE_FORK_THRESHOLD),
+            # The STORED setting, which is not necessarily the level in force:
+            # a value the vocabulary does not recognize is narrowed to the
+            # default by `logs.level_name`, and `GET /logs/level` is what
+            # reports what is actually being recorded.
+            "log_level": cfg.get("log_level", store.config.DEFAULT_LOG_LEVEL),
             "active_connection_id": active["id"] if active else "",
             # `model` rides along because the global status bar names the model
             # every scene will use, and that is only ever this connection's --
@@ -170,7 +175,15 @@ def get_config():
 @router.put("/config")
 def put_config(update: ConfigUpdate):
     fields = {k: v for k, v in _dump(update).items() if v is not None}
-    return _public_config(store.write_config(**fields))
+    saved = store.write_config(**fields)
+    # `store.logs` holds the threshold in module state rather than reading the
+    # config per row -- `record` is on the path of everything the app does --
+    # so the write is what has to push it. Unconditional rather than guarded on
+    # `"log_level" in fields`: re-applying an unchanged level costs one config
+    # read on a route that has already done several, and a guard is one more
+    # place for the two to drift apart.
+    store.logs.apply_level()
+    return _public_config(saved)
 
 
 # ---- prompt layout (#29) ----
@@ -220,6 +233,10 @@ def put_data_dir(update: DataDirUpdate, request: Request):
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=400,
                                 detail={"detail": str(exc), "kind": "data_dir"})
+    # The log's size cache is keyed by absolute path, so a root that moved
+    # leaves byte counts charged against files the new tree does not have --
+    # which would cap a fresh log at the old one's size (`logs.forget_file_sizes`).
+    store.logs.forget_file_sizes()
     return store.data_dir_info()
 
 

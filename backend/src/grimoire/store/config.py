@@ -171,6 +171,12 @@ DEFAULT_BACKUP_KEEP = "7"
 # stop being sync traffic, and stop being included in the very thing they back
 # up. Either way the backup dir is excluded from its own archives.
 DEFAULT_BACKUP_DIR = ""
+# --- the structured log (store/logs.py, #155) ---
+# The quietest level that reaches the log file. "info" rather than "debug"
+# because the file is the one a user is asked to attach to a bug report and
+# DEBUG is where the volume lives; turning it up is one dropdown away, and
+# `store.logs` explains why the threshold is the real size control there.
+DEFAULT_LOG_LEVEL = "info"
 # How many model turns a retcon replay may redo before it offers to fork the
 # campaign first (#80). Ten because a replay costs one generation per turn, in
 # money and in wall clock, and around ten is where "just redo it in place" stops
@@ -212,7 +218,7 @@ _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "prompt_layout_enabled", "speaker_turn_taking",
                 "backup_enabled", "backup_interval_hours", "backup_keep",
                 "backup_dir", "replay_fork_threshold",
-                "advance_fork_threshold") + _LENGTH_KEYS
+                "advance_fork_threshold", "log_level") + _LENGTH_KEYS
 
 
 def _config_path():
@@ -255,6 +261,7 @@ def read_config() -> dict[str, str]:
                 "backup_interval_hours": DEFAULT_BACKUP_INTERVAL_HOURS,
                 "backup_keep": DEFAULT_BACKUP_KEEP,
                 "backup_dir": DEFAULT_BACKUP_DIR,
+                "log_level": DEFAULT_LOG_LEVEL,
                 **dict.fromkeys(_LENGTH_KEYS, "")}
     if not path.exists():
         # Materializing the defaults is a write, and two first-ever readers
@@ -507,6 +514,17 @@ def backup_dir() -> str:
     is what every caller outside this module wants.
     """
     return str(read_config().get("backup_dir", DEFAULT_BACKUP_DIR) or "").strip()
+
+
+def log_level() -> str:
+    """The quietest level `store.logs` records, as one of its `LEVELS`.
+
+    Returns the raw stored string; `logs.level_name` is what narrows an
+    unrecognized value to the default. Split that way on purpose -- the store
+    module owns the vocabulary, and duplicating the list here is how the two
+    would end up disagreeing about whether "warn" is a level.
+    """
+    return str(read_config().get("log_level", DEFAULT_LOG_LEVEL) or "").strip().lower()
 
 
 def write_config(**fields: str) -> dict[str, str]:

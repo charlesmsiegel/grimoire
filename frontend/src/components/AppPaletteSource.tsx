@@ -62,6 +62,10 @@ export default function AppPaletteSource() {
                meta: "start one", action: true, to: "/campaigns/new" });
     out.push({ id: "section:/config", group: "ELSEWHERE", label: "Configuration",
                meta: "storage, model, appearance", to: "/config" });
+    // With no nav sidebar, a route that is not typeable here is a route with
+    // no way in but the URL bar.
+    out.push({ id: "section:/stats", group: "ELSEWHERE", label: "Instrumentation",
+               meta: "latency, errors, the debug log", to: "/stats" });
     // Typeable as well as clickable, for the same reason every route is: the
     // header button is the only other way in, and it is one of the things this
     // hides. Offered in both directions so the palette never describes a state

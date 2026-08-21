@@ -20,6 +20,12 @@ import { useTheme } from "../theme/ThemeProvider";
  *  is built from, what the dirty count is counted over, and what Save sends —
  *  three copies of the same list of names is how a field gets added to the
  *  form and quietly never saved. */
+/** The five `store.logs` writes, quietest first. Spelled here rather than
+ *  fetched: it is the vocabulary of a `<select>`, and a dropdown that cannot
+ *  render until a request lands is a dropdown that flickers on every visit.
+ *  `GET /logs/level` is what reports the one actually in force. */
+const LOG_LEVELS = ["debug", "info", "warning", "error", "critical"] as const;
+
 const DRAFT_FIELDS = [
   "active_connection_id", "fallback_connection_id", "llm_retries",
   "llm_timeout", "absorb_budget", "llm_call_budget",
@@ -34,6 +40,7 @@ const DRAFT_FIELDS = [
   "rolling_summary_every", "scene_break_every", "replay_fork_threshold",
   "advance_fork_threshold",
   "backup_enabled", "backup_interval_hours", "backup_keep", "backup_dir",
+  "log_level",
   "theme",
 ] as const;
 type DraftField = (typeof DRAFT_FIELDS)[number];
@@ -56,7 +63,7 @@ function draftOf(c: Config): Draft {
 }
 
 type SectionId =
-  | "storage" | "backups" | "connection" | "timeouts" | "pricing"
+  | "storage" | "backups" | "logging" | "connection" | "timeouts" | "pricing"
   | "context" | "layout" | "transient" | "semantic" | "system-prompt" | "response"
   | "transcript" | "playing" | "appearance";
 
@@ -69,6 +76,8 @@ const SECTIONS: SectionDef[] = [
   { id: "storage", group: "The install", label: "Storage", fields: [] },
   { id: "backups", group: "The install", label: "Backups",
     fields: ["backup_enabled", "backup_interval_hours", "backup_keep", "backup_dir"] },
+  { id: "logging", group: "The install", label: "Logging",
+    fields: ["log_level"] },
   { id: "connection", group: "The install", label: "Connection",
     fields: ["active_connection_id", "fallback_connection_id", "llm_retries"] },
   { id: "timeouts", group: "The install", label: "Timeouts",
@@ -458,6 +467,39 @@ export default function ConfigView() {
                 nobody has saved yet would show an empty directory as if it were
                 the state of your backups. */}
             <BackupsPanel dir={config?.backup_dir ?? ""} />
+          </>
+        )}
+
+        {draft && section === "logging" && (
+          <>
+            <p className="config-copy">
+              What the backend writes down about itself, in{" "}
+              <code>{config?.data_dir ?? "your library"}/logs</code> — one JSON line per
+              entry, a file per month, readable in any editor. This is the floor:
+              anything quieter is never written at all, so turning it down is how the
+              files stay small and turning it up is what you do before reproducing a
+              bug. <strong>Errors are recorded whatever this says.</strong>
+            </p>
+            <div className="config-fields">
+              <div className="config-field">
+                <label htmlFor="cfg-log-level">Record</label>
+                <div className="config-input">
+                  <select id="cfg-log-level" value={draft.log_level || "info"}
+                          onChange={(e) => edit("log_level", e.target.value)}>
+                    {LOG_LEVELS.map((l) => (
+                      <option key={l} value={l}>{l} and above</option>
+                    ))}
+                  </select>
+                </div>
+                <p className="config-caption">
+                  debug is verbose and off by default
+                </p>
+              </div>
+            </div>
+            <p className="config-copy">
+              <Link to="/stats">Instrumentation</Link> is where these are read back —
+              filtered, tailed live, and counted per module beside the latency figures.
+            </p>
           </>
         )}
 

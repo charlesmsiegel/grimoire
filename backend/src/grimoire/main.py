@@ -18,7 +18,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import runner
 from .routes import build_llm, build_openai_compatible_client, router, runs
-from .store import backups, campaigns, locks, migrations, module_edit
+from .store import backups, campaigns, locks, logs, migrations, module_edit
 
 DEFAULT_DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"  # paths-ok: DEFAULT_DIST only; GRIMOIRE_DIST overrides it on Android
 
@@ -272,6 +272,13 @@ class _CampaignActivityStamp:
 
 
 def create_app() -> FastAPI:
+    # Before anything else that can log. Fifteen modules under this package
+    # call `logging.getLogger(__name__)` and, until this line existed, logged
+    # to nobody: nothing ever attached a handler, so `logging`'s last-resort
+    # one printed WARNING and above to a stderr that a packaged desktop build
+    # or an Android APK does not show anyone. `store.logs` explains what it
+    # attaches to and, more importantly, what it deliberately does not.
+    logs.install()
     app = FastAPI(title="grimoire", lifespan=_lifespan)
     # The gateway clients belong to the app, not the module (#215): each owns an
     # `httpx` connection pool, and `_lifespan` closes both on shutdown. Built

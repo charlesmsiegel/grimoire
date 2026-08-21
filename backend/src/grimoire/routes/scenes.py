@@ -1640,6 +1640,11 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
         cast = store.appearances.scene_cast(cid, sid)
         croot = store.appearances.locked_actor_root(cid)   # cast actors are locked, so campaign-side
     except Exception as exc:  # noqa: BLE001 -- an unreadable cast is a failed phase, not a 500
+        # Recorded as well as reported (#156): the phase status is visible in
+        # the review that is open right now, and gone the moment it is closed.
+        store.errors.record("dossier", type(exc).__name__,
+                            f"could not read the scene cast: {exc}",
+                            campaign=cid, scene=sid, task="dossier")
         return [], {**out, "status": "failed", "reason": f"could not read the scene cast: {exc}"}
     def drop_tail(i: int) -> None:
         """Record the NPC at `i` and everyone after it as never reached.
@@ -1690,6 +1695,14 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
             # answers "" for every NPC reports `ok` with nothing staged -- exactly
             # #236's symptom (dossiers quietly stop updating) wearing a status.
             if not parsed_dossier:
+                # #236's symptom, recorded rather than only reported. This is
+                # the branch the error store was asked for by name: no
+                # exception is raised here, so nothing else in the app --
+                # not the meter, not the logging bridge -- ever sees it, and
+                # the phase status carrying it dies with the review.
+                store.errors.record("dossier", "empty_reply",
+                                    f"{name} came back with an empty dossier",
+                                    campaign=cid, scene=sid, task="dossier")
                 out["failed"].append({"id": a["id"], "reason": "empty dossier reply"})
                 continue
             edit = store.dossiers.stage_edit(a["id"], name, prior, parsed_dossier)
