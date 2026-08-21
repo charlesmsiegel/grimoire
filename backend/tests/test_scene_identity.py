@@ -425,3 +425,57 @@ def test_a_scene_that_cannot_be_written_does_not_abort_startup(tmp_path, monkeyp
 
     assert store.scenes.scene_identity(cid, good), "the rest of the campaign was abandoned"
     assert stuck in caplog.text
+
+
+def test_a_mixed_newline_header_is_spliced_not_replaced(tmp_path, monkeypatch):
+    """Opening fence CRLF, closing fence LF -- a hand-edited file, or one a
+    tool rewrote halfway.
+
+    Text reads normalize newlines, so the app sees perfectly good frontmatter;
+    a byte-level splice that looks for a CLOSING fence in the OPENER's style
+    finds none. Returning None there makes `ensure_identity` prepend a second
+    header, and the original title and model become transcript text -- silent
+    corruption of the scene, on first boot.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    sid = store.scenes.create_scene(cid, "Mara")
+    p = store.scenes.paths._scene_path(cid, sid)
+    p.write_bytes(b"---\r\ntitle: Mara\nmodel: m\n---\n\n**Mara:** hello\n")
+
+    migrations.backfill_scene_identities()
+
+    raw = p.read_bytes()
+    assert raw.count(b"---") == 2, "a second header block was prepended"
+    assert store.scenes.read_scene(cid, sid)["meta"]["title"] == "Mara"
+    assert store.scenes.scene_identity(cid, sid)
+    assert b"**Mara:** hello" in raw
+
+
+def test_an_unreadable_scenes_directory_does_not_abort_startup(tmp_path, monkeypatch):
+    """`glob()` itself raises if the directory cannot be listed -- a permissions
+    problem, or a synced folder mid-error. That happens BEFORE any per-scene
+    handler, and the startup hook catches only StoreBusy."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = store.worlds.create_world("Realm")
+    broken = store.campaigns.create_campaign("Saltmarch", wid)
+    fine = store.campaigns.create_campaign("Winifred", wid)
+    sid = store.scenes.create_scene(fine, "Mara")
+    _strip_identity_from_disk(fine, sid)
+
+    real_glob = store.scenes.paths.Path.glob if hasattr(store.scenes.paths, "Path") else None
+    broken_dir = store.scenes.paths._scenes_dir(broken)
+
+    import pathlib
+    original = pathlib.Path.glob
+
+    def refuse(self, pattern):
+        if self == broken_dir:
+            raise PermissionError("cannot list")
+        return original(self, pattern)
+
+    monkeypatch.setattr(pathlib.Path, "glob", refuse)
+    migrations.backfill_scene_identities()          # must not raise
+    monkeypatch.setattr(pathlib.Path, "glob", original)
+
+    assert store.scenes.scene_identity(fine, sid), "the other campaign was abandoned"

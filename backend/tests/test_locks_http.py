@@ -11,7 +11,10 @@ from grimoire.store import campaigns, locks, worlds
 @pytest.fixture()
 def client(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    return TestClient(main.create_app())
+    # `with`, so the lifespan runs: producing routes hand their work to a
+    # runner that lives on it, and a client without one cannot drive a turn.
+    with TestClient(main.create_app()) as c:
+        yield c
 
 
 def _campaign(monkeypatch, tmp_path):

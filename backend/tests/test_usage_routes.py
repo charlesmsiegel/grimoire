@@ -30,9 +30,11 @@ def home(monkeypatch, tmp_path):
 def client(home):
     app = create_app()
     app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["Hel", "lo"])
-    c = TestClient(app)
-    c.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
-    return c
+    # `with`, so the lifespan runs: producing routes hand their work to a
+    # runner that lives on it, and a client without one cannot drive a turn.
+    with TestClient(app) as c:
+        c.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+        yield c
 
 
 def _rows(home):

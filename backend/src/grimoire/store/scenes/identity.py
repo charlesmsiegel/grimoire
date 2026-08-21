@@ -105,10 +105,18 @@ def _splice(raw: bytes, line: bytes) -> bytes | None:
         head = b"---" + eol
         if not raw.startswith(head):
             continue
-        end = raw.find(eol + b"---", len(head) - len(eol))
+        # The CLOSING fence is found independently of the opener's newline
+        # style. A hand-edited file -- or one a tool rewrote halfway -- can open
+        # with CRLF and close with LF; text reads normalize that away, so the
+        # app sees perfectly good frontmatter while a style-matched byte search
+        # finds no closing fence at all. Returning None there makes the caller
+        # prepend a SECOND header, demoting the scene's real title and model
+        # into the transcript. Searching for `\n---` matches both, since a CRLF
+        # fence contains it.
+        end = raw.find(b"\n---", len(head) - 1)
         if end == -1:
             return None
-        at = end + len(eol)
+        at = end + 1                       # immediately after that newline
         return raw[:at] + line + eol + raw[at:]
     return None
 

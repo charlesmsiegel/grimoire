@@ -30,12 +30,16 @@ import uuid
 from collections.abc import Callable
 from typing import Literal, Protocol
 
+import json
+import uuid
+
 import anyio
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from .. import runner
 from ..store import scenes
+from ..store.campaigns import read as campaigns_read
 from ..store.campaigns.paths import CampaignNotFound
 
 STREAM_POLL_SECONDS = 0.05
@@ -598,6 +602,21 @@ def get_run_stream(cid: str, sid: str, run_id: str, request: Request,
     if from_ < 0:
         raise HTTPException(status_code=400, detail="from must not be negative")
     run = _resolve(request.app, cid, sid, run_id)
+    return tail_response(run, from_)
+
+
+def tail_response(run: Run, from_: int = 0, lead: str | None = None):
+    """A response that replays `run` from `from_` and then follows it.
+
+    Shared by the reconnect route and by every producing route, so a client
+    reading a turn as it happens and a client picking one up after a
+    disconnection are served by exactly the same code -- there is no "live"
+    path that could drift from the "replay" path.
+
+    `lead` is emitted before any buffered frame and is NOT stored in the
+    buffer: it carries the run's identity to the caller that just created it,
+    and a client reconnecting later already knows the id it is asking about.
+    """
 
     async def event_stream():
         """Replay what is buffered, then TAIL until the run is terminal.
@@ -617,6 +636,8 @@ def get_run_stream(cid: str, sid: str, run_id: str, request: Request,
         well under a human's perception of "live", and it costs one list slice
         per tick on an idle run.
         """
+        if lead is not None:
+            yield lead
         cursor = _start_cursor(from_, run)
         while True:
             # Terminal is read BEFORE draining, and that order is the whole
@@ -635,3 +656,88 @@ def get_run_stream(cid: str, sid: str, run_id: str, request: Request,
             await anyio.sleep(STREAM_POLL_SECONDS)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+def sse(payload: dict) -> str:
+    """One SSE data frame. Local rather than imported from `streaming`, which
+    this module is forbidden to depend on (`test_import_guard`)."""
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+def start_detached(app, run: Run, producer) -> None:
+    """Run `producer` for `run`, decoupled from the request that asked for it.
+
+    `producer` is a zero-arg callable returning an async iterator of raw SSE
+    frames -- the existing stream generators, unchanged. Every frame it yields
+    is buffered on the run, which is what makes the work survive the socket:
+    the response tails that buffer, and so does a reconnect ten minutes later.
+    """
+
+    async def pump():
+        async for frame in producer():
+            run.append_frame(frame)
+
+    runner.start(app, run, pump)
+
+
+def lead_frame(run: Run) -> str:
+    """The frame every producing route sends first.
+
+    Before any delta, and before anything can fail: a client whose connection
+    dies immediately still has to be able to find its run, or the send is
+    unaddressable and "did my turn land?" has no answer -- which is the whole
+    ambiguity this feature exists to remove.
+    """
+    return sse({"run": {"id": run.id, "attempt_id": run.attempt_id,
+                        "state": run.state, "next_index": len(run.frames)}})
+
+
+def reserve_turn(app, cid: str, sid: str, kind: str,
+                 attempt_id: str | None) -> tuple[Run, bool]:
+    """Reserve a `turn` run for this scene, or raise 409 if one is in flight.
+
+    `attempt_id` comes from the `X-Grimoire-Attempt` header. Absent or
+    malformed, one is generated: older clients and `curl` keep working, they
+    simply get no idempotency, which is what they have today. Present, it is
+    used verbatim -- the server never rewrites it, because the client has
+    already stored it and will ask about it by that name.
+
+    The scene's identity is captured here, via `ensure_identity` rather than a
+    plain read: a campaign whose lock was contended at startup still has
+    identity-less scenes, and capturing `None` would make the publish fence
+    compare None with None -- which always matches, defeating the fence in
+    exactly the case it exists for.
+    """
+    try:
+        identity = scenes.ensure_identity(cid, sid)
+    except CampaignNotFound as exc:
+        raise _gone("campaign_gone", "no such campaign") from exc
+    labels = {"campaign": _campaign_label(cid), "scene": _scene_label(cid, sid)}
+    try:
+        return app.state.runs.start_or_existing(
+            ("scene", cid, sid), "turn", kind,
+            attempt_id or uuid.uuid4().hex, identity, labels)
+    except RunInFlightError as exc:
+        raise HTTPException(status_code=409, detail={
+            "kind": "run_in_flight", "run_id": exc.run_id,
+            "detail": "a turn is already running on this scene"}) from exc
+
+
+def _campaign_label(cid: str) -> str:
+    """The campaign's display name, captured at start.
+
+    Read now rather than at terminal: the notification has to name the scene a
+    turn belonged to even when that scene has since been deleted, which is
+    exactly the case the error notification exists to report.
+    """
+    try:
+        return campaigns_read.read_campaign(cid)["meta"].get("title", cid)
+    except Exception:                                        # noqa: BLE001
+        return cid
+
+
+def _scene_label(cid: str, sid: str) -> str:
+    try:
+        return scenes.read_scene_meta(cid, sid).get("title", sid)
+    except Exception:                                        # noqa: BLE001
+        return sid

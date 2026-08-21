@@ -33,25 +33,25 @@ def client(monkeypatch, tmp_path):
     importlib.reload(store)
     app = create_app()
     app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["Hel", "lo"])
-    return TestClient(app)
+    # `with`, so the LIFESPAN RUNS. It did not used to, and nothing needed it
+    # to; now every producing route hands its work to a runner that lives on
+    # the lifespan's event loop, so a client without one cannot drive a turn at
+    # all -- 59 existing route tests said so the moment `post_chat` was
+    # migrated. Two fixtures, one of which is required for most of the suite,
+    # is worse than one that always works.
+    with TestClient(app) as c:
+        yield c
 
 
 @pytest.fixture
-def run_client(monkeypatch, tmp_path):
-    """`client`, with the lifespan ENTERED.
+def run_client(client):
+    """Kept as a name for tests that specifically mean "a run can execute here".
 
-    The bare `client` above never emits startup -- `TestClient(app)` without a
-    `with` block does not -- so the portal and the reaper do not exist and a run
-    cannot actually execute. Tests that only reserve a run and check what some
-    other route does about it stay on `client`; tests where a run must RUN take
-    this. When in doubt this one is never wrong, only slower.
+    `client` now always enters the lifespan, so this is the same object; the
+    separate name stays where a test's point is that the runtime is live, since
+    that is not obvious from `client` alone.
     """
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    app = create_app()
-    app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["Hel", "lo"])
-    with TestClient(app) as c:
-        yield c
+    return client
 
 
 _WARRIOR_FIELDS = [

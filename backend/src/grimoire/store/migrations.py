@@ -61,6 +61,13 @@ def backfill_scene_identities() -> None:
         except locks.StoreBusy as exc:
             _log.warning("identity backfill skipped for %s -- %s; it will be "
                          "retried on the next start", c["id"], exc)
+        except OSError as exc:
+            # Enumeration itself can fail -- `glob()` raises if the directory
+            # cannot be listed, on a permissions problem or a synced folder
+            # mid-error -- and that happens BEFORE any per-scene handler. The
+            # startup hook catches only StoreBusy, so an OSError escaping here
+            # stops the app launching at all.
+            _log.warning("identity backfill skipped for %s -- %s", c["id"], exc)
 
 
 def _backfill_campaign(cid: str) -> None:
