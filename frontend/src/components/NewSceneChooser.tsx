@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { SceneConfirmForm } from "./SceneConfirmForm";
 import { SceneIdeaPicker } from "./SceneIdeaPicker";
+import { SceneImport } from "./SceneImport";
 import type { SceneDraft } from "./sceneDraft";
 import { useSceneSuggestions } from "./useSceneSuggestions";
 
@@ -16,8 +17,11 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
   onClose: (createdSid?: string) => void;
   onCreated: (sid: string, initialPrompt?: string) => void;
 }) {
-  // scene mode is picked first; nothing is fetched until then
-  const [mode, setMode] = useState<"pc" | "offscreen" | null>(null);
+  // scene mode is picked first; nothing is fetched until then. "import" is
+  // the one mode that never reaches the picker or the confirm form: an
+  // imported scene brings its own title, cast, moment and transcript, so
+  // there is nothing to suggest and nothing to open it with (#92).
+  const [mode, setMode] = useState<"pc" | "offscreen" | "import" | null>(null);
   const [draft, setDraft] = useState<SceneDraft | null>(null);
   // Bumped every time a new draft is set. A late `onPicked` (an extraction
   // that resolves after the user already clicked a card) can replace `draft`
@@ -57,10 +61,15 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
   // the picker unmounting on Back too.
   const [direction, setDirection] = useState("");
   // Nothing should fetch before a mode is chosen (unchanged behavior --
-  // SceneIdeaPicker only ever mounted post-mode before this move). Once
-  // `mode` is set it stays set until a `cid` change resets it below, so this
-  // only ever toggles the hook's `ready` from false to true, never back.
-  const suggestionsState = useSceneSuggestions(cid, afterSid, ready && mode !== null, mode === "offscreen");
+  // SceneIdeaPicker only ever mounted post-mode before this move). Once a
+  // PLAYABLE mode is set it stays set until a `cid` change resets it below, so
+  // this only ever toggles the hook's `ready` from false to true, never back.
+  //
+  // "import" is deliberately not one of them: suggestions are an LLM ranking,
+  // and an imported scene has a title, a cast and a transcript of its own, so
+  // picking that card must not spend a call on ideas nothing will read (#92).
+  const playable = mode === "pc" || mode === "offscreen";
+  const suggestionsState = useSceneSuggestions(cid, afterSid, ready && playable, mode === "offscreen");
 
   // CampaignView reuses this component across a `cid` navigation -- it stays
   // mounted, `chooserOpen` is untouched by the switch, so without an explicit
@@ -148,10 +157,25 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
                 What happens away from your PC — NPC plans, motivations, and events you don't witness.
               </span>
             </button>
+            <button className="chooser-card" onClick={() => setMode("import")}>
+              <span className="chooser-card-title">Import a transcript</span>
+              <span className="chooser-card-premise">
+                A scene you already have — a grimoire scene file, or a chapter of a Markdown
+                export — read in as a scene here.
+              </span>
+            </button>
             <div className="form-actions">
               <button className="subtle" onClick={dismiss}>Cancel</button>
             </div>
           </>
+        ) : mode === "import" ? (
+          /* No draft, no picker, no confirm form: the file IS the draft, and
+             `SceneImport` runs its own read → review → import over it. Back
+             returns to the mode cards rather than to a picker that was never
+             shown. `onCreated` takes no initial prompt — an imported scene
+             opens on a transcript that is already written. */
+          <SceneImport cid={cid} onBack={() => setMode(null)} onCancel={dismiss}
+                       onImported={(sid) => onCreated(sid)} />
         ) : draft === null ? (
           <SceneIdeaPicker cid={cid} afterSid={afterSid} ready={ready}
                            pcless={mode === "offscreen"}

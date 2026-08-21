@@ -721,6 +721,25 @@ class AppearBatch(BaseModel):
     refs: list[Appear]
 
 
+# ---- importing an existing transcript (#92) ----
+# The draft `store.scene_import.parse` returned, after the reviewer edited it.
+# `cast` reuses `Appear` because the seats an import asks for are the seats
+# `POST .../cast` asks for -- same resolution, same 404s, same role rules.
+class ImportedMessage(BaseModel):
+    role: str = "assistant"
+    speaker: str | None = None
+    content: str = ""
+
+
+class SceneImportCommit(BaseModel):
+    title: str = ""
+    date: str = ""
+    location: str = ""
+    pcless: bool = False
+    messages: list[ImportedMessage] = []
+    cast: list[Appear] = []
+
+
 class PinRule(BaseModel):
     """One user pin or exclude (#129). `sid` is required for the default
     scene scope; `ttl_posts` counts posts and only a scene rule may carry one
