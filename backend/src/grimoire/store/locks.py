@@ -166,6 +166,14 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     "store.scenes.write",
     "store.scenes.moment",
     "store.scenes.lifecycle",
+    # `attempts` records whether a send's post is still in the transcript, and
+    # every one of its mutators is called from inside a campaign-lock hold that
+    # brackets the scene write it describes -- `remember` beside the append,
+    # `forget` inside the rollback that removes it. That bracketing is the
+    # point: written outside the hold there is a window where the transcript
+    # and the record disagree, and a recovery landing in it discards the only
+    # surviving copy of what the player typed.
+    "store.attempts",
     # `ensure_identity` is a read-modify-write of a whole scene file like every
     # other mutator in the package, and wears the same `@locking._serialized`.
     # Two unserialized callers would each mint an identity and one would win,

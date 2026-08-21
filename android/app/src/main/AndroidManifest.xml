@@ -4,6 +4,19 @@
     <!-- Outbound HTTPS to OpenRouter / chub.ai, plus the loopback server. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- A turn now outlives the request that started it, so the process has to
+         outlive the activity: without foreground promotion Android reclaims it
+         mid-generation and the buffered reply goes with it.
+         `DATA_SYNC` is the honest type -- `shortService` caps at three minutes,
+         which a turn can exceed and an absorb routinely does, and the cap is
+         enforced by killing the service. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Declared here AND requested at runtime (MainActivity): on 13+ this is
+         denied on a fresh install until the activity asks, so without the
+         request completion notifications would be off for every new user. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
@@ -25,12 +38,24 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- What a completion notification taps into. The scene is named by
+                 its IDENTITY rather than its id: a notification can sit unread
+                 for a long time and an id goes stale on rename, so the activity
+                 resolves it through `GET /scene-by-identity` and opens whatever
+                 the scene is called now. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="grimoire" android:host="scene" />
+            </intent-filter>
         </activity>
 
-        <!-- Owns the embedded Python server's lifetime; foreground promotion
-             during LLM streams is Phase 3 (docs/android-architecture.md). -->
+        <!-- Owns the embedded Python server's lifetime, and promotes itself
+             to the foreground while any run is live
+             (docs/android-architecture.md). -->
         <service
             android:name=".ServerService"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

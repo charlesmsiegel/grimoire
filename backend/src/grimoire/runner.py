@@ -138,6 +138,32 @@ async def _reaper(app) -> None:
             _log.debug("reaped %d terminal run(s)", dropped)
 
 
+def _announce_terminal(app, run) -> None:
+    """Tell the shell a run ended, and let the registry retire it.
+
+    Both AFTER the bookkeeping and each in its own fail-soft boundary. Inside
+    `_guarded`'s try, a notification the OS refused would flip a successfully
+    persisted run from `landed` to `failed`; outside any boundary, it would
+    escape into the lifespan task group and cancel every sibling run. A
+    notification is the least important thing a terminal run does.
+    """
+    registry = getattr(app.state, "runs", None)
+    if registry is not None:
+        try:
+            registry.retire(run.id)
+        except Exception:                                    # noqa: BLE001
+            _log.exception("retiring run %s failed", run.id)
+    sink = getattr(app.state, "on_run_terminal", None)
+    if sink is None:
+        return
+    try:
+        sink(run.id, run.state, run.labels.get("campaign", ""),
+             run.labels.get("scene", ""), run.subject[1] if len(run.subject) > 1 else "",
+             run.scene_identity or "")
+    except Exception:                                        # noqa: BLE001
+        _log.exception("terminal-run callback failed for %s", run.id)
+
+
 def start(app, run, factory: Callable[[], Any]) -> None:
     """Schedule ``factory()`` as a detached run. Thread-safe.
 
@@ -152,7 +178,7 @@ def start(app, run, factory: Callable[[], Any]) -> None:
         raise RuntimeError(
             "no run portal; the app's lifespan is not running. Tests that need "
             "a run to execute take a lifespan-entered client.")
-    portal.start_task_soon(_guarded, run, factory)
+    portal.start_task_soon(_guarded, app, run, factory)
 
 
 def cancel(app, run) -> None:
@@ -211,6 +237,10 @@ def release_before_start(app, run, state: str, error: dict | None = None) -> Non
     run.finish(state)
     run.ready.set()
     run.terminal.set()
+    # The pre-start release announces too. A run reserved by a route that then
+    # refuses is never entered by the runner, so a demotion hung off `_guarded`
+    # alone would leave the service pinned by a run that no longer exists.
+    _announce_terminal(app, run)
 
 
 def _error_frame(error: dict) -> str:
@@ -218,7 +248,7 @@ def _error_frame(error: dict) -> str:
     return f"data: {json.dumps({'error': error})}\n\n"
 
 
-async def _guarded(run, factory: Callable[[], Any]) -> None:
+async def _guarded(app, run, factory: Callable[[], Any]) -> None:
     """One run, inside its own failure boundary and cancel scope.
 
     The boundary is load-bearing. These run on the lifespan's task group, and
@@ -287,3 +317,4 @@ async def _guarded(run, factory: Callable[[], Any]) -> None:
     # everything inside it, so setting this within would never run on the path
     # that needs it most.
     run.terminal.set()
+    _announce_terminal(app, run)

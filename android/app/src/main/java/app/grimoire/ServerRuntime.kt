@@ -15,6 +15,31 @@ fun interface PortCallback {
 }
 
 /**
+ * What the backend tells the shell about detached runs.
+ *
+ * `onRunsChanged` crosses zero, not once per run: the service promotes itself
+ * to the foreground on the first live run and demotes on the last. Promotion
+ * is what stops Android reclaiming this process mid-generation, which is the
+ * whole reason a locked phone can now finish a turn.
+ *
+ * `onRunTerminal` carries what a notification needs to be worth tapping --
+ * which campaign, which scene -- plus the scene IDENTITY rather than its id,
+ * because an id goes stale on rename and a notification can sit unread for a
+ * long time. The tap resolves it through `GET /scene-by-identity`.
+ */
+interface RunCallback {
+    fun onRunsChanged(live: Int)
+    fun onRunTerminal(
+        runId: String,
+        state: String,
+        campaignName: String,
+        sceneTitle: String,
+        cid: String,
+        sceneIdentity: String,
+    )
+}
+
+/**
  * Process-wide owner of the embedded Python server.
  *
  * The server thread starts once per process and blocks in uvicorn for the
@@ -31,6 +56,11 @@ object ServerRuntime {
     @Volatile
     var failure: String? = null
         private set
+
+    /** Set by the service before the server starts, so the callbacks below
+     *  have somewhere to go. Null on any host without a service. */
+    @Volatile
+    var runs: RunCallback? = null
 
     private val portListeners = mutableListOf<(Int) -> Unit>()
     private val failureListeners = mutableListOf<(String) -> Unit>()
@@ -97,6 +127,32 @@ object ServerRuntime {
                 PortCallback { p ->
                     Log.i(TAG, "listening on 127.0.0.1:$p")
                     publishPort(p)
+                },
+                // Forwarded into `app.state`, where the run registry and the
+                // runner can reach them. Passing null here -- no service, as in
+                // a bare test host -- leaves the backend exactly as it is on
+                // desktop, which is the correct degraded mode rather than a
+                // failure.
+                object : RunCallback {
+                    override fun onRunsChanged(live: Int) {
+                        runCatching { runs?.onRunsChanged(live) }
+                            .onFailure { Log.w(TAG, "onRunsChanged failed", it) }
+                    }
+
+                    override fun onRunTerminal(
+                        runId: String,
+                        state: String,
+                        campaignName: String,
+                        sceneTitle: String,
+                        cid: String,
+                        sceneIdentity: String,
+                    ) {
+                        runCatching {
+                            runs?.onRunTerminal(
+                                runId, state, campaignName, sceneTitle, cid, sceneIdentity,
+                            )
+                        }.onFailure { Log.w(TAG, "onRunTerminal failed", it) }
+                    }
                 },
             )
             // start_server blocks forever; returning means uvicorn exited

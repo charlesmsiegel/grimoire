@@ -682,22 +682,6 @@ def test_a_run_that_could_not_be_scheduled_frees_the_scene(client, sending_scene
     assert _chat(client, cid, sid).status_code == 200, "the scene stayed held"
 
 
-def test_a_rename_is_refused_while_a_turn_is_running(client, campaign_scene):
-    """A rename mints a new `sid`, and a detached run holds the old one -- so
-    after one the identity fence looks for a scene that is no longer at that
-    path, calls it gone, and discards a reply the provider may have spent
-    minutes on. Survivable when a turn died with its socket; not now."""
-    cid, sid = campaign_scene
-    _reserve(client, cid, sid)
-
-    renamed = client.put(f"/api/campaigns/{cid}/scenes/{sid}", json={"title": "Winifred"})
-    deleted = client.delete(f"/api/campaigns/{cid}/scenes/{sid}")
-
-    assert renamed.status_code == 409 and renamed.json()["kind"] == "run_in_flight"
-    assert deleted.status_code == 409, "the transcript could be deleted mid-turn"
-    assert store.scenes.read_scene_meta(cid, sid), "the scene was renamed anyway"
-
-
 def test_an_unexpected_producer_failure_reaches_the_wire(client, sending_scene,
                                                          monkeypatch):
     """A handled `LLMError` emits its own error frame; an unexpected exception
@@ -783,3 +767,103 @@ def test_a_rename_does_not_make_a_finished_attempt_run_twice(client, sending_sce
     assert again.status_code == 200
     assert store.scenes.read_scene(cid, renamed)["messages"] == before, \
         "the renamed scene ran the same attempt a second time"
+
+
+# --- every scene-turn producer, not just chat -------------------------------
+# Five routes stream a turn into a scene. Migrating one and leaving the rest
+# socket-bound means a locked phone still kills a retry, a reroll, a replay or
+# an accepted roll -- and those endpoints emit no leading run handle either, so
+# the client cannot even find what it lost.
+
+@pytest.mark.parametrize("route", ["retry", "regenerate"])
+def test_every_producer_emits_a_run_handle_and_detaches(client, sending_scene, route):
+    """One case per route, because detachment is applied per call site: a route
+    that forgets it is socket-bound again and nothing else would say so.
+
+    `replay/turn` and the roll continuation need a staged session and a bound
+    mechanics module respectively, so they are covered where that setup lives --
+    `test_retcon_routes.test_a_replay_turn_detaches_like_any_other` and
+    `test_runs_detach.test_a_dropped_subscriber_does_not_cancel_a_roll_
+    continuation`. Listing them here as skips would read as coverage.
+    """
+    cid, sid = sending_scene
+    _chat(client, cid, sid)                     # gives retry/regenerate a reply to work from
+
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/{route}", json=None)
+
+    assert r.status_code == 200, r.text
+    assert "run" in _events(r.text)[0], f"{route} sent no leading run frame"
+    run = _latest(client, cid, sid)
+    assert run.kind == route, f"the run was recorded as {run.kind}"
+    assert run.state == "landed", f"{route}'s run was {run.state}"
+
+
+def test_a_second_turn_is_refused_whichever_route_asks(client, sending_scene):
+    """One run per scene is a property of the SCENE, not of the chat route: a
+    reroll while a send is generating has to be refused too, or the backstop
+    only holds for the one path that was migrated first."""
+    cid, sid = sending_scene
+    _chat(client, cid, sid)
+    run = _reserve(client, cid, sid, attempt="holder")   # a turn in flight
+
+    for route in ("chat", "retry", "regenerate"):
+        r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/{route}",
+                        json={"content": "x"} if route == "chat" else None)
+        assert r.status_code == 409, f"{route} was allowed alongside a live turn"
+        assert r.json()["kind"] == "run_in_flight"
+    run.finish("landed")
+
+
+# --- the durable half: what survives the run record expiring ----------------
+
+def test_a_landed_send_is_still_answerable_after_its_run_is_reaped(client, sending_scene):
+    """The run registry answers "did my turn land?" for the retention window
+    and not a second longer, and it is in memory, so a restart answers nothing.
+    The attempt record is what outlives both."""
+    cid, sid = sending_scene
+    _chat(client, cid, sid, headers={"X-Grimoire-Attempt": "a-1"})
+    client.app.state.runs.reap(now=1e12)               # the window passes
+
+    r = client.get(f"/api/campaigns/{cid}/scenes/{sid}/attempt-state",
+                   params={"attempt": "a-1"})
+
+    assert r.status_code == 200
+    assert r.json()["run"] is None, "the premise failed: the run was not reaped"
+    assert r.json()["retained"] is True, \
+        "a landed send became unanswerable the moment its run expired"
+
+
+def test_a_rolled_back_send_reports_its_post_gone_after_the_reap(client, sending_scene):
+    """The case this record exists for. A turn that failed after the post was
+    appended has that post taken back off, and the refetched transcript is then
+    *correctly* missing it -- so "the post is absent" means both "rolled back"
+    and "never landed". The client is holding the only copy of what the player
+    typed and has to decide whether to give it back."""
+    cid, sid = sending_scene
+    client.app.dependency_overrides[routes.get_llm] = lambda: FailingOpenRouter(
+        kind="network", message="connection reset")
+
+    body = _chat(client, cid, sid, headers={"X-Grimoire-Attempt": "a-2"}).text
+    assert any(e.get("error", {}).get("post_returned") for e in _events(body)), \
+        "the premise failed: the post was not rolled back"
+    client.app.state.runs.reap(now=1e12)
+
+    r = client.get(f"/api/campaigns/{cid}/scenes/{sid}/attempt-state",
+                   params={"attempt": "a-2"})
+
+    assert r.json()["retained"] is False, \
+        "a rolled-back send still claimed its post was in the transcript"
+
+
+def test_an_attempt_from_another_scene_is_not_answered_about(client, sending_scene):
+    """Scene-scoped like every route here: an attempt id is only unique within
+    a scene, so answering across scenes would report one scene's state as
+    another's."""
+    cid, sid = sending_scene
+    _chat(client, cid, sid, headers={"X-Grimoire-Attempt": "a-3"})
+    other = store.scenes.create_scene(cid, "Winifred")
+
+    r = client.get(f"/api/campaigns/{cid}/scenes/{other}/attempt-state",
+                   params={"attempt": "a-3"})
+
+    assert r.json()["retained"] is False and r.json()["run"] is None

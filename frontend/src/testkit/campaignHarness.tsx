@@ -9,6 +9,7 @@
 // `campaignMocks` is the half that can be, and holds the factories.
 import type { ReactNode } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { RunRegistryProvider } from "../runs/RunRegistryProvider";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
 import type { Mock } from "vitest";
 import CampaignView from "../routes/CampaignView";
@@ -107,6 +108,18 @@ export function installCampaignMocks() {
       { done: true });
   };
   (api.chat as any).mockImplementation(streamsDone);
+  // The recovery surface, rebuilt for the same reason as everything above: a
+  // reset mock resolves `undefined`, and recovery reading `.retained` off that
+  // throws -- which its own `catch` then reads as "cannot tell", restoring a
+  // prompt the transcript already has. A silent double-paste in the composer,
+  // in every test that never mentions recovery.
+  (api.findRun as any).mockResolvedValue({ run: null });
+  (api.attachRun as any).mockResolvedValue(undefined);
+  (api.attemptState as any).mockResolvedValue({ attempt: "", retained: true, run: null });
+  (api.cancelAttempt as any).mockResolvedValue(
+    { run: { id: "r", attempt_id: "a", state: "cancelled", next_index: 0 } });
+  (api.cancelRun as any).mockResolvedValue(
+    { run: { id: "r", attempt_id: "a", state: "cancelled", next_index: 0 } });
   (api.retry as any).mockImplementation(streamsDone);
   (api.regenerate as any).mockImplementation(streamsDone);
   (api.getAlternates as any).mockResolvedValue({ active: null, alternates: [] });
@@ -248,9 +261,15 @@ export function withPalette(children: ReactNode) {
 
 export function renderCampaign(initialEntry = "/campaigns/run") {
   return render(
-    <MemoryRouter initialEntries={[initialEntry]}>
-      {withPalette(<><Here />{playRoutes()}</>)}
-    </MemoryRouter>,
+    // The provider ABOVE the router, mirroring `main.tsx`. Without it
+    // `useRunRegistry` falls back to its no-op stand-in and every recovery
+    // path silently does nothing -- which is the exact shape of the bug this
+    // harness is supposed to be able to catch.
+    <RunRegistryProvider>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        {withPalette(<><Here />{playRoutes()}</>)}
+      </MemoryRouter>
+    </RunRegistryProvider>,
   );
 }
 

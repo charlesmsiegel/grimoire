@@ -91,8 +91,17 @@ def get_scenes(cid: str, limit: int | None = None, offset: int | None = None):
 
 
 @router.post("/campaigns/{cid}/scenes")
-def post_scene(cid: str, body: NewScene):
+def post_scene(cid: str, body: NewScene, request: Request):
     title = body.title or "New scene"
+    # Only when this create would WIDEN the campaign. Crossing 999 -> 1000
+    # scenes repads every scene in it -- renaming them all and repointing their
+    # sidecars -- so every live turn loses the path it captured, and the
+    # per-scene guard cannot express that. An ordinary create touches nothing
+    # but the new file, so it stays allowed while a turn generates elsewhere:
+    # refusing every create during any turn would be a much larger change to
+    # how the app feels, for a case that is not dangerous.
+    if store.scenes.create_would_repad(cid):
+        runs.require_campaign_free(request.app, cid)
     try:
         return {"id": store.scenes.create_scene(cid, title, body.suggested_date,
                                                 pcless=body.pcless)}
@@ -396,6 +405,22 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
         return _chat_run(cid, sid, turn, request, client, conn, run)
 
 
+def _take_the_post_back(cid: str, sid: str, posted_at, content: str, run) -> bool:
+    """Remove the player's post AND retire the record that says it is there.
+
+    One function because the two have to be one step. `on_error` calls this
+    inside its campaign-lock hold, so both land together; split apart -- the
+    removal here and the record cleared on the way out -- there is a window
+    where the transcript has lost the post and the record still claims it, and
+    a recovery landing in that window settles and discards the only surviving
+    copy of what the player typed.
+    """
+    if not store.scenes.remove_trailing_user_post(cid, sid, posted_at, content):
+        return False
+    store.attempts.forget(cid, run.scene_identity, run.attempt_id)
+    return True
+
+
 def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
               client: LLMClient, conn: dict, run):
     """The body of a send, once the scene is reserved.
@@ -448,6 +473,11 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
                 turn.content, store.context.scene_substitutions(cid, sid), cid, sid)
             posted_at = store.scenes.append_message(
                 cid, sid, "user", content, speaker=speaker)
+            # In the SAME hold as the append it describes. This is what lets a
+            # recovery after the run record expired ask the only decisive
+            # question -- is this attempt's post still here? -- rather than
+            # matching text, which is not an identifier.
+            store.attempts.remember(cid, run.scene_identity, run.attempt_id)
     if ephemeral:
         note = turn.content.strip() or prompts.render("scene/director_note.j2")
         messages, breakdown = store.context.compose_director_turn(
@@ -496,8 +526,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
     outcome = StreamOutcome()
     stream = _chat_stream(
         cid, sid, messages, conn, client,
-        undo_user_post=lambda: store.scenes.remove_trailing_user_post(
-            cid, sid, posted_at, content),
+        undo_user_post=lambda: _take_the_post_back(cid, sid, posted_at, content, run),
         task="chat", identity=run.scene_identity, outcome=outcome)
     # AFTER the stream is built, never before: `_chat_stream` claims the turn
     # and can raise, and a prompt recorded ahead of it leaves Turn history
@@ -510,28 +539,49 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/retry")
-def post_retry(cid: str, sid: str, body: RetryBody | None = None,
-               client: LLMClient = Depends(get_llm)):
+def post_retry(cid: str, sid: str, request: Request, body: RetryBody | None = None,
+               client: LLMClient = Depends(get_llm),
+               x_grimoire_attempt: str | None = Header(default=None)):
+    replay = runs.replay_attempt(request.app, cid, sid, x_grimoire_attempt)
+    if replay is not None:
+        return replay
     scene = _require_scene(cid, sid)
     conn = _require_connection()
     # Ahead of the retirement, not behind it: a refusal must not cost a decision
-    # for a request that then does nothing at all.
+    # for a request that then does nothing at all. Ahead of the RESERVATION too:
+    # a run reserved for a request that was never going to do anything has to be
+    # released again, and not taking it is simpler than unwinding it.
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to retry")
-    # Same order as the send above, for the same reason — see there.
+    run, fresh = runs.reserve_turn(request.app, cid, sid, "retry", x_grimoire_attempt)
+    if not fresh:
+        return runs.tail_response(run, 0, lead=runs.lead_frame(run))
+    with runs.reservation(request.app, run):
+        return _retry_run(cid, sid, body, request, client, conn, run)
+
+
+def _retry_run(cid: str, sid: str, body, request: Request,
+               client: LLMClient, conn: dict, run):
+    """The body of a retry, once the scene is reserved -- see `_chat_run` for
+    why every exit from it has to be wrapped rather than audited."""
+    # Same order as the send above, for the same reason — see there. Fenced like
+    # it too: a scene replaced between the reservation and here must not collect
+    # this turn's heal and retired proposal.
     with store.locks.campaign_lock(cid):
+        if streaming._scene_moved(cid, sid, run.scene_identity):
+            raise HTTPException(status_code=404, detail="scene not found")
         store.proposals.heal(cid, sid)
         _disown_dead_guidance(cid, sid)
         store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(body), describe=store.prompt_log.capturing())
-    # `identity=None, outcome=None`: not yet migrated, so this turn still dies
-    # with its socket and still infers its own success. Spelled out because
-    # `_chat_stream` requires it -- see its docstring for why there is no default.
+    outcome = StreamOutcome()
     stream = _chat_stream(cid, sid, messages, conn, client,   # claims the turn; see above
-                          task="retry", identity=None, outcome=None)
+                          task="retry", identity=run.scene_identity, outcome=outcome)
     _record_prompt(cid, sid, "retry", breakdown)
-    return stream
+    runs.start_detached(request.app, run, lambda: stream.body_iterator,
+                        outcome=outcome.result)
+    return runs.tail_response(run, 0, lead=runs.lead_frame(run))
 
 
 def _restore_reroll(cid: str, sid: str, removed: dict):
@@ -585,12 +635,32 @@ def _put_back(cid: str, sid: str, showing: str | None) -> bool:
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/regenerate")
-def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
-                    client: LLMClient = Depends(get_llm)):
+def post_regenerate(cid: str, sid: str, request: Request,
+                    body: RegenerateBody | None = None,
+                    client: LLMClient = Depends(get_llm),
+                    x_grimoire_attempt: str | None = Header(default=None)):
     """Redo the most recent post: park the trailing assistant reply as an
     alternate, stream a fresh one."""
+    replay = runs.replay_attempt(request.app, cid, sid, x_grimoire_attempt)
+    if replay is not None:
+        return replay
     _require_scene(cid, sid)
     conn = _require_connection()
+    # RESERVED BEFORE THE FIRST MUTATOR, which matters more here than anywhere
+    # else: this route archives the outgoing reply and removes it from the
+    # transcript before the replacement exists, so a 409 raised afterwards
+    # would report "nothing happened" over a scene that is one reply short.
+    run, fresh = runs.reserve_turn(request.app, cid, sid, "regenerate",
+                                   x_grimoire_attempt)
+    if not fresh:
+        return runs.tail_response(run, 0, lead=runs.lead_frame(run))
+    with runs.reservation(request.app, run):
+        return _regenerate_run(cid, sid, body, request, client, conn, run)
+
+
+def _regenerate_run(cid: str, sid: str, body, request: Request,
+                    client: LLMClient, conn: dict, run):
+    """The body of a reroll, once the scene is reserved -- see `_chat_run`."""
     guidance = (body.guidance or "").strip() if body else ""
     removed: dict | None = None   # set only when there is actually a reply to drop
     # ONE lock across the heal, the decision, the archive and the removal. A gap
@@ -599,6 +669,11 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     # exactly what the non-destructive guarantee promises to keep. Held only
     # across a read and two file writes; the stream starts after it is released.
     with store.locks.campaign_lock(cid):
+        # Fenced first, like every other setup block: a scene replaced between
+        # the reservation and here must not have its reply archived and removed
+        # by a turn that started on a different scene entirely.
+        if streaming._scene_moved(cid, sid, run.scene_identity):
+            raise HTTPException(status_code=404, detail="scene not found")
         # Heal now, retire later. Healing is what can append a 🎲 line, and the
         # checks below have to judge the transcript that leaves behind — but
         # RETIRING the decision waits until the reroll has actually committed to
@@ -754,16 +829,18 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     # stop deleting ahead of the replacement at all — remove the old run inside
     # `finalize`, under the same lock that writes the new reply — which is
     # tracked with the other transcript-identity work rather than bolted on.
-    # `identity=None, outcome=None` -- not yet migrated; see `post_retry`.
+    outcome = StreamOutcome()
     stream = _chat_stream(cid, sid, messages, conn, client, restore_removed=restore,
-                          identity=None, outcome=None,
+                          identity=run.scene_identity, outcome=outcome,
                           task="regenerate")
     # Last of all: after `supersede` (which can refuse and unwind the reroll) AND
     # after the turn claim inside `_chat_stream` (which can raise StoreBusy on a
     # contended campaign). Both would leave Turn history showing a regeneration
     # the model never saw.
     _record_prompt(cid, sid, "regenerate", breakdown)
-    return stream
+    runs.start_detached(request.app, run, lambda: stream.body_iterator,
+                        outcome=outcome.result)
+    return runs.tail_response(run, 0, lead=runs.lead_frame(run))
 
 
 _PREVIEW_CHARS = 200
@@ -3117,8 +3194,10 @@ def get_cast_detail(cid: str, sid: str, kind: str, id: str):
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}/messages/{index}")
-def put_scene_message(cid: str, sid: str, index: int, body: EditMessage):
+def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
+                      request: Request):
     _require_scene(cid, sid)
+    runs.require_scene_free(request.app, cid, sid)
     # Macros resolved once at persist time (#137), same as a fresh send.
     content = store.context.expand_macros(
         body.content, store.context.scene_substitutions(cid, sid), cid, sid)
@@ -3153,7 +3232,7 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage):
 
 
 @router.delete("/campaigns/{cid}/scenes/{sid}/messages/{index}")
-def delete_scene_messages_from(cid: str, sid: str, index: int):
+def delete_scene_messages_from(cid: str, sid: str, index: int, request: Request):
     """Delete this post and everything after it, undoing what the scene wrote (#75).
 
     The reply is a report of what the cascade actually did, not an `{"ok": true}`:
@@ -3186,6 +3265,7 @@ def delete_scene_messages_from(cid: str, sid: str, index: int):
     the place to close. Editing a post (`PUT`) accepts exactly the same exposure.
     """
     _require_scene(cid, sid)
+    runs.require_scene_free(request.app, cid, sid)
     try:
         return store.cascade.delete_from(cid, sid, index)
     except IndexError:
@@ -3195,7 +3275,8 @@ def delete_scene_messages_from(cid: str, sid: str, index: int):
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/messages/{index}/retcon")
-def post_scene_retcon(cid: str, sid: str, index: int, body: EditMessage):
+def post_scene_retcon(cid: str, sid: str, index: int, body: EditMessage,
+                      request: Request):
     """Rewrite a past post and let the scene be extracted again (#78).
 
     The difference from `PUT .../messages/{index}` is everything that happens
@@ -3212,6 +3293,7 @@ def post_scene_retcon(cid: str, sid: str, index: int, body: EditMessage):
     contradict, and the reason to re-absorb this scene and read the badges.
     """
     _require_scene(cid, sid)
+    runs.require_scene_free(request.app, cid, sid)
     # Macros resolved once at persist time, the same as a fresh send and the
     # same as the plain edit (#137): a retconned `{{roll:1d20}}` must not
     # re-roll on every later context build.
@@ -3308,7 +3390,9 @@ def post_replay(cid: str, sid: str, body: ReplayStart):
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/replay/turn")
-def post_replay_turn(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
+def post_replay_turn(cid: str, sid: str, request: Request,
+                     client: LLMClient = Depends(get_llm),
+                     x_grimoire_attempt: str | None = Header(default=None)):
     """Replay the next turn: re-post the originals that were the player's, then
     stream a fresh reply against the edited history.
 
@@ -3321,9 +3405,23 @@ def post_replay_turn(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
     Staging is idempotent (`replay.stage`), so a turn whose stream died is
     retried by calling this again — it re-posts nothing and generates once more.
     """
+    replay = runs.replay_attempt(request.app, cid, sid, x_grimoire_attempt)
+    if replay is not None:
+        return replay
     _require_scene(cid, sid)
     conn = _require_connection()
     _replay_session(cid, sid)
+    run, fresh = runs.reserve_turn(request.app, cid, sid, "replay",
+                                   x_grimoire_attempt)
+    if not fresh:
+        return runs.tail_response(run, 0, lead=runs.lead_frame(run))
+    with runs.reservation(request.app, run):
+        return _replay_turn_run(cid, sid, request, client, conn, run)
+
+
+def _replay_turn_run(cid: str, sid: str, request: Request,
+                     client: LLMClient, conn: dict, run):
+    """The body of a replay turn, once the scene is reserved -- see `_chat_run`."""
     try:
         store.replay.stage(cid)
         session = store.replay.state(cid)
@@ -3339,11 +3437,13 @@ def post_replay_turn(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
     # No `undo_user_post` hook, unlike `post_chat`. The staged posts are not
     # this request's to take back: `stage` recorded them as staged, a retry
     # re-uses them, and cancelling the replay is what puts the scene back.
-    # `identity=None, outcome=None` -- not yet migrated; see `post_retry`.
+    outcome = StreamOutcome()
     stream = _chat_stream(cid, sid, messages, conn, client, task="replay",
-                          identity=None, outcome=None)
+                          identity=run.scene_identity, outcome=outcome)
     _record_prompt(cid, sid, "replay", breakdown)
-    return stream
+    runs.start_detached(request.app, run, lambda: stream.body_iterator,
+                        outcome=outcome.result)
+    return runs.tail_response(run, 0, lead=runs.lead_frame(run))
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/replay/accept")

@@ -4,10 +4,11 @@ bound module and sheets."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from .. import prompts, store
 from ..llm import LLMClient
+from . import runs
 from .common import (
     _campaign_root_or_404,
     _record_prompt,
@@ -25,7 +26,7 @@ from .models import (
     SheetBody,
     SheetCreationBody,
 )
-from .streaming import _continuation_stream, _sse, _sse_response
+from .streaming import StreamOutcome, _continuation_stream, _sse
 
 router = APIRouter()
 
@@ -108,15 +109,52 @@ def get_roll_proposal(cid: str, sid: str):
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/roll-proposal")
-def post_roll_proposal(cid: str, sid: str, body: ProposalAction,
-                       client: LLMClient = Depends(get_llm)):
+def post_roll_proposal(cid: str, sid: str, body: ProposalAction, request: Request,
+                       client: LLMClient = Depends(get_llm),
+                       x_grimoire_attempt: str | None = Header(default=None)):
     """Adjudicate a roll proposal (accept / decline). Idempotent by proposal
     id, keyed to the scene's current record. Every state change is a CAS; a
     lost transition means someone else moved the record (a new send
     superseded it, another accept won the claim) — we stop dead: no
     projection, no continuation, 409."""
+    replay = runs.replay_attempt(request.app, cid, sid, x_grimoire_attempt)
+    if replay is not None:
+        return replay
     _require_scene(cid, sid)
     conn = _require_connection()
+    # RESERVED BEFORE THE FIRST CAS. Every transition below writes the proposal
+    # record, so a 409 raised after one would report that nothing happened over
+    # a record that has already moved. The exits that answer without generating
+    # -- an already-narrated proposal, a lost race -- return through the guard
+    # too, which ends their reservation rather than stranding it.
+    # Defaulted to the PROPOSAL, not to a fresh id. This route is documented
+    # idempotent by proposal id, and one-run-per-scene would otherwise turn
+    # that into a refusal: two clients accepting the same proposal at once --
+    # a double tap, a retry over a slow link -- would race, one would reserve
+    # and the other would be told a turn was already running. Sharing the
+    # attempt makes the second ADOPT the first's run and tail its frames, so
+    # both get the same answer, the narration persists once, and the provider
+    # is called once instead of twice.
+    run, fresh = runs.reserve_turn(
+        request.app, cid, sid, "continuation",
+        x_grimoire_attempt or f"proposal:{body.proposal}",
+        # A client's own id is a promise that this is the same logical request,
+        # so its outcome is replayed however it ended. The proposal-derived one
+        # is only a dedupe key for concurrent duplicates -- nobody promised
+        # anything -- so a later retry of an adjudication that FAILED has to be
+        # allowed to actually retry, rather than being handed the failure for
+        # the rest of the retention window.
+        adopt_terminal=x_grimoire_attempt is not None)
+    if not fresh:
+        return runs.tail_response(run, 0, lead=runs.lead_frame(run))
+    with runs.reservation(request.app, run):
+        return _roll_proposal_run(cid, sid, body, request, client, conn, run)
+
+
+def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Request,
+                       client: LLMClient, conn: dict, run):
+    """The body of an adjudication, once the scene is reserved -- see
+    `scenes._chat_run` for why every exit from it is wrapped."""
     pid = body.proposal
     rec = store.proposals.get(cid, sid)
     if rec is None or rec.get("id") != pid:
@@ -136,7 +174,7 @@ def post_roll_proposal(cid: str, sid: str, body: ProposalAction,
     status = rec["status"]
 
     if status == "narrated":
-        return _sse_response([_sse({"done": True})])
+        return runs.answer_without_running(request.app, run, [_sse({"done": True})])
     if status == "resolving":
         raise HTTPException(status_code=409, detail="adjudication in progress")
 
@@ -170,7 +208,8 @@ def post_roll_proposal(cid: str, sid: str, body: ProposalAction,
                 store.proposals.transition(cid, sid, pid, ("resolving",), "pending")
                 detail = (str(exc) if isinstance(exc, store.checks.CheckError)
                           else "the check could not be resolved")
-                return _sse_response([_sse({"error": {"detail": detail, "kind": "check_error"}})])
+                return runs.answer_without_running(request.app, run, [
+                    _sse({"error": {"detail": detail, "kind": "check_error"}})])
             if not store.proposals.transition(cid, sid, pid, ("resolving",), "resolved", resolution):
                 # superseded mid-resolve: the pure roll result is discarded unlogged
                 raise HTTPException(status_code=409, detail="proposal was superseded")
@@ -183,14 +222,24 @@ def post_roll_proposal(cid: str, sid: str, body: ProposalAction,
             # pre-stream status read and the projection lock (a supersede +
             # brand-new fence/send). Nothing was projected — stop dead, same
             # as any other lost-race case, with a clean done frame.
-            return _sse_response([_sse({"done": True})])
+            return runs.answer_without_running(request.app, run, [_sse({"done": True})])
         messages, breakdown = _continuation_messages(cid, sid, resolution)
     elif status == "declined":
         messages, breakdown = _declined_continuation_messages(cid, sid)
     else:  # defensive: a race moved the record out from under us
         raise HTTPException(status_code=409, detail="proposal is stale")
     _record_prompt(cid, sid, "continuation", breakdown)
-    return _continuation_stream(cid, sid, pid, messages, conn, client)
+    outcome = StreamOutcome()
+    # DETACHED like every other scene turn. The plan singles this producer out:
+    # it is `_continuation_stream`, in a different module, so a migration that
+    # did the chat path and stopped would pass every other detach test while
+    # locking the phone during an accepted roll still cancelled it and dropped
+    # the narration -- and a roll is exactly when a player looks away.
+    stream = _continuation_stream(cid, sid, pid, messages, conn, client,
+                                  identity=run.scene_identity, outcome=outcome)
+    runs.start_detached(request.app, run, lambda: stream.body_iterator,
+                        outcome=outcome.result)
+    return runs.tail_response(run, 0, lead=runs.lead_frame(run))
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/checks")

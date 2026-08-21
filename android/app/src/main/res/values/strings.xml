@@ -1,4 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Grimoire</string>
+
+    <!-- The ongoing notification exists to hold the process, not to be read,
+         so it says as little as it can: a scene title sits on the lock screen
+         for the whole of a turn, and that is more than the player asked to
+         share. The completion one names the scene, because by then they have
+         chosen to be told. -->
+    <string name="channel_ongoing">Generating</string>
+    <string name="channel_done">Finished turns</string>
+    <string name="run_ongoing_title">Grimoire is working</string>
+    <plurals name="run_ongoing_body">
+        <item quantity="one">%d turn in progress</item>
+        <item quantity="other">%d turns in progress</item>
+    </plurals>
+    <string name="run_done_title">%1$s replied</string>
+    <string name="run_failed_title">%1$s could not finish</string>
 </resources>

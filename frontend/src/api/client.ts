@@ -149,6 +149,38 @@ function request<T>(method: string, path: string, body?: unknown,
   return p;
 }
 
+/** Read an SSE stream from a GET, for attaching to a run already in flight.
+ *
+ *  `streamPost` exists for starting work; this exists for joining it. Same
+ *  parser, same index callback, no body and no attempt header -- the run is
+ *  already named in the path.
+ */
+async function streamGet<T = ChatEvent>(
+  path: string,
+  onEvent: (e: T) => void,
+  signal?: AbortSignal,
+  onIndex?: (index: number) => void,
+): Promise<void> {
+  const res = await fetch(path, { signal });
+  if (!res.ok || !res.body) {
+    // Typed rather than left `any`: this app's error handler puts `kind` at the
+    // top level of the body, so the shape is known and reading it blind only
+    // costs the type-checker's help.
+    const data = await res.json().catch(() => ({})) as
+      { detail?: string; kind?: string };
+    throw new ApiError(res.status, data.detail ?? res.statusText, data.kind);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer = parseSSEChunk<T>(buffer, decoder.decode(value, { stream: true }),
+                              onEvent, onIndex);
+  }
+}
+
 async function requestForm<T>(path: string, form: FormData, method = "POST"): Promise<T> {
   const res = await fetch(path, { method, body: form });
   if (!res.ok) {
@@ -184,6 +216,7 @@ async function streamPost<T = ChatEvent>(
   onEvent: (e: T) => void,
   signal?: AbortSignal,
   attempt?: string,
+  onIndex?: (index: number) => void,
 ): Promise<void> {
   // Tagged so a caller can tell "the server never got this" from "the server
   // got it and then something went wrong" (#95). The line between them is the
@@ -214,7 +247,8 @@ async function streamPost<T = ChatEvent>(
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
-    buffer = parseSSEChunk<T>(buffer, decoder.decode(value, { stream: true }), onEvent);
+    buffer = parseSSEChunk<T>(buffer, decoder.decode(value, { stream: true }),
+                              onEvent, onIndex);
   }
 }
 
@@ -466,9 +500,11 @@ export const api = {
   // `response` is a one-shot, unpersisted per-turn override (the length chip
   // beside Send) — rides only this call, exactly like regenerate's guidance.
   chat: (cid: string, sid: string, content: string, onEvent: (e: ChatEvent) => void,
-         response?: ResponseOverride, signal?: AbortSignal, attempt?: string) =>
+         response?: ResponseOverride, signal?: AbortSignal, attempt?: string,
+         onIndex?: (i: number) => void) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/chat`,
-               response ? { content, response } : { content }, onEvent, signal, attempt),
+               response ? { content, response } : { content }, onEvent, signal,
+               attempt, onIndex),
   /** Ask a detached run to stop.
    *
    *  Closing the connection is no longer the cancel. A turn now outlives the
@@ -508,6 +544,51 @@ export const api = {
       // on the decoded path, so it would split and reach no route at all.
       `/api/campaigns/${cid}/scenes/${sid}/attempt-cancel`
         + `?attempt=${encodeURIComponent(attempt)}`),
+
+  /** Whether this attempt's post is still in the scene, plus its run if one
+   *  is still known.
+   *
+   *  The durable question, and the only one left once the run record has been
+   *  reaped. `retained: false` after a failure means the backend took the
+   *  player's post back off the transcript -- so the words exist nowhere but
+   *  in this client, and belong back in the composer.
+   */
+  /** The scene an identity names right now.
+   *
+   *  What a completion-notification tap resolves through. The intent carries
+   *  the identity precisely because a `sid` goes stale on rename and a
+   *  notification can sit unread for a long time.
+   */
+  /** Attach to a run's buffered frames from `from` onward, INCLUSIVE.
+   *
+   *  The half of detachment the client side rests on. The backend keeps every
+   *  frame a run has produced, so a client that was away -- a locked phone, a
+   *  suspended tab, a dropped socket -- reads the ones it missed and then keeps
+   *  reading live until the run ends. Without this the turn survives on the
+   *  server and the screen never shows it.
+   *
+   *  `from` is one past the last frame actually read, never the run's
+   *  `next_index`: that is the live tail, and resuming from it drops everything
+   *  generated while the client was away, which is the whole reply.
+   */
+  attachRun: (cid: string, sid: string, runId: string, from: number,
+              onEvent: (e: ChatEvent) => void, signal?: AbortSignal,
+              onIndex?: (i: number) => void) =>
+    streamGet(`/api/campaigns/${cid}/scenes/${sid}/runs/${runId}/stream?from=${from}`,
+              onEvent, signal, onIndex),
+
+  sceneByIdentity: (cid: string, identity: string) =>
+    request<{ id: string }>(
+      "GET",
+      `/api/campaigns/${cid}/scene-by-identity?identity=${encodeURIComponent(identity)}`,
+      undefined, { fresh: true }),
+
+  attemptState: (cid: string, sid: string, attempt: string) =>
+    request<{ attempt: string; retained: boolean; run: RunHandle | null }>(
+      "GET",
+      `/api/campaigns/${cid}/scenes/${sid}/attempt-state`
+        + `?attempt=${encodeURIComponent(attempt)}`,
+      undefined, { fresh: true }),
 
   findRun: (cid: string, sid: string, attempt: string) =>
     request<{ run: RunHandle | null }>(

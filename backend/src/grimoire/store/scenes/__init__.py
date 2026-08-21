@@ -34,6 +34,7 @@ from .lifecycle import (  # noqa: F401
     _create_scene,
     _date_hint,
     create_scene,
+    create_would_repad,
     delete_scene,
     rename_scene,
     repad,
