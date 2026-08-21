@@ -88,6 +88,13 @@ code into `android/`. Rules that keep the platforms in lockstep
   the pip block in `android/app/build.gradle.kts` mirrors the base list.
 - pydantic usage stays v1/v2-agnostic: plain `BaseModel` fields only, dump via
   `routes.common._dump` (no `model_dump()`, `Field`, validators, `ConfigDict`).
+- The **manifest and resources are read by `backend/tests/test_android_manifest.py`**,
+  which parses every XML under `android/app/src/main` and checks the service's
+  `foregroundServiceType` against the declared permissions. `make check-apk` is
+  the real build and it is outside `make check` (it needs `android-bootstrap`
+  first), so without this nothing in the ordinary gate opens these files at all
+  — an XML comment containing `--` is illegal, and one line of prose failed
+  `processDebugMainManifest` on CI with nothing local to say so.
 
 Build: `make android-bootstrap` (once per machine — JDK 17, Android SDK,
 licenses, `android/local.properties`), then `make apk` (debug) /
