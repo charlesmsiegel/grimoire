@@ -290,6 +290,14 @@ reinforce rather than compete.
   `_render_sections` passes (one line), which also makes it available to
   `_VARIANTS` should a later section want an opener variant.
 
+  This completes a convention rather than inventing one: the
+  `verify_templates.py` mirror **already** builds its opener data as
+  `{**gather(...), "opener": True}` (`:917`). The key exists on the mirror
+  side and is simply absent on the production side, and nothing catches the
+  divergence today because no template reads it. The moment
+  `response_format.j2` does, the mirror renders and the builder raises — a
+  loud failure, but one the injection removes outright.
+
   Both must be passed: `verify_templates.py` renders with `StrictUndefined`,
   so a missing var is a hard failure rather than a silent blank.
 
@@ -597,9 +605,19 @@ be measured. Whether "advance one beat" is obeyed remains a question only
   byte-for-byte.
 - **`templates/README.md`** — section list and section-var list; the
   `player_names` move out of `response_format`.
-- **`verify_templates.py`** — its `gather()` mirror must reproduce `wrap` and
-  `opener` from public store reads, which is what `scenes.read.get_wrap`
-  exists for.
+- **`verify_templates.py`** — its `gather()` mirror must reproduce `wrap` from
+  public store reads, which is what `scenes.read.get_wrap` exists for;
+  `opener` it already supplies (`:917`).
+
+  **And the comparison must not go vacuous.** That file refuses this
+  explicitly twice — *"a byte-for-byte check over an empty section proves
+  nothing"* before asserting the fixture exercises the archive, and again for
+  the voice corrective, *"without an anchor the corrective renders "", and
+  comparing "" to "" passes while proving nothing"*. Both new sections have
+  branches with exactly that failure mode: `player_character` renders empty in
+  the pcless pass, and `turn_scope`'s `wrap` variant never renders at all
+  unless the fixture sets the flag. Each needs a positive assertion in the
+  same idiom, or the mirror will pass while covering nothing.
 - **`store/locks.py`** — the new `store/commands.py` needs a classification or
   `test_lock_domain_guard` fails naming it. It is pure parsing with no state,
   so `OUTSIDE_DOMAIN` with that as the reason; `UNREVIEWED` is a frozen
