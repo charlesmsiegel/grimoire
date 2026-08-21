@@ -121,11 +121,23 @@ always-on blocks with no ordering between them would be that finding, tripled.
 1. **Response format and established facts win.** Unchanged from
    `natural_prose.j2`: the `**<Name>:**` markers, resolved identities, and
    every existing name outrank everything below.
-2. **The PC boundary is absolute.** `player_character` is never overridden — not
-   by a prose style, not by a card's post-history instruction, not by the
-   global system prompt. It is the one rule in the corpus about whose words
-   these are rather than what they sound like, and a style that wants the
-   narrator inside the PC's head is asking for something the player owns.
+2. **The PC boundary is absolute — and is enforced, not merely asserted.** It
+   is the one rule in the corpus about whose words these are rather than what
+   they sound like, and a style that wants the narrator inside the PC's head
+   is asking for something the player owns.
+
+   Asserting this from `player_character` alone would not survive contact with
+   the architecture. `assemble.py:658-667` builds the list as system prompt →
+   **the whole transcript** → `post_history` → generation, so a character
+   card's `post_history_instructions` sits in a system message *after* every
+   section this spec adds and after the entire scene history. That slot exists
+   precisely to outrank — `post_history.j2` calls itself *"the last message
+   before generation, and so the closest available push-back"*. A card saying
+   "describe how {{user}} reacts" would win on position against a rule a
+   thousand tokens upstream.
+
+   So the boundary gets a presence in that slot too — see §6 — and is made
+   non-removable in the layout editor. Both are below.
 3. **`turn_scope` outranks the prose style.** This is the one place the
    hierarchy differs from `natural_prose.j2`, which yields its rhythm guidance
    to a set style. Pacing is not rhythm: a style describes how prose *sounds*,
@@ -259,8 +271,19 @@ reinforce rather than compete.
   Superseded by §2; two statements of one rule drift apart, and this one is in
   the weaker position. `player_names` leaves this template — update
   `templates/README.md:342`, which `test_docs_guard.py` holds to the code.
-- **Add**, gated on `not wrap`: *"The reply does not end on a `**Grimoire:**`
-  block. The last block belongs to a character."*
+- **Add**, gated on `not wrap` **and `not opener`**: *"The reply does not end
+  on a `**Grimoire:**` block. The last block belongs to a character."*
+
+  The opener gate matters despite `response_format` having no
+  `except_opener`. `opener_shape.j2` normally puts character blocks last, so
+  the clause is usually redundant there — but it falls back to a generic
+  marker instruction when `npc_names` is empty, and an opener with no NPCs
+  present is entirely `**Grimoire:**`. Ungated, the prompt would contain a
+  rule its own final message orders the model to break.
+
+  `wrap` and `opener` therefore both become vars of this template. Both must
+  be passed: `verify_templates.py` renders with `StrictUndefined`, so a
+  missing var is a hard failure rather than a silent blank.
 
 ### 4. `/end`
 
@@ -332,8 +355,31 @@ a flag that a *previous* `/end` may have set, and a rewind clears it
 unconditionally. Both fail toward not-wrapping, which is the recoverable
 direction — the player retypes three characters.
 
-**Reading** — `context.assemble._assemble` reads `wrap_next` and passes `wrap`
-to `turn_scope` and `response_format`.
+**Reading** — through a **public** accessor on `scenes/read.py`, following
+`get_rolling_summary` / `scene_break_fields`:
+
+```python
+def wrap_fields(meta: dict) -> bool: ...          # frontmatter -> flag
+def get_wrap(cid: str, sid: str) -> bool: ...     # read fresh off disk
+```
+
+Public rather than a frontmatter poke inside `_assemble`, for three consumers
+that all need it: the assembler, the `DELETE .../wrap` route, and the scene
+payload feeding the indicator. It is also **required** — `verify_templates.py`
+rebuilds the template data *"from public store reads"* in its `gather()`
+mirror, so a value only `_assemble` can compute cannot be verified at all.
+Coercion follows the module's existing posture: anything that isn't the stored
+truthy value reads as `False`, because a hand-edited frontmatter must cost a
+non-wrapping turn rather than a 500 on the play path.
+
+**One invariant, easy to break by reading the spec correctly:** the clear
+hangs off `delete_from` *specifically*, never off transcript removal in
+general. `post_regenerate` removes the outgoing reply with
+`remove_trailing_assistant_run` (`scenes.py:783`), which is the only reason
+"rewind clears" and "regenerate stays set" can both be true. Hook the clear
+into a shared removal helper and durability dies silently — every test still
+passes except the regenerate-still-wraps case, which is therefore the named
+guard for this invariant.
 
 **The user turn has to agree with the system section.** `routes/scenes.py:526`
 builds the ephemeral note as
@@ -392,7 +438,55 @@ post-run state (flag cleared) is exactly what a player clicking cancel is
 asking for. It still takes the campaign lock like every other frontmatter
 write.
 
-### 6. Section registration
+### 6. Making the PC boundary enforceable
+
+Two changes, both following doctrine the codebase already states.
+
+**A line in `post_history.j2`.** The template already exists to carry
+counterweights and already orders them by kind — voice ahead of length,
+because *"length is about trimming what was written, voice is about who is
+writing it."* Ownership extends that axis one step further: who the words
+*belong to* outranks who is writing them. Order becomes card instructions →
+**PC boundary** → voice → length, so the boundary answers the card blocks
+rather than being answered by them.
+
+One sentence, static, no detection required:
+
+```
+Never write dialogue, action, choice or intent for <Name>. Describe the world
+and what it does to them; stop where their answer begins.
+```
+
+This is **not** the adaptive corrective ruled out under *Out of scope* — that
+one was rejected because detecting "wrote the PC" in prose is hard. This needs
+no detection at all; it is a constant.
+
+Consequence to state: `post_history.j2` is *"omitted entirely when all are
+empty"*, so a permanent line makes it always present in any scene with a
+seated player. It stays omissible in a pcless scene, where the line renders
+nothing.
+
+**Non-removable in the layout editor.** `pack.LOCK_IN` stops the *packer* from
+dropping a section; it does not stop a user, because `layout.py` makes
+*"order, presence, and the inspector's label"* overridable. A rule the spec
+calls absolute must not be switch-off-able from a UI.
+
+`Section` gains `removable: bool = True`; `player_character` sets it `False`
+and `layout.apply` refuses to drop it. This is the same distinction that
+module already draws for the packer tier and `except_opener` — *"the same kind
+of thing rather than a taste"* — and the reasoning transfers exactly: a
+control whose only function is to let the model write someone else's character
+is not a preference.
+
+**`turn_scope` stays removable.** Pacing is a taste; someone who wants the old
+rushed shape may have it. Whose words these are is not.
+
+No migration is needed for either: `layout.py`'s upgrade rule already inserts
+a catalog section a stored layout never mentioned *"after its nearest
+preceding catalog neighbour that survived the merge"*, so existing custom
+layouts receive both new sections in the right place.
+
+### 7. Section registration
 
 Two `pack.LOCK_IN` entries in `context.assemble.SECTIONS`, after
 `natural_prose`: `turn_scope` (`except_opener=True`), then `player_character`.
@@ -436,6 +530,15 @@ naming in the spec rather than discovering in a token breakdown.
   in `test_scene_freeze.py` so a later inventory does not "fix" it).
 - **Frontend** — the indicator appears when `wrap_next` is set and after a
   regenerate, and disappears on cancel and on an ordinary send.
+- **The durability invariant** — regenerate still wraps *after* the clear is
+  wired into `delete_from`. This is the named guard for §4's invariant: it is
+  the only test that fails if the clear is moved to a shared removal helper.
+- **Non-removability** — a stored layout that omits `player_character` still
+  renders it; one that omits `turn_scope` does not. Plus the upgrade case: a
+  layout saved before this change receives both sections.
+- **`post_history`** — the PC line renders after the card blocks and before
+  the voice corrective; renders nothing in a pcless scene, leaving
+  `post_history` omissible there.
 
 ### The behavioral grader
 
@@ -461,6 +564,16 @@ be measured. Whether "advance one beat" is obeyed remains a question only
   byte-for-byte.
 - **`templates/README.md`** — section list and section-var list; the
   `player_names` move out of `response_format`.
+- **`verify_templates.py`** — its `gather()` mirror must reproduce `wrap` and
+  `opener` from public store reads, which is what `scenes.read.get_wrap`
+  exists for.
+- **`store/locks.py`** — the new `store/commands.py` needs a classification or
+  `test_lock_domain_guard` fails naming it. It is pure parsing with no state,
+  so `OUTSIDE_DOMAIN` with that as the reason; `UNREVIEWED` is a frozen
+  backlog *"not open for new entries"*. The set/clear mutator lands in
+  `scenes/write.py`, a `DOMAIN_MODULES` module, so it takes
+  `locks.campaign_lock(cid)` — reentrant, therefore free under the route's
+  existing hold — rather than a marker.
 - **Lint baselines** — `make baseline`, committed with the change.
 
 ## Known interactions, accepted
