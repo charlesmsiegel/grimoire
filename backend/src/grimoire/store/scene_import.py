@@ -265,6 +265,11 @@ def _dropped_text(transcript: str) -> list[str]:
     directly under the previous line is read as that speaker's content. Neither
     is an error: the transcript still imports. But the reviewer is told, since
     the alternative is finding out by reading the scene afterwards.
+
+    The second reading is deliberately ambiguous and says so. A line of prose
+    that opens `**Note:** ...` is a real bold label inside a real message, and
+    counting it is a false positive -- but the same shape is what a file that
+    lost its blank lines looks like, and only the reader knows which they have.
     """
     warnings = []
     markers = scenes._markers(transcript)
@@ -273,9 +278,10 @@ def _dropped_text(transcript: str) -> list[str]:
                         "any message and was left out.")
     folded = len(scenes._MARKER.findall(transcript)) - len(markers)
     if folded > 0:
-        warnings.append(f"{folded} speaker label(s) are not separated from the line above "
-                        "by a blank line, so they were read as part of the previous "
-                        "message rather than starting a new one.")
+        warnings.append(f"{folded} bold label(s) sit directly under the line above rather "
+                        "than after a blank line, so they were read as part of that "
+                        "message instead of starting a new one — right if they are part "
+                        "of the text, wrong if the file lost its blank lines.")
     return warnings
 
 
