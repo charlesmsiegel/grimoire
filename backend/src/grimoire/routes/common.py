@@ -721,6 +721,21 @@ def _world_char_version_or_404(wid: str, cid: str, vid: str):
     return root
 
 
+def _card_data(card: dict) -> dict:
+    """A card's `data` object, or `{}` for a card that has no usable one.
+
+    Version PUT accepts ANY dict as a card and writes it unchanged, so `{}` and
+    `{"data": ["speech"]}` are both supported state rather than a corrupt store.
+    Reading `card["data"]` blind is a KeyError, and a truthy non-object reaches
+    the prompt template where `card.get(...)` raises -- either way a 500 before
+    the model is ever called. The templates already render "(none)" for every
+    missing field, which is a far better answer for a draft the user edits
+    anyway.
+    """
+    data = card.get("data")
+    return data if isinstance(data, dict) else {}
+
+
 def _campaign_root_or_404(cid: str):
     try:
         store.campaigns.ensure_campaign_slim(cid)  # lazy slim of pre-overlay campaigns

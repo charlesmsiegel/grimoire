@@ -1,5 +1,5 @@
 import { parseSSEChunk, type ChatEvent, type LocalizeEvent, type ChubGalleryEvent,
-  type RunHandle } from "./stream";
+  type RunHandle, type TaglineBatchEvent } from "./stream";
 import { campaignsChanged, configChanged } from "../appEvents";
 import { encodeSegment } from "../urlSegment";
 // `errorText` and `isOffline` used to live here, next to `ApiError`. They are
@@ -727,6 +727,17 @@ export const api = {
     request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/characters/${cid}/tagline`, { tagline }),
   generateCharacterTagline: (wid: string, cid: string) =>
     request<{ tagline: string }>("POST", `/api/worlds/${wid}/characters/${cid}/tagline/generate`),
+  /** Derive a tagline for every character in the world that has none (#57).
+   *
+   *  A stream rather than a call per character: the roster can be hundreds
+   *  long, each entry costs a provider call, and a progress line the user can
+   *  walk away from is the difference between a feature and a frozen tab.
+   *  Unlike `generateCharacterTagline` this PERSISTS as it goes — see
+   *  `TaglineBatchEvent` — so nothing here needs a save afterwards. */
+  generateWorldTaglines: (wid: string, onEvent: (e: TaglineBatchEvent) => void,
+                          signal?: AbortSignal) =>
+    streamPost<TaglineBatchEvent>(`/api/worlds/${wid}/characters/taglines/generate`,
+                                  undefined, onEvent, signal),
   /** Scope-aware: a campaign-local character (an absorb `new_character`, say) has
    *  no world counterpart, so the campaign route is the only way it can ever be
    *  given an anchor. Campaign scope reads through the overlay and writes

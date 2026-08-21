@@ -8,12 +8,14 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from .common import (
     _bounded_call,
+    _card_data,
     _display_name_or_400,
     _draft_description,
     _llm_http_error,
@@ -40,6 +42,13 @@ from .models import (
 )
 
 router = APIRouter()
+
+
+def _sse(payload: dict) -> str:
+    """One SSE data frame. Local, like `runs.sse` and `streaming._sse`: this
+    module is not allowed to import either (`test_import_guard`), and the four
+    streaming routes here were each spelling the frame out inline."""
+    return f"data: {json.dumps(payload)}\n\n"
 
 
 @router.get("/worlds/{wid}/characters")
@@ -142,7 +151,7 @@ def post_world_character_chub_gallery(wid: str, cid: str, vid: str):
 
     def event_stream():
         for ev in store.characters.download_chub_gallery_stream(root, cid, vid, node):
-            yield f"data: {json.dumps(ev)}\n\n"
+            yield _sse(ev)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -235,7 +244,7 @@ async def post_character_tagline_generate(wid: str, cid: str,
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
     card = store.characters.read_card(root, cid, ch["meta"]["default_version"])
-    messages = store.taglines.build_prompt(card["data"])
+    messages = store.taglines.build_prompt(_card_data(card))
     try:
         with store.usage.meter("tagline") as m:
             text = await _bounded_call(client.complete(messages, conn, m.usage))
@@ -244,6 +253,122 @@ async def post_character_tagline_generate(wid: str, cid: str,
     # Preview only — the caller persists via PUT on Save, so Generate-then-cancel
     # (e.g. the import popup's Skip) leaves nothing written.
     return {"tagline": store.taglines.parse_output(text)}
+
+
+@router.post("/worlds/{wid}/characters/taglines/generate")
+async def post_world_taglines_generate(wid: str, client: LLMClient = Depends(get_llm)):
+    """Derive a tagline for every character in this world that has none (#57).
+
+    The per-character route above is a *preview*: it hands the sentence back and
+    writes nothing, so the import popup's Skip leaves no trace (#59). This one
+    writes as it goes, and the difference is deliberate. A world imported in
+    bulk arrives with a roster of blank taglines, and the thing that made that
+    unfixable was reviewing them one modal at a time; asking for the roster to
+    be derived IS the review, and every sentence it writes stays editable in the
+    character editor afterwards.
+
+    What keeps that safe is the one rule this route never breaks: **it only ever
+    fills a blank**. A character who already has a tagline -- hand-written or
+    generated -- is not a target, and the blank is re-checked immediately before
+    each write, so a sentence saved by hand *during* the run survives it too.
+    `taglines.py` says a hand-written tagline must not silently expire; a batch
+    that overwrote one would be exactly that, arriving all at once.
+
+    That re-check has the reach every other check here has, and no more: it sees
+    what is on disk at the moment it looks, so a save landing between it and the
+    write is still lost. Nothing holds a lock across the two. The window it
+    closes is the minutes this run takes; the one it leaves open is instructions
+    wide, and closing that would need a lock this world-scoped write has never
+    had.
+
+    Sequential, one call at a time -- not because concurrency is unsafe here
+    (`store.usage`'s ledger is append-only and says so), but because it buys
+    less than it costs. A roster's worth of calls issued at once is what a
+    provider's rate limiter exists to refuse, nothing here would throttle them,
+    and "stop at the first failure" is not a rule that means anything with
+    twenty in flight. Every other bulk path in this app works the same way.
+
+    The first provider failure stops the run rather than spending three hundred
+    calls learning the same thing three hundred times. Stopping costs nothing,
+    because a re-run targets whatever is still blank: the work already written
+    is not re-done, and the work that never happened is exactly what comes back.
+    A client that disconnects mid-run gets the same deal -- the generator stops,
+    and what landed stays landed.
+
+    Which is also why this is NOT a detached run (`app.state.runs`). That
+    machinery exists because a scene turn cannot simply be run again -- its
+    output is a transcript nobody can regenerate. This can be run again, and a
+    second pass costs only the calls the first one never made, so resumability
+    here is a property of the work rather than something built around it. The
+    one thing that buys elsewhere and not here: `PUT /config/data-dir` is
+    refused while a *run* is live but not while this streams, so a root change
+    mid-derive leaves the rest of the run writing into the tree it scanned. The
+    same idempotence covers it -- those characters are still blank in the new
+    root, and deriving there fills them.
+    """
+    root = _world_root_or_404(wid)
+    conn = _require_connection()
+    # Off the event loop: `list_characters` stats every version and every image
+    # of every character, which is ~200ms on a large world (see
+    # `list_undescribed_images`). Eagerly, before the response is returned, so
+    # `total` is known up front and a 404/409 is still an ordinary status code
+    # rather than an error frame inside a 200.
+    roster = await run_in_threadpool(store.characters.list_characters, root)
+    targets = [c for c in roster if not c["tagline"]]
+
+    async def event_stream():
+        yield _sse({"total": len(targets)})
+        written = skipped = 0
+        stopped = False
+        frame: dict = {}
+        try:
+            for done, c in enumerate(targets, start=1):
+                frame = {"done": done, "character": c["id"], "name": c["name"]}
+                try:
+                    card = store.characters.read_card(root, c["id"], c["default_version"])
+                except (store.characters.CharacterNotFound, store.characters.VersionNotFound):
+                    # Deleted or re-pointed since the scan. One unusable card is
+                    # not a reason to abandon the rest of the roster.
+                    skipped += 1
+                    yield _sse({**frame, "skipped": "unreadable card"})
+                    continue
+                messages = store.taglines.build_prompt(_card_data(card))
+                try:
+                    with store.usage.meter("tagline") as m:
+                        text = await _bounded_call(client.complete(messages, conn, m.usage))
+                except LLMError as exc:
+                    stopped = True
+                    yield _sse({**frame, "error": {"detail": exc.detail, "kind": exc.kind}})
+                    break
+                tagline = store.taglines.parse_output(text)
+                if not tagline:
+                    skipped += 1
+                    yield _sse({**frame, "skipped": "blank"})
+                    continue
+                if store.taglines.read(root, c["id"]):
+                    # Written since the scan -- by hand, or by another run. Theirs wins.
+                    skipped += 1
+                    yield _sse({**frame, "skipped": "already set"})
+                    continue
+                store.taglines.write(root, c["id"], tagline)
+                written += 1
+                yield _sse({**frame, "tagline": tagline})
+        except Exception as exc:  # noqa: BLE001 — surface a stream error like the localize route
+            # A failed write, or anything else this loop did not anticipate. The
+            # response is already a 200, so the only way to say so is a frame --
+            # and a summary still follows it, because the caller's report is
+            # "what did this run manage", which is a question a crash also has
+            # an answer to. A hang-up is not caught here and must not be: both
+            # `GeneratorExit` and `asyncio.CancelledError` are BaseExceptions,
+            # so a client that stopped the run unwinds instead of being sent an
+            # error frame nobody is reading.
+            stopped = True
+            yield _sse({**frame, "error": {"detail": str(exc), "kind": "tagline"}})
+        summary = {"total": len(targets), "written": written,
+                   "skipped": skipped, "stopped": stopped}
+        yield _sse({"summary": summary})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.get("/worlds/{wid}/characters/{cid}/voice-anchor")
@@ -282,14 +407,7 @@ async def post_character_voice_anchor_generate(wid: str, cid: str,
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
     card = store.characters.read_card(root, cid, ch["meta"]["default_version"])
-    # Version PUT accepts ANY dict as a card and writes it unchanged, so `{}`
-    # and `{"data": ["speech"]}` are both supported state. `.get` alone is not
-    # enough -- a truthy non-object reaches the template, where `card.get(...)`
-    # raises and 500s the request before the LLM is ever called. The template
-    # already renders "(none)" for every missing field, which is a far better
-    # answer -- the draft is a starting point the user edits anyway.
-    data = card.get("data")
-    messages = store.voice_anchors.build_prompt(data if isinstance(data, dict) else {})
+    messages = store.voice_anchors.build_prompt(_card_data(card))
     try:
         with store.usage.meter("voice-anchor") as m:
             text = await _bounded_call(client.complete(messages, conn, m.usage))
@@ -374,10 +492,10 @@ def post_character_localize(wid: str, cid: str, vid: str):
             for ev in store.localize.localize_card(card, root, cid, vid, wid):
                 if ev.get("applied") or ("summary" in ev and ev["summary"].get("localized")):
                     state["changed"] = True
-                yield f"data: {json.dumps(ev)}\n\n"
+                yield _sse(ev)
             save()  # normal completion: a failed save surfaces as an error frame
         except Exception as exc:  # noqa: BLE001 — surface a stream error like the chat routes
-            yield f"data: {json.dumps({'error': {'detail': str(exc), 'kind': 'localize'}})}\n\n"
+            yield _sse({"error": {"detail": str(exc), "kind": "localize"}})
         finally:
             try:
                 save()

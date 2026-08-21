@@ -4,7 +4,13 @@ a hand-written tagline must not silently expire when a card changes.
 
 Stored at <root>/characters/<cid>/tagline.md as the trimmed sentence. Pure file IO +
 prompt/parse only; the LLM call lives in the route layer and the prompt text in
-templates/tagline/.
+templates/tagline/. `dossiers.py` records why the campaign-level half of this pair
+has no hash either (#57) -- the same absence, arrived at by a different argument.
+
+The rule that reason implies is the one the bulk route
+(`POST /worlds/{wid}/characters/taglines/generate`) is built around: a derive across a
+world only ever fills a blank. `tagline.md` has exactly two writers -- the PUT behind a
+person's edit, and that derive -- and only the first one ever replaces a sentence.
 """
 
 from __future__ import annotations

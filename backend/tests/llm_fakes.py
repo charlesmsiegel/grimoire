@@ -155,7 +155,7 @@ class FakeLLM:
     def __init__(self, turns: list[list[str]] | None = None, *,
                  cassette: Cassette | None = None,
                  error: LLMError | None = None, stall: bool = False,
-                 usage: dict | None = None):
+                 fail_after: int = 0, usage: dict | None = None):
         if (turns is None) == (cassette is None):
             raise ValueError("FakeLLM takes exactly one of `turns` or `cassette`")
         if turns is not None and not turns:
@@ -166,6 +166,12 @@ class FakeLLM:
         self.turns = [list(t) for t in (turns or [])]
         self.cassette = cassette
         self.error = error
+        # How many calls answer normally before `error` starts being raised. 0
+        # (the default) fails the first call, which is what every existing
+        # failure test means. A batch route needs the other shape: a run that
+        # got somewhere before the provider died, so the test can say what
+        # happens to the part that already landed.
+        self.fail_after = fail_after
         self.stall = stall
         self.usage = usage
         self.requests: list[dict] = []
@@ -185,9 +191,13 @@ class FakeLLM:
                           "connection": conn.get("name") or conn.get("id")
                           or conn.get("kind") or "?",
                           "provider": conn.get("kind", "openrouter"), "attempts": 1})
-        for delta in self._next(messages, conn):
+        deltas = self._next(messages, conn)   # records the request and counts it
+        for delta in deltas:
             yield delta
-        if self.error is not None:
+        # After the deltas, so an injected failure is still a turn that died
+        # part-way. `calls` counts this one already, so `fail_after=0` (the
+        # default) fails the first call and `fail_after=1` the second.
+        if self.error is not None and self.calls > self.fail_after:
             raise self.error
         # After the deltas and after the error, like the real thing: a provider
         # reports what a call cost on its final frame, so a stream that dies
@@ -279,11 +289,17 @@ class FailingOpenRouter(FakeLLM):
 
     `retry_after` is the window a provider named for itself (#144), which the
     routes turn into the `Retry-After` of a 429 (#213). Defaulted to None, the
-    shape of every failure that carries no such advice."""
+    shape of every failure that carries no such advice.
+
+    `fail_after` answers that many calls normally first, which is what a route
+    making a call PER RECORD needs: a run that got somewhere before the
+    provider died is a different case from one that never started, and only the
+    first can be asked what happened to the part that already landed."""
 
     def __init__(self, deltas=(), kind="network", message="connection reset",
-                 retry_after: float | None = None):
-        super().__init__([list(deltas)], error=LLMError(kind, message, retry_after))
+                 retry_after: float | None = None, fail_after: int = 0):
+        super().__init__([list(deltas)], error=LLMError(kind, message, retry_after),
+                         fail_after=fail_after)
 
 
 class FakeModelsClient:

@@ -13,6 +13,7 @@ import SheetPanel from "./SheetPanel";
 import { ErrorNote } from "./ErrorNote";
 import { TaglinePrompt } from "./TaglinePrompt";
 import { UrlImportPrompt } from "./UrlImportPrompt";
+import { isAbortError, type TaglineBatchEvent } from "../api/stream";
 import { scrollShellToTop } from "../shellScroll";
 
 import { errorText } from "../api/errors";
@@ -255,6 +256,17 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const [taglineBusy, setTaglineBusy] = useState(false);
   const taglineReq = useRef(0);
   const [taglineQueue, setTaglineQueue] = useState<{ cid: string; name: string }[]>([]);
+  // The world's tagline backlog: who the bulk derive would target, and the
+  // count its button offers. World scope only — a tagline is a world-level
+  // property of the character, and a campaign's roster is a view of one.
+  const untagged = worldScope ? chars.filter((c) => !c.tagline) : [];
+  // The world-wide derive (#57): progress while it runs, its report afterwards.
+  const [taglineBatch, setTaglineBatch] =
+    useState<{ done: number; total: number; name: string } | null>(null);
+  const [taglineBatchMsg, setTaglineBatchMsg] = useState<string | null>(null);
+  // The live run's handle, so Stop can reach it. A ref, not state: aborting is
+  // an imperative act on an object the render does not otherwise care about.
+  const taglineAbort = useRef<AbortController | null>(null);
   const [voiceAnchor, setVoiceAnchor] = useState("");
   const [anchorBusy, setAnchorBusy] = useState(false);
   const [anchorSaving, setAnchorSaving] = useState(false);
@@ -912,6 +924,64 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     }
   }
 
+  /** Derive a tagline for every character in the world that has none (#57).
+   *
+   *  The counterpart of `regenerateTagline` for a roster rather than a card,
+   *  and it differs in the one way that matters: the route writes each sentence
+   *  as it lands, so there is nothing to save afterwards and nothing to lose if
+   *  the run dies part-way. That is also why the end of this function only
+   *  reloads the grid — the store is already ahead of it.
+   *
+   *  A provider failure arrives as a frame, not a rejection: the response is a
+   *  200 the moment the first character is attempted, so the run reports what
+   *  it managed and names what stopped it. A rejection here means the request
+   *  never got that far (no key, no world), which is an ordinary error banner.
+   */
+  async function deriveTaglines() {
+    setError(null);
+    setTaglineBatchMsg(null);
+    setTaglineBatch({ done: 0, total: untagged.length, name: "" });
+    const ctl = new AbortController();
+    taglineAbort.current = ctl;
+    // Counted from the frames rather than read off the summary alone: a run the
+    // user stops never sends one, and "you spent forty calls, here is nothing"
+    // is not an acceptable answer to Stop.
+    const run = { written: 0, reasons: {} as Record<string, number>,
+                  failed: null as { detail: string; kind: string } | null,
+                  ended: false };
+    try {
+      await api.generateWorldTaglines(wid, (e: TaglineBatchEvent) => {
+        if (e.total !== undefined) setTaglineBatch({ done: 0, total: e.total, name: "" });
+        if (e.done !== undefined) {
+          const done = e.done, name = e.name ?? "";
+          setTaglineBatch((p) => ({ done, total: p?.total ?? done, name }));
+        }
+        if (e.tagline) run.written += 1;
+        if (e.skipped) run.reasons[e.skipped] = (run.reasons[e.skipped] ?? 0) + 1;
+        if (e.error) run.failed = e.error;
+        if (e.summary) run.ended = true;
+      }, ctl.signal);
+    } catch (err: unknown) {
+      // An abort is the user's own Stop, not a failure — everything already
+      // written is still written, and the report below says how much.
+      if (!isAbortError(err)) { setError(err); return; }
+    } finally {
+      taglineAbort.current = null;
+      setTaglineBatch(null);
+      await reload();
+    }
+    const parts = [`Derived ${run.written} tagline${run.written === 1 ? "" : "s"}`];
+    // Why nothing was written for a character, not just how many: "12 skipped"
+    // and "12 already had one" are different news about the same run.
+    for (const [reason, n] of Object.entries(run.reasons)) parts.push(`${n} ${reason}`);
+    if (run.failed) parts.push(`stopped — ${run.failed.detail}`);
+    // No count of what is left, on purpose: the button above says that from the
+    // reloaded roster, which is the store's answer rather than arithmetic on a
+    // summary that cannot tell a blank reply from a tagline someone else set.
+    if (run.failed || !run.ended) parts.push("run it again to pick up the rest");
+    setTaglineBatchMsg(parts.join(" · "));
+  }
+
   async function saveBirthdate(value: string) {
     if (!detail) return;
     setBirthdate(value);
@@ -1465,6 +1535,27 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
               ▶ Describe images ({undescribed.length})
             </button>
           )}
+          {/* The tagline backlog's counterpart to the image one above. A world
+              imported in bulk arrives with every tagline blank, and one modal
+              per card is how that never gets fixed (#57). */}
+          {worldScope && untagged.length > 0 && (
+            <button className="subtle" disabled={taglineBatch !== null}
+                    onClick={() => void deriveTaglines()}>
+              ▶ Derive taglines ({untagged.length})
+            </button>
+          )}
+          {taglineBatch && (<>
+            <span className="field-hint">
+              Deriving taglines {taglineBatch.done}/{taglineBatch.total}
+              {taglineBatch.name ? ` — ${taglineBatch.name}` : ""}…
+            </span>
+            {/* A roster is a long run and every entry costs a provider call, so
+                the user has to be able to say "enough" without closing the tab.
+                Aborting the fetch disconnects the stream, which is where the
+                route stops; what it has already written stays written. */}
+            <button className="subtle" onClick={() => taglineAbort.current?.abort()}>Stop</button>
+          </>)}
+          {!taglineBatch && taglineBatchMsg && <span className="field-hint">{taglineBatchMsg}</span>}
 
           {bulkLocalize && (
             <span className="field-hint">Localizing card {bulkLocalize.current}/{bulkLocalize.cards}…</span>

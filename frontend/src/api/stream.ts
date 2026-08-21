@@ -62,6 +62,31 @@ export type LocalizeEvent = {
   error?: { detail: string; kind: string };
 };
 
+/** One pass of `POST /worlds/{wid}/characters/taglines/generate` (#57).
+ *
+ *  Unlike the per-character preview, this route WRITES each sentence as it
+ *  lands — so a frame carrying `tagline` is a fact about the store, not a
+ *  draft awaiting a save. `skipped` says why nothing was written for that
+ *  character ("blank" reply, tagline "already set" by someone else mid-run, or
+ *  an "unreadable card"); `error` is the provider failure that stopped the run,
+ *  and no character after it was attempted. */
+export type TaglineBatchSummary = {
+  total: number;
+  written: number;
+  skipped: number;
+  stopped: boolean;
+};
+export type TaglineBatchEvent = {
+  total?: number;
+  done?: number;
+  character?: string;
+  name?: string;
+  tagline?: string;
+  skipped?: string;
+  summary?: TaglineBatchSummary;
+  error?: { detail: string; kind: string };
+};
+
 export type ChubGallerySummary = { attempted: number; stored: number };
 export type ChubGalleryEvent = {
   total?: number;
