@@ -13,7 +13,18 @@ from __future__ import annotations
 # `write`, and `lifecycle` into `serialize`. The order is a reading aid, not a
 # requirement -- binding a submodule imports it on demand whatever the order,
 # so listing them this way just makes the graph readable off the line.
-from . import lifecycle, locking, moment, paths, read, serialize, turns, write  # noqa: F401
+from . import (  # noqa: F401
+    identity,
+    lifecycle,
+    locking,
+    moment,
+    paths,
+    read,
+    serialize,
+    turns,
+    write,
+)
+from .identity import ensure_identity, find_by_identity, scene_identity  # noqa: F401
 from .lifecycle import (  # noqa: F401
     _create_scene,
     _date_hint,

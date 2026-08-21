@@ -29,7 +29,7 @@ from ..campaigns import paths as campaigns_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..llm_connections import get_active as _get_active_connection
 from ..paths import now_iso, safe_id, slugify, uniquify
-from . import locking, paths, serialize
+from . import identity, locking, paths, serialize
 
 
 @locking._serialized
@@ -121,7 +121,13 @@ def _create_scene(cid: str, title: str, pcless: bool, date_hint: str) -> str:
     sid = uniquify(base, lambda c: paths._sid_taken(cid, c))
     active = _get_active_connection()
     meta = {"title": title, "model": active["model"] if active else "",
-             "created": now, "updated": now}
+             "created": now, "updated": now,
+             # Minted here and never reused. A `sid` is neither stable (a rename
+             # moves it) nor unique over time (`_numbering` recycles a deleted
+             # scene's number), so this is the only thing a long-running turn can
+             # compare to know it is still publishing onto the scene it started
+             # on. See `identity.py`.
+             "identity": identity.mint()}
     if pcless:
         meta["pcless"] = "true"
     if date_hint:

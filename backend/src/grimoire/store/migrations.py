@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from . import (
@@ -23,7 +24,11 @@ from .campaigns import paths as campaigns_paths
 from .campaigns import read as campaigns_read
 from .frontmatter import parse_frontmatter
 from .paths import home, safe_id, slugify, uniquify
+from .scenes import identity as scenes_identity
 from .scenes import lifecycle as scenes_lifecycle
+from .scenes import read as scenes_read
+
+_log = logging.getLogger(__name__)
 
 
 def migrate_scene_ids() -> None:
@@ -34,6 +39,44 @@ def migrate_scene_ids() -> None:
     files never match the legacy test, so re-running is a no-op."""
     for c in campaigns_read.list_campaigns():
         _migrate_campaign(c["id"])
+
+
+def backfill_scene_identities() -> None:
+    """Give every pre-feature scene an identity. Idempotent: a scene that has
+    one is skipped, so re-running costs a read per scene.
+
+    Assigning only at creation would be worse than nothing -- an old scene and a
+    replacement that recycled its `sid` would both present the same absent
+    value, so the publish fence would compare None with None, pass, and let the
+    corruption it exists to prevent through while reading as solved.
+    """
+    for c in campaigns_read.list_campaigns():
+        # Per campaign, not per pass. `main._lifespan` catches StoreBusy around
+        # the whole startup step, so letting it out of this loop abandons every
+        # campaign after the contended one -- they would wait for another
+        # startup or a scene-specific lazy repair while the log named only one.
+        # Contention on one campaign says nothing about the next.
+        try:
+            _backfill_campaign(c["id"])
+        except locks.StoreBusy as exc:
+            _log.warning("identity backfill skipped for %s -- %s; it will be "
+                         "retried on the next start", c["id"], exc)
+
+
+def _backfill_campaign(cid: str) -> None:
+    """One campaign's pass, the whole thing under its lock like
+    `_migrate_campaign` -- a second backend serving this campaign must not be
+    read-modify-writing the same scene files underneath us."""
+    with locks.campaign_lock(cid):
+        for meta in scenes_read.list_scenes(cid):
+            # Check with the head-only read before calling `ensure_identity`,
+            # which parses the whole file. This runs at every startup for the
+            # life of the install, and after the first pass every scene already
+            # has one -- so without this precheck the steady state is reading
+            # every transcript in the library, in full, on every boot.
+            # `list_scenes` avoids the body for the same reason.
+            if scenes_identity.scene_identity(cid, meta["id"]) is None:
+                scenes_identity.ensure_identity(cid, meta["id"])
 
 
 def _migrate_campaign(cid: str) -> None:

@@ -54,13 +54,27 @@ def is_pcless(cid: str, sid: str) -> bool:
     return parse_frontmatter_head(p).get("pcless") == "true"
 
 
+def _without_identity(meta: dict) -> dict:
+    """Frontmatter as callers see it, minus the identity token.
+
+    `identity` is a correctness token, not scene content, and it must not reach
+    a payload. `read_scene` feeds the frozen-campaign sweep, which snapshots the
+    whole thing (`sweep.py`) -- and since the token is a fresh `uuid4` per scene,
+    letting it through would make `snapshot.json` differ on every regeneration.
+    That fixture's entire value is being old and stable, so an unchanged
+    snapshot has to stay a real assertion. Read it with `scenes.scene_identity`.
+    """
+    return {k: v for k, v in meta.items() if k != "identity"}
+
+
 def read_scene(cid: str, sid: str) -> dict:
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         raise paths.SceneNotFound(sid)
     players = frozenset(cast.player_names(cid, sid))
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
-    return {"meta": {"id": sid, **meta}, "messages": serialize._parse_messages(body, players)}
+    return {"meta": {"id": sid, **_without_identity(meta)},
+            "messages": serialize._parse_messages(body, players)}
 
 
 def read_scene_window(cid: str, sid: str, limit: int, before: int | None = None) -> dict:
@@ -103,7 +117,7 @@ def read_scene_meta(cid: str, sid: str) -> dict:
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         raise paths.SceneNotFound(sid)
-    return {"id": sid, **parse_frontmatter_head(p)}
+    return {"id": sid, **_without_identity(parse_frontmatter_head(p))}
 
 
 def get_dismissed(cid: str, sid: str) -> list[str]:
