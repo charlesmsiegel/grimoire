@@ -34,12 +34,25 @@ Two scopes, and the difference is not cosmetic:
 
 **What a reclassify does not reach**, each for a reason rather than an oversight:
 
-- **A scene's `location_history`.** It stores bare location ids, with no kind
-  beside them, so a location leaving `locations` cannot be followed there --
-  there is no ref to rewrite, only a record of where the play went. It is left
-  as the play left it. `context.assemble` already renders no setting block for a
-  location id that does not resolve, which is the behaviour a deleted location
-  has always had.
+- **Anything already written into a scene.** Two things live there and neither
+  is a ledger key:
+
+  `location_history` stores bare location ids, with no kind beside them, so a
+  location leaving `locations` cannot be followed there -- there is no ref to
+  rewrite, only a record of where the play went. `context.assemble` already
+  renders no setting block for a location id that does not resolve, which is
+  the behaviour a deleted location has always had.
+
+  A post that carries a picture stores it as `![alt](/api/.../<kind>/<id>/...)`
+  -- `context.art.resolve_handles` expands a handle to markdown at append time,
+  so the kind is baked into the URL. Reclassify the record and that image stops
+  loading in the post it was shown in, exactly as deleting it does.
+
+  Both are left as the play left them. A transcript is the one thing in this
+  store that cannot be regenerated, and the whole of `store/scenes` is
+  serialized to protect it; sweeping every post of every scene to repair a
+  cosmetic link is not a trade this makes. The alt text -- which is the part
+  the model ever sees (`context.story`) -- is unaffected either way.
 - **`owners:` in a campaign's copy, on a WORLD-scope move.** World scope
   rewrites the world's own records; a campaign that materialized its own copy of
   one keeps its own text, and the world's rewritten version reaches it as an
