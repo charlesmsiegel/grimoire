@@ -30,11 +30,20 @@ import uuid
 from collections.abc import Callable
 from typing import Literal, Protocol
 
+import anyio
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from .. import runner
 from ..store import scenes
+
+STREAM_POLL_SECONDS = 0.05
+"""How often a live replay looks for newly appended frames.
+
+Frames arrive from the runner's thread and the handshake events are set-once,
+so there is nothing to await; this is well under the threshold where a reader
+would notice, and an idle run costs one list slice per tick.
+"""
 
 CANCEL_TIMEOUT_SECONDS = 30.0
 """How long the cancel route waits for the abort hook before answering anyway.
@@ -505,8 +514,13 @@ def get_scene_run(cid: str, sid: str, request: Request,
         found = [r for r in found if r.attempt_id == attempt]
     if not found:
         return {"run": None}
-    newest = max(found, key=lambda r: r.started_at)
-    return {"run": _run_payload(newest)}
+    # Reservation order, NOT `max(started_at)`. `for_subject` preserves the
+    # order runs were indexed in, and that order is real; `started_at` is a wall
+    # clock, so a backward correction between two reservations can give the
+    # newer live run a LOWER stamp -- and answering with the older terminal one
+    # makes the client settle and miss the active reply, which is the single
+    # failure this endpoint exists to prevent.
+    return {"run": _run_payload(found[-1])}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/runs/{run_id}")
@@ -547,10 +561,36 @@ def get_run_stream(cid: str, sid: str, run_id: str, request: Request,
     the server's position and `consumed + 1` replays text already rendered.
     """
     run = _resolve(request.app, cid, sid, run_id)
-    frames = run.frames_since(from_)
 
     async def event_stream():
-        for frame in frames:
-            yield f"id: {frame['index']}\n{frame['raw']}"
+        """Replay what is buffered, then TAIL until the run is terminal.
+
+        A one-shot replay would answer the buffer and reach EOF -- so a client
+        attaching to a live run (the ordinary case on reconnect, and always the
+        case when `from` is already at the tail) would disconnect before the
+        run finished and never see the rest of the reply. That is the whole
+        foreground half of this feature.
+
+        Polling rather than a push signal because the frames arrive from a
+        different thread and the handshake events are set-once; the interval is
+        well under a human's perception of "live", and it costs one list slice
+        per tick on an idle run.
+        """
+        cursor = max(from_, 0)
+        while True:
+            # Terminal is read BEFORE draining, and that order is the whole
+            # correctness argument. Any frame appended before the run went
+            # terminal is necessarily visible to the drain that follows this
+            # read -- so the loop cannot exit holding undelivered frames, and
+            # the last words of a reply cannot be truncated. Draining first and
+            # then checking would leave a window between the two, which a
+            # second pass only narrows and no test can pin down.
+            done = run.terminal.is_set() or run.state != "running"
+            for frame in run.frames_since(cursor):
+                cursor = frame["index"] + 1
+                yield f"id: {frame['index']}\n{frame['raw']}"
+            if done:
+                return
+            await anyio.sleep(STREAM_POLL_SECONDS)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
