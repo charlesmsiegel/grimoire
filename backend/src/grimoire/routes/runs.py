@@ -316,8 +316,11 @@ class RunRegistry:
         self._live_seq = 0
         self._delivered_seq = -1
         self._sink_lock = threading.Lock()
-        # Set for the duration of a store-root move. See `hold_still`.
-        self._store_frozen = False
+        # How many store-root moves are in progress. A COUNT, not a flag: two
+        # overlapping moves both entered under a boolean and the first to finish
+        # cleared it while the second was still changing the pointer. See
+        # `hold_still`.
+        self._store_moves = 0
         self._by_key: dict[str, str] = {}
 
     def set_live_sink(self, sink: Callable[[int], None] | None) -> None:
@@ -392,6 +395,7 @@ class RunRegistry:
     def start_or_existing(self, subject: Subject, cls: RunClass, kind: str,
                           attempt_id: str | None, scene_identity: str | None,
                           labels: dict, adopt_terminal: bool = True,
+                          also_precancelled: Subject | None = None,
                           ) -> tuple[Run, bool]:
         """Reserve a run, or hand back the one this attempt already made.
 
@@ -416,7 +420,7 @@ class RunRegistry:
             # this reservation, and then the run's setup writes the player's
             # post into the old tree while its terminal write resolves the
             # campaign against the new one.
-            if self._store_frozen:
+            if self._store_moves:
                 raise StoreMovingError
             if attempt_id is not None:
                 # Attempt ids come from clients, so they are only unique within
@@ -461,7 +465,20 @@ class RunRegistry:
                 # does the route write one -- which nothing will ever read. One
                 # lock for each side makes the two total: either the record is
                 # already here, or the cancel finds this run.
-                if self._precancelled.pop((subject, attempt_id), "miss") is None:
+                # BOTH keys, and review caught why. A Stop that arrives before
+                # the reservation is filed under the subject the CANCEL route
+                # could build -- and when startup backfill skipped a contended
+                # campaign, that scene has no identity yet, so the cancel filed
+                # it under `UNRESOLVED` while `reserve_turn` goes on to MINT one
+                # and looks under that. The recorded Stop was never consumed and
+                # the provider ran for a turn the player had already stopped.
+                #
+                # Reconciled here rather than by minting on the cancel path: a
+                # Stop should not have to write to the scene file to be heard.
+                keys = [(subject, attempt_id)]
+                if also_precancelled is not None:
+                    keys.append((also_precancelled, attempt_id))
+                if any(self._precancelled.pop(k, "miss") is None for k in keys):
                     run.cancel_requested = True
             if key is not None:
                 self._by_key[key] = run.id
@@ -613,19 +630,27 @@ class RunRegistry:
         `start_or_existing` reads the flag inside that same lock. The block is
         short and takes no other lock: `set_data_dir` rewrites a pointer file.
 
-        The flag is cleared in a `finally`, because a move that raises must not
-        leave the app unable to start a turn until it is restarted.
+        The count is decremented in a `finally`, because a move that raises must
+        not leave the app unable to start a turn until it is restarted.
+
+        A COUNT rather than a flag, and review caught the difference: two
+        overlapping moves both got in -- the check only excludes running RUNS,
+        not other movers -- and the first to finish cleared the flag while the
+        second was still changing the pointer. A send reserving in that
+        remainder is the very thing this exists to prevent, and it was reachable
+        exactly when two moves were in flight. Nested holds are still exclusive
+        against reservations for as long as any of them is open.
         """
         with self._lock:
             for run in self._runs.values():
                 if run.state == "running":
                     raise RunInFlightError(run.id)
-            self._store_frozen = True
+            self._store_moves += 1
         try:
             yield
         finally:
             with self._lock:
-                self._store_frozen = False
+                self._store_moves -= 1
 
     def live_for_key(self, key: str | None) -> Run | None:
         """The running holder of an exclusion key, if there is one."""
@@ -1354,7 +1379,12 @@ def reserve_turn(app, cid: str, sid: str, kind: str,
         with store.locks.campaign_lock(cid):
             run, fresh = app.state.runs.start_or_existing(
                 subject, "turn", kind, attempt, identity, labels,
-                adopt_terminal=adopt_terminal)
+                adopt_terminal=adopt_terminal,
+                # The subject a Stop would have built for this scene BEFORE
+                # `ensure_identity` above minted one. Only different when the
+                # startup backfill skipped this campaign, which is exactly when
+                # a scene is still identity-less.
+                also_precancelled=("scene", cid, UNRESOLVED))
     except RunInFlightError as exc:
         raise HTTPException(status_code=409, detail={
             "kind": "run_in_flight", "run_id": exc.run_id,

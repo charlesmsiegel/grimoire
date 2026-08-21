@@ -1422,6 +1422,56 @@ test("Stop on an adopted run keeps polling by run id, not by an empty attempt", 
   expect(api.cancelAttempt).not.toHaveBeenCalled();
 });
 
+test("a run that failed while the tab was hidden says why", async () => {
+  // Discovery returns the run already terminal, so there is nothing to attach
+  // to -- and the rest of recovery only asks whether the post was retained,
+  // refetches and unlocks. The backend's payload carries the structured
+  // failure, and it went unread: the player came back to a scene with no
+  // reply, no banner, and nothing to act on.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(hangingChat());
+  (api.cancelAttempt as any).mockRejectedValue(new Error("offline"));
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await screen.findByText(/may still be generating/i);
+
+  (api.findRun as any).mockResolvedValue({
+    run: { id: "r", attempt_id: "a", state: "failed", next_index: 2,
+           error: { detail: "the provider refused the request", kind: "upstream" } } });
+  (api.attemptState as any).mockResolvedValue({ retained: true });
+  act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+
+  expect(await screen.findByText(/the provider refused the request/i)).toBeInTheDocument();
+});
+
+test("a prompt handed back by recovery survives a reload", async () => {
+  // `settle` deleted the durable entry and moved the only copy of the player's
+  // words into component state -- which is precisely what an Android renderer
+  // restart destroys, the event the whole record exists to survive.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(hangingChat());
+  (api.cancelAttempt as any).mockRejectedValue(new Error("offline"));
+  const first = renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Mara waits." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await screen.findByText(/may still be generating/i);
+
+  // The run ended and its post was rolled back: the words come back.
+  (api.findRun as any).mockResolvedValue({ run: null });
+  (api.attemptState as any).mockResolvedValue({ retained: false });
+  act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("Mara waits."));
+
+  // Now the renderer restarts. Everything in component state is gone.
+  first.unmount();
+  renderCampaign();
+
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("Mara waits."));
+});
+
 test("an adopted run that fails and rolls back hands the words back", async () => {
   // An adopted run fails the same way a watched one does, and rolls the post
   // back the same way -- `post_returned` says so. At that moment the registry

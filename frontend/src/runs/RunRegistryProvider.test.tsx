@@ -280,3 +280,85 @@ describe("what the stored copy is trusted to be", () => {
     expect(registry.pending("c1", "s2")).toBeUndefined();
   });
 });
+
+describe("words that outlive the run that lost them", () => {
+  it("keeps a recovered send durable instead of deleting it", () => {
+    // The run is over and its post was rolled back, so this entry is the ONLY
+    // copy of what the player typed. Settling it moved that copy into component
+    // state -- which is exactly what a reload or an Android renderer restart
+    // destroys, the event the record exists to survive.
+    const first = capture();
+    act(() => first.registry.begin(SEND));
+    act(() => first.registry.recovered("c1", "s1"));
+    first.unmount();
+
+    expect(capture().registry.parked("c1", "s1")).toBe("Mara waits.");
+  });
+
+  it("stops offering a recovered send to recovery", () => {
+    // Resolved as far as the RUN goes. Left visible to `pending`, every
+    // adoption pass would re-ask the server about a turn that is over.
+    const { registry } = capture();
+    act(() => registry.begin(SEND));
+    act(() => registry.recovered("c1", "s1"));
+
+    expect(registry.pending("c1", "s1")).toBeUndefined();
+  });
+
+  it("is replaced by the next send for that scene", () => {
+    // The "resubmitted" case: the player sends those words again, `begin`
+    // overwrites, and the parked copy is gone because it is no longer the only
+    // one -- the post is in the transcript.
+    const { registry } = capture();
+    act(() => registry.begin(SEND));
+    act(() => registry.recovered("c1", "s1"));
+    act(() => registry.begin({ ...SEND, attempt: "a-2", text: "Mara waits again." }));
+
+    expect(registry.parked("c1", "s1")).toBeUndefined();
+    expect(registry.pending("c1", "s1")?.attempt).toBe("a-2");
+  });
+
+  it("settles for real when the post did land", () => {
+    // The counterweight: a post still in the transcript is durable, so keeping
+    // a copy here would hand the player words that are already in the scene.
+    const { registry } = capture();
+    act(() => registry.begin(SEND));
+    act(() => registry.settle("c1", "s1"));
+
+    expect(registry.parked("c1", "s1")).toBeUndefined();
+    expect(registry.pending("c1", "s1")).toBeUndefined();
+  });
+});
+
+describe("two tabs", () => {
+  it("does not erase the other tab's pending send", () => {
+    // Each provider snapshots storage once at construction, so writing this
+    // tab's whole map republishes one that never knew about the other's send.
+    // If that tab then reloads and its run rolls the post back, it has no
+    // durable copy of the words left.
+    const tabA = capture();
+    const tabB = capture();          // built before either has recorded anything
+
+    act(() => tabA.registry.begin({ ...SEND, sid: "s-a", text: "from A" }));
+    act(() => tabB.registry.begin({ ...SEND, sid: "s-b", text: "from B" }));
+    tabA.unmount();
+    tabB.unmount();
+
+    const reloaded = capture();      // as after a reload in either tab
+    expect(reloaded.registry.pending("c1", "s-a")?.text).toBe("from A");
+    expect(reloaded.registry.pending("c1", "s-b")?.text).toBe("from B");
+  });
+
+  it("does not resurrect a send the other tab settled", () => {
+    const tabA = capture();
+    act(() => tabA.registry.begin({ ...SEND, sid: "s-a", text: "from A" }));
+    const tabB = capture();
+    act(() => tabB.registry.begin({ ...SEND, sid: "s-b", text: "from B" }));
+    act(() => tabA.registry.settle("c1", "s-a"));
+    act(() => tabB.registry.begin({ ...SEND, sid: "s-b", text: "from B again" }));
+
+    const reloaded = capture();
+    expect(reloaded.registry.pending("c1", "s-a")).toBeUndefined();
+    expect(reloaded.registry.pending("c1", "s-b")?.text).toBe("from B again");
+  });
+});

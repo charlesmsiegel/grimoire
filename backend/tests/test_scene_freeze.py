@@ -373,3 +373,64 @@ def test_the_refusal_lifts_once_the_move_is_done(client, tmp_path):
         ("scene", cid, identity), "turn", "chat", "a1", identity, {})
 
     assert fresh and run.state == "running"
+
+
+def test_two_overlapping_store_moves_both_keep_the_store_frozen(client, tmp_path):
+    """A boolean let the first move to finish clear it while the second was
+    still changing the pointer, so a send could reserve in the remainder -- the
+    exact window `hold_still` exists to close, reachable precisely when two
+    moves overlap.
+
+    The check only excludes running RUNS, so two movers both get in; what has
+    to hold is that the store stays frozen until the LAST one leaves.
+    """
+    registry = client.app.state.runs
+    with registry.hold_still():
+        with registry.hold_still():
+            pass                      # the inner move finishes first
+        # Still frozen, because the outer one has not.
+        with pytest.raises(runs_mod.StoreMovingError):
+            registry.start_or_existing(("scene", "c", "i"), "turn", "chat",
+                                       "a1", "i", {})
+
+    # And free once the last one leaves.
+    run, fresh = registry.start_or_existing(("scene", "c", "i"), "turn", "chat",
+                                            "a2", "i", {})
+    assert fresh and run.state == "running"
+
+
+def test_a_stop_recorded_before_an_identity_existed_is_still_honoured(client):
+    """The two sides of a precancel have to agree on the key, and for an
+    identity-less scene they did not.
+
+    A campaign whose lock was contended at startup is skipped by the backfill,
+    so its scenes have no identity yet. A Stop arriving before the reservation
+    is filed by the CANCEL route under the `UNRESOLVED` subject -- while
+    `reserve_turn` goes on to MINT an identity and looks for the record under
+    that. The Stop was never consumed and the provider ran for a turn the
+    player had already stopped.
+
+    Reconciled at the reservation, not by minting on the cancel path: pressing
+    Stop should not have to write to the scene file to be heard.
+    """
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    # As the backfill leaves a campaign it could not lock.
+    p = store.scenes.paths._scene_path(cid, sid)
+    p.write_bytes(p.read_bytes().replace(b"identity: ", b"was_identity: "))
+    assert store.scenes.scene_identity(cid, sid) is None, "the premise"
+
+    # Stop, before anything has reserved. The route can only key this by what
+    # it can see, which is no identity at all.
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/attempt-cancel?attempt=a-1")
+    assert r.status_code == 200, r.text
+    assert r.json()["run"] is None, "nothing had reserved yet"
+
+    # The reservation now mints an identity -- a different subject -- and must
+    # still find that Stop.
+    run, fresh = runs_mod.reserve_turn(client.app, cid, sid, "chat", "a-1")
+
+    assert fresh
+    assert run.cancel_requested, "the Stop was recorded and then never consumed"

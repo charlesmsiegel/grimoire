@@ -978,6 +978,25 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     parkedPrompts.current.set(sid, text);
     setParkedTick((n) => n + 1);
   }, [giveBackPrompt]);
+  // Words the registry is still holding for a resolved-but-undurable send, put
+  // back where the player can see them. This is what makes the durable copy
+  // worth having: after a reload or an Android renderer restart, the component
+  // state that `recoverPrompt` wrote into is gone, and this is the pass that
+  // reads them out of storage again.
+  //
+  // Once per (cid, sid): `giveBackPrompt` APPENDS, so running twice for one
+  // scene would hand the player their words back doubled.
+  const reparked = useRef(new Set<string>());
+  useEffect(() => {
+    if (!activeId) return;
+    const once = `${cid}\u0000${activeId}`;
+    if (reparked.current.has(once)) return;
+    const held = registry.parked(cid, activeId);
+    if (held === undefined) return;
+    reparked.current.add(once);
+    recoverPrompt(activeId, held);
+  }, [cid, activeId, registry, recoverPrompt]);
+
   // Set on the way in as well as cleared on the way out. StrictMode runs the
   // setup/cleanup/setup cycle on mount in development, so a cleanup-only effect
   // leaves the flag false for the whole life of the view — and `owns()` below
@@ -2043,7 +2062,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     } catch {
       return;
     }
-    registry.settle(cid, sid);
+    // SETTLED only when the words are safe somewhere else. A post still in the
+    // transcript is durable and this entry has nothing left to protect; a
+    // rolled-back one leaves this as the only copy, and settling it would move
+    // that copy into component state -- which is precisely what a reload or an
+    // Android renderer restart destroys, the event the record exists to
+    // survive. `recovered` keeps it, flagged, so recovery stops asking about a
+    // run that is over while the text stays durable until a later send.
+    if (durable) registry.settle(cid, sid);
+    else registry.recovered(cid, sid);
     // Whatever this component was left holding for that send is resolved now.
     // An unconfirmed Stop deliberately leaves the composer locked and `runRef`
     // set (see `runStream`'s finally), on the grounds that the run may still be
@@ -2056,6 +2083,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     setStreaming("");
     setBusy(false);
     await selectScene(sid).catch(() => -1);
+    // FAILED WHILE WE WERE AWAY, and the server knows why. The rest of recovery
+    // only asks whether the post was retained, refetches and unlocks, so a
+    // provider error, a store failure or a check that would not resolve simply
+    // vanished: the player came back to a scene with no reply, no banner and
+    // nothing to act on.
+    //
+    // AFTER the refresh, not before. `selectScene` clears the banner on a
+    // successful load -- which is right for an ordinary scene open and wrong
+    // here, so this has to be the last word rather than the first.
+    if (handle?.state === "failed" && handle.error) fail(handle.error, true);
     if (!durable) {
       // The post is not in the scene. Either it was rolled back or it never
       // landed -- and both mean the player's words exist only here. Ambiguity
