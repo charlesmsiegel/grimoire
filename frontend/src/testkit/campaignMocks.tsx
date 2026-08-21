@@ -65,6 +65,10 @@ export async function campaignApiMock() {
       cancelReplay: vi.fn(),
       absorbScene: vi.fn(), saveChronicle: vi.fn(), getChronicle: vi.fn(), retryAudit: vi.fn(),
       retryDossiers: vi.fn(),
+      // The durable-review surface (#396). A review outlives the request that
+      // asked for it, so the panel discovers one rather than only creating one.
+      pendingReview: vi.fn(), discardReview: vi.fn(), liveReview: vi.fn(),
+      awaitRun: vi.fn(), getRun: vi.fn(),
       // consumed by the embedded SceneInspector
       getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
       getPins: vi.fn(), setPin: vi.fn(), removePin: vi.fn(),

@@ -28,8 +28,8 @@ vi.mock("../../api/client", async () =>
 vi.mock("../../api/models", () => ({ getModels: vi.fn() }));
 import { api } from "../../api/client";
 import {
-  installCampaignMocks, ONE_SCENE, openScene, PHASES_NONE_CUT, playRoutes,
-  renderCampaign, withPalette,
+  absorbs, installCampaignMocks, ONE_SCENE, openScene, PHASES_NONE_CUT, playRoutes,
+  renderCampaign, reviewResult, withPalette,
 } from "../../testkit/campaignHarness";
 
 beforeEach(installCampaignMocks);
@@ -99,14 +99,14 @@ test("re-absorbing a scene asks for confirmation, then retries with force", asyn
   (api.absorbScene as any)
     .mockRejectedValueOnce(new ApiError(409, "this scene has already been absorbed",
                                         "already_absorbed"))
-    .mockResolvedValueOnce({
+    .mockResolvedValueOnce(reviewResult({
       one_line: "Again.", summary: "s", keywords: [], timeline_events: [],
       cast: [], location: "", date: "", edits: [],
       mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
-    commit_token: "tok",
+      commit_token: "tok",
       dossiers: { status: "skipped", reason: null, proposed: [], failed: [] },
       voice: { status: "skipped", reason: null, checked: [], flagged: [], unjudged: [], failed: [], skipped: [] },
-      phases: PHASES_NONE_CUT });
+      phases: PHASES_NONE_CUT }));
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   renderCampaign();
   await screen.findByText("hi");
@@ -240,7 +240,7 @@ async function reviewIntoConflict() {
   const { ApiError } = await vi.importActual<typeof import("../../api/client")>("../../api/client");
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue(LORE_REVIEW);
+  absorbs(LORE_REVIEW);
   (api.saveChronicle as any).mockRejectedValueOnce(new ApiError(
     409, "some proposed changes no longer match what is stored", "edit_conflicts",
     { conflicts: [PACT_CONFLICT] }));
@@ -254,7 +254,7 @@ async function reviewIntoConflict() {
 test("a row a later scene already answered wears a badge naming it (#78)", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     ...LORE_REVIEW,
     contradictions: [{ id: "lore:the-pact", scene: "002--the-long-quay",
                        label: "The quay burned.", source: "citation" }] });
@@ -272,7 +272,7 @@ test("a row a later scene already answered wears a badge naming it (#78)", async
 test("the ordinary end-of-scene review carries no contradiction badges", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({ ...LORE_REVIEW, contradictions: [] });
+  absorbs({ ...LORE_REVIEW, contradictions: [] });
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
@@ -311,7 +311,7 @@ test("answering one row leaves its duplicate-id sibling unanswered", async () =>
   const twin = { ...LORE_REVIEW.edits[0], after: "Signed at dusk.\n\nSealed at noon." };
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     ...LORE_REVIEW, edits: [LORE_REVIEW.edits[0], twin] });
   (api.saveChronicle as any).mockRejectedValueOnce(new ApiError(
     409, "some proposed changes no longer match what is stored", "edit_conflicts",
@@ -342,7 +342,7 @@ test("a conflict on the later of two same-id rows lands on that row", async () =
   const twin = { ...LORE_REVIEW.edits[0], after: "Signed at dusk.\n\nSealed at noon." };
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     ...LORE_REVIEW, edits: [LORE_REVIEW.edits[0], twin] });
   (api.saveChronicle as any).mockRejectedValueOnce(new ApiError(
     409, "some proposed changes no longer match what is stored", "edit_conflicts",
@@ -415,7 +415,7 @@ test("Keep stored drops the row from the batch entirely", async () => {
 test("a staged dossier is editable and sent with the save", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
@@ -455,7 +455,7 @@ test("rejecting an edit excludes it from the save", async () => {
 test("character_state row renders a multi-section knowledge body in its textarea", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
@@ -481,7 +481,7 @@ test("character_state row renders a multi-section knowledge body in its textarea
 test("plot rows are editable and sent with payload on save", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
@@ -508,7 +508,7 @@ test("plot rows are editable and sent with payload on save", async () => {
 test("new_character proposal renders editable card and provenance fields and saves them", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
@@ -562,7 +562,7 @@ test("new_character proposal renders editable card and provenance fields and sav
 test("new_location shows the setting checkbox only when the scene has no location", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
@@ -587,7 +587,7 @@ test("new_location shows the setting checkbox only when the scene has no locatio
 test("new_location hides the setting checkbox when the scene already has a location", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "Old Dock", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
@@ -608,7 +608,7 @@ test("new_location hides the setting checkbox when the scene already has a locat
 test("relationship rows are read-only and sent with payload on save", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
@@ -639,7 +639,7 @@ const SHEET_EDIT = { id: "sheet:characters:mara:hp", kind: "sheet",
 test("mechanics: warnings render with a ⚠ prefix; a clean run shows the hint instead", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: ["Mara claimed a hit with no roll"], dropped: [] },
     commit_token: "tok",
@@ -654,7 +654,7 @@ test("mechanics: warnings render with a ⚠ prefix; a clean run shows the hint i
   expect(screen.queryByText("mechanics audited clean")).toBeNull();
   unmount();
 
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
@@ -671,7 +671,7 @@ test("mechanics: warnings render with a ⚠ prefix; a clean run shows the hint i
 test("skipped mechanics renders no mechanics section", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "skipped", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
@@ -692,7 +692,7 @@ test("skipped mechanics renders no mechanics section", async () => {
 test("failed mechanics shows a notice with Retry validation; retry replaces sheet rows and clears the notice", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [] },
     commit_token: "tok",
@@ -719,7 +719,7 @@ test("failed mechanics shows a notice with Retry validation; retry replaces shee
 test("a rejected retryAudit surfaces an error and leaves the mechanics notice/rows untouched", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [] },
     commit_token: "tok",
@@ -745,7 +745,7 @@ test("unapproved non-sheet rows survive Retry validation without duplicating", a
   const LORE_EDIT = { id: "lore:old-dock", kind: "lore",
     target: { kind: "lore", id: "old-dock" }, label: "Old Dock — lore",
     field: "body", before: "quiet.", after: "quiet, but watched.", authored: false };
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [] },
     commit_token: "tok",
@@ -776,7 +776,7 @@ test("unapproved non-sheet rows survive Retry validation without duplicating", a
 test("degraded mechanics shows a notice listing dropped findings", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "degraded", reason: null, warnings: [],
       dropped: [{ id: "characters:mara", field: "athletics", reason: "static tamper" }] },
@@ -792,7 +792,7 @@ test("degraded mechanics shows a notice listing dropped findings", async () => {
 });
 
 const absorbWithDossiers = (dossiers: unknown) =>
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "skipped", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
@@ -801,7 +801,7 @@ const absorbWithDossiers = (dossiers: unknown) =>
     phases: PHASES_NONE_CUT, edits: [] });
 
 const absorbWithVoice = (voice: unknown) =>
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "skipped", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
@@ -981,10 +981,10 @@ test("an absorb that lands after a campaign switch is not installed", async () =
   // against a continuation that has not run yet is a test that passes for the
   // wrong reason — the second way an earlier draft of this test proved nothing.
   await act(async () => {
-    land({
+    land(reviewResult({
       one_line: "A's one-liner", summary: "A's summary", keywords: [],
       timeline_events: [], edits: [], commit_token: "t-a",
-    });
+    }, "gen-a"));
   });
 
   // B must not be showing a review it never asked for. Asserted on the panel
@@ -1199,7 +1199,7 @@ test("a dossier retry that lands after its review is gone leaves the new review 
   await waitFor(() => expect(screen.queryByText("Review scene summary")).toBeNull());
   await openScene(/Two/);
   await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s2", { limit: 60 }));
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "second", summary: "s", keywords: [], timeline_events: [], cast: [],
     location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [],
@@ -1547,7 +1547,7 @@ test("clean and skipped dossier phases render no notice", async () => {
 });
 
 const absorbWithPhases = (phases: unknown, over: Record<string, unknown> = {}) =>
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "skipped", reason: null, warnings: [], dropped: [],
                  attempted: false, budget_exhausted: false },
@@ -1873,7 +1873,7 @@ test("a budget-cut dossier phase reads as never prepared, not as a failure", asy
 test("sheet edits render read-only with the note and survive save", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
@@ -1900,7 +1900,7 @@ test("sheet edits render read-only with the note and survive save", async () => 
 test("failures from save render a notice", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
@@ -1929,7 +1929,7 @@ test("failures from save render a notice", async () => {
 test("a voice_drift row is approvable and sent on save (#59)", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue({
+  absorbs({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
@@ -2099,7 +2099,7 @@ const ROUTED_REVIEW = {
 async function openRoutedReview(review: any = ROUTED_REVIEW) {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  (api.absorbScene as any).mockResolvedValue(review);
+  absorbs(review);
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
@@ -2285,7 +2285,7 @@ test("a review replaces the scene rather than stacking on top of it", async () =
     { role: "user", content: "hi" },
     { role: "assistant", content: "She pressed a hand to her side.", speaker: "Grimoire" },
   ] });
-  (api.absorbScene as any).mockResolvedValue(ROUTED_REVIEW);
+  absorbs(ROUTED_REVIEW);
   renderCampaign();
   await screen.findByText("hi");
   // The play view, before: composer, scene actions, the live stream.
@@ -2317,7 +2317,7 @@ test("the transcript sits beside the review, and a row's quote lights its line",
     { role: "user", content: "hi" },
     { role: "assistant", content: "She pressed a hand to her side.", speaker: "Grimoire" },
   ] });
-  (api.absorbScene as any).mockResolvedValue(ROUTED_REVIEW);
+  absorbs(ROUTED_REVIEW);
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
@@ -2340,4 +2340,232 @@ test("an uncited row offers no find, because there is nothing to find", async ()
   ] });
   expect(screen.queryByRole("button", { name: /in transcript/i })).toBeNull();
   expect(screen.getByText(/NO QUOTE · CERTAINTY UNRATED/)).toBeInTheDocument();
+});
+
+// ---- the review is durable now (#396) --------------------------------------
+//
+// It lives on disk between being generated and being saved, so three states
+// are reachable on a plain mount that were not before: one waiting, one the
+// transcript has moved out from under, and one still being generated by a run
+// this browser never started. The last is what a locked phone leaves behind,
+// and is the case the whole feature exists for.
+
+const STORED_REVIEW = {
+  one_line: "They met.", summary: "A stored summary.", keywords: [],
+  timeline_events: [], cast: [], location: "", date: "", edits: [],
+  mechanics: { status: "ok", reason: null, warnings: [], dropped: [],
+               attempted: true, budget_exhausted: false },
+  dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [],
+              attempted: false, budget_exhausted: false },
+  voice: { status: "skipped", reason: null, checked: [], flagged: [], unjudged: [],
+           failed: [], skipped: [], attempted: false, budget_exhausted: false },
+  commit_token: "stored-tok", phases: PHASES_NONE_CUT, contradictions: [] };
+
+function withScene() {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue(
+    { meta: {}, messages: [{ role: "user", content: "hi" }] });
+}
+
+test("a review waiting on disk is adopted without asking for another absorb", async () => {
+  // The reader locked their phone during End scene and came back. The absorb
+  // landed on the server; there is nothing left to generate, and offering to
+  // run it again would spend the whole budget a second time.
+  withScene();
+  (api.pendingReview as any).mockResolvedValue(
+    { review: STORED_REVIEW, generation: "gen-stored", stale: null });
+  renderCampaign();
+
+  expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
+  expect(api.absorbScene).not.toHaveBeenCalled();
+});
+
+test("a stored review does not replace the one already on screen", async () => {
+  // A review deliberately outlives a scene switch -- only Discard or a
+  // successful save closes one -- so adopting on every scene change would
+  // replace the review being read with whatever the reader just clicked on,
+  // throwing away every proposal they had already judged.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Old", model: "", created: "", updated: "" },
+    { id: "s2", title: "Newer", model: "", created: "", updated: "" }]);
+  (api.getScene as any).mockResolvedValue(
+    { meta: {}, messages: [{ role: "user", content: "hi" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Review scene summary");
+
+  // Scene 2 has a review of its own waiting, and it must stay waiting.
+  (api.pendingReview as any).mockResolvedValue(
+    { review: STORED_REVIEW, generation: "gen-stored", stale: null });
+  await openScene(/Newer/);
+
+  // It does not even ASK, which is the assertion worth making: "the panel still
+  // shows A" a microtask after the switch is true whether or not the guard
+  // exists, because the replacement would land later. The request not being
+  // made is a fact about now.
+  await act(async () => { await Promise.resolve(); });
+  expect(api.pendingReview).not.toHaveBeenCalledWith("run", "s2");
+  expect(screen.getByDisplayValue("A met B.")).toBeInTheDocument();
+  expect(screen.queryByDisplayValue("A stored summary.")).toBeNull();
+});
+
+test("a review that lands while the adoption pass is asking does not lose to it",
+     async () => {
+  // The counterweight to the check above, and the reason there are two: the
+  // early return covers a review that is already open, and this covers one that
+  // opens WHILE the request is in flight. Without the recheck after the await,
+  // the answer to a question asked when the panel was empty installs itself
+  // over the review the reader has since taken.
+  withScene();
+  let answer: (v: unknown) => void = () => {};
+  (api.pendingReview as any).mockReturnValue(new Promise((r) => { answer = r; }));
+  renderCampaign();
+  await screen.findByText("hi");
+
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Review scene summary");
+  await act(async () => {
+    answer({ review: STORED_REVIEW, generation: "gen-stored", stale: null });
+    await Promise.resolve();
+  });
+
+  expect(screen.getByDisplayValue("A met B.")).toBeInTheDocument();
+  expect(screen.queryByDisplayValue("A stored summary.")).toBeNull();
+});
+
+test("a review the scene has moved past is reported rather than shown", async () => {
+  // Saving it would mark the scene absorbed with a summary of posts that are
+  // no longer there -- and the commit epoch cannot see play continuing, so
+  // nothing else would catch it.
+  withScene();
+  (api.pendingReview as any).mockResolvedValue(
+    { review: null, generation: "gen-stored",
+      stale: { prepared_posts: 4, current_posts: 7 } });
+  renderCampaign();
+
+  expect(await screen.findByText(/The scene changed after its review was prepared/))
+    .toBeInTheDocument();
+  expect(screen.queryByText("Review scene summary")).toBeNull();
+});
+
+test("a review still being generated is adopted and waited out", async () => {
+  withScene();
+  (api.pendingReview as any)
+    .mockResolvedValueOnce({ review: null, generation: null, stale: null })
+    .mockResolvedValue({ review: STORED_REVIEW, generation: "gen-live", stale: null });
+  (api.liveReview as any).mockResolvedValue(
+    { id: "r9", attempt_id: null, state: "running", next_index: 0,
+      cls: "review", review_generation: "gen-live" });
+  let land: (v: unknown) => void = () => {};
+  (api.awaitRun as any).mockReturnValue(new Promise((r) => { land = r; }));
+  renderCampaign();
+
+  // The panel says so while it waits -- an absorb that is running on the
+  // server and silent in the browser is indistinguishable from one that never
+  // happened, which is what sends the reader to End scene again.
+  expect(await screen.findByRole("button", { name: /Ending…/ })).toBeInTheDocument();
+  await act(async () => { land({ id: "r9", state: "landed" }); });
+  expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
+  expect(api.absorbScene).not.toHaveBeenCalled();
+});
+
+test("a live CHAT turn is not mistaken for a review", async () => {
+  // `liveReview` filters by class, and this is the counterweight that proves
+  // the filter is doing something: without it End scene would sit at "Ending…"
+  // over a scene that is merely generating a reply.
+  withScene();
+  (api.liveReview as any).mockResolvedValue(null);
+  renderCampaign();
+  await screen.findByText("hi");
+  expect(screen.queryByRole("button", { name: /Ending…/ })).toBeNull();
+  expect(api.awaitRun).not.toHaveBeenCalled();
+});
+
+test("Cancel absorb deletes the stored review, by generation", async () => {
+  // Closing the panel is not enough any more: the review is on disk, and the
+  // DELETE is also the only thing that stops a retry still generating for it.
+  withScene();
+  await openAbsorb();
+  fireEvent.click(screen.getByRole("button", { name: /Cancel absorb/ }));
+  await waitFor(() => expect(api.discardReview)
+    .toHaveBeenCalledWith("run", "s1", "gen1"));
+  expect(screen.queryByText("Review scene summary")).toBeNull();
+});
+
+test("End scene deletes the stale review it is replacing, first", async () => {
+  // The reachable version of the ordering that matters: a review is stored for
+  // this scene and the transcript has moved past it, so the panel is closed and
+  // End scene is what the reader reaches for. `review` holds the scene's
+  // exclusion key exactly as a turn does, so anything still running for the old
+  // review would refuse this absorb with `run_in_flight` -- and the DELETE
+  // answers only once the runs it flagged have stopped, which is what makes
+  // the POST safe to issue immediately after it.
+  withScene();
+  (api.pendingReview as any).mockResolvedValue(
+    { review: null, generation: "gen-stale",
+      stale: { prepared_posts: 4, current_posts: 7 } });
+  const order: string[] = [];
+  (api.discardReview as any).mockImplementation(async () => {
+    order.push("discard");
+    return { removed: true, stopped: 1 };
+  });
+  (api.absorbScene as any).mockImplementation(async () => {
+    order.push("absorb");
+    return reviewResult({ ...STORED_REVIEW, commit_token: "second" }, "gen2");
+  });
+  renderCampaign();
+  await screen.findByText(/The scene changed after its review was prepared/);
+
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await waitFor(() => expect(order).toEqual(["discard", "absorb"]));
+  expect(api.discardReview).toHaveBeenCalledWith("run", "s1", "gen-stale");
+  // ...and the notice goes with it, rather than sitting over the review that
+  // has just replaced the one it was about.
+  expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
+  expect(screen.queryByText(/The scene changed after its review was prepared/)).toBeNull();
+});
+
+test("Cancel absorb deletes the stored review, by generation", async () => {
+  // Closing the panel is not enough any more: the review is on disk, and the
+  // DELETE is also the only thing that stops a retry still generating for it.
+  withScene();
+  await openAbsorb();
+  fireEvent.click(screen.getByRole("button", { name: /Cancel absorb/ }));
+  await waitFor(() => expect(api.discardReview)
+    .toHaveBeenCalledWith("run", "s1", "gen1"));
+  expect(screen.queryByText("Review scene summary")).toBeNull();
+});
+
+test("End scene deletes the stale review it is replacing, first", async () => {
+  // The reachable version of the ordering that matters: a review is stored for
+  // this scene and the transcript has moved past it, so the panel is closed and
+  // End scene is what the reader reaches for. `review` holds the scene's
+  // exclusion key exactly as a turn does, so anything still running for the old
+  // review would refuse this absorb with `run_in_flight` -- and the DELETE
+  // answers only once the runs it flagged have stopped, which is what makes
+  // the POST safe to issue immediately after it.
+  withScene();
+  (api.pendingReview as any).mockResolvedValue(
+    { review: null, generation: "gen-stale",
+      stale: { prepared_posts: 4, current_posts: 7 } });
+  const order: string[] = [];
+  (api.discardReview as any).mockImplementation(async () => {
+    order.push("discard");
+    return { removed: true, stopped: 1 };
+  });
+  (api.absorbScene as any).mockImplementation(async () => {
+    order.push("absorb");
+    return reviewResult({ ...STORED_REVIEW, commit_token: "second" }, "gen2");
+  });
+  renderCampaign();
+  await screen.findByText(/The scene changed after its review was prepared/);
+
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await waitFor(() => expect(order).toEqual(["discard", "absorb"]));
+  expect(api.discardReview).toHaveBeenCalledWith("run", "s1", "gen-stale");
+  // ...and the notice goes with it, rather than sitting over the review that
+  // has just replaced the one it was about.
+  expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
+  expect(screen.queryByText(/The scene changed after its review was prepared/)).toBeNull();
 });

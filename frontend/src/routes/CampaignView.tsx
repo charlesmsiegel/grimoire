@@ -361,7 +361,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // the tab came back -- locks the scene the same way. The server refuses
   // these mutations either way (`scene_busy`, keyed on the `turn`/`review`
   // exclusion key); this is the affordance that stops the player being told no.
-  const sceneLocked = !!activeId && activeId === streamingId;
+  // Declared just below `review`, because a live REVIEW holds the scene on
+  // exactly the same terms -- see there.
   const markRenaming = useCallback(
     (active: boolean) => setRenamesInFlight((n) => n + (active ? 1 : -1)), []);
   // Held for the life of one turn so Cancel can reach it. A ref, not state:
@@ -583,6 +584,20 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     dismissError: (from) => setError((e) => (e?.from === from ? null : e)),
     onSaved: () => setCtxKey((n) => n + 1),
   });
+
+  // A live REVIEW holds the scene on exactly the same terms as a turn -- `turn`
+  // and `review` share one exclusion key server-side -- so an absorb in flight
+  // locks these controls too. It did not need saying before #396, because an
+  // absorb could not outlive the request that asked for it and the reader was
+  // sitting in front of it; detached, they can start one, walk away, and come
+  // back to a scene the server is refusing writes for.
+  //
+  // Scoped to the scene the review belongs to. A review outlives a scene
+  // switch, so an absorb still running for scene A must not lock scene B --
+  // the server would allow a turn there, and the reader is entitled to play it.
+  const sceneLocked = !!activeId
+    && (activeId === streamingId
+        || (review.absorbing && (review.absorbSid ?? activeId) === activeId));
   const { absorb } = review;
 
   const [chooserOpen, setChooserOpen] = useState(false);
@@ -2183,6 +2198,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         return;                 // a failed lookup is not an answer; ask again later
       }
       if (live && live.state === "running") {
+        // Only a TURN has frames to read. A `review` run is live work on this
+        // scene too -- an absorb the reader started before the phone locked --
+        // but its value is a payload the review panel fetches, not a stream,
+        // and attaching to its (empty, never-`done`) buffer would leave this
+        // view showing an endless empty reply over a scene that is being
+        // absorbed perfectly well. It is left alone rather than released:
+        // `useSceneReview` adopts it, and releasing here would unlock a
+        // composer the server is refusing anyway.
+        if (live.cls === "review") return;
         await attachToRun(cid, sid, live.id);
         return;
       }
@@ -3864,6 +3888,20 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                   disabled={!activeId || review.absorbing || busy || sceneLocked || rolling}>
             {review.absorbing ? "Ending…" : "End scene"}
           </button>
+          {/* A review that is on disk and unusable (#396). The scene was played
+              on after the absorb landed -- appended, cut, retconned -- and the
+              stored review summarises posts that are no longer there. Saying so
+              here is what lets the reader re-run instead of opening a panel
+              whose save is going to be refused; the notice is dismissible
+              because it is information, not a state to be stuck in. */}
+          {review.staleReview && (
+            <p className="field-hint" role="status">
+              The scene changed after its review was prepared
+              {" "}({review.staleReview.prepared_posts} → {review.staleReview.current_posts}
+              {" "}posts). End the scene again to review what is there now.
+              {" "}<button className="subtle" onClick={review.dismissStale}>Dismiss</button>
+            </p>
+          )}
         </div>
         )}
         {/* The scene rail is gone. It cost 220px of transcript on every turn of every scene
