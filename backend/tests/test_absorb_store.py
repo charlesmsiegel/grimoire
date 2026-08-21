@@ -173,15 +173,15 @@ def test_materialize_evolves_items_groups_and_creatures(monkeypatch, tmp_path):
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "items", "The Ledger", body="A tally of bribes.")
     entities.create_entity(croot, "groups", "Salt Circle", body="A quiet cabal.")
-    entities.create_entity(croot, "creatures", "Fen Drake", body="It hunts the shallows.")
+    entities.create_entity(croot, "creatures", "Marsh Wyrm", body="Sleeps in brine.")
     sid = scenes.create_scene(cid, "S")
     parsed = {"lore_edits": [
         {"id": "the-ledger", "append": "It names the harbourmaster."},
         {"id": "salt-circle", "append": "It has lost the pier."},
-        {"id": "fen-drake", "append": "One was seen inland."}]}
+        {"id": "marsh-wyrm", "append": "One was seen inland."}]}
     edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
     assert set(edits) == {"lore:items/the-ledger", "lore:groups/salt-circle",
-                          "lore:creatures/fen-drake"}
+                          "lore:creatures/marsh-wyrm"}
     ledger = edits["lore:items/the-ledger"]
     assert ledger["kind"] == "lore" and ledger["target"] == {"kind": "items", "id": "the-ledger"}
     assert ledger["before"] == "A tally of bribes."
