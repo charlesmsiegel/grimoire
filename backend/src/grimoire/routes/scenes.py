@@ -2132,11 +2132,11 @@ def _contradictions(cid: str, sid: str, edits: list) -> list[dict]:
 #   destroy the absorb's prose, its staged edits and its commit token.
 
 
-class _ReviewCancelled(Exception):
+class _ReviewCancelledError(Exception):
     """The reviewer dismissed this review while the run was still preparing it."""
 
 
-class _SceneMoved(Exception):
+class _SceneMovedError(Exception):
     """The scene this run captured is no longer the scene at that id."""
 
 
@@ -2207,9 +2207,9 @@ def _under_review_lock(cid: str, sid: str, run, write) -> None:
         try:
             with store.locks.campaign_lock(cid):
                 if run.review_cancelled:
-                    raise _ReviewCancelled
+                    raise _ReviewCancelledError
                 if streaming._scene_moved(cid, sid, run.scene_identity):
-                    raise _SceneMoved
+                    raise _SceneMovedError
                 write()
                 return
         except store.locks.StoreBusy:
@@ -2410,21 +2410,21 @@ async def _persist_review(cid: str, sid: str, run, generation: str, write,
     """
     try:
         await run_in_threadpool(_under_review_lock, cid, sid, run, write)
-    except _ReviewCancelled:
+    except _ReviewCancelledError:
         return {"state": "cancelled", "error": _cancelled_error()}
-    except _SceneMoved:
+    except _SceneMovedError:
         return {"state": "failed", "error": {
             "kind": "scene_gone", "status": 404,
             "detail": "the scene this review was prepared for is gone"}}
-    except store.pending_reviews.NoPendingReview:
+    except store.pending_reviews.NoPendingReviewError:
         return {"state": "failed", "error": {
             "kind": "review_missing", "status": 409,
             "detail": "there is no review to fold this into any more"}}
-    except store.pending_reviews.ReviewReplaced:
+    except store.pending_reviews.ReviewReplacedError:
         return {"state": "failed", "error": {
             "kind": "review_replaced", "status": 409,
             "detail": "a newer review of this scene replaced the one this was retrying"}}
-    except (OSError, store.locks.StoreBusy, store.pending_reviews.CorruptReview) as exc:
+    except (OSError, store.locks.StoreBusy, store.pending_reviews.CorruptReviewError) as exc:
         return {"state": "failed", "error": {
             "kind": "busy", "status": 409,
             "detail": f"the review could not be stored: {exc}"}}
@@ -2453,7 +2453,7 @@ def get_pending_review(cid: str, sid: str, request: Request) -> dict:
         scene = _require_scene(cid, sid)
         try:
             record = store.pending_reviews.read(cid, sid)
-        except store.pending_reviews.CorruptReview as exc:
+        except store.pending_reviews.CorruptReviewError as exc:
             # NOT "no review". A file that will not parse cannot be repaired by
             # asking again, and an empty panel reads as "the absorb never
             # happened" -- inviting the reviewer to spend the whole budget a
@@ -2465,16 +2465,17 @@ def get_pending_review(cid: str, sid: str, request: Request) -> dict:
             raise HTTPException(status_code=409, detail={
                 "kind": "busy",
                 "detail": f"the stored review could not be read: {exc}"}) from exc
-        if record is None:
-            return {"review": None, "generation": None, "stale": None}
-        mark = store.pending_reviews.watermark(scene["messages"])
-        stale = mark != record.get("watermark")
-    if stale:
-        return {"review": None, "generation": record.get("generation"),
-                "stale": {"prepared_posts": (record.get("watermark") or {}).get("count"),
-                          "current_posts": mark["count"]}}
-    return {"review": record["review"], "generation": record.get("generation"),
-            "stale": None}
+        answer: dict = {"review": None, "generation": None, "stale": None}
+        if record is not None:
+            mark = store.pending_reviews.watermark(scene["messages"])
+            prepared = record.get("watermark") or {}
+            answer["generation"] = record.get("generation")
+            if mark == prepared:
+                answer["review"] = record["review"]
+            else:
+                answer["stale"] = {"prepared_posts": prepared.get("count"),
+                                   "current_posts": mark["count"]}
+    return answer
 
 
 @router.delete("/campaigns/{cid}/scenes/{sid}/pending-review")
@@ -2509,7 +2510,7 @@ def _pending_for_retry(cid: str, sid: str) -> dict:
     """
     try:
         record = store.pending_reviews.read(cid, sid)
-    except store.pending_reviews.CorruptReview as exc:
+    except store.pending_reviews.CorruptReviewError as exc:
         raise HTTPException(status_code=409, detail={
             "kind": "review_unreadable",
             "detail": f"the stored review could not be read: {exc}"}) from exc
@@ -2521,6 +2522,20 @@ def _pending_for_retry(cid: str, sid: str) -> dict:
         raise HTTPException(status_code=409, detail={
             "kind": "review_missing",
             "detail": "there is no open review for this scene to retry a step of"})
+    scene = _require_scene(cid, sid)
+    mark = store.pending_reviews.watermark(scene["messages"])
+    if mark != record.get("watermark"):
+        # The same refusal the retrieval and the save give, and it belongs here
+        # too rather than only there: a phase folded into a review the save is
+        # going to refuse anyway is the most expensive way to reach that
+        # answer, and the reviewer would be shown a freshly-retried panel that
+        # cannot be committed.
+        raise HTTPException(status_code=409, detail={
+            "kind": "review_stale",
+            "detail": "the scene changed after this review was prepared — "
+                      "re-run End Scene to review what is there now",
+            "prepared_posts": (record.get("watermark") or {}).get("count"),
+            "current_posts": mark["count"]})
     return record
 
 
@@ -3378,7 +3393,7 @@ def _require_unmoved_review(cid: str, sid: str, token: str) -> None:
     """
     try:
         record = store.pending_reviews.read(cid, sid)
-    except (store.pending_reviews.CorruptReview, OSError):
+    except (store.pending_reviews.CorruptReviewError, OSError):
         # Unreadable is not "no review", but it is also not evidence that this
         # save is stale -- and the epoch check below still stands. Logged
         # rather than refused: a garbled sidecar must not be able to wedge a

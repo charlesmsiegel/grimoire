@@ -41,6 +41,7 @@ superseded.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 
@@ -52,7 +53,7 @@ SCHEMA = 1
 """Stamped into every record. A file without it was written by something else."""
 
 
-class CorruptReview(Exception):
+class CorruptReviewError(Exception):
     """The stored review is there and is not a review.
 
     Distinct from "no review" on purpose. A hand-edited or truncated file
@@ -62,7 +63,7 @@ class CorruptReview(Exception):
     """
 
 
-class NoPendingReview(Exception):
+class NoPendingReviewError(Exception):
     """A retry had nothing to merge into.
 
     `post_audit` and `post_dossiers` return a *part* of a review --
@@ -73,7 +74,7 @@ class NoPendingReview(Exception):
     """
 
 
-class ReviewReplaced(Exception):
+class ReviewReplacedError(Exception):
     """The review this run was retrying is no longer the stored one.
 
     A fresh absorb replaced it while the retry was in flight. Folding the
@@ -113,7 +114,7 @@ def _read_raw(cid: str, sid: str) -> dict | None:
     """The stored record, or ``None`` when there is none.
 
     Raises `OSError` for a file that is there and would not open, and
-    `CorruptReview` for one that opened and is not a review. Neither is
+    `CorruptReviewError` for one that opened and is not a review. Neither is
     softened to "no review", and the reason is the one `attempts._read`
     records: on the *answering* path a soft failure tells the reviewer their
     absorb is gone when it is merely locked by a sync client for a moment, and
@@ -128,10 +129,10 @@ def _read_raw(cid: str, sid: str) -> dict | None:
     try:
         data = json.loads(raw)
     except ValueError as exc:
-        raise CorruptReview(str(exc)) from exc
+        raise CorruptReviewError(str(exc)) from exc
     if not isinstance(data, dict) or data.get("v") != SCHEMA \
             or not isinstance(data.get("review"), dict):
-        raise CorruptReview("not a pending review")
+        raise CorruptReviewError("not a pending review")
     return data
 
 
@@ -144,7 +145,8 @@ def read(cid: str, sid: str) -> dict | None:
     already holding it pays a recursive acquire.
     """
     with locks.campaign_lock(cid):
-        return _read_raw(cid, sid)
+        record = _read_raw(cid, sid)
+    return record
 
 
 def publish(cid: str, sid: str, generation: str, review: dict,
@@ -173,7 +175,7 @@ def merge(cid: str, sid: str, generation: str, fold) -> dict:
     retries answering at once would otherwise each read the pre-merge review
     and the second write would drop the first's phase.
 
-    Raises `NoPendingReview` when there is nothing stored and `ReviewReplaced`
+    Raises `NoPendingReviewError` when there is nothing stored and `ReviewReplacedError`
     when what is stored belongs to a different absorb -- both refusals rather
     than writes, because a retry owns one phase of one review and can say
     nothing about any other.
@@ -181,13 +183,13 @@ def merge(cid: str, sid: str, generation: str, fold) -> dict:
     with locks.campaign_lock(cid):
         record = _read_raw(cid, sid)
         if record is None:
-            raise NoPendingReview(sid)
+            raise NoPendingReviewError(sid)
         if record.get("generation") != generation:
-            raise ReviewReplaced(sid)
-        record = {**record, "review": fold(record["review"])}
+            raise ReviewReplacedError(sid)
+        merged = {**record, "review": fold(record["review"])}
         atomic.write_text(_path(cid, sid),
-                          json.dumps(record, indent=2, ensure_ascii=False) + "\n")
-        return record
+                          json.dumps(merged, indent=2, ensure_ascii=False) + "\n")
+    return merged
 
 
 def clear(cid: str, sid: str, generation: str | None = None) -> bool:
@@ -210,16 +212,15 @@ def clear(cid: str, sid: str, generation: str | None = None) -> bool:
         if generation is not None:
             try:
                 record = _read_raw(cid, sid)
-            except CorruptReview:
+            except CorruptReviewError:
                 return False
             if record is None or record.get("generation") != generation:
                 return False
-        p = _path(cid, sid)
         try:
-            p.unlink()
+            _path(cid, sid).unlink()
         except FileNotFoundError:
             return False
-        return True
+    return True
 
 
 def drop_scene(cid: str, sid: str) -> None:
@@ -280,15 +281,12 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
         for sid in (*mapping, *mapping.values()):
             if sid in published or sid in stranded:
                 continue
-            try:
+            # A source whose bytes are already published, or a destination
+            # whose orphan will not go. Either costs one stale file that
+            # `_sid_taken` keeps out of circulation; raising would abort the
+            # fan-out and strand every other store on an id whose scene is gone.
+            with contextlib.suppress(OSError):
                 _path(cid, sid).unlink(missing_ok=True)
-            except OSError:
-                # A source whose bytes are already published, or a destination
-                # whose orphan will not go. Either costs one stale file that
-                # `_sid_taken` keeps out of circulation; raising would abort the
-                # fan-out and strand every other store on an id whose scene is
-                # gone.
-                pass
 
 
 def _phase_row(rows: list, name: str, block: dict) -> list:
