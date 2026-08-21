@@ -9,6 +9,7 @@ import android.Manifest
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.webkit.URLUtil
@@ -175,10 +176,27 @@ class MainActivity : ComponentActivity() {
 
     /** What `RunNotifier` reads to decide whether a completion notification is
      *  worth posting. A player watching the reply arrive does not need telling
-     *  about it, with a sound, every turn. */
+     *  about it, with a sound, every turn.
+     *
+     *  And the service is re-started here, not only in `onCreate`. After
+     *  `demote()` this is an ordinary background started service again, so on
+     *  API 26+ Android may stop it under background-execution limits while
+     *  leaving the process alive to resume later. `onDestroy` clears
+     *  `ServerRuntime.runs`, which is the ONLY thing that can promote the
+     *  process -- and coming back to an activity that already exists runs this
+     *  and nothing else, so the next turn's live transition was dropped and a
+     *  locked phone could reclaim the process mid-generation. Exactly the
+     *  failure the foreground service exists to prevent, reached by the
+     *  service having been tidied away in between.
+     *
+     *  `startService` is idempotent: an already-running service gets another
+     *  `onStartCommand` and nothing else, and `ensureStarted` is a no-op once
+     *  the server is up. */
     override fun onResume() {
         super.onResume()
         ServerRuntime.foreground = true
+        runCatching { startService(Intent(this, ServerService::class.java)) }
+            .onFailure { Log.w("GrimoireRuns", "could not re-start the server service", it) }
     }
 
     override fun onPause() {

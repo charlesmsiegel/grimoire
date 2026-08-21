@@ -30,6 +30,10 @@ export type Attempt = {
   attempt: string;
   text: string;
   runId: string | null;
+  /** Set once the run is resolved and its post was NOT retained: the words are
+   *  handed back to the composer, and this entry is the only durable copy of
+   *  them until a later send replaces it. See `recovered`. */
+  recovered?: boolean;
 };
 
 export type RunRegistry = {
@@ -46,8 +50,24 @@ export type RunRegistry = {
   attach(cid: string, sid: string, runId: string): void;
   /** The unresolved send for this scene, if there is one. */
   pending(cid: string, sid: string): Attempt | undefined;
-  /** Forget a send whose outcome is established. */
+  /** Forget a send whose outcome is established AND whose words are safe --
+   *  the post is in the transcript, so there is nothing left to lose. */
   settle(cid: string, sid: string): void;
+  /** Mark a send resolved but its words NOT durable anywhere else.
+   *
+   *  The run is over and the post was rolled back, so the only copy of what the
+   *  player typed is this entry. Settling it moved that copy into component
+   *  state -- and component state is exactly what a reload or an Android
+   *  renderer restart destroys, which is the event this whole record exists to
+   *  survive. So the entry stays, flagged, until a later send for the same
+   *  scene replaces it.
+   *
+   *  Flagged rather than left plain because recovery must not keep re-asking
+   *  about it: `pending` skips these, and `parked` is how the words are read
+   *  back. */
+  recovered(cid: string, sid: string): void;
+  /** The words a resolved-but-undurable send is still holding, if any. */
+  parked(cid: string, sid: string): string | undefined;
   /** Follow a scene that has been renamed.
    *
    *  A `sid` carries the slug, so a rename mints a new one -- and an entry
@@ -137,11 +157,26 @@ function readStored(): [string, Attempt][] {
  */
 const KEEP = 50;
 
-function writeStored(map: Map<string, Attempt>): void {
+/** Persist one key's change, MERGED over whatever is stored now.
+ *
+ *  Writing this tab's whole map would erase the other tab's work. Two tabs each
+ *  snapshot storage once at construction, so a `begin` in the second tab
+ *  republishes a map that never knew about the first tab's pending send -- and
+ *  if that first tab then reloads and its run rolls the post back, it has no
+ *  durable copy of the words to hand back.
+ *
+ *  Read-modify-write per mutation instead. It is not atomic across processes --
+ *  nothing in `localStorage` is -- but the window is now one key's worth of
+ *  work rather than the whole session, and in the case that matters the two
+ *  tabs are writing different keys (a scene holds at most one send).
+ */
+function persist(k: string, value: Attempt | null): void {
   try {
+    const merged = new Map(readStored());
+    if (value === null) merged.delete(k);
+    else merged.set(k, value);
     // `Map` preserves insertion order, so the tail is the most recent.
-    const entries = [...map].slice(-KEEP);
-    window.localStorage.setItem(STORE_KEY, JSON.stringify(entries));
+    window.localStorage.setItem(STORE_KEY, JSON.stringify([...merged].slice(-KEEP)));
   } catch {
     /* full, blocked, or unavailable: the in-memory map is still authoritative */
   }
@@ -157,25 +192,52 @@ export function RunRegistryProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<RunRegistry>(() => ({
     begin(a) {
-      pending.current.set(key(a.cid, a.sid), a);
-      writeStored(pending.current);
+      // COPIED, not stored by reference. `attach` and `recovered` mutate the
+      // stored record in place, and holding the caller's own object means
+      // mutating that -- so a caller that reuses or reads back the object it
+      // passed finds a `recovered` flag it never set. A test caught this by
+      // reusing one fixture across two sends and getting the second silently
+      // treated as already recovered.
+      const copy = { ...a };
+      pending.current.set(key(a.cid, a.sid), copy);
+      persist(key(a.cid, a.sid), copy);
     },
     attach(cid, sid, runId) {
       const found = pending.current.get(key(cid, sid));
-      if (found) { found.runId = runId; writeStored(pending.current); }
+      if (found) { found.runId = runId; persist(key(cid, sid), found); }
     },
-    pending(cid, sid) { return pending.current.get(key(cid, sid)); },
+    pending(cid, sid) {
+      const found = pending.current.get(key(cid, sid));
+      // A recovered entry is resolved as far as the RUN goes; returning it
+      // would have every adoption pass re-ask about a turn that is over.
+      return found && !found.recovered ? found : undefined;
+    },
     settle(cid, sid) {
       pending.current.delete(key(cid, sid));
-      writeStored(pending.current);
+      persist(key(cid, sid), null);
+    },
+    recovered(cid, sid) {
+      const found = pending.current.get(key(cid, sid));
+      if (!found) return;
+      found.recovered = true;
+      persist(key(cid, sid), found);
+    },
+    parked(cid, sid) {
+      // Read through STORAGE as well as this tab's map: another tab may have
+      // recovered this scene's send since this provider was built.
+      const k = key(cid, sid);
+      const found = pending.current.get(k) ?? new Map(readStored()).get(k);
+      return found?.recovered ? found.text : undefined;
     },
     rekey(cid, from, to) {
       if (from === to) return;
       const found = pending.current.get(key(cid, from));
       if (!found) return;
       pending.current.delete(key(cid, from));
-      pending.current.set(key(cid, to), { ...found, sid: to });
-      writeStored(pending.current);
+      const moved = { ...found, sid: to };
+      pending.current.set(key(cid, to), moved);
+      persist(key(cid, from), null);
+      persist(key(cid, to), moved);
     },
     consume(runId, index) {
       const seen = consumed.current.get(runId);
@@ -207,6 +269,7 @@ export function useRunRegistry(): RunRegistry {
   const found = useContext(Ctx);
   return useMemo<RunRegistry>(() => found ?? {
     begin() {}, attach() {}, pending() { return undefined; },
-    settle() {}, rekey() {}, consume() {}, resumeFrom() { return 0; },
+    settle() {}, recovered() {}, parked() { return undefined; },
+    rekey() {}, consume() {}, resumeFrom() { return 0; },
   }, [found]);
 }

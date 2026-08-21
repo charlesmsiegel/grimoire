@@ -37,6 +37,10 @@ export type RunHandle = {
   attempt_id: string;
   state: "running" | "landed" | "failed" | "cancelled";
   next_index: number;
+  /** Present on a run the server recorded as failed. The discovery routes carry
+   *  it so a client that was away while the turn died can say WHY, rather than
+   *  silently unlocking a composer over a scene that never got its reply. */
+  error?: { detail: string; kind: string; post_returned?: boolean } | null;
 };
 export type ChatEvent = {
   delta?: string; done?: boolean; proposal?: RollProposalPayload;
