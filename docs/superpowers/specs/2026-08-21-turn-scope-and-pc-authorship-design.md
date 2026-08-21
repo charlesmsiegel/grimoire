@@ -271,8 +271,30 @@ reinforce rather than compete.
   Superseded by §2; two statements of one rule drift apart, and this one is in
   the weaker position. `player_names` leaves this template — update
   `templates/README.md:342`, which `test_docs_guard.py` holds to the code.
-- **Add**, gated on `not wrap` **and `not opener`**: *"The reply does not end
-  on a `**Grimoire:**` block. The last block belongs to a character."*
+- **Add**, gated on `not wrap` **and `not opener`**: *"The last speaker block
+  is a character's, never `**Grimoire:**`."*
+
+  **Scoped to speaker blocks, not to "the reply", and that wording is
+  load-bearing** — three instructions in this corpus describe how a reply
+  ends, and a rule phrased as "the reply does not end on…" collides with two
+  of them:
+
+  - `mechanics_response_format.j2` says a roll fence ends the turn — *"then
+    STOP writing immediately after the closing fence"*. Live on every check.
+  - `transient_tracker.j2` asks for a fenced `state` block and says *"Write
+    nothing after it."* Off by default (`turnstate_depth: 0`), live when on.
+
+  Both legitimately put something after the last character block, and neither
+  is a speaker block — `_persist_reply` strips the tracker before the reply is
+  split into posts, and the fence is machine-readable output. Talking about
+  speaker blocks lets all three rules be true at once.
+
+  **`transient_tracker.j2` still needs one word changed.** It currently opens
+  *"After the last line of narration, and only there"* — an instruction that
+  presumes the reply ends in narration, which is the thing this rule now
+  forbids. It becomes "after the last character block". Small, but leaving it
+  tells the model to place a block after something that is no longer allowed
+  to be there.
 
   The opener gate matters despite `response_format` having no
   `except_opener`. `opener_shape.j2` normally puts character blocks last, so
@@ -533,6 +555,29 @@ turn, undroppable. An **opener** pays only for `player_character` (~230), since
 `turn_scope` carries `except_opener`. Add one short line to `post_history.j2`
 (§6) on every turn with a seated player. That is the price of the feature, and
 it is worth naming here rather than discovering it in a token breakdown.
+
+## Shipping this in two parts
+
+At ~680 lines this is more than one implementation plan should carry, and it
+splits on a clean seam — the fix for the two complaints does not need `/end`
+at all.
+
+**Phase 1 — the prompt.** `turn_scope` (standard + pcless), `player_character`,
+the `response_format` edits, the `transient_tracker` rewording, the
+`post_history` line, `Section.removable` and the layout change, the precedence
+hierarchy, the behavioral grader, and the eval/cassette/snapshot fallout. No
+new routes, no new stored state, no frontend. This alone answers both problems
+this spec opened with, and it is what should go to `writing-plans` first.
+
+**Phase 2 — `/end`.** `store/commands.py`, the `wrap_next` lifecycle and its
+public reader, `turn_scope`'s `wrap` variant, `wrap_note.j2`, the wrap gates in
+`response_format`, `DELETE .../wrap`, and the indicator.
+
+Phase 2 depends on Phase 1 — the `wrap` variant is an override of a section
+that has to exist first — so the order is forced rather than chosen. Splitting
+also means Phase 1's prompt changes reach play (the only place "does it
+actually pace better" gets answered) before the command surface is built on
+top of an unvalidated assumption.
 
 ## Testing
 
