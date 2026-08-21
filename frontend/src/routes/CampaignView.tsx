@@ -346,6 +346,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // the controller is not rendered, and rebuilding the component tree on every
   // send just to store it would remount the transcript mid-stream.
   const abortRef = useRef<AbortController | null>(null);
+  // The detached run the turn in flight belongs to, once its leading frame has
+  // arrived. Stop needs it: closing the connection is no longer the cancel.
+  const runRef = useRef<{ sid: string; id: string } | null>(null);
   // The flush poll can outlive the view by up to its whole budget, and it calls
   // setState on every tick. Nothing else here needs an unmount guard — a stream
   // deliberately runs to completion after a navigation, and its refresh is a
@@ -1864,6 +1867,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         if (e.delta) {
           acc += e.delta;
           setStreaming(acc);
+        } else if (e.run) {
+          // The leading frame, before any delta. This is the only thing that
+          // makes Stop work now that the turn outlives its socket.
+          runRef.current = { sid: id, id: e.run.id };
         } else if (e.error) {
           fail(e.error, !(rerolling && acc.trim().length > 0));
           errored = true;
@@ -1912,6 +1919,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       else if (err instanceof ApiError) refused = true;
     } finally {
       abortRef.current = null;
+      // Beside `abortRef`, and load-bearing for the same reason: left set, a
+      // Stop pressed while the NEXT turn is still connecting would address this
+      // one -- terminal by then, so the route would answer politely and the
+      // live turn would keep generating with nothing to stop it.
+      runRef.current = null;
       setStreaming("");
       setBusy(false);
       // NOT released with `busy`. Review caught that clearing it here unlocks
@@ -2619,11 +2631,25 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   }
 
   // No-op unless a turn is in flight; the abort rejects the fetch, `runStream`
-  // recognises it and unwinds without an error banner. Nothing is sent to the
-  // server — closing the connection IS the cancel, and the backend persists
-  // whatever the model had produced when it sees the disconnect (#95).
+  // recognises it and unwinds without an error banner.
+  //
+  // Closing the connection is NO LONGER the cancel, and that is the whole point
+  // of detaching a turn from its request: a locked phone must not kill the
+  // generation, so neither does an abort. The run has to be told separately, or
+  // Stop would leave the provider generating, spending, and persisting a reply
+  // the player explicitly stopped -- while holding the scene against the next
+  // send. The abort still runs, and first, because that is what unwinds this
+  // view; the cancel is a request the backend answers on its own schedule.
+  //
+  // The handle is read BEFORE the abort: `runStream`'s `finally` clears it.
   function cancelTurn() {
+    const handle = runRef.current;
     abortRef.current?.abort();
+    // Best-effort. A run that landed a moment before the press is already
+    // terminal and the route says so without complaining; anything else here
+    // is a network failure on a request whose whole purpose was to stop work
+    // that is about to stop anyway, and a banner for it would be noise.
+    if (handle) void api.cancelRun(cid, handle.sid, handle.id).catch(() => {});
   }
 
   // A scene already in the chronicle comes back as 409 "already_absorbed" rather

@@ -24,6 +24,7 @@ graph cyclic; ``test_import_guard`` holds it to that.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import threading
 import time
@@ -193,6 +194,13 @@ class Run:
         # exists. A run observable without its events leaves that caller waiting
         # on something nothing will make.
         self.ready, self.terminal = events
+        # Whether a producer was ever handed to the runner. A route reserves
+        # BEFORE its first mutator and can still return early -- a validation
+        # refusal, a setup exception -- and a run left `running` with nothing
+        # driving it is never reaped and makes every later turn on that scene
+        # answer `run_in_flight` forever. `reservation` reads this to tell
+        # "returned without starting" from "started and detached".
+        self.started = False
         self._lock = threading.Lock()
 
     def append_frame(self, frame: str) -> int:
@@ -662,20 +670,100 @@ def sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-def start_detached(app, run: Run, producer) -> None:
+def start_detached(app, run: Run, producer, outcome=None) -> None:
     """Run `producer` for `run`, decoupled from the request that asked for it.
 
     `producer` is a zero-arg callable returning an async iterator of raw SSE
     frames -- the existing stream generators, unchanged. Every frame it yields
     is buffered on the run, which is what makes the work survive the socket:
     the response tails that buffer, and so does a reconnect ten minutes later.
+
+    `outcome` is a zero-arg callable read AFTER the producer is exhausted; it
+    returns what the producer decided about itself, or `None` to let the runner
+    infer success. It exists because "did not raise" is not "succeeded" here:
+    the stream generators handle an upstream `LLMError`, a contended finalize,
+    and a scene that changed underneath them by emitting an error frame and
+    returning NORMALLY. Without this the runner marked every one of those
+    `landed`, so polling -- and the notification that will read it -- reported
+    a delivered reply for a turn that failed. Passed as a callable rather than
+    a value because it is only decided while the producer runs, and as a
+    callable rather than the producer's own object because `runs` may not
+    import `streaming` (`test_import_guard`).
     """
 
     async def pump():
         async for frame in producer():
             run.append_frame(frame)
+        return None if outcome is None else outcome()
 
+    run.started = True
     runner.start(app, run, pump)
+
+
+@contextlib.contextmanager
+def reservation(app, run: Run):
+    """Guarantee that a reserved run reaches a terminal state.
+
+    `reserve_turn` publishes the run before the route does any work, on purpose:
+    that is what makes a second send refusable rather than merely discouraged.
+    The cost is that every path out of the route between the reservation and
+    `start_detached` now owns a live, discoverable run -- and a route that
+    returns or raises in that window used to leave it `running` forever. Such a
+    run is never eligible for reaping (only terminal runs are), so the scene it
+    holds answers `run_in_flight` for the life of the process: one bad request
+    and the scene is unusable until restart.
+
+    Wrapping the window instead of auditing each exit is deliberate. The
+    branches are the thing that changes as routes are migrated, and a guard that
+    has to be remembered at each new `return` is a guard that will be missed.
+    """
+    try:
+        yield
+    except HTTPException as exc:
+        # A refusal the route chose -- 400 for an empty retry, 404 for a scene
+        # that vanished. The client is being told; the run has to agree, or the
+        # composer stays locked against a turn that never began.
+        _release_unstarted(app, run, "failed", {
+            "kind": "refused", "detail": _detail_text(exc)})
+        raise
+    except BaseException as exc:
+        _release_unstarted(app, run, "failed", {
+            "kind": "run_failed", "detail": str(exc) or type(exc).__name__})
+        raise
+    # No exception, no producer: the route answered on its own. Nothing will
+    # ever set this run's events, so anyone already polling or cancelling it
+    # would wait forever.
+    _release_unstarted(app, run, "landed")
+
+
+def _release_unstarted(app, run: Run, state: RunState, error: dict | None = None) -> None:
+    """Terminate `run` -- but ONLY if nothing is driving it.
+
+    The `started` guard is on the failure arms too, not just the clean exit, and
+    that is not defensive noise: `start_detached` succeeds and the route then
+    builds its response, so a throw between the two would otherwise mark a run
+    `failed` and set `terminal` while its producer is still writing frames into
+    it. Every subscriber would stop reading mid-reply and be told the turn
+    failed, while the turn went on to persist perfectly well -- the worst of the
+    outcomes this whole guard exists to prevent, arrived at by the guard itself.
+    """
+    if run.started or run.state != "running":
+        return
+    release_before_start(app, run, state, error)
+
+
+def _detail_text(exc: HTTPException) -> str:
+    """An HTTPException's message as a string, however it was built. Routes
+    raise both plain strings and the dict shape the 409 handler unwraps."""
+    detail = exc.detail
+    if isinstance(detail, dict):
+        return str(detail.get("detail") or detail.get("kind") or detail)
+    return str(detail)
+
+
+def release_before_start(app, run: Run, state: RunState, error: dict | None = None) -> None:
+    """`runner.release_before_start`, re-exported so routes need one import."""
+    runner.release_before_start(app, run, state, error)
 
 
 def lead_frame(run: Run) -> str:
@@ -710,6 +798,15 @@ def reserve_turn(app, cid: str, sid: str, kind: str,
         identity = scenes.ensure_identity(cid, sid)
     except CampaignNotFound as exc:
         raise _gone("campaign_gone", "no such campaign") from exc
+    except OSError as exc:
+        # The scene file could not be read or written just now -- a sync client
+        # mid-write, a sharing violation (`identity.UnreadableError`), a device
+        # that went away. `_require_scene` read this same file a moment ago, so
+        # this is a transient condition and not a bad request; reported as the
+        # store contention it is, which is a kind the client already retries,
+        # rather than as the 500 an unhandled OSError would give it.
+        raise HTTPException(status_code=409, detail={
+            "kind": "busy", "detail": f"the scene could not be read: {exc}"}) from exc
     labels = {"campaign": _campaign_label(cid), "scene": _scene_label(cid, sid)}
     try:
         return app.state.runs.start_or_existing(

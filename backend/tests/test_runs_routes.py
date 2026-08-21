@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 
 import pytest
+from fastapi import HTTPException
 
 import grimoire.store as store
+from grimoire import routes
 from grimoire.routes import runs as runs_mod
+from grimoire.routes import scenes as routes_scenes
+from tests.llm_fakes import FailingOpenRouter
 
 
 @pytest.fixture
@@ -355,3 +359,171 @@ def test_an_oversized_cursor_is_clamped_to_the_tail(client, campaign_scene):
     base = f"/api/campaigns/{cid}/scenes/{sid}/runs/{run.id}/stream"
     assert _events(client.get(f"{base}?from=99").text) == []
     assert len(_events(client.get(f"{base}?from=0").text)) == 2
+
+
+# --- a reservation always reaches a terminal state ---------------------------
+# The run is published before the route does any work, which is what makes a
+# second send refusable. The cost is that every exit between the reservation and
+# `start_detached` owns a live run -- and a run left `running` is never reaped,
+# so the scene it holds refuses every later turn for the life of the process.
+
+def _chat(client, cid, sid, content="Mara steps onto the dock.", **kw):
+    return client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": content}, **kw)
+
+
+@pytest.fixture
+def sending_scene(client, campaign_scene):
+    """`campaign_scene` plus the connection a send needs, so a refusal in these
+    tests is the one the test injected rather than `_require_connection`'s."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    return campaign_scene
+
+
+def _latest(client, cid, sid):
+    """The newest run on this scene, reservation order."""
+    found = client.app.state.runs.for_subject(_subject(cid, sid))
+    return found[-1] if found else None
+
+
+def test_a_send_that_fails_before_starting_frees_the_scene(client, sending_scene,
+                                                           monkeypatch):
+    """A refusal raised after the reservation used to strand it.
+
+    `_chat_stream` claims the turn synchronously and raises `StoreBusy` on a
+    contended campaign, which the global handler turns into a 409 -- the one
+    failure in this window that already had a test, and the one that made the
+    scene permanently unusable. What the player then saw was every subsequent
+    send refused with `run_in_flight` naming a turn that never began.
+    """
+    cid, sid = sending_scene
+
+    def busy(*_a, **_k):
+        raise store.locks.StoreBusy("campaign is busy")
+
+    real = routes_scenes._chat_stream
+    monkeypatch.setattr(routes_scenes, "_chat_stream", busy)
+    assert _chat(client, cid, sid).status_code == 409
+    monkeypatch.setattr(routes_scenes, "_chat_stream", real)
+
+    run = _latest(client, cid, sid)
+    assert run is not None and run.state == "failed", \
+        "the reservation was left running with nothing driving it"
+    assert run.terminal.is_set() and run.ready.is_set(), \
+        "a poll or a cancel on this run would wait forever"
+    # and the scene is usable again, which is what the player actually notices
+    assert _chat(client, cid, sid).status_code == 200
+
+
+def test_a_send_refused_outright_frees_the_scene(client, sending_scene, monkeypatch):
+    """The same window, entered by an `HTTPException` rather than a store
+    error -- a different `except` arm, and the one migrated routes will use
+    most (a retry with nothing to retry, a scene that vanished mid-request)."""
+    cid, sid = sending_scene
+
+    def refuse(*_a, **_k):
+        raise HTTPException(status_code=400, detail="nothing to send")
+
+    real = routes_scenes._chat_stream
+    monkeypatch.setattr(routes_scenes, "_chat_stream", refuse)
+    assert _chat(client, cid, sid).status_code == 400
+    monkeypatch.setattr(routes_scenes, "_chat_stream", real)
+
+    run = _latest(client, cid, sid)
+    assert run is not None and run.state == "failed"
+    assert _chat(client, cid, sid).status_code == 200
+
+
+def test_an_ephemeral_turn_detaches_like_any_other(client, sending_scene):
+    """An empty send means "next NPC round". It stores no player message, but it
+    persists a reply exactly like a normal turn -- so it detaches like one.
+
+    It used to return the producer's response straight to the client instead:
+    the generation still died with the socket, AND its reservation stayed
+    `running` forever, so the scene refused every later turn.
+    """
+    cid, sid = sending_scene
+    body = _chat(client, cid, sid, content="   ").text
+
+    assert "run" in _events(body)[0], "no leading run frame: the turn is unaddressable"
+    run = _latest(client, cid, sid)
+    assert run.state == "landed", f"the ephemeral turn's run was {run.state}"
+    assert _chat(client, cid, sid, content="   ").status_code == 200
+
+
+def test_a_provider_failure_leaves_the_run_failed_not_landed(client, sending_scene):
+    """"Did not raise" is not "succeeded".
+
+    The stream generators handle an upstream `LLMError` by emitting an error
+    frame and returning NORMALLY, so a runner that inferred success from the
+    producer finishing recorded a failed turn as `landed` -- and the poll a
+    reconnecting phone makes, and the notification that will read it, both
+    reported a reply that was never persisted.
+    """
+    cid, sid = sending_scene
+    client.app.dependency_overrides[routes.get_llm] = lambda: FailingOpenRouter(
+        kind="rate_limit", message="slow down")
+
+    body = _chat(client, cid, sid).text
+
+    assert any("error" in e for e in _events(body)), "the client was told nothing"
+    run = _latest(client, cid, sid)
+    assert run.state == "failed", f"a failed turn was recorded {run.state}"
+    assert run.error and run.error["kind"] == "rate_limit"
+
+
+def test_a_throw_after_the_producer_starts_does_not_kill_the_live_run(client, sending_scene,
+                                                                      monkeypatch):
+    """The guard must not become the bug.
+
+    `start_detached` hands the producer to the runner and the route then builds
+    its response. A throw in that window used to be indistinguishable from a
+    throw before the producer existed, so the reservation guard would mark a
+    RUNNING turn `failed` and set `terminal` -- every subscriber stops reading
+    mid-reply and is told the turn failed, while the turn goes on to persist
+    perfectly well. Worse than the leak it was written to prevent, because it
+    corrupts a turn that was working.
+    """
+    cid, sid = sending_scene
+    real_lead = runs_mod.lead_frame
+    boom = {"n": 0}
+
+    def explode_once(run):
+        boom["n"] += 1
+        if boom["n"] == 1:
+            raise RuntimeError("response construction failed")
+        return real_lead(run)
+
+    monkeypatch.setattr(routes_scenes.runs, "lead_frame", explode_once)
+    with pytest.raises(RuntimeError):
+        _chat(client, cid, sid)
+    monkeypatch.setattr(routes_scenes.runs, "lead_frame", real_lead)
+
+    run = _latest(client, cid, sid)
+    assert run.started, "the premise failed: the producer was never handed over"
+    assert run.state != "failed", \
+        "the guard terminated a run whose producer was already driving it"
+    # and the reply the detached producer was in the middle of still lands
+    run.terminal.wait(timeout=10)
+    assert run.state == "landed"
+    assert store.scenes.read_scene(cid, sid)["messages"][-1]["role"] == "assistant"
+
+
+def test_a_scene_that_will_not_open_is_busy_not_a_500(client, sending_scene, monkeypatch):
+    """`reserve_turn` mints the scene's identity before anything else, and that
+    read can fail transiently -- a sync client mid-write, a Windows sharing
+    violation. `_require_scene` read the same file a moment earlier, so this is
+    contention, not a bad request; unhandled it was a 500, which tells the
+    player their library is broken when the right answer is "try again"."""
+    cid, sid = sending_scene
+
+    def blocked(*_a, **_k):
+        raise store.scenes.identity.UnreadableError("held by another process")
+
+    monkeypatch.setattr(store.scenes, "ensure_identity", blocked)
+    monkeypatch.setattr(runs_mod.scenes, "ensure_identity", blocked)
+    r = _chat(client, cid, sid)
+    monkeypatch.undo()
+
+    assert r.status_code == 409, f"a transient read failure answered {r.status_code}"
+    assert r.json()["kind"] == "busy"

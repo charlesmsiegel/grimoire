@@ -289,9 +289,77 @@ def _sse_response(frames: list[str]):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+class StreamOutcome:
+    """What a producer decided about its own run, for the runner to apply.
+
+    A detached producer is driven by `runner._guarded`, which cannot read
+    success off the wire: these generators handle an upstream `LLMError`, a
+    contended finalize, and a scene that changed underneath them by emitting an
+    error frame and returning NORMALLY. "Did not raise" therefore covered both
+    a delivered reply and three ways of failing, and every one of them was
+    recorded `landed` -- so a poll, and the notification that reads it, told the
+    user their turn had landed when nothing was persisted.
+
+    Deliberately a plain box the generator fills rather than a return value:
+    the producer is an async *iterator*, so there is nowhere for it to return
+    to, and its consumer only knows it is finished when iteration stops.
+
+    A producer that never sets anything leaves `result()` at `None`, which the
+    runner reads as "infer from how the task ended". That keeps every
+    unmigrated caller working exactly as before.
+    """
+
+    __slots__ = ("error", "state")
+
+    def __init__(self) -> None:
+        self.state: str | None = None
+        self.error: dict | None = None
+
+    def land(self) -> None:
+        """The turn finished and its writes were attempted -- the ordinary end."""
+        if self.state is None:            # a failure already recorded wins
+            self.state = "landed"
+
+    def fail(self, kind: str, detail: str) -> None:
+        self.state = "failed"
+        self.error = {"kind": kind, "detail": detail}
+
+    def result(self) -> dict | None:
+        if self.state is None:
+            return None
+        return {"state": self.state, "error": self.error}
+
+
+def _scene_moved(cid: str, sid: str, identity: str | None) -> bool:
+    """Whether `sid` no longer names the scene this turn started on.
+
+    Scene ids are recycled -- `serialize._numbering` derives the next number
+    from the files on disk with no stored counter -- so a turn held open while
+    its scene is deleted and a same-titled replacement is created finds a
+    perfectly valid path at exactly the id it captured, and appends its reply to
+    somebody else's scene. `_owns_turn` cannot catch it: the claim is keyed by
+    `sid` too, and the replacement has not claimed anything.
+
+    `None` means the caller asked for no fence and this is always False --
+    deliberately explicit, because comparing two `None`s always matches and
+    that is the failure this exists to prevent. `reserve_turn` mints an identity
+    rather than reading one for the same reason.
+
+    MUST be called under the campaign lock, next to the write it guards: read
+    outside one, it answers a question that was true a moment ago.
+    """
+    if identity is None:
+        return False
+    return store.scenes.scene_identity(cid, sid) != identity
+
+
+_MOVED = ("the scene this turn started on is gone -- its id now names a "
+          "different scene, so the reply was not saved")
+
+
 def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
                   client: LLMClient, finalize, on_error=None, on_abort=None,
-                  task: str = "chat"):
+                  task: str = "chat", outcome: StreamOutcome | None = None):
     """Stream one persisted turn while watching for a ```roll fence.
 
     Deltas are routed through a FenceWatcher, so an opener (even split across
@@ -317,6 +385,8 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
     send. Callers whose abort case wants the ordinary end-of-turn writes pass
     `finalize` itself here and let its frames fall on the floor.
     """
+    box = outcome if outcome is not None else StreamOutcome()
+
     async def event_stream():
         watcher = store.fence.FenceWatcher()
         # Opened before the request goes out, so `duration_ms` measures what the
@@ -388,6 +458,11 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             # is no longer the tail, and a client guessing "failed with no text
             # ⇒ rolled back" would restore a prompt that is still in the
             # transcript and have the player send it twice.
+            # The run FAILED, whatever the socket saw. The frame below is the
+            # foreground half; this is the half a reconnect or a notification
+            # reads, and inferring it from "the generator returned" made a
+            # provider failure indistinguishable from a delivered reply.
+            box.fail(exc.kind, exc.detail)
             yield _sse({"error": {"detail": exc.detail, "kind": exc.kind, **note}})
             return
         except BaseException:
@@ -426,17 +501,23 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             # ordering exists for.
             #
             # What this does NOT claim (review caught the overclaim): that
-            # nothing was persisted. `finalize` is not transactional --
-            # `_chat_stream` writes the proposal under one lock, releases it,
-            # then `_persist_reply` takes it again, so contention on that second
-            # acquisition leaves a proposal on disk with no narration. That is
-            # the *sanctioned* direction: it is exactly the recoverable state
-            # the documented fence crash-window already produces, and the
-            # opposite order is the one that loses data. What is guaranteed is
+            # nothing was persisted. `finalize` is not transactional in
+            # general -- a caller that writes the proposal under one lock,
+            # releases it, and lets `_persist_reply` take it again leaves a
+            # proposal on disk with no narration when that second acquisition
+            # is the contended one. `_continuation_stream` is still shaped that
+            # way; `_chat_stream` is not, since the identity fence put its whole
+            # `finalize` under a single acquisition and the inner takes are
+            # reentrant. Where it can happen it is the *sanctioned* direction:
+            # exactly the recoverable state the documented fence crash-window
+            # already produces, and the opposite order is the one that loses
+            # data. What is guaranteed is
             # that the busy path adds no narration without its proposal, and
             # that the stream ends with a frame saying so instead of dying (#234).
+            box.fail("busy", str(exc))
             yield _sse({"error": {"detail": str(exc), "kind": "busy"}})
             return
+        box.land()
         for frame in frames:
             yield frame
 
@@ -444,7 +525,8 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
 
 
 def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: LLMClient,
-                 undo_user_post=None, restore_removed=None, task: str = "chat"):
+                 undo_user_post=None, restore_removed=None, task: str = "chat",
+                 *, identity: str | None, outcome: StreamOutcome | None):
     """A normal persisted turn. A ```roll fence cuts the stream: the pending
     proposal record is written *before* the pre-fence narration persists, so a
     transcript that ends at a mechanical decision point always has a
@@ -460,7 +542,29 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
     keeps both halves — the post is answered, just not fully — and a cancelled
     turn keeps its post too, since the player asked to stop and will likely
     retry from exactly there.
+
+    `identity` is the scene identity the caller captured when it reserved the
+    run, and it is the publish fence: every terminal write below re-reads the
+    scene's identity under the campaign lock and refuses if it has changed. A
+    detached turn can now outlive the scene it started on by minutes, and ids
+    are recycled -- so without this, a turn held open while its scene is deleted
+    and replaced finds a valid path at the id it captured and appends its reply
+    to a different scene entirely. `None` disables the fence, which is what
+    every caller that has not been migrated still passes.
+
+    `outcome` is the box `_fence_stream` fills with what actually happened, so
+    a detached run is not recorded `landed` on the strength of the generator
+    having returned. See `StreamOutcome`.
+
+    Both are KEYWORD-ONLY AND REQUIRED, with no defaults, and that is the point:
+    the remaining producing routes are migrated one at a time, and a default
+    would let a migration detach a turn while silently keeping the unfenced,
+    always-`landed` behaviour -- which is corruption and a false success report
+    respectively, neither of which announces itself. Passing `identity=None,
+    outcome=None` is the old behaviour and stays available; it just has to be
+    said out loud.
     """
+    box = outcome if outcome is not None else StreamOutcome()
     # What the abort path checks before writing (see `on_abort`): this turn's
     # claim on the scene, and how long the transcript was when it began. Both,
     # because they catch different intruders — the token catches another turn,
@@ -480,7 +584,27 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         owned_tail = len(store.scenes.read_scene(cid, sid)["messages"])
 
     def finalize(watcher) -> list[str]:
-        frames: list[str] = []
+        # The WHOLE of it under one acquisition, which the identity fence
+        # requires: read outside the lock that guards the writes, the check
+        # answers a question that was true a moment ago. The lock is reentrant,
+        # so the nested takes below (and `_persist_reply`'s own) cost nothing.
+        with store.locks.campaign_lock(cid):
+            if _scene_moved(cid, sid, identity):
+                # The id still resolves -- to somebody else's scene. Writing
+                # here is the corruption the fence exists for, and it is not a
+                # case the client can be expected to sort out afterwards, so it
+                # is reported as a failure rather than a quiet no-op.
+                box.fail("scene_replaced", _MOVED)
+                frames = [_sse({"error": {"kind": "scene_replaced", "detail": _MOVED}})]
+            else:
+                frames = _finalize_locked(watcher, [])
+        # Outside the `with`, so this function has one exit mypy can see: a
+        # context manager whose `__exit__` is typed `-> bool` may suppress, so a
+        # `return` inside every branch of the block still reads as a possible
+        # fall-through.
+        return frames
+
+    def _finalize_locked(watcher, frames: list[str]) -> list[str]:
         if watcher.complete or watcher.truncated:
             with store.locks.campaign_lock(cid):
                 payload = _make_proposal(cid, sid, watcher)
@@ -526,8 +650,6 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         contention would be a new way to lose text, decided as a rider on a fix
         for a different problem. Deleting is what needs the discipline.
         """
-        if _persist_reply(cid, sid, watcher.narration):
-            return {}                # a normal turn keeps its partial reply
         # Under the lock, for the reason `on_abort` is: the check and the
         # rollback have to be one step. Review caught this path checking
         # ownership and then acting on it outside any lock, so a turn claiming
@@ -536,7 +658,18 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         # a few lines later. Both writers take the lock now (`_claim_turn` since
         # the round before this one), so the window is closed rather than
         # narrowed.
+        # The partial persist moved inside this same acquisition when the
+        # identity fence was added: it is a terminal write like the others and
+        # must not straddle the check that guards it.
         with store.locks.campaign_lock(cid):
+            if _scene_moved(cid, sid, identity):
+                # Neither half applies to a scene that is not this scene: the
+                # partial belongs to a transcript that is gone, and the post to
+                # roll back went with it. `_fence_stream` has already recorded
+                # the provider failure that brought us here.
+                return {}
+            if _persist_reply(cid, sid, watcher.narration):
+                return {}            # a normal turn keeps its partial reply
             if not _owns_turn(cid, sid, turn_token):
                 return {}
             if restore_removed is not None:
@@ -577,6 +710,12 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         The lock is reentrant, so `finalize` re-taking it is free.
         """
         with store.locks.campaign_lock(cid):
+            if _scene_moved(cid, sid, identity):
+                # Ahead of the claim check, because it is the wider question:
+                # `_turn_tokens` is keyed by `sid`, so a replacement scene that
+                # recycled the id has not claimed anything and this turn still
+                # reads as the owner of a scene it has never seen.
+                return []
             if not _owns_turn(cid, sid, turn_token):
                 return []
             # The restore is attempted BEFORE the length check, and review caught
@@ -636,7 +775,7 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
             return finalize(watcher)
 
     return _fence_stream(cid, sid, messages, conn, client, finalize, on_error, on_abort,
-                         task=task)
+                         task=task, outcome=box)
 
 
 def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
