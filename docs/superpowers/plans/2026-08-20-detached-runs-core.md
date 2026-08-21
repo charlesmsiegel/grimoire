@@ -224,11 +224,20 @@ stored counter, so deleting the highest scene frees its number).
 - Modify: `backend/src/grimoire/store/migrations.py` (backfill pass)
 - Modify: `backend/src/grimoire/main.py:145` (register the pass)
 - Test: `backend/tests/test_scene_identity.py`
-- Regenerate: `backend/tests/fixtures/frozen_campaign/snapshot.json`
 
 **Interfaces:**
-- Produces: `store.scenes.scene_identity(cid, sid) -> str` — an opaque 32-hex
+- Produces: `store.scenes.scene_identity(cid, sid) -> str | None` — an opaque 32-hex
   value, stable for the life of a scene record.
+
+  **`None` is a real return, not an error.** A campaign whose lock was held at
+  startup is skipped by the backfill, so its scenes stay identity-less until
+  something calls `ensure_identity` — and that legacy scene is exactly the one
+  the lazy path exists for. Typed `-> str`, an implementation naturally indexes
+  the frontmatter and raises there instead. A producing route that needs a
+  value calls `ensure_identity` and captures the non-optional result; a caller
+  that only wants to compare uses this and treats `None` as "no answer", never
+  as a token (`None == None` always matches, which is the corruption this
+  exists to stop).
 
   **Deliberately NOT exposed through `read_scene`.** That function returns
   `{"meta": {"id": sid, **frontmatter}, "messages": [...]}` (`read.py:63`), so
@@ -428,7 +437,11 @@ Nothing here needs it to.
 - [ ] **Step 8: Commit**
 
 ```bash
-make check-py check-lint check-mypy && make baseline
+# `make baseline` FIRST, then the gates. The ratcheted checks exit nonzero when
+# the recorded count is stale -- including when it is stale because the work
+# REMOVED a finding -- so `check-lint && make baseline` can never reach the
+# remedy for the failure it just hit. Regenerate, then verify, then commit.
+make check-py && make baseline && make check-lint check-mypy
 git add backend/src/grimoire/store/scenes backend/src/grimoire/store/migrations.py \
         backend/src/grimoire/main.py backend/tests/test_scene_identity.py lint-baselines
 git commit -m "Give every scene an immutable identity, and backfill it
@@ -713,6 +726,24 @@ cross-suite import couples two files for nothing. Remember `import pytest` and
   invariant: **these events are created and mutated only on the loop.** Do not
   "simplify" the construction back to a bare call because it passes locally;
   leave the reason in a comment.
+
+  **But the events must exist before the run is published, and Task 2's
+  registry has no portal to build them with.** `start_or_existing` is pure data
+  by design, and `runner.start` is only called *after* it returns — so "build
+  them through the portal" as written creates them too late, leaving exactly
+  the pre-start window this plan already documents: a cancel or a discovery
+  arrives, finds a real run, and waits on events nothing has made yet.
+
+  Resolve it by injection, not by moving the portal into the registry: the
+  registry takes an **event factory** at install time — `install_registry(app)`
+  stores a default that constructs directly, and `runner.install(app, tg)`
+  replaces it with one that goes through the portal. `start_or_existing` calls
+  the factory while building the record, so a published run always has both
+  events. A registry used without a lifespan (the plain `client` fixture) still
+  works, because the default factory needs no loop; a run that will actually
+  execute always gets the portal-backed one. Test that a run is never
+  observable without its events, by reading one straight out of the registry
+  the moment `start_or_existing` returns.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1986,9 +2017,39 @@ correlation survives the reap: when the post is appended, the attempt is
 recorded durably alongside it — `store.commits` is the existing shape for this
 (`reserve`/`lookup`, already used for chronicle idempotency at
 `scenes.py:2629`), and it survives both the reap window and a restart, which
-in-memory run state does not. Recovery then asks a question with a definite
-answer — *was attempt X ever appended to this scene?* — instead of guessing
-from prose.
+in-memory run state does not.
+
+**Record whether the post is RETAINED, not whether it was ever appended.** The
+weaker question has a wrong answer in the case this whole section is about. The
+chat path appends the player's post *first*, so "was attempt X ever appended"
+goes true immediately — and then `_chat_stream.on_error` can take that post
+back off the transcript and report `post_returned: true`. A recovery reading
+the weaker marker calls the attempt durable, settles, and discards the
+provider's held text: the precise loss this section exists to prevent, produced
+by the mechanism written to prevent it.
+
+So the rollback has to clear or invalidate the record as part of itself, in the
+same lock hold that removes the post — otherwise there is a window where the
+transcript no longer has the post but the marker still says it does. Recovery
+then asks the question that is actually decisive: *is attempt X's post still in
+this scene?*
+
+Test the rollback path specifically: a failed turn with `post_returned: true`,
+reaped, then recovered — the composer must hold the text again.
+
+- [ ] **The attempt lookup needs a route, and Task 4's inventory does not have
+  one.** Every run route there reads the in-memory registry, which by
+  definition no longer has a reaped run; and Task 6 lists frontend files only.
+  As written the client cannot ask the durable question at all, so neither
+  reap-window recovery test can be implemented.
+
+  Add `GET /api/campaigns/{cid}/scenes/{sid}/attempts/{attempt}` to Task 4,
+  reading `store.commits` rather than the registry, and returning whether that
+  attempt's post is still retained — plus the outcome if one was recorded. It is
+  scene-scoped like every other route here, so the same subject check applies:
+  an attempt from another scene answers "not found", never another scene's
+  state. Wire the provider to it in Task 6 and test both the landed and the
+  returned-post cases end to end.
 
 **And where the answer is not definite, keep the text.** Any outcome other than
 a clear "this attempt is durable" — no record, an unreadable one, a scene that
@@ -2018,6 +2079,30 @@ terminal discovery; the cold-mount case is then merely redundant, which is
 cheap, rather than the only case that works. Test a hidden-then-visible
 transition across a run that completed while hidden, and assert the new
 message is on screen.
+
+- [ ] **Step 5b: Discover by attempt the moment a send's stream fails**
+
+Mount and `visibilitychange` are the only adoption triggers named so far, and
+neither fires in a case that needs one: the tab stays **mounted and visible**
+while the connection resets before the leading run frame. The server accepted
+the POST and a run is generating; the client holds the attempt id and never
+asks about it.
+
+Both ways that resolves are wrong. The existing pre-response failure handling
+restores the prompt and re-enables the composer — so the player re-sends and
+the turn lands twice, against a run that was always fine. Or the provider stays
+locked on an attempt that never resolves, and the scene is stuck until a
+remount.
+
+So a stream failure on a producing request is not a failure signal on its own:
+before concluding the send failed, **ask `GET .../run?attempt=`**. A run means
+attach to it; `run_gone` plus a retained post means it landed; neither means the
+send genuinely did not take, and only then does the text go back in the
+composer.
+
+Test it with no remount and no visibility transition — kill the response
+mid-flight on a mounted, visible scene and assert the composer stays locked and
+re-attaches.
 
 - [ ] **Step 6b: Rewire Stop to the cancel endpoint**
 
@@ -2136,7 +2221,11 @@ semantic recall. A phone locking during it would find the service unpromoted
 and the process reclaimable before the detached runner ever began — losing the
 turn in precisely the window this feature exists to protect. The matching
 demotion belongs on the pre-start release path too. Test with a deliberately
-held setup.
+held setup — a **backend** test, in `test_runs_registry.py`, and staged by this
+task's commit. `make check-apk` builds the frontend and the APK and runs no
+pytest at all, so a task whose only checkpoint is that target will happily
+accept an implementation that promotes after the runner starts, which loses a
+run when the phone locks during setup.
 
 **Which means `onRunsChanged` cannot be emitted from `runner.py`**, and the
 file list above says so. The runner is not entered until after the handler's
@@ -2230,7 +2319,8 @@ rather than implying otherwise.
 
 ```bash
 make check-apk
-git add android backend/src/grimoire/runner.py backend/src/grimoire/routes/runs.py
+git add android backend/src/grimoire/runner.py backend/src/grimoire/routes/runs.py \
+        backend/tests/test_runs_registry.py backend/tests/test_runner.py
 git commit -m "Keep the process alive while a run is live, and say when it lands
 
 Channels are registered before anything posts: on 8.0+ an unregistered
