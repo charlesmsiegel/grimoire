@@ -1878,8 +1878,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     try {
       await api.attachRun(cid, sid, runId, registry.resumeFrom(runId), (e) => {
         if (e.delta) { acc += e.delta; setStreaming(acc); }
-        else if (e.error) { fail(e.error, true); finished = true; }
-        else if (e.proposal) {
+        else if (e.error) {
+          fail(e.error, true);
+          finished = true;
+          // An ADOPTED run can fail the same way a watched one does, and it
+          // rolls the post back the same way -- `post_returned` says so. The
+          // registry is holding the only remaining copy of those words at that
+          // point (the transcript no longer has them, and the component that
+          // typed them may be long gone), and the `settle` below is about to
+          // drop it. Recovered first, so the settle retires an entry whose
+          // text has already been handed back.
+          if (e.error.post_returned) {
+            const held = registry.pending(cid, sid)?.text;
+            if (held) recoverPrompt(sid, held);
+          }
+        } else if (e.proposal) {
           setProposalNow({ id: e.proposal.id, status: "pending",
                            payload: e.proposal, resolution: null });
         } else if (e.done) { finished = true; }
@@ -1915,7 +1928,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // here a run is just a run -- `attachRun` carries no kind, and inventing
     // one to avoid a re-mount that costs one GET would be the wrong trade.
     setReplayEpoch((n) => n + 1);
-  }, [registry]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [registry, recoverPrompt]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const adoptPendingRun = useCallback(async (cid: string, sid: string) => {
     const held = registry.pending(cid, sid);

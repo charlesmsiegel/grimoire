@@ -100,7 +100,10 @@ def _drop_identity_line(raw: bytes) -> bytes:
     beginning with ``identity``, and rewriting the body is exactly what this
     module goes to lengths to avoid.
     """
-    for eol in (b"\r\n", b"\n"):
+    # Same three styles as `_splice`, and they must agree: a header this one
+    # cannot see is one `_splice` still adds a replacement line to, leaving the
+    # file with TWO `identity` keys.
+    for eol in (b"\r\n", b"\n", b"\r"):
         head = b"---" + eol
         if not raw.startswith(head):
             continue
@@ -113,17 +116,24 @@ def _drop_identity_line(raw: bytes) -> bytes:
         # the parser lets the later one win today, so it reads as fixed, and
         # deleting or reordering that line resurrects the token this path
         # exists to retire.
-        end = raw.find(b"\n---", len(head) - 1)
-        if end == -1:
+        at = _close_fence(raw, len(head) - len(eol))
+        if at == -1:
             return raw
-        at = end + 1                       # the start of the closing fence
         block, rest = raw[len(head):at], raw[at:]
-        # Split on the bare newline for the same reason, and strip any carriage
-        # return the CRLF case leaves on each line before comparing the key.
-        kept = [ln for ln in block.split(b"\n")
+        # Split on every style rather than on the opener's, since the lines
+        # between the fences need not all share one either. Rejoined with the
+        # opener's, which is what the surrounding file uses; a mixed header is
+        # already damaged, and normalizing the few lines we rewrite is the
+        # smallest repair that leaves one readable key.
+        kept = [ln for ln in _split_lines(block)
                 if ln.split(b":", 1)[0].strip() != b"identity"]
-        return head + b"\n".join(kept) + rest
+        return head + eol.join(kept) + rest
     return raw
+
+
+def _split_lines(block: bytes) -> list[bytes]:
+    """``block`` split on CRLF, LF or bare CR, keeping empty lines."""
+    return block.replace(b"\r\n", b"\n").replace(b"\r", b"\n").split(b"\n")
 
 
 def _splice(raw: bytes, line: bytes) -> bytes | None:
@@ -144,7 +154,16 @@ def _splice(raw: bytes, line: bytes) -> bytes | None:
     boot. A transcript is the one artifact here that cannot be regenerated, so
     the migration edits the header surgically instead.
     """
-    for eol in (b"\r\n", b"\n"):
+    # Bare `\r` is here for the same reason the closing-fence search below is
+    # style-independent: `Path.read_text` performs universal-newline
+    # translation, so `parse_frontmatter_head` accepts a CR-only file and the
+    # app shows perfectly good frontmatter -- while a byte scan that knows only
+    # CRLF and LF finds no header, returns None, and makes the caller prepend a
+    # SECOND one. That demotes the scene's real title and model into the
+    # transcript, on a migration that touches every file in the library
+    # unprompted. CRLF must stay ahead of the bare forms, or `---\r\n` matches
+    # `---\r` and the trailing `\n` is treated as body.
+    for eol in (b"\r\n", b"\n", b"\r"):
         head = b"---" + eol
         if not raw.startswith(head):
             continue
@@ -154,14 +173,28 @@ def _splice(raw: bytes, line: bytes) -> bytes | None:
         # app sees perfectly good frontmatter while a style-matched byte search
         # finds no closing fence at all. Returning None there makes the caller
         # prepend a SECOND header, demoting the scene's real title and model
-        # into the transcript. Searching for `\n---` matches both, since a CRLF
-        # fence contains it.
-        end = raw.find(b"\n---", len(head) - 1)
+        # into the transcript.
+        end = _close_fence(raw, len(head) - len(eol))
         if end == -1:
             return None
-        at = end + 1                       # immediately after that newline
+        at = end                           # immediately after that newline
         return raw[:at] + line + eol + raw[at:]
     return None
+
+
+def _close_fence(raw: bytes, start: int) -> int:
+    """Offset just past the newline that precedes the closing ``---``, or -1.
+
+    Every newline style, independently of how the header opened. `\n---` alone
+    covers LF and CRLF (a CRLF fence contains it), but not a CR-only file,
+    where the byte before `---` is `\r`.
+    """
+    best = -1
+    for eol in (b"\r\n", b"\n", b"\r"):
+        at = raw.find(eol + b"---", start)
+        if at != -1 and (best == -1 or at < best):
+            best = at + len(eol)
+    return best
 
 
 def scene_identity(cid: str, sid: str) -> str | None:
@@ -190,11 +223,24 @@ def scene_identity_strict(cid: str, sid: str) -> str | None:
     whose header was momentarily unopenable would match -- and be handed the
     dead scene's run to read or cancel, which is the recycled-id hazard this
     whole module exists to close.
+
+    **No ``exists()`` here, and that is the whole point of the function.**
+    ``Path.exists`` swallows ``OSError`` and answers ``False``, so a scene on a
+    synced folder that is momentarily unstattable read as "no such scene" --
+    which ``_scene_moved`` reports as ``scene_replaced``, discarding a finished
+    reply for a scene that is sitting there intact. The strict reader was added
+    to stop exactly that, and then asked a fail-soft question one line above it.
+    ``_read_token_strict`` opens the file, so absence arrives as
+    ``FileNotFoundError`` and is the only thing turned back into ``None``.
     """
-    p = paths._scene_path(cid, sid)
-    if not safe_id(sid) or not p.exists():
+    if not safe_id(sid):
         return None
-    return _read_token_strict(p)
+    try:
+        return _read_token_strict(paths._scene_path(cid, sid))
+    except UnreadableError as exc:
+        if isinstance(exc.__cause__, FileNotFoundError):
+            return None       # genuinely not there: a real answer, not a failure
+        raise
 
 
 @locking._serialized
