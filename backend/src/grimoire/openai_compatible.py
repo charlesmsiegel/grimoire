@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator
 import certifi
 import httpx
 
-from . import llm_usage
+from . import catalog, llm_usage
 from .llm_errors import LLMError, retry_after_seconds
 
 
@@ -195,15 +195,27 @@ class OpenAICompatibleClient:
             raise OpenAICompatibleError("network", str(exc)) from exc
         except Exception as exc:
             raise OpenAICompatibleError("network", str(exc)) from exc
-        out = []
-        for m in data:
-            pricing = m.get("pricing") or {}
-            out.append({
-                "id": m["id"], "name": m.get("name") or m["id"],
-                "context": m.get("context_length"),
-                "prompt": pricing.get("prompt"), "completion": pricing.get("completion"),
-            })
-        return out
+        return catalog.entries(data)
+
+    async def probe(self, base_url: str, key: str) -> None:
+        """Ask this endpoint whether it is up and accepts this key (#146).
+
+        `/models` is the probe because it is the only thing an OpenAI-compatible
+        server is asked for that costs nothing to answer — the alternative is a
+        one-token completion, which on a metered gateway charges the reader for
+        clicking "Test connection". Every server this kind exists for
+        (llama.cpp, vLLM, LM Studio, ollama, the vendor gateways) serves it.
+
+        The gap that leaves, stated rather than hidden: a server that generates
+        happily but exposes no catalog answers 404, and this reports that as
+        `bad_response` — "reached something at that URL; it did not answer the
+        question". That is a false alarm for such a server, and the honest one:
+        nothing short of spending a generation can tell it apart from a base
+        URL with a typo in it, and reporting healthy on the strength of *any*
+        HTTP response would call a 404 from an unrelated web server a working
+        LLM endpoint.
+        """
+        await self.list_models(base_url, key)
 
     async def aclose(self) -> None:
         # Reset, not just close: `_client()` is lazy, so leaving the closed

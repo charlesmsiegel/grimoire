@@ -13,9 +13,10 @@ vi.mock("../api/client", () => ({
   api: {
     getDataDir: vi.fn(), putDataDir: vi.fn(), putConfig: vi.fn(), getConfig: vi.fn(),
     createConnection: vi.fn(), createWorld: vi.fn(), listWorlds: vi.fn(),
+    previewModels: vi.fn(), checkConnection: vi.fn(),
   },
 }));
-vi.mock("../api/models", () => ({ getModels: vi.fn(), priceLabel: () => "", contextLabel: () => "" }));
+vi.mock("../api/models", () => ({ priceLabel: () => "", contextLabel: () => "" }));
 
 const setTheme = vi.fn();
 vi.mock("../theme/ThemeProvider", () => ({
@@ -23,13 +24,15 @@ vi.mock("../theme/ThemeProvider", () => ({
 }));
 
 import { api } from "../api/client";
-import { getModels } from "../api/models";
 
 const onDone = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (getModels as any).mockResolvedValue([]);
+  (api.previewModels as any).mockResolvedValue({ models: [] });
+  (api.checkConnection as any).mockResolvedValue({
+    ok: true, kind: "", detail: "", checked_at: "2026-08-21T00:00:00Z",
+  });
   (api.getDataDir as any).mockResolvedValue({
     data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
     is_default: true, source: "default", exists: true,
@@ -83,6 +86,36 @@ test("the connection step creates the connection and makes it active", async () 
   await waitFor(() => expect(api.createConnection).toHaveBeenCalledWith(
     expect.objectContaining({ kind: "openrouter", name: "OpenRouter", api_key: "sk-or-test" })));
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ active_connection_id: "openrouter" }));
+  expect(await screen.findByText(/connected to openrouter/i)).toBeInTheDocument();
+});
+
+test("the saved connection is tested, and a refusal is said out loud", async () => {
+  // "Connected" has meant "saved and made active" since this wizard was
+  // written, which is not the same as "it works" (#146). A rejected key used to
+  // get a tick here and fail for the first time in the reader's first scene.
+  (api.checkConnection as any).mockResolvedValue({
+    ok: false, kind: "auth", detail: "No auth credentials found",
+    checked_at: "2026-08-21T09:00:00Z",
+  });
+  await goToStep(2);
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "OpenRouter" } });
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: "sk-or-dead" } });
+  fireEvent.click(screen.getByRole("button", { name: /save connection/i }));
+
+  await waitFor(() => expect(api.checkConnection).toHaveBeenCalledWith("openrouter"));
+  expect(await screen.findByText(/No auth credentials found/)).toBeInTheDocument();
+  // ...and it is a warning, not a gate: the connection IS saved and active, and
+  // a wizard that refused to move on would trap someone whose provider is down.
+  expect(await screen.findByRole("button", { name: /next/i })).toBeEnabled();
+});
+
+test("a check that cannot be made does not undo a connection that saved", async () => {
+  (api.checkConnection as any).mockRejectedValue(new Error("offline"));
+  await goToStep(2);
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "OpenRouter" } });
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: "sk-or-test" } });
+  fireEvent.click(screen.getByRole("button", { name: /save connection/i }));
+
   expect(await screen.findByText(/connected to openrouter/i)).toBeInTheDocument();
 });
 

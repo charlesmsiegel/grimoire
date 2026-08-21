@@ -291,3 +291,111 @@ async def test_a_reply_that_cached_nothing_records_no_cache_keys():
 
     assert usage["prompt_tokens"] == 120         # the block is otherwise intact
     assert "cache_read_tokens" not in usage and "cache_write_tokens" not in usage
+
+
+# ---- the model catalog (#149) and the key probe (#146) ----
+async def test_list_models_normalizes_and_sorts_by_id():
+    def handler(request):
+        assert request.url.path == "/api/v1/models"
+        return httpx.Response(200, json={"data": [
+            {"id": "z/last", "name": "Last", "context_length": 8192,
+             "pricing": {"prompt": "0.000002", "completion": "0.000006"}},
+            {"id": "a/first"},
+        ]})
+
+    models = await make_client(handler).list_models("sk-or-x")
+    assert models == [
+        {"id": "a/first", "name": "a/first", "context": None,
+         "prompt": None, "completion": None},
+        {"id": "z/last", "name": "Last", "context": 8192,
+         "prompt": "0.000002", "completion": "0.000006"},
+    ]
+
+
+async def test_list_models_without_a_key_sends_no_authorization_header():
+    """The wizard lists the catalog before a key has been typed (#149), and
+    `Bearer ` with nothing after it is a malformed credential rather than an
+    absent one."""
+    seen = {}
+
+    def handler(request):
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"data": []})
+
+    await make_client(handler).list_models("")
+    assert seen["auth"] is None
+
+
+async def test_list_models_sends_the_key_when_there_is_one():
+    seen = {}
+
+    def handler(request):
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"data": []})
+
+    await make_client(handler).list_models("sk-or-x")
+    assert seen["auth"] == "Bearer sk-or-x"
+
+
+async def test_list_models_error_is_normalized_like_a_generation():
+    def handler(request):
+        return httpx.Response(429, json={"error": {"message": "slow down"}})
+
+    with pytest.raises(OpenRouterError) as exc:
+        await make_client(handler).list_models("sk-or-x")
+    assert (exc.value.kind, exc.value.detail) == ("rate_limit", "slow down")
+
+
+async def test_list_models_rejects_a_body_that_is_not_json():
+    """An HTML error page from a captive portal or a proxy is a
+    `bad_response`, not a crash inside the picker's fetch."""
+    def handler(request):
+        return httpx.Response(200, text="<html>captive portal</html>")
+
+    with pytest.raises(OpenRouterError) as exc:
+        await make_client(handler).list_models("")
+    assert exc.value.kind == "bad_response"
+
+
+async def test_probe_asks_the_authenticated_endpoint_not_the_public_catalog():
+    """`/models` answers 200 for a revoked key, so a check built on it would
+    report a dead connection healthy — the exact complaint #146 opens with."""
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"data": {"label": "grimoire"}})
+
+    await make_client(handler).probe("sk-or-x")
+    assert seen["path"] == "/api/v1/key"
+
+
+async def test_probe_reports_a_rejected_key_as_auth():
+    def handler(request):
+        return httpx.Response(401, json={"error": {"message": "No auth credentials found"}})
+
+    with pytest.raises(OpenRouterError) as exc:
+        await make_client(handler).probe("sk-or-dead")
+    assert (exc.value.kind, exc.value.detail) == ("auth", "No auth credentials found")
+
+
+async def test_probe_reports_an_unreachable_host_as_network():
+    def handler(request):
+        raise httpx.ConnectError("nope")
+
+    with pytest.raises(OpenRouterError) as exc:
+        await make_client(handler).probe("sk-or-x")
+    assert exc.value.kind == "network"
+
+
+async def test_the_probe_is_bounded_well_under_a_generations_timeout():
+    """A reader who clicked Test connection is watching a spinner; the client's
+    120s generation default is not a bound they can sit through."""
+    seen = {}
+
+    def handler(request):
+        seen.update(request.extensions.get("timeout") or {})
+        return httpx.Response(200, json={"data": {}})
+
+    await make_client(handler).probe("sk-or-x")
+    assert 0 < seen["read"] <= 30 and 0 < seen["connect"] <= 30

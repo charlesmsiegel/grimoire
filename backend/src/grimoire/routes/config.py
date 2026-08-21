@@ -7,18 +7,21 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from .. import llm, store
+from .. import health, llm, store
+from ..llm import LLMClient
 from ..llm_errors import LLMError
-from ..openai_compatible import OpenAICompatibleClient
 from . import runs
 from .common import (
+    _connection_problem,
     _dump,
     _llm_http_error,
     _response_body,
     _write_response,
-    get_openai_compatible_client,
+    get_health,
+    get_llm,
 )
 from .models import (
+    CatalogProbe,
     ConfigUpdate,
     ConnectionCreate,
     ConnectionUpdate,
@@ -35,7 +38,7 @@ router = APIRouter()
 
 
 # ---- config ----
-def _public_config(cfg: dict[str, str]) -> dict:
+def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict:
     active = store.llm_connections.get_active()
     setup_done, first_run = _setup_state(cfg)
     return {"theme": cfg["theme"], "system_prompt": cfg.get("system_prompt", ""),
@@ -110,6 +113,14 @@ def _public_config(cfg: dict[str, str]) -> dict:
                                    "model": llm.effective_model(active)}
                                    if active else None),
             "ready": _connection_ready(active),
+            # What the active provider last actually did (#146), so the status
+            # dot can stop meaning "a key string is present" and start meaning
+            # "this worked, or here is how it failed". Read from the registry
+            # rather than checked here: a config read happens on every
+            # navigation, and a network call per navigation is a poller nobody
+            # asked for. `unknown` until something -- a real turn, or the
+            # reader pressing Test connection -- has an answer.
+            "health": registry.status(active["id"]) if active else None,
             "setup_done": setup_done,
             "first_run": first_run,
             # Which store this config describes. `first_run` is a statement
@@ -168,12 +179,12 @@ def _connection_ready(conn: dict | None) -> bool:
 
 
 @router.get("/config")
-def get_config():
-    return _public_config(store.read_config())
+def get_config(registry: health.ProviderHealth = Depends(get_health)):
+    return _public_config(store.read_config(), registry)
 
 
 @router.put("/config")
-def put_config(update: ConfigUpdate):
+def put_config(update: ConfigUpdate, registry: health.ProviderHealth = Depends(get_health)):
     fields = {k: v for k, v in _dump(update).items() if v is not None}
     saved = store.write_config(**fields)
     # `store.logs` holds the threshold in module state rather than reading the
@@ -183,7 +194,7 @@ def put_config(update: ConfigUpdate):
     # read on a route that has already done several, and a guard is one more
     # place for the two to drift apart.
     store.logs.apply_level()
-    return _public_config(saved)
+    return _public_config(saved, registry)
 
 
 # ---- prompt layout (#29) ----
@@ -349,50 +360,149 @@ def post_connection(body: ConnectionCreate):
 
 
 @router.get("/llm-connections/{id}")
-def get_connection(id: str):
+def get_connection(id: str, registry: health.ProviderHealth = Depends(get_health)):
     try:
-        return _with_effective(store.llm_connections.read_connection(id))
+        conn = _with_effective(store.llm_connections.read_connection(id))
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found")
+    # The editor shows this beside the key it is about, which is the one place
+    # a reader can act on it. Riding on the detail read rather than a route of
+    # its own because it is never wanted without the rest: the panel that would
+    # ask for it has already asked for this.
+    return {**conn, "health": registry.status(id)}
 
 
 @router.put("/llm-connections/{id}")
-def put_connection(id: str, body: ConnectionUpdate):
+def put_connection(id: str, body: ConnectionUpdate,
+                   registry: health.ProviderHealth = Depends(get_health)):
     fields = {k: v for k, v in _dump(body).items() if v is not None}
     try:
         store.llm_connections.update_connection(id, **fields)
-        return _with_effective(store.llm_connections.read_connection(id))
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found")
+    # An edit invalidates the verdict as surely as a delete does: the failure
+    # on record was this connection's *previous* key, base URL or model, and
+    # keeping it would report the setting the reader just changed as still
+    # broken -- exactly when they are watching to see whether their fix took.
+    registry.forget(id)
+    return {**_with_effective(store.llm_connections.read_connection(id)),
+            "health": registry.status(id)}
 
 
 @router.delete("/llm-connections/{id}")
-def delete_connection_route(id: str):
+def delete_connection_route(id: str, registry: health.ProviderHealth = Depends(get_health)):
     try:
         store.llm_connections.delete_connection(id)
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found")
+    # Ids are slugs, and a slug is reusable: deleting "Endpoint" and creating
+    # another connection by that name lands on the same id, which would
+    # otherwise inherit the dead connection's last failure.
+    registry.forget(id)
     return {"ok": True}
 
 
 @router.post("/llm-connections/{id}/models/refresh")
 async def post_connection_models_refresh(
-    id: str, client: OpenAICompatibleClient = Depends(get_openai_compatible_client),
+    id: str, client: LLMClient = Depends(get_llm),
 ):
+    """Re-fetch a saved connection's catalog from its own provider (#149).
+
+    Every listable kind, not just custom endpoints. The picker used to fetch
+    OpenRouter's catalog from the browser against a hardcoded URL whichever
+    connection was open, so an OpenRouter connection's models came from
+    OpenRouter whether or not that was the provider configured, and the key was
+    never presented. Both halves are fixed by the fetch happening here.
+    """
     try:
         conn = store.llm_connections.read_connection_raw(id)
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found")
-    if conn["kind"] != "openai_compatible":
+    if conn["kind"] not in llm.LISTABLE_KINDS:
         raise HTTPException(status_code=400, detail="model listing not supported for this connection kind")
     rev = conn["rev"]
     try:
-        models = await client.list_models(conn["base_url"], conn["api_key"])
+        models = await client.list_models(conn)
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
     fetched_at = store.now_iso()
     store.llm_connections.set_cached_models(id, models, rev)
     return {"models": models, "fetched_at": fetched_at, "rev": rev}
+
+
+@router.post("/model-catalog")
+async def post_model_catalog(body: CatalogProbe, client: LLMClient = Depends(get_llm)):
+    """The catalog for a connection that has been *described* but not saved.
+
+    Its counterpart above answers for a stored connection and caches what it
+    gets; this one answers for a form the reader is still filling in and caches
+    nothing — there is no `rev` to tag a cache entry with, and the next
+    keystroke in the base-URL field would invalidate it anyway.
+
+    Not merged into the route above as an optional body, though the fetch is
+    the same one: the two differ in every other respect. One takes credentials
+    off disk and the other off the wire, one writes a sidecar and the other
+    must not, and one 404s for an id that does not exist while the other has no
+    id to be wrong about.
+    """
+    conn = {**_dump(body), "model": ""}
+    if conn["kind"] not in llm.LISTABLE_KINDS:
+        raise HTTPException(status_code=400, detail="model listing not supported for this connection kind")
+    try:
+        return {"models": await client.list_models(conn)}
+    except LLMError as exc:
+        raise _llm_http_error(exc) from exc
+
+
+@router.post("/llm-connections/{cid}/health")
+async def post_connection_health(
+    cid: str, client: LLMClient = Depends(get_llm),
+    registry: health.ProviderHealth = Depends(get_health),
+):
+    """Ask this connection's provider whether it can serve, right now (#146).
+
+    **Always 200**, with the verdict in the body. The failure being reported is
+    the *provider's*, and this request — "tell me about that connection" —
+    succeeded in every case where there is something to tell: a 502 here would
+    make a working health check indistinguishable from a broken one, and would
+    put the frontend's error banner in front of the answer the reader asked
+    for. A missing connection is still a 404, because that request could not be
+    answered at all.
+
+    A connection with nothing to check with is answered without a network call,
+    from the same `_connection_problem` rule that turns a keyless connection
+    into a 409 on the generation routes: a request that is going to be rejected
+    for having no credential teaches the reader nothing that the missing
+    credential does not.
+
+    The verdict is filed in the registry either way, so the status bar reflects
+    the check for as long as it is the freshest thing known.
+    """
+    try:
+        conn = store.llm_connections.read_connection_raw(cid)
+    except store.llm_connections.ConnectionNotFound as exc:
+        raise HTTPException(status_code=404, detail="connection not found") from exc
+    problem = _connection_problem(conn)
+    if problem is not None:
+        return _health_body(registry.record(conn, LLMError("missing_key", problem)))
+    try:
+        await client.check(conn)
+    except LLMError as exc:
+        return _health_body(registry.record(conn, exc))
+    return _health_body(registry.record(conn))
+
+
+def _health_body(status: dict) -> dict:
+    """One recorded verdict as the check route's answer.
+
+    The registry's shape and the route's are deliberately not the same one.
+    A status describes what is known about a connection *whenever* it is asked
+    — hence `state`, which has an "unknown" — while a check has just happened
+    and can only be a yes or a no, which is what `ok` says. `checked_at` is the
+    same instant `at` names, spelled for a reader who just pressed the button.
+    """
+    return {"ok": status["state"] == health.OK, "kind": status["kind"],
+            "detail": status["detail"], "checked_at": status["at"]}
 
 
 # ---- styles ----

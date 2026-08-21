@@ -29,7 +29,7 @@ import pytest
 from grimoire import llm_errors, routes
 from grimoire.llm_errors import LLMError
 from grimoire.routes import common
-from tests.llm_fakes import FailingOpenRouter, FakeModelsClient
+from tests.llm_fakes import FailingOpenRouter, FakeCatalog
 
 SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "grimoire" / "routes"
 
@@ -226,15 +226,15 @@ def test_a_provider_missing_key_matches_the_pre_flight_refusal(client):
 
 
 def test_the_model_listing_route_reports_the_kind_it_got(client):
-    """Model listing hangs off a DIFFERENT dependency
-    (`get_openai_compatible_client`, not `get_llm`), so without this the static
-    guard is the only thing holding that route to the taxonomy."""
+    """Model listing is not a generation, so it does not reach the taxonomy by
+    the same path the streaming and one-shot routes do; without this the static
+    guard is the only thing holding that route to it."""
     r = client.post("/api/llm-connections", json={
         "kind": "openai_compatible", "name": "Endpoint",
         "base_url": "https://x", "api_key": "sk-x"})
     conn = r.json()["id"]
-    client.app.dependency_overrides[routes.get_openai_compatible_client] = \
-        lambda: FakeModelsClient(error=LLMError("rate_limit", "slow down", 30.0))
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeCatalog(error=LLMError("rate_limit", "slow down", 30.0))
 
     r = client.post(f"/api/llm-connections/{conn}/models/refresh")
 

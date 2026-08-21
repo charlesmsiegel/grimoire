@@ -19,18 +19,19 @@ import {
   type CampaignSceneCosts,
   type CardFormat, type CascadeReport, type Casefile, type CastChanges, type CastDetail,
   type ForkReport,
-  type CharacterDetail,
+  type CatalogDraft, type CharacterDetail,
   type CharacterSummary, type CheckResolution, type ChronicleEntry, type ChubImportResult,
   type ChubUnlinkedVersion, type Climate, type ClimateSummary, type Config, type ConfigUpdate,
   type DataDirInfo, type DivergedRecord, type Dossiers, type EntityDetail, type EntityKind,
   type EntityScope,
   type EntitySummary, type ErrorSummary, type Greeting, type GreetingDetail, type GreetingDraft,
-  type GroupState,
+  type GroupState, type HealthCheckResult,
   type IncomingItem, type IncomingRef, type JournalEntry, type LLMConnection,
   type LLMConnectionDetail, type LLMConnectionDraft, type Ledger, type LengthPreset,
   type LibraryDependent, type LibraryKind, type LibraryStatus,
   type LogLevel, type LogLevelInfo, type LogPage, type LogTailEvent,
-  type LoreEntryDraft, type Mechanics, type Message, type ModelsRefreshResult,
+  type LoreEntryDraft, type Mechanics, type Message, type Model,
+  type ModelsRefreshResult,
   type ModuleContentEntry,
   type ModuleDetail, type ModuleEditResult, type ModuleRenameKind, type ModuleSummary,
   type PCDetail, type PCSummary, type Persona, type PinRule, type PricingEntry,
@@ -1211,6 +1212,22 @@ export const api = {
     }),
   refreshConnectionModels: (id: string) =>
     request<ModelsRefreshResult>("POST", `/api/llm-connections/${id}/models/refresh`),
+  /** The catalog for a connection that has been described but not saved (#149)
+   *  — the New-connection form and the setup wizard, where there is no id to
+   *  refresh yet. Nothing is cached server-side and nothing is stored. */
+  previewModels: (draft: CatalogDraft) =>
+    request<{ models: Model[] }>("POST", "/api/model-catalog", draft),
+  /** Ask this connection's provider whether it can serve, right now (#146).
+   *
+   *  Resolves for a *failing* connection too: the answer is in `ok`, and the
+   *  request only rejects when the question itself could not be asked (an id
+   *  that does not exist). Invalidates the cached config because the check's
+   *  verdict is what the status bar reads. */
+  checkConnection: (id: string) =>
+    request<HealthCheckResult>("POST", `/api/llm-connections/${id}/health`).then((r) => {
+      invalidateConfigCache();
+      return notifyConfig(r);
+    }),
 
   listStyles: () => request<Style[]>("GET", "/api/styles"),
   createStyle: (draft: StyleDraft) => request<{ id: string }>("POST", "/api/styles", draft),

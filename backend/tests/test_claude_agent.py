@@ -265,3 +265,60 @@ async def test_a_run_that_cached_nothing_records_no_cache_keys(monkeypatch):
     [c async for c in ClaudeAgentClient().stream([], "opus", usage=usage)]
 
     assert "cache_read_tokens" not in usage and "cache_write_tokens" not in usage
+
+
+# ---- the health probe (#146) ----
+async def test_probe_runs_a_tiny_generation_on_the_configured_model(monkeypatch):
+    """This path has no free "is the credential good" endpoint — auth is the
+    host's Claude Code login, and only the CLI knows whether it still works."""
+    captured = install_fake_sdk(monkeypatch, replies=[_AssistantMessage([_TextBlock("ok")])])
+
+    await ClaudeAgentClient().probe("opus")
+
+    assert captured["options"].model == "opus"
+    assert captured["options"].max_turns == 1
+
+
+async def test_probe_stops_at_the_first_word(monkeypatch):
+    """The reply is a health signal, not content: reading it out would spend a
+    whole generation to learn something the first token already said."""
+    seen = []
+
+    async def query(*, prompt, options):
+        seen.append("started")
+        yield _AssistantMessage([_TextBlock("ok")])
+        seen.append("kept going")          # pragma: no cover - the point of the test
+        yield _AssistantMessage([_TextBlock("and on, and on")])
+
+    install_fake_sdk(monkeypatch)
+    monkeypatch.setattr(claude_agent, "query", query)
+
+    await ClaudeAgentClient().probe("opus")
+
+    assert seen == ["started"]
+
+
+async def test_probe_reports_a_missing_sdk_without_spawning_anything(monkeypatch):
+    monkeypatch.setattr(claude_agent, "query", None)
+    monkeypatch.setattr(claude_agent, "_SDK_IMPORT_ERROR",
+                        ImportError("No module named 'claude_agent_sdk'"))
+
+    with pytest.raises(ClaudeAgentError) as exc:
+        await ClaudeAgentClient().probe("opus")
+    assert exc.value.kind == "missing_dependency"
+
+
+async def test_probe_reports_a_failing_cli_as_the_kind_a_turn_would_have_got(monkeypatch):
+    install_fake_sdk(monkeypatch, error=_ProcessError("exited with code 1"))
+
+    with pytest.raises(ClaudeAgentError) as exc:
+        await ClaudeAgentClient().probe("opus")
+    assert exc.value.kind == "bad_response"
+
+
+async def test_a_run_that_says_nothing_is_still_healthy(monkeypatch):
+    """The question is whether the path works, not whether the model was
+    talkative — a run that completed without raising did work."""
+    install_fake_sdk(monkeypatch, replies=[types.SimpleNamespace()])
+
+    await ClaudeAgentClient().probe("opus")

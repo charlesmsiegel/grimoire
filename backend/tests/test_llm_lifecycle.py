@@ -1,11 +1,16 @@
-"""The gateway clients belong to the app, and shutdown closes them (#215).
+"""The gateway client belongs to the app, and shutdown closes it (#215).
 
-`LLMClient` and the model-listing `OpenAICompatibleClient` each own an
-`httpx.AsyncClient` connection pool. They used to be module-level singletons
-built at import, which left the pools with nowhere to be closed from: harmless
-where the server is the whole process and it exits anyway, a leak per app
-wherever one is rebuilt inside a living process — the Android entry point runs
-uvicorn in-process, and this suite builds an app per test.
+`LLMClient`'s providers each own an `httpx.AsyncClient` connection pool. They
+used to be module-level singletons built at import, which left the pools with
+nowhere to be closed from: harmless where the server is the whole process and
+it exits anyway, a leak per app wherever one is rebuilt inside a living
+process — the Android entry point runs uvicorn in-process, and this suite
+builds an app per test.
+
+The health registry (#146) is on `app.state` for a related but distinct
+reason — it is not closable, it is per-app so that one test's recorded provider
+failures cannot leak into the next — and is checked here because this is where
+"what does an app own" is pinned.
 """
 
 import importlib
@@ -17,9 +22,9 @@ from starlette.requests import Request
 
 import grimoire.store as store
 from grimoire import main, routes
+from grimoire.health import ProviderHealth
 from grimoire.llm import LLMClient
 from grimoire.main import create_app
-from grimoire.openai_compatible import OpenAICompatibleClient
 
 
 class _Recorder:
@@ -54,27 +59,33 @@ def test_each_app_owns_its_own_gateway_clients(app):
     other = create_app()
 
     assert isinstance(app.state.llm, LLMClient)
-    assert isinstance(app.state.openai_compatible, OpenAICompatibleClient)
     assert app.state.llm is not other.state.llm
-    assert app.state.openai_compatible is not other.state.openai_compatible
 
 
-def test_the_providers_hand_back_the_app_s_clients(app):
+def test_each_app_owns_its_own_health_registry(app):
+    """Per app for the same reason the gateway is, and a sharper one: this
+    holds recorded provider FAILURES, so a module-level registry would carry
+    one test's broken connection into the next (#146)."""
+    other = create_app()
+
+    assert isinstance(app.state.health, ProviderHealth)
+    assert app.state.health is not other.state.health
+
+
+def test_the_providers_hand_back_the_app_s_state(app):
     request = _request_to(app)
 
     assert routes.get_llm(request) is app.state.llm
-    assert routes.get_openai_compatible_client(request) is app.state.openai_compatible
+    assert routes.get_health(request) is app.state.health
 
 
-def test_shutdown_closes_both_clients(app):
+def test_shutdown_closes_the_gateway_client(app):
     app.state.llm = _Recorder()
-    app.state.openai_compatible = _Recorder()
 
     with TestClient(app):
         pass
 
     assert app.state.llm.closes == 1
-    assert app.state.openai_compatible.closes == 1
 
 
 def test_shutdown_closes_the_underlying_connection_pools(app):
@@ -84,8 +95,7 @@ def test_shutdown_closes_the_underlying_connection_pools(app):
         # Both pools are lazy -- force them into existence so there is
         # something for shutdown to close.
         pools = [app.state.llm._openrouter._client(),
-                 app.state.llm._openai_compatible._client(),
-                 app.state.openai_compatible._client()]
+                 app.state.llm._openai_compatible._client()]
         assert not any(pool.is_closed for pool in pools)
 
     assert all(pool.is_closed for pool in pools)
@@ -129,24 +139,25 @@ def test_a_second_run_over_the_same_app_gets_a_working_pool(app):
         assert not second.is_closed
 
 
-@pytest.mark.parametrize("broken", ["llm", "openai_compatible"])
-def test_one_failing_close_does_not_strand_the_other_pool(app, caplog, broken):
+def test_a_failing_close_is_logged_rather_than_raised(app, caplog):
     """Shutdown cleanup that gives up halfway is the leak this change is about.
 
-    Both arrangements, because guarding only the first close would pass the one
-    where the first client is the broken one and strand the pool in the other."""
+    It used to be parametrized over which of two clients was the broken one —
+    the arrangement that catches a guard wrapped around only the first close.
+    There is one client on `app.state` again since #149 folded model listing
+    onto the facade, so what is left to hold is the half that still has teeth:
+    a close that raises is logged and shutdown finishes anyway. Add a second
+    closable and the test above (`every_closable_the_app_holds`) is what
+    notices; restore the parametrization then."""
     class _Broken:
         async def aclose(self):
             raise RuntimeError("the pool refused to close")
 
-    other = "openai_compatible" if broken == "llm" else "llm"
-    setattr(app.state, broken, _Broken())
-    setattr(app.state, other, _Recorder())
+    app.state.llm = _Broken()
 
     with TestClient(app):
         pass
 
-    assert getattr(app.state, other).closes == 1
     assert "the pool refused to close" in caplog.text
 
 
@@ -155,7 +166,6 @@ def test_a_crash_on_the_way_out_still_closes_the_clients(app):
     shutdown must not be the reason a pool leaks. Driven through `_lifespan`
     directly because `TestClient` only ever exits it cleanly."""
     app.state.llm = _Recorder()
-    app.state.openai_compatible = _Recorder()
 
     async def drive():
         ctx = main._lifespan(app)
@@ -170,4 +180,3 @@ def test_a_crash_on_the_way_out_still_closes_the_clients(app):
     anyio.run(drive)
 
     assert app.state.llm.closes == 1
-    assert app.state.openai_compatible.closes == 1

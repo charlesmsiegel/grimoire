@@ -10,10 +10,29 @@ from collections.abc import AsyncIterator
 import certifi
 import httpx
 
-from . import llm_usage
+from . import catalog, llm_usage
 from .llm_errors import LLMError, retry_after_seconds
 
-API_URL = "https://openrouter.ai/api/v1/chat/completions"
+#: Everything this provider is reached at hangs off one root. Spelled once
+#: because there are now three endpoints on it -- generation, the model catalog
+#: (#149) and the key probe (#146) -- and three copies of the host is three
+#: places to edit when one of them moves.
+BASE_URL = "https://openrouter.ai/api/v1"
+API_URL = f"{BASE_URL}/chat/completions"
+MODELS_URL = f"{BASE_URL}/models"
+#: The endpoint a health check asks. Deliberately NOT `/models`, which is
+#: public: it answers 200 for a key that is expired, revoked or gibberish, so a
+#: check built on it would call a connection healthy right up until the first
+#: turn failed with `auth` -- which is the "the topbar says a key is *set*, not
+#: that it *works*" complaint #146 opens with. `/key` describes the credential
+#: presented, so a bad one is a 401 and the check has a real answer.
+KEY_URL = f"{BASE_URL}/key"
+#: Bound for the two non-streaming calls above (the catalog and the probe). The
+#: client's own 120s default is sized for a generation; a reader who clicked
+#: "Test connection" is watching a spinner, and two minutes of one is
+#: indistinguishable from a hung app. Connect gets the smaller half: a host that
+#: will not accept a socket within ten seconds is not about to serve a catalog.
+PROBE_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 
 
 class OpenRouterError(LLMError):
@@ -70,7 +89,19 @@ class OpenRouterClient:
                 "usage": {"include": True}}
 
     def _headers(self, key: str) -> dict[str, str]:
-        return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        """`Authorization` only when there is something to authorize with.
+
+        `stream` refuses an empty key before it ever reaches here, so from that
+        path this reads as unconditional. The catalog deliberately does not
+        refuse one -- OpenRouter's `/models` is public, and the setup wizard
+        lists it before the reader has typed a key at all (#149) -- and
+        `Bearer ` with nothing after it is a malformed credential, which a
+        server is entitled to answer 401 to rather than read as absent.
+        """
+        headers = {"Content-Type": "application/json"}
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        return headers
 
     async def stream(self, messages, model: str, key: str,
                      usage: dict | None = None) -> AsyncIterator[str]:
@@ -135,6 +166,53 @@ class OpenRouterClient:
     async def complete(self, messages, model: str, key: str,
                        usage: dict | None = None) -> str:
         return "".join([chunk async for chunk in self.stream(messages, model, key, usage)])
+
+    async def _get(self, url: str, key: str) -> httpx.Response:
+        """One bounded GET against this provider, with its errors normalized.
+
+        The catalog and the probe are the same request twice over — a GET, a
+        status check, and every transport failure arriving as `network` — so
+        they share it rather than each spelling the funnel out. The status
+        mapping is `_status_kind`'s, which is what makes a rejected key read as
+        `auth` here exactly as it does mid-generation.
+        """
+        try:
+            resp = await self._client().get(url, headers=self._headers(key),
+                                            timeout=PROBE_TIMEOUT)
+        except httpx.HTTPError as exc:
+            raise OpenRouterError("network", str(exc)) from exc
+        except Exception as exc:  # client/TLS setup and other unexpected failures
+            raise OpenRouterError("network", str(exc)) from exc
+        if resp.status_code >= 400:
+            raise OpenRouterError(_status_kind(resp.status_code), _extract_error(resp.text),
+                                  retry_after_seconds(resp.headers))
+        return resp
+
+    async def list_models(self, key: str) -> list[dict]:
+        """OpenRouter's catalog, server-side (#149).
+
+        `key` is passed but not required: the endpoint is public, so an
+        unsaved connection lists it fine (see `_headers`). It is sent when
+        there is one because a key can carry account-specific availability,
+        and because a 401 here is a cheaper way to learn a key is wrong than
+        the first turn of a scene.
+        """
+        resp = await self._get(MODELS_URL, key)
+        try:
+            data = resp.json().get("data", [])
+        except ValueError as exc:
+            raise OpenRouterError("bad_response", f"model list was not JSON: {exc}") from exc
+        return catalog.entries(data)
+
+    async def probe(self, key: str) -> None:
+        """Ask OpenRouter whether this key works. Returns on yes, raises on no.
+
+        Returning nothing is the point: everything a caller does with the
+        answer, it does with the `LLMError` — kind and detail are the health
+        report (#146), and inventing a second success/failure vocabulary here
+        would give the route two taxonomies to reconcile.
+        """
+        await self._get(KEY_URL, key)
 
     async def aclose(self) -> None:
         # Reset, not just close: `_client()` is lazy, so leaving the closed

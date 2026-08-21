@@ -10,25 +10,28 @@ vi.mock("../api/client", async () => ({
   api: {
     listConnections: vi.fn(), readConnection: vi.fn(), createConnection: vi.fn(),
     updateConnection: vi.fn(), deleteConnection: vi.fn(), refreshConnectionModels: vi.fn(),
-    getConfig: vi.fn(), putConfig: vi.fn(),
+    getConfig: vi.fn(), putConfig: vi.fn(), previewModels: vi.fn(), checkConnection: vi.fn(),
   },
 }));
-vi.mock("../api/models", () => ({ getModels: vi.fn(), priceLabel: () => "", contextLabel: () => "" }));
+vi.mock("../api/models", () => ({ priceLabel: () => "", contextLabel: () => "" }));
 import { api, ApiError } from "../api/client";
-import { getModels } from "../api/models";
 
+const UNCHECKED = { state: "unknown", kind: "", detail: "", at: "" };
 const OPENROUTER = { id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "", model: "anthropic/claude-opus-4.1", post_process: "none", key_set: true, rev: "r1" };
 const CUSTOM = { id: "zai-glm", kind: "openai_compatible", name: "z.ai GLM", base_url: "https://api.z.ai/v4", model: "glm-4.6", post_process: "strict", key_set: true, rev: "r2" };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (getModels as any).mockResolvedValue([]);
+  (api.previewModels as any).mockResolvedValue({ models: [] });
+  (api.checkConnection as any).mockResolvedValue({
+    ok: true, kind: "", detail: "", checked_at: "2026-08-21T09:00:00Z",
+  });
   (api.listConnections as any).mockResolvedValue([OPENROUTER, CUSTOM]);
   (api.getConfig as any).mockResolvedValue({ active_connection_id: "openrouter" });
   (api.readConnection as any).mockImplementation((id: string) => Promise.resolve(
     id === "openrouter"
-      ? { ...OPENROUTER, models: [], fetched_at: "" }
-      : { ...CUSTOM, models: [], fetched_at: "" }));
+      ? { ...OPENROUTER, models: [], fetched_at: "", health: UNCHECKED }
+      : { ...CUSTOM, models: [], fetched_at: "", health: UNCHECKED }));
   (api.createConnection as any).mockResolvedValue({ id: "new-conn" });
   (api.updateConnection as any).mockResolvedValue({ ok: true });
   (api.deleteConnection as any).mockResolvedValue({ ok: true });
@@ -114,7 +117,8 @@ test("a stale refresh response (rev no longer matches) is discarded", async () =
   await waitFor(() => expect(api.readConnection).toHaveBeenCalledWith("zai-glm"));
   fireEvent.click(screen.getByRole("button", { name: /refresh models/i }));
   // the connection changes underneath the open form (e.g. base_url saved) before the refresh resolves
-  (api.readConnection as any).mockResolvedValueOnce({ ...CUSTOM, rev: "r3", models: [], fetched_at: "" });
+  (api.readConnection as any).mockResolvedValueOnce({
+    ...CUSTOM, rev: "r3", models: [], fetched_at: "", health: UNCHECKED });
   await select_again();
   resolveRefresh!({ models: [{ id: "stale", name: "stale", context: null, prompt: null, completion: null }], fetched_at: "STALE_TIMESTAMP", rev: "r2" });
   // The component is back in view mode after select_again(), where
@@ -164,10 +168,14 @@ test("a model fetch that cannot reach the provider says so, without a link back 
 });
 
 test("an unreachable model catalog degrades the picker instead of blocking config", async () => {
-  // Offline, the OpenRouter catalog is fetched straight from the browser and
-  // fails; a connection that already names a model must stay editable and
-  // saveable anyway (#210).
-  (getModels as any).mockRejectedValue(new Error("Failed to fetch"));
+  // Offline, the catalog fetch fails; a connection that already names a model
+  // must stay editable and saveable anyway (#210). Since #149 the fetch goes
+  // through the backend to the connection's own provider, so this is the
+  // refresh route failing rather than a browser fetch — and it fails on *open*,
+  // which is a request the reader did not make, so it degrades the picker
+  // rather than raising the banner.
+  (api.refreshConnectionModels as any).mockRejectedValue(
+    new ApiError(502, "connection refused", "network"));
   render(<MemoryRouter initialEntries={["/connections"]}><ConnectionEditor /></MemoryRouter>);
   const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("OpenRouter"));
@@ -178,4 +186,111 @@ test("an unreachable model catalog degrades the picker instead of blocking confi
   fireEvent.click(screen.getByRole("button", { name: /save connection/i }));
   await waitFor(() => expect(api.updateConnection).toHaveBeenCalledWith(
     "openrouter", expect.objectContaining({ model: "qwen3:8b" })));
+});
+
+// ---- the catalog comes from the connection being edited (#149) ----
+test("opening an OpenRouter connection fills its picker from its own provider", async () => {
+  (api.refreshConnectionModels as any).mockResolvedValue({
+    models: [{ id: "anthropic/claude-opus-4.1", name: "Opus", context: 200000, prompt: "0", completion: "0" }],
+    fetched_at: "2026-08-21", rev: "r1",
+  });
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+
+  fireEvent.click(await within(rail).findByText("OpenRouter"));
+
+  await waitFor(() => expect(api.refreshConnectionModels).toHaveBeenCalledWith("openrouter"));
+});
+
+test("opening a custom endpoint does not go out to it uninvited", async () => {
+  // A local server can be switched off, and a stall on merely *looking* at a
+  // connection is worse than an empty picker with a Fetch button beside it.
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+
+  fireEvent.click(await within(rail).findByText("z.ai GLM"));
+  await waitFor(() => expect(api.readConnection).toHaveBeenCalledWith("zai-glm"));
+
+  expect(api.refreshConnectionModels).not.toHaveBeenCalled();
+});
+
+test("a new connection's picker is filled without saving it first", async () => {
+  (api.previewModels as any).mockResolvedValue({
+    models: [{ id: "a/b", name: "B", context: 8192, prompt: "0", completion: "0" }],
+  });
+  render(<ConnectionEditor />);
+  await waitFor(() => screen.getByText("+ New connection"));
+
+  fireEvent.click(screen.getByText("+ New connection"));
+
+  await waitFor(() => expect(api.previewModels).toHaveBeenCalledWith({ kind: "openrouter" }));
+});
+
+test("Fetch models on an unsaved custom endpoint uses what has been typed", async () => {
+  (api.previewModels as any).mockResolvedValue({ models: [] });
+  render(<ConnectionEditor />);
+  await waitFor(() => screen.getByText("+ New connection"));
+  fireEvent.click(screen.getByText("+ New connection"));
+  fireEvent.change(screen.getByLabelText("Kind"), { target: { value: "openai_compatible" } });
+  fireEvent.change(await screen.findByLabelText("Base URL"),
+                   { target: { value: "http://127.0.0.1:8080/v1" } });
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: "sk-typed" } });
+
+  fireEvent.click(screen.getByRole("button", { name: /fetch models/i }));
+
+  await waitFor(() => expect(api.previewModels).toHaveBeenCalledWith({
+    kind: "openai_compatible", base_url: "http://127.0.0.1:8080/v1", api_key: "sk-typed" }));
+});
+
+// ---- Test connection (#146) ----
+test("the sidebar says a connection has not been checked, rather than implying it works", async () => {
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("z.ai GLM"));
+
+  expect(await screen.findByText("Not checked yet.")).toBeInTheDocument();
+  // ...beside the credential chip, which is the claim it qualifies
+  expect(screen.getByText("Key set")).toBeInTheDocument();
+});
+
+test("Test connection asks the provider and reports that it works", async () => {
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("z.ai GLM"));
+
+  fireEvent.click(await screen.findByRole("button", { name: /test connection/i }));
+
+  await waitFor(() => expect(api.checkConnection).toHaveBeenCalledWith("zai-glm"));
+  expect(await screen.findByText(/^Working/)).toBeInTheDocument();
+});
+
+test("a refused connection reports the provider's reason, not an app error", async () => {
+  (api.checkConnection as any).mockResolvedValue({
+    ok: false, kind: "auth", detail: "No auth credentials found",
+    checked_at: "2026-08-21T09:00:00Z",
+  });
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("z.ai GLM"));
+
+  fireEvent.click(await screen.findByRole("button", { name: /test connection/i }));
+
+  expect(await screen.findByText(/No auth credentials found/)).toBeInTheDocument();
+  expect(screen.getByText(/Reported as: auth/)).toBeInTheDocument();
+  // The answer to the question asked — not the banner that means "this page
+  // could not do the thing you clicked".
+  expect(screen.queryByText(/Couldn.t reach the model provider/)).toBeNull();
+});
+
+test("a stored failure is shown when the connection is opened, not only after a click", async () => {
+  (api.readConnection as any).mockResolvedValue({
+    ...CUSTOM, models: [], fetched_at: "",
+    health: { state: "error", kind: "network", detail: "connection refused", at: "2026-08-21T09:00:00Z" },
+  });
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+
+  fireEvent.click(await within(rail).findByText("z.ai GLM"));
+
+  expect(await screen.findByText(/connection refused/)).toBeInTheDocument();
 });

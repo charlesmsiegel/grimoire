@@ -64,6 +64,7 @@ const READY_OPENROUTER = {
   active_connection_id: "openrouter",
   active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter", model: "vendor/model-x" },
   ready: true, setup_done: "on", first_run: false, data_dir: "/home/u/.grimoire",
+  health: { state: "ok", kind: "", detail: "", at: "2026-08-21T09:00:00Z" },
 };
 
 const column = () => within(screen.getByRole("complementary"));
@@ -173,7 +174,33 @@ test("the library column persists across a section change, keeping the lit row",
 test("the header names the connection and the active model", async () => {
   render(<MemoryRouter><App /></MemoryRouter>);
   await waitFor(() => expect(header().getByText("VENDOR/MODEL-X")).toBeInTheDocument());
-  expect(header().getByTitle(/openrouter · connected/i)).toBeInTheDocument();
+  expect(header().getByTitle(/openrouter, connected/i)).toBeInTheDocument();
+});
+
+test("the header reports a configured connection whose provider is failing", async () => {
+  // #146: `ready` only ever meant "a key string is present", so a revoked key
+  // drew the same green dot as a working one until the first scene failed.
+  (api.getConfig as any).mockResolvedValue({
+    ...READY_OPENROUTER,
+    health: { state: "error", kind: "auth", detail: "No auth credentials found", at: "2026-08-21T09:05:00Z" },
+  });
+  render(<MemoryRouter><App /></MemoryRouter>);
+
+  const dot = await waitFor(() => header().getByTitle(/no auth credentials found/i));
+  expect(dot).toHaveClass("bad");
+});
+
+test("a connection nothing has exercised yet is not reported as broken", async () => {
+  // The state every app start begins in. A warning shown to everyone every
+  // morning is a warning nobody reads by lunchtime — the dot stays green and
+  // the tooltip says which of the two greens this is.
+  (api.getConfig as any).mockResolvedValue({
+    ...READY_OPENROUTER, health: { state: "unknown", kind: "", detail: "", at: "" },
+  });
+  render(<MemoryRouter><App /></MemoryRouter>);
+
+  const dot = await waitFor(() => header().getByTitle(/not checked yet/i));
+  expect(dot).toHaveClass("ok");
 });
 
 test("the header reports a connection that cannot be used yet", async () => {
@@ -182,12 +209,12 @@ test("the header reports a connection that cannot be used yet", async () => {
     active_connection: { id: "zai-glm", kind: "openai_compatible", name: "z.ai GLM", model: "" },
   });
   render(<MemoryRouter><App /></MemoryRouter>);
-  await waitFor(() => expect(header().getByTitle(/z\.ai glm · not ready/i)).toBeInTheDocument());
+  await waitFor(() => expect(header().getByTitle(/z\.ai glm, not ready/i)).toBeInTheDocument());
 });
 
 test("the header refetches and updates after navigating, without a reload", async () => {
   render(<MemoryRouter initialEntries={["/worlds"]}><App /></MemoryRouter>);
-  await waitFor(() => expect(header().getByTitle(/openrouter · connected/i)).toBeInTheDocument());
+  await waitFor(() => expect(header().getByTitle(/openrouter, connected/i)).toBeInTheDocument());
 
   // simulate the active connection having changed elsewhere (Config/Connections
   // page) — the next getConfig() call reflects it
@@ -196,7 +223,7 @@ test("the header refetches and updates after navigating, without a reload", asyn
     active_connection: { id: "claude", kind: "claude", name: "Claude", model: "vendor/model-y" },
   });
   fireEvent.click(column().getByRole("link", { name: /styles/i }));
-  await waitFor(() => expect(header().getByTitle(/claude · not ready/i)).toBeInTheDocument());
+  await waitFor(() => expect(header().getByTitle(/claude, not ready/i)).toBeInTheDocument());
   expect(header().getByText("VENDOR/MODEL-Y")).toBeInTheDocument();
 });
 
@@ -205,14 +232,14 @@ test("the header follows a connection change made without leaving the page", asy
   // neither of which moves the pathname — the exact workflow whose whole point
   // is to change what the header reports.
   render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
-  await waitFor(() => expect(header().getByTitle(/openrouter · connected/i)).toBeInTheDocument());
+  await waitFor(() => expect(header().getByTitle(/openrouter, connected/i)).toBeInTheDocument());
 
   (api.getConfig as any).mockResolvedValue({
     ...READY_OPENROUTER, ready: false, active_connection_id: "claude",
     active_connection: { id: "claude", kind: "claude", name: "Claude", model: "opus" },
   });
   act(() => configChanged());
-  await waitFor(() => expect(header().getByTitle(/claude · not ready/i)).toBeInTheDocument());
+  await waitFor(() => expect(header().getByTitle(/claude, not ready/i)).toBeInTheDocument());
   expect(header().getByText("OPUS")).toBeInTheDocument();
 });
 

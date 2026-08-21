@@ -124,6 +124,16 @@ def _label(conn: dict) -> str:
 #: `test_image_description_draft.py` pins the two halves to agree.
 TEXT_ONLY_KINDS = frozenset({"claude"})
 
+#: Connection kinds whose provider can be asked for a model catalog (#149).
+#:
+#: `claude` is absent, and not as an oversight: that path's models are aliases
+#: the SDK resolves at request time, with no endpoint to enumerate them, which
+#: is why `ConnectionForm` offers it a fixed list rather than a live one. The
+#: route reads this to refuse a catalog request the provider cannot serve
+#: *before* making one, so the reader gets "this kind has no catalog" instead
+#: of a transport error from a URL that was never going to exist.
+LISTABLE_KINDS = frozenset({"openrouter", "openai_compatible"})
+
 
 def _carries_parts(messages: list[dict]) -> bool:
     """Does any message hold content PARTS rather than a plain string?"""
@@ -336,9 +346,31 @@ def _stamp(usage: dict | None, conn: dict, attempts: int) -> None:
                   "provider": conn.get("kind", "openrouter"), "attempts": attempts})
 
 
+def _observe(observer, conn: dict, error: LLMError | None) -> None:
+    """Report one attempt's outcome, without letting the report break the call.
+
+    The observer is how a provider's own verdict reaches the health registry
+    without anything polling for it (#146): every real turn is already a live
+    test of the connection it ran on, and the failures worth showing in the
+    status bar are exactly the ones a scene just hit.
+
+    Guarded because it is bookkeeping on the generation path. An observer that
+    raises would turn a *successful* turn into an error — the one outcome a
+    status feature must never be able to produce — and, on the failure path,
+    would replace the provider's error with its own.
+    """
+    if observer is None:
+        return
+    try:
+        observer(conn, error)
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        log.warning("could not record connection health for %r: %s", _label(conn), exc)
+
+
 async def _resilient(open_stream, routes, timeout: float,
                      tick: float | None = None,
-                     usage: dict | None = None) -> AsyncIterator[str]:
+                     usage: dict | None = None,
+                     observer=None) -> AsyncIterator[str]:
     """Run `routes` in order, retrying each for as many attempts as it carries.
 
     `routes` is a list of `(conn, retries)` -- the active connection first,
@@ -426,8 +458,10 @@ async def _resilient(open_stream, routes, timeout: float,
                 async for chunk in agen:
                     sent = sent or bool(chunk)
                     yield chunk
+                _observe(observer, conn, None)
                 return
             except LLMError as exc:
+                _observe(observer, conn, exc)
                 if sent:
                     raise
                 last = exc
@@ -481,7 +515,7 @@ class LLMClient:
     """Dispatches each call to the resolved connection's kind."""
 
     def __init__(self, openrouter=None, claude=None, openai_compatible=None, timeout=None,
-                 retries=None, fallback=None):
+                 retries=None, fallback=None, observer=None):
         self._openrouter = openrouter if openrouter is not None else OpenRouterClient()
         self._claude = claude if claude is not None else ClaudeAgentClient()
         self._openai_compatible = (openai_compatible if openai_compatible is not None
@@ -500,6 +534,13 @@ class LLMClient:
         # Configuration page takes effect on the next send.
         self._retries = retries
         self._fallback = fallback
+        #: Called with `(conn, error_or_None)` as each attempt settles, so the
+        #: health registry learns what the provider actually did without
+        #: anything having to poll it (#146). A callable rather than the
+        #: registry itself, for the third time on this constructor and the same
+        #: reason: the registry lives on `app.state` and this module may not
+        #: reach into the app any more than it may reach into the store.
+        self._observer = observer
 
     def _timeout_seconds(self) -> float:
         if self._timeout is None:
@@ -596,11 +637,64 @@ class LLMClient:
         """
         return _resilient(lambda route, holder: self._dispatch(messages, route, holder),
                           self._usable_routes(messages, conn), self._timeout_seconds(),
-                          usage=usage)
+                          usage=usage, observer=self._observer)
 
     async def complete(self, messages: list[dict], conn: dict,
                        usage: dict | None = None) -> str:
         return "".join([chunk async for chunk in self.stream(messages, conn, usage)])
+
+    async def list_models(self, conn: dict) -> list[dict]:
+        """The catalog `conn`'s provider offers, normalized (#149).
+
+        On the facade because the answer depends on the connection's kind, and
+        dispatching by kind is the one thing this class is. Before #149 the
+        catalog was a second seam of its own that only knew how to ask an
+        OpenAI-compatible endpoint — so the picker showed a *custom* endpoint
+        its own models and showed every other connection OpenRouter's, fetched
+        from the browser against a hardcoded URL whichever provider was
+        configured.
+
+        Deliberately **not** retried and **not** fallen back. `_resilient`
+        exists so a scene survives a blip; a catalog is a question about one
+        named connection, and answering it from a different provider's models
+        would hand the reader a list of ids their connection cannot run.
+        """
+        kind = conn.get("kind", "openrouter")
+        if kind not in LISTABLE_KINDS:
+            # Unreachable through the API — the route refuses these before it
+            # gets here, with a message about the kind rather than a transport
+            # failure. Kept as a backstop so a future caller that forgets the
+            # check gets an error rather than an AttributeError from a provider
+            # with no `list_models`.
+            raise LLMError("bad_response", f"{kind} connections have no model catalog")
+        if kind == "openai_compatible":
+            return await self._openai_compatible.list_models(
+                conn.get("base_url", ""), conn.get("api_key", ""))
+        return await self._openrouter.list_models(conn.get("api_key", ""))
+
+    async def check(self, conn: dict) -> None:
+        """Ask `conn`'s provider whether it can serve. Returns on yes, raises
+        the same `LLMError` a generation would on no (#146).
+
+        One vocabulary, not two: the health report a reader sees is the `kind`
+        and `detail` of the error their next turn would have failed with, so a
+        check that says `auth` and a scene that says `auth` are saying the same
+        thing about the same connection.
+
+        Not retried and not fallen back, for a sharper version of
+        `list_models`' reason: "is this connection healthy" answered by trying
+        a *different* connection is not an answer, and a retry would report a
+        rate-limited provider as healthy after waiting out the window the
+        reader is asking about.
+        """
+        kind = conn.get("kind", "openrouter")
+        if kind == "claude":
+            await self._claude.probe(effective_model(conn))
+        elif kind == "openai_compatible":
+            await self._openai_compatible.probe(conn.get("base_url", ""),
+                                                conn.get("api_key", ""))
+        else:
+            await self._openrouter.probe(conn.get("api_key", ""))
 
     async def aclose(self) -> None:
         await self._openrouter.aclose()

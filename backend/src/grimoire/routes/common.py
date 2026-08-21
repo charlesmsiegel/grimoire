@@ -23,6 +23,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from .. import store
+from ..health import ProviderHealth
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
@@ -213,7 +214,7 @@ def _fallback_connection() -> dict | None:
     return None if _connection_problem(conn) else conn
 
 
-def build_llm() -> LLMClient:
+def build_llm(health: ProviderHealth | None = None) -> LLMClient:
     """The gateway client for one app (#215).
 
     Built per app rather than once per process because it owns an
@@ -226,10 +227,16 @@ def build_llm() -> LLMClient:
     the store (#239), and reading config.md per call is what lets a
     Configuration-page change land without a restart (#243). The retry count and
     the fallback route (#144) ride the same seam for the same two reasons.
+
+    `health` is that app's registry (#146), passed as the observer every attempt
+    reports its outcome to. Optional so a caller that only wants to generate —
+    tests, mostly — need not build one; the facade treats a missing observer as
+    "nobody is listening" rather than as an error.
     """
     return LLMClient(timeout=store.config.llm_timeout,
                      retries=store.config.llm_retries,
-                     fallback=_fallback_connection)
+                     fallback=_fallback_connection,
+                     observer=health.record if health is not None else None)
 
 
 def build_openai_compatible_client() -> OpenAICompatibleClient:
@@ -241,6 +248,21 @@ def build_openai_compatible_client() -> OpenAICompatibleClient:
     would make a private attribute part of the route's contract.
     """
     return OpenAICompatibleClient()
+
+
+def get_health(request: Request) -> ProviderHealth:
+    """The app's health registry, built in `main.create_app` (#146).
+
+    On `app.state` rather than at module scope for the reason every other piece
+    of per-app state is: a `TestClient` builds an app per test, and a shared
+    module-level registry would carry one test's recorded provider failures
+    into the next.
+    """
+    return request.app.state.health
+
+
+def get_openai_compatible_client(request: Request) -> OpenAICompatibleClient:
+    return request.app.state.openai_compatible
 
 
 def _dump(model: BaseModel) -> dict:
@@ -414,10 +436,6 @@ def get_llm(request: Request) -> LLMClient:
     lifespan (#215). `app.dependency_overrides` replaces this callable whole,
     which is the seam `tests/llm_fakes.py` is injected at."""
     return request.app.state.llm
-
-
-def get_openai_compatible_client(request: Request) -> OpenAICompatibleClient:
-    return request.app.state.openai_compatible
 
 
 # ---- response bundle (scope endpoints) ----
