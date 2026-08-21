@@ -2977,14 +2977,20 @@ test("typed guidance is passed to regenerate", async () => {
     expect.any(AbortSignal), expect.any(String), expect.any(Function)));
 });
 
-test("Escape closes the reroll popover without firing", async () => {
+test.each(["Reroll guidance", "Reroll connection", "Reroll model"])(
+  "Escape closes the reroll popover from %s, without firing", async (control) => {
+  // Every control, not just the autofocused one: the route row (#77) added two
+  // more, and a popover only one of its three controls can be backed out of is
+  // worse than one that offers no escape at all.
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
     { role: "user", content: "hi" }, { role: "assistant", content: "old reply" }] });
   renderCampaign();
   await screen.findByText("old reply");
   fireEvent.click(await screen.findByTitle("Reroll"));
-  fireEvent.keyDown(screen.getByPlaceholderText(/guide the reroll/i), { key: "Escape" });
+
+  fireEvent.keyDown(await screen.findByLabelText(control), { key: "Escape" });
+
   expect(screen.queryByPlaceholderText(/guide the reroll/i)).toBeNull();
   expect(api.regenerate).not.toHaveBeenCalled();
 });

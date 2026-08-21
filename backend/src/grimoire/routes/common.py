@@ -777,13 +777,31 @@ def _require_connection() -> dict:
     return conn
 
 
-def _override_connection(body) -> dict:
-    """The connection ONE call asked to run on, or the active one (#77).
+def _override_connection(body) -> dict | None:
+    """The connection ONE call asked to run on, or None for "no override" (#77).
 
     Reads `connection_id` and `model` off any request body that carries them
-    (`RegenerateBody` today), and returns a connection dict the LLM facade can
-    be handed directly — `_require_connection`'s answer when neither is set, so
-    every caller keeps the standing configuration by doing nothing.
+    (`RegenerateBody` today) and returns a connection dict the LLM facade can be
+    handed directly. **None means neither field was set**, so a caller writes
+
+        override = _override_connection(body)
+        routed = override is not None
+        conn = override if routed else _require_connection()
+
+    and gets the standing configuration by doing nothing — while `routed` is
+    the one honest answer to "did the caller choose a route", which the stamps
+    downstream need and which re-reading the body a second time would let
+    drift. Tested against None rather than for truth: a connection dict is
+    never empty today, but a falsy check would silently start falling back the
+    first time that stopped being true.
+
+    The two fields compose. `connection_id` alone runs the named connection at
+    its own model; `model` alone runs the ACTIVE connection at that model; both
+    is the named connection driven at the named model. Neither expresses the
+    other's case, which is why there are two: a bare model id cannot reach a
+    different provider (the credentials, base URL and prompt post-processing
+    that makes possible live on a connection), and a bare connection id cannot
+    say "the same provider, its bigger model".
 
     Three refusals, and which one fires matters to the caller:
 
@@ -791,7 +809,9 @@ def _override_connection(body) -> dict:
       an override are scene routes whose 404 already means "this scene is gone"
       and is acted on as such by the client (it stops the turn and re-reads the
       rail); spending the same status on a bad body field would send it
-      hunting for a scene that is fine.
+      hunting for a scene that is fine. An id that is not a safe path segment
+      lands here too — `llm_connections` refuses it rather than joining it onto
+      a path (#240), so it simply names no connection.
     - a connection that cannot send is the same **409/missing_key**
       `_require_connection` raises, because it is the same setup mistake and
       the frontend already routes that kind to the Connections page. Checked
@@ -805,7 +825,8 @@ def _override_connection(body) -> dict:
     The active connection is deliberately not required when `connection_id`
     names another one. Rerolling onto a working local endpoint is exactly the
     thing to do while the OpenRouter key is missing, and requiring the active
-    one first would refuse the request that fixes the session.
+    one first would refuse the request that fixes the session. A `model`-only
+    override does still require it — that is the connection it is overriding.
 
     What this does NOT change is the configured fallback (#144). An override
     picks which connection is *primary*; the fallback is standing policy about
@@ -814,13 +835,15 @@ def _override_connection(body) -> dict:
     `llm._same_route` already drops a fallback that resolves to the override
     itself, so "reroll this on the fallback" does not double up.
     """
-    cid_field = (getattr(body, "connection_id", None) or "").strip() if body else ""
+    conn_id = (getattr(body, "connection_id", None) or "").strip() if body else ""
     model = (getattr(body, "model", None) or "").strip() if body else ""
-    if not cid_field:
+    if not conn_id and not model:
+        return None
+    if not conn_id:
         conn = _require_connection()
     else:
         try:
-            conn = store.llm_connections.read_connection_raw(cid_field)
+            conn = store.llm_connections.read_connection_raw(conn_id)
         except store.llm_connections.ConnectionNotFound as exc:
             raise HTTPException(status_code=400, detail="unknown connection") from exc
         problem = _connection_problem(conn)

@@ -1544,7 +1544,7 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .reroll-pop .btn-chrome { border: none; border-left: 1px solid var(--rule); padding: 7px 12px; box-shadow: none; font-size: 11px; white-space: nowrap; }
 .reroll-route { display: flex; border-bottom: 1px solid var(--rule); }
 .reroll-route select {
-  flex: 0 0 auto; max-width: 140px; background: transparent; color: var(--ink);
+  flex: 0 0 auto; max-width: 152px; background: transparent; color: var(--ink);
   border: none; border-right: 1px solid var(--rule); outline: none;
   padding: 7px 10px; font-family: var(--fm); font-size: 12px;
 }
@@ -1554,7 +1554,10 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .reroll-route .combobox input[type="text"] {
   background: transparent; border: none; padding: 7px 10px; font-size: 12px;
 }
-.reroll-route .combobox-list { max-height: 220px; }
+/* Wider than its input: the rows carry a name, a price, an id and a context
+   size, and the box it hangs off is one of three controls in a gutter
+   overlay. `right: auto` is what lets it grow past that width. */
+.reroll-route .combobox-list { max-height: 220px; min-width: 300px; right: auto; }
 
 /* ---- manual dice roll popover (anchored to the input bar) ---- */
 .roll-pop { position: absolute; bottom: 100%; left: 0; margin-bottom: 8px; z-index: 5;

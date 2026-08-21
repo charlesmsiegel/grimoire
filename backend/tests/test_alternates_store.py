@@ -1138,15 +1138,23 @@ def test_promoting_a_variant_clears_a_pending_stamp(monkeypatch, tmp_path):
         scenes_paths._alts_path(cid, sid).read_text(encoding="utf-8"))["next_model"] == ""
 
 
-def test_a_stamp_longer_than_any_model_id_is_clipped(monkeypatch, tmp_path):
-    """The field arrives from the same unbounded wire string the hint does."""
+def test_a_stamp_longer_than_any_model_id_is_dropped_rather_than_clipped(
+        monkeypatch, tmp_path):
+    """The field arrives from the same unbounded wire string the hint does, and
+    is bounded the same way — but clipping an identifier invents a different
+    one, and a tooltip naming a model that does not exist is worse than one
+    naming none."""
     cid = _campaign(monkeypatch, tmp_path)
     sid = _scene_with_reply(cid)
 
     _reroll(cid, sid, [_seg("Gulls over the pilings.")], model="m" * 5000)
 
     runs = alternates.state(cid, sid)["runs"]
-    assert len(runs[1]["model"]) == alternates.MAX_MODEL_CHARS
+    assert runs[1]["model"] == ""
+    # the hint beside it is still prose, and prose survives a clip
+    _reroll(cid, sid, [_seg("A third take.")], guidance="g" * 5000)
+    assert len(alternates.state(cid, sid)["runs"][-1]["guidance"]) == (
+        alternates.MAX_GUIDANCE_CHARS)
 
 
 def test_a_sidecar_written_before_the_stamp_existed_still_reads(monkeypatch, tmp_path):

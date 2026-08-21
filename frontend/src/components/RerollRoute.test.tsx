@@ -34,15 +34,21 @@ beforeEach(() => {
   (getModels as any).mockResolvedValue([]);
 });
 
-test("the default option names the active connection", async () => {
+test("the default option is offered, with the active connection on hover", async () => {
   render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} active={ACTIVE} />);
   const select = await screen.findByLabelText<HTMLSelectElement>("Reroll connection");
   expect(select.value).toBe("");
-  await screen.findByRole("option", { name: "Default — OpenRouter" });
-  // Every connection is offered, not only the active one: reaching another
-  // provider is the case a bare model id cannot express.
+  await screen.findByRole("option", { name: "Default" });
+  // Every OTHER connection is offered: reaching another provider is the case a
+  // bare model id cannot express.
   expect(screen.getByRole("option", { name: "Local" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "Claude" })).toBeInTheDocument();
+  // and the active one is not offered twice — "Default" already is it.
+  expect(screen.queryByRole("option", { name: "OpenRouter" })).toBeNull();
+  expect(screen.getAllByRole("option")).toHaveLength(3);
+  // The name is not lost, only moved off a control it does not fit.
+  expect(screen.getByRole("option", { name: "Default" }))
+    .toHaveAttribute("title", "Default: OpenRouter");
 });
 
 test("the model box shows what leaving it blank would run", async () => {
@@ -112,5 +118,5 @@ test("a connection list that cannot be read still offers the default", async () 
   (api.listConnections as any).mockRejectedValue(new Error("offline"));
   render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} active={ACTIVE} />);
 
-  expect(await screen.findByRole("option", { name: "Default — OpenRouter" })).toBeInTheDocument();
+  expect(await screen.findByRole("option", { name: "Default" })).toBeInTheDocument();
 });

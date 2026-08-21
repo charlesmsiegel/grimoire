@@ -4329,6 +4329,22 @@ def test_a_reroll_may_name_a_connection_and_a_model_together(client):
     assert client.get(f"/api/llm-connections/{other}").json()["model"] == "llama3"
 
 
+def test_an_override_steers_one_reroll_and_not_the_turn_after_it(client):
+    """One-shot on the server as well as in the picker: nothing about the
+    override is persisted, so the next turn is back on the campaign's
+    connection without anything having to put it back."""
+    fake, cid, sid = _rerollable(client)
+    other = _local_endpoint(client)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                json={"connection_id": other, "model": "qwen3"})
+    assert fake.conn["kind"] == "openai_compatible"
+
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "and then?"})
+
+    assert fake.conn["id"] == "openrouter"
+    assert fake.conn["model"] == "campaign/model"
+
+
 def test_an_override_naming_no_connection_is_a_400_and_touches_nothing(client):
     """Not a 404: this route's 404 means "the scene is gone" and the client acts
     on it. The reply it would have replaced has to still be there, too — the
@@ -4369,6 +4385,10 @@ def test_an_override_works_while_the_active_connection_is_unusable(client):
     gets play moving again."""
     fake, cid, sid = _rerollable(client)
     other = _local_endpoint(client)
+    # The private, because there is no public way to CLEAR a key: `PUT
+    # /llm-connections/{id}` reads an empty `api_key` as "keep the stored one"
+    # (the type-to-replace convention), which is the behaviour that makes a
+    # rename safe and the reason this cannot be set up through the route.
     store.llm_connections._write_raw("openrouter", kind="openrouter",
                                      name="OpenRouter", api_key="", model="campaign/model")
 
@@ -4459,6 +4479,77 @@ def test_a_turn_with_no_override_still_records_the_scenes_stamped_model(client, 
     rows = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
     latest = next(r for r in rows if r["task"] == task)
     assert latest["model"] == "campaign/model"
+
+
+def test_a_rerolls_cost_is_billed_to_the_model_it_ran_on(client):
+    """The ledger names the route, not the campaign's — a reroll sent to a paid
+    provider must not be filed under the free local endpoint, nor the other way
+    round. It comes out right because the meter is stamped from the `conn` the
+    facade was handed (`llm._stamp`), which is the overridden one; asserted
+    here so a future override that forgets to reach the meter is caught."""
+    _fake, cid, sid = _rerollable(client)
+    other = _local_endpoint(client, model="llama3")
+
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                json={"connection_id": other})
+
+    rows = client.get(f"/api/campaigns/{cid}/scenes/{sid}/usage").json()["turns"]
+    latest = next(r for r in rows if r["task"] == "regenerate")
+    assert latest["model"] == "llama3"
+
+
+def test_a_reroll_onto_claude_stamps_the_model_the_dispatcher_substitutes(client):
+    """`effective_model`, not `conn["model"]`: a Claude connection with none
+    configured still generates, so stamping the stored "" would file a variant
+    under a model the reader cannot look a context size up for."""
+    _fake, cid, sid = _rerollable(client)
+    anthropic = client.post("/api/llm-connections",
+                            json={"kind": "claude", "name": "Claude",
+                                  "model": ""}).json()["id"]
+
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                json={"connection_id": anthropic})
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert body["alternates"][1]["model"] == llm.CLAUDE_DEFAULT_MODEL
+
+
+def test_an_override_id_that_could_escape_the_store_names_no_connection(client):
+    """#240's rule, on an id that now arrives in a request BODY rather than a
+    URL segment — where the router's path matching protects nothing."""
+    fake, cid, sid = _rerollable(client)
+
+    for unsafe in ("../config", "C:evil", "a/b", ".."):
+        r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                        json={"connection_id": unsafe})
+        assert r.status_code == 400, unsafe
+    assert fake.calls == 0
+
+
+def test_a_blank_override_is_the_standing_configuration_rather_than_a_refusal(client):
+    """A field a form always serializes arrives empty, and empty is "unset" for
+    all of them — a whitespace connection id is not a connection nobody has."""
+    fake, cid, sid = _rerollable(client)
+
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                       json={"connection_id": "  ", "model": " ",
+                             "guidance": ""}).status_code == 200
+
+    assert fake.conn["id"] == "openrouter"
+    assert fake.conn["model"] == "campaign/model"
+
+
+def test_an_absurd_model_override_leaves_the_variant_unstamped(client):
+    """Clipping an identifier invents a different one. The reroll still runs on
+    what it was told to run on — this is only about what gets recorded."""
+    fake, cid, sid = _rerollable(client)
+    absurd = "m" * (store.alternates.MAX_MODEL_CHARS + 1)
+
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate", json={"model": absurd})
+
+    assert fake.conn["model"] == absurd
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert body["alternates"][1]["model"] == ""
 
 
 def test_a_sidecar_that_cannot_be_written_does_not_fail_the_landed_reply(client, monkeypatch):
