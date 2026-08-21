@@ -155,3 +155,28 @@ describe("following a rename", () => {
     expect(registry.pending("c1", "s1-renamed")).toBeUndefined();
   });
 });
+
+describe("the key", () => {
+  it("does not confuse two scenes whose ids differ only in where a space falls", () => {
+    // `store.safe_id` permits interior spaces, so a separator-joined key makes
+    // ("a", "b c") and ("a b", "c") the same entry. This provider survives
+    // navigation, so both pairs can hold a pending send at once -- and the
+    // second `begin` would overwrite the first's saved prompt, leaving recovery
+    // to resolve it into the wrong scene.
+    const { registry } = capture();
+    act(() => registry.begin({ ...SEND, cid: "a", sid: "b c", text: "first" }));
+    act(() => registry.begin({ ...SEND, cid: "a b", sid: "c", text: "second" }));
+
+    expect(registry.pending("a", "b c")?.text).toBe("first");
+    expect(registry.pending("a b", "c")?.text).toBe("second");
+  });
+
+  it("does not let settling one of them resolve the other", () => {
+    const { registry } = capture();
+    act(() => registry.begin({ ...SEND, cid: "a", sid: "b c", text: "first" }));
+    act(() => registry.begin({ ...SEND, cid: "a b", sid: "c", text: "second" }));
+    act(() => registry.settle("a b", "c"));
+
+    expect(registry.pending("a", "b c")?.text).toBe("first");
+  });
+});

@@ -15,6 +15,7 @@ import pytest
 
 import grimoire.store as store
 from grimoire.store import frontmatter, migrations
+from grimoire.store.scenes import identity
 
 
 def _new_campaign() -> str:
@@ -631,3 +632,76 @@ def test_a_duplicate_in_a_mixed_newline_header_is_really_removed(tmp_path, monke
     assert b"a" * 32 not in raw, "the retired token is still in the file"
     assert b"**Mara:** hello" in raw, "the body was rewritten"
     assert store.scenes.read_scene(cid, sid)["meta"]["title"] == "Mara"
+
+
+def test_a_scene_that_cannot_be_statted_is_not_reported_as_missing(tmp_path,
+                                                                   monkeypatch):
+    """`Path.exists()` swallows `OSError` and answers False, so the strict
+    reader was asking a fail-soft question one line above itself.
+
+    The consequence is the exact failure the strict reader was added to
+    prevent: a scene whose path cannot be resolved reads as "no such scene",
+    `_scene_moved` calls that `scene_replaced`, and a finished reply is
+    discarded for a scene that may be perfectly intact.
+
+    Driven with a symlink LOOP rather than a patched `exists`, because that is
+    the whole point: `exists()` returns False for it while the read raises
+    `ELOOP`, so the two disagree exactly as they do on the unavailable mount
+    this stands in for. Patching `read_text` to raise would leave `exists()`
+    answering True and never exercise the branch at all -- the first version of
+    this test did that, and the mutant with `exists()` restored sailed through
+    it.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    p = store.scenes.paths._scene_path(cid, sid)
+    assert identity.scene_identity_strict(cid, sid)      # readable to begin with
+
+    p.unlink()
+    p.symlink_to(p)                                      # ELOOP on read
+    assert not p.exists(), "the premise: exists() cannot see this"
+
+    with pytest.raises(identity.UnreadableError):
+        identity.scene_identity_strict(cid, sid)
+
+
+def test_a_scene_that_really_is_gone_still_answers_none(tmp_path, monkeypatch):
+    """The counterweight. Absence is a real answer, not a failure -- a reader
+    that raised on it would turn every ordinary "that scene was deleted" into a
+    500."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+
+    assert identity.scene_identity_strict(cid, "0001--nobody") is None
+
+
+def test_a_cr_only_header_is_spliced_rather_than_buried(tmp_path, monkeypatch):
+    """`Path.read_text` performs universal-newline translation, so a file using
+    bare CR has perfectly good frontmatter as far as every reader is concerned
+    -- while a byte scan that knows only CRLF and LF finds no header at all.
+
+    `_splice` returning None there makes `ensure_identity` prepend a SECOND
+    header, demoting the scene's real title and model into the transcript. On a
+    migration that rewrites every file in the library unprompted, that is the
+    worst thing in this module.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    p = store.scenes.paths._scene_path(cid, sid)
+    # Rewritten with bare CR throughout, identity line removed.
+    raw = p.read_bytes().replace(b"\r\n", b"\n")
+    body = b"\r".join(ln for ln in raw.split(b"\n")
+                      if not ln.startswith(b"identity:"))
+    p.write_bytes(body)
+
+    token = identity.ensure_identity(cid, sid)
+
+    meta = store.scenes.read_scene_meta(cid, sid)
+    assert meta.get("title") == "Mara", f"the header was buried: {meta}"
+    assert identity.scene_identity(cid, sid) == token
+    assert p.read_bytes().count(b"---") == 2, "a second header was prepended"

@@ -110,16 +110,26 @@ def _date_hint(cid: str, suggested_date: str | None) -> str:
 def create_would_repad(cid: str) -> bool:
     """Whether the next scene created here would widen the whole campaign.
 
-    Asked by the route before it creates, because a repad renames every scene
-    in the campaign and a live turn holds the path it captured. Read-only and
-    lock-free: it is a hint the caller acts on under its own guard, not a
-    promise -- another create landing in between simply means the guard is
-    consulted a scene later than it might have been.
+    Asked by the route inside the campaign-lock hold that also covers the
+    create, because a repad renames every scene in the campaign and a live turn
+    holds the path it captured.
+
+    **An unreadable directory RAISES rather than answering ``False``.** They are
+    not the same answer and review caught the difference: a transient `OSError`
+    here reported "no repad needed", the guard was skipped, and `_create_scene`
+    then succeeded on its own read and repadded every scene anyway -- so a live
+    turn kept its old path and discarded its finished reply at the identity
+    fence. Failing the create is the recoverable direction; the caller can try
+    again, and nothing has moved.
+
+    A missing campaign still answers ``False``: there is nothing to widen, and
+    `_create_scene` raises its own `CampaignNotFound` a moment later, which is
+    the 404 the route already knows how to give.
     """
     try:
         number, width = serialize._numbering(cid)
-    except (OSError, campaigns_paths.CampaignNotFound):
-        return False        # nothing to widen, or nothing readable to widen
+    except campaigns_paths.CampaignNotFound:
+        return False        # nothing to widen; the create reports it properly
     return len(str(number)) > width
 
 

@@ -1337,6 +1337,33 @@ test("a send whose socket AND lookup both died stays pending", async () => {
   expect(screen.getByRole("textbox")).toHaveValue("");
 });
 
+test("an adopted run that fails and rolls back hands the words back", async () => {
+  // An adopted run fails the same way a watched one does, and rolls the post
+  // back the same way -- `post_returned` says so. At that moment the registry
+  // holds the ONLY copy of those words: the transcript no longer has them, and
+  // the component that typed them may be long gone. Settling without reading it
+  // first destroyed the prompt permanently.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(async () => {
+    throw Object.assign(new Error("network error"), { beforeResponse: true });
+  });
+  (api.findRun as any)
+    .mockResolvedValueOnce({ run: null })          // the mount pass
+    .mockResolvedValue(
+      { run: { id: "r-live", attempt_id: "a", state: "running", next_index: 0 } });
+  (api.attachRun as any).mockImplementation(
+    async (_c: string, _s: string, _r: string, _from: number, onEvent: any) => {
+      onEvent({ error: { detail: "the provider gave up", post_returned: true } });
+    });
+
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Mara waits." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+
+  await waitFor(() => expect(api.attachRun).toHaveBeenCalled());
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("Mara waits."));
+});
+
 test("a reload with no local attempt still finds the run generating on this scene",
      async () => {
   // The Android case this whole feature exists for, one layer up: the WebView's

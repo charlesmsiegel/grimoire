@@ -70,7 +70,14 @@ export type RunRegistry = {
   resumeFrom(runId: string): number;
 };
 
-const key = (cid: string, sid: string) => `${cid} ${sid}`;
+// JSON, not concatenation. `store.safe_id` permits interior spaces, so
+// `("a", "b c")` and `("a b", "c")` both flatten to `"a b c"` under a
+// separator-joined key -- and because this provider survives navigation, both
+// pairs can hold a pending send at once. Beginning a turn for one would then
+// overwrite the other's saved prompt, and recovery would resolve into the
+// wrong scene. `JSON.stringify` escapes the parts, so no pair of valid ids can
+// collide whatever characters they contain.
+const key = (cid: string, sid: string) => JSON.stringify([cid, sid]);
 
 const Ctx = createContext<RunRegistry | null>(null);
 

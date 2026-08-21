@@ -119,6 +119,16 @@ def post_scene(cid: str, body: NewScene, request: Request):
                                                     pcless=body.pcless)}
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
+    except OSError as exc:
+        # The boundary read failed, so nobody knows whether this create would
+        # repad -- and `create_would_repad` now says so rather than answering
+        # "no". Reported as store contention, which the client retries, because
+        # that is what it almost always is; going ahead would skip the guard and
+        # then repad anyway on `_create_scene`'s own read, stranding a live turn
+        # on a path that no longer exists.
+        raise HTTPException(status_code=409, detail={
+            "kind": "busy",
+            "detail": f"the campaign could not be read: {exc}"}) from exc
 
 
 def _resolve_cast(cid: str, tokens: list[str], memo: dict[str, str] | None = None) -> list[dict]:
