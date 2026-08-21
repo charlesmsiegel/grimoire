@@ -176,8 +176,8 @@ def test_a_scene_that_moved_says_what_is_not_carried(monkeypatch, tmp_path):
     overlay.create_entity(cid, "locations", "The Keep")
 
     draft = scene_import.parse(cid, (
-        "---\ntitle: T\ntime_history: 2026-01-02,2026-01-03\n"
-        "location_history: the-keep,the-quay\n---\n\n**You:** hi\n").encode())
+        b"---\ntitle: T\ntime_history: 2026-01-02,2026-01-03\n"
+        b"location_history: the-keep,the-quay\n---\n\n**You:** hi\n"))
 
     assert draft["date"] == "2026-01-02" and draft["location"] == "the-keep"
     assert sum("only the first is carried" in w for w in draft["warnings"]) == 2
@@ -216,6 +216,9 @@ def test_a_marker_without_a_blank_line_above_it_is_reported(monkeypatch, tmp_pat
     draft = scene_import.parse(cid, b"**You:** hello\n**Mara:** and back\n")
     assert len(draft["messages"]) == 1
     assert any("blank line" in w for w in draft["warnings"])
+    # ...and says the reading is ambiguous: the same shape is a real bold
+    # label inside a real message ("**Note:** ..."), and only the reader knows.
+    assert any("wrong if the file lost its blank lines" in w for w in draft["warnings"])
 
 
 # ---- parse: the cast ----
