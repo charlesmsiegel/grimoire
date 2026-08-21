@@ -619,10 +619,11 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
     value is held to its staged `before` by `conflicts` (#111) -- an edit whose target
     moved is reported rather than applied, unless the row carries the reviewer's
     `resolve`. Callers wanting the reviewer to choose before anything lands run
-    `conflicts.check_conflicts` first. When `sid` is given, the before/after
-    of each applied *browsable* edit (characters/lore/locations) is captured into
-    changes.json (the latest write-back delta per record); sheet edits are never
-    browsable and never land there -- the sheet itself is the record.
+    `conflicts.check_conflicts` first. When `sid` is given, the before/after of
+    each applied *browsable* edit -- a character record, or the body of any of
+    the five entity kinds -- is captured into changes.json (the latest
+    write-back delta per record); sheet edits are never browsable and never
+    land there -- the sheet itself is the record.
 
     Every applied edit of every kind also appends one row to the append-only
     change journal (`store/journal.py`), carrying the reversal `store/undo.py`

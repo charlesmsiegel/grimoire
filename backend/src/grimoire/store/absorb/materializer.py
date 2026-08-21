@@ -81,14 +81,19 @@ def _actor_exists(cid: str, token: str) -> bool:
 APPEND_KINDS: tuple[str, ...] = ("lore", "locations", "items", "groups", "creatures")
 
 
-def _entity_target(cid: str, raw_id: str) -> tuple[str, str] | None:
-    """`(kind, eid)` for a `lore_edits` id, or None when no record answers to it.
+def _entity_target(cid: str, raw_id: str) -> tuple[str, str, dict] | None:
+    """`(kind, eid, record)` for a `lore_edits` id, or None when nothing answers.
 
     A `<kind>/<id>`-qualified id is resolved in that kind ONLY. Falling back to
     the bare scan when the named kind has no such record would answer a
     question the model did not ask: it named a kind because the id alone is
     ambiguous, so a miss there means the record it meant does not exist, not
     that some other kind's same-slugged record will do.
+
+    The record comes back with the pair rather than being re-read by the
+    caller, because resolving is not free: a bare id that misses is up to five
+    overlay reads, and each croot miss reads the campaign's tombstone list
+    before falling through to the world.
     """
     kind, sep, rest = raw_id.partition("/")
     if not sep:
@@ -99,8 +104,7 @@ def _entity_target(cid: str, raw_id: str) -> tuple[str, str] | None:
         candidates = tuple((k, raw_id) for k in APPEND_KINDS)
     for k, eid in candidates:
         try:
-            overlay.read_entity(cid, k, eid)
-            return k, eid
+            return k, eid, overlay.read_entity(cid, k, eid)
         except entities.EntityNotFound:
             continue
     return None
@@ -416,8 +420,7 @@ def materialize(cid: str, sid: str, parsed: dict,
         target = _entity_target(cid, raw_id)
         if not target:
             continue
-        kind, eid = target
-        ent = overlay.read_entity(cid, kind, eid)
+        kind, eid, ent = target
         before = ent["body"].strip()
         after = (before + "\n\n" + append).strip()
         # The staged id carries the KIND as well as the record's, because two

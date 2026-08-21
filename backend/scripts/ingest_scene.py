@@ -432,8 +432,8 @@ def _unapplied(edits: list[dict], failures: list[dict]) -> list[dict]:
                    if isinstance(f, dict) and f.get("kind") != "conflict"]
     # An id shared by two rows cannot be resolved to one of them. `apply_edits`
     # reports a failure by id and nothing else, and `materialize` does not
-    # promise uniqueness -- two lore appends against one entry are both
-    # `lore:<eid>`. Matching in order would queue whichever came FIRST, which is
+    # promise uniqueness -- two body appends against one entry are both
+    # `lore:<kind>/<eid>`. Matching in order would queue whichever came FIRST, which is
     # the one that landed, and drop the one that failed: the retry then re-applies
     # stale text and reports the scene `done` with the real proposal gone. An
     # ambiguous id is therefore replayed by nobody; the failure stands and a
