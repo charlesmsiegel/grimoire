@@ -16,7 +16,7 @@ from starlette.concurrency import run_in_threadpool
 from .. import prompts, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from . import runs
+from . import runs, streaming
 from .common import (
     _bounded_call,
     _campaign_root_or_404,
@@ -360,6 +360,16 @@ def _disown_dead_guidance(cid: str, sid: str) -> None:
 def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
               client: LLMClient = Depends(get_llm),
               x_grimoire_attempt: str | None = Header(default=None)):
+    # BEFORE the preflight checks, and that order is the whole point of an
+    # attempt id. This is a REPLAY: the work already ran and its outcome is
+    # buffered, so a client that lost the original response must get that
+    # outcome back. Behind `_require_connection` it would not -- a connection
+    # removed or re-keyed in the meantime answers `missing_key`, telling the
+    # player a turn that actually landed did not, which is the exact ambiguity
+    # the attempt id exists to remove. No provider is needed to replay.
+    replay = runs.replay_attempt(request.app, cid, sid, x_grimoire_attempt)
+    if replay is not None:
+        return replay
     _require_scene(cid, sid)
     conn = _require_connection()
     # RESERVED BEFORE THE FIRST MUTATOR. `heal` can append a line and the
@@ -399,11 +409,36 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
     # having generated nothing. Heal still leads, because it is what can append
     # a 🎲 line, and the sidecar has to resolve against the transcript that
     # leaves behind. One lock, so a resolution cannot land between the three.
+    #
+    # The player's post joined them under that SAME acquisition when review
+    # caught what the terminal identity fence does not cover. `reserve_turn`
+    # captures the scene's identity and then returns; every mutator below used
+    # to run outside any fence, so a scene deleted and replaced in that window
+    # got this turn's `heal`, its retired proposal and its player post -- and
+    # the fence, which only guards the terminal WRITE, would then refuse the
+    # reply and leave the replacement holding somebody else's post with no
+    # answer coming. Setup is now one locked, fenced unit: either all of it
+    # lands on the scene the run captured, or none of it does.
     with store.locks.campaign_lock(cid):
+        if streaming._scene_moved(cid, sid, run.scene_identity):
+            raise HTTPException(status_code=404, detail="scene not found")
         store.proposals.heal(cid, sid)
         if ephemeral:
             _disown_dead_guidance(cid, sid)
         store.proposals.supersede(cid, sid)  # a new send retires any pending decision
+        posted_at, content, speaker = None, "", None
+        if not ephemeral:
+            names = store.appearances.player_names(cid, sid)
+            speaker = names[0] if len(names) == 1 else None
+            if speaker:
+                store.scenes.stamp_user_speaker(cid, sid, speaker)
+            # Macros resolved once at persist time (#137): a player's
+            # {{roll:1d20}} must not re-roll on every later context build
+            # (retry, next turn, ...).
+            content = store.context.expand_macros(
+                turn.content, store.context.scene_substitutions(cid, sid), cid, sid)
+            posted_at = store.scenes.append_message(
+                cid, sid, "user", content, speaker=speaker)
     if ephemeral:
         note = turn.content.strip() or prompts.render("scene/director_note.j2")
         messages, breakdown = store.context.compose_director_turn(
@@ -427,15 +462,6 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         runs.start_detached(request.app, run, lambda: stream.body_iterator,
                             outcome=outcome.result)
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
-    names = store.appearances.player_names(cid, sid)
-    speaker = names[0] if len(names) == 1 else None
-    if speaker:
-        store.scenes.stamp_user_speaker(cid, sid, speaker)
-    # Macros resolved once at persist time (#137): a player's {{roll:1d20}}
-    # must not re-roll on every later context build (retry, next turn, ...).
-    content = store.context.expand_macros(
-        turn.content, store.context.scene_substitutions(cid, sid), cid, sid)
-    posted_at = store.scenes.append_message(cid, sid, "user", content, speaker=speaker)
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(turn), describe=store.prompt_log.capturing())
 

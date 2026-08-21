@@ -24,7 +24,12 @@ from . import (  # noqa: F401
     turns,
     write,
 )
-from .identity import ensure_identity, find_by_identity, scene_identity  # noqa: F401
+from .identity import (  # noqa: F401
+    ensure_identity,
+    find_by_identity,
+    scene_identity,
+    scene_identity_strict,
+)
 from .lifecycle import (  # noqa: F401
     _create_scene,
     _date_hint,

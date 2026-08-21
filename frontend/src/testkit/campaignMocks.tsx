@@ -33,6 +33,10 @@ export async function campaignApiMock() {
       // would make `cancelTurn` throw instead of failing the assertion that
       // notices it was never called.
       cancelRun: vi.fn(() => Promise.resolve({ run: null })),
+      // Stop's fallback when no leading frame arrived: discover the run by the
+      // attempt id the client minted. Defaults to "no such run", which is the
+      // answer for a send the server never accepted.
+      findRun: vi.fn(() => Promise.resolve({ run: null })),
       getAlternates: vi.fn(), pickAlternate: vi.fn(),
       roll: vi.fn(),
       getRollProposal: vi.fn(), resolveProposal: vi.fn(),

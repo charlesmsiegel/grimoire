@@ -527,3 +527,100 @@ def test_a_scene_that_will_not_open_is_busy_not_a_500(client, sending_scene, mon
 
     assert r.status_code == 409, f"a transient read failure answered {r.status_code}"
     assert r.json()["kind"] == "busy"
+
+
+# --- the windows the terminal fence does not cover --------------------------
+
+def test_a_completed_attempt_replays_after_the_connection_is_removed(client, sending_scene):
+    """The attempt id exists to answer "did my turn land?" -- so a replay must
+    not be subject to the checks a NEW turn needs.
+
+    Behind `_require_connection`, a client that lost the response and re-sent
+    the same id after the key was removed or re-keyed was told `missing_key`:
+    the turn landed, and the one mechanism built to say so reported a failure.
+    """
+    cid, sid = sending_scene
+    first = _chat(client, cid, sid, headers={"X-Grimoire-Attempt": "a-42"})
+    assert first.status_code == 200
+    before = store.scenes.read_scene(cid, sid)["messages"]
+
+    client.delete("/api/llm-connections/openrouter")
+    again = _chat(client, cid, sid, headers={"X-Grimoire-Attempt": "a-42"})
+
+    assert again.status_code == 200, f"a replay answered {again.status_code}"
+    assert _events(again.text)[0]["run"]["attempt_id"] == "a-42"
+    assert store.scenes.read_scene(cid, sid)["messages"] == before, \
+        "the replay re-ran the work instead of replaying it"
+
+
+def test_a_scene_whose_identity_will_not_resolve_cannot_reach_a_retained_run(
+        client, campaign_scene, monkeypatch):
+    """`_owns` reads `identity=None` as "the caller did not ask" -- a wildcard.
+
+    Correct for a subject-wide sweep, catastrophic on a scene route: a
+    replacement that recycled a retained run's `sid` and cannot produce an
+    identity of its own would match that run and be allowed to read its frames
+    or cancel it. An unresolved identity has to match nothing.
+    """
+    cid, sid = campaign_scene
+    run = _reserve(client, cid, sid)
+    run.append_frame(_sse({"delta": "Mist over the dock."}))
+    run.finish("landed")
+
+    monkeypatch.setattr(store.scenes, "scene_identity_strict", lambda *_a: None)
+    monkeypatch.setattr(runs_mod.scenes, "scene_identity_strict", lambda *_a: None)
+    r = client.get(f"/api/campaigns/{cid}/scenes/{sid}/runs/{run.id}")
+    cancelled = client.post(f"/api/campaigns/{cid}/scenes/{sid}/runs/{run.id}/cancel")
+    monkeypatch.undo()
+
+    assert r.status_code == 404, "an unresolved identity matched a run as a wildcard"
+    assert cancelled.status_code == 404
+
+
+def test_an_unreadable_scene_header_is_retryable_not_a_dead_run(client, campaign_scene,
+                                                                monkeypatch):
+    """The counterweight: "cannot read the header" must not answer the same as
+    "this run is gone". The first is transient and the client should come back;
+    the second tells it to stop asking about a reply that may be landing."""
+    cid, sid = campaign_scene
+    run = _reserve(client, cid, sid)
+
+    def blocked(*_a, **_k):
+        raise store.scenes.identity.UnreadableError("held by another process")
+
+    monkeypatch.setattr(store.scenes, "scene_identity_strict", blocked)
+    monkeypatch.setattr(runs_mod.scenes, "scene_identity_strict", blocked)
+    r = client.get(f"/api/campaigns/{cid}/scenes/{sid}/runs/{run.id}")
+    monkeypatch.undo()
+
+    assert r.status_code == 409 and r.json()["kind"] == "busy"
+
+
+def test_a_scene_replaced_before_setup_keeps_the_players_post_off_it(client, sending_scene,
+                                                                     monkeypatch):
+    """The terminal fence guards the WRITE, not the setup that precedes it.
+
+    `reserve_turn` captures the identity and returns; the mutators that follow
+    -- heal, the retired proposal, the player's own post -- used to run outside
+    any fence. A scene deleted and replaced in that window collected all of
+    them, and the fence then refused only the reply: the replacement was left
+    holding somebody else's post with no answer coming, which is worse than
+    either outcome on its own.
+    """
+    cid, sid = sending_scene
+    real = runs_mod.reserve_turn
+
+    def replace_the_scene_after_reserving(app, c, s, kind, attempt):
+        got = real(app, c, s, kind, attempt)
+        store.scenes.delete_scene(c, s)
+        assert store.scenes.create_scene(c, "Mara") == s, "the id was not recycled"
+        return got
+
+    monkeypatch.setattr(routes_scenes.runs, "reserve_turn",
+                        replace_the_scene_after_reserving)
+    r = _chat(client, cid, sid)
+    monkeypatch.setattr(routes_scenes.runs, "reserve_turn", real)
+
+    assert r.status_code == 404, f"the send answered {r.status_code}"
+    assert not store.scenes.read_scene(cid, sid)["messages"], \
+        "the replacement scene was given the old turn's post"
