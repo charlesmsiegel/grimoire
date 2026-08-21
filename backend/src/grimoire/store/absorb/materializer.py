@@ -59,11 +59,48 @@ def _actor_exists(cid: str, token: str) -> bool:
         return False
 
 
-def _entity_kind(cid: str, eid: str) -> str | None:
-    for kind in ("lore", "locations"):
+#: Every world record a `lore_edits` append may land on, in the order a BARE id
+#: is tried. All five of `entities.ENTITY_KINDS` (#224): a body append is the
+#: only edit that can evolve a record of any kind, and resolving just the two
+#: left items, groups and creatures unevolvable — a group could only ever move
+#: through its campaign-side state, and an item or creature was static from the
+#: day it was created.
+#:
+#: A fixed order rather than ENTITY_KINDS' own, because ids are per-kind
+#: directories: `lore/the-ledger` and `items/the-ledger` are two records, and a
+#: bare id has to pick one. Lore and locations lead in the order they were tried
+#: before the other three joined them, so an append that has been landing on a
+#: lore entry cannot start landing on a same-slugged location instead. The pick
+#: is not hidden from the reviewer either way — the staged label names the kind
+#: it resolved to.
+#:
+#: A model that means one of the others says so: `<kind>/<id>` (or `<kind>:<id>`,
+#: the form `group_state_edits` already accepts) resolves in that kind alone.
+#: `test_absorb_store.py` holds this tuple to ENTITY_KINDS, so a sixth kind
+#: cannot join the store and quietly arrive unevolvable the way these three did.
+APPEND_KINDS: tuple[str, ...] = ("lore", "locations", "items", "groups", "creatures")
+
+
+def _entity_target(cid: str, raw_id: str) -> tuple[str, str] | None:
+    """`(kind, eid)` for a `lore_edits` id, or None when no record answers to it.
+
+    A `<kind>/<id>`-qualified id is resolved in that kind ONLY. Falling back to
+    the bare scan when the named kind has no such record would answer a
+    question the model did not ask: it named a kind because the id alone is
+    ambiguous, so a miss there means the record it meant does not exist, not
+    that some other kind's same-slugged record will do.
+    """
+    kind, sep, rest = raw_id.partition("/")
+    if not sep:
+        kind, sep, rest = raw_id.partition(":")
+    if sep and rest and kind in APPEND_KINDS:
+        candidates: tuple[tuple[str, str], ...] = ((kind, rest),)
+    else:
+        candidates = tuple((k, raw_id) for k in APPEND_KINDS)
+    for k, eid in candidates:
         try:
-            overlay.read_entity(cid, kind, eid)
-            return kind
+            overlay.read_entity(cid, k, eid)
+            return k, eid
         except entities.EntityNotFound:
             continue
     return None
@@ -373,16 +410,22 @@ def materialize(cid: str, sid: str, parsed: dict,
                             "before": before, "after": after, "authored": False}, e))
 
     for e in parsed.get("lore_edits", []):
-        eid, append = e.get("id", ""), (e.get("append", "") or "").strip()
-        if not eid or not append:
+        raw_id, append = e.get("id", ""), (e.get("append", "") or "").strip()
+        if not raw_id or not append:
             continue
-        kind = _entity_kind(cid, eid)
-        if not kind:
+        target = _entity_target(cid, raw_id)
+        if not target:
             continue
+        kind, eid = target
         ent = overlay.read_entity(cid, kind, eid)
         before = ent["body"].strip()
         after = (before + "\n\n" + append).strip()
-        out.append(_staged({"id": f"lore:{eid}", "kind": "lore",
+        # The staged id carries the KIND as well as the record's, because two
+        # kinds can hold the same slug and a qualified id can reach both of them
+        # in one absorb. The reviewer's panel keys a row by this id (its React
+        # key, and the lookup that hangs a contradiction warning on it), so two
+        # rows sharing one would hand one record's warning to the other's row.
+        out.append(_staged({"id": f"lore:{kind}/{eid}", "kind": "lore",
                             "target": {"kind": kind, "id": eid},
                             "label": f"{ent['meta'].get('name', eid)} — {kind}", "field": "body",
                             "before": before, "after": after, "authored": False}, e))

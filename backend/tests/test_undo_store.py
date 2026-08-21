@@ -89,6 +89,22 @@ def test_undoing_a_lore_edit_puts_the_body_back(cid, sid):
     assert overlay.read_entity(cid, "lore", "pact")["body"].strip() == "old body"
 
 
+@pytest.mark.parametrize("kind", ["locations", "items", "groups", "creatures"])
+def test_undoing_a_body_append_puts_it_back_for_every_entity_kind(cid, sid, kind):
+    """An append is staged against any of the five kinds (#224), and the whole
+    reversal path carries `target["kind"]` rather than assuming lore — the
+    journal ref, the snapshot it takes, and the write that puts it back."""
+    entities.create_entity(campaigns.campaign_root(cid), kind, "Pact", body="old body")
+    edit = {**_lore_edit("old body", "new body"),
+            "id": f"lore:{kind}/pact", "target": {"kind": kind, "id": "pact"}}
+    assert absorb.apply_edits(cid, [edit], sid)[0] == [f"lore:{kind}/pact"]
+    entry = _only(cid)
+    assert entry["ref"] == {"kind": kind, "id": "pact"}
+    assert entry["undo"]["target"] == {"w": "entity", "kind": kind, "id": "pact"}
+    undo.undo(cid, entry["id"])
+    assert overlay.read_entity(cid, kind, "pact")["body"].strip() == "old body"
+
+
 def test_undo_stamps_the_entry_and_journals_the_reversal(cid, sid):
     entities.create_entity(campaigns.campaign_root(cid), "lore", "Pact", body="old body")
     absorb.apply_edits(cid, [_lore_edit("old body", "new body")], sid)

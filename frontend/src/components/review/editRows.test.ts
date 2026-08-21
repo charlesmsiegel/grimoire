@@ -33,7 +33,7 @@ test("two kinds that write the same file are one drawer", () => {
   expect(groupOf(edit({ kind: "dossier" }))).toBe("state");
 });
 
-test("a kind no group claims falls back to Lore & cards rather than vanishing", () => {
+test("a kind no group claims falls back to World records & cards rather than vanishing", () => {
   // The drawers are the only way to reach a row, so a kind added to the API and
   // not to EDIT_GROUPS must still be reviewable — silently unroutable is the
   // one outcome that would let an unreviewed edit reach a save.

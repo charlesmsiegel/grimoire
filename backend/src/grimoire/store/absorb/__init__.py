@@ -53,9 +53,10 @@ from .conflicts import (  # noqa: F401
 )
 from .materializer import (  # noqa: F401
                _CARD_FIELDS,
+               APPEND_KINDS,
                _actor_exists,
                _char_name,
-               _entity_kind,
+               _entity_target,
                _new_character_dossier,
                _new_character_provenance,
                materialize,
