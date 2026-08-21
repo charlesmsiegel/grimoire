@@ -62,6 +62,27 @@ def _read_token(p) -> str | None:
     return value if _TOKEN.match(value) else None
 
 
+def _drop_identity_line(raw: bytes) -> bytes:
+    """``raw`` without its frontmatter ``identity`` line, however it is spelled.
+
+    Only the header is scanned: a transcript may legitimately contain a line
+    beginning with ``identity``, and rewriting the body is exactly what this
+    module goes to lengths to avoid.
+    """
+    for eol in (b"\r\n", b"\n"):
+        head = b"---" + eol
+        if not raw.startswith(head):
+            continue
+        end = raw.find(eol + b"---", len(head) - len(eol))
+        if end == -1:
+            return raw
+        block, rest = raw[len(head):end + len(eol)], raw[end + len(eol):]
+        kept = [ln for ln in block.split(eol)
+                if ln.split(b":", 1)[0].strip() != b"identity"]
+        return head + eol.join(kept) + rest
+    return raw
+
+
 def _splice(raw: bytes, line: bytes) -> bytes | None:
     """``raw`` with ``line`` inserted at the end of its frontmatter block, every
     other byte untouched. ``None`` if there is no block to splice into.
@@ -131,10 +152,13 @@ def ensure_identity(cid: str, sid: str, replace: bool = False) -> str:
     raw = p.read_bytes()
     spliced: bytes | None
     if existing:
-        # Replacing a token that is real but unusable -- a duplicate. Swap it in
-        # place so nothing else about the file moves.
-        spliced = raw.replace(f"identity: {existing}".encode(),
-                              f"identity: {token}".encode(), 1)
+        # Replacing a token that is real but unusable -- a duplicate. Drop the
+        # existing line wherever it is and splice a canonical one back in, at
+        # the value rather than the whole line: `_read_token` accepts spellings
+        # a person would type (`identity : x`, a quoted value), so matching the
+        # canonical byte sequence would match nothing, return a token that was
+        # never written, and leave both files holding the duplicate.
+        spliced = _splice(_drop_identity_line(raw), f"identity: {token}".encode())
     else:
         spliced = _splice(raw, f"identity: {token}".encode())
     if spliced is None:

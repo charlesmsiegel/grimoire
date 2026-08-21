@@ -31,6 +31,13 @@ from anyio.from_thread import BlockingPortal
 
 _log = logging.getLogger(__name__)
 
+READY_TIMEOUT_SECONDS = 5.0
+"""How long `cancel` waits for a run to install its cancel scope.
+
+Only ever a scheduling gap -- the task is already queued on the loop -- so this
+is generous, not a real wait.
+"""
+
 REAP_INTERVAL_SECONDS = 60.0
 """How often to sweep terminal runs. Well under ``REAP_SECONDS`` so a run is
 dropped promptly after its window, and rare enough that the sweep itself is
@@ -155,6 +162,13 @@ def cancel(app, run) -> None:
     unwinds and its abort hook has finished. Callers that need to know it is
     really over wait on ``run.terminal``, which is set only after that.
     """
+    # Wait for the task to install its scope. Stop routinely arrives before
+    # `_guarded` has run -- `start` only schedules -- and reading a missing
+    # scope and returning would drop the cancellation silently: the provider
+    # runs to completion while the cancel handler waits on `terminal`. Bounded,
+    # because a run that never becomes ready is already terminal or gone.
+    if run.state == "running":
+        run.ready.wait(timeout=READY_TIMEOUT_SECONDS)
     scope = getattr(run, "cancel_scope", None)
     if scope is None:
         return
@@ -205,8 +219,9 @@ async def _guarded(run, factory: Callable[[], Any]) -> None:
     with anyio.CancelScope() as scope:
         run.cancel_scope = scope
         run.ready.set()
+        outcome = None
         try:
-            await factory()
+            outcome = await factory()
         except anyio.get_cancelled_exc_class():
             # A deliberate Stop, or shutdown. The producer's own `finally` has
             # already run by the time this is caught, which is what makes
@@ -218,10 +233,17 @@ async def _guarded(run, factory: Callable[[], Any]) -> None:
             run.error = {"kind": "run_failed", "detail": str(exc)}
             run.finish("failed")
         else:
-            # Only where nothing was swallowed. A producer that caught its own
-            # error and returned normally records its own outcome instead --
-            # see the terminal-outcome contract in `_fence_stream`.
-            if run.state == "running":
+            # A producer that handles its own failure RETURNS an outcome rather
+            # than raising -- `_fence_stream` emits an error frame for an
+            # LLMError, a StoreBusy during finalize, or an identity-fence
+            # refusal, and then returns normally. Inferring success from "did
+            # not raise" marks those landed and fires a success notification for
+            # a reply that was never persisted.
+            if isinstance(outcome, dict) and outcome.get("state"):
+                run.error = outcome.get("error")
+                run.result = outcome.get("result")
+                run.finish(outcome["state"])
+            elif run.state == "running":
                 run.finish("landed")
     # OUTSIDE the scope, and after the abort hook: a cancelled scope suppresses
     # everything inside it, so setting this within would never run on the path

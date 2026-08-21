@@ -256,7 +256,12 @@ def test_shutdown_cancels_live_runs_and_they_flush(app_with_lifespan_factory):
 def test_reap_drops_a_stale_terminal_run(app_with_lifespan):
     app = app_with_lifespan
     run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
-    run.finish("landed", at=0.0, monotonic_at=0.0)   # far outside any window
+    # Relative to NOW, never an absolute constant: `time.monotonic()` counts
+    # from boot, so on a freshly-started CI runner it can be under
+    # REAP_SECONDS -- making the cutoff negative and `0.0` NEWER than it. Green
+    # on a long-lived machine, red on a fresh one.
+    run.finish("landed", at=0.0,
+               monotonic_at=time.monotonic() - runs_mod.REAP_SECONDS - 1)
 
     assert app.state.runs.reap(now=time.monotonic()) == 1
     assert app.state.runs.get(run.id, SCENE) is None
@@ -298,3 +303,51 @@ def test_the_reaper_loop_itself_drops_a_stale_run(monkeypatch, tmp_path,
                 return
             time.sleep(0.02)
         raise AssertionError("the reaper never dropped a long-terminal run")
+
+
+def test_the_factorys_terminal_outcome_is_applied(app_with_lifespan):
+    """`_fence_stream` handles its own failures: it emits an error frame and
+    RETURNS, reporting the outcome rather than raising. Inferring success from
+    'did not raise' marks a run landed and fires a success notification for a
+    reply that was never persisted."""
+    app = app_with_lifespan
+
+    async def handled_failure():
+        return {"state": "failed", "error": {"kind": "llm_error", "detail": "upstream"}}
+
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    runner.start(app, run, handled_failure)
+    _wait_terminal(app, run.id)
+
+    assert run.state == "failed"
+    assert run.error == {"kind": "llm_error", "detail": "upstream"}
+
+
+def test_a_factory_returning_nothing_still_lands(app_with_lifespan):
+    """Most producers report nothing and simply finish."""
+    app = app_with_lifespan
+
+    async def quiet():
+        return None
+
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    runner.start(app, run, quiet)
+    _wait_terminal(app, run.id)
+    assert run.state == "landed"
+
+
+def test_cancel_immediately_after_start_still_stops_the_run(app_with_lifespan):
+    """Stop can arrive before `_guarded` has installed the cancel scope. Reading
+    a missing scope and returning silently means the provider runs to
+    completion while the cancel handler waits on `terminal` -- the user's
+    explicit Stop ignored, in the ordinary scheduling race."""
+    app = app_with_lifespan
+
+    async def slow():
+        await anyio.sleep(30)
+
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    runner.start(app, run, slow)
+    runner.cancel(app, run)          # no wait: race the scope install on purpose
+    _wait_terminal(app, run.id)
+    assert run.state == "cancelled"

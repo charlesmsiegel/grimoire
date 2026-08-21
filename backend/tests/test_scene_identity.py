@@ -373,3 +373,55 @@ def test_a_duplicated_identity_is_re_minted(tmp_path, monkeypatch):
     assert ia and ib and ia != ib
     assert store.scenes.find_by_identity(cid, ia) == a
     assert store.scenes.find_by_identity(cid, ib) == b
+
+
+def test_a_duplicate_is_replaced_even_when_hand_formatted(tmp_path, monkeypatch):
+    """`_read_token` tolerates spellings a person would type -- `identity : x`,
+    or a quoted value -- so the replacement must not assume the canonical
+    `identity: <token>` byte sequence. Assuming it, the swap matches nothing,
+    a fresh token is returned but never written, and BOTH files keep the
+    duplicate while the backfill believes it fixed one."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    a = store.scenes.create_scene(cid, "Mara")
+    b = store.scenes.create_scene(cid, "Winifred")
+    shared = store.scenes.scene_identity(cid, a)
+
+    pb = store.scenes.paths._scene_path(cid, b)
+    raw = pb.read_text(encoding="utf-8")
+    raw = raw.replace(f"identity: {store.scenes.scene_identity(cid, b)}",
+                      f"identity : '{shared}'")          # hand-typed spacing and quotes
+    pb.write_text(raw, encoding="utf-8")
+    assert store.scenes.scene_identity(cid, b) == shared   # precondition
+
+    migrations.backfill_scene_identities()
+
+    ia, ib = store.scenes.scene_identity(cid, a), store.scenes.scene_identity(cid, b)
+    assert ia and ib and ia != ib, "the duplicate survived"
+    assert store.scenes.find_by_identity(cid, ib) == b
+
+
+def test_a_scene_that_cannot_be_written_does_not_abort_startup(tmp_path, monkeypatch, caplog):
+    """A read-only transcript, or one held by a sync client, makes the write
+    fail. `_lifespan` catches only StoreBusy, so an unhandled OSError here stops
+    the app booting -- the same failure as the unreadable case, one layer down."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    stuck = store.scenes.create_scene(cid, "Mara")
+    good = store.scenes.create_scene(cid, "Winifred")
+    _strip_identity_from_disk(cid, stuck)
+    _strip_identity_from_disk(cid, good)
+
+    real = store.scenes.identity.ensure_identity
+
+    def refuse_one(c, s, replace=False):
+        if s == stuck:
+            raise PermissionError("read-only transcript")
+        return real(c, s, replace=replace)
+
+    monkeypatch.setattr(store.scenes.identity, "ensure_identity", refuse_one)
+    with caplog.at_level(logging.WARNING):
+        migrations.backfill_scene_identities()          # must not raise
+
+    assert store.scenes.scene_identity(cid, good), "the rest of the campaign was abandoned"
+    assert stuck in caplog.text

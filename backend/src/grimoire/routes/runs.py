@@ -148,7 +148,8 @@ class Run:
 
     def __init__(self, subject: Subject, cls: RunClass, kind: str,
                  attempt_id: str | None, scene_identity: str | None,
-                 labels: dict, event_factory: Callable[[], HandshakeEvent]) -> None:
+                 labels: dict,
+                 events: tuple[HandshakeEvent, HandshakeEvent]) -> None:
         self.id = uuid.uuid4().hex
         self.subject = subject
         self.cls = cls
@@ -179,8 +180,7 @@ class Run:
         # producing route is still doing synchronous setup, before any runner
         # exists. A run observable without its events leaves that caller waiting
         # on something nothing will make.
-        self.ready = event_factory()
-        self.terminal = event_factory()
+        self.ready, self.terminal = events
         self._lock = threading.Lock()
 
     def append_frame(self, frame: str) -> int:
@@ -265,16 +265,27 @@ class RunRegistry:
         hand two concurrent first callers different answers, which is precisely
         the double-send this exists to prevent.
         """
+        # BEFORE the lock. The loop-backed factory blocks on a portal round
+        # trip, and loop-side code (the reaper) takes this same lock -- so
+        # constructing under it can deadlock the server: the handler holds the
+        # lock waiting on the loop while the loop waits for the lock. Two spare
+        # events on the adopt path is a cheap price for that not being possible.
+        events = (self._event_factory(), self._event_factory())
         with self._lock:
             if attempt_id is not None:
                 # Attempt ids come from clients, so they are only unique within
                 # a subject -- two scenes may pick the same one.
                 known = self._by_attempt.get((subject, attempt_id))
-                if known is not None:
+                existing = self._runs.get(known) if known else None
+                # The identity has to match here too, not only in `get`. A stale
+                # client retrying an old attempt id after the scene was deleted
+                # and its id recycled would otherwise adopt the dead scene's run
+                # and receive its frames.
+                if existing is not None and self._owns(existing, subject, scene_identity):
                     # Returned even when terminal: a client whose response was
                     # lost re-sends with the same id and must adopt the original
                     # outcome rather than start the work a second time.
-                    return self._runs[known], False
+                    return existing, False
 
             key = exclusion_key(subject, cls)
             if key is not None:
@@ -284,7 +295,7 @@ class RunRegistry:
                     raise RunInFlightError(holder.id)
 
             run = Run(subject, cls, kind, attempt_id, scene_identity, labels,
-                      self._event_factory)
+                      events)
             self._runs[run.id] = run
             self._by_subject.setdefault(subject, []).append(run.id)
             if attempt_id is not None:
