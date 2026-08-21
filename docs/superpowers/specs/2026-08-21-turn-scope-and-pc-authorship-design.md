@@ -355,7 +355,39 @@ that call — but it would couple the prompt flag to the break watermark, which
 is the coupling "prompt-only" was chosen to avoid. Left on the table
 deliberately; see *Known interactions*.
 
-### 5. Section registration
+### 5. Surfacing and cancelling a pending wrap
+
+**Input stays typed-only.** No composer control, no chip, no typed field on
+`ChatTurn` — `/end` is a power-user gesture, documented in `README.md` and the
+release note. This preserves the "backend parses off `ChatTurn.content`"
+decision intact.
+
+**Output is visible, because the flag is sticky and invisible state that
+changes generation is how "why did it do that" happens.** `wrap_next` survives
+regenerate and retry by design, so a player can re-roll three times and get
+three closing posts with nothing on screen explaining why.
+
+- The scene payload gains `wrap_next` (bool), read off the same frontmatter
+  the assembler reads.
+- `CampaignView` renders a small pending indicator near the composer — *"the
+  next reply will close this scene"* — with a cancel control.
+- **`DELETE /campaigns/{cid}/scenes/{sid}/wrap`** clears the flag. Without it
+  the only way to clear a wrap the player no longer wants is to send an
+  ordinary post, i.e. to generate a reply they don't want purely to undo a
+  flag.
+
+**The cancel route is deliberately NOT `scene_busy`-guarded**, and this needs
+recording in `test_scene_freeze.py` as an explicit non-door rather than an
+omission — CLAUDE.md notes that file is one case per door precisely because
+the guard is applied per call site. The reasoning: the freeze exists to refuse
+routes that change a scene's *shape* while a turn holds it, and this changes
+neither the transcript nor the cast nor the scene's identity. A live turn has
+already assembled its prompt, so clearing mid-run cannot affect it — and the
+post-run state (flag cleared) is exactly what a player clicking cancel is
+asking for. It still takes the campaign lock like every other frontmatter
+write.
+
+### 6. Section registration
 
 Two `pack.LOCK_IN` entries in `context.assemble.SECTIONS`, after
 `natural_prose`: `turn_scope` (`except_opener=True`), then `player_character`.
@@ -394,6 +426,11 @@ naming in the spec rather than discovering in a token breakdown.
   keeps the prose.
 - **Registration** — both appear in the assembled prompt and the inspector
   breakdown; neither is droppable.
+- **Cancel** — `DELETE .../wrap` clears the flag; the next reply does not
+  wrap; the route is reachable while a run is live (the non-door case, pinned
+  in `test_scene_freeze.py` so a later inventory does not "fix" it).
+- **Frontend** — the indicator appears when `wrap_next` is set and after a
+  regenerate, and disappears on cancel and on an ordinary send.
 
 ### The behavioral grader
 
