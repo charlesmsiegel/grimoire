@@ -308,3 +308,96 @@ def test_world_move_leaves_a_campaigns_own_copy_of_an_owner_alone(monkeypatch, t
     assert overlay.read_entity(cid, "lore", "rumour")["meta"]["owners"] == "lore:tidewatch"
     assert [(p["ref"], p["status"]) for p in sync.incoming(cid)] == [
         ({"kind": "lore", "id": "rumour"}, "conflict")]
+
+
+# ---- the cases the review found ----
+
+def test_a_detached_copy_is_not_tombstoned_on_its_way_out(monkeypatch, tmp_path):
+    # `detached` says the world's holder of this id is a STRANGER, so there is
+    # nothing of ours to hide from. Asking "would this inherit?" after the
+    # repoint has moved the detachment reads it as freshly inheriting and writes
+    # a tombstone -- hiding that stranger permanently, for a move that was never
+    # about it.
+    _wid, wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    overlay.update_entity(cid, "lore", "tidewatch", body="mine")
+    # the world record goes, which is what detaches the copy, and the slug is
+    # then handed to an unrelated record -- #225's stranger, exactly
+    entities.delete_entity(wroot, "lore", "tidewatch")
+    overlay.add_detached(cid, "lore/tidewatch")
+    assert entities.create_entity(wroot, "lore", "Tidewatch",
+                                  "a different place entirely") == "tidewatch"
+    reclassify.campaign_entity(cid, "lore", "tidewatch", "locations")
+    assert overlay.deleted(cid) == set()
+    assert overlay.detached(cid) == {"locations/tidewatch"}
+    # the stranger is still visible under its own kind, which is the point
+    assert (overlay.read_entity(cid, "lore", "tidewatch")["body"].strip()
+            == "a different place entirely")
+
+
+def test_a_scene_pin_keeps_its_scene_when_the_ref_grows(monkeypatch, tmp_path):
+    # `s1:lore:tidewatch` -> `s1:locations:tidewatch`: the two refs are different
+    # lengths, so a key trimmed by the wrong one eats part of the scene id.
+    _wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    pins.set_rule(cid, "lore:tidewatch", pins.PIN, scope=pins.SCENE, sid="s1")
+    reclassify.campaign_entity(cid, "lore", "tidewatch", "locations")
+    assert list(pins.read(cid)) == ["s1:locations:tidewatch"]
+
+
+def test_a_pin_whose_key_disagrees_with_its_ref_is_left_alone(monkeypatch, tmp_path):
+    # Hand-edited: rebuilding the key from `scope` would file it under
+    # `*:locations:tidewatch` and could delete a real campaign rule there.
+    _wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    pins.set_rule(cid, "locations:tidewatch", pins.EXCLUDE, scope=pins.CAMPAIGN)
+    data = pins.read(cid)
+    data["bogus-key"] = {"ref": "lore:tidewatch", "mode": "pin",
+                         "scope": "nonsense", "sid": "", "ttl_posts": 0,
+                         "created_posts": 0, "created": ""}
+    (overlay.croot_of(cid) / "pins.json").write_text(json.dumps(data), encoding="utf-8")
+    reclassify.campaign_entity(cid, "lore", "tidewatch", "locations")
+    after = pins.read(cid)
+    assert after["bogus-key"]["ref"] == "lore:tidewatch"        # untouched
+    assert after["*:locations:tidewatch"]["mode"] == "exclude"  # not clobbered
+
+
+def test_a_campaign_with_an_unreadable_ledger_still_gets_its_record_moved(
+        monkeypatch, tmp_path):
+    _wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    sheets_dir = overlay.croot_of(cid) / "sheets"
+    sheets_dir.mkdir(parents=True, exist_ok=True)
+    (sheets_dir / "lore--tidewatch.json").write_text("{}", encoding="utf-8")
+
+    def boom(*_a, **_k):
+        raise OSError("the disk said no")
+
+    monkeypatch.setattr(reclassify.overlay, "rewrite_owner_refs", boom)
+    assert reclassify.campaign_entity(cid, "lore", "tidewatch", "locations") == "tidewatch"
+    assert [e["id"] for e in overlay.list_entities(cid, "locations")] == ["tidewatch"]
+
+
+def test_a_campaign_copy_lands_on_the_world_id_even_though_the_world_moved(
+        monkeypatch, tmp_path):
+    # The world record is ALREADY at `locations/tidewatch` when the copy follows
+    # it, so a destination check that consults the world would refuse the only
+    # id the copy is allowed to take.
+    wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    overlay.update_entity(cid, "lore", "tidewatch", body="mine")
+    reclassify.world_entity(wid, "lore", "tidewatch", "locations")
+    assert [e["id"] for e in overlay.list_entities(cid, "locations")] == ["tidewatch"]
+    assert overlay.read_entity(cid, "locations", "tidewatch")["body"].strip() == "mine"
+
+
+def test_a_world_record_that_cannot_be_swept_still_reaches_its_campaigns(
+        monkeypatch, tmp_path):
+    # The campaign sweep is the failure this whole module exists to prevent, so
+    # it may not be starved by the cosmetic half that runs before it.
+    wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    overlay.materialize_entity(cid, "lore", "tidewatch")
+
+    def boom(*_a, **_k):
+        raise OSError("the disk said no")
+
+    monkeypatch.setattr(reclassify.entities, "rewrite_owner_refs", boom)
+    out = reclassify.world_entity(wid, "lore", "tidewatch", "locations")
+    assert out == {"id": "tidewatch", "campaigns": [cid]}
+    assert [e["id"] for e in overlay.list_entities(cid, "locations")] == ["tidewatch"]
+    assert sync.incoming(cid) == []

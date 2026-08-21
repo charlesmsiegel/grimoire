@@ -617,17 +617,27 @@ def update_entity(cid: str, kind: str, eid: str, *, name: str | None = None,
                            fields=fields, secrecy=secrecy)
 
 
-def _would_inherit(cid: str, kind: str, eid: str) -> bool:
+def would_inherit(cid: str, kind: str, eid: str) -> bool:
     """Would this campaign read the world's `<kind>/<eid>` if it held none of
-    its own? The predicate `delete_entity` and `hide_inherited` both turn on,
-    named once so the two cannot answer it differently."""
+    its own? What `delete_entity` turns on, and what a campaign-side reclassify
+    has to ask before it moves anything: moving the campaign's copy out of a
+    kind leaves the world's copy free to show through, and the record would then
+    be listed twice -- inherited under its old kind, and under its new one.
+
+    A predicate rather than a decide-and-tombstone, because the *answer* has to
+    be taken before `repoint_record` runs and the tombstone written after. Both
+    read `detached.json`, and repointing moves this ref's entry in it: asked
+    afterwards, a detached record reads as freshly inheriting and gets a
+    tombstone -- which permanently hides whatever stranger now holds that id in
+    the world, the exact outcome `_inherits_world` exists to prevent.
+    """
     return (_inherits_world(cid, _flat_ref(kind, eid))
             and _flat_path(wroot_of(cid), kind, eid).exists())
 
 
 def delete_entity(cid: str, kind: str, eid: str) -> None:
     ref = _flat_ref(kind, eid)
-    in_world = _would_inherit(cid, kind, eid)
+    in_world = would_inherit(cid, kind, eid)
     try:
         entities.delete_entity(croot_of(cid), kind, eid)
         _drop_manifest_ref(cid, ref)
@@ -659,11 +669,11 @@ def reclassify_entity(cid: str, kind: str, eid: str, new_kind: str,
     campaign cannot see at all, tombstoned ones included, exactly as a read of
     it would raise.
 
-    `prefer` is the id the caller needs this copy to land on: a world-side
-    reclassify has already moved the world record, and a campaign copy that took
-    a different id would stop being a copy *of* it. Passed, it is tried alone --
-    if it is occupied here the caller is told (the returned id differs) rather
-    than being given a silently forked pair.
+    `prefer` is the id the caller needs this copy to land on, and it is passed
+    straight through: a world-side reclassify has already moved the world
+    record, and a campaign copy that took a different id would stop being a copy
+    *of* it. Occupied campaign-side, the copy lands elsewhere and the caller is
+    told by the id it gets back rather than being handed a silently forked pair.
     """
     croot, wroot = croot_of(cid), wroot_of(cid)
     materialize_entity(cid, kind, eid)
@@ -676,15 +686,7 @@ def reclassify_entity(cid: str, kind: str, eid: str, new_kind: str,
                 or _record_dir(wroot, new_kind, c).is_dir()
                 or _flat_ref(new_kind, c) in deleted(cid))
 
-    if prefer is None:
-        return entities.reclassify(croot, kind, eid, new_kind, taken=taken)
-    if (_flat_path(croot, new_kind, prefer).exists()
-            or _record_dir(croot, new_kind, prefer).is_dir()):
-        # Occupied campaign-side. Land it anywhere free and report that; the
-        # caller decides what a copy that could not follow its world record is.
-        return entities.reclassify(croot, kind, eid, new_kind, taken=taken)
-    return entities.reclassify(croot, kind, eid, new_kind,
-                               taken=lambda c: c != prefer)
+    return entities.reclassify(croot, kind, eid, new_kind, taken=taken, prefer=prefer)
 
 
 def rewrite_owner_refs(cid: str, old: str, new: str) -> list[tuple[str, str]]:
@@ -704,9 +706,12 @@ def rewrite_owner_refs(cid: str, old: str, new: str) -> list[tuple[str, str]]:
     """
     touched: list[tuple[str, str]] = []
     for kind in entities.ENTITY_KINDS:
+        # `owners` off the LISTING: `list_entities` has already parsed each
+        # record's frontmatter, so reading every record again to find a line it
+        # is holding would double the cost of a sweep that normally rewrites
+        # nothing.
         for meta in list_entities(cid, kind):
-            record = read_entity(cid, kind, meta["id"])
-            refs = entities.owner_refs(record["meta"].get("owners", ""))
+            refs = entities.owner_refs(meta.get("owners", ""))
             if old not in refs:
                 continue
             rewritten: list[str] = []
@@ -717,27 +722,6 @@ def rewrite_owner_refs(cid: str, old: str, new: str) -> list[tuple[str, str]]:
             update_entity(cid, kind, meta["id"], owners=", ".join(rewritten))
             touched.append((kind, meta["id"]))
     return touched
-
-
-def hide_inherited(cid: str, kind: str, eid: str) -> bool:
-    """Tombstone `<kind>/<eid>` if this campaign would otherwise read the world's
-    record there. True when a tombstone was written.
-
-    What a campaign-side reclassify needs and a campaign-side *delete* already
-    does (`delete_entity`), named once so the two cannot drift: moving the
-    campaign's copy out of a kind leaves the world's copy of it free to show
-    through, and the record would then be listed twice -- under its old kind,
-    inherited, and under its new one.
-
-    `_inherits_world` is the gate for `delete_entity`'s reason. A ref that is
-    already detached has no world copy to hide; whatever holds that id in the
-    world is a stranger, and tombstoning would hide the stranger permanently for
-    a move that was never about it.
-    """
-    if not _would_inherit(cid, kind, eid):
-        return False
-    add_deleted(cid, _flat_ref(kind, eid))
-    return True
 
 
 def repoint_record(cid: str, old_ref: str, new_ref: str, *, keep_base: bool) -> None:

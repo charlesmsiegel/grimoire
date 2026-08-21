@@ -60,6 +60,7 @@ Two scopes, and the difference is not cosmetic:
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from . import entities, locks, overlay, record_refs, sheets
 from .campaigns import paths as campaigns_paths
@@ -88,20 +89,44 @@ def campaign_entity(cid: str, kind: str, eid: str, new_kind: str) -> str:
     generic entity kind, and `entities.SameKindError` when the two are the same.
     """
     with locks.campaign_lock(cid):
+        # Asked FIRST, and written last. Both this and `repoint_record` read
+        # `detached.json`, and repointing moves this ref's entry in it -- so a
+        # detached record asked afterwards reads as freshly inheriting and gets
+        # a tombstone that permanently hides whatever stranger now holds its id
+        # in the world. See `overlay.would_inherit`.
+        shadowed = overlay.would_inherit(cid, kind, eid)
         new_eid = overlay.reclassify_entity(cid, kind, eid, new_kind)
-        old, new = _ref(kind, eid), _ref(new_kind, new_eid)
-        # Before the tombstone: `hide_inherited` asks whether the world's record
-        # at the old ref would show through, and a stale base there is not part
-        # of that question -- but a tombstone written first would make the ref
-        # look already-hidden to anything reading the ledgers in between.
-        overlay.repoint_record(cid, old, new, keep_base=False)
-        overlay.hide_inherited(cid, kind, eid)
-        overlay.rewrite_owner_refs(cid, _owner_ref(kind, eid),
-                                   _owner_ref(new_kind, new_eid))
-        record_refs.repoint(cid, {old: new})
+        old_ref, new_ref = _ref(kind, eid), _ref(new_kind, new_eid)
+        overlay.repoint_record(cid, old_ref, new_ref, keep_base=False)
+        if shadowed:
+            overlay.add_deleted(cid, old_ref)   # or the world's shows through
+        _repoint_campaign_side(cid, kind, eid, new_kind, new_eid)
     # Outside the hold: nothing below reads campaign state, and a `return`
     # inside a `with` reads to the type checker as a path that may not run.
     return new_eid
+
+
+def _repoint_campaign_side(cid: str, kind: str, eid: str,
+                           new_kind: str, new_eid: str) -> None:
+    """The owner refs and the ledgers, neither of which may take down a move
+    that has already happened.
+
+    By the time this runs the record is under its new kind and the three
+    overlay ledgers agree. One record nobody can parse must not turn that into
+    a 500 whose retry then 404s -- the same trade `overlay.forget_world_record`
+    makes at the other end of a delete, and the one `world_entity` makes per
+    dependent campaign. Stale display refs are the smaller harm, and the
+    warning names what to go and look at.
+    """
+    old_ref, new_ref = _ref(kind, eid), _ref(new_kind, new_eid)
+    try:
+        overlay.rewrite_owner_refs(cid, _owner_ref(kind, eid),
+                                   _owner_ref(new_kind, new_eid))
+        record_refs.repoint(cid, {old_ref: new_ref})
+    except (OSError, ValueError) as exc:
+        log.warning("reclassified %s to %s in campaign %s but could not finish "
+                    "repointing it (%s) -- an `owners:` line, a pin, a citation or an "
+                    "undo entry may still name the old kind", old_ref, new_ref, cid, exc)
 
 
 def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
@@ -120,26 +145,39 @@ def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
     cids = overlay.dependent_campaigns(wroot)
     with locks.hold_all(cids):
         new_eid = entities.reclassify(wroot, kind, eid, new_kind)
-        old, new = _ref(kind, eid), _ref(new_kind, new_eid)
-        entities.rewrite_owner_refs(wroot, _owner_ref(kind, eid),
-                                    _owner_ref(new_kind, new_eid))
-        sheets.repoint_world_records(wid, {old: new})
+        old_ref, new_ref = _ref(kind, eid), _ref(new_kind, new_eid)
+        try:
+            entities.rewrite_owner_refs(wroot, _owner_ref(kind, eid),
+                                        _owner_ref(new_kind, new_eid))
+            sheets.repoint_world_records(wid, {old_ref: new_ref})
+        except (OSError, ValueError) as exc:
+            # Ahead of the sweep in the file, but never ahead of it in
+            # importance: one unreadable world record must not cost every
+            # dependent campaign the repoint that keeps it from ending with a
+            # stale copy under the old kind AND a duplicate under the new one.
+            # That is the failure this whole function exists to prevent.
+            log.warning("reclassified %s to %s but could not finish the world-side "
+                        "sweep (%s) -- an `owners:` line or a sheet may still name "
+                        "the old kind", old_ref, new_ref, exc)
         swept = []
         for cid in cids:
             try:
                 if _follow_in_campaign(cid, wroot, kind, eid, new_kind, new_eid):
                     swept.append(cid)
-            except (OSError, ValueError) as exc:
+            except (OSError, ValueError, entities.EntityNotFound) as exc:
                 # Per campaign, not per sweep, and for `overlay.forget_world_record`'s
                 # reason: the world record has already moved by the time we get
                 # here, so one campaign with an unreadable ledger must not cost
                 # every later dependent its repoint, nor 500 a move that happened.
+                # `EntityNotFound` is in the list because the copy this is about
+                # to move can go between `has_own_copy` and the move itself --
+                # nothing holds a world-record lock, and there is none to hold.
                 log.warning("could not follow %s -> %s into campaign %s (%s) -- its refs "
-                            "still name the old kind", old, new, cid, exc)
-        return {"id": new_eid, "campaigns": swept}
+                            "still name the old kind", old_ref, new_ref, cid, exc)
+    return {"id": new_eid, "campaigns": swept}
 
 
-def _follow_in_campaign(cid: str, wroot, kind: str, eid: str,
+def _follow_in_campaign(cid: str, wroot: Path, kind: str, eid: str,
                         new_kind: str, new_eid: str) -> bool:
     """Repoint one dependent campaign at the world record's new kind.
 
@@ -154,8 +192,8 @@ def _follow_in_campaign(cid: str, wroot, kind: str, eid: str,
         return False   # deleted between the enumeration and its turn
     if not worlds_paths.references_world(world, wroot):
         return False
-    old, new = _ref(kind, eid), _ref(new_kind, new_eid)
-    landed = new
+    old_ref, new_ref = _ref(kind, eid), _ref(new_kind, new_eid)
+    landed = new_ref
     if overlay.has_own_copy(cid, kind, eid):
         got = overlay.reclassify_entity(cid, kind, eid, new_kind, prefer=new_eid)
         if got != new_eid:
@@ -165,8 +203,9 @@ def _follow_in_campaign(cid: str, wroot, kind: str, eid: str,
             # against a stranger -- so it becomes campaign-local, which is what
             # `keep_base=False` writes.
             log.warning("campaign %s could not move its copy of %s to %s (taken); it is "
-                        "now the campaign-local record %s", cid, old, new, _ref(new_kind, got))
+                        "now the campaign-local record %s",
+                        cid, old_ref, new_ref, _ref(new_kind, got))
             landed = _ref(new_kind, got)
-    overlay.repoint_record(cid, old, landed, keep_base=landed == new)
-    record_refs.repoint(cid, {old: landed})
+    overlay.repoint_record(cid, old_ref, landed, keep_base=landed == new_ref)
+    record_refs.repoint(cid, {old_ref: landed})
     return True

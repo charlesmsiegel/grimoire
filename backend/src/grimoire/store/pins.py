@@ -384,16 +384,29 @@ def repoint_records(cid: str, mapping: dict[str, str]) -> None:
             ref = rec.get("ref")
             if not isinstance(ref, str) or ref not in mapping:
                 continue
+            # The new key is the old one with its ref SWAPPED, not one rebuilt
+            # from `scope`/`sid`. Rebuilding reads a hand-edited `scope` as
+            # campaign-wide and rewrites a scene rule's key into `*:<ref>`,
+            # where it can land on -- and silently delete -- a real campaign
+            # rule. Swapping the suffix moves exactly what the key already said.
+            # A record whose key does not end in its own ref is already
+            # inconsistent, and is left entirely alone rather than guessed at.
+            if not key.endswith(f":{ref}"):
+                continue
             rec["ref"] = mapping[ref]
-            moved[key] = rec
+            moved[key] = (rec, ref)
         if not moved:
             return
-        for key, rec in moved.items():
+        for key, (rec, was) in moved.items():
             del data[key]
-            scope = rec.get("scope")
-            sid = rec.get("sid")
-            data[_key(scope if scope == SCENE else CAMPAIGN,
-                      sid if isinstance(sid, str) else "", rec["ref"])] = rec
+            # Trimmed by the OLD ref's length -- `lore:tide` and
+            # `locations:tide` are not the same number of characters, and using
+            # the new one would eat part of the scene id in front of it.
+            #
+            # A rule already filed under the destination ref is replaced, and
+            # can only be a DANGLING one: this module does not validate targets,
+            # and the reclassify itself lands only on a slug no record held.
+            data[key[: -len(was)] + rec["ref"]] = rec
         _write(cid, data)
 
 
