@@ -287,6 +287,12 @@ body::before {
 .column-count, .column-row-count {
   font-family: var(--fm); font-size: 10px; letter-spacing: 0.1em; color: var(--muted);
 }
+/* The sheets room's per-member badge (#201). Muted is "fine"; `missing` lifts
+   to full ink because "no sheet yet" is the thing the page exists to show, and
+   `alert` is kept for a sheet that is actually broken or over its creation
+   budget -- the accent this file spends only on what is wrong. */
+.column-row-count.missing { color: var(--ink); }
+.column-row-count.alert { color: var(--alert); }
 /* One row shape for every column: label left, count or arrow right, a 44px
    hit target, and an accent bar down the left when it is the current one. */
 .column-row {

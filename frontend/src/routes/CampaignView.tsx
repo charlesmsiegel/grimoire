@@ -3578,6 +3578,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               to read mid-turn, and the inspector's Cost section is where the
               scene in front of you is answered for. */}
           <Link className="scene-action" to={`/campaigns/${cid}/costs`}>Costs</Link>
+          {/* The mechanics panel below binds the module; this is the cast-wide
+              sheet coverage that binding produces (#201), which is a list and
+              so is a route rather than a third drawer. */}
+          <Link className="scene-action" to={`/campaigns/${cid}/sheets`}>Sheets</Link>
           <button className="scene-action" onClick={() => setShowChanges((v) => !v)}>
             {showChanges ? "Close" : "Changes"}
           </button>

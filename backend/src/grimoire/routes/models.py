@@ -368,6 +368,13 @@ class SheetAdvanceBody(BaseModel):
     field: str
 
 
+class SheetBulkBody(BaseModel):
+    # Per file kind, the sheet type a bulk create should use. A kind the module
+    # has exactly one sheet type for needs no entry; one with several has no
+    # default, and is skipped-with-a-reason when it has none here.
+    types: dict[str, str] = {}
+
+
 class PickBody(BaseModel):
     version: str
 

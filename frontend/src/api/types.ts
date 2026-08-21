@@ -1602,3 +1602,32 @@ export type Sheet = {
 };
 export type SheetExpected = { sheet_type: string | null; fields: Record<string, unknown>; gen: string | null } | null;
 export type SheetCoverage = Record<string, { total: number; sheeted: number; invalid: number }>;
+
+/** One cast member on the sheets roster: `coverage` counts these, this names
+ *  them. `sheet_type`/`errors`/`unspent` describe the stored sheet and are the
+ *  empty answers when `sheeted` is false. */
+export type SheetRosterRow = {
+  id: string;
+  name: string;
+  sheeted: boolean;
+  sheet_type: string | null;
+  errors: string[];
+  /** Creation pools the sheet does not balance, `{pool: budget - spent}`. A
+   *  positive value is points still to spend — every sheet made from schema
+   *  defaults rather than through the creation wizard starts out owing them —
+   *  and a negative one is a sheet already over its budget. Balanced pools are
+   *  absent, so an empty object means "nothing outstanding". */
+  unspent: Record<string, number>;
+};
+
+export type SheetRoster = Record<string, SheetRosterRow[]>;
+
+/** What one bulk create did. Every cast member it looked at is in `created`,
+ *  `failed`, or was already sheeted; every kind it could not choose a type for
+ *  is in `skipped` with the reason. */
+export type SheetBulkResult = {
+  created: { kind: string; id: string; name: string; sheet_type: string;
+             unspent: Record<string, number> }[];
+  skipped: { kind: string; reason: string }[];
+  failed: { kind: string; id: string; detail: string }[];
+};

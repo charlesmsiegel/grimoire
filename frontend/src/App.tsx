@@ -17,6 +17,7 @@ import OpenScene from "./routes/OpenScene";
 import CampaignView from "./routes/CampaignView";
 import CostsView from "./routes/CostsView";
 import LedgerView from "./routes/LedgerView";
+import SheetsView from "./routes/SheetsView";
 import TimelineView from "./routes/TimelineView";
 import LibraryView from "./routes/LibraryView";
 import SearchView from "./routes/SearchView";
@@ -121,6 +122,12 @@ function Shell(
             happened, and a play history read end to end is not a drawer over
             the scene it is a history of. */}
         <Route path="/campaigns/:cid/timeline" element={<TimelineView />} />
+        {/* Sheet coverage across the cast (#201). A room for the ledger's
+            reason: the play view's mechanics panel binds the module in six
+            lines, but "who among forty characters has a sheet" is a list read
+            top to bottom, and a drawer over the transcript is not where a list
+            like that goes. */}
+        <Route path="/campaigns/:cid/sheets" element={<SheetsView />} />
         <Route path="/library" element={<LibraryView />} />
         {/* Search keeps its query in the URL, so a result page is a link and
             the back button returns to it after following a hit. */}
