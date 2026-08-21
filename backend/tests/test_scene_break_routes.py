@@ -39,7 +39,10 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     importlib.reload(store)
     app = create_app()
-    return TestClient(app)
+    # `with`, so the lifespan runs: producing routes hand their work to a
+    # runner that lives on it, and a client without one cannot drive a turn.
+    with TestClient(app) as c:
+        yield c
 
 
 def _scene(client, posts=0):

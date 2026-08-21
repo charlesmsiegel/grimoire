@@ -22,7 +22,10 @@ from grimoire.main import create_app
 def client(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     importlib.reload(store)
-    return TestClient(create_app())
+    # `with`, so the lifespan runs: producing routes hand their work to a
+    # runner that lives on it, and a client without one cannot drive a turn.
+    with TestClient(create_app()) as c:
+        yield c
 
 
 def _campaign(client):

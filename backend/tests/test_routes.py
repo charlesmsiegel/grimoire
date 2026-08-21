@@ -11,6 +11,7 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi.testclient import TestClient
 from fastapi import Request
 from PIL import Image
 
@@ -6542,10 +6543,17 @@ def test_a_commit_that_died_mid_apply_resumes_without_repeating(client):
 
     real_set = store.plot.set_movement
     store.plot.set_movement = lambda *a, **k: (_ for _ in ()).throw(_Crash("killed"))
+    # A client that does NOT re-raise the server's exception, for this call
+    # only. `client` enters the lifespan now (producing routes need the runner),
+    # and `raise_server_exceptions=True` propagates a handler crash out through
+    # the harness, unwinding that lifespan -- so the retry below would fail with
+    # "This portal is not running" rather than exercising the resume. Checked
+    # against a real uvicorn: there an unhandled handler error is a 500 and the
+    # next turn still runs, so this is a TestClient artifact, not the behaviour
+    # under test.
+    crashing = TestClient(client.app, raise_server_exceptions=False)
     try:
-        client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
-    except _Crash:
-        pass
+        crashing.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
     finally:
         store.plot.set_movement = real_set
     assert store.entities.read_entity(croot, "lore", "saltmarch")["body"].strip() \

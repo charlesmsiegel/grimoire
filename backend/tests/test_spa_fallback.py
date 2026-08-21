@@ -51,7 +51,10 @@ def client(tmp_path, monkeypatch):
     app = FastAPI()
     app.include_router(router, prefix="/api")
     app.mount("/", SPAStaticFiles(directory=str(dist), html=True), name="static")
-    return TestClient(app)
+    # `with`, so the lifespan runs: producing routes hand their work to a
+    # runner that lives on it, and a client without one cannot drive a turn.
+    with TestClient(app) as c:
+        yield c
 
 
 @pytest.mark.parametrize("path", [

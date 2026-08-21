@@ -20,7 +20,10 @@ def client(monkeypatch, tmp_path):
     importlib.reload(store)
     app = create_app()
     app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["Hel", "lo"])
-    return TestClient(app)
+    # `with`, so the lifespan runs: producing routes hand their work to a
+    # runner that lives on it, and a client without one cannot drive a turn.
+    with TestClient(app) as c:
+        yield c
 
 
 def _campaign(client):

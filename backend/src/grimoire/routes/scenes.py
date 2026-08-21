@@ -10,7 +10,7 @@ import logging
 import threading
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
 from .. import prompts, store
@@ -32,6 +32,7 @@ from .common import (
     computes_only,
     get_llm,
 )
+from . import runs
 from .models import (
     Appear,
     AppearBatch,
@@ -356,9 +357,22 @@ def _disown_dead_guidance(cid: str, sid: str) -> None:
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/chat")
-def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(get_llm)):
+def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
+              client: LLMClient = Depends(get_llm),
+              x_grimoire_attempt: str | None = Header(default=None)):
     _require_scene(cid, sid)
     conn = _require_connection()
+    # RESERVED BEFORE THE FIRST MUTATOR. `heal` can append a line and the
+    # sidecar block can retire a proposal, so a 409 raised after them would
+    # tell the player nothing happened when something already had. The
+    # reservation is also what makes a second send on this scene refusable
+    # rather than merely discouraged.
+    run, fresh = runs.reserve_turn(request.app, cid, sid, "chat",
+                                   x_grimoire_attempt)
+    if not fresh:
+        # This exact POST already ran -- a duplicate delivery after a lost
+        # response. Replay it rather than doing the work twice.
+        return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     # ephemeral turn, never stored: a director note steering one generation
     # (pcless), or — in any scene — an empty send meaning "next NPC round"
     ephemeral = store.scenes.is_pcless(cid, sid) or not turn.content.strip()
@@ -407,12 +421,30 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
     # the turn produces nothing at all, the post comes back off. `posted_at`
     # travels with it because nothing holds a lock across the stream, so by the
     # time the undo runs the tail may belong to a different turn entirely.
-    stream = _chat_stream(cid, sid, messages, conn, client,   # claims the turn; see above
-                          undo_user_post=lambda: store.scenes.remove_trailing_user_post(
-                              cid, sid, posted_at, content),
-                          task="chat")
+    # The producer is unchanged; what changed is who consumes it. `runner`
+    # drives it on the lifespan loop and buffers every frame on the run, so the
+    # work outlives this request -- a locked phone or a backgrounded tab drops
+    # a subscriber, not the turn. The response tails that same buffer.
+    #
+    # Called HERE, synchronously, and only its iteration is deferred.
+    # `_chat_stream` claims the turn under the campaign lock before it returns,
+    # so a contended campaign raises `StoreBusy` at this line and the route
+    # answers 409 having sent nothing -- exactly as it did before. Building it
+    # inside the runner's factory instead moved that claim off the request, and
+    # a contended turn started answering 200 and failing later, which
+    # `test_a_turn_that_never_claims_records_nothing` caught.
+    stream = _chat_stream(
+        cid, sid, messages, conn, client,
+        undo_user_post=lambda: store.scenes.remove_trailing_user_post(
+            cid, sid, posted_at, content),
+        task="chat")
+    # AFTER the stream is built, never before: `_chat_stream` claims the turn
+    # and can raise, and a prompt recorded ahead of it leaves Turn history
+    # showing a request the model never saw (`test_a_turn_that_never_claims_
+    # records_nothing`).
     _record_prompt(cid, sid, "chat", breakdown)
-    return stream
+    runs.start_detached(request.app, run, lambda: stream.body_iterator)
+    return runs.tail_response(run, 0, lead=runs.lead_frame(run))
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/retry")

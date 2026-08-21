@@ -161,7 +161,10 @@ def test_an_unreadable_subtree_does_not_abort_the_scan(home, monkeypatch):
 @pytest.fixture
 def client(home):
     importlib.reload(store)
-    return TestClient(create_app())
+    # `with`, so the lifespan runs: producing routes hand their work to a
+    # runner that lives on it, and a client without one cannot drive a turn.
+    with TestClient(create_app()) as c:
+        yield c
 
 
 def test_the_route_reports_what_the_scan_found(client, home):

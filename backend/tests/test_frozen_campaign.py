@@ -268,12 +268,18 @@ def frozen_client(frozen_home):
     app = create_app()
     fake = from_cassette("campaign_flow")
     app.dependency_overrides[routes.get_llm] = lambda: fake
-    client = TestClient(app)
-    # The frozen tree carries no key (asserted above); the chat route refuses
-    # to call a provider without one, so the test supplies its own.
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-test"})
-    client.llm = fake
-    return client
+    # `with`, so the lifespan runs. It did not need to when this fixture was
+    # written -- the migration above is run by hand for that reason -- but a
+    # producing route now hands its work to a runner that lives on the
+    # lifespan's loop, and a client without one cannot play a turn at all. The
+    # hand-run migration stays: it is idempotent, and it documents which
+    # migration these tests actually depend on.
+    with TestClient(app) as client:
+        # The frozen tree carries no key (asserted above); the chat route
+        # refuses to call a provider without one, so the test supplies its own.
+        client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-test"})
+        client.llm = fake
+        yield client
 
 
 def test_a_turn_played_on_the_frozen_campaign_streams_and_persists(frozen_client):
