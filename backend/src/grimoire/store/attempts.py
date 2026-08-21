@@ -47,14 +47,41 @@ def _path(cid: str):
     return campaigns_paths.campaign_root(cid) / "attempts.json"
 
 
-def _read(cid: str) -> dict:
+def _read(cid: str, *, strict: bool = False) -> dict:
+    """The records for this campaign.
+
+    `strict` is the difference between reading this file to ANSWER a question
+    and reading it to REWRITE it, and the two want opposite failure modes.
+
+    Fail-soft (the default) belongs to `retained`: an unreadable file means "I
+    cannot say this post is durable", the caller keeps the player's text, and
+    the cost is a duplicate they can see and delete.
+
+    Fail-soft on the mutating path is the same sentence with the opposite
+    meaning, and review caught it. `forget` reading `{}` from a file it merely
+    could not OPEN -- a sync client or a Windows sharing violation holding it
+    for a moment -- concludes the marker is already absent and returns happily;
+    `_take_the_post_back` then deletes the player's post while the real file
+    still says `retained: true`. Once it is readable again recovery believes
+    that marker, settles, and the only copy of what they typed is gone. So a
+    mutating read raises instead, and the rollback leaves the post in place.
+
+    A corrupt file (valid `OSError`-free read, invalid JSON) is NOT strict: it
+    cannot be repaired by trying again, and refusing every rollback forever is
+    worse than rewriting a file that was already unusable.
+    """
     p = _path(cid)
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        # A missing file is the ordinary case, and a corrupt one must not stop
-        # a turn: the worst this costs is a recovery that keeps the player's
-        # text when it could have settled, which is the safe direction.
+        raw = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}          # the ordinary case, on both paths
+    except OSError:
+        if strict:
+            raise
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -82,7 +109,7 @@ def remember(cid: str, identity: str | None, attempt: str | None) -> None:
     # the append; this one is what keeps two campaigns' worth of concurrent
     # sends from losing one of two read-modify-writes of the same file.
     with locks.campaign_lock(cid):
-        data = _read(cid)
+        data = _read(cid, strict=True)
         data[_key(identity, attempt)] = now_iso()
         for stale in sorted(data, key=lambda k: data[k])[:max(0, len(data) - RETAIN)]:
             del data[stale]
@@ -102,7 +129,10 @@ def forget(cid: str, identity: str | None, attempt: str | None) -> None:
     if not identity or not attempt:
         return
     with locks.campaign_lock(cid):     # see `remember`
-        data = _read(cid)
+        # STRICT: an unreadable file here must not be mistaken for an absent
+        # marker -- see `_read`. Letting the `OSError` out leaves the post in
+        # the transcript, which is the recoverable side of the ambiguity.
+        data = _read(cid, strict=True)
         if data.pop(_key(identity, attempt), None) is not None:
             _write(cid, data)
 

@@ -164,7 +164,8 @@ def _announce_terminal(app, run) -> None:
         _log.exception("terminal-run callback failed for %s", run.id)
 
 
-def start(app, run, factory: Callable[[], Any]) -> None:
+def start(app, run, factory: Callable[[], Any],
+          on_unstarted: Callable[[], None] | None = None) -> None:
     """Schedule ``factory()`` as a detached run. Thread-safe.
 
     ``factory`` is a zero-arg callable returning the coroutine, not the
@@ -172,13 +173,15 @@ def start(app, run, factory: Callable[[], Any]) -> None:
     awaited (because the portal went away mid-shutdown) emits a
     "coroutine was never awaited" warning and does no work, which is a confusing
     way to discover the portal is gone.
+
+    ``on_unstarted`` is forwarded to `_guarded`; see there.
     """
     portal = getattr(app.state, "run_portal", None)
     if portal is None:
         raise RuntimeError(
             "no run portal; the app's lifespan is not running. Tests that need "
             "a run to execute take a lifespan-entered client.")
-    portal.start_task_soon(_guarded, app, run, factory)
+    portal.start_task_soon(_guarded, app, run, factory, on_unstarted)
 
 
 def cancel(app, run) -> None:
@@ -248,13 +251,23 @@ def _error_frame(error: dict) -> str:
     return f"data: {json.dumps({'error': error})}\n\n"
 
 
-async def _guarded(app, run, factory: Callable[[], Any]) -> None:
+async def _guarded(app, run, factory: Callable[[], Any],
+                   on_unstarted: Callable[[], None] | None = None) -> None:
     """One run, inside its own failure boundary and cancel scope.
 
     The boundary is load-bearing. These run on the lifespan's task group, and
     anyio cancels every sibling when one task raises, then propagates out of
     ``_lifespan`` -- so without catching here, one malformed scene would abort
     every other live run in the process and stop the backup ticker with them.
+
+    ``on_unstarted`` undoes setup the ROUTE did that the producer was going to
+    be responsible for undoing. It fires only on the one path where the
+    producer is never entered at all: a Stop that arrived during the route's
+    synchronous setup, which the checkpoint below then honours before the first
+    statement of the generator runs. Regenerate is the case -- it removes the
+    old reply before composing, and hands the stream the way to put it back --
+    so without this a reroll stopped in that window reports `cancelled` while
+    the transcript is permanently one reply short.
     """
     with anyio.CancelScope() as scope:
         run.cancel_scope = scope
@@ -268,6 +281,7 @@ async def _guarded(app, run, factory: Callable[[], Any]) -> None:
             scope.cancel()
         outcome = None
         try:
+            entered = False
             if run.cancel_requested:
                 # A CHECKPOINT before the factory, not just a cancelled scope.
                 # Cancellation only fires at an await, and a producer's first
@@ -280,11 +294,31 @@ async def _guarded(app, run, factory: Callable[[], Any]) -> None:
                 # turn the user had already stopped, which is the entire thing
                 # the flag exists to prevent.
                 await anyio.lowlevel.checkpoint()
+            entered = True
             outcome = await factory()
         except anyio.get_cancelled_exc_class():
             # A deliberate Stop, or shutdown. The producer's own `finally` has
             # already run by the time this is caught, which is what makes
             # "the partial is persisted before the slot frees" true.
+            #
+            # Unless it was never entered, which is the checkpoint above firing
+            # -- and then nobody has run the producer's teardown, because there
+            # was no producer.
+            #
+            # SYNCHRONOUS, deliberately: we are unwinding a cancellation, so
+            # anything that awaited here would be cancelled at its first await
+            # and half-undo the setup. Shielding it instead was tried and
+            # reverted -- a scope around code that never awaits is exactly what
+            # ASYNC100 flags, and it would have been protection against a
+            # hazard this signature does not allow.
+            #
+            # Fail-soft, because a restore that raises must not replace
+            # `cancelled` with a crash the client cannot act on.
+            if not entered and on_unstarted is not None:
+                try:
+                    on_unstarted()
+                except Exception:                           # noqa: BLE001
+                    _log.exception("run %s could not undo its setup", run.id)
             run.finish("cancelled")
             raise
         except Exception as exc:                            # noqa: BLE001

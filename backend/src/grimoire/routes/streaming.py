@@ -478,14 +478,24 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             if on_error is not None:
                 try:
                     note = await run_in_threadpool(on_error, watcher) or {}
-                except (store.locks.StoreBusy, store.scenes.SceneNotFound):
+                except (store.locks.StoreBusy, store.scenes.SceneNotFound, OSError):
                     # on_error writes to the scene -- it persists the partial
                     # reply, and now may also take the user post back off (#95)
-                    # -- so it can fail two ways. StoreBusy: the cross-process
+                    # -- so it can fail three ways. StoreBusy: the cross-process
                     # lock is contended (#234). SceneNotFound: the scene was
                     # renamed mid-turn, which mints a new id and moves the file
                     # out from under both calls (review caught this on the
-                    # rollback; the persist has always had it).
+                    # rollback; the persist has always had it). OSError: the
+                    # attempt record would not open, and `attempts.forget`
+                    # raises rather than mistaking that for an absent marker --
+                    # so the rollback is refused BEFORE it deletes anything.
+                    #
+                    # That last one lands exactly where it should. `note` stays
+                    # empty, so no `post_returned` reaches the client, so the
+                    # client keeps its copy of the words -- and the post is
+                    # still in the transcript, because the raise happened
+                    # first. A duplicate the player can see and delete, which
+                    # is the side of this ambiguity worth being wrong on.
                     #
                     # Neither may escape. The response has already started, so
                     # the global 409 handler cannot convert it, and an exception

@@ -125,6 +125,17 @@ class HandshakeEvent(Protocol):
     def wait(self, timeout: float | None = None) -> bool: ...
 
 
+class StoreMovingError(Exception):
+    """Raised when a run is reserved while the store root is being moved.
+
+    The move takes the registry's own lock for its whole duration, so a
+    reservation can only see this flag by arriving in a window where the answer
+    really is "not right now". Transient by construction -- a moment later the
+    root is settled and the same send succeeds -- which is why it is a distinct
+    kind from `run_in_flight` rather than a variation of it.
+    """
+
+
 class RunInFlightError(Exception):
     """Raised when a class that excludes finds its subject already held.
 
@@ -297,6 +308,16 @@ class RunRegistry:
         # what stops the OS reclaiming the process mid-turn.
         self._live: set[str] = set()
         self._on_live_change: Callable[[int], None] | None = None
+        # The count is computed under `_lock` and DELIVERED outside it, so two
+        # threads can arrive at the sink in the opposite order to the
+        # transitions they describe. `_live_seq` stamps each one where it is
+        # decided; `_sink_lock` serializes delivery and drops any stamp older
+        # than the last one delivered. See `_fire_live`.
+        self._live_seq = 0
+        self._delivered_seq = -1
+        self._sink_lock = threading.Lock()
+        # Set for the duration of a store-root move. See `hold_still`.
+        self._store_frozen = False
         self._by_key: dict[str, str] = {}
 
     def set_live_sink(self, sink: Callable[[int], None] | None) -> None:
@@ -307,7 +328,7 @@ class RunRegistry:
         """
         self._on_live_change = sink
 
-    def _fire_live(self, count: int | None) -> None:
+    def _fire_live(self, count: int | None, seq: int) -> None:
         """Announce a crossing, OUTSIDE the registry lock and fail-soft.
 
         Outside, because the sink calls into the Android runtime and a
@@ -315,13 +336,34 @@ class RunRegistry:
         portal events already taught us. Fail-soft, because a foreground
         promotion the OS refuses must not take down a run that is generating
         perfectly well -- a notification is the least important thing here.
+
+        **In order, though, and review caught that it was not.** Computing
+        under the lock and delivering outside it leaves the delivery unordered:
+        retiring the last run computes `0`, a new send reserves and delivers
+        `1`, and the delayed `0` lands after it. The service then demotes while
+        a run is live -- so the phone locks, the OS reclaims the process, and
+        the turn this whole feature exists to save is lost. The mirror image
+        pins the service and its notification after everything has finished.
+
+        `seq` is stamped where the transition is DECIDED, under `_lock`, so it
+        orders them by that rather than by which thread got here first. A stamp
+        older than the last delivered describes a world that has already been
+        superseded, and saying it would be a lie about the present.
         """
         if count is None or self._on_live_change is None:
             return
-        try:
-            self._on_live_change(count)
-        except Exception:                                    # noqa: BLE001
-            _log.exception("live-run callback failed")
+        # Held across the call, not just the compare: two sinks running
+        # concurrently could otherwise interleave inside the Android runtime,
+        # and `_delivered_seq` would say the newer one landed while the older
+        # was still executing.
+        with self._sink_lock:
+            if seq <= self._delivered_seq:
+                return
+            self._delivered_seq = seq
+            try:
+                self._on_live_change(count)
+            except Exception:                                # noqa: BLE001
+                _log.exception("live-run callback failed")
 
     def retire(self, run_id: str) -> None:
         """Note that a run is no longer live, and announce it if it was the last.
@@ -334,7 +376,9 @@ class RunRegistry:
         with self._lock:
             self._live.discard(run_id)
             count = len(self._live) if not self._live else None
-        self._fire_live(count)
+            self._live_seq += 1
+            seq = self._live_seq
+        self._fire_live(count, seq)
 
     def set_event_factory(self, factory: Callable[[], HandshakeEvent]) -> None:
         """Swap the factory used for runs published from here on.
@@ -367,6 +411,13 @@ class RunRegistry:
         # events on the adopt path is a cheap price for that not being possible.
         events = (self._event_factory(), self._event_factory())
         with self._lock:
+            # FIRST, and inside the lock the move also holds: a check made in
+            # `put_data_dir` and acted on afterwards leaves room for exactly
+            # this reservation, and then the run's setup writes the player's
+            # post into the old tree while its terminal write resolves the
+            # campaign against the new one.
+            if self._store_frozen:
+                raise StoreMovingError
             if attempt_id is not None:
                 # Attempt ids come from clients, so they are only unique within
                 # a subject -- two scenes may pick the same one.
@@ -422,7 +473,9 @@ class RunRegistry:
             # unpromoted and the process reclaimable before the runner ever
             # began, losing the turn in exactly the window this protects.
             crossed = len(self._live) if len(self._live) == 1 else None
-        self._fire_live(crossed)
+            self._live_seq += 1
+            seq = self._live_seq
+        self._fire_live(crossed, seq)
         return run, True
 
     @staticmethod
@@ -543,6 +596,36 @@ class RunRegistry:
                 if run.state == "running":
                     return run
             return None
+
+    @contextlib.contextmanager
+    def hold_still(self):
+        """Hold the store root still: no run may be reserved for this block.
+
+        `any_live()` followed by the move is a check-then-act, and review
+        caught it: the registry lock is released between the two, a send
+        reserves in the gap, and the move proceeds with a run now live. That
+        run's setup has already written into the old tree, so its terminal
+        write either fails the identity fence -- discarding a finished reply --
+        or lands in a copied library while the player's post stays behind in
+        the original.
+
+        So the refusal and the flag are set in ONE acquisition, and
+        `start_or_existing` reads the flag inside that same lock. The block is
+        short and takes no other lock: `set_data_dir` rewrites a pointer file.
+
+        The flag is cleared in a `finally`, because a move that raises must not
+        leave the app unable to start a turn until it is restarted.
+        """
+        with self._lock:
+            for run in self._runs.values():
+                if run.state == "running":
+                    raise RunInFlightError(run.id)
+            self._store_frozen = True
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._store_frozen = False
 
     def live_for_key(self, key: str | None) -> Run | None:
         """The running holder of an exclusion key, if there is one."""
@@ -954,7 +1037,8 @@ def sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-def start_detached(app, run: Run, producer, outcome=None) -> None:
+def start_detached(app, run: Run, producer, outcome=None,
+                   on_unstarted=None) -> None:
     """Run `producer` for `run`, decoupled from the request that asked for it.
 
     `producer` is a zero-arg callable returning an async iterator of raw SSE
@@ -973,6 +1057,11 @@ def start_detached(app, run: Run, producer, outcome=None) -> None:
     a value because it is only decided while the producer runs, and as a
     callable rather than the producer's own object because `runs` may not
     import `streaming` (`test_import_guard`).
+
+    `on_unstarted` undoes destructive setup the ROUTE did on the one path where
+    the producer is never entered -- a Stop that landed while the route was
+    still in synchronous setup. Regenerate is the caller that needs it; see
+    `runner._guarded`.
     """
 
     async def pump():
@@ -986,11 +1075,12 @@ def start_detached(app, run: Run, producer, outcome=None) -> None:
     # permanently `running` with no task, no terminal event, and its scene's
     # exclusion key held for the rest of the process. Same thread, and nothing
     # reads the flag until this route returns, so there is no window here.
-    runner.start(app, run, pump)
+    runner.start(app, run, pump, on_unstarted)
     run.started = True
 
 
-def answer_without_running(app, run: Run, frames: list[str]):
+def answer_without_running(app, run: Run, frames: list[str],
+                           state: RunState = "landed"):
     """End a reserved run that answered on its own, and hand back its answer.
 
     For the exits that produce a complete response without generating anything
@@ -1000,10 +1090,17 @@ def answer_without_running(app, run: Run, frames: list[str]):
     the id) would then be handed a stream containing nothing at all. Buffering
     them first makes the run the single record of what this request answered,
     however it answered.
+
+    `state` is what that answer WAS, and defaulting it to `landed` for every
+    caller was wrong: a check that would not resolve buffers an `error` frame
+    and generated nothing, so a client polling the record read success while
+    the stream said failure -- and on Android the completion notification said
+    the turn had replied. The frames and the run's state have to agree, because
+    they are read by different clients and neither knows about the other.
     """
     for frame in frames:
         run.append_frame(frame)
-    release_before_start(app, run, "landed")
+    release_before_start(app, run, state)
     return tail_response(run, 0, lead=lead_frame(run))
 
 
@@ -1173,8 +1270,10 @@ def scene_held_free(app, cid: str, sid: str):
         yield
 
 
-def require_store_free(app) -> None:
-    """Refuse an operation that moves the STORE ROOT while anything is running.
+@contextlib.contextmanager
+def store_held_still(app):
+    """Refuse an operation that moves the STORE ROOT while anything is running,
+    and keep it refused for the whole of that operation.
 
     Detaching a turn is what makes this reachable: the run survives navigation,
     so the player can leave the scene, open Configuration and change the storage
@@ -1184,13 +1283,18 @@ def require_store_free(app) -> None:
 
     Campaign-agnostic, unlike `require_campaign_free`: the root is global, so a
     run in ANY campaign is a run that would be persisted into the wrong tree.
+
+    A CONTEXT MANAGER and not a check, which is the correction review asked
+    for: see `RunRegistry.hold_still` for the window a bare check leaves open.
     """
-    live = app.state.runs.any_live()
-    if live is not None:
+    try:
+        with app.state.runs.hold_still():
+            yield
+    except RunInFlightError as exc:
         raise HTTPException(status_code=409, detail={
-            "kind": "runs_in_flight", "run_id": live.id,
+            "kind": "runs_in_flight", "run_id": exc.run_id,
             "detail": "a turn is still generating; wait for it or stop it before "
-                      "moving the storage location"})
+                      "moving the storage location"}) from exc
 
 
 def require_campaign_free(app, cid: str) -> None:
@@ -1255,6 +1359,13 @@ def reserve_turn(app, cid: str, sid: str, kind: str,
         raise HTTPException(status_code=409, detail={
             "kind": "run_in_flight", "run_id": exc.run_id,
             "detail": "a turn is already running on this scene"}) from exc
+    except StoreMovingError as exc:
+        # Distinct from `run_in_flight`, which resolves when somebody else's
+        # turn finishes. This one resolves in milliseconds and the same send
+        # will work, so the client is told to retry rather than to wait.
+        raise HTTPException(status_code=409, detail={
+            "kind": "busy",
+            "detail": "the storage location is being changed; try again"}) from exc
     # A Stop that arrived while this route was still in setup is already on the
     # run: `start_or_existing` consumes the record under the same lock that
     # publishes it. `runner` reads the flag when it installs the cancel scope,

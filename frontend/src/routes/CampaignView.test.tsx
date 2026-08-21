@@ -1279,8 +1279,14 @@ test("a dead response on a scene nobody left re-attaches instead of giving up", 
     // trigger. An abort is a Stop, and that path is settled elsewhere.
     throw Object.assign(new Error("network error"), { beforeResponse: true });
   });
-  (api.findRun as any).mockResolvedValue(
-    { run: { id: "r-live", attempt_id: "a", state: "running", next_index: 0 } });
+  // Null for the MOUNT pass, which now asks the scene for its newest run even
+  // with nothing pending (a reload leaves the provider empty). Answering
+  // "running" there would attach before this test has sent anything, and the
+  // reattach it means to observe would be a different one.
+  (api.findRun as any)
+    .mockResolvedValueOnce({ run: null })
+    .mockResolvedValue(
+      { run: { id: "r-live", attempt_id: "a", state: "running", next_index: 0 } });
   // Emits and then stays open, so the streamed preview is still on screen to
   // assert on: `attachToRun` clears it and refetches the scene once the run is
   // done, and the scene mock has no such post.
@@ -1298,10 +1304,122 @@ test("a dead response on a scene nobody left re-attaches instead of giving up", 
   // nothing: the scene refetch carries that back either way.
   expect(await screen.findByText(/The lamps are already lit\./)).toBeInTheDocument();
   // and asked by ATTEMPT, which is what names the send in the window where no
-  // frame ever arrived
-  expect((api.findRun as any).mock.calls[0][2]).toBe((api.chat as any).mock.calls[0][6]);
+  // frame ever arrived. Not `calls[0]`: the mount pass asks the same route
+  // with no attempt at all, precisely because it has none to ask about.
+  const asked = (api.findRun as any).mock.calls.map((c: unknown[]) => c[2]);
+  expect(asked).toContain((api.chat as any).mock.calls[0][6]);
   // and the prompt was NOT handed back, which would have been a second send
   expect(screen.getByRole("textbox")).toHaveValue("");
+});
+
+test("a send whose socket AND lookup both died stays pending", async () => {
+  // These are the same outage: the response reset before its leading frame,
+  // and the discovery request that would say whether a run exists cannot get
+  // out either. Reading that failure as "no run" runs the whole teardown --
+  // unlocking the composer and letting the next Send overwrite the registry's
+  // one pending entry for this scene -- while the original turn may be
+  // generating perfectly well on the server.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(async () => {
+    throw Object.assign(new Error("network error"), { beforeResponse: true });
+  });
+  (api.findRun as any).mockRejectedValue(new Error("offline"));
+
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await waitFor(() => expect(api.findRun).toHaveBeenCalled());
+
+  // Still Stop, because nothing has established that the turn is over -- and
+  // the words were NOT handed back, which would invite a second send of a post
+  // that may well be in the transcript.
+  expect(screen.getByRole("button", { name: /stop ■/i })).toBeInTheDocument();
+  expect(screen.getByRole("textbox")).toHaveValue("");
+});
+
+test("a reload with no local attempt still finds the run generating on this scene",
+     async () => {
+  // The Android case this whole feature exists for, one layer up: the WebView's
+  // renderer can be restarted out from under a perfectly healthy backend turn,
+  // and a full reload recreates the provider EMPTY. With no pending attempt to
+  // ask about, adoption used to return -- leaving an unlocked composer over a
+  // stale transcript, and the next send refused with `run_in_flight` by a run
+  // this view could not see.
+  //
+  // The attemptless lookup is a different question: "what is the newest run on
+  // this scene?" -- which is the only one a client with no local state can ask.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.findRun as any).mockResolvedValue(
+    { run: { id: "r-live", attempt_id: "someone-elses", state: "running", next_index: 0 } });
+  (api.attachRun as any).mockImplementation(
+    async (_c: string, _s: string, _r: string, _from: number, onEvent: any) => {
+      onEvent({ delta: "The lamps are already lit." });
+      await new Promise(() => {});
+    });
+
+  renderCampaign();
+
+  expect(await screen.findByText(/The lamps are already lit\./)).toBeInTheDocument();
+  // asked WITHOUT an attempt, because there is none to ask about
+  expect((api.findRun as any).mock.calls[0][2]).toBeUndefined();
+  // and the composer says what is true: a turn is running here
+  expect(screen.getByRole("button", { name: /stop ■/i })).toBeInTheDocument();
+});
+
+test("a finished run found by that lookup is left alone", async () => {
+  // The counterweight. A terminal run belongs to a turn whose words some other
+  // client holds; there is nothing here to restore and nothing to settle, so
+  // attaching would lock this composer over a scene that is perfectly free.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.findRun as any).mockResolvedValue(
+    { run: { id: "r-done", attempt_id: "someone-elses", state: "landed", next_index: 4 } });
+
+  renderCampaign();
+
+  await screen.findByRole("button", { name: /(send ▸|continue ▶)/i });
+  expect(api.attachRun).not.toHaveBeenCalled();
+});
+
+test("a Stop the server has not reserved yet is not a stopped turn", async () => {
+  // A precancel recorded before the POST reserved answers `run: null`. That is
+  // not "there is nothing to stop" -- it is "cancellation is pending": the
+  // original request is still in its synchronous setup and will consume that
+  // record when it reserves. Resolving on it settled the attempt and unlocked
+  // the composer while that was still to happen, so the next Send raced the
+  // very request it had just cancelled.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(hangingChat());
+  (api.cancelAttempt as any).mockResolvedValue({ run: null });
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+
+  // Unconfirmed, so it reports that and keeps the button rather than handing
+  // Send back over a request that is about to reserve.
+  expect(await screen.findByText(/may still be generating/i)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /stop ■/i })).toBeInTheDocument();
+  // and it kept asking rather than concluding from the first null
+  expect((api.cancelAttempt as any).mock.calls.length).toBeGreaterThan(1);
+});
+
+test("a Stop confirmed once the request reserves does settle", async () => {
+  // The counterweight to the test above: the pending answer resolves as soon
+  // as the original request reserves and consumes the precancel. Treating
+  // every null as permanent would leave the composer locked on the ordinary
+  // Stop-before-first-frame, which is the commonest Stop there is.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(hangingChat());
+  (api.cancelAttempt as any)
+    .mockResolvedValueOnce({ run: null })
+    .mockResolvedValue({ run: { id: "r", attempt_id: "a", state: "cancelled", next_index: 0 } });
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+
+  await screen.findByRole("button", { name: /(send ▸|continue ▶)/i });
+  expect(screen.queryByText(/may still be generating/i)).toBeNull();
 });
 
 test("a recovery pass that could not reach the server keeps the send pending", async () => {
@@ -6363,8 +6481,11 @@ test("the reattach asks from one past what was read, not from the live tail", as
     onEvent({ delta: "The lamps " });
     throw new Error("network");           // the socket dies after one frame
   });
-  (api.findRun as any).mockResolvedValue({
-    run: { id: "run-9", attempt_id: "a", state: "running", next_index: 12 } });
+  // Null for the mount pass; see the note in the reattach test above.
+  (api.findRun as any)
+    .mockResolvedValueOnce({ run: null })
+    .mockResolvedValue({
+      run: { id: "run-9", attempt_id: "a", state: "running", next_index: 12 } });
 
   renderCampaign();
   fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Mara waits." } });

@@ -384,3 +384,69 @@ def test_a_cancel_before_the_run_is_even_scheduled_is_not_lost(app_with_lifespan
     _wait_terminal(app, run.id)
     assert run.state == "cancelled", f"the run was {run.state}: the Stop was dropped"
     assert not ran.is_set(), "the provider started after the user cancelled it"
+
+
+def test_setup_is_undone_when_a_stop_lands_before_the_producer_starts(app_with_lifespan):
+    """A Stop during a route's synchronous setup leaves only `cancel_requested`,
+    and `_guarded` honours it with a checkpoint BEFORE entering the producer.
+    The producer's `finally` is where a route's destructive setup is undone --
+    regenerate removes the old reply and hands the stream the way to put it back
+    -- so on this one path nothing undoes it and the reroll ends `cancelled`
+    with the transcript permanently one reply short.
+    """
+    app = app_with_lifespan
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    entered = []
+    undone = []
+
+    async def producer():
+        entered.append(True)
+        if False:
+            yield ""
+
+    run.cancel_requested = True
+    runs_mod.start_detached(app, run, producer, on_unstarted=lambda: undone.append(True))
+    assert run.terminal.wait(5)
+
+    assert run.state == "cancelled"
+    assert entered == [], "the producer ran despite a Stop already recorded"
+    assert undone == [True], "the route's setup was never undone"
+
+
+def test_a_cancel_after_the_producer_started_leaves_teardown_to_the_producer(
+        app_with_lifespan):
+    """The counterweight, and the reason this is not simply always called on a
+    cancel: once the producer is entered, its own `finally` owns the teardown.
+    Running both would restore the old reply twice -- appending a duplicate of
+    the very text the reroll was replacing.
+
+    Cancelled while the producer is RUNNING, which is the discriminating case.
+    A producer that simply finishes never reaches the cancelled branch at all,
+    so a test built on one passes whatever the condition says.
+    """
+    app = app_with_lifespan
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a2", "i", LABELS)
+    undone = []
+    own_teardown = []
+    started = threading.Event()
+
+    async def producer():
+        try:
+            started.set()
+            yield _sse_frame()
+            await anyio.sleep(30)
+        finally:
+            own_teardown.append(True)
+
+    runs_mod.start_detached(app, run, producer, on_unstarted=lambda: undone.append(True))
+    assert started.wait(5)
+    runner.cancel(app, run)
+    assert run.terminal.wait(5)
+
+    assert run.state == "cancelled"
+    assert own_teardown == [True], "the producer's own teardown did not run"
+    assert undone == [], "the unstarted hook fired for a producer that had started"
+
+
+def _sse_frame() -> str:
+    return 'data: {"done": true}\n\n'

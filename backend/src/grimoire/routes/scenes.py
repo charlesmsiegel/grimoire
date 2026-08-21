@@ -503,7 +503,16 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             # recovery after the run record expired ask the only decisive
             # question -- is this attempt's post still here? -- rather than
             # matching text, which is not an identifier.
-            store.attempts.remember(cid, run.scene_identity, run.attempt_id)
+            #
+            # Swallowed, and only here. `attempts` refuses to rewrite a file it
+            # could not read (see `_read`), which on the ROLLBACK path is what
+            # keeps a post from being deleted against a marker still saying it
+            # is there. On this path the same refusal would fail an otherwise
+            # good send over a bookkeeping file, and the cost of the missing
+            # marker is a recovery that hands back words already in the
+            # transcript -- a duplicate, the recoverable side again.
+            with contextlib.suppress(OSError):
+                store.attempts.remember(cid, run.scene_identity, run.attempt_id)
     if ephemeral:
         note = turn.content.strip() or prompts.render("scene/director_note.j2")
         messages, breakdown = store.context.compose_director_turn(
@@ -864,8 +873,15 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
     # contended campaign). Both would leave Turn history showing a regeneration
     # the model never saw.
     _record_prompt(cid, sid, "regenerate", breakdown)
+    # `on_unstarted` is `restore` again, for the one path the stream's own hooks
+    # cannot cover: a Stop that arrived while this route was still in the
+    # synchronous setup above. The runner honours it with a checkpoint BEFORE
+    # entering the producer, so the generator's `finally` -- where `restore`
+    # otherwise lives -- never runs, and review caught what that leaves behind:
+    # a reroll reported `cancelled` with the old reply removed and no
+    # replacement, permanently one reply short.
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
-                        outcome=outcome.result)
+                        outcome=outcome.result, on_unstarted=restore)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))
 
 
