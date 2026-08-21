@@ -92,6 +92,44 @@ test("? typed into prose is a question mark", () => {
   expect(screen.queryByRole("dialog", { name: /keyboard/i })).toBeNull();
 });
 
+// The sheet is opened FROM under an overlay (it is `global`), so it is read at
+// exactly the moment half its rows cannot fire. Listing them as live is the
+// one lie a sheet like this must not tell — the reader presses the key, and
+// nothing happens, twice.
+test("a binding the overlay on top is holding off is inert too", () => {
+  render(
+    <>
+      <Bind keys={[NEW_SCENE]} />
+      <Bind keys={[{ keys: "mod+k", label: "Go anywhere", group: "ANYWHERE", global: true, run: () => {} }]} />
+      <Bind keys={[{ keys: "escape", label: "Close the dossier", group: "THIS PANEL", run: () => {} }]} modal />
+      <ShortcutsHelp />
+    </>,
+  );
+  press("?");
+  // By row rather than by text: "Keyboard shortcuts" is both the sheet's title
+  // and one of its rows.
+  const row = (label: string) => [...document.querySelectorAll(".shortcuts-row")]
+    .find((r) => r.querySelector(".shortcuts-label")?.textContent === label)!.className;
+  expect(row("New scene")).toContain("off");
+  // The overlay's own key, and the two that outlive one, are still live.
+  expect(row("Close the dossier")).not.toContain("off");
+  expect(row("Go anywhere")).not.toContain("off");
+  expect(row("Keyboard shortcuts")).not.toContain("off");
+});
+
+// It calls itself a modal dialog; a modal dialog that never takes focus is a
+// claim screen readers act on and sighted keyboard users cannot verify — Tab
+// would still walk the page behind it.
+test("it takes focus, and gives it back to where the reader was", () => {
+  render(<><button>somewhere</button><ShortcutsHelp /></>);
+  const before = screen.getByText("somewhere");
+  before.focus();
+  press("?");
+  expect(document.activeElement).toBe(screen.getByRole("dialog", { name: /keyboard/i }));
+  press("Escape");
+  expect(document.activeElement).toBe(before);
+});
+
 test("the sections read most-specific first", () => {
   render(
     <>
