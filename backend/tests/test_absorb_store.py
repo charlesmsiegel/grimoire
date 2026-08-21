@@ -147,6 +147,23 @@ def test_append_kinds_covers_every_entity_kind():
     assert len(absorb.APPEND_KINDS) == len(set(absorb.APPEND_KINDS))
 
 
+def test_the_absorb_prompt_names_every_kind_a_body_append_can_reach():
+    """Resolving a kind the prompt never mentions is a fix nothing exercises:
+    the model can only cite a record it has been told it may cite. Paired with
+    the ENTITY_KINDS guard above, this is what carries a sixth kind all the way
+    from the store to the ask — add one and both tests fail in turn.
+
+    Matched on the singular stem, because the prompt is prose and says "an item"
+    where the store says `items`. Every one of the five is `<kind>`, `<kind>s`
+    or unchanged by dropping a trailing s.
+    """
+    system = absorb.build_prompt("**You:** hi", {})[0]["content"]
+    lines = [ln for ln in system.splitlines() if ln.startswith('"lore_edits"')]
+    assert len(lines) == 1, "the absorb prompt no longer asks for lore_edits by that name"
+    for kind in absorb.APPEND_KINDS:
+        assert kind.removesuffix("s") in lines[0], f"{kind} is resolvable but never asked for"
+
+
 def test_materialize_evolves_items_groups_and_creatures(monkeypatch, tmp_path):
     """Items, groups and creatures were unreachable from `lore_edits` (#224), so
     a group could only move through its campaign-side state and an item or a
@@ -172,6 +189,31 @@ def test_materialize_evolves_items_groups_and_creatures(monkeypatch, tmp_path):
     # The label names the kind, which is what lets a reviewer catch a bare id
     # that resolved to a record the model did not mean.
     assert ledger["label"] == "The Ledger — items"
+
+
+def test_a_group_can_take_a_body_append_and_a_state_edit_in_one_absorb(monkeypatch, tmp_path):
+    """`groups/<gid>` is the form the "Groups:" snapshot hands the model, and it
+    now means something in TWO sections. They must not collide: the state edit
+    writes the campaign's groupstate sidecar, the append writes the world
+    record's body, and the reviewer gets one row for each."""
+    from grimoire.store import entities, groupstate, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    gid = entities.create_entity(croot, "groups", "Salt Circle", body="A quiet cabal.")
+    sid = scenes.create_scene(cid, "S")
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, {
+        "group_state_edits": [{"id": f"groups/{gid}", "goals": "Reach the ledger."}],
+        "lore_edits": [{"id": f"groups/{gid}", "append": "Dockhands founded it."}]})}
+    assert set(edits) == {f"group_state:{gid}", f"lore:groups/{gid}"}
+    assert edits[f"group_state:{gid}"]["field"] == "group_state"
+    append = edits[f"lore:groups/{gid}"]
+    assert append["field"] == "body" and append["target"] == {"kind": "groups", "id": gid}
+    assert append["after"] == "A quiet cabal.\n\nDockhands founded it."
+    # And each lands where it says: the body append must not reach the sidecar.
+    assert absorb.apply_edits(cid, list(edits.values()), sid)[1] == []
+    assert entities.read_entity(croot, "groups", gid)["body"].strip() \
+        == "A quiet cabal.\n\nDockhands founded it."
+    assert groupstate.read_state(croot, gid)["goals"] == "Reach the ledger."
 
 
 @pytest.mark.parametrize("raw", ["items/the-ledger", "items:the-ledger"])
@@ -206,8 +248,7 @@ def test_materialize_qualified_lore_edit_id_does_not_fall_back_to_another_kind(
         == "A rumour of a tally."
 
 
-def test_materialize_bare_lore_edit_id_still_prefers_lore_then_locations(
-        monkeypatch, tmp_path):
+def test_a_bare_lore_edit_id_resolves_in_the_declared_kind_order(monkeypatch, tmp_path):
     """The two kinds this resolver knew before the other three joined it keep
     the order they were tried in. Slugs are per-kind, so one id can name up to
     five records, and reordering would silently move an append that has been
@@ -215,14 +256,17 @@ def test_materialize_bare_lore_edit_id_still_prefers_lore_then_locations(
     from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
-    for kind in ("locations", "lore", "items", "groups", "creatures"):
+    for kind in absorb.APPEND_KINDS:
         entities.create_entity(croot, kind, "The Ledger", body=f"The {kind} one.")
     sid = scenes.create_scene(cid, "S")
-    edits = absorb.materialize(cid, sid, {"lore_edits": [{"id": "the-ledger", "append": "x"}]})
-    assert [e["target"] for e in edits] == [{"kind": "lore", "id": "the-ledger"}]
-    entities.delete_entity(croot, "lore", "the-ledger")
-    edits = absorb.materialize(cid, sid, {"lore_edits": [{"id": "the-ledger", "append": "x"}]})
-    assert [e["target"] for e in edits] == [{"kind": "locations", "id": "the-ledger"}]
+    # Peel the winner off one at a time: each kind in turn is the one a bare id
+    # resolves to, in exactly the declared order.
+    for kind in absorb.APPEND_KINDS:
+        edits = absorb.materialize(cid, sid, {"lore_edits": [{"id": "the-ledger", "append": "x"}]})
+        assert [e["target"] for e in edits] == [{"kind": kind, "id": "the-ledger"}]
+        entities.delete_entity(croot, kind, "the-ledger")
+    assert absorb.materialize(cid, sid, {"lore_edits": [
+        {"id": "the-ledger", "append": "x"}]}) == []
 
 
 def test_materialize_lore_edit_drops_an_id_naming_a_kind_that_is_not_a_record(

@@ -1,17 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, api, type JournalEntry, type RecordChange } from "../api/client";
+import { ApiError, api, type EntityKind, type JournalEntry, type RecordChange }
+  from "../api/client";
 
-// Every ref kind a write-back can carry, because a row filed under a kind no
-// heading claims is not rendered at all. Absorb evolves the body of any of the
-// five entity kinds (#224), not just lore and locations, so a group's or an
-// item's change would otherwise be logged and then be invisible here.
+// Every ref kind a write-back can carry needs a heading here, because a row
+// filed under a kind no heading claims is fetched, counted, and then never
+// rendered. Absorb evolves the body of any of the five entity kinds (#224), not
+// just lore and locations, so a group's or an item's change would otherwise be
+// logged and then be invisible. Keyed by `EntityKind` rather than listed, so a
+// sixth kind fails typecheck here instead of quietly going missing; the
+// insertion order is the order the headings appear in.
+const ENTITY_HEADINGS: Record<EntityKind, string> = {
+  lore: "Lore", locations: "Locations", items: "Items",
+  groups: "Groups", creatures: "Creatures",
+};
+
 const GROUPS: { kind: string; label: string }[] = [
   { kind: "characters", label: "Characters" },
-  { kind: "lore", label: "Lore" },
-  { kind: "locations", label: "Locations" },
-  { kind: "items", label: "Items" },
-  { kind: "groups", label: "Groups" },
-  { kind: "creatures", label: "Creatures" },
+  ...Object.entries(ENTITY_HEADINGS).map(([kind, label]) => ({ kind, label })),
 ];
 
 /** The two things this panel answers, which are different questions (#31).

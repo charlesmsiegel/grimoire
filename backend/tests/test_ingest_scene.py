@@ -1311,8 +1311,8 @@ def test_a_scene_whose_only_failure_created_a_record_stops_for_a_person(monkeypa
 
 def test_an_ambiguous_edit_id_is_replayed_by_nobody():
     """`apply_edits` reports a failure by id and nothing else, and `materialize`
-    does not promise uniqueness — two lore appends against one entry are both
-    `lore:<eid>`. Matching in order queues whichever came FIRST, which is the one
+    does not promise uniqueness — two body appends against one entry are both
+    `lore:<kind>/<eid>`. Matching in order queues whichever came FIRST, which is the one
     that landed, and drops the one that failed: the retry then re-applies stale
     text and the scene reports `done` with the real proposal gone."""
     edits = [{"id": "lore:the-pact", "kind": "lore", "after": "landed"},

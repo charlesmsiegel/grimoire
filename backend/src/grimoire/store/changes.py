@@ -1,5 +1,6 @@
 """Per-campaign record-change log: the latest write-back delta (previous -> current)
-for each browsable record (characters/lore/locations). Stored at <campaign>/changes.json,
+for each browsable record — a character, or any of the five entity kinds, whose
+body an absorb can evolve (#224). Stored at <campaign>/changes.json,
 keyed by "<kind>/<id>". Pure JSON IO + a stdlib line diff. Written by absorb.apply_edits,
 read by the GET /changes route.
 """
