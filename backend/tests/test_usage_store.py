@@ -202,7 +202,9 @@ def test_an_empty_ledger_summarizes_to_zero_rather_than_failing(home, monkeypatc
                             "completion_tokens": 0, "total_tokens": 0,
                             "cache_read_tokens": 0, "cache_write_tokens": 0,
                             "cost_usd": 0.0, "estimated_usd": 0.0,
-                            "priced_calls": 0, "unpriced_calls": 0, "duration_ms": 0}
+                            "modelled_usd": 0.0, "priced_calls": 0,
+                            "unpriced_calls": 0, "subscription_calls": 0,
+                            "modelled_calls": 0, "duration_ms": 0}
     assert out["by_day"] == []
 
 
@@ -853,3 +855,280 @@ def test_a_title_renamed_and_renamed_back_does_not_silence_the_scene(home, monke
     out = usage.scene_usage("c", "a", since="2026-08-01")
     assert out["totals"]["cost_usd"] == 0.6, "every row is this one scene's"
     assert out["totals"]["calls"] == 3
+
+
+# ---- modelled costs: what the user's own rates say an unpriced call cost (#158) ----
+def _rates(home, table):
+    (home / "pricing.json").write_text(json.dumps(table), encoding="utf-8")
+
+
+def test_with_no_rate_table_an_unpriced_call_stays_unpriced(home, monkeypatch):
+    """The default state, and the one every existing reader was written
+    against: an empty table models nothing at all."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", model="local/glm", prompt_tokens=1000, completion_tokens=500)
+
+    totals = usage.summary(days=30)["totals"]
+    assert totals["unpriced_calls"] == 1
+    assert totals["modelled_calls"] == 0
+    assert totals["modelled_usd"] == 0.0
+
+
+def test_a_rate_moves_an_unpriced_call_into_its_own_money_column(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _rates(home, {"local/glm": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 2.0}})
+    _seed("2026-08-14", model="local/glm", prompt_tokens=1000, completion_tokens=500)
+
+    totals = usage.summary(days=30)["totals"]
+    assert totals["modelled_calls"] == 1
+    assert totals["modelled_usd"] == pytest.approx(2.0)
+    assert totals["unpriced_calls"] == 0, "it is priced now, by an estimate"
+    assert totals["cost_usd"] == 0.0, "an estimate is not money that was charged"
+
+
+def test_a_modelled_figure_is_never_added_to_what_was_billed(home, monkeypatch):
+    """Three money columns, no two of which may be summed — the rule the whole
+    ledger rests on, checked where the third one enters."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _rates(home, {"": {"prompt_usd_per_1k": 1.0}})
+    _seed("2026-08-14", model="realm/opus", prompt_tokens=1000, cost_usd=0.5)
+    _seed("2026-08-14", model="claude/agent", prompt_tokens=1000, cost_usd=0.25,
+          cost_basis="equivalent")
+    _seed("2026-08-14", model="local/glm", prompt_tokens=1000)
+
+    totals = usage.summary(days=30)["totals"]
+    assert totals["cost_usd"] == pytest.approx(0.5)
+    assert totals["estimated_usd"] == pytest.approx(0.25)
+    assert totals["modelled_usd"] == pytest.approx(1.0)
+    assert totals["priced_calls"] == 2
+    assert totals["subscription_calls"] == 1
+    assert totals["modelled_calls"] == 1
+
+
+def test_a_priced_call_is_never_re_priced_by_the_table(home, monkeypatch):
+    """The table fills gaps. A provider that said what it charged has said it."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _rates(home, {"": {"prompt_usd_per_1k": 99.0}})
+    _seed("2026-08-14", model="realm/opus", prompt_tokens=1000, cost_usd=0.01)
+
+    totals = usage.summary(days=30)["totals"]
+    assert totals["cost_usd"] == pytest.approx(0.01)
+    assert totals["modelled_usd"] == 0.0
+
+
+def test_a_call_nobody_counted_stays_unpriced_however_good_the_table(home, monkeypatch):
+    """Rates times nothing is zero, and a scene of those rendered as $0.00 is
+    the claim this feature exists not to make."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}})
+    _seed("2026-08-14", model="local/glm")
+
+    totals = usage.summary(days=30)["totals"]
+    assert totals["unpriced_calls"] == 1
+    assert totals["modelled_calls"] == 0
+
+
+def test_a_budget_is_never_charged_for_a_modelled_figure(home, monkeypatch):
+    """A cap measures money owed. Hitting it on arithmetic nobody was invoiced
+    for would be the feature warning about its own guess."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _rates(home, {"": {"prompt_usd_per_1k": 100.0}})
+    _seed("2026-08-14", campaign="saltmarch", model="local/glm", prompt_tokens=1000)
+
+    out = usage.budget("saltmarch", 1.0, "monthly")
+    assert out["spent_usd"] == 0.0
+    assert out["level"] == "ok"
+    assert out["unpriced_calls"] == 1, "still a floor, and still says so"
+
+
+def test_a_turn_carries_the_modelled_figure_beside_its_absent_price(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _rates(home, {"": {"prompt_usd_per_1k": 1.0}})
+    _seed("2026-08-14", campaign="saltmarch", scene="001-arrival",
+          model="local/glm", prompt_tokens=2000)
+
+    turn, = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")["turns"]
+    assert turn["cost_usd"] is None
+    assert turn["modelled_usd"] == pytest.approx(2.0)
+
+
+def test_a_priced_turn_reports_no_modelled_figure(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _rates(home, {"": {"prompt_usd_per_1k": 1.0}})
+    _seed("2026-08-14", campaign="saltmarch", scene="001-arrival",
+          model="realm/opus", prompt_tokens=2000, cost_usd=0.02)
+
+    turn, = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")["turns"]
+    assert turn["cost_usd"] == pytest.approx(0.02)
+    assert turn["modelled_usd"] is None
+
+
+# ---- what one player post cost, across every reroll of it (#153) ----
+def test_a_post_and_its_rerolls_bucket_together(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    for task, cost in (("chat", 0.01), ("retry", 0.02), ("regenerate", 0.04)):
+        _seed("2026-08-14", task=task, campaign="saltmarch", scene="001-arrival",
+              cost_usd=cost, post=6)
+    _seed("2026-08-14", task="chat", campaign="saltmarch", scene="001-arrival",
+          cost_usd=0.5, post=8)
+
+    by_post = usage.scene_usage("saltmarch", "001-arrival",
+                                since="2026-08-01")["by_post"]
+    assert [b["post"] for b in by_post] == [6, 8], "ascending, to be walked beside a transcript"
+    assert by_post[0]["calls"] == 3
+    assert by_post[0]["cost_usd"] == pytest.approx(0.07)
+    assert by_post[1]["cost_usd"] == pytest.approx(0.5)
+
+
+def test_a_call_that_answers_no_post_is_in_the_scene_but_in_no_post_bucket(home, monkeypatch):
+    """An absorb belongs to the scene, not to a post. Filed under one it would
+    make whichever post it followed look expensive."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", task="absorb", campaign="saltmarch", scene="001-arrival",
+          cost_usd=0.30)
+    _seed("2026-08-14", task="chat", campaign="saltmarch", scene="001-arrival",
+          cost_usd=0.01, post=2)
+
+    out = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")
+    assert out["totals"]["cost_usd"] == pytest.approx(0.31)
+    assert [b["post"] for b in out["by_post"]] == [2]
+    assert out["by_post"][0]["cost_usd"] == pytest.approx(0.01)
+
+
+def test_post_zero_is_a_post_and_an_absent_one_is_not(home, monkeypatch):
+    """`0` and "no post" are different claims, and the field is absent rather
+    than zero for the second — the same absent-not-zero rule as the counts."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", task="chat", campaign="saltmarch", scene="001-arrival",
+          cost_usd=0.01, post=0)
+    _seed("2026-08-14", task="absorb", campaign="saltmarch", scene="001-arrival",
+          cost_usd=0.02)
+
+    rows = _rows(home)
+    assert rows[0]["post"] == 0
+    assert "post" not in rows[1]
+    by_post = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")["by_post"]
+    assert [b["post"] for b in by_post] == [0]
+
+
+def test_a_negative_post_index_is_not_recorded(home):
+    _seed("2026-08-14", task="chat", post=-1)
+
+    assert "post" not in _rows(home)[0]
+
+
+# ---- a campaign's scenes, all-time ----
+def test_campaign_scenes_buckets_each_scenes_spend(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", scene="001-arrival", cost_usd=0.10)
+    _seed("2026-08-14", campaign="saltmarch", scene="001-arrival", cost_usd=0.05)
+    _seed("2026-08-14", campaign="saltmarch", scene="002-market", cost_usd=0.40)
+    _seed("2026-08-14", campaign="realm", scene="001-elsewhere", cost_usd=9.0)
+
+    out = usage.campaign_scenes("saltmarch")
+    assert [b["scene"] for b in out["scenes"]] == ["002-market", "001-arrival"], \
+        "ordered by spend: the question is where the money went"
+    assert out["scenes"][1]["calls"] == 2
+    assert out["scenes"][1]["cost_usd"] == pytest.approx(0.15)
+    assert out["totals"]["cost_usd"] == pytest.approx(0.55), "this campaign's own"
+
+
+def test_campaign_scenes_keeps_the_calls_that_belong_to_no_scene(home, monkeypatch):
+    """A breakdown that quietly excluded them would not add up to the total
+    printed above it."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", task="suggestions", campaign="saltmarch", cost_usd=0.02)
+    _seed("2026-08-14", campaign="saltmarch", scene="001-arrival", cost_usd=0.10)
+
+    out = usage.campaign_scenes("saltmarch")
+    assert {b["scene"] for b in out["scenes"]} == {"001-arrival", usage.NO_SCENE}
+    assert sum(b["cost_usd"] for b in out["scenes"]) \
+        == pytest.approx(out["totals"]["cost_usd"])
+
+
+def test_campaign_scenes_folds_a_renamed_scene_into_the_id_it_carries_now(home, monkeypatch):
+    """Setting a date renames a scene, and it happens to most of them a turn or
+    two in. Unfollowed, the all-time view would report a scene's cost since its
+    rename and call it the scene's."""
+    _pin(monkeypatch, "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", scene="001--arrival", cost_usd=0.10)
+    usage.repoint_scenes("saltmarch", {"001--arrival": "001--dated--arrival"})
+    _seed("2026-08-14", campaign="saltmarch", scene="001--dated--arrival", cost_usd=0.20)
+
+    out = usage.campaign_scenes("saltmarch")
+    assert [b["scene"] for b in out["scenes"]] == ["001--dated--arrival"]
+    assert out["scenes"][0]["cost_usd"] == pytest.approx(0.30)
+
+
+def test_an_id_handed_on_does_not_take_the_new_scenes_rows_with_it(home, monkeypatch):
+    """`paths.uniquify` checks only what exists now, so a freed id is reused —
+    and a hop only carries the rows written before it."""
+    _pin(monkeypatch, "2026-08-14")
+    usage.record(task="chat", campaign="saltmarch", scene="001--arrival",
+                 cost_usd=0.10, ts="2026-08-14T10:00:00Z")
+    usage.repoint_scenes("saltmarch", {"001--arrival": "001--dated"})   # stamped 12:00
+    # A different scene, created later, takes the id the first one gave up.
+    usage.record(task="chat", campaign="saltmarch", scene="001--arrival",
+                 cost_usd=0.70, ts="2026-08-14T13:00:00Z")
+
+    out = usage.campaign_scenes("saltmarch")
+    spend = {b["scene"]: b["cost_usd"] for b in out["scenes"]}
+    assert spend["001--dated"] == pytest.approx(0.10)
+    assert spend["001--arrival"] == pytest.approx(0.70)
+
+
+def test_campaign_scenes_reaches_back_past_the_windowed_rollups(home, monkeypatch):
+    """"All time" is the question this one answers; a year-long clamp would be
+    answering a different one."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2023-01-05", campaign="saltmarch", scene="001-arrival", cost_usd=1.0)
+    _seed("2026-08-14", campaign="saltmarch", scene="002-market", cost_usd=2.0)
+
+    out = usage.campaign_scenes("saltmarch")
+    assert out["since"] == "2023-01-01"
+    assert out["totals"]["cost_usd"] == pytest.approx(3.0)
+
+
+def test_an_empty_ledger_has_a_campaign_spending_nothing_rather_than_failing(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+
+    out = usage.campaign_scenes("saltmarch")
+    assert out["scenes"] == []
+    assert out["totals"]["calls"] == 0
+    assert out["since"] == "2026-08-14"
+
+
+def test_the_scene_list_is_capped_without_moving_the_total(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    for n in range(5):
+        _seed("2026-08-14", campaign="saltmarch", scene=f"00{n}-scene", cost_usd=0.1)
+
+    out = usage.campaign_scenes("saltmarch", limit=2)
+    assert len(out["scenes"]) == 2
+    assert out["listed"] == 2
+    assert out["truncated"] is True
+    assert out["totals"]["cost_usd"] == pytest.approx(0.5)
+
+
+def test_a_continuation_is_not_counted_as_a_reroll(home, monkeypatch):
+    """Two calls, one answer: a turn that ran on past a dice roll. `calls - 1`
+    would tell a player they had redone a turn they never touched."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    for task in ("chat", "continuation"):
+        _seed("2026-08-14", task=task, campaign="saltmarch", scene="001-arrival",
+              cost_usd=0.01, post=4)
+
+    bucket, = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")["by_post"]
+    assert bucket["calls"] == 2
+    assert bucket["rerolls"] == 0
+
+
+def test_rerolls_counts_the_calls_that_re_answered_the_post(home, monkeypatch):
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    for task in ("chat", "retry", "regenerate", "continuation"):
+        _seed("2026-08-14", task=task, campaign="saltmarch", scene="001-arrival",
+              cost_usd=0.01, post=4)
+
+    bucket, = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")["by_post"]
+    assert bucket["calls"] == 4
+    assert bucket["rerolls"] == 2

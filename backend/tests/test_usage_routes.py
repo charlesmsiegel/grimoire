@@ -559,3 +559,185 @@ def test_a_hand_edited_budget_reads_as_none_rather_than_breaking_the_page(client
     body = client.get(f"/api/campaigns/{cid}/budget").json()
     assert body["level"] == "off"
     assert "spent_usd" not in body
+
+
+# ---- what one player post cost, across its rerolls (#153) ----
+def test_a_send_stamps_the_post_it_is_answering(client, home):
+    _use(client.app, FakeOpenRouter(["ok"], usage=USAGE))
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
+
+    row, = _rows(home)
+    assert row["post"] == 0, "the player's own message, at index 0"
+
+
+def test_a_reroll_is_charged_to_the_same_post_as_the_reply_it_replaces(client, home):
+    """The question the per-post figure answers: a post rerolled twice cost
+    three generations, and only the last one is still on screen."""
+    _use(client.app, FakeOpenRouter(["ok"], usage=USAGE))
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
+    _use(client.app, FakeOpenRouter(["again"], usage=USAGE))
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/retry", json={})
+
+    assert [row["post"] for row in _rows(home)] == [0, 0]
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/usage").json()
+    bucket, = body["by_post"]
+    assert bucket["post"] == 0
+    assert bucket["calls"] == 2
+    assert bucket["cost_usd"] == pytest.approx(0.0084)
+
+
+def test_a_second_post_gets_its_own_bucket(client, home):
+    _use(client.app, FakeOpenRouter(["ok"], usage=USAGE))
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "one"})
+    _use(client.app, FakeOpenRouter(["ok"], usage=USAGE))
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "two"})
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/usage").json()
+    assert [b["post"] for b in body["by_post"]] == [0, 2], \
+        "post, reply, post -- the second player message is at index 2"
+
+
+# ---- the campaign's scenes, all-time ----
+def test_the_campaign_scene_endpoint_lists_each_scene_with_its_cost(client, home):
+    _use(client.app, FakeOpenRouter(["ok"], usage=USAGE))
+    _, cid = _campaign(client)
+    one, two = _scene(client, cid, "One"), _scene(client, cid, "Two")
+    client.post(f"/api/campaigns/{cid}/scenes/{one}/chat", json={"content": "hi"})
+    _use(client.app, FakeOpenRouter(["ok"], usage=USAGE))
+    client.post(f"/api/campaigns/{cid}/scenes/{two}/chat", json={"content": "hi"})
+
+    body = client.get(f"/api/campaigns/{cid}/usage/scenes").json()
+    assert body["totals"]["calls"] == 2
+    assert {b["scene"] for b in body["scenes"]} == {one, two}
+    assert {b["title"] for b in body["scenes"]} == {"One", "Two"}
+    assert all(b["cost_usd"] == 0.0042 for b in body["scenes"])
+    assert all(b["missing"] is False for b in body["scenes"])
+
+
+def test_a_scene_that_has_been_deleted_keeps_its_spend_in_the_list(client, home):
+    """The money was spent. Hiding it would make the rows stop adding up to the
+    total printed above them."""
+    _use(client.app, FakeOpenRouter(["ok"], usage=USAGE))
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
+    assert client.delete(f"/api/campaigns/{cid}/scenes/{sid}").status_code == 200
+
+    body = client.get(f"/api/campaigns/{cid}/usage/scenes").json()
+    bucket, = body["scenes"]
+    assert bucket["missing"] is True
+    assert bucket["title"] == ""
+    assert bucket["cost_usd"] == 0.0042
+    assert body["totals"]["cost_usd"] == 0.0042
+
+
+def test_the_campaign_scene_endpoint_404s_on_a_campaign_nobody_has(client):
+    assert client.get("/api/campaigns/nope/usage/scenes").status_code == 404
+
+
+def test_a_campaign_that_has_generated_nothing_reports_zero_rather_than_404(client):
+    _, cid = _campaign(client)
+
+    body = client.get(f"/api/campaigns/{cid}/usage/scenes").json()
+    assert body["scenes"] == []
+    assert body["totals"]["cost_usd"] == 0.0
+
+
+# ---- the rate table (#158) ----
+def test_the_rate_table_starts_empty(client):
+    body = client.get("/api/pricing").json()
+    assert body["rates"] == {}
+    assert "prompt_usd_per_1k" in body["fields"]
+
+
+def test_a_rate_table_round_trips(client):
+    saved = client.put("/api/pricing", json={"rates": {
+        "local/glm": {"prompt_usd_per_1k": 0.5, "completion_usd_per_1k": 1.5}}})
+    assert saved.status_code == 200
+    assert client.get("/api/pricing").json()["rates"] == {
+        "local/glm": {"prompt_usd_per_1k": 0.5, "completion_usd_per_1k": 1.5}}
+
+
+def test_a_put_replaces_the_table_rather_than_merging_into_it(client):
+    client.put("/api/pricing", json={"rates": {"a": {"prompt_usd_per_1k": 1}}})
+    client.put("/api/pricing", json={"rates": {"b": {"prompt_usd_per_1k": 2}}})
+
+    assert list(client.get("/api/pricing").json()["rates"]) == ["b"]
+
+
+def test_an_entry_naming_no_usable_rate_comes_back_dropped(client):
+    body = client.put("/api/pricing", json={"rates": {
+        "a": {"prompt_usd_per_1k": "free"}, "b": {"prompt_usd_per_1k": 1}}}).json()
+
+    assert list(body["rates"]) == ["b"]
+
+
+def test_a_rate_prices_a_turn_the_provider_would_not(client, home):
+    """The whole point of #158 for this view: an endpoint that reports no cost
+    reads as "unpriced" until a rate exists, and as an estimate after."""
+    unpriced = {"prompt_tokens": 1000, "completion_tokens": 1000,
+                "model": "local/glm"}
+    _use(client.app, FakeOpenRouter(["ok"], usage=unpriced))
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
+
+    before = client.get(f"/api/campaigns/{cid}/scenes/{sid}/usage").json()
+    assert before["totals"]["unpriced_calls"] == 1
+    assert before["turns"][0]["modelled_usd"] is None
+
+    client.put("/api/pricing", json={"rates": {
+        "local/glm": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 2.0}}})
+
+    after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/usage").json()
+    assert after["totals"]["unpriced_calls"] == 0
+    assert after["totals"]["modelled_calls"] == 1
+    assert after["totals"]["modelled_usd"] == pytest.approx(3.0)
+    assert after["turns"][0]["modelled_usd"] == pytest.approx(3.0)
+    assert after["totals"]["cost_usd"] == 0.0, "an estimate is not spend"
+
+
+def test_a_modelled_figure_never_reaches_the_budget(client, home):
+    unpriced = {"prompt_tokens": 1000, "completion_tokens": 1000, "model": "local/glm"}
+    _use(client.app, FakeOpenRouter(["ok"], usage=unpriced))
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
+    client.put("/api/pricing", json={"rates": {"": {"prompt_usd_per_1k": 100.0}}})
+    client.put(f"/api/campaigns/{cid}/budget",
+               json={"budget_usd": 1, "budget_period": "monthly"})
+
+    body = client.get(f"/api/campaigns/{cid}/budget").json()
+    assert body["spent_usd"] == 0.0
+    assert body["level"] == "ok"
+    assert body["unpriced_calls"] == 1
+
+
+def test_a_director_turn_is_charged_to_the_scene_and_to_no_post(client, home):
+    """The note is ephemeral and never reaches the transcript, so the turn
+    answers no post the player can see. Charged to the last one it would
+    inflate a post they did not send."""
+    _use(client.app, FakeOpenRouter(["ok"], usage=USAGE))
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
+    _use(client.app, FakeOpenRouter(["and then"], usage=USAGE))
+    # An empty send in a normal scene is the ephemeral director round: the note
+    # is never written to the transcript.
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": ""})
+
+    tasks = {row["task"]: row for row in _rows(home)}
+    assert "director" in tasks, "the director turn was recorded at all"
+    assert "post" not in tasks["director"]
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/usage").json()
+    assert body["totals"]["calls"] == 2, "both turns are the scene's"
+    bucket, = body["by_post"]
+    assert bucket["calls"] == 1, "only the send is the post's"
+    assert bucket["rerolls"] == 0

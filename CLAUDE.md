@@ -124,6 +124,36 @@ If a gate surfaces findings, address them (or explicitly note why not) before
 moving on. Don't skip a gate because a change feels small — ask the user
 first if you think one should be skipped.
 
+## Costs: three money columns, and no two of them may be added
+
+`store/usage.py` is an append-only ledger of what each LLM call reported, and
+every rollup over it carries **three** separate money figures. Adding any two
+of them together produces a number that is wrong in a direction nobody can
+recover, so the split is the design rather than an artefact of it:
+
+- `cost_usd` — what a provider said it charged. The only figure that is spend,
+  and the only one a campaign budget is measured against.
+- `estimated_usd` — a call that billed against a subscription instead of per
+  token (the `claude_agent` path), priced by the provider at what it *would*
+  have cost. Real usage; not money anybody paid.
+- `modelled_usd` — a call whose provider named no price at all, costed against
+  the per-token table the user maintains in `store/pricing.py`. Arithmetic this
+  side did, and the weakest of the three.
+
+`unpriced_calls` counts what none of them covers, which is what makes an
+incomplete total say so. The rule that follows from all of it, and the one the
+UI exists to keep: **a price nobody reported is never rendered as zero.** Both
+the ledger (an absent field, never a `0`) and the three cost surfaces
+(`components/cost.tsx`, which every one of them formats through) are built
+around that single sentence.
+
+Attribution is per *player post*: a turn's ledger row carries the transcript
+index it was answering, so a post and every reroll of it bucket together and
+the transcript can say what getting one reply actually cost. The index is only
+as stable as indices are — a cut renumbers what follows it and the ledger
+cannot follow — so it is a breakdown, and the scene's own totals are the number
+that is always right.
+
 ## Detached runs: a turn outlives the request that asked for it
 
 A dropped connection used to cancel generation. It no longer does — it drops a

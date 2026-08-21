@@ -159,6 +159,19 @@ class BudgetBody(BaseModel):
     budget_period: str | None = None
 
 
+class PricingBody(BaseModel):
+    """The whole per-model rate table (#158), replaced in one PUT.
+
+    `rates` is a plain `dict` rather than a mapping of a typed entry model, and
+    that is the pydantic-v1/v2-agnostic constraint doing its job (`CLAUDE.md`):
+    no `Field`, no validators, no nested constraint types. Validation lives in
+    `store.pricing.write_pricing`, which is where the same rules already have to
+    hold for a file the user can hand-edit — one implementation, one answer,
+    whichever door the table came through.
+    """
+    rates: dict = {}
+
+
 class NameBody(BaseModel):
     name: str
 

@@ -16,7 +16,7 @@ One ``APIRouter`` per domain, composed here into the single ``router`` that
   ``scenes``      /campaigns/{cid}/scenes
   ``weather``     /campaigns/{cid}/weather
   ``mechanics``   rolls, roll proposals, checks, campaign module and sheets
-  ``usage``       /usage/summary and /campaigns/{cid}/usage cost rollups
+  ``usage``       /usage/summary, /campaigns/{cid}/usage cost rollups, /pricing
   ``search``      /search, the keyword sweep over content and facts
   ``entities``    the generic /{kind} entity surface for both scopes
 
