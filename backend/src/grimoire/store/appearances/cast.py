@@ -14,7 +14,14 @@ from . import paths, versions
 
 
 def cast_detail(cid: str, sid: str, kind: str, actor_id: str) -> dict:
-    """Read-only display info for an actor in a scene, from the campaign copy."""
+    """Read-only display info for an actor in a scene, from the campaign copy.
+
+    `source` is the provenance badge (`versions.actor_source`, #99). Scene cast
+    is always locked -- `scene_cast` reads the appearance record -- so the
+    comparison it makes against the recorded base always has a lock to make it
+    against, and it cannot raise here for an actor that got past the
+    membership check above.
+    """
     if not any(a["kind"] == kind and a["id"] == actor_id for a in scene_cast(cid, sid)):
         raise paths.AppearError(f"{kind}/{actor_id} is not in scene {sid}")
     aroot = paths.locked_actor_root(cid)
@@ -29,7 +36,8 @@ def cast_detail(cid: str, sid: str, kind: str, actor_id: str) -> dict:
         p = pcs.read_persona(aroot, actor_id, vid)
         body = "\n\n".join(x for x in (p.get("summary", "").strip(), p.get("description", "").strip()) if x)
         name = p.get("name", actor_id)
-    return {"kind": kind, "id": actor_id, "name": name, "version": vid, "body": body}
+    return {"kind": kind, "id": actor_id, "name": name, "version": vid, "body": body,
+            "source": versions.actor_source(cid, kind, actor_id)}
 
 
 def roster(cid: str) -> list[dict]:

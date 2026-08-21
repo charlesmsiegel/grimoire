@@ -2688,9 +2688,44 @@ def test_cast_detail_for_character_and_pc(client):
 
     c = client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/seraphine").json()
     assert c["name"] == "Seraphine" and "Drowned King" in c["body"] and "cold" in c["body"]
+    # #99: straight off the world shelf, and a PC this campaign made for itself.
+    assert c["source"] == "library"
     p = client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast/pcs/mara").json()
     assert p["name"] == "Mara" and "On the run." in p["body"]
+    assert p["source"] == "emergent"
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/ghost").status_code == 404
+
+
+def test_cast_detail_badges_a_campaign_edit_as_an_override(client):
+    """Editing the campaign's copy of a world character moves the badge off
+    "library" without touching the world (#99)."""
+    wid, cid = _campaign(client)
+    card = {"spec": "chara_card_v3", "spec_version": "3.0",
+            "data": {"name": "Seraphine", "description": "She serves the Drowned King.",
+                     "extensions": {}}}
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine", "card": card})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"kind": "characters", "id": "seraphine"})
+    assert client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/seraphine").json()["source"] == "library"
+
+    edited = {**card, "data": {**card["data"], "description": "She serves nobody at all."}}
+    r = client.put(f"/api/campaigns/{cid}/characters/seraphine/versions/default", json={"card": edited})
+    assert r.status_code == 200, r.text
+    assert client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/seraphine").json()["source"] == "override"
+
+
+def test_cast_detail_badges_an_emergent_character_as_emergent(client):
+    """The character the emergent-cast route invents has no world record behind
+    it, which is exactly what the badge reports (#98 / #99)."""
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    made = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast/emergent", json={"name": "Winifred"})
+    assert made.status_code == 200, made.text
+    aid = made.json()["character"]
+    assert client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/{aid}").json()["source"] == "emergent"
 
 
 def test_world_pc_crud_and_tag_validation(client):

@@ -86,7 +86,7 @@ beforeEach(() => {
   });
   (api.listScenePrompts as any).mockResolvedValue({ entries: [] });
   (api.getScenePrompt as any).mockResolvedValue(null);
-  (api.getCastDetail as any).mockResolvedValue({ kind: "characters", id: "seraphine", name: "Seraphine", version: "default", body: "keeper" });
+  (api.getCastDetail as any).mockResolvedValue({ kind: "characters", id: "seraphine", name: "Seraphine", version: "default", body: "keeper", source: "library" });
   (getModels as any).mockResolvedValue([{ id: "m", name: "M", context: 1000, prompt: "0", completion: "0" }]);
   (api.getChronicle as any).mockResolvedValue([
     { id: "s0", one_line: "They first met.", summary: "", keywords: [],

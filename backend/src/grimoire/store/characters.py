@@ -416,6 +416,19 @@ def character_count(root: Path) -> int:
                if p.is_dir() and (p / "character.md").exists() and safe_id(p.name)) if d.exists() else 0
 
 
+def character_exists(root: Path, cid: str) -> bool:
+    """Whether `root` holds a character under this id.
+
+    The container meta is the test, which is what `character_refs` and
+    `character_count` enumerate by -- deliberately not `read_character`, which
+    additionally refuses an actor whose version files have all gone. A caller
+    asking this is asking whether the id names a record here *at all*, and a
+    versionless directory is still a record: answering "absent" for one would
+    hand it to whatever allocates the slug next.
+    """
+    return safe_id(cid) and _meta_path(root, cid).exists()
+
+
 def character_refs(root: Path) -> list[str]:
     d = _chars_dir(root)
     if not d.exists():
