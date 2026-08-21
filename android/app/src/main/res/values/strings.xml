@@ -16,5 +16,6 @@
         <item quantity="other">%d turns in progress</item>
     </plurals>
     <string name="run_done_title">New Post in %1$s: %2$s</string>
+    <string name="review_done_title">Scene Review Ready in %1$s: %2$s</string>
     <string name="run_failed_title">Error on %1$s: %2$s</string>
 </resources>

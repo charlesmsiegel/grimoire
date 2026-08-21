@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from grimoire import store
 from grimoire.main import create_app
+from tests import review_runs
 
 
 @pytest.fixture
@@ -276,7 +277,7 @@ def test_a_re_absorbed_retcon_badges_what_the_later_scene_answered(client):
             json.dumps({"one_line": "They spoke.", "summary": "A long night.",
                         "keywords": [], "timeline_events": [],
                         "character_state_edits": [{"id": "seraphine", "current_state": state}]}))
-        body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+        body = review_runs.absorb(client, cid, sid).json()
         client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                    json={"one_line": body["one_line"], "summary": body["summary"],
                          "keywords": [], "timeline_events": [], "edits": body["edits"],
@@ -319,7 +320,7 @@ def test_the_ordinary_end_of_scene_review_badges_nothing(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"one_line": "They entered.", "summary": "The party entered.",'
         ' "keywords": [], "timeline_events": []}')
-    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["contradictions"] == []
+    assert review_runs.absorb(client, cid, sid).json()["contradictions"] == []
 
 
 def test_a_replay_turn_detaches_like_any_other(client, scene):

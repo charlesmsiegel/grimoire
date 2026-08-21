@@ -35,17 +35,33 @@ def _alts_path(cid: str, sid: str) -> Path:
     return _scenes_dir(cid) / f"{sid}.alts.json"
 
 
+def _review_path(cid: str, sid: str) -> Path:
+    """The scene's pending end-of-scene review (`store/pending_reviews.py`).
+
+    Beside the transcript for `_alts_path`'s reasons, and it is the second
+    sidecar rather than a second *kind* of thing: both are per-scene JSON that
+    a deleted scene must take with it, both are keyed by filename rather than
+    by a field inside a shared file, and both are therefore reachable only
+    through this resolver. Enumeration is unaffected — every scan of this
+    directory globs `*.md`.
+    """
+    return _scenes_dir(cid) / f"{sid}.review.json"
+
+
 def _sid_taken(cid: str, sid: str) -> bool:
     """Whether an id is spoken for — by a transcript, or by a sidecar left
     beside one that is gone.
 
     Numbering comes from the `.md` files (`serialize._numbering`), so the id of
     a deleted scene is free for the next one to take. `delete_scene` removes the
-    sidecar first so an orphan should not exist, but a crash between the two
+    sidecars first so an orphan should not exist, but a crash between the
     unlinks, or one written by an older build, still could — and adopting that
-    id would hand a fresh scene the deleted scene's parked transcripts.
+    id would hand a fresh scene the deleted scene's parked transcripts, or its
+    pending review: a whole end-of-scene generation describing a transcript the
+    new scene has never had, offered against the new scene's own posts.
     """
-    return _scene_path(cid, sid).exists() or _alts_path(cid, sid).exists()
+    return (_scene_path(cid, sid).exists() or _alts_path(cid, sid).exists()
+            or _review_path(cid, sid).exists())
 
 
 def _require_campaign(cid: str) -> None:

@@ -195,7 +195,7 @@ def delete_scene(cid: str, sid: str) -> None:
         raise paths.SceneNotFound(sid)
     # FIRST, ahead of every destructive step, because it is the one here that can
     # refuse. Ids are recycled, so prompt snapshots left behind are adopted by the
-    # next scene to take this id and listed as its own -- and unlike the sidecar
+    # next scene to take this id and listed as its own -- and unlike the sidecars
     # below, this is rows inside a shared index, so "the delete half-worked" is not
     # a state it can be left in. It therefore raises rather than swallowing, which
     # is only safe from here: run after `retire_scene` or the sidecar unlink, a
@@ -229,33 +229,42 @@ def delete_scene(cid: str, sid: str) -> None:
     # another's prompt. Campaign-scoped rules stay; they were never about this
     # scene. Before the unlink, same as the two above.
     pins.drop_scene(cid, sid)
-    # The reroll-alternates sidecar goes FIRST. Deleting the transcript is what
-    # frees the id for reuse, so a crash between the two unlinks must not be
-    # able to leave a sidecar without one: that orphan would be adopted by the
-    # next scene to take this id, handing it someone else's parked transcripts.
-    # The other order is recoverable in the harmless direction -- a scene that
-    # still exists merely loses its alternates.
-    try:
-        paths._alts_path(cid, sid).unlink(missing_ok=True)
-    except OSError as exc:
-        # `missing_ok` swallows only FileNotFoundError. A store written before
-        # ids were capped can hold a sid whose `.md` fits its directory entry
-        # and whose `.alts.json` does not, and the OS reports that as
-        # ENAMETOOLONG on the unlink itself — refusing to delete a scene over a
-        # sidecar that cannot exist would be the worst reading of it.
-        #
-        # ONLY that one. Every other OSError is a sidecar that does exist and
-        # would not go: a read-only attribute, a sharing violation, a failing
-        # disk. Swallowing those reports the delete as done while the scene's
-        # parked replies stay on disk forever — `_sid_taken` stops the orphan
-        # being adopted, but nothing ever completes what the caller asked for.
-        # Windows reports the overlong name as ERROR_FILENAME_EXCED_RANGE,
-        # which does not always reach errno.
-        if exc.errno != errno.ENAMETOOLONG and getattr(exc, "winerror", None) != 206:
-            raise
+    # The two per-scene sidecars go FIRST. Deleting the transcript is what frees
+    # the id for reuse, so a crash between the unlinks must not be able to leave
+    # a sidecar without one: that orphan would be adopted by the next scene to
+    # take this id -- handing it someone else's parked transcripts, or someone
+    # else's end-of-scene review, complete with a commit token that would save
+    # the dead scene's summary onto the new one. The other order is recoverable
+    # in the harmless direction: a scene that still exists merely loses them.
+    _unlink_sidecar(paths._review_path(cid, sid))
+    _unlink_sidecar(paths._alts_path(cid, sid))
     p.unlink()
     # AFTER the unlink, so a delete that raised records nothing. Deleting the
     # newest scene would otherwise drag the campaign's derived activity
     # *backwards* onto an older survivor -- a campaign you just edited sinking
     # down the recents list, or off it. Deleting is working on it too. Non-fatal
     # for the same reason as the rename: the scene is already gone.
+
+
+def _unlink_sidecar(path) -> None:
+    """Remove one of a scene's sidecars, tolerating only the name it cannot have.
+
+    `missing_ok` swallows only FileNotFoundError. A store written before ids
+    were capped can hold a sid whose `.md` fits its directory entry and whose
+    sidecar name does not, and the OS reports that as ENAMETOOLONG on the unlink
+    itself -- refusing to delete a scene over a sidecar that cannot exist would
+    be the worst reading of it.
+
+    ONLY that one. Every other OSError is a sidecar that does exist and would
+    not go: a read-only attribute, a sharing violation, a failing disk.
+    Swallowing those reports the delete as done while the scene's parked replies
+    -- or its pending review -- stay on disk forever; `_sid_taken` stops the
+    orphan being adopted, but nothing ever completes what the caller asked for.
+    Windows reports the overlong name as ERROR_FILENAME_EXCED_RANGE, which does
+    not always reach errno.
+    """
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        if exc.errno != errno.ENAMETOOLONG and getattr(exc, "winerror", None) != 206:
+            raise

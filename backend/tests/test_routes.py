@@ -20,6 +20,7 @@ from grimoire import llm, routes
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.store import atomic
+from tests import review_runs
 from tests.llm_fakes import (  # the shared gateway fakes (#204)
     CapturingOpenRouter,
     FailingOpenRouter,
@@ -6292,7 +6293,7 @@ def test_absorb_returns_preview_without_persisting(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"one_line": "They entered.", "summary": "The party entered the crypt.",'
         ' "keywords": ["crypt"], "timeline_events": []}')
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    r = review_runs.absorb(client, cid, sid)
     assert r.status_code == 200
     body = r.json()
     assert body["one_line"] == "They entered." and body["keywords"] == ["crypt"]
@@ -6320,7 +6321,7 @@ def test_absorb_stages_dossier_without_writing_it(client):
     cid, sid = _dossier_scene(client)
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete("Aese is a shy snowleopardgirl who now trusts the owner.")
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    r = review_runs.absorb(client, cid, sid)
     assert r.status_code == 200
     edit = next(e for e in r.json()["edits"] if e["kind"] == "dossier")
     assert edit["target"] == {"kind": "characters", "id": "aese"}
@@ -6336,7 +6337,7 @@ def test_dossier_edit_is_written_on_save(client):
     cid, sid = _dossier_scene(client)
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete("Aese now trusts the owner.")
-    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    edits = review_runs.absorb(client, cid, sid).json()["edits"]
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                    json={"one_line": "o", "summary": "s", "keywords": [],
                          "timeline_events": [], "edits": edits})
@@ -6392,7 +6393,7 @@ def test_absorb_stages_voice_drift_without_writing_it(client):
     approvable edit, on the same commit boundary as every other one (#235)."""
     cid, sid = _voice_scene(client)
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She used contractions twice; Aese never does."}')
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     edit = next(e for e in body["edits"] if e["kind"] == "voice_drift")
     assert edit["id"] == "voice_drift:aese"
     assert edit["target"] == {"kind": "characters", "id": "aese"}
@@ -6410,7 +6411,7 @@ def test_an_anchorless_npc_is_never_judged(client):
     fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
                          {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     assert fake.calls == 2                       # extraction + dossier, and nothing else
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
     assert body["voice"]["status"] == "skipped"
@@ -6420,7 +6421,7 @@ def test_an_anchorless_npc_is_never_judged(client):
 def test_voice_drift_edit_is_written_on_save(client):
     cid, sid = _voice_scene(client)
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}')
-    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    edits = review_runs.absorb(client, cid, sid).json()["edits"]
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                    json={"one_line": "o", "summary": "s", "keywords": [],
                          "timeline_events": [], "edits": edits})
@@ -6434,7 +6435,7 @@ def test_the_saved_flag_records_the_anchor_it_was_judged_against(client):
     cid, sid = _voice_scene(client)
     wid = store.campaigns.read_campaign(cid)["meta"]["world"]
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}')
-    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    edits = review_runs.absorb(client, cid, sid).json()["edits"]
     client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                json={"one_line": "o", "summary": "s", "keywords": [],
                      "timeline_events": [], "edits": edits})
@@ -6450,7 +6451,7 @@ def test_an_in_voice_scene_stages_a_clear_for_a_standing_flag(client):
     stops firing."""
     cid, sid = _voice_scene(client, prior="She hedged.")
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     edit = next(e for e in body["edits"] if e["kind"] == "voice_drift")
     assert edit["before"] == "She hedged." and edit["after"] == ""
     assert body["voice"]["flagged"] == [] and body["voice"]["checked"] == ["aese"]
@@ -6463,7 +6464,7 @@ def test_an_in_voice_scene_stages_a_clear_for_a_standing_flag(client):
 def test_an_in_voice_scene_with_no_flag_stages_nothing(client):
     cid, sid = _voice_scene(client)
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
     assert body["voice"]["status"] == "ok" and body["voice"]["checked"] == ["aese"]
 
@@ -6473,7 +6474,7 @@ def test_a_drift_verdict_with_no_note_is_reported_not_staged(client):
     downgraded to "in voice", nor staged as a blank instruction."""
     cid, sid = _voice_scene(client)
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": ""}')
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
     assert body["voice"]["status"] == "failed"
     assert body["voice"]["failed"] == [{"id": "aese", "reason": "drift reported with no corrective"}]
@@ -6486,7 +6487,7 @@ def test_an_unreadable_verdict_never_clears_a_standing_flag(client):
     cid, sid = _voice_scene(client, prior="She hedged.")
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(
         _EXTRACTION, _DOSSIER, "I'm sorry, I can't help with that.")
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
     assert body["voice"]["status"] == "failed"
     assert body["voice"]["failed"] == [{"id": "aese",
@@ -6501,7 +6502,7 @@ def test_a_silent_character_never_clears_a_standing_flag(client):
     actually shows the voice again."""
     cid, sid = _voice_scene(client, prior="She hedged.")
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "not_enough", "note": ""}')
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
     # a real judgment, so the phase is ok -- but named apart from "in voice",
     # or `checked` minus `flagged` would read as "confirmed fine"
@@ -6518,7 +6519,7 @@ def test_a_finding_judged_against_a_replaced_anchor_is_rejected_on_save(client):
     cid, sid = _voice_scene(client)
     wid = store.campaigns.read_campaign(cid)["meta"]["world"]
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}')
-    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    edits = review_runs.absorb(client, cid, sid).json()["edits"]
     store.voice_anchors.write(store.worlds.world_root(wid), "aese", "Warm and rambling now.")
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                    json={"one_line": "o", "summary": "s", "keywords": [],
@@ -6535,7 +6536,7 @@ def test_reformatting_the_anchor_still_lets_a_finding_land(client):
     cid, sid = _voice_scene(client, anchor="Clipped. Never uses contractions.")
     wid = store.campaigns.read_campaign(cid)["meta"]["world"]
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}')
-    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    edits = review_runs.absorb(client, cid, sid).json()["edits"]
     store.voice_anchors.write(store.worlds.world_root(wid),
                               "aese", "  Clipped. Never uses contractions.\n\n")
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
@@ -6552,7 +6553,7 @@ def test_a_clear_lands_even_when_the_anchor_moved(client):
     cid, sid = _voice_scene(client, prior="She hedged.")
     wid = store.campaigns.read_campaign(cid)["meta"]["world"]
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
-    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    edits = review_runs.absorb(client, cid, sid).json()["edits"]
     store.voice_anchors.write(store.worlds.world_root(wid), "aese", "A different standard.")
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                    json={"one_line": "o", "summary": "s", "keywords": [],
@@ -6577,7 +6578,7 @@ def test_the_judge_is_told_the_locked_card_name(client):
     store.voice_drift.build_prompt = lambda name, anchor, transcript: (
         seen.append(name) or real(name, anchor, transcript))
     try:
-        client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+        review_runs.absorb(client, cid, sid)
     finally:
         store.voice_drift.build_prompt = real
     assert seen == ["Aese Vane"]
@@ -6602,7 +6603,7 @@ def test_two_npcs_sharing_a_transcript_name_are_reported_not_judged(client):
     fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
                          {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert fake.calls == 3       # extraction + two dossiers, and NO voice call
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
@@ -6633,7 +6634,7 @@ def test_a_prefix_ambiguous_name_is_reported_not_judged(client):
     fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
                          {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert fake.calls == 3                       # extraction + two dossiers, no voice call
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
@@ -6658,7 +6659,7 @@ def test_a_clash_with_an_unanchored_npc_still_disqualifies(client):
     fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
                          {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert fake.calls == 3                 # extraction + two dossiers, no voice call
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
@@ -6679,7 +6680,7 @@ def test_a_clash_with_a_player_character_still_disqualifies(client):
                 json={"kind": "characters", "id": "mara", "version": "main", "role": "pc"})
 
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER)
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     assert [f["id"] for f in body["voice"]["failed"]] == ["aese"]
 
 
@@ -6699,7 +6700,7 @@ def test_one_malformed_roster_card_does_not_fail_the_whole_voice_phase(client):
         "{}", encoding="utf-8")
 
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She used contractions; Aese never does."}')
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert body["voice"]["status"] == "ok"          # not "failed"
     assert body["voice"]["checked"] == ["aese"]
@@ -6727,7 +6728,7 @@ def test_a_departed_speaker_sharing_the_label_still_disqualifies(client):
     fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
                          {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
     assert [f["id"] for f in body["voice"]["failed"]] == ["aese"]
@@ -6742,7 +6743,7 @@ def test_an_oversized_judge_note_is_reported_not_staged(client):
     huge = "She used contractions. " * 200
     assert len(huge) > store.voice_drift.MAX_NOTE
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, json.dumps({"verdict": "drift", "note": huge}))
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
     assert [f["id"] for f in body["voice"]["failed"]] == ["aese"]
@@ -6760,7 +6761,7 @@ def test_a_clean_verdict_clears_the_flag_however_chatty_its_note(client):
     huge = "She sounded exactly right, at length. " * 200
     assert len(huge) > store.voice_drift.MAX_NOTE
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, json.dumps({"verdict": "in_voice", "note": huge}))
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert body["voice"]["failed"] == []
     edit = next(e for e in body["edits"] if e["kind"] == "voice_drift")
@@ -6811,7 +6812,7 @@ def test_a_card_with_no_name_is_not_judged_against_its_slug(client):
         fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
                              {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
         client.app.dependency_overrides[routes.get_llm] = lambda: fake
-        r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+        r = review_runs.absorb(client, cid, sid)
 
         assert r.status_code == 200
         assert fake.calls == 2                    # extraction + dossier, no voice call
@@ -6833,7 +6834,7 @@ def test_a_name_the_transcript_cannot_carry_fails_that_actor(client):
         fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
                              {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
         client.app.dependency_overrides[routes.get_llm] = lambda: fake
-        r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+        r = review_runs.absorb(client, cid, sid)
 
         assert r.status_code == 200
         assert fake.calls == 2                    # extraction + dossier, no voice call
@@ -6855,7 +6856,7 @@ def test_an_unusable_card_name_fails_that_actor_not_the_absorb(client):
     fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
                          {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    r = review_runs.absorb(client, cid, sid)
 
     assert r.status_code == 200                       # not a 500
     assert fake.calls == 2                            # extraction + dossier, no voice call
@@ -6881,7 +6882,7 @@ def test_a_unique_name_is_still_judged_alongside_a_clashing_pair(client):
     store.characters.update_version(aroot, "mara", "main", card)
 
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "Winifred rambled; she is normally curt."}')
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert body["voice"]["checked"] == ["winifred"]
     assert sorted(f["id"] for f in body["voice"]["failed"]) == ["aese", "mara"]
@@ -6904,7 +6905,7 @@ def test_a_failing_voice_check_does_not_fail_absorb(client):
 
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: Failing([_EXTRACTION, _DOSSIER])
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     assert body["one_line"] == "o"               # the absorb itself survived
     assert body["voice"]["status"] == "failed"
     assert body["voice"]["failed"][0]["id"] == "aese"
@@ -6916,7 +6917,7 @@ def test_a_stale_voice_finding_is_reported_as_a_conflict(client):
     a newer verdict already on disk must not be silently overwritten."""
     cid, sid = _voice_scene(client)
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}')
-    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    edits = review_runs.absorb(client, cid, sid).json()["edits"]
     store.voice_drift.write(store.campaigns.campaign_root(cid), "aese", "a newer finding")
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                    json={"one_line": "o", "summary": "s", "keywords": [],
@@ -7054,7 +7055,7 @@ def test_put_chronicle_serializes_the_whole_commit(client):
 
     cid, sid = _dossier_scene(client)
     client.app.dependency_overrides[routes.get_llm] =         lambda: FakeOpenRouterComplete("Aese now trusts the owner.")
-    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    edits = review_runs.absorb(client, cid, sid).json()["edits"]
     assert [e["id"] for e in edits] == ["dossier:aese"]
 
     observed = {}
@@ -7105,7 +7106,7 @@ def test_replaying_a_save_with_the_same_token_applies_once(client):
         '{"one_line": "o", "summary": "s", "keywords": [],'
         ' "timeline_events": [{"date": "d1", "text": "The tea was poured."}],'
         ' "plot_movements": [{"title": "The Tea", "beat": "poured", "status": "open"}]}')
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     save = {"one_line": "o", "summary": "s", "keywords": [],
             "timeline_events": body["timeline_events"], "edits": body["edits"],
             "commit_token": body["commit_token"]}
@@ -7134,7 +7135,7 @@ def test_a_commit_that_died_before_recording_finishes_on_the_retry(client):
         '{"one_line": "o", "summary": "s", "keywords": [],'
         ' "timeline_events": [{"date": "d1", "text": "The tea was poured."}],'
         ' "plot_movements": [{"title": "The Tea", "beat": "poured", "status": "open"}]}')
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     save = {"one_line": "o", "summary": "s", "keywords": [],
             "timeline_events": body["timeline_events"], "edits": body["edits"],
             "commit_token": body["commit_token"]}
@@ -7248,9 +7249,9 @@ def test_a_review_prepared_before_another_save_of_the_scene_is_refused(client):
         '{"one_line": "o", "summary": "s", "keywords": [],'
         ' "timeline_events": [{"date": "d1", "text": "The tea was poured."}],'
         ' "plot_movements": [{"title": "The Tea", "beat": "poured", "status": "open"}]}')
-    first = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    first = review_runs.absorb(client, cid, sid).json()
     # a second review of the same scene, opened while the first sat unsaved
-    second = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb?force=true").json()
+    second = review_runs.absorb(client, cid, sid, force=True).json()
 
     def _save(body):
         return {"one_line": "o", "summary": "s", "keywords": [],
@@ -7280,10 +7281,10 @@ def test_a_review_prepared_after_a_save_of_the_scene_still_commits(client):
         return {"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
                 "edits": body["edits"], "commit_token": body["commit_token"]}
 
-    first = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    first = review_runs.absorb(client, cid, sid).json()
     assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                       json=_save(first)).status_code == 200
-    again = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb?force=true").json()
+    again = review_runs.absorb(client, cid, sid, force=True).json()
     assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                       json=_save(again)).status_code == 200
 
@@ -7298,7 +7299,7 @@ def test_editing_the_review_after_a_committed_save_is_refused(client):
     store.scenes.append_message(cid, sid, "user", "We poured the tea.")
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}')
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     save = {"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
             "edits": body["edits"], "commit_token": body["commit_token"]}
     assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
@@ -7323,7 +7324,7 @@ def test_a_token_committed_for_one_scene_is_refused_for_another(client):
     store.scenes.append_message(cid, first, "user", "We poured the tea.")
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}')
-    body = client.post(f"/api/campaigns/{cid}/scenes/{first}/absorb").json()
+    body = review_runs.absorb(client, cid, first).json()
     save = {"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
             "edits": body["edits"], "commit_token": body["commit_token"]}
     assert client.put(f"/api/campaigns/{cid}/scenes/{first}/chronicle",
@@ -7353,7 +7354,7 @@ def test_a_failed_dossier_write_is_reported(client):
     dossier would be lost with the save still reading as a success."""
     cid, sid = _dossier_scene(client)
     client.app.dependency_overrides[routes.get_llm] =         lambda: FakeOpenRouterComplete("Aese now trusts the owner.")
-    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    edits = review_runs.absorb(client, cid, sid).json()["edits"]
     real_write = store.dossiers.write
 
     def boom(*a, **k):
@@ -7402,7 +7403,7 @@ def test_a_failed_plot_write_reaches_the_reviewer(client):
 def test_a_stale_dossier_conflict_reaches_the_reviewer(client):
     cid, sid = _dossier_scene(client, prior="Aese is a stranger.")
     client.app.dependency_overrides[routes.get_llm] =         lambda: FakeOpenRouterComplete("Aese now trusts the owner.")
-    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    edits = review_runs.absorb(client, cid, sid).json()["edits"]
     # another review lands first
     store.dossiers.write(store.campaigns.campaign_root(cid), "aese", "Aese left the city.")
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
@@ -7420,7 +7421,7 @@ def test_rejected_dossier_edit_leaves_the_prior_dossier(client):
     cid, sid = _dossier_scene(client, prior="Aese is a stranger.")
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete("Aese now trusts the owner.")
-    client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    review_runs.absorb(client, cid, sid)
     client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                json={"one_line": "o", "summary": "s", "keywords": [],
                      "timeline_events": [], "edits": []})
@@ -7448,7 +7449,7 @@ def test_a_dossier_written_mid_call_is_not_overwritten(client):
             return '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}'
 
     client.app.dependency_overrides[routes.get_llm] = lambda: WritesMidCall()
-    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    edits = review_runs.absorb(client, cid, sid).json()["edits"]
     dossier = next(e for e in edits if e["kind"] == "dossier")
     assert dossier["before"] == "Aese is a stranger."      # what the prompt saw
 
@@ -7465,7 +7466,7 @@ def test_absorb_skips_dossier_edit_when_unchanged(client):
     cid, sid = _dossier_scene(client, prior="Aese is a shy snowleopardgirl.")
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete("Aese is a shy snowleopardgirl.")
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     assert [e for e in body["edits"] if e["kind"] == "dossier"] == []
     assert body["dossiers"]["status"] == "ok" and body["dossiers"]["proposed"] == ["aese"]
 
@@ -7476,7 +7477,7 @@ def test_absorb_reports_a_blank_dossier_reply_as_a_failure(client):
     quietly stop updating) would come back."""
     cid, sid = _dossier_scene(client, prior="Aese is a stranger.")
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete("   ")
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     assert [e for e in body["edits"] if e["kind"] == "dossier"] == []
     assert body["dossiers"]["status"] == "failed"
     assert body["dossiers"]["proposed"] == []
@@ -7517,7 +7518,7 @@ def test_absorb_survives_dossier_failure(client):
     store.scenes.append_message(cid, sid, "user", "hi")
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     client.app.dependency_overrides[routes.get_llm] = lambda: _DossierFake("Aese")
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    r = review_runs.absorb(client, cid, sid)
     assert r.status_code == 200 and r.json()["one_line"] == "ok"
     assert [e for e in r.json()["edits"] if e["kind"] == "dossier"] == []  # nothing to stage
     assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == ""
@@ -7535,7 +7536,7 @@ def test_absorb_reports_partial_dossier_failure_as_degraded(client):
     store.scenes.append_message(cid, sid, "user", "hi")
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     client.app.dependency_overrides[routes.get_llm] = lambda: _DossierFake("Winifred")
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     assert body["dossiers"] == {
         "status": "degraded", "reason": "some dossiers could not be prepared",
         "proposed": ["aese"], "failed": [{"id": "winifred", "reason": "RuntimeError: dossier boom"}],
@@ -7558,7 +7559,7 @@ def test_absorb_reports_an_unreadable_npc_card_as_a_dossier_failure(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: _DossierFake()
     # The cast still names aese, but the campaign-level card read now fails.
     (store.campaigns.campaign_root(cid) / "characters" / "aese" / "character.md").unlink()
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     assert body["dossiers"]["status"] == "failed"
     assert [f["id"] for f in body["dossiers"]["failed"]] == ["aese"]
     assert body["dossiers"]["failed"][0]["reason"].startswith("CharacterNotFound")
@@ -7589,7 +7590,7 @@ def test_absorb_dossiers_are_skipped_with_no_npcs_present(client):
     store.scenes.append_message(cid, sid, "user", "We entered.")
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     client.app.dependency_overrides[routes.get_llm] = lambda: _DossierFake()
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     assert body["dossiers"] == {"status": "skipped", "reason": "no npcs present",
                                 "proposed": [], "failed": [], "skipped": [],
                                 "attempted": False, "budget_exhausted": False}
@@ -7607,7 +7608,15 @@ def test_absorb_leaves_the_campaign_byte_identical(client):
     legacy records in place, so a dirty weather.json is the one thing an absorb
     can still rewrite. That repair is the weather store's own migration (any read
     of it does the same, e.g. the scene inspector) and carries no absorb state,
-    so this fixture's weather store is clean and the assertion stays absolute."""
+    so this fixture's weather store is clean and the assertion stays absolute.
+
+    ONE file is excluded, and naming it is the point rather than a loophole: the
+    scene's own `.review.json`, which is the absorb's result and the whole of
+    what #396 made durable. The invariant it guards is unchanged -- nothing the
+    review PROPOSES has landed -- and the sidecar is what a Cancel deletes and a
+    save clears. Excluding the whole directory, or comparing only the files that
+    existed before, would let a real regression hide behind the exclusion; this
+    names the single path and asserts that nothing else moved."""
     cid, sid = _dossier_scene(client)
     store.overlay.create_entity(cid, "locations", "The Tearoom", "A quiet room.")
     store.scenes.set_location(cid, sid, "the-tearoom")
@@ -7623,11 +7632,20 @@ def test_absorb_leaves_the_campaign_byte_identical(client):
         ' "relationship_deltas": [], "bond_changes": [],'
         ' "new_lore": [{"name": "The Blend", "body": "A smoked oolong."}],'
         ' "weather_edits": [{"condition": "hail", "duration_blocks": 2}]}')
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     # the branches really ran: staging happened, it just didn't land
     assert {e["kind"] for e in body["edits"]} >= {"character_state", "plot", "new_lore", "weather"}
-    after = {p: p.read_bytes() for p in croot.rglob("*") if p.is_file()}
+    review_file = croot / "scenes" / f"{sid}.review.json"
+    assert review_file.is_file(), "the review is durable now; it has to be somewhere"
+    after = {p: p.read_bytes() for p in croot.rglob("*")
+             if p.is_file() and p != review_file}
     assert after == snapshot
+    # ...and discarding it puts the campaign back exactly as it was, which is
+    # the half of #235 the exclusion above must not be allowed to weaken.
+    generation = client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}/pending-review").json()["generation"]
+    review_runs.cancel(client, cid, sid, generation)
+    assert {p: p.read_bytes() for p in croot.rglob("*") if p.is_file()} == snapshot
 
 
 # ---- absorb: re-absorb guard (#235) ----
@@ -7650,7 +7668,7 @@ def test_re_absorbing_an_absorbed_scene_is_409(client):
     cid, sid = _absorbed_scene(client)
     fake = FakeOpenRouterComplete(ABSORB_JSON)
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    r = review_runs.absorb(client, cid, sid)
     assert r.status_code == 409 and r.json()["kind"] == "already_absorbed"
     assert fake.calls == 0                       # refused before spending a token
 
@@ -7669,7 +7687,7 @@ def test_a_recycled_scene_id_does_not_read_as_absorbed(client):
     store.scenes.append_message(cid, new_sid, "user", "A different night entirely.")
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"one_line": "Fresh.", "summary": "s", "keywords": [], "timeline_events": []}')
-    r = client.post(f"/api/campaigns/{cid}/scenes/{new_sid}/absorb")
+    r = review_runs.absorb(client, cid, new_sid)
     assert r.status_code == 200 and r.json()["one_line"] == "Fresh."
 
 
@@ -7677,7 +7695,7 @@ def test_re_absorbing_with_force_runs(client):
     cid, sid = _absorbed_scene(client)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"one_line": "Again.", "summary": "s", "keywords": [], "timeline_events": []}')
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb?force=true")
+    r = review_runs.absorb(client, cid, sid, force=True)
     assert r.status_code == 200 and r.json()["one_line"] == "Again."
 
 
@@ -7685,7 +7703,7 @@ def test_absorb_empty_scene_is_400(client):
     _, cid = _campaign(client)
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    r = review_runs.absorb(client, cid, sid)
     assert r.status_code == 400
 
 
@@ -7706,7 +7724,7 @@ def test_absorb_missing_key_returns_409(client):
     _, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "We entered.")
-    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    resp = review_runs.absorb(client, cid, sid)
     assert resp.status_code == 409 and resp.json()["kind"] == "missing_key"
 
 
@@ -7722,7 +7740,7 @@ def test_absorb_upstream_error_returns_502(client):
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "We entered.")
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeRaises()
-    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    resp = review_runs.absorb(client, cid, sid)
     assert resp.status_code == 502 and resp.json()["kind"] == "bad_response"
 
 
@@ -7738,7 +7756,7 @@ def test_absorb_returns_edits_without_persisting(client):
         '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],'
         f' "character_state_edits": [{{"id": "{ch}", "current_state": "hurt"}}],'
         ' "lore_edits": [], "authored_edits": []}')
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     assert body["edits"][0]["kind"] == "character_state" and body["edits"][0]["after"] == "hurt"
     assert store.playstate.read_state(croot, ch) is None  # not persisted
 
@@ -7785,7 +7803,7 @@ def test_absorb_runs_audit_on_module_campaign(client, module_scene):
     fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": ABSORB_JSON},
                          {"when": _WHEN_AUDIT, "reply": AUDIT_OK}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    r = review_runs.absorb(client, cid, sid)
     assert r.status_code == 200
     body = r.json()
     assert body["mechanics"]["status"] == "ok"
@@ -7797,7 +7815,7 @@ def test_absorb_moduleless_skips_audit(client, plain_scene):
     cid, sid = plain_scene
     fake = FakeOpenRouterComplete([ABSORB_JSON])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     assert body["mechanics"]["status"] == "skipped" and fake.calls == 1
 
 
@@ -7809,7 +7827,7 @@ def test_absorb_all_invalid_scope_fails_with_no_audit_call(client, module_scene)
     p.write_text("{not json", encoding="utf-8")
     fake = FakeOpenRouterComplete([ABSORB_JSON])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     assert body["mechanics"]["status"] == "failed"
     assert body["mechanics"]["dropped"][0]["id"] == "characters:mara"
     assert fake.calls == 1                    # no audit LLM call for an all-invalid scope
@@ -7821,7 +7839,7 @@ def test_absorb_audit_schema_failure_is_failed_not_clean(client, module_scene):
         client.app.dependency_overrides[routes.get_llm] = \
             lambda b=bad: from_entries([{"when": _WHEN_EXTRACTION, "reply": ABSORB_JSON},
                                         {"when": _WHEN_AUDIT, "reply": b}])
-        body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+        body = review_runs.absorb(client, cid, sid).json()
         assert body["one_line"]                       # prose absorb intact
         assert body["mechanics"]["status"] == "failed"
         assert body["mechanics"]["reason"]
@@ -7834,7 +7852,7 @@ def test_absorb_dropped_delta_degrades(client, module_scene):
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: from_entries([{"when": _WHEN_EXTRACTION, "reply": ABSORB_JSON},
                               {"when": _WHEN_AUDIT, "reply": bad_delta}])
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
     assert body["mechanics"]["status"] == "degraded"
     assert body["mechanics"]["dropped"]
 
@@ -7849,25 +7867,86 @@ def test_absorb_survives_audit_pipeline_crash(client, module_scene, monkeypatch)
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: from_entries([{"when": _WHEN_EXTRACTION, "reply": ABSORB_JSON},
                               {"when": _WHEN_AUDIT, "reply": AUDIT_OK}])
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    r = review_runs.absorb(client, cid, sid)
     assert r.status_code == 200
     body = r.json()
     assert body["one_line"] and body["mechanics"]["status"] == "failed"
     assert "boom" in body["mechanics"]["reason"]
 
 
+def _open_review(client, cid, sid):
+    """Absorb this scene so a scoped retry has a review to fold into, and
+    return that review's generation.
+
+    A retry answers a PART of a review -- `{mechanics, edits}` or
+    `{dossiers, edits}` -- so there is no such thing as one standing on its
+    own: written whole it would destroy the absorb's prose, its staged edits
+    and its commit token, and the token is the piece nothing else can
+    reconstruct. The route therefore refuses when nothing is stored, before a
+    token is spent, and every retry test has to open one first.
+
+    A real absorb rather than a hand-written record, deliberately: the merge is
+    a read-modify-write of what an absorb actually wrote, and a fixture of the
+    shape it is *supposed* to have is exactly the thing that can drift from it
+    silently. The caller's own provider is put back afterwards, because these
+    tests install one for the retry and this must not be the fake it gets.
+    """
+    previous = client.app.dependency_overrides.get(routes.get_llm)
+    client.app.dependency_overrides[routes.get_llm] = lambda: from_entries([
+        {"when": _WHEN_EXTRACTION, "reply": ABSORB_JSON},
+        {"when": _WHEN_DOSSIER, "reply": "Steady, before the retry."},
+        {"when": _WHEN_VOICE, "reply": VOICE_OK},
+        {"when": _WHEN_AUDIT, "reply": AUDIT_OK}])
+    opened = review_runs.absorb(client, cid, sid)
+    assert opened.status_code == 200, opened.json()
+    if previous is None:
+        del client.app.dependency_overrides[routes.get_llm]
+    else:
+        client.app.dependency_overrides[routes.get_llm] = previous
+    return client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}/pending-review").json()["generation"]
+
+
+def test_a_retry_with_no_open_review_is_refused_before_a_token_is_spent(
+        client, npc_module_scene):
+    """The refusal that makes the merge safe, asserted at the door.
+
+    Both retries are read-modify-writes of a stored review, so one with nothing
+    to fold into can only be dropped -- and dropping it after the provider has
+    been paid is the one outcome worse than refusing it."""
+    cid, sid = npc_module_scene
+    sent = []
+
+    class Counting:
+        async def stream(self, m, cfg, usage=None):
+            sent.append(m)
+            yield "{}"
+
+        async def complete(self, m, cfg, usage=None):
+            sent.append(m)
+            return "{}"
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: Counting()
+    for route in ("audit", "dossiers"):
+        r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/{route}")
+        assert r.status_code == 409, (route, r.status_code)
+        assert r.json()["kind"] == "review_missing", route
+    assert sent == [], "a refused retry must not reach the provider"
+
+
 def test_audit_retry_endpoint(client, module_scene):
     cid, sid = module_scene
+    _open_review(client, cid, sid)
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete([AUDIT_OK])
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit").json()
+    body = review_runs.audit(client, cid, sid).json()
     assert body["mechanics"]["status"] == "ok" and body["edits"] == []
 
 
 def test_audit_retry_endpoint_400_without_module(client, plain_scene):
     cid, sid = plain_scene
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete([AUDIT_OK])
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit")
+    r = review_runs.audit(client, cid, sid)
     assert r.status_code == 400
 
 
@@ -8125,7 +8204,7 @@ def test_absorb_runs_its_phases_at_once(client, npc_module_scene):
     rec = _absorb_recorder()
     client.app.dependency_overrides[routes.get_llm] = lambda: rec
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert body["one_line"] == "o"                 # the review is intact
     assert rec.calls > 1                           # several phases really ran
@@ -8140,7 +8219,7 @@ def test_absorb_concurrency_of_one_is_exactly_todays_behaviour(client, npc_modul
     rec = _absorb_recorder()
     client.app.dependency_overrides[routes.get_llm] = lambda: rec
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert body["one_line"] == "o"
     assert rec.peak == 1, "absorb_concurrency = 1 must serialize the phases"
@@ -8171,7 +8250,7 @@ def test_the_one_shot_ceiling_does_not_bound_absorb(client, npc_module_scene):
 
     client.app.dependency_overrides[routes.get_llm] = lambda: Slow()
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert body["dossiers"]["status"] == "ok" and body["mechanics"]["status"] == "ok"
     assert all(not p["budget_exhausted"] for p in body["phases"])
@@ -8283,7 +8362,7 @@ def test_absorb_budget_exhaustion_cancels_the_slow_phase_and_keeps_the_rest(
     fake = _SlowPhaseFake(slow_when=_WHEN_DOSSIER, slow=2.0)
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert body["one_line"] == "o"                    # prose absorb intact
     assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == ""
@@ -8302,7 +8381,7 @@ def test_absorb_names_the_budget_when_it_stops_a_dossier(client, npc_module_scen
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: _SlowPhaseFake(slow_when=_WHEN_DOSSIER, slow=2.0)
 
-    dossiers = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["dossiers"]
+    dossiers = review_runs.absorb(client, cid, sid).json()["dossiers"]
 
     assert dossiers["status"] == "failed"
     assert dossiers["proposed"] == []
@@ -8323,7 +8402,7 @@ def test_absorb_reports_a_partially_skipped_dossier_phase_as_degraded(
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: ClockEatingFake(clock, 33.0, [ABSORB_JSON, "A standing paragraph."])
 
-    dossiers = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["dossiers"]
+    dossiers = review_runs.absorb(client, cid, sid).json()["dossiers"]
 
     assert dossiers["status"] == "degraded"
     assert dossiers["proposed"] == ["aese"] and dossiers["skipped"] == ["winifred"]
@@ -8338,7 +8417,7 @@ def test_absorb_within_budget_runs_every_step(client, npc_module_scene, monkeypa
     fake = ClockEatingFake(clock, 1.0, [ABSORB_JSON, "Aese is steady.", VOICE_OK, AUDIT_OK])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     # four steps now the fixture's NPC is anchored: extraction, dossier, voice, audit
     assert fake.calls == 4
@@ -8358,7 +8437,7 @@ def test_absorb_budget_of_zero_is_unbounded(client, npc_module_scene, monkeypatc
     fake = ClockEatingFake(clock, 10_000.0, [ABSORB_JSON, "Aese is steady.", VOICE_OK, AUDIT_OK])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert fake.calls == 4 and body["mechanics"]["status"] == "ok"
 
@@ -8381,7 +8460,7 @@ def test_absorb_extraction_overrunning_the_budget_is_a_504(client, npc_module_sc
             return ABSORB_JSON
 
     client.app.dependency_overrides[routes.get_llm] = lambda: Wedged()
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    r = review_runs.absorb(client, cid, sid)
     assert r.status_code == 504 and r.json()["kind"] == "timeout"
 
 
@@ -8391,9 +8470,10 @@ def test_audit_retry_gets_a_fresh_budget(client, npc_module_scene, monkeypatch):
     client.put("/api/config", json={"absorb_budget": "60"})
     clock = [1_000.0]  # well past any earlier absorb's deadline
     monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    _open_review(client, cid, sid)
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: ClockEatingFake(clock, 1.0, [AUDIT_OK])
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit").json()
+    body = review_runs.audit(client, cid, sid).json()
     assert body["mechanics"]["status"] == "ok"
 
 
@@ -8410,7 +8490,7 @@ def test_dossier_retry_gets_a_fresh_budget(client, npc_module_scene):
     client.put("/api/config", json={"absorb_budget": "0.20"})
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: _SlowPhaseFake(slow_when=_WHEN_DOSSIER, slow=2.0)
-    absorbed = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    absorbed = review_runs.absorb(client, cid, sid).json()
     assert absorbed["dossiers"]["status"] == "failed"
     assert absorbed["dossiers"]["budget_exhausted"] is True
 
@@ -8418,7 +8498,7 @@ def test_dossier_retry_gets_a_fresh_budget(client, npc_module_scene):
     # this one builds its own, which is the whole point of #286.
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: from_entries([{"when": _WHEN_DOSSIER, "reply": "Aese is steady."}])
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers").json()
+    body = review_runs.dossiers(client, cid, sid).json()
 
     assert body["dossiers"]["status"] == "ok"
     assert body["dossiers"]["proposed"] == ["aese"] and body["dossiers"]["skipped"] == []
@@ -8428,18 +8508,16 @@ def test_dossier_retry_gets_a_fresh_budget(client, npc_module_scene):
 def test_a_dossier_retry_stops_when_the_reviewer_walks_away(client, monkeypatch):
     """Cancel has to stop the WORK, not just the waiting.
 
-    The client aborts on release, but a disconnect does not cancel a plain
-    endpoint -- uvicorn runs it to completion -- so without this check the retry
-    keeps making one LLM call per remaining NPC for a review that no longer
-    exists. `absorb_budget = 0` is the case that makes it more than waste: the
-    budget will never stop it either, and Cancel is precisely what the panel
-    offers as the way out of an unbounded retry.
+    A retry runs one LLM call per present NPC on a budget of its own, and
+    `absorb_budget = 0` means no deadline will ever end it -- so a review the
+    reviewer has discarded would otherwise go on paying for NPC after NPC with
+    nothing left to receive them. Detached (#396) that is no longer something a
+    hangup could even signal: the run outlives the request, and Discard is what
+    says nobody wants this.
 
-    Two present NPCs, and the disconnect is reported only once the first call
-    has gone out -- so this pins that the loop stops PARTWAY, which is where all
-    the remaining cost is. TestClient cannot really hang up, so the disconnect
-    itself is faked at `Request.is_disconnected`; that uvicorn sets it on a real
-    hangup is a separate fact, checked by hand against a live server.
+    Two present NPCs, and the Discard lands while the FIRST call is still in
+    flight -- so this pins that the loop stops PARTWAY, which is where all the
+    remaining cost is.
     """
     wid, cid = _campaign(client)
     client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
@@ -8452,29 +8530,26 @@ def test_a_dossier_retry_stops_when_the_reviewer_walks_away(client, monkeypatch)
     store.scenes.append_message(cid, sid, "user", "Aese took a hit.")
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     client.put("/api/config", json={"absorb_budget": "0"})  # the unbounded case
+    generation = _open_review(client, cid, sid)
 
     calls = []
 
-    class Counting:
-        async def stream(self, m, cfg, usage=None):
-            calls.append(m)
-            yield "Steady."
+    class WedgedCounting(WedgedProvider):
+        async def stream(self, messages, *args, **kwargs):
+            calls.append(messages)
+            async for frame in super().stream(messages, *args, **kwargs):
+                yield frame
 
-        async def complete(self, m, cfg, usage=None):
-            return "".join([d async for d in self.stream(m, cfg)])
+    provider = WedgedCounting()
+    _wedged(client, monkeypatch, provider)
 
-    client.app.dependency_overrides[routes.get_llm] = lambda: Counting()
+    started = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers")
+    assert started.status_code == 202, started.json()
+    _cancel_once_called(client, cid, sid, generation, calls)
+    run = review_runs.wait_for_run(client, cid, sid, started.json()["run"]["id"])
 
-    async def gone(self):
-        return len(calls) >= 1   # still connected for the first NPC, not the second
-
-    monkeypatch.setattr(Request, "is_disconnected", gone)
-
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers").json()
-
+    assert run["state"] == "cancelled", run
     assert len(calls) == 1, f"the second NPC's call went out anyway ({len(calls)} calls)"
-    assert body["dossiers"]["status"] == "failed"
-    assert "closed before it finished" in body["dossiers"]["reason"]
 
 
 class WedgedProvider:
@@ -8499,34 +8574,48 @@ class WedgedProvider:
         self.gap, self.frames = gap, frames
         self.pulls = 0
         self.finished = False
+        # A list rather than the counter, so a test thread can wait on it
+        # without reading an int that is being written from the loop. Only
+        # `append` and `len` are used, and both are safe under the GIL.
+        self.frames_seen = []
 
     async def stream(self, messages, *args, **kwargs):
         for _ in range(self.frames):
             await asyncio.sleep(self.gap)
             self.pulls += 1
+            self.frames_seen.append(True)
             yield ""
         self.finished = True
 
 
-def _wedged(client, monkeypatch, provider, after=0):
+def _wedged(client, monkeypatch, provider):
     """A real facade over a wedged provider — real, so the idle bound and the
-    unwinding are the code's own — plus a disconnect that starts being reported
-    on the `after`-th ask.
+    unwinding are the code's own — and a fast abandonment poll.
 
-    `after=1` is what makes the dossier test honest: the loop's between-NPC
-    check is asked first, and reporting the disconnect there would end the run
-    before any call went out, proving nothing about the call in flight.
+    The disconnect this used to fake at `Request.is_disconnected` is gone with
+    the socket (#396): a review outlives the request that asked for it, so
+    "nobody is waiting" is no longer something the connection can say. What
+    ends one now is the reviewer's own Cancel, and the tests below drive the
+    real `DELETE .../pending-review` for it.
     """
     monkeypatch.setattr(routes.scenes, "ABANDON_POLL", 0.02)
     client.app.dependency_overrides[routes.get_llm] = lambda: LLMClient(
         openrouter=provider, claude=provider, openai_compatible=provider, timeout=120)
-    asks = []
 
-    async def gone(self):
-        asks.append(True)
-        return len(asks) > after
 
-    monkeypatch.setattr(Request, "is_disconnected", gone)
+def _cancel_once_called(client, cid, sid, generation, seen, at=1):
+    """Wait for the provider to have been reached `at` times, then Discard.
+
+    Waiting rather than cancelling straight away is what makes these tests
+    about the call IN FLIGHT: a Cancel that lands before the first request goes
+    out proves only that a run can be stopped before it starts, which is a
+    different (and much easier) thing.
+    """
+    deadline = time.monotonic() + 10.0
+    while len(seen) < at:
+        assert time.monotonic() < deadline, f"the provider was never reached ({len(seen)})"
+        time.sleep(0.01)
+    assert review_runs.cancel(client, cid, sid, generation).status_code == 200
 
 
 def test_watched_cancels_the_call_it_gives_up_on():
@@ -8608,13 +8697,17 @@ def test_a_wedged_dossier_call_is_cut_off_when_the_reviewer_walks_away(
     by it."""
     cid, sid = npc_module_scene
     client.put("/api/config", json={"absorb_budget": "0"})
+    generation = _open_review(client, cid, sid)
     provider = WedgedProvider()
-    _wedged(client, monkeypatch, provider, after=1)   # connected for the loop's own check
+    _wedged(client, monkeypatch, provider)
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers").json()
+    started = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers")
+    assert started.status_code == 202, started.json()
+    _cancel_once_called(client, cid, sid, generation, provider.frames_seen)
+    run = review_runs.wait_for_run(client, cid, sid, started.json()["run"]["id"])
 
-    assert body["dossiers"]["status"] == "failed"
-    assert "closed before it finished" in body["dossiers"]["reason"]
+    assert run["state"] == "cancelled", run
+    assert run["error"]["kind"] == "review_cancelled"
     # Left unfinished -- the generator was abandoned partway, not allowed to run
     # its 200 frames out and answer normally.
     assert not provider.finished and provider.pulls < provider.frames
@@ -8626,21 +8719,29 @@ def test_a_wedged_audit_call_is_cut_off_when_the_reviewer_walks_away(
     was the half of this that the client's AbortSignal alone did nothing for."""
     cid, sid = npc_module_scene
     client.put("/api/config", json={"absorb_budget": "0"})
+    generation = _open_review(client, cid, sid)
     provider = WedgedProvider()
     _wedged(client, monkeypatch, provider)
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit").json()
+    started = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit")
+    assert started.status_code == 202, started.json()
+    _cancel_once_called(client, cid, sid, generation, provider.frames_seen)
+    run = review_runs.wait_for_run(client, cid, sid, started.json()["run"]["id"])
 
-    assert body["mechanics"]["status"] == "failed"
-    assert "closed before it finished" in body["mechanics"]["reason"]
+    assert run["state"] == "cancelled", run
     assert not provider.finished and provider.pulls < provider.frames
 
 
-def test_absorb_does_not_ask_whether_it_was_abandoned(client, npc_module_scene, monkeypatch):
-    """Only the scoped retry passes a disconnect check. Absorb's caller is
-    holding a review open and has not gone anywhere, and wiring the same check
-    into it would let a flaky read of the connection silently truncate the
-    dossier phase of an ordinary End scene."""
+def test_the_review_family_never_asks_the_socket(client, npc_module_scene, monkeypatch):
+    """No review route reads the connection any more, and a socket that claims
+    to be gone must not truncate one (#396).
+
+    `abandoned=request.is_disconnected` was right when a disconnect could only
+    mean the reviewer walked away. It is exactly wrong once a disconnect
+    routinely means the screen locked -- which is the whole point of detaching
+    these -- so the predicate now reads the RUN's own cancellation. This drives
+    an ordinary End scene with a socket that reports itself disconnected on
+    every ask, and the review has to come back whole."""
     cid, sid = npc_module_scene
     asked = []
 
@@ -8655,10 +8756,17 @@ def test_absorb_does_not_ask_whether_it_was_abandoned(client, npc_module_scene, 
                               {"when": _WHEN_VOICE, "reply": VOICE_OK},
                               {"when": _WHEN_AUDIT, "reply": AUDIT_OK}])
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert not asked
     assert body["dossiers"]["proposed"] == ["aese"]
+
+    # ...and the same for a scoped retry, which is where the check used to be.
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: from_entries([{"when": _WHEN_DOSSIER, "reply": "Aese is steady."}])
+    retried = review_runs.dossiers(client, cid, sid).json()
+    assert not asked
+    assert retried["dossiers"]["proposed"] == ["aese"]
 
 
 def test_dossier_retry_reports_the_block_absorb_carries(client, npc_module_scene, monkeypatch):
@@ -8666,11 +8774,12 @@ def test_dossier_retry_reports_the_block_absorb_carries(client, npc_module_scene
     shape to understand -- `attempted`/`budget_exhausted` included, which is
     what the dossiers phase row is projected from."""
     cid, sid = npc_module_scene
+    _open_review(client, cid, sid)
     clock = [0.0]
     monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: ClockEatingFake(clock, 1.0, ["Aese is steady."])
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers").json()
+    body = review_runs.dossiers(client, cid, sid).json()
     assert body["dossiers"] == {
         "status": "ok", "reason": None, "proposed": ["aese"], "failed": [], "skipped": [],
         "attempted": True, "budget_exhausted": False}
@@ -8680,11 +8789,12 @@ def test_dossier_retry_stages_but_never_writes(client, npc_module_scene, monkeyp
     """#235's staged-not-written rule still holds on the retry path: the
     paragraph rides back in `edits` and lands only when the review is saved."""
     cid, sid = npc_module_scene
+    _open_review(client, cid, sid)
     clock = [0.0]
     monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: ClockEatingFake(clock, 1.0, ["Aese is steady."])
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers").json()
+    body = review_runs.dossiers(client, cid, sid).json()
     # Staged -- so there IS something that could have been written, which is
     # what makes the read below a real assertion rather than a no-op.
     assert [e["target"]["id"] for e in body["edits"]] == ["aese"]
@@ -8695,6 +8805,7 @@ def test_dossier_retry_reports_a_failure_rather_than_500ing(client, npc_module_s
     """_stage_dossiers' failure boundary is the whole reason absorb survives a
     broken dossier call; the retry inherits it rather than raising."""
     cid, sid = npc_module_scene
+    _open_review(client, cid, sid)
 
     class Boom:
         async def stream(self, m, cfg, usage=None):
@@ -8704,7 +8815,7 @@ def test_dossier_retry_reports_a_failure_rather_than_500ing(client, npc_module_s
             raise RuntimeError("dossier boom")
 
     client.app.dependency_overrides[routes.get_llm] = lambda: Boom()
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers")
+    r = review_runs.dossiers(client, cid, sid)
     assert r.status_code == 200
     assert r.json()["dossiers"]["status"] == "failed"
     assert [f["id"] for f in r.json()["dossiers"]["failed"]] == ["aese"]
@@ -8717,7 +8828,7 @@ def test_dossier_retry_refuses_a_scene_with_no_transcript(client, npc_module_sce
     cid, _ = npc_module_scene
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Empty"}).json()["id"]
     client.app.dependency_overrides[routes.get_llm] = lambda: _DossierFake()
-    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers").status_code == 400
+    assert review_runs.dossiers(client, cid, sid).status_code == 400
 
 
 def test_dossier_retry_404s_for_an_unknown_scene(client, npc_module_scene):
@@ -8732,7 +8843,7 @@ def test_dossier_retry_missing_key_returns_409(client):
     _, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "We entered.")
-    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers")
+    resp = review_runs.dossiers(client, cid, sid)
     assert resp.status_code == 409 and resp.json()["kind"] == "missing_key"
 
 
@@ -8753,7 +8864,7 @@ def test_absorb_reports_every_phase_attempted(client, npc_module_scene, monkeypa
         lambda: ClockEatingFake(clock, 1.0, [ABSORB_JSON, "Aese is steady.",
                                             VOICE_OK, AUDIT_OK])
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert [p["name"] for p in body["phases"]] == ["extraction", "dossiers", "voice", "audit"]
     assert all(p["attempted"] for p in body["phases"])
@@ -8770,7 +8881,7 @@ def test_absorb_phases_name_the_steps_the_budget_stopped(client, npc_module_scen
     fake = _SlowPhaseFake(slow_when=_WHEN_DOSSIER, slow=2.0)
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert _phase(body, "extraction") == {"name": "extraction", "attempted": True,
                                           "status": "ok", "reason": None,
@@ -8796,7 +8907,7 @@ def test_absorb_phases_mirror_the_dossier_and_mechanics_blocks(
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: ClockEatingFake(clock, 90.0, [ABSORB_JSON])
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     for name, block in (("dossiers", "dossiers"), ("audit", "mechanics")):
         for key in ("status", "reason", "attempted", "budget_exhausted"):
@@ -8814,7 +8925,7 @@ def test_a_genuine_audit_failure_is_not_blamed_on_the_budget(
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: ClockEatingFake(clock, 1.0, [ABSORB_JSON, "Aese is steady.", "not json"])
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert body["mechanics"]["status"] == "failed"
     assert _phase(body, "audit") == {"name": "audit", "attempted": True, "status": "failed",
@@ -8853,7 +8964,7 @@ def test_a_dossier_call_cancelled_mid_flight_counts_as_attempted(
 
     client.app.dependency_overrides[routes.get_llm] = lambda: SlowDossier()
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert _phase(body, "dossiers")["attempted"] is True
     assert _phase(body, "dossiers")["budget_exhausted"] is True
@@ -8884,7 +8995,7 @@ def test_a_budget_spent_by_the_reads_before_the_call_is_not_an_attempt(
 
     monkeypatch.setattr(store.dossiers, "read", slow_read)
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert not any(_WHEN_DOSSIER["system_contains"] in sysmsg
                    for sysmsg in fake.systems)      # the dossier request never left
@@ -8945,7 +9056,7 @@ def test_a_refused_dossier_call_is_skipped_rather_than_failed(
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete([ABSORB_JSON])
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert body["dossiers"]["failed"] == []
     assert body["dossiers"]["skipped"] == ["aese"]
@@ -8978,7 +9089,7 @@ def test_an_upstream_timeout_is_not_mistaken_for_the_budget(
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: StallsOnAudit(clock, 1.0, [ABSORB_JSON, "Aese is steady.", VOICE_OK])
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     audit = _phase(body, "audit")
     assert audit["status"] == "failed" and audit["attempted"] is True
@@ -8993,10 +9104,11 @@ def test_audit_retry_reports_its_own_fresh_budget(client, npc_module_scene, monk
     client.put("/api/config", json={"absorb_budget": "60"})
     clock = [1_000.0]
     monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    _open_review(client, cid, sid)
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: ClockEatingFake(clock, 1.0, [AUDIT_OK])
 
-    mech = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit").json()["mechanics"]
+    mech = review_runs.audit(client, cid, sid).json()["mechanics"]
 
     assert mech["attempted"] is True and mech["budget_exhausted"] is False
 
@@ -9009,7 +9121,7 @@ def test_an_audit_with_nothing_to_do_is_unattempted_but_not_the_budgets_fault(
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete([ABSORB_JSON])
 
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     assert _phase(body, "audit") == {"name": "audit", "attempted": False, "status": "skipped",
                                      "reason": "no module", "budget_exhausted": False}
@@ -13210,8 +13322,8 @@ def test_a_rival_review_cannot_save_while_a_commit_is_unfinished(client):
         '{"one_line": "o", "summary": "s", "keywords": [],'
         ' "timeline_events": [{"date": "d1", "text": "The tea was poured."}],'
         ' "plot_movements": [{"title": "The Tea", "beat": "poured", "status": "open"}]}')
-    mine = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
-    rival = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb?force=true").json()
+    mine = review_runs.absorb(client, cid, sid).json()
+    rival = review_runs.absorb(client, cid, sid, force=True).json()
 
     def _save(body):
         return {"one_line": "o", "summary": "s", "keywords": [],
@@ -13248,7 +13360,7 @@ def test_a_wedged_commit_does_not_block_its_scene_forever(client):
     store.scenes.append_message(cid, sid, "user", "We poured the tea.")
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}')
-    lost = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    lost = review_runs.absorb(client, cid, sid).json()
     real_record = store.commits.record
     store.commits.record = lambda *a, **k: (_ for _ in ()).throw(OSError("died"))
     try:
@@ -13261,7 +13373,7 @@ def test_a_wedged_commit_does_not_block_its_scene_forever(client):
     finally:
         store.commits.record = real_record
 
-    fresh = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb?force=true").json()
+    fresh = review_runs.absorb(client, cid, sid, force=True).json()
     assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                       json={"one_line": "o", "summary": "s", "keywords": [],
                             "timeline_events": [], "edits": fresh["edits"],
@@ -13371,7 +13483,7 @@ def test_a_save_during_an_absorb_supersedes_the_review_it_was_preparing(client):
             return await super().complete(messages, cfg)
 
     client.app.dependency_overrides[routes.get_llm] = _SavesMidAbsorb
-    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    body = review_runs.absorb(client, cid, sid).json()
 
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                    json={"one_line": "o", "summary": "s", "keywords": [],
@@ -13394,7 +13506,7 @@ def test_a_wedged_commit_overtaken_by_a_newer_save_is_refused(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"one_line": "the older review", "summary": "s", "keywords": [],'
         ' "timeline_events": [], "plot_movements": []}')
-    stale = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    stale = review_runs.absorb(client, cid, sid).json()
     save = {"one_line": "the older review", "summary": "s", "keywords": [],
             "timeline_events": [], "edits": stale["edits"],
             "commit_token": stale["commit_token"]}
@@ -13412,7 +13524,7 @@ def test_a_wedged_commit_overtaken_by_a_newer_save_is_refused(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"one_line": "the newer review", "summary": "s2", "keywords": [],'
         ' "timeline_events": [], "plot_movements": []}')
-    fresh = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb?force=true").json()
+    fresh = review_runs.absorb(client, cid, sid, force=True).json()
     assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                       json={"one_line": "the newer review", "summary": "s2",
                             "keywords": [], "timeline_events": [], "edits": fresh["edits"],
@@ -13436,7 +13548,7 @@ def test_a_review_of_a_deleted_scene_cannot_save_into_its_replacement(client):
         '{"one_line": "o", "summary": "s", "keywords": [],'
         ' "timeline_events": [{"date": "d1", "text": "The tea was poured."}],'
         ' "plot_movements": [{"title": "The Tea", "beat": "poured", "status": "open"}]}')
-    orphan = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    orphan = review_runs.absorb(client, cid, sid).json()
 
     assert client.delete(f"/api/campaigns/{cid}/scenes/{sid}").status_code == 200
     again = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
@@ -13557,7 +13669,7 @@ def test_a_raise_edited_down_to_blank_is_refused_not_treated_as_a_clear(client):
     cid, sid = _voice_scene(client, prior="She hedged.")
     croot = store.campaigns.campaign_root(cid)
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "A newer corrective."}')
-    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    edits = review_runs.absorb(client, cid, sid).json()["edits"]
     for e in edits:                      # the reviewer empties the textarea
         if e["kind"] == "voice_drift":
             e["after"] = "   "
@@ -13577,7 +13689,7 @@ def test_a_stale_clear_cannot_delete_a_re_confirmed_flag(client):
     cid, sid = _voice_scene(client, prior="She hedged.")
     croot = store.campaigns.campaign_root(cid)
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
-    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    edits = review_runs.absorb(client, cid, sid).json()["edits"]
     # meanwhile another review re-confirms the same note against a new anchor
     store.voice_drift.write(croot, "aese", "She hedged.", "a-newer-fingerprint")
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
@@ -13596,7 +13708,7 @@ def test_a_clear_row_typed_into_is_checked_like_the_raise_it_became(client):
     cid, sid = _voice_scene(client, prior="She hedged.")
     croot = store.campaigns.campaign_root(cid)
     client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
-    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    edits = review_runs.absorb(client, cid, sid).json()["edits"]
     for e in edits:                    # the reviewer types a note into the clear row
         if e["kind"] == "voice_drift":
             assert e["payload"]["op"] == "clear"
@@ -14020,7 +14132,7 @@ def test_absorb_primes_the_extraction_with_the_campaigns_standing_facts(client):
     store.facts.record(cid, "The crypt door has no lock.", "the third night", "000--earlier")
 
     client.app.dependency_overrides[routes.get_llm] = lambda: _Recording('{"one_line": "x"}')
-    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").status_code == 200
+    assert review_runs.absorb(client, cid, sid).status_code == 200
 
     user = seen[0][1]["content"]
     assert "Standing facts:" in user

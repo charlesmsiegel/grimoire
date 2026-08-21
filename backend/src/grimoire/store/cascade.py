@@ -76,6 +76,13 @@ What is deliberately NOT reverted, and why each one is the honest answer:
 - **`scene_ideas`.** A saved idea's `used_scene` records which scene it became,
   and it still became this one.
 
+One store on the fan-out is *dropped* rather than either reverted or left
+alone: **`pending_reviews`**, the end-of-scene review held on disk waiting to be
+saved (#396). It holds nothing the scene wrote — only what the next save would
+write — and after a cut or a retcon that is a summary of posts which are no
+longer there, carrying a `commit_token` stamped with the epoch
+`commits.retire_scene` is retiring in the same breath.
+
 That accounts for every store `scene_refs.repoint` fans out to. The list is the
 point of this module rather than a courtesy: a store that persists a scene id and
 is not named here is one nobody has decided about.
@@ -114,6 +121,7 @@ from . import (
     commits,
     journal,
     locks,
+    pending_reviews,
     plot,
     provenance,
     turnstate,
@@ -197,6 +205,16 @@ def _revert_writes(cid: str, sid: str, step: Callable) -> dict:
     the scene's id, so an un-absorbed scene reverts nothing by construction. The
     ordering argument is `delete_from`'s and is written there.
     """
+    # FIRST, and it is not one of the write-backs: a pending review is the
+    # end-of-scene generation held on disk waiting to be saved, and both entry
+    # points here have just moved the transcript it was built from. Its
+    # watermark would refuse it at save (`routes.scenes`), so leaving it costs
+    # the reviewer a panel they can open and never commit -- and its
+    # `commit_token` still names the pre-cut epoch, which is the fence
+    # `commits.retire_scene` is taking away at the same moment. Dropped rather
+    # than repointed, because there is nothing to repoint it to: the scene it
+    # summarises no longer exists.
+    step("pending_review", lambda: pending_reviews.drop_scene(cid, sid))
     reverted, refused = step("journal", lambda: _revert_journalled(cid, sid)) or (0, [])
     report: dict = {"records": reverted, "refused": refused}
     # Each on its own, so a garbled `plot.json` does not cost the chronicle

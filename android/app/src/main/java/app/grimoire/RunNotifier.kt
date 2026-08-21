@@ -74,7 +74,7 @@ object RunNotifier {
             .build()
 
     /**
-     * Post "your turn finished".
+     * Post "your turn finished", or "your review is ready".
      *
      * The tap carries the scene's IDENTITY, not its id. A notification can sit
      * unread for a long time, and an id goes stale the moment the scene is
@@ -86,6 +86,7 @@ object RunNotifier {
         context: Context,
         runId: String,
         state: String,
+        runClass: String,
         campaignName: String,
         sceneTitle: String,
         cid: String,
@@ -107,10 +108,14 @@ object RunNotifier {
             return
         }
         val landed = state == "landed"
-        val title = if (landed) {
-            context.getString(R.string.run_done_title, campaignName, sceneTitle)
-        } else {
-            context.getString(R.string.run_failed_title, campaignName, sceneTitle)
+        // What landed decides what this may say. An absorb produces a form to
+        // read, not narration, and "New Post" would send the player into the
+        // scene looking for a reply that was never generated.
+        val title = when {
+            landed && runClass == "review" ->
+                context.getString(R.string.review_done_title, campaignName, sceneTitle)
+            landed -> context.getString(R.string.run_done_title, campaignName, sceneTitle)
+            else -> context.getString(R.string.run_failed_title, campaignName, sceneTitle)
         }
         val notification = NotificationCompat.Builder(context, DONE_CHANNEL)
             .setContentTitle(title)

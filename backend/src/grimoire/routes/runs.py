@@ -194,7 +194,8 @@ class Run:
     def __init__(self, subject: Subject, cls: RunClass, kind: str,
                  attempt_id: str | None, scene_identity: str | None,
                  labels: dict,
-                 events: tuple[HandshakeEvent, HandshakeEvent]) -> None:
+                 events: tuple[HandshakeEvent, HandshakeEvent],
+                 review_generation: str | None = None) -> None:
         self.id = uuid.uuid4().hex
         self.subject = subject
         self.cls = cls
@@ -239,6 +240,24 @@ class Run:
         # scope to cancel then, and without this the request was simply lost and
         # the provider started after the user had stopped it.
         self.cancel_requested = False
+        # Which pending review this run belongs to -- minted when an absorb
+        # starts, carried on the retries that fold into it, and stored on the
+        # record. `DELETE .../pending-review` names it, and that is the whole
+        # reason it exists: the pending payload is the absorb result verbatim
+        # and names no producer, and the delete route carries no run id, so
+        # "flag the scene's most recent run" would stop an unrelated live CHAT
+        # run that happens to be newer, and "flag the run the record names"
+        # finds nothing at all before the absorb has published one.
+        self.review_generation = review_generation
+        # Set by the reviewer's Cancel, under the campaign lock, BEFORE the
+        # record is deleted -- and read by this run's terminal persist under
+        # that same lock, which is what stops the runner from publishing and
+        # recreating the review the player has just dismissed. A cancelled
+        # review that reappears minutes later is worse than one that was never
+        # saved. Distinct from `cancel_requested`, which is a Stop on the run
+        # itself: this one is an intent about the RECORD, and it is what the
+        # phases' `abandoned` predicate reads to stop generating for it.
+        self.review_cancelled = False
         self._lock = threading.Lock()
 
     def append_frame(self, frame: str) -> int:
@@ -396,6 +415,7 @@ class RunRegistry:
                           attempt_id: str | None, scene_identity: str | None,
                           labels: dict, adopt_terminal: bool = True,
                           also_precancelled: Subject | None = None,
+                          review_generation: str | None = None,
                           ) -> tuple[Run, bool]:
         """Reserve a run, or hand back the one this attempt already made.
 
@@ -453,7 +473,7 @@ class RunRegistry:
                     raise RunInFlightError(holder.id)
 
             run = Run(subject, cls, kind, attempt_id, scene_identity, labels,
-                      events)
+                      events, review_generation=review_generation)
             self._runs[run.id] = run
             self._by_subject.setdefault(subject, []).append(run.id)
             if attempt_id is not None:
@@ -580,6 +600,20 @@ class RunRegistry:
             known = self._by_attempt.get((subject, attempt_id))
             run = self._runs.get(known) if known else None
             return run if self._owns(run, subject, identity) else None
+
+    def reviews_for_generation(self, subject: Subject, generation: str) -> list[Run]:
+        """Every run on this subject that belongs to one pending review.
+
+        The list, not the newest: an absorb and a retry of one of its phases
+        both carry the generation, and a Cancel means "stop preparing this
+        review", not "stop the most recent thing". Terminal runs are included
+        and harmless -- flagging one changes nothing, and filtering them here
+        would need a second read of state the caller is about to act on anyway.
+        """
+        with self._lock:
+            return [r for r in self._runs.values()
+                    if r.subject == subject and r.cls == "review"
+                    and r.review_generation == generation]
 
     def live_running_in(self, cid: str) -> Run | None:
         """Any live run anywhere in this campaign, for the operations that
@@ -799,7 +833,7 @@ def _start_cursor(from_: int, run: Run) -> int:
     return min(from_, len(run.frames))
 
 
-def _run_payload(run: Run) -> dict:
+def run_payload(run: Run) -> dict:
     """What a client needs to decide what to do, and nothing it does not.
 
     `next_index` rather than the frames themselves: a poll is for state, and a
@@ -812,6 +846,11 @@ def _run_payload(run: Run) -> dict:
         "kind": run.kind,
         "cls": run.cls,
         "attempt_id": run.attempt_id,
+        # Which pending review a `review` run is preparing, so a client that
+        # discovered a live absorb through `GET .../run` can address Cancel to
+        # it -- `DELETE .../pending-review` names the generation, not the run.
+        # `None` for every other class.
+        "review_generation": run.review_generation,
         "labels": run.labels,
         "next_index": len(run.frames),
         "error": run.error,
@@ -888,12 +927,12 @@ def get_scene_run(cid: str, sid: str, request: Request,
     # newer live run a LOWER stamp -- and answering with the older terminal one
     # makes the client settle and miss the active reply, which is the single
     # failure this endpoint exists to prevent.
-    return {"run": _run_payload(found[-1])}
+    return {"run": run_payload(found[-1])}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/runs/{run_id}")
 def get_run(cid: str, sid: str, run_id: str, request: Request) -> dict:
-    return {"run": _run_payload(_resolve(request.app, cid, sid, run_id))}
+    return {"run": run_payload(_resolve(request.app, cid, sid, run_id))}
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/runs/{run_id}/cancel")
@@ -911,7 +950,7 @@ def post_run_cancel(cid: str, sid: str, run_id: str, request: Request) -> dict:
         # answering earlier lets a fast re-send race the partial-persist, which
         # is the ordering the handshake exists to guarantee.
         run.terminal.wait(timeout=CANCEL_TIMEOUT_SECONDS)
-    return {"run": _run_payload(run)}
+    return {"run": run_payload(run)}
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/attempt-cancel")
@@ -946,7 +985,7 @@ def post_attempt_cancel(cid: str, sid: str, request: Request,
     if run.state == "running":
         runner.cancel(request.app, run)
         run.terminal.wait(timeout=CANCEL_TIMEOUT_SECONDS)
-    return {"run": _run_payload(run)}
+    return {"run": run_payload(run)}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/attempt-state")
@@ -976,7 +1015,7 @@ def get_attempt_state(cid: str, sid: str, request: Request,
         "attempt": attempt,
         "retained": scenes_attempts.retained(
             cid, None if identity == UNRESOLVED else identity, attempt),
-        "run": _run_payload(run) if run is not None else None,
+        "run": run_payload(run) if run is not None else None,
     }
 
 
@@ -1232,7 +1271,15 @@ def replay_attempt(app, cid: str, sid: str, attempt_id: str | None):
 
 
 def require_scene_free(app, cid: str, sid: str) -> None:
-    """Refuse a change to the SHAPE of a scene while a turn is running on it.
+    """Refuse a change to the SHAPE of a scene while a run is holding it.
+
+    A `turn` or a `review`, and one check covers both: `exclusion_key` is built
+    from the subject and both classes are in `_EXCLUSIVE`, so they name the
+    same key and a scene can hold at most one of either. The rule is one
+    sentence -- while a turn or a review holds a scene, that scene's shape does
+    not change -- and a review is the case that makes it urgent rather than
+    theoretical: an absorb is minutes long, and an edit, a retcon or a cut
+    landing under one moves the transcript it was built from.
 
     Detaching a turn is what makes this necessary. A rename mints a new `sid`
     (the slug is part of it), and the run and every one of its persistence hooks
@@ -1259,7 +1306,7 @@ def require_scene_free(app, cid: str, sid: str) -> None:
         # turn is reading it", which is about renaming, editing and cutting.
         raise HTTPException(status_code=409, detail={
             "kind": "scene_busy", "run_id": live.id,
-            "detail": "a turn is running on this scene; stop it first"})
+            "detail": "a turn or review is running on this scene; stop it first"})
 
 
 @contextlib.contextmanager
@@ -1342,6 +1389,45 @@ def reserve_turn(app, cid: str, sid: str, kind: str,
     simply get no idempotency, which is what they have today. Present, it is
     used verbatim -- the server never rewrites it, because the client has
     already stored it and will ask about it by that name.
+    """
+    return _reserve(app, cid, sid, "turn", kind,
+                    attempt_id or uuid.uuid4().hex,
+                    adopt_terminal=adopt_terminal)
+
+
+def reserve_review(app, cid: str, sid: str, kind: str,
+                   generation: str) -> Run:
+    """Reserve a `review` run for this scene, or raise 409 if one is in flight.
+
+    `review` shares its exclusion key with `turn` (`exclusion_key` builds it
+    from the subject, and `_EXCLUSIVE` holds both classes), so an absorb and a
+    chat cannot hold one scene between them -- and every route that changes the
+    scene's SHAPE is refused for the whole of a review, not just the whole of a
+    turn. That is not decoration: an edit, a retcon or a cut landing under a
+    ten-minute absorb would move the transcript the review is being built from,
+    and the watermark would then refuse to save it -- after the entire budget
+    had been spent, which is the most expensive way to discover a race that
+    excluding prevents for free.
+
+    **Reserved BEFORE the snapshot, which is why this returns before one is
+    taken.** Snapshot-then-reserve leaves a gap in which a fast chat turn can
+    reserve, append, finish and release, after which the absorb is accepted
+    against a transcript that has already moved.
+
+    No attempt id: a review carries no player text, so there is nothing for
+    idempotency to protect, and the exclusion key already makes a duplicate
+    POST a refusal rather than a second run. A client that lost the 202 finds
+    its run through `GET .../run`.
+    """
+    run, _ = _reserve(app, cid, sid, "review", kind, None,
+                      review_generation=generation)
+    return run
+
+
+def _reserve(app, cid: str, sid: str, cls: RunClass, kind: str,
+             attempt_id: str | None, adopt_terminal: bool = True,
+             review_generation: str | None = None) -> tuple[Run, bool]:
+    """The shared half of `reserve_turn` and `reserve_review`.
 
     The scene's identity is captured here, via `ensure_identity` rather than a
     plain read: a campaign whose lock was contended at startup still has
@@ -1370,7 +1456,6 @@ def reserve_turn(app, cid: str, sid: str, kind: str,
             "kind": "busy", "detail": f"the scene could not be read: {exc}"}) from exc
     labels = {"campaign": _campaign_label(cid), "scene": _scene_label(cid, sid)}
     subject: Subject = ("scene", cid, identity)
-    attempt = attempt_id or uuid.uuid4().hex
     try:
         # Under the campaign lock, which is what lets `scene_held_free` exclude
         # a reservation rather than merely narrow the window before one. The
@@ -1378,17 +1463,18 @@ def reserve_turn(app, cid: str, sid: str, kind: str,
         # serialized on it) and it is reentrant, so this costs nothing.
         with store.locks.campaign_lock(cid):
             run, fresh = app.state.runs.start_or_existing(
-                subject, "turn", kind, attempt, identity, labels,
+                subject, cls, kind, attempt_id, identity, labels,
                 adopt_terminal=adopt_terminal,
                 # The subject a Stop would have built for this scene BEFORE
                 # `ensure_identity` above minted one. Only different when the
                 # startup backfill skipped this campaign, which is exactly when
                 # a scene is still identity-less.
-                also_precancelled=("scene", cid, UNRESOLVED))
+                also_precancelled=("scene", cid, UNRESOLVED),
+                review_generation=review_generation)
     except RunInFlightError as exc:
         raise HTTPException(status_code=409, detail={
             "kind": "run_in_flight", "run_id": exc.run_id,
-            "detail": "a turn is already running on this scene"}) from exc
+            "detail": "a turn or review is already running on this scene"}) from exc
     except StoreMovingError as exc:
         # Distinct from `run_in_flight`, which resolves when somebody else's
         # turn finishes. This one resolves in milliseconds and the same send
@@ -1401,6 +1487,52 @@ def reserve_turn(app, cid: str, sid: str, kind: str,
     # publishes it. `runner` reads the flag when it installs the cancel scope,
     # so the turn ends without ever reaching a provider.
     return run, fresh
+
+
+def cancel_review(app, cid: str, sid: str, generation: str) -> int:
+    """Flag every run preparing this review as cancelled. Returns how many.
+
+    MUST be called inside the campaign-lock hold that then deletes the record,
+    and BEFORE the delete. Split apart, the delete lands, the run publishes,
+    and the review the player just dismissed comes back minutes later.
+
+    Named by GENERATION rather than by run id or by recency, because neither of
+    the obvious readings works: the stored payload names no producer, and
+    "the scene's newest run" is as likely to be an unrelated live chat.
+
+    Answers 0 for a scene whose identity cannot be resolved rather than
+    raising: the caller is deleting a record, and a Cancel that cannot find a
+    run still has a record to remove.
+    """
+    try:
+        subject, _ = _scene_subject(cid, sid)
+    except HTTPException:
+        return 0
+    flagged = app.state.runs.reviews_for_generation(subject, generation)
+    for run in flagged:
+        run.review_cancelled = True
+    return len(flagged)
+
+
+def start_computing(app, run: Run, work) -> None:
+    """Run `work` detached, for a class whose value is a payload and not frames.
+
+    `work` is a zero-arg callable returning a coroutine that returns the run's
+    outcome -- `{"state": ..., "result"?: ..., "error"?: ...}` -- exactly what
+    `runner._guarded` already understands from a producer's `outcome`.
+
+    No frame buffer, and that is the whole difference from `start_detached`:
+    End Scene is not a streaming view, so there is nothing to tail and a client
+    polls `GET .../runs/{id}` instead. Buffering an empty stream for it would
+    give a reconnecting client an SSE response that says nothing.
+
+    `run.started` is set AFTER the handoff for `start_detached`'s reason:
+    `runner.start` can raise, and `reservation` deliberately skips a started
+    run, so marking first would leave the record permanently `running` with no
+    task and its scene's exclusion key held for the rest of the process.
+    """
+    runner.start(app, run, work)
+    run.started = True
 
 
 def _campaign_label(cid: str) -> str:

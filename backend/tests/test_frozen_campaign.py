@@ -36,6 +36,7 @@ from fastapi.testclient import TestClient
 
 from grimoire import routes, store
 from grimoire.main import create_app
+from tests import review_runs
 from tests.fixtures.frozen_campaign import build
 from tests.fixtures.frozen_campaign import sweep as frozen
 from tests.llm_fakes import from_cassette
@@ -307,7 +308,7 @@ def test_absorbing_a_frozen_scene_stages_the_movements_it_reports(frozen_client)
     """End to end on a campaign this process did not create: the absorb pass
     reads the frozen chronicle and plot, the cassette answers every call it
     makes, and the movements come back as edits against the frozen ids."""
-    body = frozen_client.post(f"/api/campaigns/{CAMPAIGN}/scenes/{SCENE}/absorb").json()
+    body = review_runs.absorb(frozen_client, CAMPAIGN, SCENE).json()
     assert body["one_line"] == "Winifred paid the salt she owed."
     ids = {e["id"] for e in body["edits"]}
     assert "plot:the-debt" in ids
