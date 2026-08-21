@@ -329,6 +329,21 @@ backfill belongs in **Task 5**, where a run can exist; it is listed there.
 Keeping it here would mean either a task that cannot go green or a helper that
 fakes the very integration it claims to prove.
 
+**Task 5 must actually carry it, and an earlier revision of this plan claimed
+it did without adding it.** The assertion is not decoration: startup skips a
+campaign whose lock is contended, so a legacy campaign can still be
+identity-less when its first run starts. If reservation does not call
+`ensure_identity`, that run captures nothing, and the identity fence -- the
+whole defence against a recycled `sid` publishing onto a replacement scene --
+degrades silently to comparing `None` with `None`, which always matches. An
+implementation that adds `ensure_identity` and never calls it passes every
+other test in this plan.
+
+So Task 5's suite includes: strip a scene's identity from disk, POST a real
+turn, then assert both that the scene has one on disk **and** that the run
+record captured that same value. Asserting only the first passes against a
+backfill that ran somewhere harmless while the run captured `None`.
+
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cd backend && PYTHONPATH=src .venv/bin/python -m pytest tests/test_scene_identity.py -v`
@@ -661,6 +676,34 @@ cross-suite import couples two files for nothing. Remember `import pytest` and
   route awaits `run.terminal` before responding, which is what makes "the slot
   stays held until `on_abort` returns" true rather than aspirational.
 
+  **Construct `ready` and `terminal` through the portal, not with a bare
+  `anyio.Event()` on the handler thread.** The reasoning is worth writing down
+  because the naive version *appears* to work:
+
+  - On anyio ≥ 4.2, `Event.__new__` catches `NoEventLoopError` and hands back
+    an `EventAdapter` that binds to a backend lazily — so constructing one off
+    the loop does not raise, and a review claiming `AsyncLibraryNotFoundError`
+    here is wrong for the version this tree resolves today (checked against
+    4.14).
+  - But `anyio` is **unpinned**. It arrives transitively through
+    `fastapi>=0.110` (`pyproject.toml:11`, mirrored in
+    `android/app/build.gradle.kts:82`), whose own floor is anyio 3.7.1 — and on
+    anyio 3.x `Event()` goes straight through `sniffio` and *does* raise off
+    the loop. `check-pydantic1` resolves the Android dependency set separately,
+    so "it worked on my machine" and "it works in that job" are different
+    claims.
+  - And the adapter's lazy binding is itself unsynchronized: `_event` checks
+    `_internal_event is None` and then assigns, with no lock, so a `set()` from
+    the handler thread racing a `wait()` on the loop can bind twice and leave a
+    waiter parked on an object the setter never touches.
+
+  One portal `call(anyio.Event)` per reservation costs a round-trip and removes
+  all three questions. It also composes with the rule already stated below —
+  that every `set()` is marshalled through the portal — into one simple
+  invariant: **these events are created and mutated only on the loop.** Do not
+  "simplify" the construction back to a bare call because it passes locally;
+  leave the reason in a comment.
+
 - [ ] **Step 1: Write the failing test**
 
 ```python
@@ -887,7 +930,16 @@ backup ticker and leave through _lifespan."
 - Test: `backend/tests/test_runs_routes.py`
 
 **Interfaces:**
-- Produces: `GET /api/campaigns/{cid}/scenes/{sid}/run[?attempt=]`
+- Produces: `GET /api/campaigns/{cid}/scenes/{sid}/run[?attempt=]` — with
+  `attempt`, an exact match and nothing else. **Without it, the subject's most
+  recently STARTED run**, which is a decision and not an implementation detail:
+  `_by_subject` routinely holds several, because a terminal run stays readable
+  for the whole `REAP_SECONDS` window while a new one is already live. Return
+  an arbitrary or first match and mount discovery hands the client the *older,
+  terminal* record — it settles, skips attachment, and misses the live reply
+  entirely, which is the exact failure this endpoint exists to prevent. Test it
+  with a terminal run and a newer live run on one scene, and assert the live
+  one comes back.
 - Produces: `GET /api/campaigns/{cid}/scenes/{sid}/runs/{run_id}/stream?from=N`
 - Produces: `GET /api/campaigns/{cid}/scenes/{sid}/runs/{run_id}`
 - Produces: `POST /api/campaigns/{cid}/scenes/{sid}/runs/{run_id}/cancel`
@@ -1093,6 +1145,30 @@ def test_a_dropped_subscriber_does_not_cancel_the_run(live_server):
     assert "dock" in store.scenes.read_scene(cid, sid)["messages"][-1]["content"].lower()
 
 
+def test_a_dropped_subscriber_does_not_cancel_a_roll_continuation(live_server):
+    """The same guarantee, through the OTHER kind of producer.
+
+    `post_roll_proposal` streams `_continuation_stream` (mechanics.py:193), not
+    `_chat_stream`, and it lives in a different module. An implementation that
+    migrates `post_chat` and leaves the mechanics handler returning its
+    continuation directly passes every other detach test here while locking the
+    phone during an accepted roll still cancels and drops the narration -- and
+    a roll is exactly when a player looks away."""
+    cid, sid = live_server.campaign_scene
+    pid = _stage_a_proposal(live_server, cid, sid)
+    held = live_server.hold_provider(reply="The lamps gutter, then hold.")
+    with httpx.stream("POST", f"{live_server.url}/api/campaigns/{cid}"
+                      f"/scenes/{sid}/roll-proposal",
+                      json={"proposal": pid, "action": "accept"}) as r:
+        run_id = _first_run_frame(r)["run"]["id"]
+        held.await_first_delta()
+        r.close()
+    held.release()
+    _wait_terminal(live_server.app, run_id)
+    assert live_server.app.state.runs.get(run_id, ("scene", cid, sid)).state == "landed"
+    assert "gutter" in store.scenes.read_scene(cid, sid)["messages"][-1]["content"].lower()
+
+
 def test_a_provider_failure_ends_failed_not_landed(run_client, campaign_scene):
     """_fence_stream catches LLMError, emits an SSE error frame and returns
     NORMALLY. A runner inferring success from 'did not raise' would mark the
@@ -1221,6 +1297,25 @@ recycled, and the old run still publishes onto the replacement — the exact
 corruption the identity was introduced to stop, surviving because the check and
 the write were not one atomic step.
 
+**When the fence refuses, the run is `failed` — say so explicitly, because
+neither implementation says it by itself.** Both shapes suppress the write and
+return; the provider already reached a clean EOF, so a runner reading "the
+coroutine did not raise" records `landed` and fires the success notification for
+a reply that was deliberately discarded. The player gets *New Post in …*, opens
+the scene, and finds nothing — which is worse than the corruption the fence
+prevents, because it is silent.
+
+This is the same defect as the `StoreBusy`-during-finalize branch, and it has
+the same rule: the outcome is written where the decision is made, not inferred
+downstream. An identity mismatch produces a failed outcome whose error names
+the mismatch.
+
+Test it as an integration, not a unit: hold generation, delete the scene,
+create a replacement that recycles the `sid`, release, and then assert both
+halves — the replacement transcript is untouched **and** the run is `failed`.
+Asserting only the first passes against an implementation that discards the
+write and reports success.
+
 So either hold `campaign_lock(cid)` continuously across the comparison **and**
 every terminal mutation, or push the expected identity down into the locked
 persistence call so the store refuses the write itself. The second is the more
@@ -1242,6 +1337,19 @@ POST idempotent.
 `post_chat` (before the heal/sidecar block at `scenes.py:364`), `post_retry`,
 `post_regenerate` (before the archive-and-remove), `post_replay_turn` (before
 staging), `post_roll_proposal` (before the check resolves).
+
+**The byte-identical rejection test covers all five routes, not `/chat`
+alone.** `/chat`'s setup is the *least* destructive of the five and therefore
+the least informative: a late reservation there heals a sidecar, while a late
+reservation in `post_regenerate` archives and removes a reply, in
+`post_replay_turn` stages posts, and in `post_roll_proposal` resolves a check
+and mutates the proposal record. An implementation that reserves correctly in
+`post_chat` and late everywhere else passes a one-route test and still tells
+the player "nothing happened" after destroying a reply.
+
+Parameterize it over the five, and compare the right artifact for each: scene
+bytes for the transcript mutators, the proposal record for `post_roll_proposal`.
+Each must be byte-identical across a rejected request.
 
 **Release the reservation on every early exit, not only on a raise.**
 `post_roll_proposal` catches check-resolution failures and *returns* an SSE
