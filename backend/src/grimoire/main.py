@@ -16,7 +16,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .routes import build_llm, build_openai_compatible_client, router
+from . import runner
+from .routes import build_llm, build_openai_compatible_client, router, runs
 from .store import backups, campaigns, locks, migrations, module_edit
 
 DEFAULT_DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"  # paths-ok: DEFAULT_DIST only; GRIMOIRE_DIST overrides it on Android
@@ -154,7 +155,15 @@ async def _lifespan(app: FastAPI):
     # process is about to open. `atomic.streaming_write` is what makes that
     # safe: an interrupted archive was never published.
     try:
-        async with anyio.create_task_group() as tg:
+        # The portal is what lets a SYNCHRONOUS streaming handler hand work to
+        # this loop: every producing route is `def`, so FastAPI runs it in a
+        # threadpool worker, and `tg.start_soon` is not thread-safe from there.
+        # `runner.install` also swaps the registry's event factory for one that
+        # builds on this loop -- see `_PortalEvent`.
+        async with (anyio.create_task_group() as tg,
+                    anyio.from_thread.BlockingPortal() as portal):
+            app.state.run_portal = portal
+            runner.install(app, tg)
             tg.start_soon(_backup_ticker)
             yield
             tg.cancel_scope.cancel()
@@ -271,6 +280,12 @@ def create_app() -> FastAPI:
     # client opens a socket before its first call.
     app.state.llm = build_llm()
     app.state.openai_compatible = build_openai_compatible_client()
+    # Same reasoning as the gateway clients directly above: the run registry is
+    # pure data with nothing to close, and a bare `TestClient` never runs a
+    # lifespan -- so a registry created only at startup would be absent for
+    # every route test and every migrated handler. `runner.install` attaches the
+    # parts that do need a running loop.
+    runs.install_registry(app)
     # character detail responses run to hundreds of KB of JSON; payloads under
     # the floor (and streaming responses) pass through untouched
     # compresslevel 6 over the default 9: ~2-3x less CPU for ~1% larger output

@@ -201,6 +201,15 @@ class RunRegistry:
         self._by_attempt: dict[tuple[Subject, str], str] = {}
         self._by_key: dict[str, str] = {}
 
+    def set_event_factory(self, factory: Callable[[], object]) -> None:
+        """Swap the factory used for runs published from here on.
+
+        The lifespan calls this to install one that builds events on the event
+        loop. Runs already published keep the events they were made with, which
+        is correct: they were made before there was a loop to build on.
+        """
+        self._event_factory = factory
+
     def start_or_existing(self, subject: Subject, cls: RunClass, kind: str,
                           attempt_id: str | None, scene_identity: str | None,
                           labels: dict) -> tuple[Run, bool]:
