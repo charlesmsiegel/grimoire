@@ -1,10 +1,13 @@
 import os
+import re
 import time
 from pathlib import Path
 
 import pytest
 
 from grimoire.store import entities, tokens
+
+REPO = Path(__file__).resolve().parents[2]
 
 
 def test_create_read_and_stable_id(tmp_path: Path):
@@ -329,3 +332,24 @@ def test_require_entity_answers_from_a_stat_and_names_what_is_wrong(tmp_path: Pa
     entities.delete_entity(tmp_path, "locations", eid)
     with pytest.raises(entities.EntityNotFound):
         entities.require_entity(tmp_path, "locations", eid)
+
+
+def test_the_frontend_ships_the_same_kind_list():
+    """`ENTITY_KINDS` in `frontend/src/api/types.ts` is this tuple, in order.
+
+    The frontend holds a second copy for two jobs the server cannot do at
+    build time: the compile-time union the tabs, labels and per-kind field
+    table are written against, and the fallback the import dialogs' Category
+    dropdown shows when `GET /api/entity-kinds` does not answer (#138).
+
+    Both jobs rot silently. A kind added here and forgotten there gets no tab
+    and no label -- so a row imported into it, through the dropdown the
+    endpoint correctly widened, lands somewhere this build cannot show. That
+    is a worse failure than the drift the endpoint fixed, and nothing else in
+    either suite notices it.
+    """
+    src = (REPO / "frontend" / "src" / "api" / "types.ts").read_text(encoding="utf-8")
+    m = re.search(r"export const ENTITY_KINDS = \[(.*?)\] as const;", src, re.DOTALL)
+    assert m, "ENTITY_KINDS is not declared in types.ts in the shape this guard reads"
+    assert re.findall(r'"([^"]+)"', m.group(1)) == list(entities.ENTITY_KINDS), \
+        "frontend/src/api/types.ts ENTITY_KINDS has drifted from entities.ENTITY_KINDS"

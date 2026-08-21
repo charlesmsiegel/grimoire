@@ -282,10 +282,15 @@ export type ScenePage = Scene & {
 // with no frontend edit (#138). This list is what those dropdowns fall back to
 // when that read fails, and it stays the compile-time union because the tabs,
 // labels and per-kind field table are all written against named kinds.
+// Import it from `../api/types` and not through `../api/client`: a component
+// that reads it at module scope would otherwise crash every suite that mocks
+// the client wholesale, including suites that only import a helper out of it.
 export const ENTITY_KINDS = ["locations", "lore", "items", "groups", "creatures"] as const;
 export type EntityKind = (typeof ENTITY_KINDS)[number];
 /** A kind as it comes back over HTTP: one of the above, or one this build has
- *  not heard of. Use `EntityKind` for kinds this code names itself. */
+ *  not heard of. `str` on the wire too (`routes.models.LoreEntry.category`),
+ *  validated against `entities.ENTITY_KINDS` at the commit boundary rather than
+ *  by its type. Use `EntityKind` for kinds this code names itself. */
 export type EntityKindName = string;
 export type EntityScope = { kind: "world" | "campaign"; id: string };
 

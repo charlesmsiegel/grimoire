@@ -5589,15 +5589,52 @@ def test_entity_kinds_endpoint_lists_the_store_s_kinds(client):
     assert client.get("/api/entity-kinds").json()["kinds"] == list(store.entities.ENTITY_KINDS)
 
 
-def test_every_offered_kind_is_a_category_import_accepts(client):
-    # The load-bearing half: what the endpoint offers and what `lorebook.commit`
-    # accepts cannot drift, or the dropdown grows an option that 400s.
-    wid = _world(client)
+def test_every_offered_kind_is_a_category_both_imports_accept(client):
+    # The load-bearing half: what the endpoint offers and what the commit paths
+    # accept cannot drift, or the dropdown grows an option that 400s. BOTH
+    # paths, because both review tables read the same endpoint and they commit
+    # through different validators -- `lorebook.commit` and `scenario.apply`.
     kinds = client.get("/api/entity-kinds").json()["kinds"]
-    r = client.post(f"/api/worlds/{wid}/lorebook/import", json={"entries": [
-        {"name": f"Entry {k}", "keys": [], "body": "body", "category": k} for k in kinds]})
+    entries = [{"name": f"Entry {k}", "keys": [], "body": "body", "category": k} for k in kinds]
+
+    book = _world(client, "Book")
+    r = client.post(f"/api/worlds/{book}/lorebook/import", json={"entries": entries})
     assert r.status_code == 200
     assert [c["kind"] for c in r.json()["created"]] == kinds
+
+    card = _world(client, "Card")
+    r = client.post(f"/api/worlds/{card}/scenario/import",
+                    json={"characters": [], "entries": entries, "greetings": [], "art": False})
+    assert r.status_code == 200
+    assert [c["kind"] for c in r.json()["entries"]] == kinds
+
+
+def test_reclassifying_an_already_imported_row_files_it_under_the_new_kind(client):
+    """The dedup is per category, and that is the behaviour reclassifying wants.
+
+    `lorebook.commit` skips an entry whose (name, keys, body) already exists
+    *in that category*, so re-importing a book is a no-op. Routing a row that
+    was imported as `lore` to `locations` is therefore not a duplicate: the
+    user is saying it belongs somewhere else, and both copies existing is what
+    lets them delete the wrong one rather than losing the import. Asserted
+    rather than assumed, because "dedup" and "reclassify" reading the same
+    signature is exactly where a later tightening would break this (#138).
+    """
+    wid = _world(client)
+    entry = {"name": "The Docks", "keys": ["docks"], "body": "Wet planks.", "category": "lore"}
+
+    assert client.post(f"/api/worlds/{wid}/lorebook/import",
+                       json={"entries": [entry]}).json()["created"] == [
+        {"kind": "lore", "id": "the-docks"}]
+    # the same row again, unchanged: nothing new
+    assert client.post(f"/api/worlds/{wid}/lorebook/import",
+                       json={"entries": [entry]}).json()["created"] == []
+    # the same row reclassified: it lands under the new kind, and the lore copy stays
+    assert client.post(f"/api/worlds/{wid}/lorebook/import",
+                       json={"entries": [{**entry, "category": "locations"}]}).json()["created"] == [
+        {"kind": "locations", "id": "the-docks"}]
+    assert [e["name"] for e in client.get(f"/api/worlds/{wid}/lore").json()] == ["The Docks"]
+    assert [e["name"] for e in client.get(f"/api/worlds/{wid}/locations").json()] == ["The Docks"]
 
 
 def test_lorebook_parse_bad_file_400(client):
