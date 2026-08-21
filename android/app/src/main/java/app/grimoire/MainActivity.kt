@@ -120,22 +120,65 @@ class MainActivity : ComponentActivity() {
         ServerRuntime.subscribe(
             onReady = { port ->
                 runOnUiThread {
-                    if (web.url == null) {
-                        val base = "http://127.0.0.1:$port/"
-                        // The SPA resolves the identity itself; handing it the
-                        // stale id here would just move the 404 one layer up.
-                        web.loadUrl(
-                            if (opening == null) base
-                            else base + "open?campaign=${opening.first}" +
-                                "&identity=${opening.second}",
-                        )
-                    }
+                    if (web.url == null) web.loadUrl(pageFor(port, opening))
                 }
             },
             onFailure = { message ->
                 runOnUiThread { status.text = message }
             },
         )
+    }
+
+    /**
+     * A notification tapped while this activity already exists.
+     *
+     * The usual case, not the rare one: the player backgrounded the app, which
+     * is why the notification was posted at all. `CLEAR_TOP | SINGLE_TOP` on the
+     * pending intent means the URI arrives HERE rather than through a second
+     * `onCreate`, so an activity that only reads `sceneFrom` while being created
+     * leaves the tap doing nothing visible -- the app comes forward on whatever
+     * route it was already showing (codex, P1).
+     *
+     * `setIntent` first, so `getIntent()` stops returning the launch intent: a
+     * later recreation (a rotation with the WebView torn down, a process
+     * restart from the recents entry) would otherwise re-open whichever scene
+     * was tapped days ago.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val opening = sceneFrom(intent) ?: return
+        // Before the server is up there is nothing to navigate to, and the
+        // `onCreate` path has not run its `loadUrl` yet either -- so hand the
+        // scene to the subscription rather than dropping it. `subscribe` fires
+        // immediately when the port is already known, which is the common case.
+        ServerRuntime.subscribe(
+            onReady = { port -> runOnUiThread { web.loadUrl(pageFor(port, opening)) } },
+            onFailure = { message -> runOnUiThread { status.text = message } },
+        )
+    }
+
+    /** The page to open: the app, or the `/open` resolver for a tapped scene.
+     *
+     *  The SPA resolves the identity itself; handing it the stale id here would
+     *  just move the 404 one layer up. */
+    private fun pageFor(port: Int, opening: Pair<String, String>?): String {
+        val base = "http://127.0.0.1:$port/"
+        return if (opening == null) base
+        else base + "open?campaign=${opening.first}&identity=${opening.second}"
+    }
+
+    /** What `RunNotifier` reads to decide whether a completion notification is
+     *  worth posting. A player watching the reply arrive does not need telling
+     *  about it, with a sound, every turn. */
+    override fun onResume() {
+        super.onResume()
+        ServerRuntime.foreground = true
+    }
+
+    override fun onPause() {
+        ServerRuntime.foreground = false
+        super.onPause()
     }
 
     private fun configureWebView() {

@@ -346,6 +346,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // End scene, and the dice roll. Every control that mutates *this* scene's
   // transcript without going through `runStream` reads this, so the next one
   // is a missing `sceneLocked` rather than a fifth rediscovery of the rule.
+  //
+  // It covers a run this component never started, too, and that is what makes
+  // it right once a turn outlives its request: `attachToRun` sets
+  // `streamingId` for an ADOPTED run exactly as `runStream` does for one it
+  // began, so a turn recovered after a reload -- or one still generating when
+  // the tab came back -- locks the scene the same way. The server refuses
+  // these mutations either way (`scene_busy`, keyed on the `turn`/`review`
+  // exclusion key); this is the affordance that stops the player being told no.
   const sceneLocked = !!activeId && activeId === streamingId;
   const markRenaming = useCallback(
     (active: boolean) => setRenamesInFlight((n) => n + (active ? 1 : -1)), []);
@@ -2122,6 +2130,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // the server never heard is not a stopped turn, and the releases
       // under the guard would say it was.
       let unstopped = false;
+      const stopped = !!cancelRef.current;
       if (cancelRef.current) {
         const pending = cancelRef.current;
         cancelRef.current = null;
@@ -2145,6 +2154,28 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                            + "may still be generating", retryable: false });
         }
       }
+      // THE STREAM DIED WITH NO ANSWER, AND THIS TAB IS STILL HERE. Mount and
+      // `visibilitychange` are the only adoption triggers, and neither fires in
+      // this case: the component stayed mounted and visible while the response
+      // reset before its leading frame. The server accepted the POST and a run
+      // is generating -- so both of the answers below are wrong. Treating it as
+      // a failure restores the prompt and the player sends again, landing the
+      // turn twice against a run that was always fine; leaving it locked strands
+      // the scene until a remount.
+      //
+      // So ask, by attempt, before concluding anything. A run means attach to
+      // it and skip the whole teardown, because the turn is still ours.
+      // `abortRef` is already cleared above, which is what lets `attachToRun`
+      // take the view back.
+      let adopted = false;
+      if (!unstopped && !stopped && !finished && !errored && !refused) {
+        const live = await api.findRun(cid, id, attempt)
+          .then((r) => r.run).catch(() => null);
+        if (live && live.state === "running") {
+          adopted = true;
+          void attachToRun(cid, id, live.id);
+        }
+      }
       // NOT a `return` -- this is a `finally`, and returning from one
       // discards whatever the block was already returning or throwing. The
       // rest of the teardown is skipped by a guard instead.
@@ -2155,7 +2186,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // `busy`, the streamed preview, `runRef` -- is skipped when the Stop
       // went unconfirmed, so Stop is still there to press and still knows
       // what to press about.
-      if (!unstopped) {
+      if (!unstopped && !adopted) {
         // Beside `abortRef`, and load-bearing for the same reason: left set, a
         // Stop pressed while the NEXT turn is still connecting would address this
         // one -- terminal by then, so the route would answer politely and the
@@ -2620,9 +2651,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (!activeId || busy || rolling || renamesInFlight) return;
     const again = rerollToRetryRef.current;
     if (again && again.sid === activeId) return void await reroll(again.guidance);
-    const landed = await runStream(activeId, (onEvent, signal) => pendingResponse
-      ? api.retry(cid, activeId, onEvent, pendingResponse, signal)
-      : api.retry(cid, activeId, onEvent, undefined, signal));
+    const landed = await runStream(activeId, (onEvent, signal, attempt, onIndex) =>
+      pendingResponse
+        ? api.retry(cid, activeId, onEvent, pendingResponse, signal, attempt, onIndex)
+        : api.retry(cid, activeId, onEvent, undefined, signal, attempt, onIndex));
     if (landed) setPendingResponse(null);
   }
 
@@ -2650,11 +2682,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // omitted: the signal sits behind them, so a plain reroll still has to say
     // `undefined, undefined` to reach it. What the four branches preserve is
     // the promise retry makes — a pending one-shot override rides regenerate.
-    const landed = await runStream(activeId, (onEvent, signal) => {
-      if (guidance && pendingResponse) return api.regenerate(cid, activeId!, onEvent, guidance, pendingResponse, signal);
-      if (guidance) return api.regenerate(cid, activeId!, onEvent, guidance, undefined, signal);
-      if (pendingResponse) return api.regenerate(cid, activeId!, onEvent, undefined, pendingResponse, signal);
-      return api.regenerate(cid, activeId!, onEvent, undefined, undefined, signal);
+    const landed = await runStream(activeId, (onEvent, signal, attempt, onIndex) => {
+      if (guidance && pendingResponse) return api.regenerate(cid, activeId!, onEvent, guidance, pendingResponse, signal, attempt, onIndex);
+      if (guidance) return api.regenerate(cid, activeId!, onEvent, guidance, undefined, signal, attempt, onIndex);
+      if (pendingResponse) return api.regenerate(cid, activeId!, onEvent, undefined, pendingResponse, signal, attempt, onIndex);
+      return api.regenerate(cid, activeId!, onEvent, undefined, undefined, signal, attempt, onIndex);
       // `rerolling`: a reroll that fails wants a different recovery offered
       // than a failed send does — see `runStream`.
     }, undefined, true);
@@ -2868,8 +2900,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // the decision is still pending (#95).
     if (renamesInFlight) return;
     setProposalNow(null);
-    await runStream(activeId, (onEvent, signal) =>
-      api.resolveProposal(cid, activeId!, body, onEvent, signal));
+    await runStream(activeId, (onEvent, signal, attempt, onIndex) =>
+      api.resolveProposal(cid, activeId!, body, onEvent, signal, attempt, onIndex));
   }
 
   // No-op unless a turn is in flight; the abort rejects the fetch, `runStream`

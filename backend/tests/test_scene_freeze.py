@@ -52,11 +52,31 @@ def test_every_shape_change_is_refused_while_a_run_holds_the_scene(held_scene, c
         ("post",   f"{base}/alternates/v-nope",  None),
         ("post",   f"{base}/replay",             {"index": 0}),
         ("post",   f"{base}/roll",               {"notation": "1d20"}),
+        # The cast and moment routes. The UI disables these with `sceneLocked`,
+        # which is an affordance and not a guarantee -- a second tab, another
+        # device or a plain API call is not bound by it. They belong here
+        # because `appear`/`leave`/`set_location` APPEND a transition line, and
+        # the first `set_datetime` renames the scene outright.
+        ("post",   f"{base}/cast",               {"kind": "characters", "id": "nobody",
+                                                  "version": "default", "role": "npc"}),
+        ("delete", f"{base}/cast/characters/x",  None),
+        ("post",   f"{base}/cast/batch",         {"refs": []}),
+        ("post",   f"{base}/cast/emergent",      {"name": "Winifred", "role": "npc"}),
+        ("put",    f"{base}/location",           {"location": "saltmarch-docks"}),
+        ("put",    f"{base}/datetime",           {"datetime": "1834-04-02"}),
+        # The review save writes back into the scene and marks it absorbed.
+        ("put",    f"{base}/chronicle",          {"one_line": "x", "summary": "y",
+                                                  "keywords": [], "timeline_events": [],
+                                                  "edits": [], "commit_token": "t"}),
+        # `greetings.py` -- a different module, which is exactly why an
+        # inventory built by reading `scenes.py` never reached it.
+        ("post",   f"{base}/first-post",         {"text": "The lamps are lit."}),
+        ("post",   f"{base}/start-from-greeting", {"greeting": "g1"}),
     ]
     for method, path, body in calls:
         r = getattr(client, method)(path, **({"json": body} if body else {}))
         assert r.status_code == 409, f"{method} {path} answered {r.status_code}"
-        assert r.json()["kind"] == "scene_busy", f"{method} {path}"
+        assert r.json().get("kind") == "scene_busy", f"{method} {path}: {r.json()}"
 
 
 def test_the_refusal_names_the_run_so_the_client_can_offer_to_stop_it(held_scene, client):
@@ -216,3 +236,39 @@ def test_a_manual_check_is_refused_while_a_turn_holds_the_scene(client):
 
     assert r.status_code == 409, r.text
     assert r.json()["kind"] == "scene_busy"
+
+
+def test_the_storage_root_cannot_move_while_a_turn_is_generating(held_scene, client,
+                                                                  tmp_path):
+    """The hazard the frontend provider created: a run now survives navigation,
+    so the player can leave the scene, open Configuration and move the library
+    while their turn is still generating. Terminal persistence resolves its
+    campaign and scene against `store.home()` minutes later -- so it either
+    fails the identity fence and discards a finished reply, or writes into a
+    copied library while the post that prompted it stays in the old one.
+
+    Campaign-agnostic on purpose: the root is global, so a run anywhere is a run
+    that would land in the wrong tree.
+    """
+    _, _, run = held_scene
+    dest = tmp_path / "moved"
+
+    r = client.put("/api/config/data-dir", json={"data_dir": str(dest)})
+
+    assert r.status_code == 409, r.text
+    assert r.json()["kind"] == "runs_in_flight"
+    assert r.json()["run_id"] == run.id
+    assert not dest.exists(), "the move went ahead anyway"
+
+
+def test_the_storage_root_moves_once_nothing_is_running(held_scene, client, tmp_path):
+    """The counterweight. A refusal that never lifts is a setting nobody can
+    change, and a terminal run stays in the registry for its whole retention
+    window -- so the question is "is anything LIVE", not "is anything here"."""
+    _, _, run = held_scene
+    run.finish("landed")
+    dest = tmp_path / "moved"
+
+    r = client.put("/api/config/data-dir", json={"data_dir": str(dest)})
+
+    assert r.status_code == 200, r.text

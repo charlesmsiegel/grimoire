@@ -4,11 +4,12 @@ catalogues that worlds and campaigns select from."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from .. import llm, store
 from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
+from . import runs
 from .common import (
     _dump,
     _llm_http_error,
@@ -190,7 +191,16 @@ def get_data_dir():
 
 
 @router.put("/config/data-dir")
-def put_data_dir(update: DataDirUpdate):
+def put_data_dir(update: DataDirUpdate, request: Request):
+    # Not under a campaign lock, deliberately: there is no campaign to lock --
+    # the root itself is moving, and a lock taken in the old tree would not name
+    # anything in the new one. This is a narrow refusal rather than a
+    # guarantee, and it is the honest one available: a run reserved in the gap
+    # is a race the store's own docs already place outside what any lock here
+    # can promise (`store/locks.py`), while the case this actually closes -- a
+    # player wandering to Configuration mid-turn -- is now reachable for the
+    # first time and was not before.
+    runs.require_store_free(request.app)
     try:
         store.set_data_dir(update.data_dir)
     except (OSError, ValueError) as exc:

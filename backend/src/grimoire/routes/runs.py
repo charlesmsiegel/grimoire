@@ -527,6 +527,23 @@ class RunRegistry:
                     return run
             return None
 
+    def any_live(self) -> Run | None:
+        """Any live run at all, for the operations that reshape the store the
+        runs are writing INTO rather than one campaign inside it.
+
+        `PUT /config/data-dir` is the one: it moves the global root, and a
+        detached run resolves its campaign and scene against `store.home()`
+        when it persists -- minutes after the request that started it. Moved
+        underneath, that terminal write either fails the identity fence and
+        discards a finished reply, or lands in a copied library while the
+        player's post stays in the old one.
+        """
+        with self._lock:
+            for run in self._runs.values():
+                if run.state == "running":
+                    return run
+            return None
+
     def live_for_key(self, key: str | None) -> Run | None:
         """The running holder of an exclusion key, if there is one."""
         if key is None:
@@ -1154,6 +1171,26 @@ def scene_held_free(app, cid: str, sid: str):
     with store.locks.campaign_lock(cid):
         require_scene_free(app, cid, sid)
         yield
+
+
+def require_store_free(app) -> None:
+    """Refuse an operation that moves the STORE ROOT while anything is running.
+
+    Detaching a turn is what makes this reachable: the run survives navigation,
+    so the player can leave the scene, open Configuration and change the storage
+    location while their turn is still generating. Every earlier version of this
+    hazard was impossible -- a turn died with its request, and its request held
+    the page.
+
+    Campaign-agnostic, unlike `require_campaign_free`: the root is global, so a
+    run in ANY campaign is a run that would be persisted into the wrong tree.
+    """
+    live = app.state.runs.any_live()
+    if live is not None:
+        raise HTTPException(status_code=409, detail={
+            "kind": "runs_in_flight", "run_id": live.id,
+            "detail": "a turn is still generating; wait for it or stop it before "
+                      "moving the storage location"})
 
 
 def require_campaign_free(app, cid: str) -> None:

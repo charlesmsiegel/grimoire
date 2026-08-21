@@ -4,10 +4,11 @@ routes that open a scene from a greeting."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from .. import store
 from ..llm import LLMClient
+from . import runs
 from .common import (
     _campaign_root_or_404,
     _fresh_or_409,
@@ -303,10 +304,16 @@ def post_campaign_greeting_mark(cid: str, gid: str, body: MarkBody):
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/start-from-greeting")
-def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting):
+def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting, request: Request):
     _require_scene(cid, sid)
     try:
-        new_sid = store.playing.start_from_greeting(cid, sid, body.greeting)
+        # This module was the one an inventory of the freeze kept missing, for
+        # the plain reason that every other guarded route is in `scenes.py` or
+        # `mechanics.py`. Both routes here mutate a live scene: this one seats a
+        # cast and writes the greeting as the opener, and can RENAME the scene
+        # while doing it.
+        with runs.scene_held_free(request.app, cid, sid):
+            new_sid = store.playing.start_from_greeting(cid, sid, body.greeting)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     except (store.playing.PlayError, store.appearances.AppearError) as exc:
@@ -325,13 +332,24 @@ def post_opener(cid: str, sid: str, body: Opener, client: LLMClient = Depends(ge
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/first-post")
-def post_first_post(cid: str, sid: str, body: FirstPost):
+def post_first_post(cid: str, sid: str, body: FirstPost, request: Request):
     """Adopt a generated opener as the scene's first (assistant) message. The cast is
     already set up in the panel, so this just persists the text onto an empty scene."""
     _require_scene(cid, sid)
+    # The hold opens HERE, not around the append alone: "is the scene empty" and
+    # "write the opener" are a read-modify-write, and a turn reserved between
+    # them would append the opener under a run that composed its prompt from an
+    # empty scene. It also puts the busy refusal ahead of the already-has-
+    # messages one, which is the honest order -- a scene a turn is generating
+    # into is refused for that reason, whatever else is true of it.
+    with runs.scene_held_free(request.app, cid, sid):
+        return _adopt_first_post(cid, sid, body.text)
+
+
+def _adopt_first_post(cid: str, sid: str, text: str) -> dict:
     if store.scenes.read_scene(cid, sid)["messages"]:
         raise HTTPException(status_code=409, detail="scene already has messages")
-    if not body.text.strip():
+    if not text.strip():
         raise HTTPException(status_code=400, detail="empty first post")
     # Judged on what LANDED, not on what was sent. Text can be non-empty and
     # still produce no post: a trailing tracker block is split off before the
@@ -340,6 +358,6 @@ def post_first_post(cid: str, sid: str, body: FirstPost):
     # over a scene that is still empty loses the opener the user was adopting
     # with no error to show for it. Nothing has been written when the count is
     # zero, so the 400 leaves the scene exactly as it was.
-    if not _persist_reply(cid, sid, body.text):
+    if not _persist_reply(cid, sid, text):
         raise HTTPException(status_code=400, detail="empty first post")
     return {"ok": True}

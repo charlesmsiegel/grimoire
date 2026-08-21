@@ -94,9 +94,12 @@ object RunNotifier {
         // A cancelled run is the player getting what they asked for. Telling
         // them about it would be a notification for having pressed Stop.
         if (state == "cancelled") return
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
+        // Neither does a player who is watching it happen. This notification is
+        // for a reply that landed while they were away, and posting it at
+        // default importance -- with a sound -- for every turn they sit through
+        // would make the feature something to turn off.
+        if (ServerRuntime.foreground) return
+        if (!mayPost(context)) {
             // Denied is a degraded install, not an error: the reply is on disk
             // and the app shows it on next open. Logged so a silent phone is
             // explicable rather than mysterious.
@@ -105,13 +108,12 @@ object RunNotifier {
         }
         val landed = state == "landed"
         val title = if (landed) {
-            context.getString(R.string.run_done_title, sceneTitle)
+            context.getString(R.string.run_done_title, campaignName, sceneTitle)
         } else {
-            context.getString(R.string.run_failed_title, sceneTitle)
+            context.getString(R.string.run_failed_title, campaignName, sceneTitle)
         }
         val notification = NotificationCompat.Builder(context, DONE_CHANNEL)
             .setContentTitle(title)
-            .setContentText(campaignName)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setAutoCancel(true)
             .setContentIntent(openIntent(context, cid, sceneIdentity))
@@ -119,6 +121,30 @@ object RunNotifier {
         runCatching {
             NotificationManagerCompat.from(context).notify(runId.hashCode(), notification)
         }.onFailure { Log.w(TAG, "posting completion for $runId failed", it) }
+    }
+
+    /**
+     * Whether a completion notification would actually be delivered.
+     *
+     * `POST_NOTIFICATIONS` became a RUNTIME permission in Android 13 (API 33).
+     * On 8.0 through 12L -- which `minSdk 26` still supports -- the platform
+     * does not know it at all, and `checkSelfPermission` answers DENIED for a
+     * permission that was never required. Checking it unconditionally therefore
+     * switched completion notifications off on every pre-13 device, silently,
+     * which is most of the range this app claims to support (codex, P1).
+     *
+     * `areNotificationsEnabled` is the question that has an answer on both
+     * sides of that line: it is the user's own Settings toggle, which exists on
+     * every version and is not a permission check.
+     */
+    private fun mayPost(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            return false
+        }
+        return NotificationManagerCompat.from(context).areNotificationsEnabled()
     }
 
     private fun openIntent(context: Context, cid: String?, identity: String?): PendingIntent {

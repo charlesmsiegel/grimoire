@@ -921,7 +921,8 @@ test("a failed stream keeps the override, and retry carries it", async () => {
   await waitFor(() => expect(picker).toHaveValue("terse")); // NOT cleared by the failure
   fireEvent.click(screen.getByRole("button", { name: /Retry/ }));
   await waitFor(() => expect(api.retry).toHaveBeenCalledWith(
-    "run", "s1", expect.any(Function), { response_preset: "terse" }, expect.any(AbortSignal)));
+    "run", "s1", expect.any(Function), { response_preset: "terse" }, expect.any(AbortSignal),
+    expect.any(String), expect.any(Function)));
 });
 
 test("sending with no scene creates one first", async () => {
@@ -1028,7 +1029,9 @@ test("an error shows a Retry button that retries the scene", async () => {
   fireEvent.keyDown(ta, { key: "Enter" });
   const retryBtn = await screen.findByRole("button", { name: /retry/i });
   fireEvent.click(retryBtn);
-  await waitFor(() => expect(api.retry).toHaveBeenCalledWith("run", "s1", expect.any(Function), undefined, expect.any(AbortSignal)));
+  await waitFor(() => expect(api.retry).toHaveBeenCalledWith(
+    "run", "s1", expect.any(Function), undefined, expect.any(AbortSignal),
+    expect.any(String), expect.any(Function)));
   expect(screen.getAllByText("hello")).toHaveLength(1);
 });
 
@@ -1165,6 +1168,140 @@ test("Stop cancels a turn whose leading frame never arrived", async () => {
   expect(sid).toBe("s1");
   // and the attempt it cancelled is the one the send actually carried
   expect((api.chat as any).mock.calls[0][6]).toBe(attempt);
+});
+
+/** A stream that hangs until aborted, whatever position its signal sits in.
+ *
+ *  `hangingChat` destructures by position and so only fits `api.chat`. Retry
+ *  and the proposal resolution put the signal one earlier, and a mock that
+ *  listened to the wrong argument would hang forever instead of reporting.
+ */
+function hangingStream() {
+  return async (...args: unknown[]) => {
+    const signal = args.find((a): a is AbortSignal => a instanceof AbortSignal)!;
+    await new Promise<void>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        const err = new Error("The operation was aborted.");
+        err.name = "AbortError";
+        reject(err);
+      });
+    });
+  };
+}
+
+/** Each turn producer, how to reach it from a fresh render, and where its
+ *  attempt sits in the call. */
+const PRODUCERS: { api: "retry" | "regenerate" | "resolveProposal";
+                   arrange: () => void; reach: () => Promise<void>;
+                   attemptAt: number }[] = [
+  {
+    api: "retry",
+    // Retry is only offered after a turn failed, so one has to fail first.
+    arrange: () => {
+      (api.getScene as any).mockResolvedValue({ meta: {}, messages: [] });
+      (api.chat as any).mockImplementation(
+        async (_c: string, _s: string, _t: string, onEvent: any) => {
+          onEvent({ error: { detail: "boom" } });
+        });
+    },
+    reach: async () => {
+      fireEvent.change(await screen.findByRole("textbox"), { target: { value: "hello" } });
+      fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+      fireEvent.click(await screen.findByRole("button", { name: /^retry$/i }));
+    },
+    attemptAt: 5,
+  },
+  {
+    api: "regenerate",
+    arrange: () => {
+      (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "The tide turns." }] });
+    },
+    reach: async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /^reroll$/i }));
+      fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
+    },
+    attemptAt: 6,
+  },
+  {
+    api: "resolveProposal",
+    // A declined record whose narration never landed: one button, no fence.
+    arrange: () => {
+      (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+        { role: "assistant", content: "a reply" }] });
+      (api.getRollProposal as any).mockResolvedValue({
+        record: { id: "pr-1", status: "declined", payload: PROPOSAL_PAYLOAD,
+                  resolution: null } });
+    },
+    reach: async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Continue narration" }));
+    },
+    attemptAt: 5,
+  },
+];
+
+test.each(PRODUCERS)("$api carries the attempt Stop will cancel",
+                     async ({ api: name, arrange, reach, attemptAt }) => {
+  // The defect: only `api.chat` forwarded the attempt. Retry, reroll and the
+  // proposal continuation dropped it, so the SERVER minted its own -- and the
+  // id this client recorded named a run that never existed. Stop then addressed
+  // nothing and the adoption pass asked about an attempt no route had heard of,
+  // while the detached run went on generating. Exactly the window the registry
+  // was built to close, left open on four routes out of five.
+  //
+  // Asserted through Stop rather than by reading the call: what matters is not
+  // that *an* attempt was passed, but that it is the one the cancel names.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  arrange();
+  (api as any)[name].mockImplementation(hangingStream());
+  renderCampaign();
+  await reach();
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await waitFor(() => expect(api.cancelAttempt).toHaveBeenCalled());
+
+  const sent = (api as any)[name].mock.calls[0][attemptAt];
+  expect(sent).toEqual(expect.any(String));
+  expect((api.cancelAttempt as any).mock.calls[0][2]).toBe(sent);
+});
+
+test("a dead response on a scene nobody left re-attaches instead of giving up", async () => {
+  // Mount and `visibilitychange` are the only adoption triggers, and NEITHER
+  // fires here: the component stays mounted and visible while the response
+  // resets before its leading frame. The server accepted the POST and a run is
+  // generating, so both of the obvious answers are wrong -- treating it as a
+  // failure hands the prompt back and the player sends again, landing the turn
+  // twice against a run that was always fine; leaving it locked strands the
+  // scene until a remount.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(async () => {
+    // Not an abort: the socket died on its own, which is the case with no
+    // trigger. An abort is a Stop, and that path is settled elsewhere.
+    throw Object.assign(new Error("network error"), { beforeResponse: true });
+  });
+  (api.findRun as any).mockResolvedValue(
+    { run: { id: "r-live", attempt_id: "a", state: "running", next_index: 0 } });
+  // Emits and then stays open, so the streamed preview is still on screen to
+  // assert on: `attachToRun` clears it and refetches the scene once the run is
+  // done, and the scene mock has no such post.
+  (api.attachRun as any).mockImplementation(
+    async (_c: string, _s: string, _r: string, _from: number, onEvent: any) => {
+      onEvent({ delta: "The lamps are already lit." });
+      await new Promise(() => {});
+    });
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+
+  // The text generated while the response was dead -- the only thing that
+  // proves a reattach happened. Asserting on the submitted post would prove
+  // nothing: the scene refetch carries that back either way.
+  expect(await screen.findByText(/The lamps are already lit\./)).toBeInTheDocument();
+  // and asked by ATTEMPT, which is what names the send in the window where no
+  // frame ever arrived
+  expect((api.findRun as any).mock.calls[0][2]).toBe((api.chat as any).mock.calls[0][6]);
+  // and the prompt was NOT handed back, which would have been a second send
+  expect(screen.getByRole("textbox")).toHaveValue("");
 });
 
 test("Stop reaches the run's own campaign after the player has moved to another",
@@ -2381,7 +2518,8 @@ test("Reroll on the last assistant post replaces it with a fresh reply", async (
   expect(screen.getByTitle("Reroll")).toBeInTheDocument(); // hovertext present
   fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i })); // empty = plain reroll
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
-    "run", "s1", expect.any(Function), undefined, undefined, expect.any(AbortSignal)));
+    "run", "s1", expect.any(Function), undefined, undefined, expect.any(AbortSignal),
+    expect.any(String), expect.any(Function)));
   await screen.findByText("fresh reply");
   expect(screen.queryByText("old reply")).toBeNull();
 });
@@ -2397,7 +2535,8 @@ test("typed guidance is passed to regenerate", async () => {
   fireEvent.change(input, { target: { value: "make her angrier" } });
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
-    "run", "s1", expect.any(Function), "make her angrier", undefined, expect.any(AbortSignal)));
+    "run", "s1", expect.any(Function), "make her angrier", undefined, expect.any(AbortSignal),
+    expect.any(String), expect.any(Function)));
 });
 
 test("Escape closes the reroll popover without firing", async () => {
@@ -2427,7 +2566,8 @@ test("regenerate carries a pending override", async () => {
   fireEvent.click(await screen.findByTitle("Reroll"));
   fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i })); // empty guidance = plain reroll
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
-    "run", "s1", expect.any(Function), undefined, { response_preset: "terse" }, expect.any(AbortSignal)));
+    "run", "s1", expect.any(Function), undefined, { response_preset: "terse" }, expect.any(AbortSignal),
+    expect.any(String), expect.any(Function)));
 });
 
 // The wire addresses a variant by a content-derived `id`, not by position:
@@ -4050,7 +4190,8 @@ test("resolving a roll-proposal chip calls api.resolveProposal and clears the ch
   await waitFor(() => expect(api.resolveProposal).toHaveBeenCalledWith(
     "run", "s1",
     { proposal: "pr-1", action: "accept", check: "brawl", actor: "characters:mara", difficulty: 6, modifier: 0 },
-    expect.any(Function), expect.any(AbortSignal)));
+    expect.any(Function), expect.any(AbortSignal),
+    expect.any(String), expect.any(Function)));
   await waitFor(() => expect(screen.queryByRole("button", { name: "Roll it" })).toBeNull());
 });
 
@@ -4069,7 +4210,8 @@ test("a declined roll whose narration never landed stays retryable", async () =>
   fireEvent.click(screen.getByRole("button", { name: "Continue narration" }));
   await waitFor(() => expect(api.resolveProposal).toHaveBeenCalledWith(
     "run", "s1", { proposal: "pr-1", action: "decline" },
-    expect.any(Function), expect.any(AbortSignal)));
+    expect.any(Function), expect.any(AbortSignal),
+    expect.any(String), expect.any(Function)));
 });
 
 test("selecting a scene re-hydrates a pending roll-proposal record", async () => {
@@ -4170,7 +4312,8 @@ test("switching between two scenes that both have pending proposals shows the ne
   await waitFor(() => expect(api.resolveProposal).toHaveBeenCalledWith(
     "run", "002--2024-01-02--two",
     { proposal: "pr-b", action: "accept", check: "stealth", actor: "characters:borys", difficulty: 4, modifier: 0 },
-    expect.any(Function), expect.any(AbortSignal)));
+    expect.any(Function), expect.any(AbortSignal),
+    expect.any(String), expect.any(Function)));
   expect(api.resolveProposal).not.toHaveBeenCalledWith(
     "run", expect.anything(),
     expect.objectContaining({ proposal: "pr-a" }),

@@ -2661,7 +2661,7 @@ async def post_dossiers(cid: str, sid: str, request: Request,
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}/chronicle")
-def put_chronicle(cid: str, sid: str, body: ChronicleSave):
+def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request):
     _require_scene(cid, sid)
     facts = store.chronicle.scene_facts(cid, sid)
     # One hold across the whole persistence sequence (#234). These are four
@@ -2682,6 +2682,11 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
         "one_line": body.one_line, "summary": body.summary, "keywords": body.keywords,
         "timeline_events": body.timeline_events, "edits": body.edits})
     with store.locks.campaign_lock(cid):
+        # A review save writes back into the scene and marks it absorbed, so it
+        # reshapes what a live turn is generating into. Inside the hold that
+        # already covers the whole sequence, so nothing reserves a turn between
+        # the check and the first write.
+        runs.require_scene_free(request.app, cid, sid)
         # Inside the lock: two saves racing on one token must not both miss.
         prior = store.commits.lookup(cid, body.commit_token)
         progress: dict = {}
@@ -2906,42 +2911,54 @@ def _seat_cast_member(cid: str, sid: str, body: Appear) -> None:
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/cast")
-def post_scene_cast(cid: str, sid: str, body: Appear):
+def post_scene_cast(cid: str, sid: str, body: Appear, request: Request):
     _require_scene(cid, sid)
+    # `appear`/`leave` APPEND a transition line to a non-empty transcript, so
+    # these are transcript-shape changes and not merely cast bookkeeping -- the
+    # reason the plan lists them beside the rename. Held across the check and
+    # the write, like every other door.
     try:
-        _seat_cast_member(cid, sid, body)
+        with runs.scene_held_free(request.app, cid, sid):
+            _seat_cast_member(cid, sid, body)
     except store.appearances.AppearError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return {"ok": True}
 
 
 @router.delete("/campaigns/{cid}/scenes/{sid}/cast/{kind}/{id}")
-def delete_scene_cast(cid: str, sid: str, kind: str, id: str):
+def delete_scene_cast(cid: str, sid: str, kind: str, id: str, request: Request):
     _require_scene(cid, sid)
     if kind not in store.appearances.ACTOR_KINDS:
         raise HTTPException(status_code=404, detail="unknown actor kind")
-    store.appearances.leave(cid, sid, kind, id)
+    # The most destructive of the cast routes, and the one an inventory of them
+    # is most likely to miss: `leave` removes the actor AND appends a "leaves
+    # the scene" transition whenever the transcript is non-empty.
+    with runs.scene_held_free(request.app, cid, sid):
+        store.appearances.leave(cid, sid, kind, id)
     return {"ok": True}
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/cast/batch")
-def post_scene_cast_batch(cid: str, sid: str, body: AppearBatch):
+def post_scene_cast_batch(cid: str, sid: str, body: AppearBatch, request: Request):
     """Seat a whole suggestion cast in one request. Already-cast members are
     skipped (the per-member 409), matching what the chooser's serial loop
     tolerated; unknown actors still 404 the request."""
     _require_scene(cid, sid)
     added, skipped = 0, []
-    for ref in body.refs:
-        try:
-            _seat_cast_member(cid, sid, ref)
-            added += 1
-        except store.appearances.AppearError:
-            skipped.append(f"{ref.kind}/{ref.id}")
+    # ONE hold over the whole batch, not one per member: a turn reserved
+    # mid-loop would otherwise have half the cast seated under it.
+    with runs.scene_held_free(request.app, cid, sid):
+        for ref in body.refs:
+            try:
+                _seat_cast_member(cid, sid, ref)
+                added += 1
+            except store.appearances.AppearError:
+                skipped.append(f"{ref.kind}/{ref.id}")
     return {"ok": True, "added": added, "skipped": skipped}
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/cast/emergent")
-def post_emergent_cast(cid: str, sid: str, body: EmergentCast):
+def post_emergent_cast(cid: str, sid: str, body: EmergentCast, request: Request):
     """Create a character this campaign invented mid-play, and seat it (#98).
 
     Campaign-scoped on purpose: the name came out of one scene's prose, so it
@@ -2965,7 +2982,13 @@ def post_emergent_cast(cid: str, sid: str, body: EmergentCast):
     role = _cast_role(cid, sid, "characters", body.role)
     char, version = store.overlay.create_character(cid, name)
     try:
-        _seat_cast_member(cid, sid, Appear(kind="characters", id=char, version=version, role=role))
+        # The seat is the transcript-touching half (`appear` appends a
+        # transition), so the guard belongs around it rather than around the
+        # create -- refusing after the character exists is the same shape as the
+        # AppearError below, and the character is campaign state either way.
+        with runs.scene_held_free(request.app, cid, sid):
+            _seat_cast_member(cid, sid,
+                              Appear(kind="characters", id=char, version=version, role=role))
     except store.appearances.AppearError as exc:
         # Not unreachable, though it takes a deleted character to get here: a
         # campaign-side delete deliberately does NOT sweep `appearances.json`
@@ -3028,10 +3051,14 @@ def get_scene_location(cid: str, sid: str):
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}/location")
-def put_scene_location(cid: str, sid: str, body: SceneLocation):
+def put_scene_location(cid: str, sid: str, body: SceneLocation, request: Request):
     _require_scene(cid, sid)
     try:
-        result = store.scenes.set_location(cid, sid, body.location)
+        # `set_location` appends a transition line, so this moves the transcript
+        # a live turn is generating into -- not merely the context it was built
+        # from.
+        with runs.scene_held_free(request.app, cid, sid):
+            result = store.scenes.set_location(cid, sid, body.location)
     except store.entities.EntityNotFound:
         raise HTTPException(status_code=404, detail="location not found")
     return {"ok": True, **result}
@@ -3067,14 +3094,19 @@ def get_scene_datetime(cid: str, sid: str):
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}/datetime")
-def put_scene_datetime(cid: str, sid: str, body: SceneDatetime):
+def put_scene_datetime(cid: str, sid: str, body: SceneDatetime, request: Request):
     _require_scene(cid, sid)
     # Captured before the write: the sweep needs the moment being left, and
     # set_datetime appends to the same history it would read back.
     history = store.scenes.get_time_history(cid, sid)
     previous = history[-1] if history else None
     try:
-        result = store.scenes.set_datetime(cid, sid, body.datetime)
+        # The sharpest of the moment routes: the FIRST `set_datetime` renames
+        # the scene, so this does not merely change the context a live turn was
+        # built from -- it mints a new `sid` and can trip the identity fence
+        # that discards a completed reply.
+        with runs.scene_held_free(request.app, cid, sid):
+            result = store.scenes.set_datetime(cid, sid, body.datetime)
     except store.calendars.CalendarError as e:
         raise HTTPException(status_code=400, detail=str(e))
     # Reconcile the campaign clock (#100) with the moment this scene just took:

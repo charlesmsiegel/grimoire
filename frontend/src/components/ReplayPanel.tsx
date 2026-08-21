@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api, type ReplayPreview, type ReplaySession } from "../api/client";
-import type { ChatEvent } from "../api/stream";
+import { newAttemptId, type ChatEvent } from "../api/stream";
+import { useRunRegistry } from "../runs/RunRegistryProvider";
 import { ErrorNote } from "./ErrorNote";
 
 /** The retcon replay's own surface (#79/#80).
@@ -43,6 +44,11 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
    *  its own tests. */
   latch?: () => () => void;
 }) {
+  // The same provider the composer's turns are recorded in, so a replayed turn
+  // is discoverable by attempt after the WebView is suspended. `useRunRegistry`
+  // degrades to a no-op stand-in with no provider mounted, which is what lets
+  // this panel keep standing alone in its own tests.
+  const registry = useRunRegistry();
   const [session, setSession] = useState<ReplaySession | null>(null);
   // The price, stamped with the post it was taken for. Stamped rather than
   // cleared when `startAt` changes: a clearing effect has to run on every
@@ -174,21 +180,56 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
    *  the request still completes — so a caller that ignores frames reads a
    *  failed turn as a finished one, and offers Accept for a reply that was
    *  never written. */
-  async function streamed(run: (onEvent: (e: ChatEvent) => void) => Promise<void>) {
+  async function streamed(
+    run: (onEvent: (e: ChatEvent) => void, attempt: string,
+          onIndex: (i: number) => void) => Promise<void>,
+  ) {
+    // REGISTERED BEFORE THE REQUEST GOES OUT, exactly as the composer's turns
+    // are. `/replay/turn` and `/regenerate` are detached server-side now, so a
+    // WebView suspended mid-walk leaves the backend generating while `guard`
+    // releases this panel's latch -- the panel cannot cancel it, cannot
+    // reattach when the tab comes back, never reaches `refresh()`, and shows
+    // replay state that is quietly stale until a manual reload (codex, P2).
+    //
+    // No `text`: a replayed turn submits nothing of the reviewer's own, so
+    // there is nothing to hand back. What the record buys here is the attempt
+    // -- the id the server sees, which is what makes the run addressable and
+    // idempotent if this request is re-sent.
+    const attempt = newAttemptId();
+    registry.begin({ cid, sid, attempt, text: "", runId: null });
     // The frame whole, not its `detail`: the kind rides on it, and this is the
     // path a replay takes when the provider is unreachable (#210).
     let failed: ChatEvent["error"] = undefined;
-    await run((e) => { if (e.error) failed = e.error; });
+    let answered = false;
+    // The resume cursor is keyed by RUN id, which only the leading frame
+    // supplies -- so indexes seen before it are dropped rather than filed under
+    // the attempt, where nothing would ever look for them.
+    let runId: string | null = null;
+    try {
+      await run((e) => {
+        if (e.run) { runId = e.run.id; registry.attach(cid, sid, e.run.id); }
+        if (e.error) { failed = e.error; answered = true; }
+        if (e.done) answered = true;
+      }, attempt, (i) => { if (runId) registry.consume(runId, i); });
+    } finally {
+      // A stream that ended WITHOUT an answer deliberately stays pending: the
+      // run may well still be generating, and that is the case the registry
+      // exists for. Anything that got an answer is resolved and settles here,
+      // the same rule `runStream` follows.
+      if (answered) registry.settle(cid, sid);
+    }
     if (failed && alive.current) setError(failed);
   }
 
   const runTurn = () => guard(async () => {
-    await streamed((on) => api.replayTurn(cid, sid, on));
+    await streamed((on, attempt, onIndex) =>
+      api.replayTurn(cid, sid, on, undefined, attempt, onIndex));
     await refresh();
   });
 
   const again = () => guard(async () => {
-    await streamed((on) => api.regenerate(cid, sid, on));
+    await streamed((on, attempt, onIndex) =>
+      api.regenerate(cid, sid, on, undefined, undefined, undefined, attempt, onIndex));
     await refresh();
   });
 
