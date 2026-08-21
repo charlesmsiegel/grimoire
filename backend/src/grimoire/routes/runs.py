@@ -36,7 +36,7 @@ import anyio
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from .. import runner
+from .. import runner, store
 from ..store import scenes
 from ..store.campaigns import read as campaigns_read
 from ..store.campaigns.paths import CampaignNotFound
@@ -61,9 +61,19 @@ REAP_SECONDS = 600
 
 Long enough that a phone left face-down through a whole turn still finds its
 result on unlock, and short enough that a day of play does not accumulate every
-run it ever made. A run reaped before its client returns is not a lost reply --
-the reply is on disk -- but the client can no longer tell 'it landed' from 'it
-never sent', which is what the durable attempt record answers instead.
+run it ever made.
+
+What it does NOT survive, stated plainly because an earlier version of this
+docstring pointed at a "durable attempt record" that has never existed: the
+registry is in memory, so both the window expiring and the process restarting
+lose the attempt mapping. A client that retries the same attempt id after
+either will not adopt the original outcome -- `start_or_existing` sees an
+attempt it has never met and runs the turn again, duplicating the player's post
+and the reply. A run reaped before its client returns is not a lost reply (the
+reply is on disk), but the client can no longer tell "it landed" from "it never
+sent", and this is the boundary of what idempotency by attempt id covers.
+Closing it means persisting each attempt's outcome beside the scene, which is
+a store change and not a registry one.
 """
 
 Subject = tuple
@@ -680,8 +690,9 @@ def post_run_cancel(cid: str, sid: str, run_id: str, request: Request) -> dict:
     return {"run": _run_payload(run)}
 
 
-@router.post("/campaigns/{cid}/scenes/{sid}/attempts/{attempt_id}/cancel")
-def post_attempt_cancel(cid: str, sid: str, attempt_id: str, request: Request) -> dict:
+@router.post("/campaigns/{cid}/scenes/{sid}/attempt-cancel")
+def post_attempt_cancel(cid: str, sid: str, request: Request,
+                        attempt: str = Query(...)) -> dict:
     """Stop the turn this attempt id names, whether or not it has a run yet.
 
     What Stop calls when discovery came back empty. The POST it is stopping may
@@ -693,7 +704,15 @@ def post_attempt_cancel(cid: str, sid: str, attempt_id: str, request: Request) -
 
     Idempotent, and safe to call for an attempt that never reserves: the record
     is capped and forgotten oldest-first.
+
+    The attempt is a QUERY parameter, not a path segment, because the header
+    contract accepts a client's id VERBATIM -- `X-Grimoire-Attempt: client/42`
+    is legal, and percent-encoding does not save it: the ASGI router matches on
+    the decoded path, so the slash splits the segment and the request reaches no
+    route at all. The very clients most likely to use a structured id would be
+    the ones unable to stop their own turns.
     """
+    attempt_id = attempt
     subject, identity = _scene_subject(cid, sid)
     # One call, because looking up and then recording is two acquisitions with a
     # reservation-shaped gap between them -- see `cancel_or_precancel`.
@@ -949,6 +968,27 @@ def require_scene_free(app, cid: str, sid: str) -> None:
             "detail": "a turn is running on this scene; stop it first"})
 
 
+@contextlib.contextmanager
+def scene_held_free(app, cid: str, sid: str):
+    """Hold the campaign lock across BOTH the scene-free check and the mutation
+    it guards.
+
+    Checking and then mutating is two steps, and a reservation fits between
+    them: the check sees no run, a send reserves and detaches, and the rename
+    lands anyway -- so the turn's fence later finds its scene gone and discards
+    a finished reply. `reserve_turn` takes the same campaign lock across its
+    identity capture and its reservation, which is what makes holding it here
+    actually exclude one rather than merely narrow the gap before one.
+
+    Lock order is campaign-then-registry on both sides (`live_for_key` and
+    `start_or_existing` take the registry lock inside a campaign-lock hold, and
+    nothing takes them the other way round), so this cannot invert.
+    """
+    with store.locks.campaign_lock(cid):
+        require_scene_free(app, cid, sid)
+        yield
+
+
 def reserve_turn(app, cid: str, sid: str, kind: str,
                  attempt_id: str | None) -> tuple[Run, bool]:
     """Reserve a `turn` run for this scene, or raise 409 if one is in flight.
@@ -988,8 +1028,13 @@ def reserve_turn(app, cid: str, sid: str, kind: str,
     subject: Subject = ("scene", cid, sid)
     attempt = attempt_id or uuid.uuid4().hex
     try:
-        run, fresh = app.state.runs.start_or_existing(
-            subject, "turn", kind, attempt, identity, labels)
+        # Under the campaign lock, which is what lets `scene_held_free` exclude
+        # a reservation rather than merely narrow the window before one. The
+        # identity capture above takes the same lock (`ensure_identity` is
+        # serialized on it) and it is reentrant, so this costs nothing.
+        with store.locks.campaign_lock(cid):
+            run, fresh = app.state.runs.start_or_existing(
+                subject, "turn", kind, attempt, identity, labels)
     except RunInFlightError as exc:
         raise HTTPException(status_code=409, detail={
             "kind": "run_in_flight", "run_id": exc.run_id,

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import time
 
 import anyio
 from fastapi.responses import StreamingResponse
@@ -320,9 +321,16 @@ class StreamOutcome:
         if self.state is None:            # a failure already recorded wins
             self.state = "landed"
 
-    def fail(self, kind: str, detail: str) -> None:
+    def fail(self, kind: str, detail: str, **note) -> None:
+        """`note` is what the handler DID, carried onto the run as well as the
+        wire. Today that is `post_returned`: a failed turn whose rollback took
+        the player's words back off the transcript. The live frame said so and
+        the run did not, so a client that lost the frame and discovered the
+        outcome by polling was told the turn failed but not that its prompt was
+        gone -- and the composer could not give the words back. Recovery reads
+        the run, so the run has to know."""
         self.state = "failed"
-        self.error = {"kind": kind, "detail": detail}
+        self.error = {"kind": kind, "detail": detail, **note}
 
     def result(self) -> dict | None:
         if self.state is None:
@@ -347,14 +355,50 @@ def _scene_moved(cid: str, sid: str, identity: str | None) -> bool:
 
     MUST be called under the campaign lock, next to the write it guards: read
     outside one, it answers a question that was true a moment ago.
+
+    STRICT, and this is the difference between a fence and a data-loss bug. The
+    tolerant reader answers `None` for a header it could not open, which is
+    indistinguishable here from a scene that was replaced -- so a sync client
+    holding the file for the moment generation finalizes would make a complete,
+    correct reply look like it belonged to a scene that no longer exists, and
+    the fence would throw it away and mark the run failed with the original
+    identity still sitting on disk. An unreadable fence is a store failure and
+    is raised as one; the caller reports it as retryable contention, which is
+    what it is.
     """
     if identity is None:
         return False
-    return store.scenes.scene_identity(cid, sid) != identity
+    for attempt in range(_FENCE_READS):
+        try:
+            return store.scenes.scene_identity_strict(cid, sid) != identity
+        except OSError as exc:
+            if attempt == _FENCE_READS - 1:
+                # Raised as contention, not invented as an answer. `StoreBusy`
+                # is the kind every caller here already handles -- the error
+                # path swallows it, the abort path swallows everything, and
+                # finalize turns it into the `busy` frame -- so an unverifiable
+                # fence ends the turn the same way a contended store does, and
+                # nothing is written to a scene we could not identify.
+                raise store.locks.StoreBusy(
+                    f"could not read the scene's identity: {exc}") from exc
+            time.sleep(_FENCE_RETRY_SECONDS)
+    raise AssertionError("unreachable")           # pragma: no cover
 
 
 _MOVED = ("the scene this turn started on is gone -- its id now names a "
           "different scene, so the reply was not saved")
+
+_FENCE_READS = 3
+_FENCE_RETRY_SECONDS = 0.05
+"""How hard to try to READ the fence before giving up on the turn.
+
+The conditions that make a header momentarily unopenable -- a sync client
+mid-write, a Windows sharing violation -- last milliseconds, and this runs in a
+worker thread where a short sleep costs nothing. Retrying is what keeps a
+transient blip from ending a turn the provider spent minutes on; giving up
+after a few is what keeps a genuinely stuck file from holding the campaign
+lock indefinitely.
+"""
 
 
 def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
@@ -462,7 +506,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             # foreground half; this is the half a reconnect or a notification
             # reads, and inferring it from "the generator returned" made a
             # provider failure indistinguishable from a delivered reply.
-            box.fail(exc.kind, exc.detail)
+            box.fail(exc.kind, exc.detail, **note)
             yield _sse({"error": {"detail": exc.detail, "kind": exc.kind, **note}})
             return
         except BaseException:

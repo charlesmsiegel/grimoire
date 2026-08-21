@@ -320,9 +320,9 @@ def put_scene(cid: str, sid: str, body: RenameScene, request: Request):
     # A rename mints a new `sid`, and a detached turn holds the old one -- see
     # `require_scene_free`. Ahead of the title check would refuse a malformed
     # request with the wrong reason; behind the rename would be too late.
-    runs.require_scene_free(request.app, cid, sid)
     try:
-        new_sid = store.scenes.rename_scene(cid, sid, title)
+        with runs.scene_held_free(request.app, cid, sid):
+            new_sid = store.scenes.rename_scene(cid, sid, title)
     except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
         # a scene path is built from campaign_root, so an unusable campaign id
         # surfaces here as CampaignNotFound -- still a 404, not a 500
@@ -336,9 +336,9 @@ def delete_scene(cid: str, sid: str, request: Request):
     # turn is about to write into would be gone. The identity fence keeps the
     # reply off a REPLACEMENT scene, which is the corruption; this keeps the
     # reply from being thrown away in the first place.
-    runs.require_scene_free(request.app, cid, sid)
     try:
-        store.scenes.delete_scene(cid, sid)
+        with runs.scene_held_free(request.app, cid, sid):
+            store.scenes.delete_scene(cid, sid)
     except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
         # a scene path is built from campaign_root, so an unusable campaign id
         # surfaces here as CampaignNotFound -- still a 404, not a 500

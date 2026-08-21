@@ -1966,7 +1966,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       if (cancelRef.current) {
         const pending = cancelRef.current;
         cancelRef.current = null;
-        await pending;
+        // An unconfirmed cancel must not read as a finished one: `stopRun`
+        // rethrows when it could not reach the server, and settling anyway
+        // would put Send back over a run that is still generating. Reported,
+        // not swallowed -- the player pressed a button and it did not work.
+        try {
+          await pending;
+        } catch {
+          setError({ text: "could not reach the server to stop this turn — it "
+                           + "may still be generating", retryable: false });
+        }
       }
       setStreaming("");
       setBusy(false);
@@ -2722,7 +2731,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         state = (await api.cancelAttempt(from, sid, attempt)).run?.state;
       }
     } catch {
-      // see above
+      // The cancel never reached the server -- connectivity dropped as the
+      // phone was backgrounded, most likely. Swallowing this and settling would
+      // be the worst answer available: aborting the subscriber does NOT stop a
+      // detached run, so the provider keeps spending, persists a reply the
+      // player stopped, and holds the scene against the next send. Re-thrown so
+      // the teardown leaves the turn unsettled and the composer keeps saying
+      // Stop, which is the truth: it has not been stopped yet.
+      throw new Error("the stop request could not be delivered");
     }
   }
 

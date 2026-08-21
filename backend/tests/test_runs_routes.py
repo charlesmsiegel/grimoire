@@ -637,7 +637,8 @@ def test_a_stop_that_beats_the_reservation_is_consumed_by_it(client, sending_sce
     is the thing that consumes it.
     """
     cid, sid = sending_scene
-    pre = client.post(f"/api/campaigns/{cid}/scenes/{sid}/attempts/a-9/cancel")
+    pre = client.post(f"/api/campaigns/{cid}/scenes/{sid}/attempt-cancel",
+                      params={"attempt": "a-9"})
     assert pre.status_code == 200 and pre.json()["run"] is None
 
     _chat(client, cid, sid, headers={"X-Grimoire-Attempt": "a-9"})
@@ -711,3 +712,21 @@ def test_an_unexpected_producer_failure_reaches_the_wire(client, sending_scene,
     assert errors, "the subscriber was given an unexplained EOF"
     assert errors[-1]["kind"] == "run_failed"
     assert _latest(client, cid, sid).state == "failed"
+
+
+def test_an_attempt_id_with_a_slash_can_still_be_cancelled(client, sending_scene):
+    """The header contract takes a client's attempt id VERBATIM, so a
+    structured one like `client/42` is legal. In a path segment it is
+    unaddressable -- percent-encoding does not help, because the ASGI router
+    matches on the decoded path and the slash splits the segment -- which would
+    leave exactly the clients using structured ids unable to stop their own
+    turns."""
+    cid, sid = sending_scene
+    pre = client.post(f"/api/campaigns/{cid}/scenes/{sid}/attempt-cancel",
+                      params={"attempt": "client/42"})
+    assert pre.status_code == 200 and pre.json()["run"] is None
+
+    _chat(client, cid, sid, headers={"X-Grimoire-Attempt": "client/42"})
+
+    assert _latest(client, cid, sid).state == "cancelled", \
+        "a structured attempt id could not stop its own turn"
