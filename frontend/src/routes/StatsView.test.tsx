@@ -349,6 +349,27 @@ it("appends tailed rows newest first, like the page they sit above", async () =>
   expect(rows[1]).toContain("older");
 });
 
+it("reports a tail that cannot read the log without tearing it down", async () => {
+  vi.mocked(api.streamLogTail).mockImplementation(((_o: unknown,
+                                                    onEvent: (e: unknown) => void) => {
+    onEvent({ cursor: "c", error: { detail: "the log went away", kind: "log_unreadable" } });
+    onEvent({ cursor: "c2", rows: [
+      { ts: "2026-08-21T11:00:00.000Z", level: "info", module: "runner", message: "back" }] });
+    return new Promise(() => {});
+  }) as never);
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+  await screen.findByLabelText("Module to show");
+
+  fireEvent.click(screen.getByRole("checkbox", { name: "Live" }));
+
+  // Rows that arrive after it recovers clear the report; the stream never
+  // stopped, so neither should the panel.
+  expect(await screen.findByText("back")).toBeInTheDocument();
+  expect(screen.queryByText("the log went away")).not.toBeInTheDocument();
+});
+
 it("reopens the tail against the new filter rather than keeping the old one", async () => {
   view();
   await screen.findByRole("heading", { name: "Performance" });

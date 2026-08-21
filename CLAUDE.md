@@ -224,6 +224,42 @@ streaming handler, but it is a `draft` and Phase 1 leaves draft routes alone.)
   what lets recovery after the run record expired ask a question that has a
   right answer, instead of matching text.
 
+## Observability: one writer, three views
+
+`store/logs.py` is the only thing in the app that writes a log line, and
+`<home>/logs/YYYY-MM.jsonl` is the only file it writes to. `store/errors.py`
+(#156) and `store/metrics.py` (#154) are *readers* over it and over the usage
+ledger — there is no second store, and adding one would mean the same failure
+written twice by two appends that can disagree.
+
+Four rules that are easy to undo by accident:
+
+- **Never attach a second `logging` handler, and never attach one to the root
+  logger.** `logs.install()` (from `create_app`) puts one on the `grimoire`
+  logger, and that boundary is a privacy rule, not a preference: `httpx` logs
+  full request URLs at DEBUG, an OpenAI-compatible endpoint can carry its key
+  in one, and this is a file users are asked to attach to bug reports.
+- **`logs.record` may not raise and may not re-enter itself.** It runs beside a
+  turn and inside exception handlers, and writing a row resolves the store root
+  — which reads the bootstrap pointer through `failsoft`, which *logs*. The
+  thread-local latch is what makes that terminate.
+- **The level floor stops at `error`** (`logs.FLOORS`). The error store is a
+  view over ERROR rows, so a floor above them would be a setting that silently
+  switches #156 off — which the size backstop and Configuration both promise it
+  cannot.
+- **Instrument LLM failures at `usage.Meter.done`, not at call sites.** Every
+  LLM call in the app runs under a meter, so that is the one place that sees
+  all of them fail, and the meter's `task` is already the module axis the error
+  store aggregates on. Sixteen call sites each remembering to pass a `kind` is
+  how half of them stop appearing in the per-kind counts.
+
+The two error counts on `/stats` come from two places **on purpose**: a latency
+bucket's `errors` counts calls that failed (the usage ledger, the only source
+that also knows how many succeeded, so the only one that can give a rate its
+denominator), and the `errors` block counts failures recorded anywhere
+(including those that were never a call). Reconciling them into one number
+would answer neither question.
+
 ## Working notes
 
 - Backend tests isolate the store via `monkeypatch.setenv("GRIMOIRE_HOME", tmp_path)`.

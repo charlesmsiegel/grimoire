@@ -250,6 +250,28 @@ def test_the_tail_applies_the_same_filters_the_page_does(live_server, fast_tail)
     assert rows == ["429"]
 
 
+def test_a_poll_that_cannot_read_the_log_says_so_and_keeps_watching(
+        live_server, fast_tail, monkeypatch):
+    """A stream that simply stops is indistinguishable, in a browser, from a
+    healthy log with nothing to say."""
+    broken = {"still": True}
+    real = observability.store.logs.tail
+
+    def sometimes(*args, **kwargs):
+        if broken["still"]:
+            broken["still"] = False
+            raise OSError("the log directory went away")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(observability.store.logs, "tail", sometimes)
+
+    seen = _tail(live_server, write=lambda: logs.record("warning", "runner", "back"))
+
+    assert any(f.get("error", {}).get("kind") == "log_unreadable" for f in seen)
+    # ...and it kept polling rather than giving up on the first hiccup.
+    assert any(r["message"] == "back" for f in seen for r in f.get("rows", []))
+
+
 def test_a_cursor_handed_back_resumes_without_missing_a_row(live_server, fast_tail):
     """The reconnect promise: a row written while nothing was listening is
     still delivered when the client comes back with its cursor."""

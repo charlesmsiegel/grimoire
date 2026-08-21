@@ -106,7 +106,7 @@ def test_the_threshold_comes_from_the_config_and_moves_when_it_is_rewritten(home
     config.write_config(log_level="debug")
 
     assert logs.apply_level() == "debug"
-    assert logs.enabled("debug")
+    assert logs.level() == "debug"
 
 
 def test_an_unrecognized_configured_level_falls_back_rather_than_crashing(home):
@@ -205,6 +205,83 @@ def test_install_is_idempotent_so_a_second_app_does_not_double_every_row(home):
     logging.getLogger("grimoire.runner").warning("once")
 
     assert len(_rows(home)) == 1
+
+
+def test_installing_the_bridge_does_not_create_the_store(monkeypatch, tmp_path):
+    """`install` runs from `create_app`, and grimoire's rule is that nothing
+    exists on disk until the first API call that needs it -- the installers end
+    by PRINTING where the store will land, which is a promise that building the
+    app has not already put it there. Reading the level through
+    `config.read_config` broke that: it calls `ensure_home` and materializes a
+    default `config.md`."""
+    root = tmp_path / "never-created"
+    monkeypatch.setenv("GRIMOIRE_HOME", str(root))
+
+    assert logs.install() == "info"
+
+    assert not root.exists()
+
+
+def test_a_quiet_floor_does_not_take_warnings_off_the_terminal(home):
+    """The floor is a setting about a FILE. Raising the logger's own level with
+    it would silently stop `logging.lastResort` printing grimoire's warnings to
+    stderr, which it has always done and which has nothing to do with what this
+    module keeps."""
+    logs.install()
+    logs.apply_level("error")
+
+    assert logging.getLogger("grimoire").isEnabledFor(logging.WARNING)
+    logging.getLogger("grimoire.runner").warning("still reaches stderr")
+    assert _rows(home) == []            # ...but not the file
+
+
+def test_two_threads_recording_at_once_lose_no_rows_and_tear_no_lines(home):
+    """`atomic.append_line` publishes a row with one `O_APPEND` write, so
+    concurrent writers interleave whole lines rather than halves of one."""
+    import threading
+
+    def write(n):
+        for i in range(50):
+            logs.record("info", f"worker{n}", f"row {n}-{i}")
+
+    threads = [threading.Thread(target=write, args=(n,)) for n in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    rows = _rows(home)                  # parses every line, so a torn one fails here
+    assert len(rows) == 200
+    assert len({r["message"] for r in rows}) == 200
+
+
+def test_the_reentrancy_latch_is_per_thread_not_global(home):
+    """A second thread logging while the first is mid-record is not a
+    recursion, and silencing it would drop rows under any concurrency at all."""
+    import threading
+
+    started, done = threading.Event(), threading.Event()
+    real_home = logs.paths.home
+
+    def slow_home():
+        # Inside thread A's `record`: hold there while thread B records.
+        if threading.current_thread().name == "A":
+            started.set()
+            done.wait(5)
+        return real_home()
+
+    logs.paths.home = slow_home
+    try:
+        a = threading.Thread(target=lambda: logs.record("info", "runner", "from A"), name="A")
+        a.start()
+        assert started.wait(5)
+        logs.record("info", "runner", "from B")   # main thread, A still latched
+        done.set()
+        a.join(5)
+    finally:
+        logs.paths.home = real_home
+
+    assert {r["message"] for r in _rows(home)} == {"from A", "from B"}
 
 
 # ---- the size backstop ----
