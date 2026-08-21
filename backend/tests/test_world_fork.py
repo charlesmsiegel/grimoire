@@ -73,6 +73,49 @@ def test_fork_copies_every_file_and_only_identity_differs(monkeypatch, tmp_path)
     assert len(differing) >= 4, differing        # the seed really did localize some
 
 
+def test_a_file_no_kind_owns_still_travels(monkeypatch, tmp_path):
+    """The whole claim of copying the directory rather than walking the kinds:
+    a part of the world layout that arrives next month is forked without
+    anybody editing this code. Stood in for by a directory nothing knows
+    about, since a real future kind cannot be written today."""
+    _home(monkeypatch, tmp_path)
+    wid = seed_world()
+    invented = worlds.world_root(wid) / "invented-later" / "deep"
+    invented.mkdir(parents=True)
+    (invented / "thing.json").write_text('{"kept": true}', encoding="utf-8")
+    (invented / "portrait.png").write_bytes(PNG)
+
+    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    copied = tree(worlds.world_root(new))
+    assert copied["invented-later/deep/thing.json"] == b'{"kept": true}'
+    assert copied["invented-later/deep/portrait.png"] == PNG
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+def test_a_read_only_record_does_not_sink_the_fork(monkeypatch, tmp_path):
+    """`store.atomic` refuses to replace a record the user made read-only, so a
+    copy that carried the mode bit across would arrive read-only in staging and
+    the URL repoint could not rewrite it -- failing the whole fork, and only
+    for worlds holding a read-only localized record. Content is copied;
+    metadata is not."""
+    _home(monkeypatch, tmp_path)
+    wid = seed_world()
+    root = worlds.world_root(wid)
+    lid = entities.create_entity(root, "lore", "Sealed")
+    entities.update_entity(root, "lore", lid,
+                           body=f"![](/api/worlds/{wid}/greetings/g/images/a)\n")
+    sealed = next(p for p in root.rglob(f"{lid}.md"))
+    sealed.chmod(0o444)
+
+    new = worlds.fork_world(wid, "Saltmarch (fork)")
+    copy = worlds.world_root(new) / sealed.relative_to(root)
+    # Asserted on the mode bits rather than through `os.access`, which answers
+    # True for everything when the suite runs as root.
+    assert copy.stat().st_mode & 0o200, oct(copy.stat().st_mode)
+    assert _repointed(copy.read_text(encoding="utf-8"), wid, new)
+    assert sealed.stat().st_mode & 0o777 == 0o444      # the source keeps its bit
+
+
 def test_fork_carries_binary_assets_verbatim(monkeypatch, tmp_path):
     """Byte equality on the PNGs specifically: a rewrite that widened past
     `.md`/`.json` would corrupt an asset, and a tree-wide comparison that

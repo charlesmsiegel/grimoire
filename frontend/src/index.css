@@ -958,7 +958,11 @@ button.primary { background: var(--accent); color: var(--on-accent); border: 1px
 .row-subtitle { display: block; font-family: var(--fm); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 .row-actions { display: flex; gap: 2px; flex: none; }
 .row-actions button { background: transparent; border: none; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: 13px; line-height: 1; }
-.row-actions button:hover { color: var(--accent); }
+.row-actions button:hover:not(:disabled) { color: var(--accent); }
+/* The world card's Fork is the first disabled button to appear in a
+   row-actions strip; without these it would keep lighting up on hover
+   while ignoring the click. */
+.row-actions button:disabled { color: var(--disabled); cursor: default; }
 .row-rename { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--accent); padding: 3px 6px; font-family: var(--fb); }
 .back-link { display: block; margin-bottom: 8px; color: var(--muted); text-decoration: none; font-size: 13px; }
 .back-link:hover { color: var(--accent); }

@@ -86,12 +86,30 @@ def fork_world(wid: str, name: str) -> str:
         # `store/fork.py` documents for campaigns: copied as links, every file
         # in the fork would still be the source's file and the first edit to
         # the copy would land in the original. A store is plain files the user
-        # owns and syncs, so a symlink in one is not hypothetical.
+        # owns and syncs, so a symlink in one is not hypothetical. Following
+        # costs the bytes and can loop or dangle; both fail the fork loudly,
+        # which is the trade `store/fork.py` also takes -- and unlike an export
+        # (which skips links, because a bundle goes to somebody else) a fork
+        # that skipped them would produce a world missing files it appears to
+        # have.
         #
         # `store.atomic`'s in-flight temps are skipped: they are not part of the
         # world, and the writer that owns one renames or unlinks it out from
         # under the walk -- so copying one is both wrong and racy.
-        shutil.copytree(root, dest, ignore=_skip_write_temps)
+        #
+        # `copyfile`, not the default `copy2`: CONTENT is copied and metadata
+        # is not, and that is a correctness requirement rather than a
+        # preference. `copy2` carries the mode bits, so a record the user had
+        # chmod'ed `0444` -- a protection `store.atomic` deliberately honours
+        # (`_assert_target_writable`) -- arrives read-only in the staging tree,
+        # and `repoint_urls` then cannot rewrite the world id inside it: the
+        # whole fork fails with a PermissionError, and only for worlds holding
+        # a read-only localized record. Nothing is lost by dropping the
+        # metadata, because the store keeps every timestamp it cares about in
+        # its own frontmatter and has no use for a mode bit; the fork's files
+        # are new files, made now, under the process umask.
+        shutil.copytree(root, dest, ignore=_skip_write_temps,
+                        copy_function=shutil.copyfile)
         mp = dest / "world.md"
         meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
         now = now_iso()
@@ -109,8 +127,12 @@ def fork_world(wid: str, name: str) -> str:
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _skip_write_temps(directory: str, names: list[str]) -> set[str]:
-    """`copytree`'s `ignore` callback: the `store.atomic` temps in `names`."""
+def _skip_write_temps(directory: str | Path, names: list[str]) -> set[str]:
+    """`copytree`'s `ignore` callback: the `store.atomic` temps in `names`.
+
+    `directory` is whatever `copytree` was handed -- a `Path` here, but the
+    signature says both because the callback protocol does not promise which.
+    """
     return {n for n in names if atomic.is_write_temp(Path(directory) / n)}
 
 
