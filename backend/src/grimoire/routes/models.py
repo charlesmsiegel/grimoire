@@ -558,6 +558,14 @@ class ChronicleSave(BaseModel):
 class ChatTurn(BaseModel):
     content: str = ""
     response: ResponseSettings | None = None
+    # #83: send this turn as a director note rather than a player post -- the
+    # composer's Direct mode. Ephemerality was previously inferred, from the
+    # scene being `pcless` or from the content being blank, which left the
+    # feature blank-only in an ordinary scene and unlabelled everywhere. The
+    # inference stays (an empty send is still a director beat, and an offscreen
+    # scene still has no other kind of turn); this only lets a client say so
+    # outright. Defaults off, so a send that does not mention it still posts.
+    director: bool = False
 
 
 class Appear(BaseModel):

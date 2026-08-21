@@ -952,6 +952,30 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // so all three are gone rather than reimplemented.
   const [directorNote, setDirectorNote] = useState<string | null>(null);
 
+  // #83: the composer's two modes. Speak writes a player post; Direct writes a
+  // director note — sent to steer one generation, never stored. Both have
+  // always existed; only Direct had no way to say so, which left it inferred
+  // (from an offscreen scene, or from an empty box) and unlabelled.
+  //
+  // Sticky across a scene switch, ON PURPOSE. The composer is one shared box
+  // whose text deliberately survives the move, and a mode that reset under
+  // surviving text would post as the player's own words something written as
+  // direction — the exact confusion the control exists to end.
+  const [directMode, setDirectMode] = useState(false);
+  // An offscreen scene has no other kind of turn, so it forces the mode rather
+  // than merely defaulting it: the toggle is shown locked, not hidden, because
+  // "there is no PC here to speak as" is the fact worth teaching.
+  const directing = activePcless || directMode;
+  // ...and the force is STAMPED, not merely applied for as long as the reader
+  // stays. `activePcless` is the scene's property; `directMode` is the
+  // composer's, and the composer is the thing the words are in. Without this,
+  // a note typed in an offscreen scene and carried into a normal one by the
+  // shared box arrived staged as a player post — the mode having quietly
+  // reverted while the text it labelled did not, which is the sticky rule
+  // above broken in the one case that writes it into the transcript.
+  useEffect(() => {
+    if (activePcless) setDirectMode(true);
+  }, [activePcless]);
 
   // Prompts recovered from a turn that stored nothing, held under the scene
   // they were written for until that scene is on screen.
@@ -2656,15 +2680,23 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // the player just spoke: put them back at the tail even if they had
     // scrolled up into older history to re-read something
     atBottomRef.current = true;
-    // ephemeral turns are never stored: a director note (offscreen scene) or —
-    // in any scene — an empty send meaning "next NPC round"
-    if (activePcless || !content) {
-      if (activePcless) setDirectorNote(content || null);
+    // Ephemeral turns are never stored: a director note — asked for in Direct
+    // mode, or the only kind of turn an offscreen scene has — or, in any scene
+    // and either mode, an empty send meaning "next NPC round".
+    //
+    // What the player typed is NOT handed back if this turn dies, which is the
+    // one thing Direct mode gives up against Speak. The recovery machinery
+    // decides by asking the server whether this attempt's post is still in the
+    // transcript, and an ephemeral turn stores no post whether it succeeded or
+    // failed — so wiring it up here would hand the note back after it worked,
+    // which is worse than losing one that did not.
+    if (directing || !content) {
+      if (directing) setDirectorNote(content || null);
       try {
         const landed = await runStream(id,
-          (onEvent, signal, attempt, onIndex) => pendingResponse
-            ? api.chat(cid, id!, content, onEvent, pendingResponse, signal, attempt, onIndex)
-            : api.chat(cid, id!, content, onEvent, undefined, signal, attempt, onIndex));
+          (onEvent, signal, attempt, onIndex) =>
+            api.chat(cid, id!, content, onEvent, pendingResponse ?? undefined,
+                     signal, attempt, onIndex, directing));
         if (landed) setPendingResponse(null);
       } finally {
         setDirectorNote(null);
@@ -2687,9 +2719,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // `giveBackPrompt`. `id`, captured here, is the scene this prompt was
     // written for, and it stays right however long the recovery takes.
     const landed = await runStream(id,
-      (onEvent, signal, attempt, onIndex) => pendingResponse
-        ? api.chat(cid, id!, content, onEvent, pendingResponse, signal, attempt, onIndex)
-        : api.chat(cid, id!, content, onEvent, undefined, signal, attempt, onIndex),
+      (onEvent, signal, attempt, onIndex) =>
+        // The trailing `false` is `director`: this is the branch that POSTS, so
+        // it is the one send that can never be a note.
+        api.chat(cid, id!, content, onEvent, pendingResponse ?? undefined,
+                 signal, attempt, onIndex, false),
       () => recoverPrompt(id!, content), false,
       // The words the player typed, held until the outcome proves them durable.
       content);
@@ -4130,13 +4164,36 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                adding to a scene that is closed. */
             <div className="scene-complete">✓ Scene complete</div>
           ) : (
-          <div className="composer">
+          <div className={`composer${directing ? " directing" : ""}`}>
           {/* Its own row, not a cell inside the input bar. As a cell it was
               `flex: none` at 334px of un-shrinkable nowrap text -- 63% of the
               bar's 529px minimum -- so a narrow column squeezed the textarea to
               36px and then pushed Send clean out of the column. Here it is free
               to shrink and Send cannot be displaced. */}
           <div className="composer-meta">
+            {/* #83. The two things this composer can send have always been two
+                things; until now only one of them had a name on screen. Shown
+                in every scene, because the director turn is not offscreen-only
+                — an empty send takes the same path in an ordinary scene, and a
+                control that appeared only when `pcless` would hide half of what
+                the feature does. */}
+            <div className="composer-mode" role="group" aria-label="Turn kind">
+              <button type="button" aria-pressed={!directing}
+                      disabled={activePcless}
+                      title={activePcless
+                        ? "No player character is in this scene"
+                        : "Post as your character"}
+                      onClick={() => setDirectMode(false)}>Speak</button>
+              <button type="button" aria-pressed={directing}
+                      title="Steer the scene without posting"
+                      onClick={() => setDirectMode(true)}>Direct</button>
+            </div>
+            {/* What Direct actually costs and buys, said once, beside the
+                control — the note is spent on this generation and the
+                transcript never sees it. */}
+            {directing && (
+              <span className="composer-meta-hint">steers the reply · never posted</span>
+            )}
             <label className="composer-meta-label" htmlFor="response-length">Response</label>
             <select id="response-length" aria-label="Response length"
                     value={responseChipPresetId}
@@ -4302,7 +4359,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
             )}
             <textarea
               rows={3}
-              placeholder={activePcless ? "Direct the scene (optional)…" : "Speak your intent…"}
+              placeholder={directing ? "Direct the scene (optional)…" : "Speak your intent…"}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKeyDown}
@@ -4314,7 +4371,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               <button className="send cancel-turn" onClick={cancelTurn}>Stop ■</button>
             ) : (
               <button className="send" onClick={send} disabled={rolling || renamesInFlight > 0}>
-                {!input.trim() ? "Continue ▶" : "Send ▸"}
+                {/* Three labels, not two: an empty box is the "next NPC round"
+                    fast path in EITHER mode (and the reason Direct does not
+                    take it away), so it keeps its own word. */}
+                {!input.trim() ? "Continue ▶" : directing ? "Direct 🎬" : "Send ▸"}
               </button>
             )}
           </div>

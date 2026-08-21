@@ -684,10 +684,22 @@ def build_messages(cid: str, sid: str, turn: dict | None = None,
 
 def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = None,
                           describe: bool = True) -> tuple[list[dict], dict | None]:
-    """One offscreen director turn: full system + history, then the note as the
-    final user message. The note rides only this call — never persisted. `turn`
-    is the same one-shot response-preset override as `compose_turn`, and the
-    messages and breakdown come out of one pass for the same reason."""
+    """One director turn: full system + history, then the note as the final user
+    message. The note rides only this call — never persisted. `turn` is the same
+    one-shot response-preset override as `compose_turn`, and the messages and
+    breakdown come out of one pass for the same reason.
+
+    Not offscreen-only, and never was: an empty send takes this path in an
+    ordinary scene too, and since #83 so does a note typed in the composer's
+    Direct mode. Nothing here reads `pcless` — the "Offscreen scene" section
+    comes from `_assemble`, off the scene's own flag — so an ordinary scene gets
+    its ordinary prompt with the note appended, and that is the whole
+    difference. What it does NOT do is tell the model the final user turn is
+    direction rather than the player speaking; in a pcless scene the offscreen
+    section says so, and in an ordinary one the note reads as the player's own
+    contribution, minus the persisting. That is the feature as offered ("steers
+    the reply · never posted"), not an oversight — framing it differently is a
+    prompt change, and prompt changes are answered by evals, not here."""
     # The note is this turn's actual input, and it is never persisted -- so it
     # seeds retrieval the same way the opener's prompt does, or naming an old
     # scene in a director note could not recall it (nothing else in the scan

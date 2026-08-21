@@ -431,7 +431,7 @@
     "@typescript-eslint/no-explicit-any": 18,
     "@typescript-eslint/no-floating-promises": 14,
     "@typescript-eslint/no-misused-promises": 22,
-    "@typescript-eslint/no-unnecessary-type-assertion": 7,
+    "@typescript-eslint/no-unnecessary-type-assertion": 8,
     "@typescript-eslint/no-unsafe-assignment": 3,
     "@typescript-eslint/no-unsafe-member-access": 11,
     "jsx-a11y/no-autofocus": 4,
