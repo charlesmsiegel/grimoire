@@ -231,20 +231,38 @@ def ensure_identity(cid: str, sid: str, replace: bool = False) -> str:
 
 
 def find_by_identity(cid: str, identity: str) -> str | None:
-    """The scene's current ``sid``, or ``None`` if it is gone.
+    """The scene's current ``sid``, or ``None`` if it is genuinely gone.
 
     The inverse the notification tap needs: an intent carries the identity
     precisely because the id goes stale on rename, so without this the tap can
     only open a stale route or fall back to the campaign unnecessarily.
+
+    Raises ``UnreadableError`` when the scan finished without a match but could
+    not read every candidate, and the distinction is the whole point. One
+    unreadable file must not blind the scan -- that is why the loop skips and
+    carries on -- but "I looked everywhere and it is not here" and "I could not
+    look everywhere" are different answers, and only the first should send a tap
+    back to the campaign. A sync client holding one header for a moment used to
+    turn a scene that exists into a scene reported gone.
     """
     if not _TOKEN.match(identity or ""):
         return None
     d = paths._scenes_dir(cid)
     if not d.exists():
         return None
+    blind = False
     for p in sorted(d.glob("*.md")):
         if not safe_id(p.stem):   # enumeration agrees with the resolvers
             continue
-        if _read_token(p) == identity:
-            return p.stem
+        try:
+            if _read_token_strict(p) == identity:
+                return p.stem
+        except UnreadableError:
+            # Keep scanning: the match may well be a later file, and one
+            # unopenable transcript must not cost the tap its answer.
+            blind = True
+    if blind:
+        raise UnreadableError(
+            f"{cid}: some scenes could not be read, so the identity cannot be "
+            f"ruled out")
     return None

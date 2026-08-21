@@ -18,6 +18,12 @@ import httpx
 import grimoire.store as store
 
 
+def _subject(cid, sid):
+    """A scene run's subject: the campaign and the scene's IDENTITY, not its
+    `sid` -- see `runs.Subject` for why the id cannot name a detached run."""
+    return ("scene", cid, store.scenes.scene_identity(cid, sid))
+
+
 def _lines(r):
     """The response's line iterator, created once and reused.
 
@@ -83,7 +89,7 @@ def test_a_dropped_subscriber_does_not_cancel_the_run(live_server):
         r.close()                       # a real socket close, mid-generation
 
     held.release()
-    run = _wait_terminal(live_server.app, run_id, ("scene", cid, sid))
+    run = _wait_terminal(live_server.app, run_id, _subject(cid, sid))
     assert run.state == "landed", f"the run was {run.state}, not landed"
     reply = store.scenes.read_scene(cid, sid)["messages"][-1]["content"]
     assert "dock" in reply.lower(), "the reply never reached the transcript"
@@ -133,8 +139,8 @@ def test_two_scenes_generate_at_once_without_cross_contamination(live_server):
     ta.join(timeout=20); tb.join(timeout=20)
 
     assert results["a"] != results["b"], "both scenes shared one run"
-    _wait_terminal(live_server.app, results["a"], ("scene", cid, a))
-    _wait_terminal(live_server.app, results["b"], ("scene", cid, b))
+    _wait_terminal(live_server.app, results["a"], _subject(cid, a))
+    _wait_terminal(live_server.app, results["b"], _subject(cid, b))
 
     reply_a = store.scenes.read_scene(cid, a)["messages"][-1]["content"].lower()
     reply_b = store.scenes.read_scene(cid, b)["messages"][-1]["content"].lower()
@@ -178,6 +184,11 @@ def test_a_reply_never_lands_on_a_scene_that_recycled_the_id(live_server):
     # only the highest-numbered scene frees its id by being deleted. The
     # fixture's own scenes sit below it.
     sid = store.scenes.create_scene(cid, "Winifred")
+    # Captured BEFORE the delete: the subject is the scene's identity, and the
+    # replacement below mints its own. Reading it afterwards would ask about the
+    # replacement's run rather than this one's -- which is the very distinction
+    # under test.
+    subject = _subject(cid, sid)
     held = live_server.hold_provider("Mist over the dock.")
 
     with httpx.stream("POST", f"{live_server.url}/api/campaigns/{cid}/scenes/{sid}/chat",
@@ -191,7 +202,7 @@ def test_a_reply_never_lands_on_a_scene_that_recycled_the_id(live_server):
         r.close()
 
     held.release()
-    run = _wait_terminal(live_server.app, run_id, ("scene", cid, sid))
+    run = _wait_terminal(live_server.app, run_id, subject)
 
     assert run.state == "failed", f"the run was {run.state}, not failed"
     assert run.error and run.error["kind"] == "scene_replaced"
