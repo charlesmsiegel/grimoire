@@ -224,6 +224,17 @@ export function SceneImport({ cid, onBack, onCancel, onImported, onWriting }: {
         </blockquote>
       )}
 
+      {/* The post-processing half of the import (#92) is the one the app
+          already has: an imported scene is an ordinary scene, so End scene runs
+          the same continuity pass over it — chronicle, state, relationships,
+          plot — with the same review of what it proposes. Said here because the
+          reader has just arrived from a file and has no reason to assume the
+          rest of the pipeline is the one they already know. */}
+      <div className="field-hint">
+        Nothing else is derived from it yet: use <strong>End scene</strong> afterwards to run
+        the usual continuity pass over the imported transcript.
+      </div>
+
       <div className="form-actions">
         <button className="subtle" disabled={busy} onClick={() => setDraft(null)}>← Back</button>
         <button className="subtle" disabled={busy} onClick={onCancel}>Cancel</button>
