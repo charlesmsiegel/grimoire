@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { registerScope, type Hotkey, type Scope } from "./registry";
+import { registerScope, scopeSeq, type Hotkey, type Scope } from "./registry";
 
 export type { Hotkey, Scope };
 
@@ -23,7 +23,7 @@ export function useHotkeys(keys: Hotkey[], opts: { modal?: boolean } = {}): Scop
   // Rewritten in render, not in an effect: the help sheet reads the registry
   // while rendering, and an effect would show it the previous pass's table.
   const held = useRef<Scope | null>(null);
-  if (held.current === null) held.current = { keys, modal };
+  if (held.current === null) held.current = { keys, modal, seq: scopeSeq() };
   else { held.current.keys = keys; held.current.modal = modal; }
   const scope = held.current;
   useEffect(() => registerScope(scope), [scope, modal]);
