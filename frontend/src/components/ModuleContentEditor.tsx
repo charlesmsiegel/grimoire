@@ -2,10 +2,10 @@ import { useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type ModuleContentEntry, type ModuleDetail, type ModuleEditResult, type ModuleField } from "../api/client";
+// From `types`, not through `client` — see the note on ENTITY_KINDS there.
+import { ENTITY_KINDS } from "../api/types";
 import { ErrorList, ImpactConfirm, useModuleDryRun, type SaveFn } from "./moduleEditShared";
 import { RenamePrompt } from "./ModuleSchemaEditor";
-
-const CONTENT_KINDS = ["locations", "lore", "items", "groups", "creatures"];
 
 // Keys `readModuleContent` always returns; anything else on the response is
 // custom frontmatter (e.g. `rarity: legendary`) that must round-trip through
@@ -234,11 +234,11 @@ export function ContentSection({ pack, reload }: {
           setSelected(null);
           setViewEntry(null);
           setGateError([]);
-          setForm({ contentId: "", kind: CONTENT_KINDS[0], isNew: true,
+          setForm({ contentId: "", kind: ENTITY_KINDS[0], isNew: true,
                      name: "", keys: "", body: "", meta: {}, sheetType: null, statFields: {} });
           setMode("edit");
         }}>+ New content</button>
-        {CONTENT_KINDS.map((kind) => {
+        {ENTITY_KINDS.map((kind) => {
           const rows = pack.content.filter((c) => c.kind === kind);
           if (!rows.length) return null;
           return (
@@ -338,7 +338,7 @@ export function ContentSection({ pack, reload }: {
                 <label>Kind
                   <select value={form.kind}
                           onChange={(e) => setForm({ ...form, kind: e.target.value, sheetType: null, statFields: {} })}>
-                    {CONTENT_KINDS.map((k) => <option key={k}>{k}</option>)}
+                    {ENTITY_KINDS.map((k) => <option key={k}>{k}</option>)}
                   </select>
                 </label>
               </>

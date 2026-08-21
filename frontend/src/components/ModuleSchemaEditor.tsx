@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { api, type ModuleDetail, type ModuleEditResult, type ModuleField } from "../api/client";
+// From `types`, not through `client` — see the note on ENTITY_KINDS there.
+import { ENTITY_KINDS } from "../api/types";
 import { ErrorList, ImpactConfirm, useModuleDryRun, type SaveFn } from "./moduleEditShared";
 
 const FIELD_TYPES = ["number", "dots", "track", "resource", "text", "list", "ref"];
-const REF_KINDS = ["locations", "lore", "items", "groups", "creatures"];
 const SHEET_KINDS = ["characters", "items", "locations", "creatures", "groups", "lore"];
 
 type Derived = Record<string, string>;
@@ -72,7 +73,7 @@ export function FieldRows({ fields, setFields, existingKeys, dirty, onRename }: 
           {f.type === "ref" && (
             <select aria-label="Ref kind" value={f.ref_kind ?? "lore"}
                     onChange={(e) => upd(i, { ref_kind: e.target.value })}>
-              {REF_KINDS.map((k) => <option key={k}>{k}</option>)}
+              {ENTITY_KINDS.map((k) => <option key={k}>{k}</option>)}
             </select>
           )}
           <button onClick={() => setFields(fields.filter((_, j) => j !== i))}>Remove</button>

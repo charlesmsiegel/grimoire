@@ -22,6 +22,15 @@ import { ENTITY_KINDS } from "../api/types";
  *  `EntityKind[]`, deliberately — the server is allowed to know a kind this
  *  build does not, and typing the answer as the local union would erase the one
  *  case the endpoint exists for.
+ *
+ *  Not cached across mounts: the answer is a handful of bytes, the two dialogs
+ *  that ask are on one page (so `client.ts` already shares the overlapping
+ *  GET), and a module-level promise would outlive the tests that set what it
+ *  resolves to. A build whose own list has fallen behind the server's is a
+ *  separate failure and has its own guard — `test_entities_store.py::
+ *  test_the_frontend_ships_the_same_kind_list` — because a kind this build
+ *  cannot label or give a tab to is one it cannot show a user after import,
+ *  even though the dropdown was right to offer it.
  */
 export function useEntityKinds(): string[] {
   const [kinds, setKinds] = useState<string[]>(() => [...ENTITY_KINDS]);

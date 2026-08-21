@@ -502,7 +502,9 @@ def get_entity_kinds():
 
     `lorebook.commit` and `scenario.apply` validate an incoming category
     against the same tuple, so what this offers is exactly what they accept;
-    `test_every_offered_kind_is_a_category_import_accepts` is that guarantee.
+    `test_every_offered_kind_is_a_category_both_imports_accept` is that
+    guarantee, taken against both commit paths rather than argued from the
+    shared constant.
     """
     return {"kinds": list(store.entities.ENTITY_KINDS)}
 
