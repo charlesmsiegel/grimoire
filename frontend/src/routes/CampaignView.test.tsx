@@ -1200,6 +1200,24 @@ test("Stop reaches the run's own campaign after the player has moved to another"
   expect((api.cancelAttempt as any).mock.calls[0][0]).toBe("run");
 });
 
+test("a Stop that cannot reach the server does not settle the turn", async () => {
+  // Aborting the subscriber does not stop a detached run. So a cancel that
+  // never arrived -- connectivity dropped as the phone was backgrounded -- must
+  // not read as a finished one: settling would put Send back over a run that is
+  // still generating, still spending, and still holding the scene, and the next
+  // send would be refused. The player pressed a button and it did not work;
+  // they have to be told.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(hangingChat());
+  (api.cancelAttempt as any).mockRejectedValue(new Error("offline"));
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+
+  expect(await screen.findByText(/may still be generating/i)).toBeInTheDocument();
+});
+
 test("Stop keeps asking while the server says the run is still unwinding", async () => {
   // The cancel route waits for the run, but that wait is bounded (30s) and can
   // answer while it is still `running`. Reading that as "it is over" put Send

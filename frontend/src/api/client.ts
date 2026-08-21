@@ -503,7 +503,11 @@ export const api = {
   cancelAttempt: (cid: string, sid: string, attempt: string) =>
     request<{ run: RunHandle | null }>(
       "POST",
-      `/api/campaigns/${cid}/scenes/${sid}/attempts/${encodeURIComponent(attempt)}/cancel`),
+      // A QUERY parameter, because the server takes an attempt id verbatim and
+      // one containing `/` cannot survive a path segment -- the router matches
+      // on the decoded path, so it would split and reach no route at all.
+      `/api/campaigns/${cid}/scenes/${sid}/attempt-cancel`
+        + `?attempt=${encodeURIComponent(attempt)}`),
 
   findRun: (cid: string, sid: string, attempt: string) =>
     request<{ run: RunHandle | null }>(
