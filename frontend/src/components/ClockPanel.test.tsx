@@ -297,9 +297,9 @@ test("the checkpoint can be named", async () => {
   await askToAdvance("90");
   await screen.findByText(/large time skip/);
   fireEvent.change(screen.getByLabelText("Checkpoint name"),
-                   { target: { value: "The winter before" } });
+                   { target: { value: "Saltmarch" } });
   fireEvent.click(screen.getByText("Checkpoint, then advance"));
-  await waitFor(() => expect(api.forkCampaign).toHaveBeenCalledWith("c", "The winter before"));
+  await waitFor(() => expect(api.forkCampaign).toHaveBeenCalledWith("c", "Saltmarch"));
 });
 
 test("a checkpoint with no name cannot be taken", async () => {
@@ -357,6 +357,76 @@ test("the skip cannot be edited out from under a checkpoint in flight", async ()
   release(FORK_REPORT);
   await screen.findByText(/^Advanced/);
   expect(api.advanceTime).toHaveBeenCalledWith("c", { days: 90, reason: "a season passes" });
+});
+
+test("a pricing reply for the campaign you left cannot open a question here", async () => {
+  // The confirm path, which is the one that matters: the reply belongs to
+  // campaign A, and the buttons the question renders belong to whatever is on
+  // screen. Installed anyway, answering it forks and skips B on the strength of
+  // a span measured in A.
+  let release: (r: { digest: AdvanceDigest }) => void = () => { /* replaced */ };
+  vi.mocked(api.previewAdvance).mockReturnValue(new Promise((res) => { release = res; }));
+  const { rerender } = render(<ClockPanel cid="a" />);
+  await screen.findByText(/Now: 24 December 2026/);
+  fireEvent.change(screen.getByLabelText("Days"), { target: { value: "90" } });
+  fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "a season passes" } });
+  fireEvent.click(screen.getByText("Advance time"));
+  await waitFor(() => expect(api.previewAdvance).toHaveBeenCalledWith("a", { days: 90 }));
+
+  rerender(<ClockPanel cid="b" />);           // the reader moves on, mid-flight
+  release({ digest: BIG });
+  await waitFor(() => expect(api.getCampaignClock).toHaveBeenCalledWith("b"));
+
+  expect(screen.queryByText(/large time skip/)).not.toBeInTheDocument();
+  expect(api.forkCampaign).not.toHaveBeenCalled();
+  expect(api.advanceTime).not.toHaveBeenCalled();
+});
+
+test("...and cannot leave a stale preview on the new campaign either", async () => {
+  let release: (r: { digest: AdvanceDigest }) => void = () => { /* replaced */ };
+  vi.mocked(api.previewAdvance).mockReturnValue(new Promise((res) => { release = res; }));
+  const { rerender } = render(<ClockPanel cid="a" />);
+  await screen.findByText(/Now: 24 December 2026/);
+  fireEvent.click(screen.getByText("Preview"));
+  rerender(<ClockPanel cid="b" />);
+  release({ digest: BIG });
+  await waitFor(() => expect(api.getCampaignClock).toHaveBeenCalledWith("b"));
+  expect(screen.queryByText(/Would advance/)).not.toBeInTheDocument();
+});
+
+test("a reason cannot be emptied out from under an open question", async () => {
+  // The endpoint requires one and the gate's actions do not re-check it, so a
+  // cleared reason would fork the campaign and then earn a 400 for the skip --
+  // a full copy on the shelf for a move that never happened.
+  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  await askToAdvance("90");
+  await screen.findByText(/large time skip/);
+  expect(screen.getByLabelText("Reason")).toBeDisabled();
+});
+
+test("a checkpoint stops counting once the campaign has moved on", async () => {
+  // The marker means "a copy of this campaign AS IT STANDS exists". A turn
+  // landing between the copy and the retry makes that false, and reusing it
+  // would hand back a restore point missing everything since.
+  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.advanceTime).mockRejectedValueOnce({ detail: "campaign is busy" });
+  const { rerender } = render(<ClockPanel cid="c" refreshKey={0} />);
+  await screen.findByText(/Now: 24 December 2026/);
+  fireEvent.change(screen.getByLabelText("Days"), { target: { value: "90" } });
+  fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "a season passes" } });
+  fireEvent.click(screen.getByText("Advance time"));
+  await screen.findByText(/large time skip/);
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/campaign is busy/);
+  expect(screen.getByText("Retry the skip")).toBeInTheDocument();
+
+  rerender(<ClockPanel cid="c" refreshKey={1} />);      // a turn lands
+  await waitFor(() =>
+    expect(screen.getByText("Checkpoint, then advance")).toBeInTheDocument());
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+  await screen.findByText(/^Advanced/);
+  // A second copy, deliberately: the first no longer holds what it is for.
+  expect(api.forkCampaign).toHaveBeenCalledTimes(2);
 });
 
 test("dismissing after a checkpoint landed does not take a second one", async () => {
