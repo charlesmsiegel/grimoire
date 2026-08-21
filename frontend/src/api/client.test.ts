@@ -1126,3 +1126,120 @@ test("reclassifyEntity omits an absent rev rather than sending a null preconditi
     expect.objectContaining({ method: "POST", body: JSON.stringify({ to: "items" }) }),
   );
 });
+
+// ---- the review family, detached (#396) ------------------------------------
+//
+// `absorbScene` is no longer one request that waits: the POST answers 202 the
+// moment the run is reserved -- which is what makes a locked phone survivable
+// -- and the client polls, then reads the review off the store. These pin the
+// three parts of that a caller depends on: it waits, it answers with the
+// stored review, and a run that failed raises the failure the synchronous
+// route used to raise.
+
+function runResponse(state: string, extra: Record<string, unknown> = {}) {
+  return jsonOk({ run: { id: "r1", attempt_id: null, state, next_index: 0,
+                         cls: "review", ...extra } });
+}
+
+test("absorbScene polls the run and answers with the stored review", async () => {
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
+                                             attempt_id: null, next_index: 0 },
+                                      generation: "gen1" }))
+      .mockResolvedValueOnce(runResponse("running"))
+      .mockResolvedValueOnce(runResponse("landed"))
+      .mockResolvedValueOnce(jsonOk({ review: { one_line: "They met." },
+                                      generation: "gen1", stale: null }));
+    globalThis.fetch = fetchMock;
+    const pending = api.absorbScene("run", "s1");
+    // Two ticks of the poll, so the "still running" answer is really waited on
+    // rather than the loop spinning through it.
+    await vi.advanceTimersByTimeAsync(5000);
+    const got = await pending;
+    expect(got.generation).toBe("gen1");
+    expect(got.review.one_line).toBe("They met.");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/campaigns/run/scenes/s1/absorb");
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/campaigns/run/scenes/s1/runs/r1");
+    expect(fetchMock.mock.calls[3][0])
+      .toBe("/api/campaigns/run/scenes/s1/pending-review");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a failed run raises the failure the synchronous route used to raise", async () => {
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
+                                             attempt_id: null, next_index: 0 },
+                                      generation: "gen1" }))
+      .mockResolvedValueOnce(runResponse("failed", {
+        error: { kind: "timeout", detail: "absorb time budget exhausted", status: 504 } }));
+    globalThis.fetch = fetchMock;
+    const pending = api.absorbScene("run", "s1").then(
+      () => { throw new Error("resolved"); },
+      (e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(5000);
+    const err = await pending;
+    // The status and kind travel with the run, so a caller that already knows
+    // what to do with a 504 timeout needs no second shape to understand.
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(504);
+    expect((err as ApiError).kind).toBe("timeout");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a landed absorb whose record is gone is reported as stale, not as an empty review",
+     async () => {
+  // The window the watermark exists for, from the client's side: the run
+  // landed and the scene moved on between the two calls. Handing the panel a
+  // null would render as a review with nothing in it, which reads as a model
+  // that had nothing to say.
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "landed", cls: "review",
+                                             attempt_id: null, next_index: 0 },
+                                      generation: "gen1" }))
+      .mockResolvedValueOnce(jsonOk({ review: null, generation: "gen1",
+                                      stale: { prepared_posts: 1, current_posts: 2 } }));
+    globalThis.fetch = fetchMock;
+    const err = await api.absorbScene("run", "s1").then(
+      () => { throw new Error("resolved"); }, (e: unknown) => e);
+    expect((err as ApiError).kind).toBe("review_stale");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("discardReview names the generation, and only that", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ removed: true, stopped: 1 }));
+  globalThis.fetch = fetchMock;
+  await api.discardReview("run", "s1", "gen/1");
+  expect(fetchMock.mock.calls[0][0])
+    .toBe("/api/campaigns/run/scenes/s1/pending-review?generation=gen%2F1");
+  expect(fetchMock.mock.calls[0][1]).toEqual(
+    expect.objectContaining({ method: "DELETE" }));
+});
+
+test("liveReview ignores a live run that is not a review", async () => {
+  // The newest run on a scene is as likely to be a chat turn, and adopting one
+  // of those as a review would leave End Scene spinning over a reply.
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk(
+    { run: { id: "r1", state: "running", cls: "turn", attempt_id: "a", next_index: 3 } }));
+  globalThis.fetch = fetchMock;
+  expect(await api.liveReview("run", "s1")).toBeNull();
+});
+
+test("liveReview answers with a review still being prepared", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk(
+    { run: { id: "r1", state: "running", cls: "review", attempt_id: null,
+             next_index: 0, review_generation: "gen1" } }));
+  globalThis.fetch = fetchMock;
+  expect((await api.liveReview("run", "s1"))?.review_generation).toBe("gen1");
+});

@@ -58,6 +58,23 @@ export const RESPONSE_BUNDLE = {
 };
 
 /** Everything a campaign-view suite needs reset and re-defaulted per test. */
+/** What `api.absorbScene` resolves to now (#396).
+ *
+ *  The absorb is a detached run: the client starts it, polls it, and reads the
+ *  review back off the store, so what reaches the panel is the stored review
+ *  plus the GENERATION Cancel is addressed to. Wrapped here rather than at
+ *  sixty call sites, so a suite says what its review IS and this says what the
+ *  transport looks like.
+ */
+export function reviewResult(review: unknown, generation = "gen1") {
+  return { review, generation };
+}
+
+/** Make the next End scene answer with this review. */
+export function absorbs(review: unknown, generation = "gen1") {
+  (api.absorbScene as any).mockResolvedValue(reviewResult(review, generation));
+}
+
 export function installCampaignMocks() {
   localStorage.clear();
   vi.clearAllMocks();
@@ -208,7 +225,13 @@ export function installCampaignMocks() {
     connections: [{ id: "openrouter", name: "OpenRouter", kind: "openrouter",
                     model: "vendor/opus" }] });
   (getModels as any).mockResolvedValue([]);
+  // `{review, generation}`, not the review alone (#396): the absorb is a
+  // detached run now, and the client's `absorbScene` starts it, polls it, and
+  // reads the result back off the store -- so what it hands the panel is the
+  // stored review plus the generation Cancel is addressed to.
   (api.absorbScene as any).mockResolvedValue({
+    generation: "gen1",
+    review: {
     one_line: "They met.", summary: "A met B.", keywords: ["salt"],
     timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
@@ -218,7 +241,16 @@ export function installCampaignMocks() {
     phases: PHASES_NONE_CUT,
     edits: [{ id: "character_state:seraphine", kind: "character_state",
       target: { kind: "characters", id: "seraphine" }, label: "Seraphine — current state",
-      field: "current_state", before: "Wary.", after: "Loyal now.", authored: false }] });
+      field: "current_state", before: "Wary.", after: "Loyal now.", authored: false }] } });
+  // No stored review by default: every mount asks, and a mock resolving
+  // `undefined` would throw inside the adoption pass -- whose own catch then
+  // reads as "ask again later", quietly costing every suite its recovery path.
+  (api.pendingReview as any).mockResolvedValue(
+    { review: null, generation: null, stale: null });
+  (api.liveReview as any).mockResolvedValue(null);
+  (api.discardReview as any).mockResolvedValue({ removed: true, stopped: 0 });
+  (api.awaitRun as any).mockResolvedValue(
+    { id: "r", attempt_id: "a", state: "landed", next_index: 0 });
   (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "They met.",
     summary: "A met B.", keywords: ["salt"], cast: [], location: "", date: "", absorbed: "t",
     applied: [], failures: [] });

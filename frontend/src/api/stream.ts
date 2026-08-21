@@ -37,10 +37,24 @@ export type RunHandle = {
   attempt_id: string;
   state: "running" | "landed" | "failed" | "cancelled";
   next_index: number;
+  /** What KIND of work this is, and it is not decoration: a `turn` produces
+   *  frames to read and a `review` produces a payload to fetch, so a client
+   *  that discovers a live run has to know which before it decides what to do
+   *  with it. Attaching to a review's (empty) frame stream would show an
+   *  endless empty reply over a scene that is being absorbed perfectly well. */
+  cls?: "turn" | "review" | "background" | "draft";
+  /** Which pending review a `review` run is preparing. Cancel is addressed to
+   *  the review rather than to one of the runs building it, so this is what a
+   *  client discovering an absorb after a reload needs in order to stop it. */
+  review_generation?: string | null;
   /** Present on a run the server recorded as failed. The discovery routes carry
    *  it so a client that was away while the turn died can say WHY, rather than
    *  silently unlocking a composer over a scene that never got its reply. */
-  error?: { detail: string; kind: string; post_returned?: boolean } | null;
+  error?: { detail: string; kind: string; post_returned?: boolean;
+            status?: number } | null;
+  /** What a computing run produced. Empty for the streaming kinds, whose value
+   *  is the transcript they already wrote. */
+  result?: Record<string, unknown> | null;
 };
 export type ChatEvent = {
   delta?: string; done?: boolean; proposal?: RollProposalPayload;

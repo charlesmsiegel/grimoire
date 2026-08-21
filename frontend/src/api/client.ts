@@ -169,6 +169,67 @@ function request<T>(method: string, path: string, body?: unknown,
   return p;
 }
 
+/** How often a computing run is polled while it works.
+ *
+ *  An absorb is minutes long, so this is a heartbeat rather than a spin: the
+ *  request is local, the answer is a few hundred bytes, and the only cost of
+ *  asking is one round trip that never leaves the machine. Exported so a test
+ *  can drive it rather than infer it from a sleep.
+ */
+export const RUN_POLL_MS = 1000;
+
+/** Wait for a detached run to stop running, and answer with what it became.
+ *
+ *  A poll, not a held connection, and that is the whole point: the client may
+ *  not be there for the whole of a ten-minute absorb -- a locked phone, a
+ *  suspended tab, a closed laptop -- and nothing about the run depends on it
+ *  being there. Coming back and asking again is a complete recovery.
+ *
+ *  A failed run is raised as the HTTP failure the same work would have been
+ *  when these routes answered synchronously, status and kind included, so a
+ *  caller's existing handling of `missing_key` or a timeout is unchanged --
+ *  only where it reads them from moved.
+ *
+ *  `signal` stops the WAITING. It cannot stop the run: that is what detached
+ *  means, and `api.discardReview` (or `api.cancelRun`) is how a caller says
+ *  stop.
+ */
+async function awaitRun(cid: string, sid: string, started: RunHandle,
+                        signal?: AbortSignal): Promise<RunHandle> {
+  let run = started;
+  while (run.state === "running") {
+    await sleepUnlessAborted(RUN_POLL_MS, signal);
+    run = (await request<{ run: RunHandle }>(
+      "GET", `/api/campaigns/${cid}/scenes/${sid}/runs/${run.id}`,
+      undefined, { fresh: true })).run;
+  }
+  if (run.state === "landed") return run;
+  const error = run.error ?? undefined;
+  throw new ApiError(error?.status ?? 409,
+                     error?.detail ?? `the run ended ${run.state}`,
+                     error?.kind ?? run.state, error);
+}
+
+function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      // The same shape `fetch` throws, so `isAbortError` recognises it and a
+      // caller that already tells an abort from a failure needs no new branch.
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 /** Read an SSE stream from a GET, for attaching to a run already in flight.
  *
  *  `streamPost` exists for starting work; this exists for joining it. Same
@@ -1517,11 +1578,84 @@ export const api = {
   cancelReplay: (cid: string, sid: string, restore: boolean) =>
     request<{ scene: string; restored: number; dropped: number }>(
       "POST", `/api/campaigns/${cid}/scenes/${sid}/replay/cancel`, { restore }),
+  /** The run this id names, right now. What a review is polled through.
+   *
+   *  A review is not a stream: End Scene is a form to read, not text arriving
+   *  word by word, so there is nothing to tail and `attachRun` is the wrong
+   *  shape for it. The server answers the POST with a run and the client asks
+   *  about it until it stops running. */
+  getRun: (cid: string, sid: string, runId: string) =>
+    request<{ run: RunHandle }>(
+      "GET", `/api/campaigns/${cid}/scenes/${sid}/runs/${runId}`,
+      undefined, { fresh: true }),
+
+  /** Wait for a detached run to stop, and answer with what it became.
+   *
+   *  Exported so the review panel can adopt a run it did not start -- one that
+   *  was still generating when the phone locked, which is the case this whole
+   *  feature exists for. */
+  awaitRun: (cid: string, sid: string, run: RunHandle, signal?: AbortSignal) =>
+    awaitRun(cid, sid, run, signal),
+
+  /** The review still being prepared for this scene, if one is.
+   *
+   *  Asked when there is no stored review and the panel wants to know whether
+   *  that means "none" or "not yet". The class check is the whole of it: the
+   *  newest run on a scene is as likely to be a chat turn, and adopting one of
+   *  those as a review would leave End Scene spinning over a reply. */
+  liveReview: async (cid: string, sid: string) => {
+    const found = (await api.findRun(cid, sid)).run;
+    return found && found.state === "running" && found.cls === "review" ? found : null;
+  },
+
+  /** This scene's stored end-of-scene review, if one is waiting to be saved.
+   *
+   *  `review` is null and `stale` is set when the transcript has moved since
+   *  the review was prepared -- the reviewer is told to re-run rather than
+   *  shown a summary of posts that are no longer there. Both null means there
+   *  is simply no review, which is the ordinary case on every mount. */
+  pendingReview: (cid: string, sid: string) =>
+    request<{ review: SceneAbsorb | null; generation: string | null;
+              stale: { prepared_posts: number; current_posts: number } | null }>(
+      "GET", `/api/campaigns/${cid}/scenes/${sid}/pending-review`,
+      undefined, { fresh: true }),
+
+  /** Throw the stored review away, and stop whatever is still making it.
+   *
+   *  Named by GENERATION rather than by run id: an absorb and the retries of
+   *  its phases all belong to one review, and Cancel means "stop preparing
+   *  this", not "stop the most recent thing". Answers only once the runs it
+   *  flagged have really stopped, so the caller may start a fresh absorb
+   *  immediately -- the scene's exclusion key is free by then. */
+  discardReview: (cid: string, sid: string, generation: string) =>
+    request<{ removed: boolean; stopped: number }>(
+      "DELETE", `/api/campaigns/${cid}/scenes/${sid}/pending-review`
+        + `?generation=${encodeURIComponent(generation)}`),
+
   // `force` re-runs an absorb the backend has already recorded in the chronicle;
   // without it that POST is a 409 (kind "already_absorbed") -- see #235.
-  absorbScene: (cid: string, sid: string, force = false) =>
-    request<SceneAbsorb>("POST",
-      `/api/campaigns/${cid}/scenes/${sid}/absorb${force ? "?force=true" : ""}`),
+  //
+  // Detached (#396): the POST answers 202 the moment the run is reserved, so
+  // there is no socket for a locked phone to take down, and the review is read
+  // back off the store once the run lands. The wait is the client's now, and
+  // it is a poll rather than a held connection precisely because the client
+  // may not be there for the whole of it.
+  absorbScene: async (cid: string, sid: string, force = false) => {
+    const started = await request<{ run: RunHandle; generation: string }>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/absorb${force ? "?force=true" : ""}`);
+    await awaitRun(cid, sid, started.run);
+    const pending = await api.pendingReview(cid, sid);
+    if (!pending.review) {
+      // The run landed and the record is not there. The scene moved on between
+      // the two -- a turn appended, a post was cut -- which is exactly what the
+      // watermark exists to catch; reporting it as the refusal it is beats
+      // handing the panel a null it would render as an empty review.
+      throw new ApiError(409, "the scene changed while the review was being "
+        + "prepared — end the scene again", "review_stale",
+        pending.stale ?? undefined);
+    }
+    return { review: pending.review, generation: pending.generation ?? "" };
+  },
   saveChronicle: (cid: string, sid: string,
                   body: { one_line: string; summary: string; keywords: string[];
                           timeline_events: TimelineEvent[]; edits: StagedEdit[];
@@ -1531,20 +1665,31 @@ export const api = {
       "PUT", `/api/campaigns/${cid}/scenes/${sid}/chronicle`, body),
   getChronicle: (cid: string) =>
     request<ChronicleEntry[]>("GET", `/api/campaigns/${cid}/chronicle`),
-  // Both scoped retries take a `signal`. Releasing the review they belong to
-  // has to reach the *server*: these run one LLM call per present NPC on a
-  // budget of their own, and `absorb_budget = 0` means that budget is
-  // unbounded — so a retry the reviewer walked away from would otherwise keep
-  // spending time and credits on a review that no longer exists. Aborting
-  // closes the connection, which is what the endpoint watches for.
-  retryAudit: (cid: string, sid: string, signal?: AbortSignal) =>
-    request<{ mechanics: Mechanics; edits: StagedEdit[] }>(
-      "POST", `/api/campaigns/${cid}/scenes/${sid}/audit`, undefined, { signal }),
+  // Both scoped retries are detached runs of their own (#396), folded into the
+  // stored review by the server as well as into the panel by the caller. The
+  // `signal` no longer reaches the work -- it stops this client WAITING, which
+  // is all an abort could ever do once the run outlives the request. What stops
+  // the work is `discardReview`, which flags every run preparing that review.
+  //
+  // Each still answers with what THIS retry produced rather than with the
+  // merged review, because that is the question the panel is asking: the
+  // reviewer's own typing and approvals live only in the browser, so the merge
+  // on screen has to be the local one and the stored merge is what a client
+  // coming back later reads.
+  retryAudit: async (cid: string, sid: string, signal?: AbortSignal) => {
+    const started = await request<{ run: RunHandle; generation: string }>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/audit`, undefined, { signal });
+    const run = await awaitRun(cid, sid, started.run, signal);
+    return (run.result ?? {}) as unknown as { mechanics: Mechanics; edits: StagedEdit[] };
+  },
   // The dossier phase's sibling to retryAudit (#286): re-runs that phase alone,
   // on a fresh budget, without disturbing the rest of the open review.
-  retryDossiers: (cid: string, sid: string, signal?: AbortSignal) =>
-    request<{ dossiers: Dossiers; edits: StagedEdit[] }>(
-      "POST", `/api/campaigns/${cid}/scenes/${sid}/dossiers`, undefined, { signal }),
+  retryDossiers: async (cid: string, sid: string, signal?: AbortSignal) => {
+    const started = await request<{ run: RunHandle; generation: string }>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/dossiers`, undefined, { signal });
+    const run = await awaitRun(cid, sid, started.run, signal);
+    return (run.result ?? {}) as unknown as { dossiers: Dossiers; edits: StagedEdit[] };
+  },
   opener: (cid: string, sid: string, prompt: string, onEvent: (e: ChatEvent) => void) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/opener`, { prompt }, onEvent),
   firstPost: (cid: string, sid: string, text: string) =>
