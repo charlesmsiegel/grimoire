@@ -14,6 +14,19 @@ from grimoire import routes
 from grimoire.main import create_app
 from tests.llm_fakes import FailingOpenRouter, FakeOpenRouter, FakeOpenRouterComplete
 
+
+def _unfenced_stream(*args, **kw):
+    """`_chat_stream` with the publish fence and the outcome box switched off.
+
+    Both are keyword-only and required on the real function so a route being
+    migrated to detached runs cannot forget them; this test predates the fence
+    and means the old behaviour. `test_routes._unfenced_stream` carries the
+    full reasoning -- not imported from there because importing that module
+    runs the largest suite in the tree at collection time.
+    """
+    return routes.streaming._chat_stream(*args, identity=None, outcome=None, **kw)
+
+
 USAGE = {"prompt_tokens": 900, "completion_tokens": 40, "cost_usd": 0.0042,
          "cost_basis": "billed", "model": "realm/opus", "connection": "Main",
          "provider": "openrouter"}
@@ -183,7 +196,7 @@ async def test_a_cancelled_turn_is_recorded_as_aborted_not_as_a_failure(client, 
 
     _, cid = _campaign(client)
     sid = _scene(client, cid)
-    resp = routes.streaming._chat_stream(
+    resp = _unfenced_stream(
         cid, sid, [{"role": "user", "content": "hi"}], {"kind": "openrouter", "model": "m"},
         StallingOpenRouter([""]))
     frames = resp.body_iterator
