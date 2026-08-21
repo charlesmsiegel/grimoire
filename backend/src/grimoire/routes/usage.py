@@ -1,11 +1,16 @@
 """Cost and token rollups over the usage ledger (#152), and what a campaign is
 allowed to spend (#153).
 
-Three reads over the same ledger — library-wide, one campaign, one scene — and
-the campaign budget that turns the second into a warning. Every rollup here is
-a pure read, and one that has never had a call to count answers with zeroes
-rather than a 404, because "you have spent nothing yet" is an answer. The one
-write is the budget itself, which is campaign metadata like a rename.
+Four reads over the same ledger — library-wide, one campaign, one campaign
+scene by scene, one scene turn by turn — plus the campaign budget that turns
+the second into a warning, and the per-model rate table (#158) that decides
+what an unpriced call is reported as. Every rollup here is a pure read, and one
+that has never had a call to count answers with zeroes rather than a 404,
+because "you have spent nothing yet" is an answer.
+
+Two writes: the budget, which is campaign metadata like a rename, and the rate
+table, which is library-wide configuration. Both are whole-value PUTs rather
+than patches — see each for why.
 """
 
 from __future__ import annotations
@@ -14,7 +19,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from .. import store
 from .common import _campaign_root_or_404, _require_scene
-from .models import BudgetBody
+from .models import BudgetBody, PricingBody
 
 router = APIRouter()
 
@@ -81,12 +86,86 @@ def get_scene_usage(cid: str, sid: str):
     `store.usage.scene_usage` clamps it at both ends, and the window it settled
     on comes back as `since`/`until` so the view can say what it covers.
 
-    `turns` is capped (`truncated` says when), while `totals` and `by_task` are
-    summed over every row in the window — so a long scene's numbers do not
-    change when its list is cut.
+    `turns` is capped (`truncated` says when), while `totals`, `by_task` and
+    `by_post` are summed over every row in the window — so a long scene's
+    numbers do not change when its list is cut.
+
+    `by_post` is keyed by transcript index, and holds every call made answering
+    that player post — the first reply and each reroll of it. That is what makes
+    a per-post figure worth reading: a post rerolled five times cost five
+    generations, and only the fifth is still on screen.
     """
     scene = _require_scene(cid, sid)
     return store.usage.scene_usage(cid, sid, since=scene["meta"].get("created", ""))
+
+
+@router.get("/campaigns/{cid}/usage/scenes")
+def get_campaign_scene_costs(cid: str):
+    """What each of this campaign's scenes has cost, over the whole ledger.
+
+    The all-time view, and the only read here that is not windowed: "what has
+    this campaign cost me" is a question about a campaign's whole life, and
+    answering it with the last 30 days would be answering a different one. The
+    window it settled on comes back as `since`/`until` all the same — a library
+    whose oldest month file has been deleted by hand cannot be scanned further
+    back than the files that are left, and the view says so rather than
+    implying the total is complete.
+
+    Each bucket carries the scene's own totals plus the title and dates read off
+    the scene file, joined here rather than in the store: the ledger knows scene
+    *ids*, and a rollup that opened campaign files to name them would make an
+    accounting read depend on a transcript store. A bucket whose id no longer
+    resolves to a scene keeps its id and is marked `missing` — the spend
+    happened, and hiding a deleted scene's cost would make the rows stop adding
+    up to the total above them.
+    """
+    _campaign_root_or_404(cid)
+    rollup = store.usage.campaign_scenes(cid)
+    titles = {s["id"]: s for s in store.scenes.list_scenes(cid)}
+    named = []
+    for bucket in rollup["scenes"]:
+        meta = titles.get(bucket["scene"])
+        named.append({**bucket,
+                      "title": (meta or {}).get("title", ""),
+                      "created": (meta or {}).get("created", ""),
+                      "updated": (meta or {}).get("updated", ""),
+                      # `NO_SCENE` is not missing -- it is the bucket for the
+                      # calls that never named a scene (a cast suggestion, an
+                      # intent classification), which is a real category rather
+                      # than a scene that has gone.
+                      "missing": bool(bucket["scene"]) and meta is None})
+    return {**rollup, "scenes": named}
+
+
+@router.get("/pricing")
+def get_pricing():
+    """The user's per-model rate table (#158).
+
+    Answers `{}` when there is none, which is the default state: the table is
+    opt-in, and every rollup treats an empty one as "model nothing". A file that
+    cannot be parsed answers `{}` too — see `store.pricing.read_pricing` for why
+    a broken table costs the estimates rather than the page.
+    """
+    return {"rates": store.pricing.read_pricing(),
+            "fields": list(store.pricing.FIELDS),
+            "default_key": store.pricing.DEFAULT_KEY,
+            "max_entries": store.pricing.MAX_ENTRIES}
+
+
+@router.put("/pricing")
+def put_pricing(body: PricingBody):
+    """Replace the whole table, and answer with what was stored.
+
+    A PUT is the whole table, not a patch — the same rule as the budget below,
+    and for the same reason: an entry is removed by sending a table without it,
+    so there is no partial shape whose meaning a reader would have to guess.
+    Entries that name no usable rate are dropped on the way in, and what comes
+    back is what a rollup will actually read.
+    """
+    try:
+        return {"rates": store.pricing.write_pricing(body.rates)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/campaigns/{cid}/budget")

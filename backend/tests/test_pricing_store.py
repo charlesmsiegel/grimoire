@@ -1,0 +1,197 @@
+"""Per-model rate overrides (#158): the table, and what it prices.
+
+The property under test throughout is the one thing this feature must not do —
+turn "nobody priced this call" into "$0.00". Every path that cannot produce a
+real figure has to answer None, and the tests below are mostly that same
+question asked of each way a table or a row can be incomplete.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from grimoire.store import pricing
+
+
+@pytest.fixture
+def home(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    return tmp_path
+
+
+def _write(home, table):
+    (home / "pricing.json").write_text(json.dumps(table), encoding="utf-8")
+
+
+# ---- the table ----
+def test_no_file_is_an_empty_table_not_a_failure(home):
+    assert pricing.read_pricing() == {}
+
+
+def test_a_table_round_trips_through_write_and_read(home):
+    stored = pricing.write_pricing(
+        {"realm/opus": {"prompt_usd_per_1k": 0.003, "completion_usd_per_1k": 0.015}})
+
+    assert stored == {"realm/opus": {"prompt_usd_per_1k": 0.003,
+                                     "completion_usd_per_1k": 0.015}}
+    assert pricing.read_pricing() == stored
+
+
+def test_a_rate_typed_as_a_string_is_still_a_rate(home):
+    """`pricing.json` is hand-editable, and `"0.002"` is what a hand types."""
+    _write(home, {"realm/opus": {"prompt_usd_per_1k": "0.002"}})
+
+    assert pricing.read_pricing()["realm/opus"]["prompt_usd_per_1k"] == 0.002
+
+
+@pytest.mark.parametrize("bad", [-1, "twelve", float("inf"), float("nan"), None, True])
+def test_an_unusable_rate_is_dropped_rather_than_read_as_zero(home, bad):
+    _write(home, {"realm/opus": {"prompt_usd_per_1k": bad,
+                                 "completion_usd_per_1k": 0.01}})
+
+    entry = pricing.read_pricing()["realm/opus"]
+    assert "prompt_usd_per_1k" not in entry
+    assert entry["completion_usd_per_1k"] == 0.01
+
+
+def test_an_entry_with_no_usable_rate_is_dropped_entirely(home):
+    """Kept as `{}` it would shadow the default for exactly the model somebody
+    was trying to price — pricing silently OFF where it was just turned on."""
+    _write(home, {"realm/opus": {"prompt_usd_per_1k": "free"},
+                  "": {"prompt_usd_per_1k": 0.001}})
+
+    assert pricing.read_pricing() == {"": {"prompt_usd_per_1k": 0.001}}
+
+
+def test_a_broken_file_costs_the_estimates_not_the_report(home):
+    (home / "pricing.json").write_text("{not json,", encoding="utf-8")
+
+    assert pricing.read_pricing() == {}
+
+
+def test_a_table_that_is_not_an_object_reads_as_no_table(home):
+    _write(home, ["realm/opus", 0.003])
+
+    assert pricing.read_pricing() == {}
+
+
+def test_writing_a_non_mapping_is_refused(home):
+    with pytest.raises(ValueError):
+        pricing.write_pricing([{"prompt_usd_per_1k": 1}])
+
+
+def test_writing_more_entries_than_the_cap_is_refused_not_truncated(home):
+    """Truncating would silently discard rates somebody typed and would never
+    see again."""
+    too_many = {f"m{n}": {"prompt_usd_per_1k": 0.001}
+                for n in range(pricing.MAX_ENTRIES + 1)}
+
+    with pytest.raises(ValueError):
+        pricing.write_pricing(too_many)
+    assert not (home / "pricing.json").exists()
+
+
+# ---- which entry prices a model ----
+def test_an_exact_model_id_wins_over_a_wildcard_and_the_default():
+    table = {"realm/opus": {"prompt_usd_per_1k": 1.0},
+             "realm/*": {"prompt_usd_per_1k": 2.0},
+             "": {"prompt_usd_per_1k": 3.0}}
+
+    assert pricing.rate_for(table, "realm/opus")["prompt_usd_per_1k"] == 1.0
+
+
+def test_the_longest_matching_wildcard_wins():
+    """A table naturally holds both a family and a narrower branch of it, and
+    the narrower one is the one that was typed second on purpose."""
+    table = {"realm/*": {"prompt_usd_per_1k": 2.0},
+             "realm/opus-*": {"prompt_usd_per_1k": 4.0},
+             "": {"prompt_usd_per_1k": 3.0}}
+
+    assert pricing.rate_for(table, "realm/opus-4")["prompt_usd_per_1k"] == 4.0
+    assert pricing.rate_for(table, "realm/haiku")["prompt_usd_per_1k"] == 2.0
+
+
+def test_a_model_nothing_names_falls_through_to_the_default():
+    table = {"realm/*": {"prompt_usd_per_1k": 2.0}, "": {"prompt_usd_per_1k": 3.0}}
+
+    assert pricing.rate_for(table, "other/thing")["prompt_usd_per_1k"] == 3.0
+
+
+def test_a_model_nothing_names_with_no_default_is_priced_by_nothing():
+    assert pricing.rate_for({"realm/*": {"prompt_usd_per_1k": 2.0}}, "other/x") is None
+
+
+def test_a_row_with_no_model_at_all_can_only_match_the_default():
+    """`store.usage` labels a model-less row "unknown"; nobody knows what
+    answered, so only a rate claiming to cover everything may price it."""
+    table = {"realm/*": {"prompt_usd_per_1k": 2.0}, "": {"prompt_usd_per_1k": 3.0}}
+
+    assert pricing.rate_for(table, "")["prompt_usd_per_1k"] == 3.0
+    assert pricing.rate_for(table, None)["prompt_usd_per_1k"] == 3.0
+
+
+# ---- what a call would have cost ----
+def test_prompt_and_completion_are_priced_at_their_own_rates():
+    entry = {"prompt_usd_per_1k": 0.003, "completion_usd_per_1k": 0.015}
+
+    usd = pricing.estimate(entry, prompt_tokens=1000, completion_tokens=2000)
+
+    assert usd == pytest.approx(0.003 + 0.030)
+
+
+def test_a_cache_rate_moves_those_tokens_out_of_the_prompt_subtotal():
+    """The cache counts are slices OF the prompt (#148). Priced beside it
+    rather than out of it, a cached prefix would be billed twice."""
+    entry = {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 0.0,
+             "cache_read_usd_per_1k": 0.1}
+
+    usd = pricing.estimate(entry, prompt_tokens=1000, completion_tokens=0,
+                           cache_read_tokens=800)
+
+    assert usd == pytest.approx((200 * 1.0 + 800 * 0.1) / 1000)
+
+
+def test_with_no_cache_rate_cached_tokens_stay_at_the_prompt_rate():
+    """A table naming no cache rate is saying the provider does not discount
+    them — not that they are free."""
+    entry = {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 0.0}
+
+    usd = pricing.estimate(entry, prompt_tokens=1000, completion_tokens=0,
+                           cache_read_tokens=800)
+
+    assert usd == pytest.approx(1.0)
+
+
+def test_cache_counts_larger_than_the_prompt_cannot_drive_the_estimate_down():
+    """A hand-edited row (or a double-reporting provider) must not make the
+    prompt subtotal negative and subtract from the bill."""
+    entry = {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 0.0,
+             "cache_read_usd_per_1k": 0.1, "cache_write_usd_per_1k": 0.2}
+
+    usd = pricing.estimate(entry, prompt_tokens=100, completion_tokens=0,
+                           cache_read_tokens=9999, cache_write_tokens=9999)
+
+    assert usd == pytest.approx(100 * 0.1 / 1000)
+
+
+def test_a_call_nobody_counted_is_not_estimated_at_zero():
+    """The case this whole feature must not get wrong: an endpoint that sends
+    no usage block at all is exactly the one a rate cannot rescue."""
+    entry = {"prompt_usd_per_1k": 0.003, "completion_usd_per_1k": 0.015}
+
+    assert pricing.estimate(entry, prompt_tokens=None, completion_tokens=None) is None
+
+
+def test_a_call_that_genuinely_completed_nothing_is_still_priced():
+    """Zero is a count. Only an ABSENT count means nobody measured."""
+    entry = {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}
+
+    assert pricing.estimate(entry, prompt_tokens=500, completion_tokens=0) \
+        == pytest.approx(0.5)
+
+
+def test_no_entry_prices_nothing():
+    assert pricing.estimate(None, prompt_tokens=100, completion_tokens=100) is None
+    assert pricing.estimate({}, prompt_tokens=100, completion_tokens=100) is None
