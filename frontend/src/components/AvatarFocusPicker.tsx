@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useHotkeys } from "../shortcuts/useHotkeys";
 
 /** Modal for choosing which square of the avatar shows in square crops.
  *  Focus is 0-100 along the image's long axis; object-fit: cover has no
@@ -9,6 +10,14 @@ export function AvatarFocusPicker({ src, initial, onSave, onClose }:
   const [portrait, setPortrait] = useState(true);
   const [squareFrac, setSquareFrac] = useState(1); // short side / long side
   const boxRef = useRef<HTMLDivElement>(null);
+
+  // Escape is Cancel: the crop is not saved until Save, so leaving by the key
+  // discards exactly what leaving by the button does.
+  useHotkeys(
+    [{ keys: "escape", label: "Cancel the crop", group: "THIS PANEL",
+       whileTyping: true, run: onClose }],
+    { modal: true },
+  );
 
   function onLoad(e: React.SyntheticEvent<HTMLImageElement>) {
     const img = e.currentTarget;

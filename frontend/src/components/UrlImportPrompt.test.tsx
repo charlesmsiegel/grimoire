@@ -29,3 +29,15 @@ test("Cancel closes without submitting", () => {
   expect(onClose).toHaveBeenCalled();
   expect(onSubmit).not.toHaveBeenCalled();
 });
+
+// Every dialog in the app answers Escape now (#193); this one had no key
+// handling at all, so a reader who opened it by mistake had to find Cancel.
+test("Escape cancels, even with a URL half typed", () => {
+  const onClose = vi.fn();
+  render(<UrlImportPrompt onSubmit={vi.fn()} onClose={onClose} />);
+  const box = screen.getByLabelText("Card URLs");
+  fireEvent.change(box, { target: { value: "creator/one" } });
+  box.focus();
+  fireEvent.keyDown(box, { key: "Escape" });
+  expect(onClose).toHaveBeenCalledTimes(1);
+});

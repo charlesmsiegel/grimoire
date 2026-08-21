@@ -1,8 +1,15 @@
 import { useState } from "react";
+import { useHotkeys } from "../shortcuts/useHotkeys";
 
 export function UrlImportPrompt({ onSubmit, onClose }:
   { onSubmit: (urls: string[]) => void; onClose: () => void }) {
   const [text, setText] = useState("");
+
+  useHotkeys(
+    [{ keys: "escape", label: "Cancel", group: "THIS PANEL",
+       whileTyping: true, run: onClose }],
+    { modal: true },
+  );
 
   function submit() {
     const urls = text.split("\n").map((l) => l.trim()).filter(Boolean);

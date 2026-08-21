@@ -1,6 +1,7 @@
 import { useState, type ChangeEvent } from "react";
 import { ApiError, api, type EntityScope, type ModuleDetail, type ModuleField, type Sheet } from "../api/client";
 import SheetLayout, { assembledDefs, themeStyle } from "./SheetLayout";
+import { useHotkeys } from "../shortcuts/useHotkeys";
 
 /** Module sheet-type kind for a file kind (pcs share characters types) — mirrors backend sheets.sheet_kind. */
 export const typeKind = (k: string) => (k === "pcs" ? "characters" : k);
@@ -63,6 +64,17 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
     setError(null);
     setMode("edit");
   }
+
+  // Escape mirrors whichever control the form is showing -- Cancel while
+  // editing, Close otherwise. Not always Close: a sheet in edit mode holds a
+  // draft, and a key that discarded it without saying so would be the one
+  // dismissal in the app that loses typing.
+  useHotkeys(
+    [{ keys: "escape", label: mode === "edit" ? "Cancel the edit" : "Close the sheet",
+       group: "THIS PANEL", whileTyping: true,
+       run: () => (mode === "edit" ? cancel() : onClose()) }],
+    { modal: true },
+  );
 
   function cancel() {
     setDraft(fields);
