@@ -30,7 +30,9 @@ type DraftBase = {
 /** Greeting drafts carry no premise and no cast BY CONSTRUCTION, because a
  *  greeting has neither to offer: its body is the post it would supply, and
  *  start_from_greeting seats its cast under locked-version rules a form must
- *  not re-implement.
+ *  not re-implement. The location is not in that set: since #218 a greeting
+ *  records the setting it opens at, so there is a real answer to pre-fill with
+ *  rather than a rule against guessing one.
  *
  *  That is a statement about the DRAFT, not about the scene. Since #90 the
  *  reader can decline the greeting in the confirm form and write a premise or
@@ -51,7 +53,7 @@ export const BLANK_TITLE = "New scene";
 
 export function greetingDraft(g: Availability, nextDate: string, pcless: boolean): SceneDraft {
   return { source: "greeting", gid: g.id, title: g.name, defaultTitle: g.name,
-           date: nextDate, location: "", pcless };
+           date: nextDate, location: g.location ?? "", pcless };
 }
 
 export function suggestionDraft(s: SceneSuggestion, nextDate: string,
