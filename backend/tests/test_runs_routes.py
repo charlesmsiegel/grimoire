@@ -7,6 +7,7 @@ import json
 import pytest
 
 import grimoire.store as store
+from grimoire.routes import runs as runs_mod
 
 
 @pytest.fixture
@@ -298,3 +299,59 @@ def test_discovery_orders_by_reservation_not_the_wall_clock(client, campaign_sce
 
     r = client.get(f"/api/campaigns/{cid}/scenes/{sid}/run")
     assert r.json()["run"]["id"] == live.id
+
+
+def test_an_unsafe_campaign_id_is_404_not_500(client):
+    """Every id-carrying route in this app is swept for this. `scene_identity`
+    reaches `campaign_root`, which raises `CampaignNotFound` for an id the
+    store cannot address -- and an unhandled store error is a 500."""
+    for path in ("/api/campaigns/C:evil/scenes/s1/run",
+                 "/api/campaigns/C:evil/scenes/s1/runs/r1",
+                 "/api/campaigns/C:evil/scenes/s1/runs/r1/stream",
+                 "/api/campaigns/C:evil/scene-by-identity?identity=" + "0" * 32):
+        r = client.get(path)
+        assert r.status_code == 404, f"{path} answered {r.status_code}"
+    r = client.post("/api/campaigns/C:evil/scenes/s1/runs/r1/cancel")
+    assert r.status_code == 404
+
+
+def test_a_negative_replay_cursor_is_rejected(client, campaign_scene):
+    """Silently reading `from=-1` as 0 replays the whole buffer, duplicating a
+    reply the client has already rendered. A malformed resume is a bug in the
+    caller and should say so."""
+    cid, sid = campaign_scene
+    run = _reserve(client, cid, sid)
+    run.append_frame(_sse({"delta": "x"}))
+    run.finish("landed")
+    r = client.get(f"/api/campaigns/{cid}/scenes/{sid}/runs/{run.id}/stream?from=-1")
+    assert r.status_code == 400
+
+
+def test_an_oversized_cursor_is_clamped_to_the_tail(client, campaign_scene):
+    """A cursor past the buffer must not be held literally.
+
+    Frames that arrive next have LOWER indexes than an oversized `from`, so
+    keeping it would exclude every one of them and the client would tail to the
+    end of the run and receive nothing -- worse than the reconnect it was
+    attempting. Asserted as an equivalence rather than by racing a producer
+    thread: an earlier version of this test slept in a thread and passed or
+    failed depending on whether that thread beat the request, which is exactly
+    the flake this repo warns about.
+    """
+    cid, sid = campaign_scene
+    run = _reserve(client, cid, sid)
+    run.append_frame(_sse({"delta": "one"}))
+    run.append_frame(_sse({"delta": "two"}))
+    run.finish("landed")
+
+    # The cursor itself, because through the route the difference is invisible
+    # on a terminal run -- both answer empty -- and observing it on a live one
+    # needs a producer thread to lose a race with the request, which is the
+    # flake this repo warns about.
+    assert runs_mod._start_cursor(99, run) == 2
+    assert runs_mod._start_cursor(1, run) == 1
+    assert runs_mod._start_cursor(0, run) == 0
+
+    base = f"/api/campaigns/{cid}/scenes/{sid}/runs/{run.id}/stream"
+    assert _events(client.get(f"{base}?from=99").text) == []
+    assert len(_events(client.get(f"{base}?from=0").text)) == 2
