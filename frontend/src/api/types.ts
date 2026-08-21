@@ -1671,6 +1671,10 @@ export type LogTailEvent = {
   cursor: string;
   /** Absent on the opening frame, which carries a cursor and no backlog. */
   rows?: LogRow[];
+  /** The log became unreadable — moved, synced away, deleted under the poll.
+   *  The stream keeps going: the file usually comes back, and a tail that
+   *  ended on the first hiccup would have to be restarted by hand. */
+  error?: { detail: string; kind: string };
 };
 
 export type ErrorKindCount = { kind: string; count: number };

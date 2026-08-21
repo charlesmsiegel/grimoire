@@ -293,7 +293,14 @@ export default function StatsView() {
     tailRows.current = [];
     setTailed([]);
     api.streamLogTail({ level, module, q: settled }, (event) => {
+      if (event.error) {
+        // The stream is still open -- the server keeps polling -- so this is
+        // reported without tearing the tail down.
+        setFailed(event.error.detail);
+        return;
+      }
       if (!event.rows?.length) return;
+      setFailed("");
       // Newest first, matching the page above it -- the two lists are read as
       // one, and a live half that grew downward while the page grew upward
       // would be two lists pretending to be one.

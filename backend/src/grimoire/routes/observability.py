@@ -152,9 +152,23 @@ def get_logs_tail(request: Request, cursor: str = Query(""),
         while True:
             if await request.is_disconnected():
                 return
-            # Off the event loop: this stats a file and may read to its end,
-            # and the loop it would block is the one serving a live scene turn.
-            out = await asyncio.to_thread(store.logs.tail, position, **filters)
+            try:
+                # Off the event loop: this stats a file and may read to its
+                # end, and the loop it would block is the one serving a live
+                # scene turn.
+                out = await asyncio.to_thread(store.logs.tail, position, **filters)
+            except OSError as exc:
+                # The log is a directory a user can move, sync or delete under
+                # us. An exception here would end the generator mid-stream and
+                # the browser would see a connection that simply stopped --
+                # indistinguishable from a healthy log with nothing to say. One
+                # frame that names the problem, then keep polling: the file
+                # usually comes back, and a tail that gave up on the first
+                # hiccup would have to be noticed and restarted by hand.
+                yield _sse({"error": {"detail": str(exc), "kind": "log_unreadable"},
+                            "cursor": position})
+                await asyncio.sleep(TAIL_INTERVAL)
+                continue
             position = out["cursor"]
             if out["rows"]:
                 quiet = 0.0

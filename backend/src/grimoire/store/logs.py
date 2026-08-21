@@ -222,21 +222,44 @@ def apply_level(name: str = "") -> str:
     level = level_name(name or _stored_level())
     _floor["rank"] = min(_RANK[level], _RANK["error"])
     level = LEVELS[_floor["rank"]]
-    logging.getLogger(ROOT_LOGGER).setLevel(getattr(logging, level.upper()))
-    for handler in logging.getLogger(ROOT_LOGGER).handlers:
+    logger = logging.getLogger(ROOT_LOGGER)
+    # Two different levels, deliberately.
+    #
+    # The LOGGER's level decides what is emitted at all, and lowering it is the
+    # only way DEBUG and INFO ever reach a handler -- `logging`'s root defaults
+    # to WARNING. But raising it past WARNING would make a *storage* setting
+    # silently take grimoire's warnings off a developer's terminal, which
+    # `logging.lastResort` has always printed there and which has nothing to do
+    # with what this file keeps. So the logger never goes quieter than WARNING.
+    #
+    # The HANDLER's level is the floor for the file, and it is the one that
+    # actually enforces the setting. `record` checks `_floor` for the same
+    # reason, since a direct call never passes through a handler at all.
+    logger.setLevel(min(getattr(logging, level.upper()), logging.WARNING))
+    for handler in logger.handlers:
         if isinstance(handler, Handler):
             handler.setLevel(getattr(logging, level.upper()))
     return level
 
 
 def _stored_level() -> str:
-    """The configured level, or "info" if the config cannot be read.
+    """The configured level, or "info" if there is nothing to read it from.
 
-    Guarded because this runs during `create_app`, and a store whose config is
-    unreadable must still boot -- with logging on at its default, which is the
-    state in which the reason is most likely to get written down.
+    **Must not create the store**, which is why this checks for the file rather
+    than just calling `config.log_level()`: that goes through `read_config`,
+    which calls `ensure_home` and materializes a default `config.md`. `install`
+    runs from `create_app`, and grimoire's rule is that nothing exists on disk
+    until the first API call that needs it -- the installers end by *printing*
+    where the store will land (`python -m grimoire.where`), which is a promise
+    that building the app has not already put it there.
+
+    Guarded as well, because a store whose config is unreadable must still
+    boot: logging comes up at its default, which is the state in which the
+    reason is most likely to get written down.
     """
     try:
+        if not (paths.home() / "config.md").exists():
+            return "info"
         return config.log_level()
     except (OSError, ValueError):
         return "info"
@@ -245,12 +268,6 @@ def _stored_level() -> str:
 def level() -> str:
     """The threshold currently in force."""
     return LEVELS[_floor["rank"]]
-
-
-def enabled(level_: str) -> bool:
-    """Would a row at ``level_`` be recorded? The check `record` makes, exposed
-    for a caller that would have to *build* something expensive to log it."""
-    return _RANK.get(level_name(level_), 0) >= _floor["rank"]
 
 
 def record(level_: str, module: str, message: str, *, kind: str = "",
