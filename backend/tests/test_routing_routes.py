@@ -328,6 +328,29 @@ def test_an_unroutable_scope_is_refused_before_anything_is_written(client):
     assert client.get(f"/api/campaigns/{cid}/routing").json()["routes"] == before
 
 
+def test_the_ledger_records_the_connection_a_routed_call_actually_used(client):
+    """Cost tracking has to follow routing, or the reason for routing -- running
+    the cheap jobs somewhere cheap -- is invisible in the one view that would
+    show it working (#152/#153).
+
+    Nothing in this change touches the ledger; `llm._stamp` files whatever
+    connection it was handed. That is exactly why it is worth a test: the
+    property is inherited rather than implemented, and inherited properties are
+    the ones a later refactor breaks quietly.
+    """
+    _wid, cid, _sid = _seed(client)
+    routed = _connection(client, "thrifty", model="vendor/haiku")
+    client.put("/api/routing", json={"routes": {"suggestions": routed}})
+    _fake(client)
+
+    client.post(f"/api/campaigns/{cid}/scene-suggestions")
+
+    # The campaign rollup groups by model, and the model it names is the routed
+    # connection's -- not the active connection's `vendor/x`.
+    by_model = client.get(f"/api/campaigns/{cid}/usage").json()["by_model"]
+    assert [m["key"] for m in by_model] == ["vendor/haiku"]
+
+
 def test_the_bundle_says_where_each_effective_value_came_from(client):
     _wid, cid, _sid = _seed(client)
     globally = _connection(client, "wide")

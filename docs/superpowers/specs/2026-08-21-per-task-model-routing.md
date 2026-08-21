@@ -157,6 +157,13 @@ natural long-term home and this moves there unchanged when it lands.
 - **No embedding tier.** #145 owns embeddings, and `embeddings_connection_id`
   already routes them; adding an eleventh route for a call these routes do not
   make would be a key that means nothing.
+- **No per-scene scope.** The response cascade has turn/scene/campaign/global;
+  this one has campaign/global, which is what #142 asked for. A scene is not
+  where a cost decision gets made, and a fourth scope is four more keys in every
+  scene's frontmatter for a knob nobody asked for.
+- **No fallback per route.** #144's fallback connection stays global: it is the
+  answer to "this connection is down", which is a property of the connection
+  rather than of the job being sent to it.
 - **No one-shot "regenerate with a different model"** (#77). That is a per-turn
   override of the `scene` route and wants a request body, not a stored setting.
 - **The scene's stamped `model`.** `scenes.lifecycle.create_scene` records the
