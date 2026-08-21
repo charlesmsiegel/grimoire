@@ -571,8 +571,26 @@ be measured. Whether "advance one beat" is obeyed remains a question only
 
 ## Consequences for the existing harnesses
 
-- **`evals/cases.py`** requires prompt sections verbatim (see the
-  `response_budget.j2` case). All three new variants get the same treatment.
+- **`evals/cases.py` — an existing case breaks, not just new ones.**
+  `grade_scene_length` already renders `response_format.j2` verbatim and calls
+  it as `grade_prompt_section(..., player_names=sorted(ctx["players"]))`
+  (`cases.py:203`). §3 removes `player_names` from that template and adds
+  `wrap` and `opener`, so under `StrictUndefined` the existing call raises on
+  the two vars it does not pass. That call has to be updated in the same
+  change, and the comment above it — *"the marker convention the whole length
+  measurement rests on"* — is still true and still worth keeping. The three
+  new variants then get the same verbatim treatment alongside it.
+- **Cassette matchers (`backend/tests/llm_fakes.py`).** A cassette answers by
+  what the request *looks like*, matching `system_contains` over the system
+  messages (`llm_fakes.py:84`, `:110`), and *"a request matching no cassette
+  entry raises rather than defaulting."* This change edits `response_format`'s
+  text, adds two system sections, and — via §6 — makes `post_history` a
+  system message present on every turn with a seated player, in scenes that
+  previously sent none. Any matcher keyed on text this change removes (most
+  likely the old `Never write dialogue or actions for:` clause) stops
+  matching. `test_llm_fakes.py` renders every real prompt template precisely
+  so this surfaces here rather than silently everywhere else; expect to audit
+  the fixtures under `backend/tests/fixtures/llm/`.
 - **`frozen_campaign/snapshot.json`** captures `build_messages`
   (`sweep.py:197`), so it changes and is regenerated deliberately.
 - **`scripts/verify_templates.py`** — builders and templates agree
