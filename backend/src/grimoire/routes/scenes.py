@@ -100,11 +100,23 @@ def post_scene(cid: str, body: NewScene, request: Request):
     # but the new file, so it stays allowed while a turn generates elsewhere:
     # refusing every create during any turn would be a much larger change to
     # how the app feels, for a case that is not dangerous.
-    if store.scenes.create_would_repad(cid):
-        runs.require_campaign_free(request.app, cid)
+    #
+    # ONE HOLD over the boundary read, the guard and the create. The three were
+    # separate steps, and both gaps are real: a turn can reserve after
+    # `require_campaign_free` returns, and two concurrent creates can each
+    # preflight below the boundary so that the second one repads anyway. Either
+    # way `_create_scene` renames the live turn's transcript and its terminal
+    # fence discards the reply. The campaign lock is reentrant, so
+    # `_create_scene`'s own `@_serialized` acquisition costs nothing, and
+    # `reserve_turn` takes the same lock across its identity capture and its
+    # reservation -- which is what makes holding it here exclude a turn rather
+    # than merely narrow the window before one.
     try:
-        return {"id": store.scenes.create_scene(cid, title, body.suggested_date,
-                                                pcless=body.pcless)}
+        with store.locks.campaign_lock(cid):
+            if store.scenes.create_would_repad(cid):
+                runs.require_campaign_free(request.app, cid)
+            return {"id": store.scenes.create_scene(cid, title, body.suggested_date,
+                                                    pcless=body.pcless)}
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
 
@@ -414,11 +426,25 @@ def _take_the_post_back(cid: str, sid: str, posted_at, content: str, run) -> boo
     where the transcript has lost the post and the record still claims it, and
     a recovery landing in that window settles and discards the only surviving
     copy of what the player typed.
+
+    **The record is retired FIRST, and the order is the fail-safe.** These are
+    two files, so the lock makes them one step for a concurrent reader but not
+    for a process that exits between them. Whichever way round, one crash
+    window is unavoidable; the choice is which side of it the player lands on:
+
+    - forget, then remove: the marker says "gone" while the post is still
+      there. Recovery believes it, hands the words back, and the player sees a
+      DUPLICATE they can read and delete.
+    - remove, then forget: the post is gone while the marker still says
+      "retained". Recovery believes that, settles the attempt, and the only
+      copy of what the player typed is discarded with no trace at all.
+
+    The same asymmetry every ambiguity in this feature is resolved by, and the
+    reason a `forget` that raises must not be swallowed either -- letting it
+    out leaves the post in place, which is the recoverable side.
     """
-    if not store.scenes.remove_trailing_user_post(cid, sid, posted_at, content):
-        return False
     store.attempts.forget(cid, run.scene_identity, run.attempt_id)
-    return True
+    return store.scenes.remove_trailing_user_post(cid, sid, posted_at, content)
 
 
 def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,

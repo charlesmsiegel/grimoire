@@ -1527,6 +1527,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     markRenaming(true);
     try {
       const { id: newId } = await api.renameScene(cid, id, title);
+      // The `sid` carries the slug, so this scene has a new one -- and an
+      // unresolved send filed under the old one becomes unreachable, which for
+      // a rolled-back post means the player's words are stranded under an id
+      // nothing will select again.
+      registry.rekey(cid, id, newId);
       adoptSceneId(id, newId);
       try {
         await loadScenes();
@@ -1910,8 +1915,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // By ATTEMPT, not by the run id we may or may not have seen. The id is a
     // shortcut; the attempt is what names this send in the window where no
     // frame ever arrived, which is the window worth recovering from.
-    const handle = await api.findRun(cid, sid, held.attempt)
-      .then((r) => r.run).catch(() => null);
+    //
+    // A TRANSPORT FAILURE IS NOT AN ANSWER. `visibilitychange` fires the
+    // instant the tab comes forward, which is routinely before connectivity is
+    // actually back -- so this request is more likely to fail here than
+    // anywhere else in the app. Folding that into "no run" and carrying on
+    // discards the only handle to a chat that may still be generating, and
+    // then hands back a prompt that is sitting in the transcript, inviting the
+    // player to send it twice. Left pending instead: the next visibility
+    // change, or the next mount, asks again.
+    let handle;
+    try {
+      handle = (await api.findRun(cid, sid, held.attempt)).run;
+    } catch {
+      return;
+    }
     if (handle && handle.state === "running") {
       // STILL GENERATING, and this is the case the whole feature is for. Read
       // the frames produced while we were away and keep reading live -- the
@@ -1922,10 +1940,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       await attachToRun(cid, sid, handle.id);
       return;
     }
-    // Either it finished, or its record is gone. Ask the durable question.
-    const durable = await api.attemptState(cid, sid, held.attempt)
-      .then((r) => r.retained)
-      .catch(() => false);   // unresolvable means keep the text; see below
+    // Either it finished, or its record is gone. Ask the durable question --
+    // and, for the reason above, only act on an ANSWER. A failed request here
+    // used to read as `retained: false`, which restores a prompt that may
+    // still be in the transcript AND settles the attempt, so the second
+    // recovery pass that would have got it right never runs.
+    let durable: boolean;
+    try {
+      durable = (await api.attemptState(cid, sid, held.attempt)).retained;
+    } catch {
+      return;
+    }
     registry.settle(cid, sid);
     // Whatever this component was left holding for that send is resolved now.
     // An unconfirmed Stop deliberately leaves the composer locked and `runRef`

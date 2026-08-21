@@ -11,9 +11,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../api/client", () => ({
   api: { sceneByIdentity: vi.fn() },
+  ApiError: class ApiError extends Error {
+    constructor(public status: number, public detail: string, public kind?: string) {
+      super(detail);
+    }
+  },
 }));
 
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import OpenScene from "./OpenScene";
 
 function open(url: string) {
@@ -56,5 +61,30 @@ describe("opening a scene from a notification", () => {
     open("/open");
     await waitFor(() => expect(screen.getByText("home")).toBeInTheDocument());
     expect(api.sceneByIdentity).not.toHaveBeenCalled();
+  });
+
+  it("retries a busy lookup rather than treating it as a missing scene", async () => {
+    // The identity route reports an unreadable header as a retryable `busy`
+    // and a genuinely absent scene as `scene_gone`. Folding the two together
+    // sent the tap to the campaign because a transient sharing violation
+    // happened to land on that one read -- and the scene it was posted for was
+    // sitting right there.
+    (api.sceneByIdentity as any)
+      .mockRejectedValueOnce(new ApiError(409, "the scene could not be read", "busy"))
+      .mockResolvedValue({ id: "002--winifred" });
+    open("/open?campaign=saltmarch&identity=" + "f".repeat(32));
+
+    expect(await screen.findByText("scene page")).toBeInTheDocument();
+    expect((api.sceneByIdentity as any).mock.calls).toHaveLength(2);
+  });
+
+  it("gives up on a lookup that keeps saying busy", async () => {
+    // Bounded, because this is a blank screen the player is looking at. The
+    // campaign is a useful place to be; a spinner that never resolves is not.
+    (api.sceneByIdentity as any).mockRejectedValue(
+      new ApiError(409, "the scene could not be read", "busy"));
+    open("/open?campaign=saltmarch&identity=" + "f".repeat(32));
+
+    expect(await screen.findByText("campaign page")).toBeInTheDocument();
   });
 });

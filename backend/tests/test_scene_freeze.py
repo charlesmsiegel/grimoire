@@ -272,3 +272,39 @@ def test_the_storage_root_moves_once_nothing_is_running(held_scene, client, tmp_
     r = client.put("/api/config/data-dir", json={"data_dir": str(dest)})
 
     assert r.status_code == 200, r.text
+
+
+def test_the_rollback_retires_the_marker_before_it_removes_the_post(monkeypatch,
+                                                                     client):
+    """Two files, so the campaign lock makes them one step for a concurrent
+    reader and no step at all for a process that exits between them. One crash
+    window is unavoidable; this pins which side of it the player lands on.
+
+    Removing first and forgetting second leaves the post gone and the marker
+    still saying `retained` -- recovery believes it, settles the attempt and
+    discards the only copy of what the player typed. Forgetting first leaves a
+    duplicate they can see and delete.
+    """
+    import grimoire.routes.scenes as scenes_mod
+
+    order: list[str] = []
+    real_forget = store.attempts.forget
+
+    def spy_forget(*a, **kw):
+        order.append("forget")
+        return real_forget(*a, **kw)
+
+    monkeypatch.setattr(scenes_mod.store.attempts, "forget", spy_forget)
+    monkeypatch.setattr(scenes_mod.store.scenes, "remove_trailing_user_post",
+                        lambda *a, **kw: order.append("remove") or True)
+
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    identity = store.scenes.scene_identity(cid, sid)
+    run = client.app.state.runs.start_or_existing(
+        ("scene", cid, identity), "turn", "chat", "a1", identity, {})[0]
+
+    scenes_mod._take_the_post_back(cid, sid, None, "Mara waits.", run)
+
+    assert order == ["forget", "remove"], order

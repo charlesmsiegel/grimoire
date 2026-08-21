@@ -164,8 +164,13 @@ class MainActivity : ComponentActivity() {
      *  just move the 404 one layer up. */
     private fun pageFor(port: Int, opening: Pair<String, String>?): String {
         val base = "http://127.0.0.1:$port/"
-        return if (opening == null) base
-        else base + "open?campaign=${opening.first}&identity=${opening.second}"
+        if (opening == null) return base
+        // Encoded, for `RunNotifier.openIntent`'s reason: an id may legally
+        // hold a character that is reserved in a query string, and pasting it
+        // in raw makes the SPA read a different campaign than the one the
+        // notification was posted for.
+        return base + "open?campaign=" + Uri.encode(opening.first) +
+            "&identity=" + Uri.encode(opening.second)
     }
 
     /** What `RunNotifier` reads to decide whether a completion notification is

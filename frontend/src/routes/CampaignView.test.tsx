@@ -1304,6 +1304,43 @@ test("a dead response on a scene nobody left re-attaches instead of giving up", 
   expect(screen.getByRole("textbox")).toHaveValue("");
 });
 
+test("a recovery pass that could not reach the server keeps the send pending", async () => {
+  // `visibilitychange` fires the instant the tab comes forward, which is
+  // routinely BEFORE connectivity is actually back -- so of everything in this
+  // file, these two requests are the likeliest to fail. Reading a failure as
+  // "no run" and "not retained" discarded the only handle to a chat that may
+  // still be generating, and handed back a prompt that is sitting in the
+  // transcript, inviting the player to send it twice.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(hangingChat());
+  // The Stop could not be confirmed, so the send is deliberately left pending
+  // and the composer stays locked -- which is the state recovery exists to
+  // resolve, and the only one where these two requests are ever made.
+  (api.cancelAttempt as any).mockRejectedValue(new Error("offline"));
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await screen.findByText(/may still be generating/i);
+
+  // Still offline when the tab comes back.
+  (api.findRun as any).mockRejectedValue(new Error("offline"));
+  act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+  await waitFor(() => expect(api.findRun).toHaveBeenCalled());
+  // It did not conclude anything: no durable question was asked, and no prompt
+  // was handed back over a post that may well be in the transcript.
+  expect(api.attemptState).not.toHaveBeenCalled();
+  expect(screen.getByRole("textbox")).toHaveValue("");
+
+  // Connectivity returns, and the pass that can answer does.
+  (api.findRun as any).mockResolvedValue({ run: null });
+  (api.attemptState as any).mockResolvedValue({ retained: false });
+  act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+
+  // The send was still pending, so the words came back.
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("and then?"));
+});
+
 test("Stop reaches the run's own campaign after the player has moved to another",
      async () => {
   // React Router reuses this component across `/campaigns/A` -> `/campaigns/B`,
