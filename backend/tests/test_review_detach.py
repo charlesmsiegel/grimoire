@@ -1,0 +1,419 @@
+"""The end-of-scene review outlives the request that asked for it (#396).
+
+Phase 1 detached the five scene-turn producers, so a locked phone no longer
+loses a turn. This is the harder half: an absorb is the longest single
+generation in the app, its result is a form nobody has written down, and
+putting the phone down while it runs is exactly what people do.
+
+Four properties, and each is a way the old shape lost work:
+
+* the absorb lands with nobody listening, and is still there afterwards;
+* it is still there after a RESTART, because the registry is memory and a
+  review that only lived in it would be gone with the process;
+* a review of a transcript that has since moved is refused rather than
+  committed -- the commit epoch cannot see play continuing, only another save;
+* Cancel and the terminal write cannot lose to each other, in either order.
+"""
+
+from __future__ import annotations
+
+import importlib
+import time
+
+import pytest
+from fastapi.testclient import TestClient
+
+import grimoire.store as store
+from grimoire import routes
+from grimoire.main import create_app
+from tests import review_runs
+from tests.llm_fakes import from_entries
+
+ABSORB_JSON = (
+    '{"one_line": "They met.", "summary": "A meeting.", "keywords": ["tea"],'
+    ' "timeline_events": [], "character_state_edits": [], "lore_edits": [],'
+    ' "plot_movements": [], "relationship_deltas": [], "bond_changes": [],'
+    ' "new_lore": [], "weather_edits": []}')
+
+# The real prompts' opening lines, so a reworded system prompt fails here
+# rather than silently matching the wrong phase (`llm_fakes.from_entries`).
+_EXTRACTION = {"system_contains": "You are absorbing a completed role-play scene"}
+_AUDIT = {"system_contains": "You are auditing a completed role-play scene"}
+_DOSSIER = {"system_contains": "You are updating a game master's dossier"}
+_VOICE = {"system_contains": "You are checking one character's dialogue"}
+
+
+def _fake():
+    return from_entries([{"when": _EXTRACTION, "reply": ABSORB_JSON},
+                         {"when": _DOSSIER, "reply": "Aese is steady."},
+                         {"when": _VOICE, "reply": '{"verdict": "in_voice", "note": ""}'},
+                         {"when": _AUDIT, "reply": '{"warnings": [], "sheet_deltas": []}'}])
+
+
+@pytest.fixture
+def scene(client):
+    """A campaign with a present NPC and one post -- enough that every phase
+    of an absorb has something to do."""
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns",
+                      json={"name": "Saltmarch", "world": wid}).json()["id"]
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    client.post(f"/api/worlds/{wid}/characters",
+                json={"name": "Aese", "version_name": "main"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes",
+                      json={"title": "The Tearoom"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": "aese", "version": "main", "role": "npc"})
+    store.scenes.append_message(cid, sid, "user", "We entered.")
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    client.app.dependency_overrides[routes.get_llm] = _fake
+    return cid, sid
+
+
+def _absorb(client, cid, sid):
+    started = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert started.status_code == 202, started.json()
+    body = started.json()
+    run = review_runs.wait_for_run(client, cid, sid, body["run"]["id"])
+    return body["generation"], run
+
+
+def _pending(client, cid, sid):
+    return client.get(f"/api/campaigns/{cid}/scenes/{sid}/pending-review").json()
+
+
+# ---- the absorb survives having nobody to answer ---------------------------
+
+def test_the_absorb_answers_at_once_and_lands_without_a_listener(client, scene):
+    """The whole shape of the fix in one test: the POST returns before any
+    model call has been made, so there is no socket for a locked phone to take
+    down -- and the review is on disk when the client comes back for it."""
+    cid, sid = scene
+    started = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert started.status_code == 202
+    assert started.json()["run"]["state"] == "running"
+
+    run = review_runs.wait_for_run(client, cid, sid, started.json()["run"]["id"])
+    assert run["state"] == "landed", run
+    review = _pending(client, cid, sid)["review"]
+    assert review["one_line"] == "They met." and review["commit_token"]
+
+
+def test_the_review_survives_the_process_that_made_it(client, scene, tmp_path):
+    """The registry is memory, so a review that lived only in it would be gone
+    with the process -- and on Android the process is reclaimed routinely. A
+    second app over the same store is what a restart looks like from here."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+
+    importlib.reload(store)
+    with TestClient(create_app()) as restarted:
+        body = restarted.get(
+            f"/api/campaigns/{cid}/scenes/{sid}/pending-review").json()
+    assert body["review"]["one_line"] == "They met."
+    # ...and the run itself is gone with the process, which is exactly why the
+    # review could not be left on it.
+    assert body["generation"]
+
+
+def test_a_scene_with_no_review_answers_none_rather_than_404(client, scene):
+    """Every mount asks; an error for the ordinary case would make every quiet
+    scene look broken."""
+    cid, sid = scene
+    assert _pending(client, cid, sid) == {"review": None, "generation": None, "stale": None}
+
+
+# ---- playing on ------------------------------------------------------------
+
+def test_a_review_is_withheld_once_the_scene_has_moved_on(client, scene):
+    """Once the absorb lands, its exclusion slot is released and the composer
+    re-enables -- so the player can append, cut and retcon while the review
+    sits on disk. None of that advances the commit epoch, so nothing else here
+    would notice."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    assert _pending(client, cid, sid)["review"] is not None
+
+    store.scenes.append_message(cid, sid, "user", "And then we left.")
+    body = _pending(client, cid, sid)
+    assert body["review"] is None
+    assert body["stale"] == {"prepared_posts": 1, "current_posts": 2}
+
+
+def test_a_moved_scene_is_refused_at_save_with_nothing_written(client, scene):
+    """The read-time check is the affordance; this is the guarantee. A review
+    that reached the panel before the scene moved is still holding a token that
+    passes every other check -- and saving it marks the scene absorbed with a
+    summary of posts nobody reviewed."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    review = _pending(client, cid, sid)["review"]
+    store.scenes.append_message(cid, sid, "user", "And then we left.")
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": review["one_line"], "summary": review["summary"],
+                         "keywords": [], "timeline_events": [{"date": "day 1",
+                                                              "text": "They met."}],
+                         "edits": [], "commit_token": review["commit_token"]})
+    assert r.status_code == 409 and r.json()["kind"] == "review_stale"
+    assert r.json()["prepared_posts"] == 1 and r.json()["current_posts"] == 2
+    # Refused before the first write, so the chronicle is untouched and the
+    # token is unspent -- which is what makes re-running the absorb the whole
+    # recovery.
+    assert store.chronicle.read_chronicle(cid) == {}
+    scene_meta = store.scenes.read_scene(cid, sid)["meta"]
+    assert str(scene_meta.get("done", "")).lower() != "true"
+
+
+def test_a_scene_that_did_not_move_saves(client, scene):
+    """The counterweight, and the one that matters: a watermark that refused
+    everything would pass the test above and make End Scene unusable."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    review = _pending(client, cid, sid)["review"]
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": review["one_line"], "summary": review["summary"],
+                         "keywords": review["keywords"], "timeline_events": [],
+                         "edits": [], "commit_token": review["commit_token"]})
+    assert r.status_code == 200, r.json()
+    assert store.chronicle.read_chronicle(cid)[sid]["one_line"] == "They met."
+    # ...and the saved review is cleared, so the panel cannot reopen a review
+    # of a scene that is now absorbed.
+    assert _pending(client, cid, sid)["review"] is None
+
+
+def test_a_replayed_save_clears_the_review_too(client, scene):
+    """The commit is idempotent by design (#235), so a save whose response was
+    lost returns the recorded result through the replay branch -- and cleanup
+    that lived only on the first-execution path would leave an obsolete review
+    retrievable forever for a scene that is demonstrably absorbed."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    review = _pending(client, cid, sid)["review"]
+    body = {"one_line": review["one_line"], "summary": review["summary"],
+            "keywords": review["keywords"], "timeline_events": [], "edits": [],
+            "commit_token": review["commit_token"]}
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                      json=body).status_code == 200
+    # Put a review back, as a process that died between recording the commit
+    # and deleting it would have left one.
+    store.pending_reviews.publish(cid, sid, "orphan", review, {"count": 1})
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                      json=body).status_code == 200
+    assert store.pending_reviews.read(cid, sid) is None
+
+
+# ---- Cancel ----------------------------------------------------------------
+
+def test_cancel_flags_the_run_before_it_removes_the_record(client, scene):
+    """The ordering the whole cancel path turns on. Left unordered the two lose
+    to each other: the DELETE lands while an absorb is finishing, and the
+    runner then publishes and recreates the review the reviewer just dismissed.
+    """
+    cid, sid = scene
+    generation, _ = _absorb(client, cid, sid)
+    subject = ("scene", cid, store.scenes.scene_identity(cid, sid))
+    review_runs.cancel(client, cid, sid, generation)
+
+    flagged = client.app.state.runs.reviews_for_generation(subject, generation)
+    assert flagged and all(r.review_cancelled for r in flagged)
+    assert store.pending_reviews.read(cid, sid) is None
+
+
+def test_a_cancel_for_another_generation_leaves_the_review_alone(client, scene):
+    """Idempotent is not the same as indiscriminate: a stale Discard from a
+    panel showing a review that has since been replaced must not take the new
+    one with it."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    r = review_runs.cancel(client, cid, sid, "some-other-generation")
+    assert r.status_code == 200 and r.json()["removed"] is False
+    assert _pending(client, cid, sid)["review"] is not None
+
+
+def test_a_flagged_run_publishes_nothing(client, scene, monkeypatch):
+    """The suppression itself, at the one line that decides it.
+
+    Driven directly rather than through a race: the check and the write are one
+    campaign-lock hold on purpose, so there is no moment between them for a
+    test to aim at -- which is the property, not an obstacle to testing it.
+    """
+    cid, sid = scene
+    written = []
+
+    class Run:
+        review_cancelled = True
+        scene_identity = store.scenes.scene_identity(cid, sid)
+
+    with pytest.raises(routes.scenes._ReviewCancelledError):
+        routes.scenes._under_review_lock(cid, sid, Run(), lambda: written.append(1))
+    assert written == []
+
+    Run.review_cancelled = False
+    routes.scenes._under_review_lock(cid, sid, Run(), lambda: written.append(1))
+    assert written == [1]
+
+
+def test_a_run_whose_scene_was_replaced_publishes_nothing(client, scene):
+    """An existence check is not enough: `serialize._numbering` derives the
+    next scene number from the files on disk, so deleting the highest-numbered
+    scene frees its number and the next create takes the identical id."""
+    cid, sid = scene
+    written = []
+
+    class Run:
+        review_cancelled = False
+        scene_identity = "0" * 32       # never minted for this scene
+
+    with pytest.raises(routes.scenes._SceneMovedError):
+        routes.scenes._under_review_lock(cid, sid, Run(), lambda: written.append(1))
+    assert written == []
+
+
+# ---- the exclusion key -----------------------------------------------------
+
+def test_a_running_review_holds_the_scene_against_a_turn(client, scene, monkeypatch):
+    """`turn` and `review` share one exclusion key, so an absorb and a chat
+    cannot both hold a scene -- which is what stops an append from moving the
+    transcript out from under a ten-minute absorb."""
+    cid, sid = scene
+    monkeypatch.setattr(routes.scenes, "ABANDON_POLL", 0.02)
+    held = _Wedged()
+    client.app.dependency_overrides[routes.get_llm] = lambda: _facade(held)
+
+    started = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert started.status_code == 202
+    _wait_for(held.frames_seen)
+
+    sent = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "Another line."})
+    assert sent.status_code == 409 and sent.json()["kind"] == "run_in_flight"
+    edited = client.put(f"/api/campaigns/{cid}/scenes/{sid}/messages/0",
+                        json={"content": "Rewritten."})
+    assert edited.status_code == 409 and edited.json()["kind"] == "scene_busy"
+
+    review_runs.cancel(client, cid, sid, started.json()["generation"])
+    review_runs.wait_for_run(client, cid, sid, started.json()["run"]["id"])
+
+
+def test_a_refused_absorb_does_not_leave_the_scene_held(client, scene):
+    """The reservation is taken BEFORE the snapshot, so every pre-flight
+    refusal after it has to give the scene back -- a run left `running` with
+    nothing driving it is never reaped, and the scene answers `run_in_flight`
+    for the life of the process."""
+    cid, sid = scene
+    store.scenes.mark_absorbed(cid, sid, "o", "s")
+
+    refused = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert refused.status_code == 409 and refused.json()["kind"] == "already_absorbed"
+
+    again = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb?force=true")
+    assert again.status_code == 202, again.json()
+    review_runs.wait_for_run(client, cid, sid, again.json()["run"]["id"])
+
+
+# ---- retries fold in -------------------------------------------------------
+
+def test_a_dossier_retry_merges_into_the_stored_review(client, scene):
+    """A retry answers a PART of a review. Written whole it would destroy the
+    absorb's prose, its staged edits and its commit token."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    before = _pending(client, cid, sid)["review"]
+
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: from_entries([{"when": _DOSSIER, "reply": "Aese, warier now."}])
+    retried = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers")
+    assert retried.status_code == 202, retried.json()
+    review_runs.wait_for_run(client, cid, sid, retried.json()["run"]["id"])
+
+    after = _pending(client, cid, sid)["review"]
+    assert after["commit_token"] == before["commit_token"]
+    assert after["one_line"] == before["one_line"]
+    assert [e["after"] for e in after["edits"] if e["kind"] == "dossier"] == \
+        ["Aese, warier now."]
+
+
+def test_a_retry_carries_the_generation_of_the_review_it_is_retrying(client, scene):
+    """So Cancel on that review stops it, rather than it belonging to a
+    generation of its own that nothing addresses."""
+    cid, sid = scene
+    generation, _ = _absorb(client, cid, sid)
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: from_entries([{"when": _DOSSIER, "reply": "Aese, warier now."}])
+    retried = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers")
+    assert retried.json()["generation"] == generation
+    review_runs.wait_for_run(client, cid, sid, retried.json()["run"]["id"])
+
+
+def test_a_retry_of_a_scene_that_moved_is_refused_before_a_token_is_spent(client, scene):
+    """Folding a phase into a review the save is going to refuse anyway is the
+    most expensive way to reach the same answer."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    store.scenes.append_message(cid, sid, "user", "And then we left.")
+    sent = []
+
+    class Counting:
+        async def stream(self, m, cfg, usage=None):
+            sent.append(m)
+            yield "{}"
+
+        async def complete(self, m, cfg, usage=None):
+            sent.append(m)
+            return "{}"
+
+    counting = Counting()
+    client.app.dependency_overrides[routes.get_llm] = lambda: counting
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers")
+    assert r.status_code == 409 and r.json()["kind"] == "review_stale"
+    assert sent == []
+
+
+# ---- a rename in between ---------------------------------------------------
+
+def test_renaming_a_scene_carries_its_review_to_the_new_id(client, scene):
+    """Once the review has landed the scene is no longer held, so renaming
+    before saving it is ordinary use."""
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    new_sid = client.put(f"/api/campaigns/{cid}/scenes/{sid}",
+                         json={"title": "The Back Room"}).json()["id"]
+    assert new_sid != sid
+    assert _pending(client, cid, new_sid)["review"]["one_line"] == "They met."
+
+
+# ---- helpers ---------------------------------------------------------------
+
+class _Wedged:
+    """Dribbles inside the idle bound: healthy by every clock the facade keeps,
+    and finished by none of them. Bounded at ~2s rather than endlessly, so a
+    regression that drops the abandonment check fails the suite in seconds
+    instead of hanging it."""
+
+    def __init__(self, gap=0.01, frames=200):
+        self.gap, self.frames = gap, frames
+        self.finished = False
+        self.frames_seen: list[bool] = []
+
+    async def stream(self, messages, *args, **kwargs):
+        for _ in range(self.frames):
+            import anyio
+            await anyio.sleep(self.gap)
+            self.frames_seen.append(True)
+            yield ""
+        self.finished = True
+
+
+def _facade(provider):
+    from grimoire.llm import LLMClient
+    return LLMClient(openrouter=provider, claude=provider,
+                     openai_compatible=provider, timeout=120)
+
+
+def _wait_for(seen, at=1, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while len(seen) < at:
+        assert time.monotonic() < deadline, "the provider was never reached"
+        time.sleep(0.01)
