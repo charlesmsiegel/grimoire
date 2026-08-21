@@ -281,9 +281,17 @@ reinforce rather than compete.
   present is entirely `**Grimoire:**`. Ungated, the prompt would contain a
   rule its own final message orders the model to break.
 
-  `wrap` and `opener` therefore both become vars of this template. Both must
-  be passed: `verify_templates.py` renders with `StrictUndefined`, so a
-  missing var is a hard failure rather than a silent blank.
+  `wrap` and `opener` therefore both become vars of this template, and they
+  arrive by different routes. `wrap` is assembled data like any other section
+  var. `opener` is **not** today: `_render_sections(a, cid, sid, opener=False)`
+  keeps it as a function parameter and renders each template with `**data`, so
+  no template can see it — `opener_only` and `except_opener` are tested against
+  the parameter in Python, never in Jinja. It gets injected into the dict
+  `_render_sections` passes (one line), which also makes it available to
+  `_VARIANTS` should a later section want an opener variant.
+
+  Both must be passed: `verify_templates.py` renders with `StrictUndefined`,
+  so a missing var is a hard failure rather than a silent blank.
 
 ### 4. `/end`
 
@@ -461,10 +469,15 @@ This is **not** the adaptive corrective ruled out under *Out of scope* — that
 one was rejected because detecting "wrote the PC" in prose is hard. This needs
 no detection at all; it is a constant.
 
-Consequence to state: `post_history.j2` is *"omitted entirely when all are
-empty"*, so a permanent line makes it always present in any scene with a
-seated player. It stays omissible in a pcless scene, where the line renders
-nothing.
+`post_history.j2` gains `player_names` as a var — it currently takes only
+`npc_cards`, `voice_correction` and `length_correction` — and `_assemble`
+already has the list to hand.
+
+Consequence to state: the template is *"omitted entirely when all are empty"*,
+so a permanent line makes it always present in any scene with a seated player,
+and a scene whose cards carry no post-history instructions now sends a system
+message where it previously sent none. It stays omissible in a pcless scene,
+where the line renders nothing.
 
 **Non-removable in the layout editor.** `pack.LOCK_IN` stops the *packer* from
 dropping a section; it does not stop a user, because `layout.py` makes
@@ -497,9 +510,11 @@ and PC-authorship discipline matter most.
 
 **The cost, stated rather than assumed:** `natural_prose.j2` is 468 words.
 These two add roughly 410 more, so the standing always-on instruction overhead
-close to doubles — ~550 tokens on every chat, retry, regenerate, director and
-opener turn, undroppable. That is the price of the feature and it is worth
-naming in the spec rather than discovering in a token breakdown.
+close to doubles — ~550 tokens on every chat, retry, regenerate and director
+turn, undroppable. An **opener** pays only for `player_character` (~230), since
+`turn_scope` carries `except_opener`. Add one short line to `post_history.j2`
+(§6) on every turn with a seated player. That is the price of the feature, and
+it is worth naming here rather than discovering it in a token breakdown.
 
 ## Testing
 
@@ -516,8 +531,8 @@ naming in the spec rather than discovering in a token breakdown.
   rewind clears it.
 - **Rendering** — each section renders; `player_character` renders empty
   pcless and renders plural with two seated players; `turn_scope` is absent
-  from an opener; `response_format` omits the closing-narration rule under
-  `wrap`.
+  from an opener; `response_format` omits the closing-narration rule both
+  under `wrap` and in an opener, and carries it otherwise.
 - **Variant selection** — `standard` / `pcless` / `wrap`, with `wrap` winning
   over `pcless` when both hold (a director scene that was asked to close).
 - **The note agrees with the section** — a bare `/end` produces
@@ -599,6 +614,10 @@ be measured. Whether "advance one beat" is obeyed remains a question only
   length cascade would undo the "no knob" decision.
 - **No command framework.** One token, one flag, one branch.
 - **`opener_shape.j2` is unchanged.**
-- **No adaptive PC-authorship corrective** in `post_history.j2`. Detecting
-  "wrote the PC" in prose is materially harder than counting words; the
-  section gets a chance to work first.
+- **No *adaptive* PC-authorship corrective.** §6 puts a **static** line in
+  `post_history.j2`; what stays out of scope is the measured, conditional kind
+  that `voice_correction` and `length_correction` are — one that detects
+  violations in recent turns and escalates. Detecting "wrote the PC" in prose
+  is materially harder than counting words, and the constant line costs
+  nothing to be right. If the boundary still leaks in play, that detector is
+  the next thing to build, not more wording.
