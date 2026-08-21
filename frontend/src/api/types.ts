@@ -178,11 +178,13 @@ export type CampaignMeta = {
   /** The opening paragraph of campaign.md's body — the pitch the campaign was
    *  started from, shown as each card's blurb. "" when the body is empty. */
   blurb?: string;
-  /** Title of the newest scene carrying an absorb mark: how far the chronicle,
-   *  the ledger and the dossiers are caught up to. Deliberately not derivable
-   *  from `scenes` — playing a scene ahead of the absorb is the normal state
-   *  of a campaign in progress. "" when nothing has been absorbed yet. */
-  absorbed_through?: string;
+  /** How many of `scenes` carry an absorb mark: how much of the chronicle, the
+   *  ledger and the dossiers is caught up. Deliberately not derivable from
+   *  `scenes` — playing a scene ahead of the absorb is the normal state of a
+   *  campaign in progress. 0 when nothing has been absorbed yet, never absent:
+   *  the list endpoint computes it beside `scenes` on the same pass, and the
+   *  backend that answers is the one serving this bundle. */
+  absorbed: number;
   /** Whole-campaign high-water mark: the later of campaign.md's `updated` and
    *  its newest scene's. `updated` alone misses play entirely, so anything
    *  ranking by "recently worked on" wants this. Only the list endpoint

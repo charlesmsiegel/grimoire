@@ -48,31 +48,37 @@ const card = (name: string) =>
 test("a campaign card carries the shelf line, the blurb and one primary action", async () => {
   (api.listCampaigns as any).mockResolvedValue([
     { id: "c1", name: "Ashes of the Verdigris Crown", world: "w1", created: "", updated: "",
-      activity: new Date(Date.now() - 2 * 86_400_000).toISOString().replace("T", " ").slice(0, 19),
-      scenes: 4, last_scene: "Verdigris & Ash", absorbed_through: "The Long Tide",
+      // The store's own format: UTC with the Z. Dropping it -- as this fixture
+      // once did -- leaves a form `Date.parse` reads as LOCAL time, so the
+      // elapsed days come out short of two west of Greenwich and the assertion
+      // below fails by timezone rather than by behaviour.
+      activity: new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 19) + "Z",
+      scenes: 4, last_scene: "Verdigris & Ash", absorbed: 2,
       blurb: "Wyle came for a drowned cousin and stayed for the nail." },
   ]);
   renderView();
   await screen.findByText("Ashes of the Verdigris Crown");
   const c = within(card("Ashes of the Verdigris Crown"));
-  expect(c.getByText(/4 scenes/i)).toBeInTheDocument();
+  // The absorbed count is not derivable from the scene count: playing a scene
+  // ahead of the absorb is the normal state of a campaign in progress, so the
+  // two halves of the fraction have to come from the payload separately.
+  expect(c.getByText(/2\/4 scenes/i)).toBeInTheDocument();
   expect(c.getByText(/last played 2 days ago/i)).toBeInTheDocument();
-  // Absorbed-through is not derivable from the scene count: playing a scene
-  // ahead of the absorb is the normal state of a campaign in progress.
-  expect(c.getByText(/absorbed through The Long Tide/i)).toBeInTheDocument();
   expect(c.getByText(/drowned cousin/i)).toBeInTheDocument();
   expect(c.getByRole("link", { name: /continue/i })).toHaveAttribute("href", "/campaigns/c1");
   expect(c.getByText("Verdigris & Ash")).toBeInTheDocument();
 });
 
-test("a campaign nothing has been absorbed from says so rather than nothing", async () => {
+test("a campaign nothing has been absorbed from counts zero rather than nothing", async () => {
   (api.listCampaigns as any).mockResolvedValue([
-    { id: "c1", name: "Tidewrack", world: "w1", scenes: 3, last_scene: "" },
+    { id: "c1", name: "Tidewrack", world: "w1", scenes: 3, absorbed: 0, last_scene: "" },
   ]);
   renderView();
   await screen.findByText("Tidewrack");
   const c = within(card("Tidewrack"));
-  expect(c.getByText(/not yet absorbed/i)).toBeInTheDocument();
+  // Nothing absorbed is a zero numerator, not an empty one: the fraction has
+  // to read as "none of three" rather than trailing off into the total.
+  expect(c.getByText(/0\/3 scenes/i)).toBeInTheDocument();
   expect(c.getByText(/never played/i)).toBeInTheDocument();
   // no last scene to continue into, so the action names what it really does
   expect(c.getByRole("link", { name: /open/i })).toBeInTheDocument();

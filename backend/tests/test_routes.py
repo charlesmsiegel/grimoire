@@ -8962,7 +8962,24 @@ def test_list_campaigns_scene_counts(client):
     client.post(f"/api/campaigns/{cid}/scenes", json={"title": "The Salt Road"})
     listing = [c for c in client.get("/api/campaigns").json() if c["id"] == cid]
     assert listing[0]["scenes"] == 2
+    assert listing[0]["absorbed"] == 0, "nothing absorbed yet counts zero, not absent"
     assert listing[0]["last_scene"] in ("First Light", "The Salt Road")
+
+
+def test_list_campaigns_counts_absorbed_scenes_not_the_newest_one(client):
+    """The shelf line reads absorbed-over-total, so this is a count and not a
+    high-water mark. The distinction is load-bearing: absorb the older of two
+    scenes and leave the newer alone and a "newest absorbed" answer names a
+    scene while the campaign is one behind -- the count says one of two."""
+    _, cid = _campaign(client)
+    older = client.post(f"/api/campaigns/{cid}/scenes",
+                        json={"title": "First Light"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes", json={"title": "The Salt Road"})
+
+    store.scenes.mark_absorbed(cid, older, "They swore.", "A long night.")
+
+    row = next(c for c in client.get("/api/campaigns").json() if c["id"] == cid)
+    assert (row["absorbed"], row["scenes"]) == (1, 2)
 
 
 def test_list_campaigns_activity_tracks_scene_writes_that_updated_misses(client, monkeypatch):

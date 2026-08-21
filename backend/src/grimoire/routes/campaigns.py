@@ -149,16 +149,20 @@ def get_campaigns():
         # very field that may be the bad one, so element zero is only the
         # newest if the sort key can be trusted. The list is already in memory
         # for the count; validating it costs a strptime per scene.
-        # The newest scene carrying an absorb mark, which is how far the
-        # chronicle, the ledger and every dossier are caught up to. It is not
-        # the same question as "how many scenes are there" and a campaign
-        # answers them differently the moment you play one scene ahead of the
-        # absorb -- which is the normal state of a campaign being played.
-        absorbed = next((s["title"] for s in scene_list if s.get("done")), "")
+        # How many scenes carry an absorb mark, which is how much of the
+        # chronicle, the ledger and every dossier is caught up. It is not the
+        # same question as "how many scenes are there" and a campaign answers
+        # them differently the moment you play one scene ahead of the absorb --
+        # which is the normal state of a campaign being played. A count rather
+        # than the newest absorbed title because the shelf line reads it as a
+        # fraction of the scene count, and a gap in the middle (an older scene
+        # left unabsorbed under a newer one that was) shows up in a count and
+        # is invisible in a high-water mark.
+        absorbed = sum(1 for s in scene_list if s.get("done"))
         out.append({**c, "scenes": len(scene_list),
                     "cover": store.covers.cover_version(c["id"]),
                     "last_scene": scene_list[0]["title"] if scene_list else "",
-                    "absorbed_through": absorbed,
+                    "absorbed": absorbed,
                     "activity": store.campaigns.best_stamp(
                         c["updated"], store.campaigns.read_activity(c["id"]),
                         *(s["updated"] for s in scene_list))})

@@ -238,12 +238,13 @@ export default function CampaignsView() {
                     <Link to={`/campaigns/${c.id}`}>{c.name}</Link>
                   </h2>
                 )}
+                {/* Absorbed over total, because the two are a different
+                    question and the gap between them is the campaign's state:
+                    playing ahead of the absorb is normal, and the fraction is
+                    where that shows. */}
                 <div className="campaign-meta">
-                  {c.scenes} {c.scenes === 1 ? "scene" : "scenes"} · {ago(stamp(c))}
-                  {" · "}
-                  {c.absorbed_through
-                    ? `absorbed through ${c.absorbed_through}`
-                    : "not yet absorbed"}
+                  {c.absorbed}/{c.scenes} {c.scenes === 1 ? "scene" : "scenes"}
+                  {" · "}{ago(stamp(c))}
                 </div>
                 {c.blurb && <p className="campaign-blurb">{c.blurb}</p>}
                 <div className="chip-row">
