@@ -151,7 +151,12 @@ def test_the_level_endpoint_reports_what_is_being_recorded(client):
     body = client.get("/api/logs/level").json()
 
     assert body["level"] == "info"
-    assert body["levels"] == list(logs.LEVELS)
+    # The floors a user may CHOOSE stop at `error`; the levels a row may carry
+    # do not. Offering `critical` as a floor would offer to switch the error
+    # store off, which `store.logs.FLOORS` exists to make impossible.
+    assert body["levels"] == list(logs.FLOORS)
+    assert body["row_levels"] == list(logs.LEVELS)
+    assert "critical" not in body["levels"]
 
 
 def test_saving_the_config_moves_the_threshold_without_a_restart(client):

@@ -36,6 +36,8 @@ class name.
 
 from __future__ import annotations
 
+from collections import deque
+
 from . import logs
 
 #: Rows one read hands back. Errors are rare, and a page of the most recent
@@ -89,8 +91,12 @@ def summary(days: int = DEFAULT_DAYS, *, module: str = "", campaign: str = "",
     by_module: dict[str, dict] = {}
     by_kind: dict[str, int] = {}
     daily: dict[str, int] = {}
-    recent: list[dict] = []
     cap = max(1, min(int(rows or DEFAULT_ROWS), MAX_ROWS))
+    # A bounded deque rather than a list trimmed from the front: `scan` yields
+    # oldest first, so the page is the newest `cap` and every row past that
+    # costs a `pop(0)` -- an O(n) shift per row, which on a bad month turns a
+    # dashboard read into a quadratic one.
+    recent: deque[dict] = deque(maxlen=cap)
     total = 0
     for row in logs.scan(level="error", module=module, campaign=campaign,
                          since=since, until=until):
@@ -110,11 +116,6 @@ def summary(days: int = DEFAULT_DAYS, *, module: str = "", campaign: str = "",
         by_kind[kind] = by_kind.get(kind, 0) + 1
         daily[ts[:10]] = daily.get(ts[:10], 0) + 1
         recent.append(row)
-        if len(recent) > cap:
-            # Drop from the FRONT: `scan` yields oldest first, and the page is
-            # the newest `cap`. Trimming as we go keeps a pathological window
-            # from being materialized whole.
-            recent.pop(0)
     return {
         "since": since, "until": until, "days": _span(days),
         "total": total,

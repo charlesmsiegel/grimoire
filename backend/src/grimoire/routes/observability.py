@@ -106,7 +106,13 @@ def get_log_level():
     `log_level` is still the one way to change it, so there is exactly one
     writer.
     """
-    return {"level": store.logs.level(), "levels": list(store.logs.LEVELS)}
+    return {"level": store.logs.level(),
+            # The floors that may be CHOSEN, which is not every level a row can
+            # carry: `store.logs.FLOORS` stops at `error`, because a setting
+            # that could switch the error store off would make the promise
+            # Configuration prints beside it false.
+            "levels": list(store.logs.FLOORS),
+            "row_levels": list(store.logs.LEVELS)}
 
 
 @router.get("/logs/tail")
@@ -155,6 +161,16 @@ def get_logs_tail(request: Request, cursor: str = Query(""),
                     # client never has to special-case a keep-alive that looks
                     # like an empty batch of rows.
                     yield ": keep-alive\n\n"
+            if out["more"]:
+                # One poll reads a bounded number of bytes, so a burst bigger
+                # than that budget leaves rows waiting. Coming straight back
+                # for them -- rather than sleeping a second per batch -- is
+                # what keeps a busy log from falling minutes behind while
+                # still claiming to be live. Yielding to the loop first, so a
+                # log being written faster than it is read cannot starve
+                # everything else on it.
+                await asyncio.sleep(0)
+                continue
             await asyncio.sleep(TAIL_INTERVAL)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream",

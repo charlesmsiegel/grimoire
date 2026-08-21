@@ -70,8 +70,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.getStats).mockResolvedValue(structuredClone(STATS) as never);
   vi.mocked(api.getLogs).mockResolvedValue(structuredClone(PAGE) as never);
+  vi.mocked(api.getErrorSummary).mockResolvedValue(structuredClone(ERRORS) as never);
   vi.mocked(api.getLogLevel).mockResolvedValue(
-    { level: "info", levels: PAGE.levels } as never);
+    { level: "info", levels: ["debug", "info", "warning", "error"] } as never);
   vi.mocked(api.streamLogTail).mockReturnValue(new Promise(() => {}) as never);
 });
 
@@ -143,6 +144,8 @@ it("aggregates errors per module, with each module's own kinds", async () => {
 });
 
 it("says nothing has gone wrong rather than drawing an empty table", async () => {
+  vi.mocked(api.getErrorSummary).mockResolvedValue(
+    { ...ERRORS, total: 0, modules: [], kinds: [], daily: [], rows: [] } as never);
   vi.mocked(api.getStats).mockResolvedValue({
     ...structuredClone(STATS),
     errors: { ...ERRORS, total: 0, modules: [], kinds: [], daily: [], rows: [] },
@@ -153,6 +156,47 @@ it("says nothing has gone wrong rather than drawing an empty table", async () =>
   fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
 
   expect(await screen.findByText(/Nothing has gone wrong in this window/)).toBeInTheDocument();
+});
+
+it("filters the error report to one module, from its own read", async () => {
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
+  await screen.findByText("By module");
+
+  fireEvent.change(screen.getByLabelText("Module to report on"),
+                   { target: { value: "dossier" } });
+
+  await waitFor(() => expect(api.getErrorSummary).toHaveBeenLastCalledWith(
+    30, { module: "dossier" }));
+});
+
+it("keeps every module in the picker after one of them is picked", async () => {
+  vi.mocked(api.getErrorSummary).mockResolvedValue(
+    { ...ERRORS, total: 2, modules: [ERRORS.modules[0]] } as never);
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
+
+  // The options come from the unfiltered stats copy, so narrowing to one
+  // module cannot strip the control of every way back out.
+  const picker = await screen.findByLabelText("Module to report on");
+  expect(within(picker).getByRole("option", { name: "chat" })).toBeInTheDocument();
+});
+
+it("says which module is empty, and offers the way back", async () => {
+  vi.mocked(api.getErrorSummary).mockResolvedValue(
+    { ...ERRORS, total: 0, modules: [], kinds: [], daily: [], rows: [] } as never);
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
+  await screen.findByText(/Nothing has gone wrong/);
+
+  fireEvent.change(screen.getByLabelText("Module to report on"),
+                   { target: { value: "dossier" } });
+
+  expect(await screen.findByText(/Nothing has gone wrong in dossier/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "every module" })).toBeInTheDocument();
 });
 
 // ---- the log (#155) ----

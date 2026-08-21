@@ -20,11 +20,16 @@ import { useTheme } from "../theme/ThemeProvider";
  *  is built from, what the dirty count is counted over, and what Save sends —
  *  three copies of the same list of names is how a field gets added to the
  *  form and quietly never saved. */
-/** The five `store.logs` writes, quietest first. Spelled here rather than
- *  fetched: it is the vocabulary of a `<select>`, and a dropdown that cannot
- *  render until a request lands is a dropdown that flickers on every visit.
- *  `GET /logs/level` is what reports the one actually in force. */
-const LOG_LEVELS = ["debug", "info", "warning", "error", "critical"] as const;
+/** The floors `store/logs.py` accepts, quietest first — `logs.FLOORS`, which
+ *  deliberately stops at `error` and does not include `critical`: the error
+ *  store is a view over this file's ERROR rows, so a floor above them would be
+ *  a setting that silently switches #156 off. The server clamps a hand-edited
+ *  config the same way.
+ *
+ *  Spelled here rather than fetched: it is the vocabulary of a `<select>`, and
+ *  a dropdown that cannot render until a request lands flickers on every
+ *  visit. `GET /logs/level` reports the one actually in force. */
+const LOG_LEVELS = ["debug", "info", "warning", "error"] as const;
 
 const DRAFT_FIELDS = [
   "active_connection_id", "fallback_connection_id", "llm_retries",
