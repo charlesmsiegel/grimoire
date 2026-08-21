@@ -100,6 +100,12 @@ export type Config = {
    *  the campaign first (#80). A threshold, not a limit: "0" nudges every
    *  replay rather than none. */
   replay_fork_threshold: string;
+  /** Days a clock advance may cross before the panel offers to checkpoint the
+   *  campaign first (#107). The same kind of threshold as the one above, and
+   *  the same "0" reading — every skip that crosses a day is asked about. The
+   *  comparison itself is the server's (`AdvanceDigest.fork`); this is only
+   *  where the number is set. */
+  advance_fork_threshold: string;
 };
 /**
  * The subset of Config the Configuration page writes — the mirror of the
@@ -120,7 +126,7 @@ export type ConfigUpdate = Partial<Pick<Config,
   "semantic_recall_depth" | "semantic_recall_threshold" |
   "prompt_layout_enabled" | "speaker_turn_taking" |
   "backup_enabled" | "backup_interval_hours" | "backup_keep" | "backup_dir" |
-  "replay_fork_threshold">>;
+  "replay_fork_threshold" | "advance_fork_threshold">>;
 /** One archive written by `store/backups.py`. */
 export type BackupEntry = {
   name: string;
@@ -596,6 +602,14 @@ export type AdvanceDigest = {
   /** Counted over both lists, aged against the moment the move LANDS on — what
    *  the skip will leave overdue, which is the question before confirming it. */
   aging: { overdue: number; stale: number; stale_after: number };
+  /** The checkpoint nudge (#107): true when this span is long enough that the
+   *  panel offers to fork the campaign before skipping it. Server-computed for
+   *  the reason every other number here is — the span is calendar arithmetic,
+   *  and in "skip to a date" mode the client cannot know it without asking. */
+  fork: boolean;
+  /** The configured day count `fork` was reached by, so the prompt can say what
+   *  "large" means in this install without a second request for it. */
+  fork_threshold: number;
 };
 /** `to` skips to a date, `days` advances by a duration; `to` wins if both are sent. */
 export type AdvanceRequest = { to?: string; days?: number; reason?: string };

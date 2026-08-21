@@ -78,15 +78,8 @@
     "@typescript-eslint/no-unsafe-member-access": 1,
     "react/no-array-index-key": 4
   },
-  "frontend/src/components/ClockPanel.test.tsx": {
-    "@typescript-eslint/no-unnecessary-type-assertion": 3
-  },
   "frontend/src/components/ClockPanel.tsx": {
-    "@typescript-eslint/no-explicit-any": 2,
     "@typescript-eslint/no-floating-promises": 1,
-    "@typescript-eslint/no-misused-promises": 2,
-    "@typescript-eslint/no-unsafe-argument": 2,
-    "@typescript-eslint/no-unsafe-member-access": 2,
     "react/no-array-index-key": 2
   },
   "frontend/src/components/CommandPalette.test.tsx": {

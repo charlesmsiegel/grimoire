@@ -89,6 +89,22 @@ def test_preview_needs_no_reason(client):
     assert r.status_code == 200 and r.json()["digest"]["to"] == "2026-05-01"
 
 
+def test_preview_carries_the_checkpoint_nudge_and_the_threshold_behind_it(client):
+    """#107: the panel offers to fork before a large skip, and reads both the
+    verdict and the number it was reached by off the digest — so nothing on the
+    client re-implements calendar arithmetic to decide what "large" is."""
+    _wid, cid = _campaign(client)
+    client.put("/api/config", json={"advance_fork_threshold": "5"})
+    client.post(f"/api/campaigns/{cid}/advance", json={"to": "2026-01-01", "reason": "start"})
+    small = client.post(f"/api/campaigns/{cid}/advance/preview", json={"days": 5}).json()["digest"]
+    assert small["fork"] is False and small["fork_threshold"] == 5
+    big = client.post(f"/api/campaigns/{cid}/advance/preview", json={"days": 6}).json()["digest"]
+    assert big["fork"] is True and big["fork_threshold"] == 5
+    # Still a nudge and not a gate: the endpoint takes the same body it always did.
+    r = client.post(f"/api/campaigns/{cid}/advance", json={"days": 6, "reason": "a long road"})
+    assert r.status_code == 200 and r.json()["digest"]["fork"] is True
+
+
 def test_advance_writes_nothing_to_the_transcript(client):
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]

@@ -3,6 +3,7 @@ import { agingLabel } from "../aging";
 import { api, type AdvanceDigest, type CalendarConfig, type CampaignClock,
          type ClockLogEntry } from "../api/client";
 import { CalendarDatePicker } from "./CalendarDatePicker";
+import { forkNotes } from "./forkNotes";
 
 /** What a shown digest *is*, so one block can serve all three states without
  *  the reader having to guess which they are looking at: a preview, a move that
@@ -10,6 +11,26 @@ import { CalendarDatePicker } from "./CalendarDatePicker";
  *  clock was already at that moment (`moved: false`). Calling that last one
  *  "Advanced" would claim a write that did not happen. */
 type Outcome = "preview" | "moved" | "unchanged";
+
+/** `n` days, pluralized. Shared by the digest and the checkpoint question so a
+ *  threshold of 0 — which asks about a one-day move — cannot say "1 days". */
+function dayCount(n: number): string {
+  return `${n} day${n === 1 ? "" : "s"}`;
+}
+
+/** The server's own sentence for a refusal, or the error itself.
+ *
+ *  One helper rather than an `any`-typed catch per action: `request` rejects
+ *  with the body FastAPI sent, whose `detail` is the sentence written for the
+ *  reader ("an advance needs a reason", "name is required"), and anything else
+ *  reaching here is a transport failure with no sentence of its own.
+ */
+function refusal(err: unknown): string {
+  const detail = err !== null && typeof err === "object"
+    ? (err as { detail?: unknown }).detail
+    : undefined;
+  return typeof detail === "string" ? detail : String(err);
+}
 
 /** The campaign clock (#100): where the story's present is, and the one control
  *  that moves it deliberately — by a duration or to a date, always with a reason.
@@ -23,6 +44,16 @@ type Outcome = "preview" | "moved" | "unchanged";
  *  is that question for the campaign. Advancing writes no transcript — the only
  *  line a time change puts in a scene still comes from setting that scene's own
  *  date.
+ *
+ *  A large skip is asked about before it happens (#107): over the configured
+ *  threshold, confirming opens the checkpoint question instead of moving the
+ *  clock, offering to fork the campaign first. That is why confirming always
+ *  holds a *fresh* preview — the panel's stated design was preview-before-
+ *  confirm, but nothing enforced it, and in "skip to a date" mode the client
+ *  cannot know how far the skip goes without asking. So `confirm` prices the
+ *  move it is about to make, whether or not Preview was pressed. Composition
+ *  rather than a new endpoint: the fork and the advance are two primitives
+ *  that already exist, and neither knows about the other.
  */
 export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   cid: string;
@@ -40,6 +71,18 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   const [reason, setReason] = useState("");
   const [digest, setDigest] = useState<AdvanceDigest | null>(null);
   const [outcome, setOutcome] = useState<Outcome>("preview");
+  // The open checkpoint question, holding the digest it was asked about — so
+  // the sentence and the threshold it names come from the same computation that
+  // decided to ask, rather than from whatever is on screen by the time it is
+  // answered. Null is "not asking".
+  const [gate, setGate] = useState<AdvanceDigest | null>(null);
+  const [forkName, setForkName] = useState("");
+  // A checkpoint already taken for the OPEN question. Kept apart from `saved`,
+  // which is only the sentence: a fork that lands and a skip that then fails
+  // leaves the question open, and without this a retry would take a second full
+  // copy of the campaign — silently, and `copytree`-expensively.
+  const [checkpointed, setCheckpointed] = useState(false);
+  const [saved, setSaved] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,7 +95,13 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   // A digest belongs to the request that produced it. Changing the target (or
   // the campaign) invalidates it, and showing a stale one next to new inputs is
   // how a reader confirms a skip they never previewed.
-  useEffect(() => { setDigest(null); setOutcome("preview"); }, [cid, mode, days, target]);
+  // The open checkpoint question goes with it, and for a sharper version of the
+  // same reason: answering "checkpoint, then advance" against a span the prompt
+  // was never about would fork for one skip and take another.
+  useEffect(() => {
+    setDigest(null); setOutcome("preview");
+    setGate(null); setCheckpointed(false); setSaved("");
+  }, [cid, mode, days, target]);
 
   const request = () => (mode === "days" ? { days: parseInt(days, 10) } : { to: target });
   const ready = mode === "days" ? !isNaN(parseInt(days, 10)) : !!target;
@@ -64,29 +113,106 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
       const r = await api.previewAdvance(cid, request());
       setDigest(r.digest);
       setOutcome("preview");
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(refusal(err));
     } finally {
       setBusy(false);
     }
   }
 
+  /** The write itself. Shared by the ungated path and both answers to the gate,
+   *  so there is exactly one place the clock moves. */
+  async function runAdvance() {
+    const r = await api.advanceTime(cid, { ...request(), reason });
+    setDigest(r.digest);
+    setOutcome(r.moved ? "moved" : "unchanged");
+    setGate(null);
+    setCheckpointed(false);
+    // Clearing the reason is load-bearing, not just tidy: the duration is left
+    // as typed (a reader who skips a week often skips another), so without this
+    // the Advance button would stay live and a second click would skip a second
+    // week. An empty reason disables it until the next advance is described.
+    setReason("");
+    await reload();
+    onAdvanced?.();
+  }
+
+  /** Price the move, then either ask about a checkpoint or make it.
+   *
+   *  A digest is reused only while it is a PREVIEW of what is typed now. The one
+   *  left on screen after a move describes the move that happened, and reading
+   *  the nudge off it would answer for the wrong span — skipping to a fixed date
+   *  twice is ninety days and then none at all.
+   */
   async function confirm() {
+    setError(null);
+    // A new confirm is a new operation, so the previous one's checkpoint line
+    // stops being the answer to what is on screen — unless this IS that
+    // operation, resumed. `checkpointed` outlives a dismissal precisely so a
+    // reader who cancelled after a copy landed and then asked again does not
+    // get a second copy of the same campaign under the same name.
+    if (!checkpointed) setSaved("");
+    setBusy(true);
+    try {
+      let priced = digest && outcome === "preview" ? digest : null;
+      if (!priced) {
+        const r = await api.previewAdvance(cid, request());
+        setDigest(r.digest);
+        setOutcome("preview");
+        priced = r.digest;
+      }
+      if (priced.fork) {
+        setForkName(`Before ${priced.to_friendly || priced.to}`);
+        setGate(priced);            // the question is asked; nothing is written
+        return;
+      }
+      await runAdvance();
+    } catch (err: unknown) {
+      setError(refusal(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Copy the campaign as it stands, then skip in the original.
+   *
+   *  Strictly in that order, and the skip is abandoned if the copy fails: the
+   *  reader asked to be able to come back to this moment, and moving past it
+   *  anyway would give them the one thing they said they did not want.
+   */
+  async function checkpointThenAdvance() {
     setError(null);
     setBusy(true);
     try {
-      const r = await api.advanceTime(cid, { ...request(), reason });
-      setDigest(r.digest);
-      setOutcome(r.moved ? "moved" : "unchanged");
-      // Clearing the reason is load-bearing, not just tidy: the duration is left
-      // as typed (a reader who skips a week often skips another), so without this
-      // the Advance button would stay live and a second click would skip a second
-      // week. An empty reason disables it until the next advance is described.
-      setReason("");
-      await reload();
-      onAdvanced?.();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+      if (!checkpointed) {
+        const name = forkName.trim();
+        const report = await api.forkCampaign(cid, name);
+        setCheckpointed(true);
+        // A fork from where the campaign stands cuts nothing, so `forkNotes` is
+        // almost always "". Shown when it is not, on the same footing the shelf
+        // and the campaign page show it — a checkpoint that quietly came up
+        // short is worse than one that says so.
+        const notes = forkNotes(report);
+        setSaved(`Checkpoint saved: “${name}” is on the campaigns shelf.`
+                 + (notes ? ` ${notes}` : ""));
+      }
+      await runAdvance();
+    } catch (err: unknown) {
+      // The question stays open: the reader can retry, or skip without one.
+      setError(refusal(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Take the skip the gate was asked about, with no copy left behind. */
+  async function skipWithoutCheckpoint() {
+    setError(null);
+    setBusy(true);
+    try {
+      await runAdvance();
+    } catch (err: unknown) {
+      setError(refusal(err));
     } finally {
       setBusy(false);
     }
@@ -115,38 +241,105 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
         ? <div className="field-hint">Now: {clock.friendly || clock.now}</div>
         : <div className="field-hint">No campaign date yet</div>}
 
+      {/* Frozen while a call is in flight. A checkpoint is a `copytree` of a
+          whole campaign and takes real time, and the skip that follows it is
+          the one the question was asked about: editing the duration underneath
+          it would leave the panel showing one span and the clock taking
+          another. Changing the duration otherwise takes the question back. */}
       <div className="picker">
-        <select aria-label="Advance by" value={mode}
+        <select aria-label="Advance by" value={mode} disabled={busy}
                 onChange={(e) => setMode(e.target.value as "days" | "date")}>
           <option value="days">Advance by days</option>
           <option value="date">Skip to a date</option>
         </select>
         {mode === "days"
-          ? <input type="number" aria-label="Days" value={days}
+          ? <input type="number" aria-label="Days" value={days} disabled={busy}
                    onChange={(e) => setDays(e.target.value)} />
           : <CalendarDatePicker scope={{ kind: "campaign", id: cid }} value={target}
-                                onChange={setTarget} ariaLabel="Skip to" />}
+                                onChange={setTarget} ariaLabel="Skip to" disabled={busy} />}
       </div>
 
       <input aria-label="Reason" placeholder="Why time passes…" value={reason}
-             onChange={(e) => setReason(e.target.value)} />
+             disabled={busy} onChange={(e) => setReason(e.target.value)} />
 
-      <div className="picker">
-        <button onClick={preview} disabled={busy || !ready}>Preview</button>
-        {/* A reason is required by the endpoint, so the button that needs one
-            says so by being disabled rather than by earning a 400. */}
-        <button className="primary" onClick={confirm}
-                disabled={busy || !ready || !reason.trim()}
-                title={reason.trim() ? undefined : "An advance needs a reason"}>
-          Advance time
-        </button>
-      </div>
+      {/* The question replaces the controls it was asked from, so there is only
+          ever one live decision on screen. Changing the skip takes it back. */}
+      {gate
+        ? <CheckpointGate digest={gate} name={forkName} onName={setForkName} busy={busy}
+                          checkpointed={checkpointed}
+                          onCheckpoint={() => void checkpointThenAdvance()}
+                          onSkip={() => void skipWithoutCheckpoint()}
+                          onCancel={() => setGate(null)} />
+        : (
+          <div className="picker">
+            <button onClick={() => void preview()} disabled={busy || !ready}>Preview</button>
+            {/* A reason is required by the endpoint, so the button that needs one
+                says so by being disabled rather than by earning a 400. */}
+            <button className="primary" onClick={() => void confirm()}
+                    disabled={busy || !ready || !reason.trim()}
+                    title={reason.trim() ? undefined : "An advance needs a reason"}>
+              Advance time
+            </button>
+          </div>
+        )}
 
+      {saved && <div className="field-hint">{saved}</div>}
       {error && <div className="field-hint error">{error}</div>}
 
       {digest && <AdvanceDigestView digest={digest} outcome={outcome} />}
 
       {clock && clock.log.length > 0 && <ClockLog log={clock.log} />}
+    </div>
+  );
+}
+
+
+/** The checkpoint question (#107): a large skip, and the offer to copy the
+ *  campaign before taking it.
+ *
+ *  A prompt rather than a refusal, and the composition of two primitives that
+ *  already exist — `POST /campaigns/{cid}/fork` and `POST .../advance`. The
+ *  copy is what stays behind: it is taken of the campaign as it stands, and the
+ *  skip then happens in the campaign the reader is already in, so play carries
+ *  on where they are and the checkpoint is a thing on the shelf to come back to.
+ *
+ *  Every number it says comes off the digest that opened it, so the sentence
+ *  cannot disagree with the comparison that produced it.
+ */
+function CheckpointGate({ digest, name, onName, busy, checkpointed,
+                         onCheckpoint, onSkip, onCancel }: {
+  digest: AdvanceDigest; name: string; onName: (v: string) => void; busy: boolean;
+  /** A checkpoint already taken for this question — the skip that followed it
+   *  is what failed. The primary button retries only that half. */
+  checkpointed: boolean;
+  onCheckpoint: () => void; onSkip: () => void; onCancel: () => void;
+}) {
+  return (
+    <div className="clock-checkpoint">
+      {/* A backward move of the same size is asked about too, and says which
+          direction it is going: "90 days" alone would read as the wrong one. */}
+      <div className="field-hint">
+        This is a large time skip — {dayCount(Math.abs(digest.elapsed_days))}
+        {digest.backward ? " backward" : ""}, more than{" "}
+        {dayCount(digest.fork_threshold)}. Save a checkpoint of this campaign first?
+      </div>
+      {/* The checkpoint holds the moment the campaign is at now, and is named
+          for the skip it comes before rather than for that moment — "Before 24
+          March 2027" is how the reader will look for it on the shelf, because
+          the skip is the thing they will remember happening. */}
+      <input aria-label="Checkpoint name" placeholder="Name for the checkpoint…"
+             value={name} onChange={(e) => onName(e.target.value)}
+             disabled={busy || checkpointed} />
+      <div className="picker">
+        {/* The fork endpoint refuses an empty name with a 400, so the button
+            that needs one says so by being disabled rather than by earning it. */}
+        <button className="primary" disabled={busy || !name.trim()} onClick={onCheckpoint}
+                title={name.trim() ? undefined : "A checkpoint needs a name"}>
+          {checkpointed ? "Retry the skip" : "Checkpoint, then advance"}
+        </button>
+        <button className="subtle" disabled={busy} onClick={onSkip}>Skip without one</button>
+        <button className="subtle" disabled={busy} onClick={onCancel}>Cancel</button>
+      </div>
     </div>
   );
 }
@@ -162,8 +355,8 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
  */
 function AdvanceDigestView({ digest, outcome }: { digest: AdvanceDigest; outcome: Outcome }) {
   const span = digest.backward
-    ? `${Math.abs(digest.elapsed_days)} days back`
-    : `${digest.elapsed_days} day${digest.elapsed_days === 1 ? "" : "s"}`;
+    ? `${dayCount(Math.abs(digest.elapsed_days))} back`
+    : dayCount(digest.elapsed_days);
   return (
     <div className="clock-digest">
       <div className="field-hint">

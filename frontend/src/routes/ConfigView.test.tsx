@@ -34,6 +34,7 @@ const cfg = {
   prompt_log_depth: "50", offscene_known_limit: "40",
   turnstate_depth: "0", promote_streak: "3", rolling_summary_every: "10",
   scene_break_every: "20", replay_fork_threshold: "10",
+  advance_fork_threshold: "30",
   embeddings_connection_id: "", embeddings_model: "", semantic_recall_depth: "0",
   semantic_recall_threshold: "0.4",
   prompt_layout_enabled: "off", speaker_turn_taking: "off",
@@ -396,6 +397,17 @@ test("saves the replay fork threshold (#80)", async () => {
   save();
   await waitFor(() =>
     expect(api.putConfig).toHaveBeenCalledWith({ replay_fork_threshold: "4" }));
+});
+
+test("saves the checkpoint threshold the clock nudges at (#107)", async () => {
+  renderView();
+  await open(/^While playing/);
+  expect(screen.getByLabelText(/offer a checkpoint before skipping/i)).toHaveValue("30");
+  fireEvent.change(screen.getByLabelText(/offer a checkpoint before skipping/i),
+                   { target: { value: "7" } });
+  save();
+  await waitFor(() =>
+    expect(api.putConfig).toHaveBeenCalledWith({ advance_fork_threshold: "7" }));
 });
 
 // ---- the context budget bar ----

@@ -31,6 +31,7 @@ const DRAFT_FIELDS = [
   "system_prompt",
   "quote_color", "user_label", "assistant_label",
   "rolling_summary_every", "scene_break_every", "replay_fork_threshold",
+  "advance_fork_threshold",
   "backup_enabled", "backup_interval_hours", "backup_keep", "backup_dir",
   "theme",
 ] as const;
@@ -87,7 +88,8 @@ const SECTIONS: SectionDef[] = [
   { id: "transcript", group: "What you see", label: "Transcript",
     fields: ["quote_color", "user_label", "assistant_label"] },
   { id: "playing", group: "What you see", label: "While playing",
-    fields: ["rolling_summary_every", "scene_break_every", "replay_fork_threshold"] },
+    fields: ["rolling_summary_every", "scene_break_every", "replay_fork_threshold",
+             "advance_fork_threshold"] },
   { id: "appearance", group: "What you see", label: "Appearance", fields: ["theme"] },
 ];
 const GROUPS = SECTIONS.reduce<string[]>(
@@ -862,6 +864,11 @@ export default function ConfigView() {
               call each, so a long one is expensive in both money and waiting. Past this
               many turns the transcript offers to fork the campaign first and replay in
               the copy, leaving what you were playing untouched.
+              Skipping the campaign clock is one click and a month of story is behind
+              you — every scheduled beat it crosses stamped as fired, every thread it
+              leaves open that much staler. Past this many days the clock offers to save
+              a checkpoint first: a copy of the campaign as it stands, left on the shelf
+              where the story was while you skip on in the one you are playing.
             </p>
             <div className="config-fields">
               <NumField id="cfg-rolling-every" label="Summarize the scene every"
@@ -879,6 +886,13 @@ export default function ConfigView() {
                         unit="turns" placeholder="10" caption="0 = suggest it every time"
                         value={draft.replay_fork_threshold}
                         onChange={(v) => edit("replay_fork_threshold", v)} />
+              {/* Also a threshold and not a limit: the prompt always offers to
+                  skip on without a checkpoint, and nothing here refuses a long
+                  skip. The comparison is the server's -- this only moves it. */}
+              <NumField id="cfg-advance-fork" label="Offer a checkpoint before skipping more than"
+                        unit="days" placeholder="30" caption="0 = suggest it every time"
+                        value={draft.advance_fork_threshold}
+                        onChange={(v) => edit("advance_fork_threshold", v)} />
             </div>
           </>
         )}

@@ -177,6 +177,13 @@ DEFAULT_BACKUP_DIR = ""
 # being the obvious call — the number is configuration precisely because that
 # judgement is the user's and depends on their model's price.
 DEFAULT_REPLAY_FORK_THRESHOLD = "10"
+# Days a campaign-clock advance may cross before the client offers to checkpoint
+# the campaign first (#107). Thirty because a month is where a skip stops being
+# "and then it was Tuesday" and starts being the kind of jump a reader might
+# want to be able to walk back from -- and, like the replay threshold above,
+# the number is configuration because the judgement is the user's: a saga told
+# in seasons and a thriller told in hours do not agree about thirty days.
+DEFAULT_ADVANCE_FORK_THRESHOLD = "30"
 # The global scope of the response-preset cascade. These MUST be listed here:
 # read_config() narrows its return to _CONFIG_KEYS, so a key omitted from this
 # tuple is silently dropped and the global scope resolves as if unset — no
@@ -204,7 +211,8 @@ _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "art_catalog_depth", "art_catalog_threshold",
                 "prompt_layout_enabled", "speaker_turn_taking",
                 "backup_enabled", "backup_interval_hours", "backup_keep",
-                "backup_dir", "replay_fork_threshold") + _LENGTH_KEYS
+                "backup_dir", "replay_fork_threshold",
+                "advance_fork_threshold") + _LENGTH_KEYS
 
 
 def _config_path():
@@ -225,6 +233,7 @@ def read_config() -> dict[str, str]:
                 "absorb_concurrency": DEFAULT_ABSORB_CONCURRENCY,
                 "setup_done": DEFAULT_SETUP_DONE,
                 "replay_fork_threshold": DEFAULT_REPLAY_FORK_THRESHOLD,
+                "advance_fork_threshold": DEFAULT_ADVANCE_FORK_THRESHOLD,
                 "llm_retries": DEFAULT_LLM_RETRIES,
                 "fallback_connection_id": DEFAULT_FALLBACK_CONNECTION_ID,
                 "prompt_log_depth": DEFAULT_PROMPT_LOG_DEPTH,
@@ -390,6 +399,18 @@ def replay_fork_threshold() -> int:
     the default rather than silently disabling the guard.
     """
     return _count("replay_fork_threshold", DEFAULT_REPLAY_FORK_THRESHOLD)
+
+
+def advance_fork_threshold() -> int:
+    """Days a clock advance may cross before the client offers to checkpoint the
+    campaign first (#107).
+
+    A threshold, not a limit, on the same terms as `replay_fork_threshold`:
+    nothing refuses a long skip, 0 means every skip that crosses a day is asked
+    about rather than none, and a cleared or hand-mangled value falls back to
+    the default instead of silently turning the nudge off.
+    """
+    return _count("advance_fork_threshold", DEFAULT_ADVANCE_FORK_THRESHOLD)
 
 
 def rolling_summary_every() -> int:
