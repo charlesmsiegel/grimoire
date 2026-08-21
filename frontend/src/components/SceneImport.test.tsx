@@ -56,6 +56,9 @@ test("reading a file shows the review form and writes nothing", async () => {
   expect(screen.getByLabelText("Location")).toHaveValue("the-quay");
   expect(screen.getByLabelText("Seat Mara")).toBeChecked();
   expect(screen.getByText(/2 posts will be imported/i)).toBeInTheDocument();
+  // The opening post is shown, so "unchanged" is something the reviewer can
+  // check rather than take on trust.
+  expect(screen.getByText(/I walk the quay looking for Mara\./)).toBeInTheDocument();
   expect(api.sceneImport).not.toHaveBeenCalled();
 });
 
