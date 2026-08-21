@@ -164,6 +164,22 @@ test("Escape closes the picker", async () => {
   expect(onClose).toHaveBeenCalled();
 });
 
+// Escape mirrors Cancel, which is not disabled mid-upload -- and neither is
+// the scrim. A key that refused while the two mouse paths still worked would
+// be the one dismissal keyboard users cannot reach (PR #400 review).
+test("Escape closes mid-upload, exactly as Cancel and the scrim do", async () => {
+  const onClose = vi.fn();
+  (api.putCampaignImage as any).mockImplementation(() => new Promise(() => {}));
+  render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
+                          onInsert={() => {}} onClose={onClose} />);
+  const input = await screen.findByLabelText(/add an image/i);
+  fireEvent.change(input, { target: { files: [new File(["x"], "reeds.png", { type: "image/png" })] } });
+  await waitFor(() => expect(api.putCampaignImage).toHaveBeenCalled());
+  expect(screen.getByRole("button", { name: /^cancel$/i })).not.toBeDisabled();
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
 test("the file input is a real, focusable control rather than a styled label", async () => {
   // A `display: none` input inside a label looks tidier and is unreachable by
   // keyboard. It also has to offer only what the server will store: `image/*`

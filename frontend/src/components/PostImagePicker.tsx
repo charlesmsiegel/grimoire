@@ -134,11 +134,13 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
   // back off whatever they had just tabbed to.
   useEffect(() => { panel.current?.focus(); }, []);
   // Escape, and the scene's own bindings held off while this covers it (#193).
-  // Refused mid-upload, the same answer every other control here gives while
-  // `busy`.
+  // Unconditional, because the two dismissals beside it are: Cancel is never
+  // disabled and the scrim always closes. A key refused mid-upload while both
+  // mouse paths still worked would be the one way out keyboard users do not
+  // have -- the opposite of what mirroring a control means (PR #400 review).
   useHotkeys(
     [{ keys: "escape", label: "Close the picker", group: "THIS PANEL",
-       enabled: !busy, whileTyping: true, run: onClose }],
+       whileTyping: true, run: onClose }],
     { modal: true },
   );
 

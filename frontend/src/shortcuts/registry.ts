@@ -57,6 +57,26 @@ export type Scope = { keys: Hotkey[]; modal?: boolean; seq: number };
 const scopes: Scope[] = [];
 let born = 0;
 
+/** Told whenever a scope registers, unregisters, or rewrites its table, with
+ *  the scope that moved. The help sheet is the only subscriber, and only while
+ *  it is open: what it lists is "what you can press right now", and a turn
+ *  finishing or a panel opening underneath moves that while the sheet is up.
+ *  Closed, this set is empty and announcing costs a loop over nothing. */
+type Watcher = (changed: Scope) => void;
+const watchers = new Set<Watcher>();
+
+export function watchHotkeys(fn: Watcher): () => void {
+  watchers.add(fn);
+  return () => { watchers.delete(fn); };
+}
+
+/** Announce `scope`. Carries which scope moved so a subscriber can ignore its
+ *  own -- the sheet announces on its own render like everyone else, and acting
+ *  on that would be a render loop. */
+export function scopeChanged(scope: Scope): void {
+  for (const fn of [...watchers]) fn(scope);
+}
+
 /** The next birth number. Taken once, when a component first builds its scope. */
 export function scopeSeq(): number {
   return ++born;
@@ -122,10 +142,12 @@ function topModal(list: Scope[]): number {
 export function registerScope(scope: Scope): () => void {
   if (!scopes.length) window.addEventListener("keydown", onKeyDown);
   scopes.push(scope);
+  scopeChanged(scope);
   return () => {
     const at = scopes.indexOf(scope);
     if (at >= 0) scopes.splice(at, 1);
     if (!scopes.length) window.removeEventListener("keydown", onKeyDown);
+    scopeChanged(scope);
   };
 }
 
