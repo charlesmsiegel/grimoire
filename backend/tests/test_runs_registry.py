@@ -290,3 +290,20 @@ def test_events_are_not_built_while_the_registry_lock_is_held():
     r.set_event_factory(factory)
     r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
     assert all(held), "an event was constructed while the registry lock was held"
+
+
+def test_reaping_an_old_run_keeps_a_newer_attempt_mapping():
+    """A recycled scene id can start a replacement run under the same attempt
+    id. Reaping the old one must not delete the mapping that now points at the
+    replacement -- a retry would then start the work again instead of adopting
+    it, which is the duplicate send this index exists to prevent."""
+    r = runs.RunRegistry()
+    old, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-old", LABELS)
+    old.finish("landed", at=1000.0, monotonic_at=1000.0)
+    new, started = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-new", LABELS)
+    assert started
+
+    assert r.reap(now=1000.0 + runs.REAP_SECONDS + 1) == 1
+    adopted, started_again = r.start_or_existing(SCENE, "turn", "chat", "a1",
+                                                 "ident-new", LABELS)
+    assert adopted is new and not started_again

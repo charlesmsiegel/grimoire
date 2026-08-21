@@ -36,6 +36,7 @@ from fastapi.responses import StreamingResponse
 
 from .. import runner
 from ..store import scenes
+from ..store.campaigns.paths import CampaignNotFound
 
 STREAM_POLL_SECONDS = 0.05
 """How often a live replay looks for newly appended frames.
@@ -389,7 +390,14 @@ class RunRegistry:
                     if not ids:
                         del self._by_subject[run.subject]
                 if run.attempt_id is not None:
-                    self._by_attempt.pop((run.subject, run.attempt_id), None)
+                    # Only when it still points HERE. A recycled scene id can
+                    # start a replacement under the same attempt id, and
+                    # deleting its mapping would make a retry start the work
+                    # again rather than adopt it -- the duplicate send this
+                    # index exists to prevent. Same guard `_by_key` already had.
+                    key_a = (run.subject, run.attempt_id)
+                    if self._by_attempt.get(key_a) == run.id:
+                        del self._by_attempt[key_a]
                 key = exclusion_key(run.subject, run.cls)
                 if key is not None and self._by_key.get(key) == run.id:
                     del self._by_key[key]
@@ -428,7 +436,13 @@ def _scene_subject(cid: str, sid: str) -> tuple[Subject, str | None]:
     readable for the whole retention window, so the subject alone would let the
     replacement read or cancel the dead scene's run.
     """
-    return ("scene", cid, sid), scenes.scene_identity(cid, sid)
+    try:
+        return ("scene", cid, sid), scenes.scene_identity(cid, sid)
+    except CampaignNotFound as exc:
+        # `scene_identity` reaches `campaign_root`, which refuses an id the
+        # store cannot address. Unhandled that is a 500, and every id-carrying
+        # route in this app is swept for exactly that.
+        raise _gone("campaign_gone", "no such campaign") from exc
 
 
 def _gone(kind: str, detail: str) -> HTTPException:
@@ -439,6 +453,21 @@ def _gone(kind: str, detail: str) -> HTTPException:
     every other structured error in this tree is asserted.
     """
     return HTTPException(status_code=404, detail={"kind": kind, "detail": detail})
+
+
+def _start_cursor(from_: int, run: Run) -> int:
+    """Where a replay should actually begin.
+
+    A cursor past the buffer is clamped to the tail. Held literally on a LIVE
+    run it would exclude every frame that arrives next -- their indexes are
+    LOWER than it -- so the client would tail to the end of the run and receive
+    nothing at all, which is worse than the reconnect it was attempting.
+
+    Its own function because that is the only way to test it: through the route
+    the difference is invisible on a terminal run (both answer empty) and needs
+    a race to observe on a live one.
+    """
+    return min(from_, len(run.frames))
 
 
 def _run_payload(run: Run) -> dict:
@@ -487,7 +516,10 @@ def get_scene_by_identity(cid: str, identity: str) -> dict:
     one lookup is the guard reporting that the URL is shaped wrong, not that
     the guard is in the way.
     """
-    sid = scenes.find_by_identity(cid, identity)
+    try:
+        sid = scenes.find_by_identity(cid, identity)
+    except CampaignNotFound as exc:
+        raise _gone("campaign_gone", "no such campaign") from exc
     if sid is None:
         raise _gone("scene_gone", "no scene carries that identity")
     return {"id": sid}
@@ -560,12 +592,21 @@ def get_run_stream(cid: str, sid: str, run_id: str, request: Request,
     frame (the heartbeat) carries no event at all -- so a per-event cursor lags
     the server's position and `consumed + 1` replays text already rendered.
     """
+    # 400 rather than FastAPI's 422: `scenes.py:300` already answers a bad
+    # `limit`/`before` this way, and one shape of bad-parameter error is easier
+    # for a client to handle than two.
+    if from_ < 0:
+        raise HTTPException(status_code=400, detail="from must not be negative")
     run = _resolve(request.app, cid, sid, run_id)
 
     async def event_stream():
         """Replay what is buffered, then TAIL until the run is terminal.
 
-        A one-shot replay would answer the buffer and reach EOF -- so a client
+        A negative `from` is rejected by the route signature rather than read as
+    zero: silently widening a malformed cursor replays the whole buffer and
+    duplicates a reply the client has already rendered.
+
+    A one-shot replay would answer the buffer and reach EOF -- so a client
         attaching to a live run (the ordinary case on reconnect, and always the
         case when `from` is already at the tail) would disconnect before the
         run finished and never see the rest of the reply. That is the whole
@@ -576,7 +617,7 @@ def get_run_stream(cid: str, sid: str, run_id: str, request: Request,
         well under a human's perception of "live", and it costs one list slice
         per tick on an idle run.
         """
-        cursor = max(from_, 0)
+        cursor = _start_cursor(from_, run)
         while True:
             # Terminal is read BEFORE draining, and that order is the whole
             # correctness argument. Any frame appended before the run went

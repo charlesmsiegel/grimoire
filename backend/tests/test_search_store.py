@@ -419,12 +419,38 @@ def test_the_snippet_frames_the_match_even_when_folding_changes_the_length(world
 def test_the_query_parser_is_linear_in_the_word_count(world):
     """Pasting a document into the search box is an ordinary accident. Deduping
     terms against a list made this quadratic — a 60k-word paste spent six
-    seconds here before the sweep even started."""
+    seconds here before the sweep even started.
+
+    A RATIO, not a wall-clock ceiling. The old form asserted 20k words parse in
+    under half a second, which is a statement about the runner as much as the
+    parser: it passes locally in 0.07s and failed CI at 0.72s under load. And
+    raising the ceiling would have hidden the bug -- by this docstring's own
+    numbers quadratic parsing reaches ~0.67s at 20k words, right where the
+    contended run landed. Doubling the input costs ~2x when linear and ~4x when
+    quadratic, and both halves run under whatever load the machine is already
+    under, so the comparison holds where an absolute bound does not.
+    """
     import time
-    q = " ".join(f"w{i}" for i in range(20000))
-    started = time.perf_counter()
-    assert len(search.query_terms(q)) == 20000
-    assert time.perf_counter() - started < 0.5
+
+    def _parse(n):
+        q = " ".join(f"w{i}" for i in range(n))
+        started = time.perf_counter()
+        assert len(search.query_terms(q)) == n
+        return time.perf_counter() - started
+
+    # Best-of-three at each size. A single sample is dominated by whatever the
+    # machine was doing at that instant -- the first call alone measured a 0.74x
+    # "scaling" here, which is noise, not sublinearity. The minimum is the run
+    # least interfered with, which is what the comparison wants.
+    def _best(n, rounds=3):
+        return min(_parse(n) for _ in range(rounds))
+
+    _best(20000)                       # warm the interpreter, not the measure
+    small = max(_best(20000), 1e-4)    # a floor, so a fast machine cannot divide by ~0
+    large = _best(40000)
+    assert large / small < 3, (
+        f"parsing scaled {large / small:.1f}x for 2x the words -- linear is ~2, "
+        f"quadratic is ~4")
 
 
 def test_a_store_with_no_worlds_or_campaigns_yet_searches_to_nothing(home):
