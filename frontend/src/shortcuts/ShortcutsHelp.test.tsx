@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import ShortcutsHelp from "./ShortcutsHelp";
 import { useHotkeys, type Hotkey } from "./useHotkeys";
@@ -142,6 +143,66 @@ test("the rows are in the same order every time it opens", () => {
   press("?");
   expect(labels()).toEqual(first);
   expect(first.length).toBeGreaterThan(1);
+});
+
+// The sheet advertises what you can press RIGHT NOW, and a turn finishing or a
+// panel opening underneath moves that while it is up. A snapshot taken when it
+// opened would keep saying the old answer until it was closed and reopened
+// (PR #400 review).
+test("a row that goes inert while the sheet is open says so without reopening", () => {
+  function Toggling() {
+    const [on, setOn] = useState(true);
+    useHotkeys([{ ...NEW_SCENE, enabled: on }]);
+    return <button onClick={() => setOn(false)}>disable</button>;
+  }
+  render(<><Toggling /><ShortcutsHelp /></>);
+  press("?");
+  const row = () => screen.getByText("New scene").closest(".shortcuts-row")!.className;
+  expect(row()).not.toContain("off");
+  fireEvent.click(screen.getByText("disable"));
+  expect(row()).toContain("off");
+});
+
+test("a scope that mounts while the sheet is open is listed", () => {
+  function Later() {
+    const [there, setThere] = useState(false);
+    return (
+      <>
+        <button onClick={() => setThere(true)}>mount</button>
+        {there && <Bind keys={[{ keys: "escape", label: "Close the dossier", group: "THIS PANEL", run: () => {} }]} modal />}
+      </>
+    );
+  }
+  render(<><Later /><ShortcutsHelp /></>);
+  press("?");
+  expect(screen.queryByText("Close the dossier")).toBeNull();
+  fireEvent.click(screen.getByText("mount"));
+  expect(screen.getByText("Close the dossier")).toBeTruthy();
+});
+
+// `aria-modal` does not contain anything by itself: without a tabbable control
+// and something holding Tab, focus walks straight out of the sheet into the
+// page behind the scrim.
+describe("containment", () => {
+  test("it has a close control that closes it", () => {
+    render(<ShortcutsHelp />);
+    press("?");
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
+    expect(screen.queryByRole("dialog", { name: /keyboard/i })).toBeNull();
+  });
+
+  test("Tab stays inside it", () => {
+    render(<><button>behind</button><ShortcutsHelp /></>);
+    press("?");
+    const sheet = screen.getByRole("dialog", { name: /keyboard/i });
+    const close = screen.getByRole("button", { name: /close/i });
+    fireEvent.keyDown(sheet, { key: "Tab" });
+    expect(document.activeElement).toBe(close);
+    // ...and back out of the only control it has, rather than into the page.
+    fireEvent.keyDown(close, { key: "Tab", shiftKey: true });
+    expect(sheet.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(screen.getByText("behind"));
+  });
 });
 
 test("the sections read most-specific first", () => {

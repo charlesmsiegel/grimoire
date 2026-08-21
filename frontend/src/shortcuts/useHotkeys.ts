@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { registerScope, scopeSeq, type Hotkey, type Scope } from "./registry";
+import { registerScope, scopeChanged, scopeSeq, type Hotkey, type Scope } from "./registry";
 
 export type { Hotkey, Scope };
 
@@ -27,5 +27,9 @@ export function useHotkeys(keys: Hotkey[], opts: { modal?: boolean } = {}): Scop
   else { held.current.keys = keys; held.current.modal = modal; }
   const scope = held.current;
   useEffect(() => registerScope(scope), [scope, modal]);
+  // Every render, with no dependency list on purpose: `enabled` moves with the
+  // owner's render and nothing else can see that happen. Free while nobody is
+  // watching, which is every moment the shortcuts sheet is closed.
+  useEffect(() => scopeChanged(scope));
   return scope;
 }

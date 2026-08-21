@@ -97,6 +97,22 @@ test("R opens the reroll box on the reply the ↻ button hangs off", async () =>
   await waitFor(() => expect(api.regenerate).toHaveBeenCalled());
 });
 
+// The ↻ button is hidden while its own post is being edited, and `reroll()`
+// does not clear the draft: the edit form would rebind to the replacement reply
+// at the same index, and Save would overwrite what was just generated. Same
+// guard `pickAlternate` takes, for the same reason (PR #400 review).
+test("R is inert while an edit form is open", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue(ONE_EXCHANGE);
+  renderCampaign();
+  await screen.findByText("old reply");
+  fireEvent.click(screen.getAllByTitle("Edit message")[1]);   // the assistant post
+  await screen.findByLabelText("Edit message");
+  press("r");
+  expect(screen.queryByLabelText("Reroll guidance")).toBeNull();
+  expect(api.regenerate).not.toHaveBeenCalled();
+});
+
 test("R is inert when there is no reply to reroll", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
@@ -153,6 +169,20 @@ describe("the help sheet, in a scene", () => {
     // label is three nodes rather than one.
     fireEvent.click(await screen.findByRole("option", { name: /keyboard shortcuts/i }));
     expect(await screen.findByRole("dialog", { name: /keyboard/i })).toBeInTheDocument();
+  });
+
+  // Both open from anywhere, and the palette draws BENEATH this sheet: without
+  // this, ⌘K would open a palette nobody can see, take focus into its hidden
+  // search box, and answer the next Escape (PR #400 review).
+  test("⌘K replaces it rather than opening behind it", async () => {
+    (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+    renderCampaign();
+    await screen.findByRole("heading", { name: /^Old$/ });
+    press("?");
+    expect(screen.getByRole("dialog", { name: /keyboard/i })).toBeTruthy();
+    press("k", { metaKey: true });
+    expect(await screen.findByRole("combobox", { name: /search/i })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: /keyboard/i })).toBeNull();
   });
 
   // The sheet is read to find out what a key IS; a row that vanished whenever

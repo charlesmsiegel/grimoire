@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { usePaletteSource, type PaletteItem } from "../components/palette";
-import { activeHotkeys, type HotkeyRow } from "./registry";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { usePalette, usePaletteSource, type PaletteItem } from "../components/palette";
+import { activeHotkeys, watchHotkeys, type HotkeyRow } from "./registry";
 import { formatChord } from "./keys";
 import { useHotkeys } from "./useHotkeys";
 
@@ -32,6 +32,7 @@ export default function ShortcutsHelp() {
   // the page behind it — and one that takes focus without giving it back
   // strands the reader on `<body>` afterwards.
   const cameFrom = useRef<HTMLElement | null>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
 
   const self = useHotkeys([
     // `global`, so the sheet opens over an overlay too: a reader who cannot
@@ -45,6 +46,23 @@ export default function ShortcutsHelp() {
     // one row in the sheet that is about the sheet.
     { keys: "escape", enabled: open, whileTyping: true, run: () => setOpen(false) },
   ], { modal: open });
+
+  // What it lists is "right now", so it has to hear about right now changing:
+  // a turn finishing un-dims the send row, a panel opening underneath dims the
+  // scene's. Subscribed only while open, and deaf to its own scope -- this
+  // component announces on its own render like every other binding owner, and
+  // acting on that would be a render loop (PR #400 review).
+  const [, refresh] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    if (!open) return;
+    return watchHotkeys((changed) => { if (changed !== self) refresh(); });
+  }, [open, self]);
+
+  // The palette is the other surface that opens from anywhere, and it draws
+  // BENEATH this one. Two of them stacked is a palette nobody can see taking
+  // the keys, so this yields: ⌘K reaches past the sheet and replaces it.
+  const { open: paletteOpen } = usePalette();
+  useEffect(() => { if (paletteOpen) setOpen(false); }, [paletteOpen]);
 
   useEffect(() => {
     if (open) {
@@ -95,14 +113,28 @@ export default function ShortcutsHelp() {
     // Dismissed by a press on the scrim ITSELF rather than by the sheet
     // stopping the bubble: one handler instead of two, and the sheet stays a
     // dialog with nothing bound to it.
+    //
+    // `aria-modal` contains nothing by itself. With one tabbable control inside
+    // and Tab held here, focus cannot leave for the page behind the scrim in
+    // either direction (PR #400 review).
     <div className="shortcuts-scrim" role="presentation"
-         onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false); }}>
+         onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false); }}
+         // Tab is caught out here rather than on the dialog: it covers the
+         // sheet and everything in it by bubbling, and the dialog stays an
+         // element with nothing bound to it.
+         onKeyDown={(e) => {
+           if (e.key !== "Tab") return;
+           e.preventDefault();
+           closeRef.current?.focus();
+         }}>
       <div className="shortcuts" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"
            ref={sheetRef} tabIndex={-1}>
         <div className="shortcuts-head">
           <span className="palette-key" aria-hidden>?</span>
           <h3>Keyboard shortcuts</h3>
           <span className="palette-hint" aria-hidden>ESC CLOSE</span>
+          <button type="button" className="drawer-close" aria-label="Close"
+                  ref={closeRef} onClick={() => setOpen(false)}>✕</button>
         </div>
         <div className="shortcuts-body">
           {groups.map(([group, keys]) => (

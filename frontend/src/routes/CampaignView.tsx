@@ -3452,7 +3452,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     },
     {
       keys: "r", label: "Reroll the last reply", group: "IN THIS SCENE",
-      enabled: !absorb && !busy && !rolling && canReroll,
+      // `editing` as well, the guard `pickAlternate` takes and for its reason:
+      // a reroll replaces the post at this index, and an edit form open over
+      // it rebinds to the REPLACEMENT, so Save would overwrite the reply that
+      // was just generated. The ↻ button is hidden while its own post is being
+      // edited, so a key that fired anyway would reach past it (PR #400
+      // review).
+      enabled: !absorb && !busy && !rolling && !editing && canReroll,
       run: () => setRerollPrompt(""),
     },
     {
