@@ -76,6 +76,17 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   // decided to ask, rather than from whatever is on screen by the time it is
   // answered. Null is "not asking".
   const [gate, setGate] = useState<AdvanceDigest | null>(null);
+  // The clock reading the shown digest was priced against, so the panel can
+  // notice the campaign's present moving underneath it — a scene dated forward
+  // carries the clock with it (`clock.observe`), and the inspector's When
+  // section is one section up from this one.
+  //
+  // Compared against `clock.now` and taken from the same place, rather than
+  // read off `digest.from`: the digest's own anchor comes back CANONICALIZED by
+  // the provider (`clock._current`) while the stored moment may be an
+  // un-canonicalized seed off the chronicle, so the two spellings of one date
+  // would read as a move and blank every preview the moment it arrived.
+  const [pricedNow, setPricedNow] = useState<string | null>(null);
   const [forkName, setForkName] = useState("");
   // A checkpoint already taken for the OPEN question. Kept apart from `saved`,
   // which is only the sentence: a fork that lands and a skip that then fails
@@ -103,6 +114,23 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     setGate(null); setCheckpointed(false); setSaved("");
   }, [cid, mode, days, target]);
 
+  // ...and the same rule for the other way a shown span goes stale: the inputs
+  // held still and the campaign's present moved. A preview describes a span
+  // FROM somewhere, so a clock that has moved since leaves it describing a
+  // skip nobody is being offered — and an open checkpoint question asked about
+  // one.
+  //
+  // Keyed on the clock's own reading rather than on `refreshKey`, which the
+  // inspector bumps twice per turn: taking the question back over turns that
+  // never touched the clock would blank it under a reader mid-decision. The
+  // decision itself no longer rests on this — `confirm` re-prices every time —
+  // so this is about not showing numbers that have stopped being true.
+  useEffect(() => {
+    if (!clock || outcome !== "preview" || pricedNow === null) return;
+    if (pricedNow === clock.now) return;
+    setDigest(null); setGate(null); setCheckpointed(false); setPricedNow(null);
+  }, [clock, outcome, pricedNow]);
+
   const request = () => (mode === "days" ? { days: parseInt(days, 10) } : { to: target });
   const ready = mode === "days" ? !isNaN(parseInt(days, 10)) : !!target;
 
@@ -112,6 +140,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     try {
       const r = await api.previewAdvance(cid, request());
       setDigest(r.digest);
+      setPricedNow(clock?.now ?? "");
       setOutcome("preview");
     } catch (err: unknown) {
       setError(refusal(err));
@@ -139,10 +168,24 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
 
   /** Price the move, then either ask about a checkpoint or make it.
    *
-   *  A digest is reused only while it is a PREVIEW of what is typed now. The one
-   *  left on screen after a move describes the move that happened, and reading
-   *  the nudge off it would answer for the wrong span — skipping to a fixed date
-   *  twice is ninety days and then none at all.
+   *  The move is priced afresh EVERY time, and a digest already on screen is
+   *  never reused for the verdict. Reuse looked free — the reader had just
+   *  pressed Preview, on inputs that have not changed since — and it is not: a
+   *  preview describes a span from a particular moment, and the campaign's
+   *  present can move underneath it without the inputs moving at all. Setting a
+   *  scene's date carries the clock forward with it, and that control is one
+   *  section up from this one in the same inspector.
+   *
+   *  Skipping TO a date is where that bites. Priced at eight days from December
+   *  and confirmed after a scene dated June moved the clock, the same request is
+   *  a five-month correction backwards — over any threshold, and the question
+   *  would never have been asked. The stale digest is the one on screen; the
+   *  clock the advance lands against is the live one, so only re-pricing can
+   *  make the two agree.
+   *
+   *  The cost is one extra read-only call on the confirm path, against a server
+   *  on this machine, for a button a person presses. That is a poor trade to
+   *  refuse in exchange for a verdict that can be about a different skip.
    */
   async function confirm() {
     setError(null);
@@ -154,13 +197,10 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     if (!checkpointed) setSaved("");
     setBusy(true);
     try {
-      let priced = digest && outcome === "preview" ? digest : null;
-      if (!priced) {
-        const r = await api.previewAdvance(cid, request());
-        setDigest(r.digest);
-        setOutcome("preview");
-        priced = r.digest;
-      }
+      const { digest: priced } = await api.previewAdvance(cid, request());
+      setDigest(priced);
+      setPricedNow(clock?.now ?? "");
+      setOutcome("preview");
       if (priced.fork) {
         setForkName(`Before ${priced.to_friendly || priced.to}`);
         setGate(priced);            // the question is asked; nothing is written
