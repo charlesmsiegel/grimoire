@@ -2492,12 +2492,18 @@ def delete_pending_review(cid: str, sid: str, request: Request,
     Idempotent, and named by generation rather than by run id: a DELETE for a
     generation that has already gone flags nothing, removes nothing and reports
     success, because the reviewer's intent is satisfied either way.
+
+    **It answers only once the runs it flagged have really stopped**, and the
+    wait is outside the lock. Answering earlier would let the caller's next act
+    -- which is usually "end the scene again" -- race a retry that is still
+    unwinding, and be refused with `run_in_flight` by a review it has just
+    discarded. Cancel means stopped, the way it does for a turn.
     """
     _require_scene(cid, sid)
     with store.locks.campaign_lock(cid):
-        stopped = runs.cancel_review(request.app, cid, sid, generation)
+        flagged = runs.cancel_review(request.app, cid, sid, generation)
         removed = store.pending_reviews.clear(cid, sid, generation)
-    return {"removed": removed, "stopped": stopped}
+    return {"removed": removed, "stopped": runs.await_reviews_stopped(flagged)}
 
 
 def _pending_for_retry(cid: str, sid: str) -> dict:

@@ -143,7 +143,10 @@ android/                          ← new top-level Gradle project
   A completion notification is posted when a run ends, carrying the scene's
   stable **identity** rather than its id: a notification can sit unread for a
   long time and an id moves on rename, so the tap resolves through
-  `GET /scene-by-identity`. `POST_NOTIFICATIONS` is requested at runtime on 13+;
+  `GET /scene-by-identity`. It carries the run's **class** too, and the wording
+  turns on it: a `turn` produces a reply and a `review` produces an
+  end-of-scene form, so announcing "New Post" for a landed absorb sends the
+  reader into the scene looking for narration that was never generated. `POST_NOTIFICATIONS` is requested at runtime on 13+;
   denied, the app is degraded but not broken — the reply is on disk and shows on
   next open. At every other moment we still accept process death — the store's
   file-per-record design makes restart lossless.

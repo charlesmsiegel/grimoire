@@ -2493,79 +2493,24 @@ test("Cancel absorb deletes the stored review, by generation", async () => {
   expect(screen.queryByText("Review scene summary")).toBeNull();
 });
 
-test("End scene deletes the stale review it is replacing, first", async () => {
-  // The reachable version of the ordering that matters: a review is stored for
-  // this scene and the transcript has moved past it, so the panel is closed and
-  // End scene is what the reader reaches for. `review` holds the scene's
-  // exclusion key exactly as a turn does, so anything still running for the old
-  // review would refuse this absorb with `run_in_flight` -- and the DELETE
-  // answers only once the runs it flagged have stopped, which is what makes
-  // the POST safe to issue immediately after it.
+test("End scene over a stale review replaces it, without deleting it first", async () => {
+  // A fresh absorb replaces whatever is stored for the scene, so there is
+  // nothing for a delete to buy here -- and it would cost something real: the
+  // re-absorb path asks for confirmation, and a reader who declines would have
+  // lost the review they were looking at to a question they answered "no" to.
   withScene();
   (api.pendingReview as any).mockResolvedValue(
     { review: null, generation: "gen-stale",
       stale: { prepared_posts: 4, current_posts: 7 } });
-  const order: string[] = [];
-  (api.discardReview as any).mockImplementation(async () => {
-    order.push("discard");
-    return { removed: true, stopped: 1 };
-  });
-  (api.absorbScene as any).mockImplementation(async () => {
-    order.push("absorb");
-    return reviewResult({ ...STORED_REVIEW, commit_token: "second" }, "gen2");
-  });
+  absorbs({ ...STORED_REVIEW, commit_token: "second" }, "gen2");
   renderCampaign();
   await screen.findByText(/The scene changed after its review was prepared/);
 
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-  await waitFor(() => expect(order).toEqual(["discard", "absorb"]));
-  expect(api.discardReview).toHaveBeenCalledWith("run", "s1", "gen-stale");
-  // ...and the notice goes with it, rather than sitting over the review that
+
+  // The notice goes with the absorb, rather than sitting over the review that
   // has just replaced the one it was about.
   expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
   expect(screen.queryByText(/The scene changed after its review was prepared/)).toBeNull();
-});
-
-test("Cancel absorb deletes the stored review, by generation", async () => {
-  // Closing the panel is not enough any more: the review is on disk, and the
-  // DELETE is also the only thing that stops a retry still generating for it.
-  withScene();
-  await openAbsorb();
-  fireEvent.click(screen.getByRole("button", { name: /Cancel absorb/ }));
-  await waitFor(() => expect(api.discardReview)
-    .toHaveBeenCalledWith("run", "s1", "gen1"));
-  expect(screen.queryByText("Review scene summary")).toBeNull();
-});
-
-test("End scene deletes the stale review it is replacing, first", async () => {
-  // The reachable version of the ordering that matters: a review is stored for
-  // this scene and the transcript has moved past it, so the panel is closed and
-  // End scene is what the reader reaches for. `review` holds the scene's
-  // exclusion key exactly as a turn does, so anything still running for the old
-  // review would refuse this absorb with `run_in_flight` -- and the DELETE
-  // answers only once the runs it flagged have stopped, which is what makes
-  // the POST safe to issue immediately after it.
-  withScene();
-  (api.pendingReview as any).mockResolvedValue(
-    { review: null, generation: "gen-stale",
-      stale: { prepared_posts: 4, current_posts: 7 } });
-  const order: string[] = [];
-  (api.discardReview as any).mockImplementation(async () => {
-    order.push("discard");
-    return { removed: true, stopped: 1 };
-  });
-  (api.absorbScene as any).mockImplementation(async () => {
-    order.push("absorb");
-    return reviewResult({ ...STORED_REVIEW, commit_token: "second" }, "gen2");
-  });
-  renderCampaign();
-  await screen.findByText(/The scene changed after its review was prepared/);
-
-  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-  await waitFor(() => expect(order).toEqual(["discard", "absorb"]));
-  expect(api.discardReview).toHaveBeenCalledWith("run", "s1", "gen-stale");
-  // ...and the notice goes with it, rather than sitting over the review that
-  // has just replaced the one it was about.
-  expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
-  expect(screen.queryByText(/The scene changed after its review was prepared/)).toBeNull();
+  expect(api.discardReview).not.toHaveBeenCalled();
 });

@@ -190,10 +190,16 @@ that is always right.
 ## Detached runs: a turn outlives the request that asked for it
 
 A dropped connection used to cancel generation. It no longer does — it drops a
-subscriber. **Five scene-turn handlers** start detached runs: `post_chat`,
-`post_retry`, `post_regenerate`, `post_replay_turn` and
-`post_roll_proposal`. (Five, not six: `post_opener` is the sixth synchronous
-streaming handler, but it is a `draft` and Phase 1 leaves draft routes alone.)
+subscriber. **Eight handlers** start detached runs, in two classes:
+
+- `turn` — `post_chat`, `post_retry`, `post_regenerate`, `post_replay_turn` and
+  `post_roll_proposal`. (Five, not six: `post_opener` is the sixth synchronous
+  streaming handler, but it is a `draft` and the draft routes are still
+  attached.)
+- `review` — `post_absorb`, `post_audit` and `post_dossiers`. These are not
+  streams: each answers **202** with a run to poll and persists its result to
+  `store/pending_reviews.py`, because a review's value is a payload nobody has
+  written down and losing it costs the longest generation in the app.
 
 - The run registry lives on **`app.state.runs`**, not at module scope: a
   `TestClient` builds an app per test, and module state would leak runs between
@@ -206,7 +212,9 @@ streaming handler, but it is a `draft` and Phase 1 leaves draft routes alone.)
   its request.
 - Every terminal write is **fenced** on that identity under the campaign lock,
   and every route that changes a scene's *shape* is refused with `scene_busy`
-  while a turn holds it: rename, delete, message edit, cut, retcon, alternate
+  while a turn **or a review** holds it (both classes share one exclusion key
+  per scene, so a scene holds at most one of either): rename, delete, message
+  edit, cut, retcon, alternate
   promotion, replay begin/accept/cancel, a manual roll or check, every cast
   route (`appear`/`leave` append a transition line), location and datetime (the
   first `set_datetime` **renames** the scene), the review save, both greeting
@@ -223,6 +231,21 @@ streaming handler, but it is a `draft` and Phase 1 leaves draft routes alone.)
   transcript, recorded beside the append and cleared inside the rollback. It is
   what lets recovery after the run record expired ask a question that has a
   right answer, instead of matching text.
+- **A stored review carries a transcript watermark**, and it is not the commit
+  epoch wearing another name. `commits.reserve` is called from exactly one place
+  (`PUT /chronicle`), so playing on after a review lands — appending, cutting,
+  retconning — advances nothing: the token still passes every check while the
+  scene gets marked absorbed with a summary of posts nobody reviewed. The
+  watermark is checked when the review is retrieved, when a scoped retry starts,
+  and again at save. The epoch guards against another *review* committing; this
+  guards against *play continuing*.
+- **Cancel is ordered against the terminal persist.** `DELETE .../pending-review`
+  flags every run preparing that review *before* deleting the record, both under
+  one `campaign_lock(cid)` hold, and the persist checks the flag under that same
+  hold — otherwise the delete lands, the runner publishes, and the review the
+  player dismissed comes back minutes later. It is addressed by **generation**
+  (minted per absorb, carried by its retries), because the stored payload names
+  no producer and "the scene's newest run" is as likely to be a chat turn.
 
 ## Observability: one writer, three views
 

@@ -318,26 +318,12 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     setEditFailures([]);
     setConflicts([]);
     try {
-      // Discard whatever is stored for this scene FIRST, and wait for it. A
-      // `review` holds the scene's exclusion key exactly as a turn does, so a
-      // retry still running for the outgoing review would refuse this absorb
-      // with `run_in_flight` -- and the DELETE answers only once the runs it
-      // flagged have really stopped, which is what makes the POST below safe
-      // to issue immediately. Best effort: a scene with nothing stored answers
-      // 200 and removes nothing, and a failure here must not cost the reader
-      // the End scene button.
-      // A generation belonging to some OTHER scene is harmless rather than
-      // guarded against: the DELETE is scoped to both, so a record whose
-      // generation does not match removes nothing and flags nothing (the
-      // backend's `clear(cid, sid, generation)`). Adding a check here would be
-      // a second copy of that rule, in the place least able to be sure of it.
-      const outgoing = generationRef.current;
-      if (outgoing) {
-        try {
-          await api.discardReview(cid, activeId, outgoing);
-        } catch { /* nothing stored, or a transient failure; the POST decides */ }
-        if (campaignRef.current !== cid) return;
-      }
+      // Nothing is deleted on the way in, deliberately. A fresh absorb
+      // REPLACES whatever is stored for this scene
+      // (`pending_reviews.publish`), so a delete first would buy nothing --
+      // and it would cost something real: the re-absorb below asks for
+      // confirmation, and a reader who declines would have lost the review
+      // they were looking at to a question they answered "no" to.
       let a;
       try {
         a = await api.absorbScene(cid, activeId);

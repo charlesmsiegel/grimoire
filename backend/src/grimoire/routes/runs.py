@@ -1489,8 +1489,8 @@ def _reserve(app, cid: str, sid: str, cls: RunClass, kind: str,
     return run, fresh
 
 
-def cancel_review(app, cid: str, sid: str, generation: str) -> int:
-    """Flag every run preparing this review as cancelled. Returns how many.
+def cancel_review(app, cid: str, sid: str, generation: str) -> list[Run]:
+    """Flag every run preparing this review as cancelled. Returns them.
 
     MUST be called inside the campaign-lock hold that then deletes the record,
     and BEFORE the delete. Split apart, the delete lands, the run publishes,
@@ -1500,18 +1500,42 @@ def cancel_review(app, cid: str, sid: str, generation: str) -> int:
     the obvious readings works: the stored payload names no producer, and
     "the scene's newest run" is as likely to be an unrelated live chat.
 
-    Answers 0 for a scene whose identity cannot be resolved rather than
-    raising: the caller is deleting a record, and a Cancel that cannot find a
-    run still has a record to remove.
+    Answers an empty list for a scene whose identity cannot be resolved rather
+    than raising: the caller is deleting a record, and a Cancel that cannot
+    find a run still has a record to remove.
+
+    The runs come back so the caller can WAIT for them, which it must do
+    outside this lock -- see `await_reviews_stopped`.
     """
     try:
         subject, _ = _scene_subject(cid, sid)
     except HTTPException:
-        return 0
+        return []
     flagged = app.state.runs.reviews_for_generation(subject, generation)
     for run in flagged:
         run.review_cancelled = True
-    return len(flagged)
+    return flagged
+
+
+def await_reviews_stopped(flagged: list[Run]) -> int:
+    """Wait for flagged review runs to reach a terminal state. Returns how many
+    were still live when asked.
+
+    **Outside the campaign lock, always.** A run being cancelled reaches its
+    terminal persist through `campaign_lock(cid)`; waiting for it while holding
+    that lock is a deadlock with a thirty-second fuse.
+
+    Waited on rather than left to unwind on its own, because the caller's very
+    next act is usually to start a *fresh* absorb -- and `review` holds the
+    scene's exclusion key exactly as a turn does, so a retry still unwinding
+    would refuse it with `run_in_flight`. The phases notice the flag on their
+    own abandonment poll, so this is normally well under a second; the bound is
+    for a provider that will not unwind, which must not hold a worker forever.
+    """
+    live = [r for r in flagged if r.state == "running"]
+    for run in live:
+        run.terminal.wait(timeout=CANCEL_TIMEOUT_SECONDS)
+    return len(live)
 
 
 def start_computing(app, run: Run, work) -> None:
