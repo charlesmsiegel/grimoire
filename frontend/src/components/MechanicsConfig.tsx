@@ -1,10 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type CampaignModule, type ModuleSummary, type SheetCoverage } from "../api/client";
-
-const KIND_LABELS: Record<string, string> = {
-  characters: "Characters", pcs: "PCs", locations: "Locations", lore: "Lore",
-  items: "Items", groups: "Groups", creatures: "Creatures",
-};
+import { sheetKindLabel } from "../sheetKinds";
 
 export default function MechanicsConfig({ cid, onChanged }: {
   cid: string;
@@ -89,7 +85,7 @@ export default function MechanicsConfig({ cid, onChanged }: {
           <h4>Sheets</h4>
           {Object.entries(coverage).map(([kind, c]) => (
             <div key={kind} className="field-hint">
-              {KIND_LABELS[kind] ?? kind} {c.sheeted}/{c.total}
+              {sheetKindLabel(kind)} {c.sheeted}/{c.total}
               {c.invalid > 0 ? ` · ${c.invalid} invalid` : ""}
             </div>
           ))}

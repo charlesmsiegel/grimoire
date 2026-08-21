@@ -7,7 +7,7 @@ from __future__ import annotations
 from .. import expressions
 from ..modules import fields as modules_fields
 from ..modules import validate as modules_validate
-from . import paths
+from . import paths, pools
 from .paths import SheetError
 
 
@@ -111,6 +111,68 @@ def _validate_instance(sheets_def: dict, file_kind: str, sheet_type,
         return [f"sheet type {sheet_type!r} targets kind {st.get('kind')!r}, "
                 f"not {paths.sheet_kind(file_kind)!r}"]
     return modules_validate.validate_sheet_values(sheets_def, sheet_type, fields)
+
+
+def _pool_spent(sheets_def: dict, pool_id: str, costs: dict, merged: dict) -> int:
+    """What a value map spends against one creation pool, priced from its
+    fields' floors -- the same arithmetic ``creation._checked_creation_write``
+    charges a spend at, run over values that are already stored."""
+    group_fields = pools._pool_group_fields(sheets_def, pool_id)
+    spent = 0
+    for field_key, cost in costs.items():
+        value = merged.get(field_key)
+        if (not isinstance(cost, int) or isinstance(cost, bool)
+                or not isinstance(value, int) or isinstance(value, bool)):
+            continue   # unjudgeable; see unspent_pools' docstring
+        spent += (value - pools._pool_floor(group_fields.get(field_key, {}))) * cost
+    return spent
+
+
+def unspent_pools(sheets_def: dict, type_id: str, fields: dict) -> dict[str, int]:
+    """Creation pools a sheet does not balance: ``{pool_id: budget - spent}``.
+
+    A sheet type's ``creation`` block prices a set of fields against a budget,
+    and ``creation.write_creation`` is the only writer that spends it. Every
+    other way a sheet comes into being -- ``write`` with ``fields=None``, a
+    world starting sheet copied by ``seed``, a bulk create -- writes the schema
+    defaults and consults no pool at all, so the sheet is *creation-incomplete*
+    the moment it exists and nothing on it says so.
+
+    That is the gap this closes, and the reason it is computed rather than
+    stored: like ``derived``, it is a judgment about the values that are there,
+    so it cannot go stale behind an edit made anywhere else.
+
+    Only pools that do not balance are listed. A positive value is points still
+    to spend; a NEGATIVE one is a sheet already over its budget, which a module
+    whose schema defaults sit above its pool floors produces by construction --
+    reporting only the underspend would quietly call that one complete.
+
+    Never raises. A budget expression that does not evaluate, a non-integer
+    cost, a field whose stored value is not an integer: each makes its pool (or
+    that one field) unjudgeable, and pack validation already reports the first
+    two as pack errors. Guessing here would put a number on the screen that no
+    rule produced.
+    """
+    st = sheets_def.get("sheet_types", {}).get(type_id)
+    if not isinstance(st, dict):
+        return {}
+    creation = st.get("creation")
+    defined = creation.get("pools") if isinstance(creation, dict) else None
+    if not isinstance(defined, dict):
+        return {}
+    merged = {**default_fields(sheets_def, type_id), **fields}
+    out: dict[str, int] = {}
+    for pool_id, pool in defined.items():
+        if not isinstance(pool, dict) or not isinstance(pool.get("costs"), dict):
+            continue
+        try:
+            budget = pools._pool_budget(pool)
+        except expressions.ExpressionError:
+            continue
+        spent = _pool_spent(sheets_def, pool_id, pool["costs"], merged)
+        if budget != spent:
+            out[pool_id] = budget - spent
+    return out
 
 
 def instance_errors(pack: dict, file_kind: str, sheet_type, fields: dict) -> list[str]:

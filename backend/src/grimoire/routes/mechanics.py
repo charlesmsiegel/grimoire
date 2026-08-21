@@ -24,6 +24,7 @@ from .models import (
     RollBody,
     SheetAdvanceBody,
     SheetBody,
+    SheetBulkBody,
     SheetCreationBody,
 )
 from .streaming import StreamOutcome, _continuation_stream, _sse
@@ -335,6 +336,34 @@ def get_campaign_sheets(cid: str):
     _campaign_root_or_404(cid)
     return {"coverage": store.sheets.coverage(cid),
             "refs": store.sheets.list_refs(cid)}
+
+
+# Four segments, so it can neither shadow nor be shadowed by the five-segment
+# `/sheets/{kind}/{eid}` routes below. What it does CROSS is the generic entity
+# read `/campaigns/{cid}/{kind}/{eid}`, which `routes.__init__` includes last so
+# this one wins; `tests/test_route_order.py` pins that decision.
+@router.get("/campaigns/{cid}/sheets/roster")
+def get_campaign_sheet_roster(cid: str):
+    """The cast, one row per member, saying who has a sheet and who does not.
+
+    Separate from `GET /sheets` rather than folded into it: the mechanics panel
+    reads that endpoint every time it opens and only ever wants the tallies, and
+    a campaign whose world carries a few hundred characters should not pay for
+    the whole roster to render `12/40`."""
+    _campaign_root_or_404(cid)
+    return {"roster": store.sheets.roster(cid)}
+
+
+@router.post("/campaigns/{cid}/sheets/create-missing")
+def post_campaign_sheets_create_missing(cid: str, body: SheetBulkBody):
+    """Create a default sheet for every cast member lacking one, in one request
+    -- the alternative being N round-trips driven by the client, which is N
+    chances to stop half-way and no single answer about what happened."""
+    _campaign_root_or_404(cid)
+    try:
+        return store.sheets.create_missing(cid, body.types)
+    except store.sheets.SheetError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.get("/campaigns/{cid}/sheets/{kind}/{eid}")

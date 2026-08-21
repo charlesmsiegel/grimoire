@@ -11455,6 +11455,67 @@ def test_sheet_delete_cas(client):
     assert r.json()["ok"] is False
 
 
+# ---- the roster and the bulk create (#201) ----
+def test_campaign_sheet_roster_route(client):
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    mara = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Winifred"})
+    client.put(f"/api/campaigns/{cid}/sheets/characters/{mara}",
+               json={"sheet_type": "medium", "fields": None, "expected": None})
+
+    roster = client.get(f"/api/campaigns/{cid}/sheets/roster").json()["roster"]
+    rows = {r["id"]: r for r in roster["characters"]}
+    assert rows[mara]["sheeted"] is True and rows[mara]["name"] == "Mara"
+    # a default sheet still owes its creation pool, and says so
+    assert rows[mara]["unspent"] == {"abilities": 6}
+    assert rows["winifred"]["sheeted"] is False
+    # `roster` is four segments and `entities`' generic /{kind}/{eid} read is
+    # included last, so this must not have been swallowed as kind="sheets"
+    assert set(roster) == set(client.get(f"/api/campaigns/{cid}/sheets").json()["coverage"])
+    assert client.get("/api/campaigns/nope/sheets/roster").status_code == 404
+
+
+def test_campaign_sheets_create_missing_route(client):
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    client.post(f"/api/campaigns/{cid}/items", json={"name": "Moon Disc"})
+
+    url = f"/api/campaigns/{cid}/sheets/create-missing"
+    # `talisman` is pool-basic's only items type, so items need no choice --
+    # but characters (and pcs, which share their types) have two, so they are
+    # skipped with a reason rather than guessed at. The kinds that CAN be done
+    # still are: a bulk create reports what it could not do instead of refusing
+    # the whole sweep over one ambiguous kind.
+    out = client.post(url, json={}).json()
+    assert [(c["kind"], c["id"]) for c in out["created"]] == [("items", "moon-disc")]
+    assert {s["kind"] for s in out["skipped"]} == {"characters", "pcs"}
+    assert client.get(f"/api/campaigns/{cid}/sheets").json()["coverage"]["characters"] \
+        == {"total": 1, "sheeted": 0, "invalid": 0}
+
+    out = client.post(url, json={"types": {"characters": "medium", "pcs": "medium"}}).json()
+    assert [(c["kind"], c["id"]) for c in out["created"]] == [("characters", "mara")]
+    assert out["failed"] == [] and out["skipped"] == []
+    assert client.get(f"/api/campaigns/{cid}/sheets").json()["coverage"]["characters"] \
+        == {"total": 1, "sheeted": 1, "invalid": 0}
+    # the created character sheet is real, and reported incomplete
+    assert out["created"][0]["unspent"] == {"abilities": 6}
+
+    # idempotent: a second press has nothing left to do
+    assert client.post(url, json={"types": {"characters": "medium",
+                                            "pcs": "medium"}}).json()["created"] == []
+
+
+def test_campaign_sheets_create_missing_without_a_module_is_a_400(client):
+    _, cid = _campaign(client)
+    r = client.post(f"/api/campaigns/{cid}/sheets/create-missing", json={})
+    assert r.status_code == 400
+    assert "module" in r.json()["detail"]
+    assert client.post("/api/campaigns/nope/sheets/create-missing",
+                       json={}).status_code == 404
+
+
 def test_instantiate_still_creates_sheeted_content(client, tmp_path):
     # Regression for the instantiate route's server-side expected=None call
     # (routes/campaigns.py post_campaign_instantiate) plus its rollback path: a fresh

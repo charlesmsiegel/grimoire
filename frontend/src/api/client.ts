@@ -42,7 +42,8 @@ import {
   type SceneBreak, type SceneBreakAnswer,
   type SceneMeta, type ScenePage, type SceneSuggestion, type SceneUsage,
   type SceneWeather, type ScheduledEvent, type SearchMode,
-  type SearchResult, type Sheet, type SheetCoverage, type SheetExpected, type StagedEdit,
+  type SearchResult, type Sheet, type SheetBulkResult, type SheetCoverage,
+  type SheetExpected, type SheetRoster, type StagedEdit,
   type StoreConflicts, type Style, type StyleDetail, type StyleDraft, type Suggestion,
   type Timeline, type TimelineEvent, type UndescribedImage,
   type WeatherOverrideBody, type WeatherRangeBody,
@@ -1580,6 +1581,11 @@ export const api = {
   getCampaignSheets: (cid: string) =>
     request<{ coverage: SheetCoverage; refs: [string, string][] }>(
       "GET", `/api/campaigns/${cid}/sheets`),
+  getCampaignSheetRoster: (cid: string) =>
+    request<{ roster: SheetRoster }>("GET", `/api/campaigns/${cid}/sheets/roster`),
+  createMissingSheets: (cid: string, types: Record<string, string>) =>
+    request<SheetBulkResult>("POST", `/api/campaigns/${cid}/sheets/create-missing`,
+      { types }),
   getWorldSheetsIndex: (wid: string) =>
     request<{ modules: string[]; default: string }>("GET", `/api/worlds/${wid}/sheets`),
   getWorldSheets: (wid: string, mid: string) =>

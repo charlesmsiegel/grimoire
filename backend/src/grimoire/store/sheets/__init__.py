@@ -63,8 +63,17 @@ from .schema import (  # noqa: F401
                default_fields,
                expression_scope,
                instance_errors,
+               unspent_pools,
 )
-from .tally import _tally, _type_kinds, coverage, seed, world_coverage  # noqa: F401
+from .tally import (  # noqa: F401
+               _tally,
+               _type_kinds,
+               coverage,
+               create_missing,
+               roster,
+               seed,
+               world_coverage,
+)
 from .writer import (  # noqa: F401
                _check_expected,
                _checked_write,

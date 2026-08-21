@@ -1173,3 +1173,235 @@ def test_instance_errors_includes_derived_failures(monkeypatch, tmp_path):
     assert sheets.instance_errors(pack, "characters", "warden", {"strength": 2}) == []
     assert sheets.instance_errors(pack, "characters", "ghost", {}) != []
     assert sheets.instance_errors(pack, "items", "warden", {}) != []
+
+
+# ---- creation completeness, the roster, and the bulk create (#201) ----
+#
+# `write` with `fields=None` -- the only way a sheet has ever been created
+# outside the creation wizard -- writes schema defaults and never looks at the
+# sheet type's `creation` pools. So a "default sheet" can be born owing points,
+# and until #201 nothing said so. These are the tests for the thing that says so
+# and for the bulk create that leans on it.
+
+# A sheet type whose schema defaults sit ABOVE its pool budget. pool-basic
+# cannot express this (its defaults balance or underspend), and a bulk create
+# that reported only underspend would quietly call this one finished.
+_OVERSPENT_DEF = {
+    "groups": {"attributes": {"label": "Attributes", "fields": [
+        {"key": "vigor", "label": "Vigor", "type": "dots", "max": 5, "default": 3}]}},
+    "sheet_types": {"mortal": {
+        "label": "Mortal", "kind": "characters", "groups": ["attributes"], "fields": [],
+        "creation": {"pools": {"attributes": {"budget": 2, "costs": {"vigor": 2}}}}}},
+}
+
+
+def _pool_basic_sheets_def():
+    return modules.load_pack("pool-basic")["sheets"]
+
+
+def test_unspent_pools_reports_what_a_default_sheet_still_owes():
+    d = _pool_basic_sheets_def()
+    unspent = sheets.unspent_pools(d, "medium", sheets.default_fields(d, "medium"))
+    # attributes: three dots priced at 2, all defaulting to 1 -> 6 of a 6 budget
+    # spent, so it balances and is not listed at all.
+    assert unspent == {"abilities": 6}
+
+
+def test_unspent_pools_is_empty_for_a_fully_spent_creation(monkeypatch, tmp_path):
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara")
+    sheets.write_creation(cid, "characters", "mara", "medium",
+                          # 3 dots at 2 each, then 6 at 1 each: both budgets to zero
+                          {"attributes": {"vigor": 3},
+                           "abilities": {"brawl": 3, "occult": 3}},
+                          expected=None)
+    s = sheets.read(cid, "characters", "mara")
+    assert sheets.unspent_pools(_pool_basic_sheets_def(), "medium", s["fields"]) == {}
+
+
+def test_unspent_pools_reports_an_overspend_as_a_negative():
+    unspent = sheets.unspent_pools(_OVERSPENT_DEF, "mortal",
+                                   sheets.default_fields(_OVERSPENT_DEF, "mortal"))
+    assert unspent == {"attributes": -4}          # budget 2, defaults spend 6
+
+
+def test_unspent_pools_skips_a_pool_it_cannot_price():
+    """A budget expression that does not evaluate, a cost that is not an int, a
+    stored value that is not an int: each is unjudgeable, and pack validation
+    already reports the first two. A guess here would be a number on screen
+    that no rule produced."""
+    broken = {"groups": {"attributes": {"fields": [{"key": "vigor", "type": "dots"}]}},
+              "sheet_types": {"mortal": {"kind": "characters", "groups": ["attributes"],
+                                         "creation": {"pools": {
+                                             "attributes": {"budget": "1 +",
+                                                            "costs": {"vigor": 2}}}}}}}
+    assert sheets.unspent_pools(broken, "mortal", {"vigor": 1}) == {}
+    text_cost = {**_OVERSPENT_DEF}
+    text_cost["sheet_types"] = {"mortal": {
+        **_OVERSPENT_DEF["sheet_types"]["mortal"],
+        "creation": {"pools": {"attributes": {"budget": 2, "costs": {"vigor": "two"}}}}}}
+    assert sheets.unspent_pools(text_cost, "mortal", {"vigor": 3}) == {"attributes": 2}
+    assert sheets.unspent_pools(_OVERSPENT_DEF, "mortal", {"vigor": "three"}) == {"attributes": 2}
+
+
+def test_unspent_pools_is_empty_for_a_type_with_no_creation_block():
+    d = _pool_basic_sheets_def()
+    assert sheets.unspent_pools(d, "shifter", sheets.default_fields(d, "shifter")) == {}
+    assert sheets.unspent_pools(d, "ghost", {}) == {}
+
+
+def test_roster_names_the_cast_and_says_who_has_a_sheet(monkeypatch, tmp_path):
+    from grimoire.store import overlay
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara")
+    characters.create_character(worlds.world_root(wid), "Winifred")
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
+
+    rows = {r["id"]: r for r in sheets.roster(cid)["characters"]}
+    assert rows["mara"]["name"] == "Mara"
+    assert rows["mara"]["sheeted"] is True
+    assert rows["mara"]["sheet_type"] == "medium"
+    assert rows["mara"]["errors"] == []
+    # the point of the whole exercise: a default sheet is not a finished one
+    assert rows["mara"]["unspent"] == {"abilities": 6}
+    assert rows["winifred"] == {"id": "winifred", "name": "Winifred", "sheeted": False,
+                                "sheet_type": None, "errors": [], "unspent": {}}
+    # and it agrees with the tally it is the long form of
+    assert sheets.coverage(cid)["characters"] == {"total": 2, "sheeted": 1, "invalid": 0}
+    # kinds the module has no sheet type for stay off the roster, as in coverage
+    assert "lore" not in sheets.roster(cid)
+    assert set(sheets.roster(cid)) == set(sheets.coverage(cid))
+    overlay.list_entities(cid, "items")   # no items, but the kind is sheetable
+    assert sheets.roster(cid)["items"] == []
+
+
+def test_roster_carries_an_invalid_sheets_errors(monkeypatch, tmp_path):
+    from grimoire.store import overlay
+    _, cid = _campaign(monkeypatch, tmp_path)
+    overlay.create_entity(cid, "items", "Moon Disc")
+    sheets.write(cid, "items", "moon-disc", "talisman", None, expected=None)
+    modules.set_campaign_module(cid, "d20-basic")     # talisman is now unknown
+    row = sheets.roster(cid)["items"][0]
+    assert row["sheeted"] is True and row["errors"]
+    assert row["unspent"] == {}                       # unjudgeable, not guessed
+
+
+def test_roster_is_empty_without_a_module(monkeypatch, tmp_path):
+    _, cid = _campaign(monkeypatch, tmp_path, module=None)
+    assert sheets.roster(cid) == {}
+
+
+def test_create_missing_fills_the_gap_and_flags_what_is_incomplete(monkeypatch, tmp_path):
+    from grimoire.store import overlay
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara")
+    characters.create_character(worlds.world_root(wid), "Winifred")
+    overlay.create_entity(cid, "items", "Moon Disc")
+    sheets.write(cid, "characters", "mara", "shifter", None, expected=None)
+
+    out = sheets.create_missing(cid, {"characters": "medium", "pcs": "medium"})
+
+    made = {(c["kind"], c["id"]): c for c in out["created"]}
+    assert set(made) == {("characters", "winifred"), ("items", "moon-disc")}
+    assert made[("characters", "winifred")]["name"] == "Winifred"
+    assert made[("characters", "winifred")]["sheet_type"] == "medium"
+    # created, and explicitly incomplete -- not skipped, which is the one
+    # option #201 rules out
+    assert made[("characters", "winifred")]["unspent"] == {"abilities": 6}
+    # `talisman` has no creation block at all, so nothing is owed
+    assert made[("items", "moon-disc")]["unspent"] == {}
+    assert out["failed"] == []
+    # `haven` is the only locations type, so it needed no choice -- and there
+    # are no locations, so it produced nothing and is not a skip either
+    assert out["skipped"] == []
+
+    # mara's existing sheet is untouched: a bulk create fills gaps, never
+    # overwrites a sheet somebody made
+    assert sheets.read(cid, "characters", "mara")["sheet_type"] == "shifter"
+    assert sheets.coverage(cid)["characters"]["sheeted"] == 2
+
+
+def test_create_missing_is_a_no_op_the_second_time(monkeypatch, tmp_path):
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara")
+    assert len(sheets.create_missing(cid, {"characters": "medium"})["created"]) == 1
+    again = sheets.create_missing(cid, {"characters": "medium"})
+    assert again["created"] == [] and again["failed"] == []
+
+
+def test_create_missing_skips_an_ambiguous_kind_out_loud(monkeypatch, tmp_path):
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara")
+
+    out = sheets.create_missing(cid)          # no choices at all
+    assert out["created"] == []
+    skipped = {s["kind"]: s["reason"] for s in out["skipped"]}
+    # pool-basic has `medium` and `shifter` for characters (and pcs share them)
+    assert set(skipped) == {"characters", "pcs"}
+    assert "medium" in skipped["characters"] and "shifter" in skipped["characters"]
+    assert sheets.read(cid, "characters", "mara") is None
+
+
+def test_create_missing_reports_a_type_that_does_not_fit_the_kind(monkeypatch, tmp_path):
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara")
+    out = sheets.create_missing(cid, {"characters": "talisman", "pcs": "medium"})
+    assert out["created"] == []
+    assert [s["kind"] for s in out["skipped"]] == ["characters"]
+    assert "talisman" in out["skipped"][0]["reason"]
+
+
+def test_create_missing_reports_a_choice_for_a_kind_the_module_does_not_sheet(
+        monkeypatch, tmp_path):
+    _, cid = _campaign(monkeypatch, tmp_path)
+    out = sheets.create_missing(cid, {"lore": "medium", "characters": "medium",
+                                      "pcs": "medium"})
+    assert {s["kind"] for s in out["skipped"]} == {"lore"}
+
+
+def test_create_missing_covers_pcs_with_the_characters_types(monkeypatch, tmp_path):
+    _, cid = _campaign(monkeypatch, tmp_path)
+    pcs.create_pc(campaigns.campaign_root(cid), "Seraphine", [])
+    out = sheets.create_missing(cid, {"characters": "medium", "pcs": "shifter"})
+    assert [(c["kind"], c["sheet_type"]) for c in out["created"]] == [("pcs", "shifter")]
+    assert sheets.read(cid, "pcs", "seraphine")["sheet_type"] == "shifter"
+
+
+def test_create_missing_needs_a_module(monkeypatch, tmp_path):
+    _, cid = _campaign(monkeypatch, tmp_path, module=None)
+    with pytest.raises(sheets.SheetError):
+        sheets.create_missing(cid)
+
+
+def test_create_missing_records_a_sheet_that_raced_in_as_a_failure(monkeypatch, tmp_path):
+    """Every write asserts creation (`expected=None`), so a sheet appearing
+    between the scan and the write is a recorded failure, never an overwrite.
+    Simulated by writing the file from under the scan -- the campaign lock makes
+    the real race a cross-process one."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara")
+    real_read = sheets.reader.read
+
+    def read_then_race(c, kind, eid):
+        got = real_read(c, kind, eid)
+        if got is None and kind == "characters":
+            sheets.writer._checked_write(sheets._campaign_path(c, kind, eid),
+                                         "pool-basic", kind, eid, "shifter", None)
+        return got
+
+    monkeypatch.setattr(sheets.tally.sheet_reader, "read", read_then_race)
+    out = sheets.create_missing(cid, {"characters": "medium", "pcs": "medium"})
+    assert out["created"] == []
+    assert [(f["kind"], f["id"]) for f in out["failed"]] == [("characters", "mara")]
+    assert sheets.read(cid, "characters", "mara")["sheet_type"] == "shifter"
+
+
+def test_create_missing_takes_the_campaign_lock_once_for_the_whole_sweep(
+        monkeypatch, tmp_path):
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara")
+    with locks.campaign_lock(cid):
+        # reentrant from this thread; the point is that a *concurrent* writer
+        # cannot land between the "has no sheet" scan and the write
+        out = sheets.create_missing(cid, {"characters": "medium", "pcs": "medium"})
+    assert len(out["created"]) == 1
