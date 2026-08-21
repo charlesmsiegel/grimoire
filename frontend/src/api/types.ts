@@ -239,8 +239,13 @@ export type Scene = { meta: { id: string; title: string; response_preset?: strin
 // clipped server-side, and `guidance` is the reroll hint that produced it.
 // `id` is derived from the variant's content, not its position: retention drops
 // the oldest take when a full set grows, and every index below it shifts.
+// `model` is the route this variant was generated on, when it was archived by
+// a reroll that overrode one (#77) — "" for every variant that predates the
+// override and for every one reconciled out of the transcript rather than
+// archived, which reads as "the scene's own model".
 export type SceneAlternate = {
-  id: string; created: string; guidance: string; posts: number; preview: string;
+  id: string; created: string; guidance: string; model: string;
+  posts: number; preview: string;
 };
 export type SceneAlternates = { active: number | null; alternates: SceneAlternate[] };
 // A windowed read (`getScene` with a `limit`) carries the tail of the
@@ -486,6 +491,17 @@ export type ResponseProvenance = Record<string, { scope: string; source?: string
 // response_presets.resolve(turn=...) accepts server-side: a bare
 // {response_preset: id} or loose knob overrides.
 export type ResponseOverride = Partial<ResponseFields>;
+/** Everything ONE reroll may override, all of it riding that call alone.
+ *  `connection_id` and `model` are the manual route override (#77): the
+ *  connection to send this reroll to, and the model to drive it at. Empty
+ *  means the standing configuration for that half — they compose, so a
+ *  connection with no model uses the connection's own. */
+export type RegenerateOverrides = {
+  guidance?: string;
+  response?: ResponseOverride;
+  connection_id?: string;
+  model?: string;
+};
 export type ResponseBundle = ResponseFields & { effective: ResponseEffective; provenance: ResponseProvenance };
 export type Availability = {
   id: string; name: string; available: boolean; reasons: string[]; unlocked: boolean;

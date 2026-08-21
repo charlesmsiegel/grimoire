@@ -6,11 +6,19 @@ export default function ModelCombobox({
   onChange,
   models,
   error = false,
+  ariaLabel,
+  placeholder,
 }: {
   value: string;
   onChange: (id: string) => void;
   models: Model[];
   error?: boolean;
+  /** Names the input where no `<Field>` label wraps it — the reroll popover
+   *  (#77) is a gutter overlay with no room for one. */
+  ariaLabel?: string;
+  /** What an EMPTY value falls back to, shown in the box. Only a picker whose
+   *  blank means something other than "unset" has one to offer. */
+  placeholder?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [touched, setTouched] = useState(false);
@@ -38,6 +46,8 @@ export default function ModelCombobox({
     <div className="combobox">
       <input
         type="text"
+        aria-label={ariaLabel}
+        placeholder={placeholder}
         value={value}
         onChange={(e) => {
           onChange(e.target.value);

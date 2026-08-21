@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, Up
 from starlette.concurrency import run_in_threadpool
 
 from .. import prompts, store
-from ..llm import LLMClient
+from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
 from . import runs, streaming
 from .common import (
@@ -22,6 +22,7 @@ from .common import (
     _campaign_root_or_404,
     _dump,
     _llm_http_error,
+    _override_connection,
     _page_of,
     _page_window,
     _record_prompt,
@@ -760,7 +761,7 @@ def _restore_reroll(cid: str, sid: str, removed: dict):
     def restore() -> None:
         store.scenes.restore_trailing_assistant_run(cid, sid, removed)
         try:
-            store.alternates.disown_guidance(cid, sid)
+            store.alternates.disown_pending(cid, sid)
         except OSError:
             pass
     return restore
@@ -806,7 +807,12 @@ def post_regenerate(cid: str, sid: str, request: Request,
     if replay is not None:
         return replay
     _require_scene(cid, sid)
-    conn = _require_connection()
+    # The one-shot route override (#77), resolved here rather than inside
+    # `_regenerate_run`: a body naming a connection that does not exist, or one
+    # with no key, must refuse BEFORE the reservation below — past it the route
+    # has archived and removed the outgoing reply, and a 400 raised there would
+    # report a rejected request over a scene that is one reply short.
+    conn = _override_connection(body)
     # RESERVED BEFORE THE FIRST MUTATOR, which matters more here than anywhere
     # else: this route archives the outgoing reply and removes it from the
     # transcript before the replacement exists, so a 409 raised afterwards
@@ -823,6 +829,33 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
                     client: LLMClient, conn: dict, run):
     """The body of a reroll, once the scene is reserved -- see `_chat_run`."""
     guidance = (body.guidance or "").strip() if body else ""
+    # What this reroll will actually be sent to, after `_override_connection`
+    # has folded in whatever the body asked for. Read off `conn` rather than off
+    # the body, so it names the resolved route in every case -- an override
+    # naming only a connection reports THAT connection's model, and a Claude
+    # connection with none configured reports the one the dispatcher
+    # substitutes rather than the empty string it stores.
+    #
+    ran_on = effective_model(conn)
+    # Whether the caller asked for a route at all, which the two stamps below
+    # answer to differently -- and deliberately, because they are answering
+    # different questions:
+    #
+    # - The ALTERNATE is stamped on every reroll. It is the only record a
+    #   variant has of the generation that produced it, and the whole point of
+    #   the set is reading variants side by side; "which model wrote this one"
+    #   is answerable nowhere else. Always stamping also catches the case an
+    #   override-only rule would miss, since the scene's `model` frontmatter is
+    #   written once at creation and goes stale the moment the active
+    #   connection is repointed. "" is then left meaning "no record" -- every
+    #   pre-#77 variant, and every variant reconciled out of the transcript.
+    # - The SNAPSHOT is stamped only when the route was overridden, because its
+    #   `model` is a field the LIVE context panel reports for the same scene
+    #   too, and `store.prompt_log` argues at length that the two agreeing
+    #   matters more than either being exactly right. A deliberate one-shot
+    #   override is the one case where they are describing different things
+    #   (this turn, versus the next one) rather than drifting apart.
+    routed = bool(body and (body.connection_id or body.model))
     removed: dict | None = None   # set only when there is actually a reply to drop
     # ONE lock across the heal, the decision, the archive and the removal. A gap
     # anywhere in that span is a gap another writer's generation can land in —
@@ -893,7 +926,7 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
         # variant that does land is filed under the *previous* attempt's
         # guidance. `archive` writes nothing at all for a scene that has no set,
         # so the refusals above still leave the scene untouched.
-        store.alternates.archive(cid, sid, guidance)
+        store.alternates.archive(cid, sid, guidance, ran_on)
         if replacing:
             try:
                 removed = store.scenes.remove_trailing_assistant_run(cid, sid)
@@ -907,7 +940,7 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
                 # likely) may stop this too, and the original failure is the one
                 # worth reporting.
                 try:
-                    store.alternates.disown_guidance(cid, sid)
+                    store.alternates.disown_pending(cid, sid)
                 except OSError:
                     pass    # the disk that stopped the removal can stop this too
                 if isinstance(exc, store.scenes.TurnSizesDesynced):
@@ -998,7 +1031,12 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
     # after the turn claim inside `_chat_stream` (which can raise StoreBusy on a
     # contended campaign). Both would leave Turn history showing a regeneration
     # the model never saw.
-    _record_prompt(cid, sid, "regenerate", breakdown)
+    # `ran_on` for a routed reroll, and the scene's own stamp otherwise (see
+    # `routed` above). `SceneInspector` reads the recorded model back to look up
+    # the context size it measures a snapshot against, so a reroll sent to a 32k
+    # local endpoint and filed under the campaign's 200k model is a percentage
+    # bar that reads comfortable for a prompt that did not fit.
+    _record_prompt(cid, sid, "regenerate", breakdown, model=ran_on if routed else "")
     # `on_unstarted` is `restore` again, for the one path the stream's own hooks
     # cannot cover: a Stop that arrived while this route was still in the
     # synchronous setup above. The runner honours it with a checkpoint BEFORE
@@ -1021,6 +1059,11 @@ def _alternate(run: dict) -> dict:
     text = "\n\n".join(s["content"] for s in run["segments"])
     return {"id": store.alternates.variant_id(run),
             "created": run.get("created", ""), "guidance": run.get("guidance", ""),
+            # "" for a variant with no record of its route — every one that
+            # predates #77, and every one reconciled out of the transcript
+            # rather than archived. The client reads that as "the scene's
+            # model", which is what it was before an override could exist.
+            "model": run.get("model", ""),
             "posts": len(run["segments"]),
             "preview": text[:_PREVIEW_CHARS] + ("…" if len(text) > _PREVIEW_CHARS else "")}
 

@@ -264,13 +264,24 @@ def _turn_override(body) -> dict | None:
     return {k: v for k, v in _dump(body.response).items() if v is not None}
 
 
-def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None) -> None:
+def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
+                   *, model: str = "") -> None:
     """Freeze what this turn's model is about to see (#157).
 
     Called with the breakdown from the SAME `context.compose_*` call that
     produced the messages being sent — see `store.prompt_log`. The scene's
     stamped model rides along so a snapshot still names its provider after the
     scene is repointed at another one.
+
+    `model` overrides that stamp for the one caller that KNOWS the turn did not
+    run on it: a reroll carrying a per-call route override (#77). Keyword-only
+    and defaulted to "", so every other caller keeps the shared-inaccuracy rule
+    `store.prompt_log`'s docstring argues for — the frozen panel and the live
+    one agreeing about a scene matters more than either being exactly right.
+    That argument is about a *drifted* stamp, though, and it does not cover a
+    turn the user deliberately sent somewhere else: there the live panel is
+    describing the next turn and this one is describing a turn that happened,
+    and they are simply about different things.
 
     Called once the turn is committed to happening — after the stream object
     exists, so the pre-stream claim has already succeeded — but NOT from inside
@@ -308,9 +319,12 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None) -> Non
             # Frontmatter only. `read_scene` would re-parse the whole transcript
             # for one field, on a path the turn is already about to pay for
             # several times over.
+            # Read even when `model` was supplied: the frontmatter read is what
+            # proves the scene is still here, which is the check this whole
+            # critical section exists for.
             meta = store.scenes.read_scene_meta(cid, sid)
             store.prompt_log.record(cid, sid, task, breakdown,
-                                    model=meta.get("model", ""))
+                                    model=model or meta.get("model", ""))
     except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound,
             store.locks.StoreBusy, OSError):
         return   # gone, contended, or unreadable: capture nothing, cost nothing
@@ -761,6 +775,62 @@ def _require_connection() -> dict:
         # connection, wondering why the model they picked never sounds right.
         raise HTTPException(status_code=409, detail={"detail": problem, "kind": "missing_key"})
     return conn
+
+
+def _override_connection(body) -> dict:
+    """The connection ONE call asked to run on, or the active one (#77).
+
+    Reads `connection_id` and `model` off any request body that carries them
+    (`RegenerateBody` today), and returns a connection dict the LLM facade can
+    be handed directly — `_require_connection`'s answer when neither is set, so
+    every caller keeps the standing configuration by doing nothing.
+
+    Three refusals, and which one fires matters to the caller:
+
+    - an id naming no connection is a **400**, not a 404. The routes that take
+      an override are scene routes whose 404 already means "this scene is gone"
+      and is acted on as such by the client (it stops the turn and re-reads the
+      rail); spending the same status on a bad body field would send it
+      hunting for a scene that is fine.
+    - a connection that cannot send is the same **409/missing_key**
+      `_require_connection` raises, because it is the same setup mistake and
+      the frontend already routes that kind to the Connections page. Checked
+      through the shared `_connection_problem`, so an override is held to
+      exactly the standard the active connection is.
+    - an override is NOT rescued by falling back to the active connection when
+      it is unusable. Quietly serving "reroll this on the local endpoint" from
+      OpenRouter is the failure mode the explicit 409 exists to prevent, and it
+      would be invisible: the reply reads like any other.
+
+    The active connection is deliberately not required when `connection_id`
+    names another one. Rerolling onto a working local endpoint is exactly the
+    thing to do while the OpenRouter key is missing, and requiring the active
+    one first would refuse the request that fixes the session.
+
+    What this does NOT change is the configured fallback (#144). An override
+    picks which connection is *primary*; the fallback is standing policy about
+    what happens when a primary is exhausted, and silently suspending it for
+    one call would make a reroll the one turn a rate limit can simply lose.
+    `llm._same_route` already drops a fallback that resolves to the override
+    itself, so "reroll this on the fallback" does not double up.
+    """
+    cid_field = (getattr(body, "connection_id", None) or "").strip() if body else ""
+    model = (getattr(body, "model", None) or "").strip() if body else ""
+    if not cid_field:
+        conn = _require_connection()
+    else:
+        try:
+            conn = store.llm_connections.read_connection_raw(cid_field)
+        except store.llm_connections.ConnectionNotFound as exc:
+            raise HTTPException(status_code=400, detail="unknown connection") from exc
+        problem = _connection_problem(conn)
+        if problem is not None:
+            raise HTTPException(status_code=409,
+                                detail={"detail": problem, "kind": "missing_key"})
+    # Last, so it applies to the active connection and to a named one alike.
+    # A copy, never a mutation: `conn` is the dict the store handed back, and
+    # writing through it would be a per-call override editing shared state.
+    return {**conn, "model": model} if model else conn
 
 
 def _require_scene(cid: str, sid: str) -> dict:

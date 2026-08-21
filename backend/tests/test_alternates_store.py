@@ -38,11 +38,11 @@ def _scene_with_reply(cid, title="Saltmarch"):
     return sid
 
 
-def _reroll(cid, sid, segments, guidance=""):
+def _reroll(cid, sid, segments, guidance="", model=""):
     """What the regenerate route does: archive, drop the run, stream a new one —
     and persist the reconciliation the reply's landing produced, which the
     route does from `_persist_reply`."""
-    alternates.archive(cid, sid, guidance)
+    alternates.archive(cid, sid, guidance, model)
     scenes.remove_trailing_assistant_run(cid, sid)
     scenes.append_reply(cid, sid, segments)
     alternates.reconcile(cid, sid)
@@ -1036,3 +1036,135 @@ def test_the_sidecar_is_json_a_human_can_read(monkeypatch, tmp_path):
     assert data["next_guidance"] == ""
     # nothing about what is on screen is stored -- it is derived on every read
     assert "active" not in data
+
+
+# ---- the model a reroll was aimed at (#77) ----
+def test_the_model_a_reroll_was_aimed_at_lands_on_the_variant_it_produced(
+        monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = _scene_with_reply(cid)
+
+    _reroll(cid, sid, [_seg("Gulls over the pilings.")], model="local/llama3")
+
+    runs = alternates.state(cid, sid)["runs"]
+    assert [r.get("model", "") for r in runs] == ["", "local/llama3"]
+
+
+def test_a_stamp_reaches_a_variant_with_no_guidance_beside_it(monkeypatch, tmp_path):
+    """The pending pair is spent together, so a model override sent without a
+    hint must still reach the run that fills the slot."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = _scene_with_reply(cid)
+
+    alternates.archive(cid, sid, "", "local/llama3")
+    scenes.remove_trailing_assistant_run(cid, sid)
+    scenes.append_reply(cid, sid, [_seg("Gulls over the pilings.")])
+
+    runs = alternates.state(cid, sid)["runs"]
+    assert runs[1]["model"] == "local/llama3"
+    assert runs[1]["guidance"] == ""
+
+
+def test_a_stamp_is_spent_and_does_not_re_label_the_next_take(monkeypatch, tmp_path):
+    """One reroll's route is not the next thing to land in the slot — a hand
+    edit of the reply, most obviously — so the stamp is one-shot exactly as the
+    hint is."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = _scene_with_reply(cid)
+    _reroll(cid, sid, [_seg("Gulls over the pilings.")], model="local/llama3")
+
+    scenes.edit_message(cid, sid, 1, "Gulls, and a bell.")
+
+    runs = alternates.state(cid, sid)["runs"]
+    assert [r["segments"][0]["content"] for r in runs] == [
+        "Fog over the pilings.", "Gulls over the pilings.", "Gulls, and a bell."]
+    assert [r.get("model", "") for r in runs] == ["", "local/llama3", ""]
+
+
+def test_a_deduplicated_take_is_re_stamped_with_the_route_that_produced_it(
+        monkeypatch, tmp_path):
+    """Two identical takes are one variant, but the second reroll is what is on
+    screen — so an override-free repeat must not leave the earlier take's route
+    labelling it."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = _scene_with_reply(cid)
+    _reroll(cid, sid, [_seg("Gulls over the pilings.")], model="local/llama3")
+    _reroll(cid, sid, [_seg("Fog over the pilings.")], model="")   # back to the first take
+
+    state = alternates.state(cid, sid)
+    assert state["runs"][state["active"]]["model"] == ""
+
+
+def test_disowning_a_pending_pair_takes_the_model_back_with_the_hint(
+        monkeypatch, tmp_path):
+    """The reroll recorded both and then failed to make room for what they were
+    aimed at. The reply on screen is the one they meant to replace."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = _scene_with_reply(cid)
+    alternates.archive(cid, sid, "colder", "local/llama3")
+
+    alternates.disown_pending(cid, sid)
+
+    stored = json.loads(scenes_paths._alts_path(cid, sid).read_text(encoding="utf-8"))
+    assert stored["next_guidance"] == "" and stored["next_model"] == ""
+    assert alternates.state(cid, sid)["runs"][0].get("model", "") == ""
+
+
+def test_disowning_takes_a_model_back_that_arrived_without_a_hint(monkeypatch, tmp_path):
+    """Half an undo would credit the surviving reply with a route it was not
+    generated on."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = _scene_with_reply(cid)
+    alternates.archive(cid, sid, "", "local/llama3")
+
+    alternates.disown_pending(cid, sid)
+
+    assert json.loads(
+        scenes_paths._alts_path(cid, sid).read_text(encoding="utf-8"))["next_model"] == ""
+
+
+def test_promoting_a_variant_clears_a_pending_stamp(monkeypatch, tmp_path):
+    """Swapping is not the generation the stamp was aimed at, so it must not
+    survive the swap and label whatever lands next."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = _scene_with_reply(cid)
+    _reroll(cid, sid, [_seg("Gulls over the pilings.")])
+    alternates.archive(cid, sid, "colder", "local/llama3")   # a reroll that then died
+    scenes.remove_trailing_assistant_run(cid, sid)
+
+    alternates.promote(cid, sid, 0)
+
+    assert json.loads(
+        scenes_paths._alts_path(cid, sid).read_text(encoding="utf-8"))["next_model"] == ""
+
+
+def test_a_stamp_longer_than_any_model_id_is_clipped(monkeypatch, tmp_path):
+    """The field arrives from the same unbounded wire string the hint does."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = _scene_with_reply(cid)
+
+    _reroll(cid, sid, [_seg("Gulls over the pilings.")], model="m" * 5000)
+
+    runs = alternates.state(cid, sid)["runs"]
+    assert len(runs[1]["model"]) == alternates.MAX_MODEL_CHARS
+
+
+def test_a_sidecar_written_before_the_stamp_existed_still_reads(monkeypatch, tmp_path):
+    """Every variant archived before #77 has no `model` key at all, and reads as
+    "the scene's model" rather than as a broken record."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = _scene_with_reply(cid)
+    _reroll(cid, sid, [_seg("Gulls over the pilings.")], guidance="colder")
+    path = scenes_paths._alts_path(cid, sid)
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    stored.pop("next_model")
+    for run in stored["runs"]:
+        run.pop("model", None)
+    atomic.write_text(path, json.dumps(stored, indent=2) + "\n")
+
+    state = alternates.state(cid, sid)
+
+    assert [r["segments"][0]["content"] for r in state["runs"]] == [
+        "Fog over the pilings.", "Gulls over the pilings."]
+    assert [r.get("model", "") for r in state["runs"]] == ["", ""]
+    assert state["runs"][1]["guidance"] == "colder"

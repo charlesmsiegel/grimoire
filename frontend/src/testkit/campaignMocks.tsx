@@ -49,6 +49,9 @@ export async function campaignApiMock() {
       cancelAttempt: vi.fn(() => Promise.resolve(
         { run: { id: "r", attempt_id: "a", state: "cancelled", next_index: 0 } })),
       getAlternates: vi.fn(), pickAlternate: vi.fn(),
+      // The reroll popover's route picker (#77). `listConnections` fires on
+      // every open, and `readConnection` only for a chosen custom endpoint.
+      listConnections: vi.fn(), readConnection: vi.fn(),
       roll: vi.fn(),
       getRollProposal: vi.fn(), resolveProposal: vi.fn(),
       getSceneChecks: vi.fn(), rollCheck: vi.fn(),

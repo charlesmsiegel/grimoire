@@ -128,7 +128,17 @@ export function installCampaignMocks() {
   (api.resolveProposal as any).mockImplementation(streamsDone);
   (api.getSceneChecks as any).mockResolvedValue({ actors: [] });
   (api.rollCheck as any).mockResolvedValue({ ok: true, resolution: {}, message: "" });
-  (api.getConfig as any).mockResolvedValue({ theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire", active_connection_id: "openrouter", active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true });
+  (api.getConfig as any).mockResolvedValue({ theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire", active_connection_id: "openrouter", active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter", model: "campaign/model" }, ready: true });
+  // The reroll popover's route picker (#77): one connection, the active one, so
+  // an untouched popover offers only "Default" and the suites that never open
+  // it are unaffected.
+  (api.listConnections as any).mockResolvedValue([
+    { id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "",
+      model: "campaign/model", post_process: "none", key_set: true, rev: "r1" }]);
+  (api.readConnection as any).mockResolvedValue(
+    { id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "",
+      model: "campaign/model", post_process: "none", key_set: true, rev: "r1",
+      models: [], fetched_at: "" });
   (api.editMessage as any).mockResolvedValue({ ok: true });
   (api.getReplay as any).mockResolvedValue(null);
   (api.replayPreview as any).mockResolvedValue(
