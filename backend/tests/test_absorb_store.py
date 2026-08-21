@@ -249,10 +249,11 @@ def test_materialize_qualified_lore_edit_id_does_not_fall_back_to_another_kind(
 
 
 def test_a_bare_lore_edit_id_resolves_in_the_declared_kind_order(monkeypatch, tmp_path):
-    """The two kinds this resolver knew before the other three joined it keep
-    the order they were tried in. Slugs are per-kind, so one id can name up to
-    five records, and reordering would silently move an append that has been
-    landing on a lore entry onto a same-slugged location."""
+    """Slugs are per-kind, so one bare id can name up to five records and the
+    resolver has to pick one. All five positions are pinned, not just the first:
+    lore and locations lead because they are the two this resolver knew before
+    the other three joined it (#224), and reordering them would silently move an
+    append that has been landing on a lore entry onto a same-slugged location."""
     from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
@@ -271,9 +272,10 @@ def test_a_bare_lore_edit_id_resolves_in_the_declared_kind_order(monkeypatch, tm
 
 def test_materialize_lore_edit_drops_an_id_naming_a_kind_that_is_not_a_record(
         monkeypatch, tmp_path):
-    """`characters/seraphine` is a real ref elsewhere in this contract, and a
-    body append is not a thing a character has. It must be dropped, not read as
-    a bare id that happens to contain a slash."""
+    """`characters/<id>` is a real ref elsewhere in this contract, and a body
+    append is not a thing a character has. A prefix that is not an entity kind
+    must be dropped, not read as a bare id that happens to contain a slash --
+    and neither is a kind with nothing after it."""
     from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
