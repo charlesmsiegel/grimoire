@@ -252,7 +252,15 @@ def delete_entity(root: Path, kind: str, eid: str) -> None:
     p.unlink()
 
 
-def reclassify(root: Path, kind: str, eid: str, new_kind: str, taken=None) -> str:
+def _occupied(root: Path, kind: str, eid: str) -> bool:
+    """Is this slug spoken for in `kind`, by a record or by the orphaned asset
+    directory of one (#225)? The half of the id namespace that is on disk here;
+    a caller's `taken` adds the rest."""
+    return _entity_path(root, kind, eid).exists() or _record_dir(root, kind, eid).is_dir()
+
+
+def reclassify(root: Path, kind: str, eid: str, new_kind: str, taken=None,
+               prefer: str | None = None) -> str:
     """Move `kind`/`eid` to `new_kind` in this root; return the id it landed on.
 
     The id is preserved -- that is the whole point, and the invariant every
@@ -262,6 +270,14 @@ def reclassify(root: Path, kind: str, eid: str, new_kind: str, taken=None) -> st
     already holds that slug (a record, or the orphaned asset directory of one,
     or whatever `taken` adds) gets the same `-2` suffix a create would take,
     and the id this returns is the one to rewrite refs to.
+
+    `prefer` overrides the id to try FIRST, and it is what lets a world-side
+    move bring a campaign's copy along: the world record has already landed on
+    an id, and a copy that took a different one would stop being a copy of it.
+    It is checked against the destination alone -- `taken` is the campaign's
+    view of what its WORLD holds, and by then the world holds the very record
+    being followed. Occupied, it falls back to the ordinary suffix walk, and
+    the caller learns that from the id it gets back.
 
     Two moves, record first and record directory second, and the order is the
     one that fails safely. Crash between them and the record is readable under
@@ -284,11 +300,11 @@ def reclassify(root: Path, kind: str, eid: str, new_kind: str, taken=None) -> st
         # The same three questions `create_entity` asks, for the same reasons:
         # a record there, a record DIRECTORY there (#225's orphaned assets), or
         # a caller-supplied namespace (overlay: the world's files, tombstones).
-        return (_entity_path(root, new_kind, c).exists()
-                or _record_dir(root, new_kind, c).is_dir()
-                or (taken is not None and taken(c)))
+        return _occupied(root, new_kind, c) or (taken is not None and taken(c))
 
-    new_eid = uniquify(eid, exists)
+    new_eid = (prefer if prefer is not None and safe_id(prefer)
+               and not _occupied(root, new_kind, prefer)
+               else uniquify(eid, exists))
     src.replace(_entity_path(root, new_kind, new_eid))
     old_dir = _record_dir(root, kind, eid)
     if old_dir.is_dir():
