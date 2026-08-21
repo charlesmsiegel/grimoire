@@ -132,7 +132,11 @@ _DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 #: is what moves it -- called at install and again whenever the config is
 #: written, so a change in the UI takes effect on the next row without anything
 #: here having to poll or cache with a TTL.
-_threshold = _RANK["info"]
+#:
+#: A one-key dict rather than a bare name so `apply_level` mutates rather than
+#: rebinds: a `global` here would also mean a test that imported the name
+#: by value held a copy that never moved.
+_floor = {"rank": _RANK["info"]}
 
 #: Re-entrancy latch; see the module docstring. Thread-local because the guard
 #: is per call stack -- a second thread logging concurrently is not a recursion
@@ -185,11 +189,10 @@ def apply_level(name: str = "") -> str:
 
     Returns the level in force. Called by `install` and by the config route
     after a write, which is what keeps `record` free of a per-row config read
-    (see `_threshold`).
+    (see `_floor`).
     """
-    global _threshold
     level = level_name(name or _stored_level())
-    _threshold = _RANK[level]
+    _floor["rank"] = _RANK[level]
     logging.getLogger(ROOT_LOGGER).setLevel(getattr(logging, level.upper()))
     for handler in logging.getLogger(ROOT_LOGGER).handlers:
         if isinstance(handler, Handler):
@@ -212,13 +215,13 @@ def _stored_level() -> str:
 
 def level() -> str:
     """The threshold currently in force."""
-    return LEVELS[_threshold]
+    return LEVELS[_floor["rank"]]
 
 
 def enabled(level_: str) -> bool:
     """Would a row at ``level_`` be recorded? The check `record` makes, exposed
     for a caller that would have to *build* something expensive to log it."""
-    return _RANK.get(level_name(level_), 0) >= _threshold
+    return _RANK.get(level_name(level_), 0) >= _floor["rank"]
 
 
 def record(level_: str, module: str, message: str, *, kind: str = "",
@@ -238,7 +241,7 @@ def record(level_: str, module: str, message: str, *, kind: str = "",
     if getattr(_busy, "on", False):
         return None                      # nested: see `_busy`
     name = level_name(level_)
-    if _RANK[name] < _threshold:
+    if _RANK[name] < _floor["rank"]:
         return None
     _busy.on = True
     try:
@@ -253,11 +256,14 @@ def record(level_: str, module: str, message: str, *, kind: str = "",
                            ("scene", scene), ("task", task)):
             if value:
                 row[key] = str(value)
-        for key, value in fields.items():
-            if isinstance(value, str):
-                row[key] = _clip(value, MAX_MESSAGE)
-            elif value is None or isinstance(value, (bool, int, float)):
-                row[key] = value
+        # `extra` rather than reusing `value` above: the loop before this one
+        # binds it to a `str`, and a second loop rebinding the same name to an
+        # `object` is an assignment mypy is right to refuse.
+        for name_, extra in fields.items():
+            if isinstance(extra, str):
+                row[name_] = _clip(extra, MAX_MESSAGE)
+            elif extra is None or isinstance(extra, (bool, int, float)):
+                row[name_] = extra
         if trace:
             row["trace"] = _clip(trace, MAX_TRACE, head=False)
         return _append(row)
@@ -351,8 +357,7 @@ def _module_name(name: object) -> str:
     text = str(name or "app")
     if text == ROOT_LOGGER:
         return "app"
-    prefix = ROOT_LOGGER + "."
-    return text[len(prefix):] if text.startswith(prefix) else text
+    return text.removeprefix(ROOT_LOGGER + ".")
 
 
 def _clip(text: str, limit: int, head: bool = True) -> str:
@@ -483,9 +488,7 @@ def _matches(row: dict, level_: str, module: str, since: str, until: str,
     # date -- so the comparison is against the day's end, not the day.
     if until and ts > until + "T99":
         return False
-    if contains and contains.lower() not in _haystack(row):
-        return False
-    return True
+    return not (contains and contains.lower() not in _haystack(row))
 
 
 def _haystack(row: dict) -> str:
@@ -570,8 +573,8 @@ def _lines(path: Path) -> list[dict]:
     except OSError:
         return []
     out = []
-    for line in text.splitlines():
-        line = line.strip()
+    for raw in text.splitlines():
+        line = raw.strip()
         if not line:
             continue
         try:
@@ -680,12 +683,12 @@ def _read_from(path: Path, offset: int) -> tuple[list[dict], int]:
         return [], offset                # nothing complete yet
     whole = data[:end + 1]
     out = []
-    for raw in whole.decode("utf-8", errors="replace").splitlines():
-        raw = raw.strip()
-        if not raw:
+    for chunk in whole.decode("utf-8", errors="replace").splitlines():
+        line = chunk.strip()
+        if not line:
             continue
         try:
-            row = json.loads(raw)
+            row = json.loads(line)
         except ValueError:
             continue
         if isinstance(row, dict):

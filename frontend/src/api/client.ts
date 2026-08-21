@@ -1663,15 +1663,15 @@ export const api = {
       (campaign ? `&campaign=${encodeURIComponent(campaign)}` : ""),
       undefined, { fresh: true }),
   getErrorSummary: (days: number, opts: { module?: string; campaign?: string; limit?: number } = {}) =>
-    request<ErrorSummary>("GET", "/api/errors?" + new URLSearchParams({
+    request<ErrorSummary>("GET", "/api/errors?" + String(new URLSearchParams({
       days: String(days),
       ...(opts.module ? { module: opts.module } : {}),
       ...(opts.campaign ? { campaign: opts.campaign } : {}),
       ...(opts.limit ? { limit: String(opts.limit) } : {}),
-    }), undefined, { fresh: true }),
+    })), undefined, { fresh: true }),
   getLogs: (opts: { level?: LogLevel; module?: string; q?: string; campaign?: string;
                     since?: string; until?: string; limit?: number } = {}) =>
-    request<LogPage>("GET", "/api/logs?" + new URLSearchParams({
+    request<LogPage>("GET", "/api/logs?" + String(new URLSearchParams({
       ...(opts.level ? { level: opts.level } : {}),
       ...(opts.module ? { module: opts.module } : {}),
       ...(opts.q ? { q: opts.q } : {}),
@@ -1679,7 +1679,7 @@ export const api = {
       ...(opts.since ? { since: opts.since } : {}),
       ...(opts.until ? { until: opts.until } : {}),
       ...(opts.limit ? { limit: String(opts.limit) } : {}),
-    }), undefined, { fresh: true }),
+    })), undefined, { fresh: true }),
   getLogLevel: () => request<LogLevelInfo>("GET", "/api/logs/level", undefined, { fresh: true }),
   /** Follow the log as it is written.
    *
@@ -1696,11 +1696,11 @@ export const api = {
   streamLogTail: (opts: { cursor?: string; level?: LogLevel; module?: string;
                           q?: string; campaign?: string },
                   onEvent: (e: LogTailEvent) => void, signal?: AbortSignal) =>
-    streamGet<LogTailEvent>("/api/logs/tail?" + new URLSearchParams({
+    streamGet<LogTailEvent>("/api/logs/tail?" + String(new URLSearchParams({
       ...(opts.cursor ? { cursor: opts.cursor } : {}),
       ...(opts.level ? { level: opts.level } : {}),
       ...(opts.module ? { module: opts.module } : {}),
       ...(opts.q ? { q: opts.q } : {}),
       ...(opts.campaign ? { campaign: opts.campaign } : {}),
-    }), onEvent, signal),
+    })), onEvent, signal),
 };

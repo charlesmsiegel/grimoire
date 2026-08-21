@@ -137,10 +137,9 @@ def test_a_route_error_reaches_the_log_through_the_meter(client):
     call site having had to remember to do it."""
     from grimoire.llm_errors import LLMError
 
-    with pytest.raises(LLMError):
-        with usage.meter("suggestions", campaign="saltmarch") as m:
-            m.usage.update({"model": "realm/opus"})
-            raise LLMError("rate_limit", "429 Too Many Requests")
+    with pytest.raises(LLMError), usage.meter("suggestions", campaign="saltmarch") as m:
+        m.usage.update({"model": "realm/opus"})
+        raise LLMError("rate_limit", "429 Too Many Requests")
 
     body = client.get("/api/logs?level=error").json()
     assert body["rows"][0]["module"] == "suggestions"

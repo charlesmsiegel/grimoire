@@ -139,14 +139,34 @@ function Trend(
   );
 }
 
+/** Keys for a list of log rows that is PREPENDED to.
+ *
+ *  Neither obvious key works. A bare array index is stable only while the
+ *  list is append-only, and the live tail puts new rows at the FRONT — so
+ *  every existing row's key would change on every batch. The timestamp is not
+ *  unique either: rows are stamped to the millisecond and a retry loop
+ *  produces several inside one.
+ *
+ *  So: the row's own content, plus an occurrence number for the genuinely
+ *  identical ones. Prepending leaves every existing key untouched, and two
+ *  byte-identical lines still get distinct keys instead of React silently
+ *  dropping one of them. */
+function keyed(rows: LogRow[]): { row: LogRow; key: string }[] {
+  const seen = new Map<string, number>();
+  return rows.map((row) => {
+    const base = `${row.ts}|${row.level}|${row.module}|${row.message}`;
+    const nth = (seen.get(base) ?? 0) + 1;
+    seen.set(base, nth);
+    return { row, key: nth === 1 ? base : `${base}#${nth}` };
+  });
+}
+
 function LogRows({ rows, empty }: { rows: LogRow[]; empty: string }) {
   if (rows.length === 0) return <p className="empty-state"><span className="empty-what">{empty}</span></p>;
   return (
     <ol className="stats-log">
-      {rows.map((r, i) => (
-        // Indexed, not keyed by ts: two rows CAN share a millisecond, and a
-        // duplicate React key silently drops one of them from the list.
-        <li key={`${r.ts}-${i}`} className={`stats-log-row level-${r.level}`}>
+      {keyed(rows).map(({ row: r, key }) => (
+        <li key={key} className={`stats-log-row level-${r.level}`}>
           <span className="stats-log-level">{r.level.toUpperCase()}</span>
           <span className="stats-log-time">{clock(r.ts)}</span>
           <span className="stats-log-module">{r.module}</span>
