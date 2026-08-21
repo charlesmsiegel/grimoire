@@ -10,7 +10,7 @@ export function LorebookImport({ wid, onImported }: { wid: string; onImported?: 
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const kinds = useEntityKinds();
+  const kinds = useEntityKinds(entries !== null);
 
   async function parse() {
     const file = fileRef.current?.files?.[0];
@@ -96,7 +96,9 @@ export function LorebookImport({ wid, onImported }: { wid: string; onImported?: 
           )}
           {entries.length > 0 && (
             <div className="form-actions">
-              <button className="primary" onClick={commit}>Import {entries.length} entries</button>
+              <button className="primary" onClick={commit}>
+                Import {entries.length} {entries.length === 1 ? "entry" : "entries"}
+              </button>
             </div>
           )}
         </>
