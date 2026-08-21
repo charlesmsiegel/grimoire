@@ -94,4 +94,19 @@ describe("formatChord", () => {
     expect(formatChord("?")).toBe("?");
     expect(formatChord("escape")).toBe("Esc");
   });
+
+  test("alt is the glyph on a mac and the word everywhere else", () => {
+    pretend("MacIntel");
+    expect(formatChord("alt+arrowleft")).toBe("⌥ ←");
+    pretend("Win32");
+    expect(formatChord("alt+arrowleft")).toBe("Alt ←");
+  });
+
+  // A key with no glyph is still printable rather than raw: the sheet lists
+  // whatever a page registered, and nothing here gets to render as "f7".
+  test("a key with no glyph is capitalized, not dropped", () => {
+    pretend("Win32");
+    expect(formatChord("f7")).toBe("F7");
+    expect(formatChord("mod+home")).toBe("Ctrl Home");
+  });
 });
