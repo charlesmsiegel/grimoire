@@ -81,11 +81,26 @@ export default function WorldsView() {
       // `any` bought nothing and cost the compiler's check on the rest of the
       // handler (see `api/errors.ts`).
       setError(`'${w.name}' could not be forked: ${errorText(err)}`);
+      setForking(null);
       return;
+    }
+    // Returning from the call IS the commit point: the copy exists from here
+    // on. So a failing refresh must not read as a failed fork -- the user
+    // would retry, and after a minute of copying a gigabyte the retry makes a
+    // SECOND copy. It cannot be swallowed either, the way the import's is:
+    // that one navigates to the new world, so the user sees it whatever the
+    // grid does, and here a silent no-op is indistinguishable from a fork that
+    // never happened.
+    try {
+      setWorlds(await api.listWorlds());
+    } catch {
+      setError(`'${name}' was created, but the list could not be refreshed.`);
     } finally {
+      // Held until the refresh settles, not released with the call: between
+      // the two the grid does not yet show the copy, and a re-enabled button
+      // over a stale grid is an invitation to fork twice.
       setForking(null);
     }
-    setWorlds(await api.listWorlds());
   }
 
   // An import always lands as a NEW world, so the grid is sorted by the

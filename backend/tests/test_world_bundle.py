@@ -18,15 +18,14 @@ import pytest
 from grimoire.store import (
     assets,
     characters,
-    entities,
     greetings,
     image_descriptions,
-    tags,
     world_bundle,
     worlds,
 )
 
 from .world_fixtures import PNG, seed_world, tree
+
 
 def _home(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))

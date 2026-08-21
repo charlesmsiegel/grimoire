@@ -20,6 +20,17 @@ hand, so a tree that lands under a new id renders every localized image as a
 that is cannot be known until the rename succeeds — the one it was going to
 get can be taken in between — so `publish` owns the retry and re-points on
 each attempt, and the world it finally publishes always references itself.
+
+**What this deliberately does not do is sweep.** A process killed outright
+mid-copy leaves a world-sized tree under `staging_root()` that nothing lists
+and nothing removes; the callers' own `finally` covers every exception but not
+a `SIGKILL` or a power cut. Forking makes that more reachable than importing
+did — it is a click on a shelf rather than a rare deliberate act — but a sweep
+here would have to decide, from a directory's age alone, that no other process
+is still filling it, and getting that wrong destroys somebody's in-flight
+import. The leaked bytes are recoverable by hand and named by a directory the
+user can see; a wrong sweep is not. Left as a known limit rather than guessed
+at.
 """
 
 from __future__ import annotations

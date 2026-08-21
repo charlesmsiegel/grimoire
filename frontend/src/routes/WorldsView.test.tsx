@@ -233,3 +233,24 @@ test("a fork in flight cannot be started twice", async () => {
   await waitFor(() => expect(screen.getByLabelText("Fork Saltmarch")).toBeEnabled());
   prompt.mockRestore();
 });
+
+test("a failed refresh after a successful fork says the copy exists", async () => {
+  // Returning from the call is the commit point. Reporting the refresh's
+  // failure as the fork's would send the user to retry, and after a minute of
+  // copying a gigabyte the retry makes a second copy. Swallowing it silently
+  // is no better here: unlike an import, nothing navigates, so a quiet no-op
+  // looks exactly like a fork that never happened.
+  (api.listWorlds as any)
+    .mockResolvedValueOnce(ONE_WORLD)
+    .mockResolvedValueOnce(ONE_WORLD)
+    .mockRejectedValueOnce(new Error("network"));
+  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Saltmarch (fork)");
+  renderView();
+  fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent(/'Saltmarch \(fork\)' was created/i);
+  expect(alert).not.toHaveTextContent(/could not be forked/i);
+  // And the button comes back, rather than being stuck disabled by the throw.
+  await waitFor(() => expect(screen.getByLabelText("Fork Saltmarch")).toBeEnabled());
+  prompt.mockRestore();
+});
