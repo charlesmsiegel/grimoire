@@ -37,8 +37,11 @@ const TAIL_KEEP = 500;
  *  the digits stop meaning anything and one decimal of seconds is the honest
  *  precision. */
 function duration(ms: number): string {
-  if (!ms) return "—";
-  if (ms < 1000) return `${ms}ms`;
+  // "0ms", not a dash. A dash reads as "nothing was measured", and zero here
+  // is a measurement: a sub-millisecond call, or a row whose duration the
+  // ledger could not parse. The `calls` count beside every one of these is
+  // what says whether there was anything to measure at all.
+  if (ms < 1000) return `${Math.max(0, ms)}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
   const minutes = Math.floor(ms / 60_000);
   return `${minutes}m ${Math.round((ms % 60_000) / 1000)}s`;
@@ -198,6 +201,8 @@ export default function StatsView() {
   const [failed, setFailed] = useState("");
 
   // ---- the log's own filters ----
+  const [errorModule, setErrorModule] = useState("");
+  const [errorSummary, setErrorSummary] = useState<ErrorSummary | null>(null);
   const [level, setLevel] = useState<LogLevel>("debug");
   const [module, setModule] = useState("");
   const [query, setQuery] = useState("");
@@ -214,6 +219,20 @@ export default function StatsView() {
       .catch((e) => { if (alive) setFailed(errorText(e)); });
     return () => { alive = false; };
   }, [days]);
+
+  // The errors section reads `/api/errors` rather than leaning on the copy
+  // `/api/stats` already carries. The embedded one is #154's headline count
+  // and is scoped to the stats window alone; this one takes a module filter,
+  // which is the question the section exists to answer ("is it always
+  // dossiers?"). Same store either way, so the two can never disagree.
+  useEffect(() => {
+    if (section !== "errors") return;
+    let alive = true;
+    api.getErrorSummary(days, { module: errorModule })
+      .then((e) => { if (alive) setErrorSummary(e); })
+      .catch((e) => { if (alive) setFailed(errorText(e)); });
+    return () => { alive = false; };
+  }, [section, days, errorModule]);
 
   // The log page is re-read whenever a filter moves. Deliberately not
   // debounced on `query`: this is a local file read behind a local server, the
@@ -268,7 +287,12 @@ export default function StatsView() {
   usePaletteSource(paletteSource);
 
   const current = SECTIONS.find((s) => s.key === section) ?? SECTIONS[0];
-  const errors: ErrorSummary | null = stats?.errors ?? null;
+  // Whichever is current: the section's own filtered read once it has landed,
+  // the stats copy until then, so opening Errors does not blank the page.
+  const errors: ErrorSummary | null = errorSummary ?? stats?.errors ?? null;
+  // Built from the unfiltered copy, so picking a module cannot remove every
+  // other option from the control you picked it with.
+  const errorModules = stats?.errors.modules.map((m) => m.module) ?? [];
 
   const counts = useMemo(() => ({
     performance: stats ? stats.totals.calls : null,
@@ -363,12 +387,37 @@ export default function StatsView() {
               </>
         )}
 
+        {section === "errors" && errorModules.length > 1 && (
+          // Above the empty check, deliberately: filtering to a module with
+          // nothing in it must not also remove the control that would undo
+          // that. Built from the unfiltered copy for the same reason.
+          <div className="stats-filters">
+            <label>
+              <span className="section-label">Module</span>
+              <select value={errorModule}
+                      onChange={(e) => setErrorModule(e.target.value)}
+                      aria-label="Module to report on">
+                <option value="">every module</option>
+                {errorModules.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </label>
+          </div>
+        )}
+
         {section === "errors" && (
           errors === null
             ? <p className="column-empty">Reading the log…</p>
             : errors.total === 0
               ? <p className="empty-state">
-                  <span className="empty-what">Nothing has gone wrong in this window.</span>
+                  <span className="empty-what">
+                    {errorModule
+                      ? `Nothing has gone wrong in ${errorModule} in this window.`
+                      : "Nothing has gone wrong in this window."}
+                  </span>{" "}
+                  {errorModule && (
+                    <button type="button" className="chip"
+                            onClick={() => setErrorModule("")}>every module</button>
+                  )}
                 </p>
               : <>
                   <section className="stats-block">

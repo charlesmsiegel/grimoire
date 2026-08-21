@@ -44,13 +44,26 @@ def test_an_error_is_recorded_as_one_row_in_the_log_and_nowhere_else(home):
     assert row["scene"] == "001-arrival"
 
 
-def test_an_error_is_recorded_even_when_the_threshold_would_hide_a_debug_row(home):
-    logs.apply_level("critical")
+def test_no_threshold_can_switch_the_error_store_off(home):
+    """Configuration says "errors are recorded whatever this says", and the
+    size backstop already promises it. A floor above `error` would have made
+    both statements false -- and the failures this store exists for are the
+    ones nothing else in the app records at all."""
+    for asked in logs.LEVELS:
+        assert logs.apply_level(asked) in logs.FLOORS
+        assert errors.record("dossier", "empty_reply", f"at {asked}") is not None
 
-    assert errors.record("dossier", "empty_reply", "nothing") is None
-
+    # Quieter levels still obey the floor -- that is what it is for.
     logs.apply_level("error")
-    assert errors.record("dossier", "empty_reply", "nothing") is not None
+    assert logs.record("warning", "runner", "slow") is None
+
+
+def test_a_quieter_floor_than_error_still_records_everything_above_it(home):
+    logs.apply_level("warning")
+
+    assert logs.record("info", "runner", "chatty") is None
+    assert logs.record("warning", "runner", "loud") is not None
+    assert errors.record("llm", "rate_limit", "429") is not None
 
 
 def test_a_kind_with_no_detail_still_says_something(home):

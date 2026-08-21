@@ -358,6 +358,58 @@ def test_an_unknown_cursor_starts_at_the_end_rather_than_replaying_the_month(hom
     assert out["cursor"].startswith("2026-08.jsonl:")
 
 
+def test_a_burst_bigger_than_one_poll_loses_nothing(home):
+    """The tail used to be bounded by ROWS, which cannot be reconciled with a
+    byte cursor: it advanced the offset past the rows that did not fit and
+    they were gone. Ten rows against a budget that holds three delivered three
+    and silently destroyed seven -- under exactly the burst somebody would be
+    watching for."""
+    start = logs.cursor()
+    for i in range(10):
+        logs.record("info", "runner", f"row {i}")
+
+    seen, out = [], {"cursor": start, "more": True}
+    while out["more"]:
+        out = logs.tail(out["cursor"], budget=300)
+        seen += [r["message"] for r in out["rows"]]
+
+    assert seen == [f"row {i}" for i in range(10)]
+
+
+def test_a_partial_poll_says_there_is_more_rather_than_looking_idle(home):
+    start = logs.cursor()
+    for i in range(10):
+        logs.record("info", "runner", f"row {i}")
+
+    assert logs.tail(start, budget=300)["more"] is True
+    assert logs.tail(logs.cursor())["more"] is False
+
+
+def test_a_line_longer_than_the_budget_still_advances_the_cursor(home):
+    """Otherwise one long row wedges the tail permanently: the budget never
+    reaches a newline, the offset never moves, and nothing after it arrives."""
+    start = logs.cursor()
+    logs.record("info", "runner", "x" * 500)
+    logs.record("info", "runner", "after")
+
+    out = logs.tail(start, budget=10)
+    assert out["rows"] and out["rows"][0]["message"].startswith("xxx")
+    assert [r["message"] for r in logs.tail(out["cursor"], budget=10)["rows"]] == ["after"]
+
+
+def test_a_filtered_tail_consumes_the_log_at_the_same_rate_as_an_open_one(home):
+    """Filtering happens after the byte boundary, so a narrow filter cannot
+    fall behind a busy log and start reporting minutes-old lines as live."""
+    start = logs.cursor()
+    for i in range(20):
+        logs.record("info", "runner", f"noise {i}")
+    logs.record("error", "llm", "429", kind="rate_limit")
+
+    out = logs.tail(start, level="error")
+    assert [r["message"] for r in out["rows"]] == ["429"]
+    assert out["more"] is False          # every one of those 21 rows was read
+
+
 def test_the_tail_applies_the_same_filters_the_page_does(home):
     logs.apply_level("debug")
     start = logs.cursor()

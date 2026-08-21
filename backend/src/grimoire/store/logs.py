@@ -88,6 +88,16 @@ from . import atomic, config, paths
 LEVELS = ("debug", "info", "warning", "error", "critical")
 _RANK = {name: i for i, name in enumerate(LEVELS)}
 
+#: The levels that may be CHOSEN as a threshold, which is not the same list.
+#: `critical` is a level a row can carry and never one the floor may sit at:
+#: `store.errors` reads this file's ERROR rows back (#156), the error store is
+#: the only record of a failure that was never a call, and a setting that could
+#: switch it off would make "errors are recorded whatever this says" -- which
+#: the size backstop already promises, and which Configuration says in
+#: as many words -- a lie. `apply_level` clamps rather than rejects, so a
+#: config file edited by hand to `critical` still records errors.
+FLOORS = LEVELS[:LEVELS.index("error") + 1]
+
 #: `logging`'s numeric levels, mapped down to ours. A `LogRecord` may carry any
 #: int -- a custom level, or one of the odd values between the named ones -- so
 #: this is resolved by threshold rather than by lookup: anything at or above
@@ -122,6 +132,13 @@ MAX_DAYS = 366
 #: Rows one read may return. A filtered log view is a page, not an export.
 MAX_LIMIT = 2000
 DEFAULT_LIMIT = 200
+
+#: Bytes one `tail` poll may consume. The tail is bounded by bytes rather than
+#: by rows for the reason `tail` argues at length: a row cap and a byte cursor
+#: cannot both be honoured, and the cap is the half that loses data. 256 KiB is
+#: a thousand-odd rows a second, well past any real write rate, and whatever
+#: exceeds it is still there for the next poll.
+MAX_TAIL_BYTES = 256 * 1024
 
 _MONTH = re.compile(r"^\d{4}-\d{2}$")
 _DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -187,12 +204,16 @@ def level_name(value: object) -> str:
 def apply_level(name: str = "") -> str:
     """Set the threshold, from ``name`` or from the stored config.
 
-    Returns the level in force. Called by `install` and by the config route
-    after a write, which is what keeps `record` free of a per-row config read
-    (see `_floor`).
+    Returns the level in force, which can be quieter than ``name`` asked for:
+    the floor is clamped at `error` so the error store cannot be switched off
+    (see `FLOORS`).
     """
+    # Clamped at `error`, never above it -- see `FLOORS`. `level()` then
+    # reports the floor actually in force rather than the one that was asked
+    # for, so nothing downstream has to know the clamp happened.
     level = level_name(name or _stored_level())
-    _floor["rank"] = _RANK[level]
+    _floor["rank"] = min(_RANK[level], _RANK["error"])
+    level = LEVELS[_floor["rank"]]
     logging.getLogger(ROOT_LOGGER).setLevel(getattr(logging, level.upper()))
     for handler in logging.getLogger(ROOT_LOGGER).handlers:
         if isinstance(handler, Handler):
@@ -605,13 +626,28 @@ def cursor() -> str:
         return f"{newest.name}:0"
 
 
-def tail(from_cursor: str = "", limit: int = DEFAULT_LIMIT, **filters) -> dict:
+def tail(from_cursor: str = "", budget: int = MAX_TAIL_BYTES, **filters) -> dict:
     """Rows appended since ``from_cursor``, **oldest first**, plus the next one.
 
     Oldest first, unlike `read`: these are appended to a list the reader is
     already holding, so they arrive in the order they happened.
 
-    Three things this has to survive, all of which happen in practice:
+    **Bounded by bytes read, not by rows returned**, and that distinction is
+    the whole correctness argument. A row cap cannot work here: the cursor is a
+    byte offset, so returning "the first N rows" of a chunk means either
+    advancing the offset past the rows that did not fit -- losing them
+    permanently and silently -- or leaving the offset behind and re-sending
+    everything that did fit. The first is what this originally did, and it lost
+    seven of ten rows the moment more arrived between two polls than the cap
+    allowed, which is precisely when somebody is watching. Reading a bounded
+    number of BYTES has no such split: the offset advances by exactly what was
+    parsed, every row inside it comes back, and whatever is past the budget is
+    still there for the next poll a second later.
+
+    Filtering happens after that boundary, so a filtered tail consumes the log
+    at the same rate an unfiltered one does and cannot fall behind.
+
+    Three more things this has to survive, all of which happen in practice:
 
     - **The month rolling over.** At midnight on the 1st the cursor names a
       file that has stopped growing. When it is exhausted and a newer file
@@ -633,29 +669,40 @@ def tail(from_cursor: str = "", limit: int = DEFAULT_LIMIT, **filters) -> dict:
         offset = 0
     files = _window_files("0000-00", "9999-99")
     if not files:
-        return {"rows": [], "cursor": from_cursor or cursor()}
+        return {"rows": [], "cursor": from_cursor or cursor(), "more": False}
     names = [p.name for p in files]
     if name not in names:
         # An unknown (or absent) cursor starts at the newest file's end rather
         # than replaying the month: a client opening a tail asked for what
         # happens NEXT, and `read` is how it gets the backlog.
-        return {"rows": [], "cursor": cursor()}
-    cap = max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
+        return {"rows": [], "cursor": cursor(), "more": False}
+    left = max(1, min(int(budget or MAX_TAIL_BYTES), MAX_TAIL_BYTES))
     rows: list[dict] = []
     index = names.index(name)
-    while index < len(files) and len(rows) < cap:
-        path = files[index]
-        chunk, offset = _read_from(path, offset)
-        for row in chunk:
-            if len(rows) >= cap:
-                break
-            if _tail_matches(row, filters):
-                rows.append(row)
-        if index + 1 < len(files):
+    while True:
+        chunk, offset, used = _read_from(files[index], offset, left)
+        rows.extend(row for row in chunk if _tail_matches(row, filters))
+        left -= used
+        if left <= 0:
+            break                          # budget spent; the rest waits a second
+        # Only move on once the current file is EXHAUSTED. Advancing while
+        # bytes remain in it is the same row-loss the docstring describes,
+        # wearing a different shape.
+        if index + 1 < len(files) and _at_end(files[index], offset):
             index, offset = index + 1, 0   # month rolled over
             continue
         break
-    return {"rows": rows, "cursor": f"{files[index].name}:{offset}"}
+    return {"rows": rows, "cursor": f"{files[index].name}:{offset}",
+            "more": not _at_end(files[index], offset) or index + 1 < len(files)}
+
+
+def _at_end(path: Path, offset: int) -> bool:
+    """Is ``offset`` at (or past) the end of ``path``? An unreadable file is
+    treated as exhausted -- there is nothing more to take from it."""
+    try:
+        return offset >= path.stat().st_size
+    except OSError:
+        return True
 
 
 def _tail_matches(row: dict, filters: dict) -> bool:
@@ -667,20 +714,34 @@ def _tail_matches(row: dict, filters: dict) -> bool:
                     str(filters.get("campaign") or ""))
 
 
-def _read_from(path: Path, offset: int) -> tuple[list[dict], int]:
-    """Complete rows in ``path`` after byte ``offset``, and the new offset."""
+def _read_from(path: Path, offset: int, budget: int) -> tuple[list[dict], int, int]:
+    """Complete rows in ``path`` after ``offset``, the new offset, and the bytes
+    consumed.
+
+    At most ``budget`` bytes are read, cut back to the last complete newline
+    inside it -- so the offset returned always names a row boundary and never
+    lands inside a line. A single line longer than the budget would otherwise
+    wedge the tail forever, so the budget is stretched to cover one whole line
+    when that happens; `MAX_MESSAGE` bounds how long a line can be, and the
+    alternative is a cursor that can never advance.
+    """
     try:
         size = path.stat().st_size
         if offset > size:
             offset = 0                   # truncated or replaced; see `tail`
         with path.open("rb") as handle:
             handle.seek(offset)
-            data = handle.read()
+            data = handle.read(budget)
+            end = data.rfind(b"\n")
+            if end < 0 and len(data) >= budget:
+                # A line longer than the budget: take the rest of it rather
+                # than returning nothing forever.
+                data += handle.readline()
+                end = data.rfind(b"\n")
     except OSError:
-        return [], offset
-    end = data.rfind(b"\n")
+        return [], offset, 0
     if end < 0:
-        return [], offset                # nothing complete yet
+        return [], offset, 0             # nothing complete yet
     whole = data[:end + 1]
     out = []
     for chunk in whole.decode("utf-8", errors="replace").splitlines():
@@ -693,4 +754,4 @@ def _read_from(path: Path, offset: int) -> tuple[list[dict], int]:
             continue
         if isinstance(row, dict):
             out.append(row)
-    return out, offset + len(whole)
+    return out, offset + len(whole), len(whole)

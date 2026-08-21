@@ -46,6 +46,7 @@ exactly as asked.
 
 from __future__ import annotations
 
+import random
 import time
 
 from . import errors, logs, usage
@@ -58,43 +59,74 @@ PERCENTILES = (50, 90, 99)
 
 DEFAULT_DAYS = 30
 
-#: Rows one distribution keeps. A percentile needs the values, not a sum, so
+#: Values one distribution keeps. A percentile needs the values, not a sum, so
 #: this is the one place a scan holds something per call -- capped so a library
 #: with a million calls in the window cannot turn a dashboard request into a
-#: memory event. Past the cap the distribution is sampled by dropping the
-#: middle (`_Series.add`), which keeps both tails -- the part a percentile is
-#: actually about -- and `sampled` says it happened.
+#: memory event. Past the cap it becomes a uniform random sample of the window
+#: (`_Series.add`), and `sampled` says so.
 MAX_SAMPLES = 50_000
+
+#: The sampler's seed. Fixed, so the same ledger produces the same percentiles
+#: twice: a dashboard whose numbers wobble on refresh with nothing underneath
+#: having changed is a dashboard nobody trusts. It costs nothing -- the sample
+#: is uniform either way, and this is not a security decision.
+SAMPLE_SEED = 20260821
 
 
 class _Series:
-    """One bucket's durations, plus the counts that go beside them."""
+    """One bucket's durations, plus the counts that go beside them.
+
+    Past `MAX_SAMPLES` this switches to **reservoir sampling** (Vitter's R):
+    each later value replaces a uniformly-chosen slot with probability
+    `MAX_SAMPLES/n`, which leaves the kept values a uniform sample of
+    everything seen. The obvious alternatives are both wrong in ways that
+    matter here -- keeping the first N reports the percentiles of whenever the
+    window started, which for a 30-day window is a month-old answer presented
+    as today's, and always overwriting one fixed slot (which is what this did
+    first) keeps the first N with a single rotating hole, i.e. the same stale
+    answer wearing a `sampled` flag.
+
+    `min` and `max` are tracked exactly, outside the reservoir. They are the
+    two numbers a sample is least likely to hold and the two a reader is most
+    likely to act on -- "Slowest" understating the worst call in the window
+    would be a reading that quietly excuses the thing being investigated.
+    """
 
     def __init__(self) -> None:
         self.values: list[int] = []
         self.calls = 0
         self.errors = 0
         self.sampled = False
+        self.low: int | None = None
+        self.high: int | None = None
+        self._rng = random.Random(SAMPLE_SEED)
 
     def add(self, ms: int, failed: bool) -> None:
         self.calls += 1
         if failed:
             self.errors += 1
+        self.low = ms if self.low is None else min(self.low, ms)
+        self.high = ms if self.high is None else max(self.high, ms)
         if len(self.values) < MAX_SAMPLES:
             self.values.append(ms)
-        else:
-            # Replace a value from the middle rather than dropping the newest:
-            # keeping the first `MAX_SAMPLES` calls would report the percentiles
-            # of whenever the window started, which for a 30-day window is a
-            # month-old answer presented as today's.
-            self.sampled = True
-            self.values[len(self.values) // 2] = ms
+            return
+        self.sampled = True
+        # `randrange(self.calls)` over the count SEEN, not over the reservoir:
+        # that is what makes the keep probability MAX_SAMPLES/n rather than 1.
+        slot = self._rng.randrange(self.calls)
+        if slot < MAX_SAMPLES:
+            self.values[slot] = ms
 
     def report(self, key: str) -> dict:
         out = {"key": key, "calls": self.calls, "errors": self.errors,
                "error_rate": round(self.errors / self.calls, 4) if self.calls else 0.0,
                "sampled": self.sampled}
         out.update(percentiles(self.values))
+        # The exact ends win over the sample's, always -- see the class
+        # docstring. Equal when nothing was sampled, so this is a no-op on
+        # every real library.
+        out["min"] = self.low or 0
+        out["max"] = self.high or 0
         return out
 
 
