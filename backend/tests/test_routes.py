@@ -10649,6 +10649,76 @@ def test_empty_chat_in_a_normal_scene_is_an_ephemeral_npc_round(client):
     assert all(m["role"] == "assistant" for m in msgs)
 
 
+def test_director_note_in_a_normal_scene_is_ephemeral(client):
+    """#83: the note has its own control now, so it is no longer blank-only and
+    no longer offscreen-only. A `director` send in an ORDINARY scene steers one
+    generation without becoming a player post -- which is what the composer's
+    Direct mode sends, and what an empty send has always done underneath."""
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "assistant", "The tavern hums.")
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "the storm intensifies", "director": True}) as r:
+        r.read()
+    # the note rode the call as the final user turn...
+    assert cap.messages[-1] == {"role": "user", "content": "the storm intensifies"}
+    # ...and nothing of it reached the transcript
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert all(m["role"] == "assistant" for m in msgs)
+    assert "storm intensifies" not in json.dumps(msgs)
+
+
+def test_director_note_in_a_normal_scene_expands_macros(client):
+    """The note is this turn's actual input wherever it is sent from, so it gets
+    the same macro pass the offscreen one does (#137)."""
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "Resolve {{roll:1d20}}.", "director": True}) as r:
+        r.read()
+    note = cap.messages[-1]
+    assert note["role"] == "user" and "{{roll" not in note["content"]
+    # and it is still the ephemeral path, not a player post that happens to
+    # have been expanded on the way in
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert all(m["role"] == "assistant" for m in msgs)
+
+
+def test_director_flag_with_a_blank_note_still_sends_continue(client):
+    """Direct mode with an empty box is the empty-send convention, not a
+    different request: the same default note, so the fast path survives the
+    control being added on top of it."""
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "  ", "director": True}) as r:
+        r.read()
+    assert cap.messages[-1] == {"role": "user", "content": "Continue the scene."}
+
+
+def test_a_send_without_the_director_flag_is_still_a_player_post(client):
+    """The flag defaults off, so every existing client keeps posting."""
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouter(["**Grimoire:** Thunder."])
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "the storm intensifies"}) as r:
+        r.read()
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert [m["content"] for m in msgs if m["role"] == "user"] == ["the storm intensifies"]
+
+
 def test_greeting_pcless_roundtrip_and_availability(client):
     wid, cid = _campaign(client)
     client.post(f"/api/worlds/{wid}/characters", json={"name": "Vex"})

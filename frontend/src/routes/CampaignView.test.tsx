@@ -970,7 +970,7 @@ test("Enter sends a message in the active scene", async () => {
   fireEvent.change(ta, { target: { value: "hello" } });
   fireEvent.keyDown(ta, { key: "Enter" });
   await waitFor(() =>
-    expect(api.chat).toHaveBeenCalledWith("run", "s1", "hello", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String), expect.any(Function)),
+    expect(api.chat).toHaveBeenCalledWith("run", "s1", "hello", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String), expect.any(Function), false),
   );
 });
 
@@ -1027,7 +1027,7 @@ test("sends the one-shot override in the chat request payload", async () => {
   fireEvent.click(screen.getByRole("button", { name: /Send/ }));
   await waitFor(() => expect(api.chat).toHaveBeenCalledWith(
     "run", "s1", "Go on.", expect.any(Function), { response_preset: "terse" },
-    expect.any(AbortSignal), expect.any(String), expect.any(Function)));
+    expect.any(AbortSignal), expect.any(String), expect.any(Function), false));
 });
 
 test("a failed stream keeps the override, and retry carries it", async () => {
@@ -1057,7 +1057,7 @@ test("sending with no scene creates one first", async () => {
   fireEvent.change(ta, { target: { value: "hi" } });
   fireEvent.keyDown(ta, { key: "Enter" });
   await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("run"));
-  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "hi", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String), expect.any(Function)));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "hi", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String), expect.any(Function), false));
 });
 
 test("+ New Scene opens the chooser without creating a scene", async () => {
@@ -4567,7 +4567,7 @@ test("offscreen scene: empty Continue sends an empty note", async () => {
   (api.listScenes as any).mockResolvedValue(OFFSCREEN_SCENE);
   renderCampaign();
   fireEvent.click(await screen.findByRole("button", { name: /continue ▶/i }));
-  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String), expect.any(Function)));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String), expect.any(Function), true));
 });
 
 test("offscreen scene: typed note shows transiently, never lands in messages", async () => {
@@ -4577,7 +4577,7 @@ test("offscreen scene: typed note shows transiently, never lands in messages", a
   renderCampaign();
   const box = await screen.findByPlaceholderText(/direct the scene/i);
   fireEvent.change(box, { target: { value: "the guard grows suspicious" } });
-  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
   await screen.findByText(/🎬 the guard grows suspicious/);
   release();
   await waitFor(() => expect(screen.queryByText(/🎬/)).toBeNull());
@@ -4596,7 +4596,131 @@ test("normal scene: empty Continue sends an ephemeral round, no user message add
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
   fireEvent.click(await screen.findByRole("button", { name: /continue ▶/i }));
-  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String), expect.any(Function)));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String), expect.any(Function), false));
+});
+
+// #83. The director note used to have no input of its own: whatever you typed
+// in a pcless scene WAS the note, and an empty send anywhere meant "next NPC
+// round" — both true, neither said anywhere on screen. These cover the control
+// that says it.
+
+test("normal scene: the composer offers Speak and Direct, and starts in Speak", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  const speak = await screen.findByRole("button", { name: "Speak" });
+  const direct = screen.getByRole("button", { name: "Direct" });
+  expect(speak).toHaveAttribute("aria-pressed", "true");
+  expect(direct).toHaveAttribute("aria-pressed", "false");
+  expect(speak).toBeEnabled();
+});
+
+test("normal scene: Direct sends a director note, not a player post", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let release: () => void = () => {};
+  (api.chat as any).mockReturnValue(new Promise<void>((r) => { release = () => r(); }));
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Direct" }));
+  const box = screen.getByPlaceholderText(/direct the scene/i);
+  fireEvent.change(box, { target: { value: "the storm intensifies" } });
+  // the send control says what it will do, rather than reading "Send"
+  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith(
+    "run", "s1", "the storm intensifies", expect.any(Function), undefined,
+    expect.any(AbortSignal), expect.any(String), expect.any(Function), true));
+  // shown transiently as a note, never appended as the player's own words
+  await screen.findByText(/🎬 the storm intensifies/);
+  release();
+  await waitFor(() => expect(screen.queryByText(/🎬/)).toBeNull());
+});
+
+test("normal scene: Speak is unchanged — a player post, and no director flag", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let release: () => void = () => {};
+  (api.chat as any).mockReturnValue(new Promise<void>((r) => { release = () => r(); }));
+  renderCampaign();
+  const box = await screen.findByPlaceholderText(/speak your intent/i);
+  fireEvent.change(box, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith(
+    "run", "s1", "I draw my blade.", expect.any(Function), undefined,
+    expect.any(AbortSignal), expect.any(String), expect.any(Function), false));
+  // the player's own words, in the transcript — not a note above it
+  expect(await screen.findByText("I draw my blade.")).toBeInTheDocument();
+  expect(screen.queryByText(/🎬/)).toBeNull();
+  release();
+});
+
+test("Direct mode keeps the empty-send convention", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Direct" }));
+  // an empty box is still "next NPC round", in either mode — the button says so
+  expect(screen.getByRole("button", { name: /continue ▶/i })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /continue ▶/i }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith(
+    "run", "s1", "", expect.any(Function), undefined,
+    expect.any(AbortSignal), expect.any(String), expect.any(Function), true));
+});
+
+test("offscreen scene: the mode is locked to Direct", async () => {
+  (api.listScenes as any).mockResolvedValue(OFFSCREEN_SCENE);
+  renderCampaign();
+  const direct = await screen.findByRole("button", { name: "Direct" });
+  expect(direct).toHaveAttribute("aria-pressed", "true");
+  // Speak is shown rather than hidden, and disabled: what it is unavailable
+  // for is the fact worth teaching — there is no PC in this scene to speak as.
+  const speak = screen.getByRole("button", { name: "Speak" });
+  expect(speak).toBeDisabled();
+  expect(speak).toHaveAttribute("aria-pressed", "false");
+});
+
+test("a note carried out of an offscreen scene is still a note", async () => {
+  // The nastier half of the sticky rule. `pcless` FORCES Direct, so a reader
+  // who never touched the toggle still has a note in the box — and the box
+  // survives the move to a scene whose `pcless` is false. If the mode reverted
+  // there, the next Send would post scene direction as the player's own words,
+  // which is the one outcome this control exists to prevent.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Cabal", model: "", created: "", updated: "2", pcless: true },
+    { id: "s2", title: "The Saltmarch Gate", model: "", created: "", updated: "1" },
+  ]);
+  transcriptsPerScene();
+  renderCampaign();
+  await screen.findByText("transcript of s1");
+  fireEvent.change(screen.getByPlaceholderText(/direct the scene/i),
+                   { target: { value: "the storm intensifies" } });
+
+  await openScene(/The Saltmarch Gate/);
+
+  await screen.findByText("transcript of s2");
+  // Speak is available again — and not selected
+  expect(screen.getByRole("button", { name: "Speak" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Direct" }))
+    .toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByPlaceholderText(/direct the scene/i))
+    .toHaveValue("the storm intensifies");
+});
+
+test("the mode travels with the text it labels across a scene switch", async () => {
+  // The composer is one shared box whose contents deliberately survive a scene
+  // change. A mode that reset there would send words written as direction as
+  // the player's own post, which is precisely the confusion this control exists
+  // to end.
+  (api.listScenes as any).mockResolvedValue(TWO_SCENES);
+  transcriptsPerScene();
+  renderCampaign();
+  await screen.findByText("transcript of s1");
+  fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+  fireEvent.change(screen.getByPlaceholderText(/direct the scene/i),
+                   { target: { value: "the storm intensifies" } });
+
+  await openScene(/The Saltmarch Gate/);
+
+  await screen.findByText("transcript of s2");
+  expect(screen.getByRole("button", { name: "Direct" }))
+    .toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByPlaceholderText(/direct the scene/i))
+    .toHaveValue("the storm intensifies");
 });
 
 test("Roll dice is disabled on a fresh scene until the opener/cast setup produces a message", async () => {
@@ -5976,7 +6100,7 @@ test("the first send into an empty campaign puts its new scene in the URL", asyn
   await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1"));
   expect(api.chat).toHaveBeenCalledWith("run", "s1", "we begin",
     expect.anything(), undefined, expect.anything(), expect.any(String),
-    expect.any(Function));
+    expect.any(Function), false);
 });
 
 test("a scene list arriving after a campaign switch does not strand the view", async () => {

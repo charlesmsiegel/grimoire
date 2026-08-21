@@ -600,9 +600,12 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
     `return` statements (any mutator below can raise), which is why this is a
     wrapper rather than a checklist.
     """
-    # ephemeral turn, never stored: a director note steering one generation
-    # (pcless), or — in any scene — an empty send meaning "next NPC round"
-    ephemeral = store.scenes.is_pcless(cid, sid) or not turn.content.strip()
+    # ephemeral turn, never stored: a director note steering one generation --
+    # asked for outright (`director`, the composer's Direct mode), implied by an
+    # offscreen scene, which has no other kind of turn, or implied — in any
+    # scene — by an empty send meaning "next NPC round".
+    ephemeral = (turn.director or store.scenes.is_pcless(cid, sid)
+                 or not turn.content.strip())
     # Heal, then the sidecar, then retire — the same split regenerate makes, and
     # for the same reason. `_disown_dead_pending` writes a file that can refuse
     # the write, and it used to run AFTER the retirement: an empty send over an

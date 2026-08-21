@@ -532,12 +532,16 @@ export const api = {
 
   // `response` is a one-shot, unpersisted per-turn override (the length chip
   // beside Send) — rides only this call, exactly like regenerate's guidance.
+  // `director` (#83) says this turn is a director note rather than a player
+  // post: sent, never stored. Omitted from the body unless set, so the server
+  // sees the same request every earlier client sent and its own inference —
+  // an offscreen scene, or an empty send — still decides those.
   chat: (cid: string, sid: string, content: string, onEvent: (e: ChatEvent) => void,
          response?: ResponseOverride, signal?: AbortSignal, attempt?: string,
-         onIndex?: (i: number) => void) =>
+         onIndex?: (i: number) => void, director?: boolean) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/chat`,
-               response ? { content, response } : { content }, onEvent, signal,
-               attempt, onIndex),
+               { content, ...(response ? { response } : {}), ...(director ? { director: true } : {}) },
+               onEvent, signal, attempt, onIndex),
   /** Ask a detached run to stop.
    *
    *  Closing the connection is no longer the cancel. A turn now outlives the
