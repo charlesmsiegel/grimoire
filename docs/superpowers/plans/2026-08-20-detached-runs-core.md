@@ -316,9 +316,18 @@ def test_a_run_lazily_backfills_a_campaign_the_migration_skipped(client, tmp_pat
     # the corruption the identity exists to prevent.
     cid, sid = _campaign_whose_migration_was_skipped(tmp_path, monkeypatch)
     assert store.scenes.scene_identity(cid, sid) is None
-    _start_a_run(client.app, cid, sid)
+    store.scenes.ensure_identity(cid, sid)          # the lazy path, directly
     assert store.scenes.scene_identity(cid, sid)
 ```
+
+**Task 1 tests `ensure_identity` directly, and cannot do otherwise.** There is
+no registry until Task 2, nothing installs it until Task 3, and no route
+produces a run until Task 5 — so a `_start_a_run` helper here would have
+nothing to call, and Task 1's own "run tests, expect PASS" checkpoint could
+never be met. The assertion that actually starting a run triggers the lazy
+backfill belongs in **Task 5**, where a run can exist; it is listed there.
+Keeping it here would mean either a task that cannot go green or a helper that
+fakes the very integration it claims to prove.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -762,6 +771,25 @@ on events no task will ever set. So a pre-start release marks the run terminal
 and sets both `ready` and `terminal`, and there is a test for **cancel racing
 an early-exit route**, not only cancel against a runner that started normally.
 
+**And an early exit that reported an error must buffer that error, or give up
+its attempt index.** These two rules collide otherwise. The setup path returns
+an SSE error frame *directly* — a `check_error`, say — without the run ever
+buffering a frame; the release marks it terminal; and `start_or_existing`
+returns an existing run even when terminal, which is what makes retries
+idempotent. So a client whose response was lost re-POSTs with the same attempt
+id, adopts that terminal record, streams it, and receives **nothing** — an
+empty terminal stream where the first attempt got a specific, actionable
+error. The retry looks like a turn that silently did nothing.
+
+Pick one, consistently: either the early error is written into the run's frame
+buffer and finished with the matching structured outcome — so replay reproduces
+what the first caller saw — or the run is released *without* registering its
+attempt id, so a retry is a genuinely fresh attempt rather than the adoption of
+an empty one. Buffering is the better shape, because it keeps one rule ("an
+attempt id names a run whose outcome can be replayed") instead of two. Test the
+retry: same attempt id after a lost early-error response reproduces the same
+error frame.
+
 **Those event updates must be marshalled onto the lifespan loop.** The
 pre-start cleanup runs in FastAPI's synchronous handler thread while a
 concurrent cancel awaits `ready`/`terminal` on the loop — and once an
@@ -934,7 +962,7 @@ def test_from_past_the_buffer_on_a_live_run_receives_later_frames(client, live_r
 def test_a_reaped_or_unknown_run_id_is_run_gone(client, campaign_scene):
     cid, sid = campaign_scene
     r = client.get(f"/api/campaigns/{cid}/scenes/{sid}/runs/nope")
-    assert r.status_code == 404 and r.json()["detail"]["kind"] == "run_gone"
+    assert r.status_code == 404 and r.json()["kind"] == "run_gone"
 
 
 def test_a_run_id_from_another_scene_is_run_gone(client, two_scenes, live_run):
@@ -945,7 +973,7 @@ def test_a_run_id_from_another_scene_is_run_gone(client, two_scenes, live_run):
     _, cid, _ = live_run.subject
     _, other_sid = two_scenes
     r = client.get(f"/api/campaigns/{cid}/scenes/{other_sid}/runs/{live_run.id}")
-    assert r.status_code == 404 and r.json()["detail"]["kind"] == "run_gone"
+    assert r.status_code == 404 and r.json()["kind"] == "run_gone"
 
 
 def test_attempt_lookup_answers_for_a_run_that_finished_unattended(client, campaign_scene):
@@ -1084,7 +1112,7 @@ def test_a_rejected_send_leaves_the_transcript_byte_identical(run_client, campai
     _start_and_hold_a_turn(run_client, cid, sid)
     before = _scene_bytes(cid, sid)
     r = run_client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "second"})
-    assert r.status_code == 409 and r.json()["detail"]["kind"] == "run_in_flight"
+    assert r.status_code == 409 and r.json()["kind"] == "run_in_flight"
     assert _scene_bytes(cid, sid) == before
 
 
@@ -1288,13 +1316,13 @@ def test_edit_retcon_and_cut_are_refused_while_a_run_holds_the_scene(client, hel
     for method, path, body in calls:
         r = getattr(client, method)(path, **({"json": body} if body else {}))
         assert r.status_code == 409, f"{method} {path}"
-        assert r.json()["detail"]["kind"] == "scene_busy", f"{method} {path}"
+        assert r.json()["kind"] == "scene_busy", f"{method} {path}"
 
 
 def test_rename_is_refused_while_a_run_holds_the_scene(client, held_scene):
     cid, sid = held_scene
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}", json={"title": "Seraphine"})
-    assert r.status_code == 409 and r.json()["detail"]["kind"] == "scene_busy"
+    assert r.status_code == 409 and r.json()["kind"] == "scene_busy"
 
 
 def test_width_crossing_create_refused_while_any_key_in_campaign_held(client, campaign_at_999):
@@ -1307,7 +1335,7 @@ def test_width_crossing_create_refused_while_any_key_in_campaign_held(client, ca
     cid, busy_sid = campaign_at_999
     _hold_a_run(cid, busy_sid)
     r = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Winifred"})
-    assert r.status_code == 409 and r.json()["detail"]["kind"] == "scene_busy"
+    assert r.status_code == 409 and r.json()["kind"] == "scene_busy"
 
 
 def test_all_of_these_are_allowed_once_the_run_is_terminal(client, held_scene):
@@ -1315,6 +1343,40 @@ def test_all_of_these_are_allowed_once_the_run_is_terminal(client, held_scene):
     _release(cid, sid)
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}", json={"title": "Seraphine"})
     assert r.status_code == 200
+
+
+def test_stop_persists_the_partial_and_holds_the_slot_until_it_is_written(live_server):
+    """The cancel path end to end, which nothing else here covers.
+
+    Task 3's shutdown test cancels a bare coroutine: it proves the task group
+    unwinds, not that `_chat_stream`'s `on_abort` ran, kept the player's post,
+    persisted the partial narration, and held the exclusion key until those
+    writes finished. An implementation that marks the run terminal before the
+    abort hook, or drops the partial, passes every other test in this plan and
+    loses narration the player watched arrive.
+
+    On `live_server` because the POST must still be in flight when the cancel
+    lands -- a buffering TestClient cannot express that."""
+    cid, sid = live_server.campaign_scene
+    held = live_server.hold_provider(reply="The lamps are already lit.")
+    with _in_flight(live_server, cid, sid, "Mara waits.") as run_id:
+        held.await_first_delta()
+        r = httpx.post(f"{live_server.url}/api/campaigns/{cid}"
+                       f"/scenes/{sid}/runs/{run_id}/cancel")
+        assert r.status_code == 200
+    # The route answered only after `terminal`, so the writes are already done
+    # -- no polling here on purpose: a `_wait_terminal` would hide a cancel
+    # that returns early, which is precisely the defect this guards.
+    run = live_server.app.state.runs.get(run_id, ("scene", cid, sid))
+    assert run.state == "cancelled"
+    msgs = store.scenes.read_scene(cid, sid)["messages"]
+    assert msgs[-2]["content"] == "Mara waits."      # the post is KEPT, not rolled back
+    assert "lamps" in msgs[-1]["content"].lower()    # the partial is persisted
+    # And the slot is free the instant the cancel returned, so a re-send cannot
+    # race the partial-persist.
+    again = httpx.post(f"{live_server.url}/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "again"})
+    assert again.status_code != 409
 
 
 def test_a_background_run_does_not_freeze_the_scene(client, campaign_scene):
@@ -1400,6 +1462,65 @@ lock and rewrites the transcript underneath the live run — the exact race the
 guard exists to close, reintroduced by where it was placed. Since
 `scenes/locking.py:_serialized` already wraps every scene mutator in that lock,
 the check belongs inside that hold.
+
+**And that alone still does not close it, because the other side of the race
+never takes the lock at all.** `start_or_existing` serializes on the registry's
+own `threading.Lock`, which orders reservations against each other and against
+nothing else. Two locks that never overlap impose no order between them, so
+this interleaving survives a guard that is perfectly placed:
+
+1. the edit takes `campaign_lock(cid)` and finds no live run — correct, there
+   is none;
+2. the turn reserves (registry lock only) and reads the scene, unlocked,
+   catching the transcript **mid-edit**;
+3. the edit publishes and releases.
+
+The run then generates from history that never existed, and no participant did
+anything wrong. Registry membership and transcript state have to become
+observable in one order, which means **reservation and the initial scene
+snapshot happen inside `campaign_lock(cid)` too** — the same lock, so the two
+sides genuinely serialize. Then either the edit wins (the turn snapshots the
+edited transcript) or the turn wins (the edit's guard sees the run and 409s),
+and there is no third outcome.
+
+The lock is reentrant, so the handler taking it around reserve-and-snapshot
+costs nothing where a mutator takes it again underneath. Keep the hold short:
+it covers the reservation and the read, not the provider call — a lock held
+across an LLM call would freeze the campaign for the length of a turn. And
+`test_lock_domain_guard.py` will want `routes/runs.py` classified once
+reservation takes a campaign lock; classify it rather than marking it.
+
+Test it as an interleaving, not a sequence: hold the edit inside its lock,
+attempt the reservation from another thread, and assert the reservation blocks
+until the edit completes and then snapshots the edited transcript.
+
+- [ ] **Step 3b: One wire contract for the attempt id, across all five routes**
+
+Nothing so far says how the id actually travels, and the four request models
+these routes use — `ChatTurn`, `RetryBody`, `RegenerateBody`, `ProposalAction`
+(`routes/models.py:481, 144, 139, 171`) — have no field for it. Without a
+single contract the id cannot reach `start_or_existing` on a retry, and the
+idempotency this entire plan rests on is decoration: a client that lost the
+run frame re-POSTs, gets a *new* attempt, and both the duplicate-suppression
+and the "did my send land?" recovery fail at once.
+
+**Send it as a header: `X-Grimoire-Attempt`.** A body field would mean editing
+four pydantic models (one of which, `RetryBody`, is otherwise empty) and would
+still not cover a route whose body shape changes later; the header is one
+`Header(default=None)` parameter, identical on all five, and it survives the
+pydantic-v1/v2 constraint untouched because it is not a model field at all.
+
+Rules, all five routes alike:
+- Absent or malformed → generate one server-side and proceed. Older clients and
+  `curl` must keep working; they simply get no idempotency, which is what they
+  have today.
+- Present → it is the attempt id, verbatim. The server never rewrites it.
+- The run frame echoes it, so a client that generated one can confirm the
+  server agreed rather than assuming.
+
+Test the transport end to end on at least two of the five, and specifically
+test that **the same header twice yields one run**, not two — that is the
+property, and it cannot be observed from either route in isolation.
 
 - [ ] **Step 4: Guard the width-crossing create — in the ROUTE, not the store**
 
@@ -1545,23 +1666,26 @@ Expected: FAIL — the module does not exist
 and drops the decoded body, so `run_id` is lost and `kind === "run_in_flight"`
 cannot attach to anything. Keep the payload on the error.
 
-**Retaining the top-level body is not sufficient, because the body is
-nested.** Raising `HTTPException(409, detail={"kind": ..., "run_id": ...})`
-puts the payload one level down: the backend tests in this plan read
-`response.json()["detail"]["kind"]`, so on the wire there is no top-level
-`kind` and `data.kind` is `undefined`. `ApiError.kind` would then never equal
-`"run_in_flight"` and Step 4's whole comparison is dead code that silently
-takes the wrong branch — the failure mode being a busy scene reported as a
-generic 409, which is indistinguishable from a bug in the reservation.
+**The body is FLAT, not nested — check this against `main.py` rather than
+against FastAPI's documented default.** This app installs its own
+`HTTPException` handler (`main.py:294`) whose whole job is to unwrap a dict
+detail: `content = exc.detail if isinstance(exc.detail, dict) else {"detail":
+exc.detail}`. So `raise HTTPException(409, detail={"kind": "run_in_flight",
+"run_id": ...})` puts `kind` and `run_id` at the **top level** of the response
+body, and `data.kind` is exactly right. Every structured error already in this
+tree is asserted that way — `test_llm_error_status.py:205` and
+`test_retcon_routes.py:121` both read `r.json()["kind"]`.
 
-Pick one and make it consistent: either flatten the backend's 409 body and
-update those tests to read it at the top level, or normalize on the client by
-reading `data.detail?.kind ?? data.kind` and the same for `run_id`. Prefer
-normalizing on the client — the nested shape is what FastAPI produces for
-every other structured error in this tree, and flattening one route makes it
-the odd one out. Whichever is chosen, a frontend test asserts `ApiError.kind`
-is `"run_in_flight"` against a body in the shape the backend actually sends,
-copied from the backend test rather than hand-written.
+An earlier revision of this plan claimed the opposite and prescribed
+`data.detail?.kind ?? data.kind` normalization. That was wrong, and it was
+wrong in the expensive direction: the "normalization" would have read
+`data.detail` — a string or undefined — found no `kind` on it, fallen through
+to `data.kind`, and worked by accident, leaving a plausible-looking defensive
+line that documents a wire format this app does not produce.
+
+So: keep the decoded body on the error, read `kind` and `run_id` from its top
+level, and write the frontend fixture by copying a real response body out of a
+backend test rather than hand-authoring one.
 
 - [ ] **Step 4: A 409 is busy-state, not an adoption**
 
@@ -1606,6 +1730,21 @@ Never resume from `next_index` — that is the live tail, and using it drops
 everything generated while the client was away.
 
 - [ ] **Step 6: Adopt on mount and on `visibilitychange`**
+
+**Three outcomes, not two: live, terminal, and `run_gone`.** The third is the
+one an implementation forgets, and it is reachable by ordinary use. A turn
+finishes while the phone is locked; nobody attaches; `REAP_SECONDS` passes; the
+tab comes back. Discovery, poll and stream all now 404 with `run_gone` for an
+id the still-mounted component is holding — and unlike a cold mount, its
+transcript predates the landed reply. Surfacing the 404 as an error would
+report a lost turn that in fact landed perfectly; ignoring it leaves the
+composer locked over a stale transcript.
+
+So `run_gone` **refetches the scene and settles**, exactly like terminal
+discovery. The spec requires this branch for turns; it is the same handler, and
+the two cases differ only in that one of them has no run record left to read.
+Test a scene hidden longer than the reap window with a turn that landed while
+it was away, and assert the new message is on screen and the composer is live.
 
 Attach only to a **live** run. A terminal run is reported for state so the view
 can settle rather than spin, and never replayed: a fresh mount has no cursor
@@ -1837,6 +1976,33 @@ Say five, not six. `post_opener` is the sixth synchronous streaming handler but
 it is a `draft`, and Phase 1 leaves every draft route unchanged. Writing "all
 six" would misstate production behavior the day it lands and mislead whoever
 picks up Phase 3.
+
+- [ ] **Step 2b: Amend the merged spec where this plan overruled it**
+
+The spec (merged in #393) says at its §"frozen campaign" that the compatibility
+sweep runs the identity backfill and that **`snapshot.json` will move, and that
+is expected**, because identity would appear in the scene record. This plan
+deliberately does the opposite: identity is filtered out of `read_scene`'s
+`meta`, and the snapshot must **not** move.
+
+The plan is right and the spec is stale. Identity is a fresh `uuid4()` per
+scene, so if it reached the snapshot the frozen fixture would produce different
+bytes on every regeneration — destroying the one property that fixture exists
+for, which is being old and stable. Filtering it out keeps the sweep meaningful
+and makes an unchanged `snapshot.json` a real assertion rather than a chore.
+
+But leaving both documents standing is the actual hazard, and it is procedural
+rather than technical: `CLAUDE.md`'s last gate reviews the diff **against the
+originating spec**, asking whether the change implements it. With the spec
+unamended, that gate reads a deliberate decision as drift and either reopens a
+settled question or, worse, gets talked into "fixing" the implementation to
+match the stale text.
+
+So amend the spec in place — the paragraph asserting the snapshot moves becomes
+one recording that identity is internal-only and the snapshot must not move,
+with the uuid reasoning above and a pointer to this plan. Keep it short and
+keep it dated; the point is that one document is authoritative, not that the
+history is erased.
 
 - [ ] **Step 3: Run the full gate and commit**
 
