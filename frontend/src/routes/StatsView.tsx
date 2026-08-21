@@ -32,6 +32,11 @@ const LOG_LIMIT = 200;
  *  file is the record; this is a window onto it. */
 const TAIL_KEEP = 500;
 
+/** How long the text filter waits before it is applied. Short enough not to be
+ *  felt, long enough that typing a word is one reconnect of the live tail
+ *  rather than one per letter. */
+const QUERY_SETTLE_MS = 250;
+
 /** ms as something a human reads at a glance. Sub-second stays in
  *  milliseconds, because that is the resolution the number has; past a second
  *  the digits stop meaning anything and one decimal of seconds is the honest
@@ -176,7 +181,21 @@ function LogRows({ rows, empty }: { rows: LogRow[]; empty: string }) {
           <span className="stats-log-message">
             {r.message}
             {r.kind && <span className="chip on stats-log-kind">{r.kind}</span>}
-            {r.campaign && <span className="field-hint"> {r.campaign}</span>}
+            {r.campaign && (
+              <span className="field-hint"> {r.campaign}{r.scene ? ` / ${r.scene}` : ""}</span>
+            )}
+            {/* The traceback the logging bridge captured. Recorded since the
+                first version and shown by nothing until now, which made the
+                most useful half of an error row write-only -- and a debug log
+                whose stack traces are unreachable is not a debug log. Collapsed,
+                because four hundred rows each unrolling twenty frames is a page
+                nobody can scan. */}
+            {r.trace && (
+              <details className="stats-log-trace">
+                <summary>traceback</summary>
+                <pre>{r.trace}</pre>
+              </details>
+            )}
           </span>
         </li>
       ))}
@@ -206,6 +225,7 @@ export default function StatsView() {
   const [level, setLevel] = useState<LogLevel>("debug");
   const [module, setModule] = useState("");
   const [query, setQuery] = useState("");
+  const [settled, setSettled] = useState("");
   const [page, setPage] = useState<LogPage | null>(null);
   const [live, setLive] = useState(false);
   const [tailed, setTailed] = useState<LogRow[]>([]);
@@ -229,23 +249,31 @@ export default function StatsView() {
     if (section !== "errors") return;
     let alive = true;
     api.getErrorSummary(days, { module: errorModule })
-      .then((e) => { if (alive) setErrorSummary(e); })
+      .then((e) => { if (alive) { setErrorSummary(e); setFailed(""); } })
       .catch((e) => { if (alive) setFailed(errorText(e)); });
     return () => { alive = false; };
   }, [section, days, errorModule]);
 
-  // The log page is re-read whenever a filter moves. Deliberately not
-  // debounced on `query`: this is a local file read behind a local server, the
-  // reply is a page of at most 200 rows, and a debounce is a delay a user feels
-  // on every keystroke in exchange for saving a request that cost nothing.
+  // `query` settled. The page read alone would not need this -- it is a local
+  // file behind a local server, and 200 rows cost nothing -- but the live tail
+  // is keyed on the same filters, and an SSE stream torn down and reopened on
+  // every keystroke is a burst of connections for a filter the user has not
+  // finished typing. One debounce, both readers, so the two cannot end up
+  // showing different filters.
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(query), QUERY_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  // The log page is re-read whenever a filter moves.
   useEffect(() => {
     if (section !== "log") return;
     let alive = true;
-    api.getLogs({ level, module, q: query, limit: LOG_LIMIT })
-      .then((p) => { if (alive) setPage(p); })
+    api.getLogs({ level, module, q: settled, limit: LOG_LIMIT })
+      .then((p) => { if (alive) { setPage(p); setFailed(""); } })
       .catch((e) => { if (alive) setFailed(errorText(e)); });
     return () => { alive = false; };
-  }, [section, level, module, query]);
+  }, [section, level, module, settled]);
 
   useEffect(() => {
     let alive = true;
@@ -264,7 +292,7 @@ export default function StatsView() {
     const abort = new AbortController();
     tailRows.current = [];
     setTailed([]);
-    api.streamLogTail({ level, module, q: query }, (event) => {
+    api.streamLogTail({ level, module, q: settled }, (event) => {
       if (!event.rows?.length) return;
       // Newest first, matching the page above it -- the two lists are read as
       // one, and a live half that grew downward while the page grew upward
@@ -277,7 +305,7 @@ export default function StatsView() {
       if (!abort.signal.aborted) setFailed(errorText(e));
     });
     return () => abort.abort();
-  }, [live, section, level, module, query]);
+  }, [live, section, level, module, settled]);
 
   const paletteSource = useCallback((): PaletteItem[] =>
     SECTIONS.map((s) => ({

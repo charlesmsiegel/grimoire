@@ -129,6 +129,14 @@ _STAT_EVERY = 1 * 1024 * 1024
 #: month a library has ever had. Same ceiling as the usage ledger's.
 MAX_DAYS = 366
 
+#: The window a read covers when the caller names no dates. Bounded on purpose:
+#: an absent `since` used to mean "no lower bound", so the default `GET /logs`
+#: opened every month file a library had ever written -- a read whose cost grew
+#: with the age of the install, on the one page somebody opens *because*
+#: something is wrong. Matching the usage rollup's default so the two halves of
+#: the stats page describe the same span unless asked otherwise.
+DEFAULT_DAYS = 30
+
 #: Rows one read may return. A filtered log view is a page, not an export.
 MAX_LIMIT = 2000
 DEFAULT_LIMIT = 200
@@ -475,6 +483,24 @@ def window(days: int) -> tuple[str, str]:
     return (today - timedelta(days=span - 1)).isoformat(), today.isoformat()
 
 
+def _span(since: object, until: object, days: int) -> tuple[str, str]:
+    """The ``[since, until]`` pair a read covers, always bounded.
+
+    An unparseable or absent ``until`` is today; an unparseable or absent
+    ``since`` is ``days`` back from it. A reversed pair is read rather than
+    refused -- this backs a date control, and swapping two fields should draw
+    the window, not a 422.
+    """
+    end = _valid_day(until) or time.strftime("%Y-%m-%d", time.gmtime())
+    start = _valid_day(since)
+    if not start:
+        span = max(1, min(int(days or DEFAULT_DAYS), MAX_DAYS))
+        start = (date.fromisoformat(end) - timedelta(days=span - 1)).isoformat()
+    if start > end:
+        start, end = end, start
+    return start, end
+
+
 def _window_files(since: str, until: str) -> list[Path]:
     """The month files overlapping ``[since, until]``, oldest first.
 
@@ -520,7 +546,8 @@ def _haystack(row: dict) -> str:
 
 
 def read(*, level: str = "debug", module: str = "", since: str = "", until: str = "",
-         contains: str = "", campaign: str = "", limit: int = DEFAULT_LIMIT) -> dict:
+         contains: str = "", campaign: str = "", days: int = DEFAULT_DAYS,
+         limit: int = DEFAULT_LIMIT) -> dict:
     """Filtered rows, **newest first**, with the filter vocabulary beside them.
 
     Newest first because that is the only order a log view is ever read in, and
@@ -535,12 +562,13 @@ def read(*, level: str = "debug", module: str = "", since: str = "", until: str 
     ``modules`` and ``counts`` describe the *window*, not the page: a dropdown
     that only offered the modules present in the newest 200 rows would lose an
     option every time something else got chatty.
+
+    The window is always bounded -- ``days`` back from ``until`` when no
+    ``since`` is given, never "everything there has ever been"; see
+    `DEFAULT_DAYS`.
     """
     floor = level_name(level)
-    since = _valid_day(since)
-    until = _valid_day(until) or time.strftime("%Y-%m-%d", time.gmtime())
-    if since and since > until:
-        since, until = until, since
+    since, until = _span(since, until, days)
     cap = max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
     rows: list[dict] = []
     modules: set[str] = set()
@@ -563,7 +591,7 @@ def read(*, level: str = "debug", module: str = "", since: str = "", until: str 
 
 
 def scan(*, level: str = "debug", module: str = "", since: str = "", until: str = "",
-         contains: str = "", campaign: str = ""):
+         contains: str = "", campaign: str = "", days: int = DEFAULT_DAYS):
     """Every matching row in the window, **oldest first**, unbounded.
 
     `read` is the paged view a human looks at; this is the one an aggregate is
@@ -574,12 +602,13 @@ def scan(*, level: str = "debug", module: str = "", since: str = "", until: str 
 
     A generator rather than a list: the caller decides what to hold, and every
     caller today holds a counter rather than the rows.
+
+    Bounded exactly as `read` is, and through the same helper -- two readers
+    resolving "which window is this" separately is how one of them ends up
+    scanning an install's whole history.
     """
     floor = level_name(level)
-    since = _valid_day(since)
-    until = _valid_day(until) or time.strftime("%Y-%m-%d", time.gmtime())
-    if since and since > until:
-        since, until = until, since
+    since, until = _span(since, until, days)
     for path in _window_files(since, until):
         for row in _lines(path):
             if _matches(row, floor, module, since, until, contains, campaign):
