@@ -1,6 +1,7 @@
 """Application-wide settings: config, LLM connections, styles, response
-presets and the global response scope, plus the calendar-provider and climate
-catalogues that worlds and campaigns select from."""
+presets and the global response scope, plus the entity-kind, calendar-provider
+and climate catalogues that worlds, campaigns and the import dialogs select
+from."""
 
 from __future__ import annotations
 
@@ -516,6 +517,29 @@ def put_global_response(body: ResponseSettings):
 @router.get("/length-presets")
 def get_length_presets():
     return store.lengths.PRESETS
+
+
+# ---- the entity kinds an import may route a row to (#138) ----
+@router.get("/entity-kinds")
+def get_entity_kinds():
+    """The categories a review-table row may be reclassified to.
+
+    `store.entities.ENTITY_KINDS` itself, in its own order, so the import
+    dialogs stop keeping a second copy of the list: the per-row Category
+    dropdown is built from this, and a kind added to the tuple appears there
+    with no frontend edit at all.
+
+    Deliberately NOT world-scoped (the issue floated
+    `/worlds/{wid}/entity-kinds`). The kinds are a property of the code, not of
+    a world, and a world-scoped path would promise a per-world answer that does
+    not exist -- besides needing to be registered ahead of the generic
+    `/worlds/{wid}/{kind}` routes to be reachable at all.
+
+    `lorebook.commit` and `scenario.apply` validate an incoming category
+    against the same tuple, so what this offers is exactly what they accept;
+    `test_every_offered_kind_is_a_category_import_accepts` is that guarantee.
+    """
+    return {"kinds": list(store.entities.ENTITY_KINDS)}
 
 
 @router.get("/calendars/providers")

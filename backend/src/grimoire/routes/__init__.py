@@ -7,7 +7,7 @@ One ``APIRouter`` per domain, composed here into the single ``router`` that
   ``models``      request bodies (no routes)
   ``streaming``   SSE framing, persisted-turn strategies, proposal machinery
   ``config``      /config, /llm-connections, /styles, /response-presets,
-                  /response, /length-presets, /calendars, /climates
+                  /response, /length-presets, /entity-kinds, /calendars, /climates
   ``modules``     /modules
   ``worlds``      /worlds
   ``characters``  /worlds/{wid}/characters

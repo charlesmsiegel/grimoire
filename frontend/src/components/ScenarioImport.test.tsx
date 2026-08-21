@@ -3,9 +3,14 @@ import { MemoryRouter } from "react-router-dom";
 import { ScenarioImport } from "./ScenarioImport";
 
 vi.mock("../api/client", () => ({
-  api: { scenarioParse: vi.fn(), scenarioParseUrl: vi.fn(), scenarioImport: vi.fn() },
+  api: {
+    scenarioParse: vi.fn(), scenarioParseUrl: vi.fn(), scenarioImport: vi.fn(),
+    entityKinds: vi.fn(),
+  },
 }));
 import { api } from "../api/client";
+// NOT from the mocked client — see the note in LorebookImport.test.tsx.
+import { ENTITY_KINDS } from "../api/types";
 
 const PROPOSAL = {
   characters: [
@@ -31,6 +36,7 @@ beforeEach(() => {
     greetings: [{ name: "Saltmarch", id: "saltmarch" }],
     art: { total: 1, localized: 1, skipped: 0, failed: 0, capped: false },
   });
+  (api.entityKinds as any).mockResolvedValue({ kinds: [...ENTITY_KINDS] });
 });
 
 function pickFile() {
@@ -222,4 +228,27 @@ test("a card the model could not be read for offers the local-model recovery", a
   fireEvent.click(screen.getByRole("button", { name: /read card/i }));
   await screen.findByText(/Couldn.t reach the model provider/);
   expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
+});
+
+
+test("the entry category options are the server's kinds, and an unknown one commits as itself", async () => {
+  // Same contract as the lorebook dialog (#138): both review tables ask the
+  // server what a row may be filed under instead of shipping their own list.
+  (api.entityKinds as any).mockResolvedValue({ kinds: ["lore", "locations", "vehicles"] });
+  await readCard();
+  const select = screen.getByLabelText<HTMLSelectElement>("entry category 0");
+  expect([...select.options].map((o) => o.value)).toEqual(["lore", "locations", "vehicles"]);
+
+  fireEvent.change(select, { target: { value: "vehicles" } });
+  fireEvent.click(screen.getByRole("button", { name: /import 5 records/i }));
+  await waitFor(() => {
+    expect((api.scenarioImport as any).mock.calls[0][1].entries[0].category).toBe("vehicles");
+  });
+});
+
+test("a kinds read that fails leaves the entry dropdown on the build's own kinds", async () => {
+  (api.entityKinds as any).mockRejectedValue(new Error("offline"));
+  await readCard();
+  const select = screen.getByLabelText<HTMLSelectElement>("entry category 0");
+  expect([...select.options].map((o) => o.value)).toEqual([...ENTITY_KINDS]);
 });
