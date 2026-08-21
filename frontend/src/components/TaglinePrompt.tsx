@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../api/client";
 import { ErrorNote } from "./ErrorNote";
+import { useHotkeys } from "../shortcuts/useHotkeys";
 
 export function TaglinePrompt({ wid, cid, name, onClose, onSaved }:
   { wid: string; cid: string; name: string; onClose: () => void; onSaved?: (text: string) => void }) {
@@ -9,6 +10,14 @@ export function TaglinePrompt({ wid, cid, name, onClose, onSaved }:
   // The raw rejection, not its text: `kind` is what says the model could
   // not be reached at all, and stringifying here would throw it away (#210).
   const [error, setError] = useState<unknown>(null);
+
+  // Escape is Skip: the same dismissal the button offers, refused while a
+  // generation is in flight for the same reason the button is disabled then.
+  useHotkeys(
+    [{ keys: "escape", label: "Skip the tagline", group: "THIS PANEL",
+       enabled: !busy, whileTyping: true, run: onClose }],
+    { modal: true },
+  );
 
   async function generate() {
     setBusy(true);

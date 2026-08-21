@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { CampaignImage } from "../api/types";
 import { encodeSegment } from "../urlSegment";
+import { useHotkeys } from "../shortcuts/useHotkeys";
 import { ImageDescriptionField } from "./ImageDescriptionField";
 
 /** Who is speaking in the post the picker was opened from (#376).
@@ -126,11 +127,20 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
   // Bumped after every upload and removal so the effect below re-reads the
   // library rather than this component keeping a second, divergent copy of it.
   const [revision, setRevision] = useState(0);
-  const backdrop = useRef<HTMLDivElement>(null);
-  // Focus the backdrop ONCE, on mount, so Escape has somewhere to land. As a
-  // ref callback this would re-run on every render and pull focus back off
-  // whatever the reader had just tabbed to.
-  useEffect(() => { backdrop.current?.focus(); }, []);
+  const panel = useRef<HTMLDivElement>(null);
+  // Focus the panel ONCE, on mount: it calls itself a modal dialog, and one
+  // that never takes focus leaves the reader tabbing through the page behind
+  // it. As a ref callback this would re-run on every render and pull focus
+  // back off whatever they had just tabbed to.
+  useEffect(() => { panel.current?.focus(); }, []);
+  // Escape, and the scene's own bindings held off while this covers it (#193).
+  // Refused mid-upload, the same answer every other control here gives while
+  // `busy`.
+  useHotkeys(
+    [{ keys: "escape", label: "Close the picker", group: "THIS PANEL",
+       enabled: !busy, whileTyping: true, run: onClose }],
+    { modal: true },
+  );
 
   const isLibrary = target.kind === "campaign";
   // One dependency for "which images is this picker showing", so switching to a
@@ -225,15 +235,14 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
 
   const empty = groups !== null && groups.every((g) => g.images.length === 0);
   return (
-    // Escape closes, handled on the backdrop rather than on `document`: the
-    // backdrop covers the page and takes focus on mount, so a keystroke aimed
-    // at whatever is behind the picker can never reach this.
-    <div className="image-picker-backdrop" role="dialog"
-         aria-label={`Insert an image — ${target.name}`}
-         tabIndex={-1} ref={backdrop}
-         onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
+    // The scrim is a scrim, not the dialog: the panel is. It used to carry
+    // both, which is how a `keydown` handler ended up on it — the only place
+    // Escape could land once it had focus.
+    <div className="image-picker-backdrop" role="presentation"
          onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="image-picker">
+      <div className="image-picker" role="dialog" aria-modal="true"
+           aria-label={`Insert an image — ${target.name}`}
+           tabIndex={-1} ref={panel}>
         <h3>Insert an image</h3>
         <p className="field-hint">
           {isLibrary

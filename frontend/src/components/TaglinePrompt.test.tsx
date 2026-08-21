@@ -58,3 +58,21 @@ test("any other Generate failure still shows the endpoint's own message", async 
   await screen.findByText("No LLM connection selected");
   expect(screen.queryByRole("link")).toBeNull();
 });
+
+test("Escape skips, and is refused while a generation is in flight", async () => {
+  const onClose = vi.fn();
+  // A generate that never settles, so the dialog stays `busy`.
+  (api.generateCharacterTagline as any).mockImplementation(() => new Promise(() => {}));
+  render(<TaglinePrompt wid="w" cid="mara" name="Mara" onClose={onClose} />);
+  fireEvent.click(screen.getByRole("button", { name: /generate/i }));
+  await screen.findByRole("button", { name: /generating/i });
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+test("Escape skips while idle", () => {
+  const onClose = vi.fn();
+  render(<TaglinePrompt wid="w" cid="mara" name="Mara" onClose={onClose} />);
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(onClose).toHaveBeenCalledTimes(1);
+});

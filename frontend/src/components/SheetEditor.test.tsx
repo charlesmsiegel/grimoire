@@ -488,3 +488,18 @@ test("a 409 on save re-fetches the sheet, replaces the form, and shows a changed
   expect(screen.getByText("2 / 10")).toBeInTheDocument();
   expect(onSaved).toHaveBeenCalled();
 });
+
+// Escape mirrors whichever control the form is showing. Always-Close would be
+// the one dismissal in the app that discards typing without saying so.
+test("Escape cancels the edit first, and only then closes the sheet", () => {
+  const onClose = vi.fn();
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={MOD}
+                      kind="characters" eid="mara" initial={SHEET}
+                      onClose={onClose} onSaved={() => {}} />);
+  fireEvent.click(screen.getByText("Edit"));
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(onClose).not.toHaveBeenCalled();
+  expect(screen.getByText("Edit")).toBeInTheDocument();      // back to the read view
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
