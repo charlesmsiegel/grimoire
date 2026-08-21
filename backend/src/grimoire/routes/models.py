@@ -707,7 +707,11 @@ class AppearBatch(BaseModel):
 # `cast` reuses `Appear` because the seats an import asks for are the seats
 # `POST .../cast` asks for -- same resolution, same 404s, same role rules.
 class ImportedMessage(BaseModel):
-    role: str = "assistant"
+    # Literal, not `str`: the serializer looks a role that is neither of these
+    # up in `ROLE_TO_LABEL` and raises `KeyError` -- a 500 from inside the
+    # transcript write, on a value the boundary can reject as a 422. Same
+    # reasoning as `PinRule` below.
+    role: Literal["user", "assistant"] = "assistant"
     speaker: str | None = None
     content: str = ""
 

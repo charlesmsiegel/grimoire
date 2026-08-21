@@ -232,6 +232,33 @@ def test_a_character_locked_to_player_keeps_that_role(monkeypatch, tmp_path):
     assert draft["cast"][0]["role"] == "player"
 
 
+def test_two_labels_for_one_actor_are_one_seat(monkeypatch, tmp_path):
+    """A transcript writes both "Mara" and "Mara Tidewright" for the same
+    character. Two entries for one actor are two rows for the reviewer to tick,
+    two seats for the commit to ask for, and -- since the review form keys its
+    rows by actor -- two rows that toggle each other."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    _character(wid, "Mara Tidewright")
+
+    draft = scene_import.parse(cid, b"**Mara:** one\n\n**Mara Tidewright:** two\n")
+
+    assert [(c["label"], c["id"]) for c in draft["cast"]] == [("Mara", "mara-tidewright")]
+
+
+def test_a_location_from_another_campaign_is_dropped_and_named(monkeypatch, tmp_path):
+    """A stored scene carries the id of a location in the campaign it came
+    from, and an import is precisely the case where that is a different one.
+    Passed through, it reaches the review form as a value the location select
+    cannot offer -- so the form shows nothing, says nothing, and the scene is
+    imported placeless."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+
+    draft = scene_import.parse(cid, STORED.encode())
+
+    assert draft["location"] == ""
+    assert any("the-quay" in w for w in draft["warnings"])
+
+
 def test_synthetic_speakers_are_never_offered_as_cast(monkeypatch, tmp_path):
     """`⁣Scene` and `⁣Roll` tag lines no actor said."""
     _wid, cid = _campaign(monkeypatch, tmp_path)

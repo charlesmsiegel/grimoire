@@ -24,6 +24,12 @@ import contextlib
 import re
 from collections.abc import Sequence
 
+# `scenes` is reached for three private names -- `_parse_messages`, `_markers`
+# and `_MARKER`. Deliberate, and the same call `store.alternates` makes for the
+# first of them: the marker grammar has exactly one definition, and a second
+# copy of it here would be a parser that agrees with the store's reader only
+# until one of the two changes. They are re-exported by the package's `__init__`
+# rather than reached into a submodule for.
 from . import appearances, calendars, locks, overlay, scenes
 from .campaigns import paths as campaigns_paths
 from .frontmatter import parse_frontmatter
@@ -170,14 +176,23 @@ def _suggest_cast(cid: str, labels: list[str]) -> tuple[list[dict], list[str]]:
     """
     actors = _actors(cid)
     names = [a["name"] for a in actors]
-    cast, unmatched = [], []
+    cast, unmatched, seated = [], [], set()
     for label in labels:
         name = scenes.match_name(label, names)
         hits = [a for a in actors if a["name"] == name] if name else []
-        if len(hits) == 1:
-            cast.append({"label": label, **hits[0]})
-        else:
+        if len(hits) != 1:
             unmatched.append(label)
+            continue
+        # One actor, one seat. A transcript that writes both "Mara" and "Mara
+        # Tidewright" resolves both to the same character, and two entries for
+        # one actor are two rows the reviewer has to tick, two seats the commit
+        # asks for (the second a no-op), and -- since the review form keys its
+        # rows by actor -- two rows that toggle each other. The first label
+        # wins, which is the one the transcript uses first.
+        ref = f"{hits[0]['kind']}/{hits[0]['id']}"
+        if ref not in seated:
+            seated.add(ref)
+            cast.append({"label": label, **hits[0]})
     return cast, unmatched
 
 
@@ -192,6 +207,25 @@ def _resolve_location(cid: str, name: str) -> tuple[str, list[str]]:
         return hits[0], []
     return "", [(f"this campaign has {'no' if not hits else 'more than one'} location "
                  f"called “{name}” — pick the scene's location below.")]
+
+
+def _known_location(cid: str, eid: str) -> tuple[str, list[str]]:
+    """A location ID from a scene file's frontmatter, checked against THIS
+    campaign.
+
+    A stored scene carries the id of a location in the campaign it came from,
+    and an import is exactly the case where that campaign is a different one.
+    Unchecked, the id reaches the review form as a value the `<select>` cannot
+    offer -- so the form shows no location, the reviewer is told nothing, and
+    the scene is imported placeless. Dropped and named here, the same way an
+    unresolvable location NAME is.
+    """
+    if not eid:
+        return "", []
+    if any(e["id"] == eid for e in overlay.list_entities(cid, "locations")):
+        return eid, []
+    return "", [(f"this campaign has no location “{eid}” — it is probably from the "
+                 "campaign this scene was exported from. Pick the scene's location below.")]
 
 
 def _dropped_text(transcript: str) -> list[str]:
@@ -236,7 +270,10 @@ def parse(cid: str, data: bytes) -> dict:
     times = [t for t in meta.get("time_history", "").split(",") if t.strip()]
     places = [p for p in meta.get("location_history", "").split(",") if p.strip()]
     date, location = (times[0].strip() if times else ""), (places[0].strip() if places else "")
-    if not date and not location and head.get("meta"):
+    if date or location:
+        location, place_hints = _known_location(cid, location)
+        warnings += place_hints
+    elif head.get("meta"):
         date, location_name, hints = _meta_bits(head["meta"])
         warnings += hints
         location, place_hints = _resolve_location(cid, location_name)
@@ -279,8 +316,10 @@ def commit(cid: str, sid: str, messages: list[dict], date: str = "", location: s
            cast: Sequence[dict] = ()) -> dict:
     """Write a reviewed draft into the freshly created, still-empty scene `sid`.
 
-    **All or nothing**: either the scene ends up holding the whole draft, or it
-    is removed. A scene holding half an imported transcript reads exactly like a
+    **All or nothing, as far as a delete can make it**: either the scene ends
+    up holding the whole draft, or it is removed -- and where the removal itself
+    fails (see `_discard`) what is left is an empty scene rather than a
+    fragment. A scene holding half an imported transcript reads exactly like a
     scene, and nothing downstream -- not the reviewer, not absorb -- can tell
     which half is missing. The caller creates the scene (only it can take the
     repad guard, which needs the app's run registry) and this removes it again

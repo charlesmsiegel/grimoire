@@ -146,6 +146,10 @@ export function SceneImport({ cid, onBack, onCancel, onImported }: {
   }
 
   const posts = draft.messages.length;
+  // Computed once, not per row: the checkbox list and the commit have to agree
+  // about which seats are actually being asked for.
+  const seats = chosen();
+  const opening = draft.messages[0];
   return (
     <>
       {error && <div className="banner">{error}</div>}
@@ -175,7 +179,7 @@ export function SceneImport({ cid, onBack, onCancel, onImported }: {
         const blocked = pcless && c.role === "player";
         return (
           <label className="radio-row" key={ref}>
-            <input type="checkbox" checked={chosen().some((x) => `${x.kind}/${x.id}` === ref)}
+            <input type="checkbox" checked={seats.some((x) => `${x.kind}/${x.id}` === ref)}
                    disabled={busy || blocked} onChange={() => toggle(ref)}
                    aria-label={`Seat ${c.name}`} />
             {c.name}
@@ -201,6 +205,15 @@ export function SceneImport({ cid, onBack, onCancel, onImported }: {
       <div className="field-hint">
         {posts} {posts === 1 ? "post" : "posts"} will be imported, unchanged.
       </div>
+      {/* The first post, so "unchanged" is something the reviewer can check
+          rather than take on trust: a file whose speakers or blocks were read
+          wrongly shows it here, before anything is created. */}
+      {opening && (
+        <blockquote className="detail-rendered">
+          <strong>{opening.speaker ?? (opening.role === "user" ? "You" : "Grimoire")}:</strong>{" "}
+          {opening.content.length > 240 ? `${opening.content.slice(0, 240)}…` : opening.content}
+        </blockquote>
+      )}
 
       <div className="form-actions">
         <button className="subtle" disabled={busy} onClick={() => setDraft(null)}>← Back</button>

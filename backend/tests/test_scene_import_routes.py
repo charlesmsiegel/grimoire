@@ -141,6 +141,17 @@ def test_an_empty_import_is_refused(client):
     assert client.get(f"/api/campaigns/{cid}/scenes").json() == []
 
 
+def test_a_role_the_transcript_cannot_hold_is_refused_at_the_boundary(client):
+    """The serializer looks an unknown role up in `ROLE_TO_LABEL`, which raises
+    `KeyError` -- a 500 from inside the transcript write, on a value the request
+    boundary can reject."""
+    _wid, cid = _campaign(client)
+    r = client.post(f"/api/campaigns/{cid}/scenes/import",
+                    json={"title": "T", "messages": [{"role": "banana", "content": "hi"}]})
+    assert r.status_code == 422
+    assert client.get(f"/api/campaigns/{cid}/scenes").json() == []
+
+
 def test_commit_404s_for_an_unknown_campaign(client):
     r = client.post("/api/campaigns/nope/scenes/import",
                     json={"title": "T", "messages": [{"role": "user", "content": "hi"}]})
