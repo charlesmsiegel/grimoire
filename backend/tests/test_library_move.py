@@ -6,10 +6,20 @@ HTTP surface.
 """
 
 import json
+import shutil
 
 import pytest
 
-from grimoire.store import campaigns, characters, entities, greetings, overlay, sync, worlds
+from grimoire.store import (
+    assets,
+    campaigns,
+    characters,
+    entities,
+    greetings,
+    overlay,
+    sync,
+    worlds,
+)
 
 
 def home(monkeypatch, tmp_path):
@@ -144,12 +154,50 @@ def test_promote_retries_cleanly_after_a_crash_between_the_two_writes(monkeypatc
     assert sync.incoming(cid) == []
 
 
+def test_no_move_builds_a_world_path_out_of_an_unsafe_id(monkeypatch, tmp_path):
+    """`kind` and `eid` are path parameters, and a path parameter can carry an
+    encoded slash. Every one of these refuses before it joins the id onto the
+    world root, rather than relying on a resolver further down to notice."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    outside = tmp_path / "outside.md"
+    outside.write_text("not ours", encoding="utf-8")
+    escape = "../../../outside"
+
+    for call in (lambda: sync.promote(cid, "locations", escape),
+                 lambda: sync.push(cid, "locations", escape),
+                 lambda: sync.dependents(wid, "locations", escape),
+                 lambda: sync.demote(wid, "locations", escape),
+                 lambda: sync.library_status(cid, "locations", escape)):
+        with pytest.raises((entities.EntityNotFound, sync.LibraryMoveError)):
+            call()
+
+    assert outside.read_text(encoding="utf-8") == "not ours"
+
+
 # ---- promote: greetings name a character, so the world needs that too ------
 
 def test_promote_refuses_a_greeting_whose_character_is_campaign_local(monkeypatch, tmp_path):
     _wid, cid = _world_and_campaign(monkeypatch, tmp_path)
     aid, vid = overlay.create_character(cid, "Winifred")
     gid = overlay.create_greeting(cid, "At the gate", aid, vid, "She waits.")
+
+    with pytest.raises(sync.DanglingReferenceError):
+        sync.promote(cid, "greetings", gid)
+
+
+def test_promote_refuses_a_greeting_whose_character_is_detached(monkeypatch, tmp_path):
+    """The world holds that slug, but detachment says it is a stranger to this
+    campaign's character of the same id (#225) — filing the greeting against it
+    is worse than a dangling reference, because it reads as working."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Winifred")
+    overlay.materialize_actor(cid, "characters", aid)
+    gid = overlay.create_greeting(cid, "At the gate", aid, vid, "She waits.")
+    shutil.rmtree(wroot / "characters" / aid)
+    overlay.forget_world_record(wroot, "characters", aid)
+    characters.create_character(wroot, "Winifred")     # a stranger takes the slug
+    assert f"characters/{aid}" in overlay.detached(cid)
 
     with pytest.raises(sync.DanglingReferenceError):
         sync.promote(cid, "greetings", gid)
@@ -304,11 +352,62 @@ def test_push_refreshes_the_worlds_updated_stamp(monkeypatch, tmp_path):
     wid, cid = _world_and_campaign(monkeypatch, tmp_path)
     entities.create_entity(worlds.world_root(wid), "locations", "Saltmarch", "v1")
     overlay.update_entity(cid, "locations", "saltmarch", body="mine")
-    before = worlds.read_world(wid)["meta"].get("updated", "")
+    # A stamp the push cannot possibly leave in place, rather than `>=` against
+    # the real one -- a one-second clock makes that assertion pass for a push
+    # that never stamped at all.
+    _backdate_world(wid, "2000-01-01T00:00:00Z")
 
     sync.push(cid, "locations", "saltmarch")
 
-    assert worlds.read_world(wid)["meta"]["updated"] >= before
+    assert worlds.read_world(wid)["meta"]["updated"] != "2000-01-01T00:00:00Z"
+
+
+def _backdate_world(wid: str, stamp: str) -> None:
+    from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+    mp = worlds.world_meta_path(wid)
+    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    meta["updated"] = stamp
+    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+
+# ---- a world that is no longer there --------------------------------------
+
+def test_promote_refuses_when_the_campaigns_world_is_gone(monkeypatch, tmp_path):
+    """Without this, `mkdir(parents=True)` rebuilds the deleted world's
+    directory around the promoted file: a tree with no world.md, which nothing
+    lists as a world and no route can reach, holding the only copy of a record
+    the campaign has just recorded a sync base for."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    eid = overlay.create_entity(cid, "locations", "Saltmarch", "fog")
+    shutil.rmtree(worlds.world_root(wid))
+
+    with pytest.raises(worlds.WorldNotFound):
+        sync.promote(cid, "locations", eid)
+
+    assert not worlds.world_root(wid).exists()
+    assert f"locations/{eid}" not in campaigns.read_manifest(cid)
+    assert overlay.read_entity(cid, "locations", eid)["body"].strip() == "fog"
+
+
+def test_promote_refuses_an_actor_when_the_campaigns_world_is_gone(monkeypatch, tmp_path):
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    aid, _vid = overlay.create_character(cid, "Winifred")
+    shutil.rmtree(worlds.world_root(wid))
+
+    with pytest.raises(worlds.WorldNotFound):
+        sync.promote(cid, "characters", aid)
+    assert not worlds.world_root(wid).exists()
+
+
+def test_push_refuses_when_the_campaigns_world_is_gone(monkeypatch, tmp_path):
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    entities.create_entity(worlds.world_root(wid), "locations", "Saltmarch", "v1")
+    overlay.update_entity(cid, "locations", "saltmarch", body="mine")
+    shutil.rmtree(worlds.world_root(wid))
+
+    with pytest.raises(worlds.WorldNotFound):
+        sync.push(cid, "locations", "saltmarch")
+    assert not worlds.world_root(wid).exists()
 
 
 # ---- diverged: what a campaign could push ---------------------------------
@@ -358,6 +457,68 @@ def test_demote_with_copy_down_leaves_every_dependent_holding_its_own(monkeypatc
         croot = campaigns.campaign_root(c)
         assert (croot / "locations" / "saltmarch.md").exists()
         assert overlay.read_entity(c, "locations", "saltmarch")["body"].strip() == "v1"
+
+
+def _world_art(wid: str, kind: str, eid: str, name: str = "avatar", body: bytes = b"art") -> None:
+    p = worlds.world_root(wid) / kind / eid / "assets" / "default" / f"{name}.png"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(body)
+
+
+def _campaign_art(cid: str, kind: str, eid: str, name: str = "avatar"):
+    root = overlay.image_root(cid, eid, "default", name, base=kind)
+    return assets.image_path(root, eid, "default", name, base=kind)
+
+
+def test_demote_copies_the_records_art_down_too(monkeypatch, tmp_path):
+    """Assets overlay per FILE, from the world — so deleting the world record
+    takes its pictures with it. Copying only the text down leaves every
+    dependent campaign holding a record whose art is gone for good."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    entities.create_entity(worlds.world_root(wid), "locations", "Saltmarch", "v1")
+    _world_art(wid, "locations", "saltmarch", body=b"the world's art")
+
+    sync.demote(wid, "locations", "saltmarch", copy_down=True)
+
+    landed = _campaign_art(cid, "locations", "saltmarch")
+    assert landed is not None and landed.read_bytes() == b"the world's art"
+
+
+def test_the_copy_down_does_not_overwrite_a_campaigns_own_art(monkeypatch, tmp_path):
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    entities.create_entity(worlds.world_root(wid), "locations", "Saltmarch", "v1")
+    _world_art(wid, "locations", "saltmarch", body=b"the world's art")
+    mine = (campaigns.campaign_root(cid) / "locations" / "saltmarch"
+            / "assets" / "default" / "avatar.png")
+    mine.parent.mkdir(parents=True, exist_ok=True)
+    mine.write_bytes(b"the one I chose")
+
+    sync.demote(wid, "locations", "saltmarch", copy_down=True)
+
+    assert mine.read_bytes() == b"the one I chose"
+
+
+def test_the_copy_down_does_not_resurrect_an_image_deleted_here(monkeypatch, tmp_path):
+    # `image_root` checks the campaign's own file BEFORE the tombstone, so a
+    # blind copy hands back exactly the picture the user deleted
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    entities.create_entity(worlds.world_root(wid), "locations", "Saltmarch", "v1")
+    _world_art(wid, "locations", "saltmarch", body=b"the world's art")
+    overlay.delete_image(cid, "saltmarch", "default", "avatar", base="locations")
+
+    sync.demote(wid, "locations", "saltmarch", copy_down=True)
+
+    assert _campaign_art(cid, "locations", "saltmarch") is None
+
+
+def test_demote_without_copy_down_leaves_no_art_behind(monkeypatch, tmp_path):
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    entities.create_entity(worlds.world_root(wid), "locations", "Saltmarch", "v1")
+    _world_art(wid, "locations", "saltmarch")
+
+    sync.demote(wid, "locations", "saltmarch", copy_down=False)
+
+    assert _campaign_art(cid, "locations", "saltmarch") is None
 
 
 def test_demote_removes_the_world_record(monkeypatch, tmp_path):
@@ -412,6 +573,33 @@ def test_demote_does_not_hand_a_record_back_to_a_campaign_that_deleted_it(monkey
 
     with pytest.raises(entities.EntityNotFound):
         overlay.read_entity(cid, "locations", "saltmarch")
+
+
+def test_demote_refuses_a_target_that_is_not_a_dependent(monkeypatch, tmp_path):
+    """The destructive half runs regardless of `target`, so a target that
+    matches nothing used to mean "copy this down nowhere, then delete it" --
+    a typo answered by taking the record away from every campaign at once."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    entities.create_entity(worlds.world_root(wid), "locations", "Saltmarch", "v1")
+
+    with pytest.raises(sync.UnknownTargetError):
+        sync.demote(wid, "locations", "saltmarch", copy_down=True, target="no-such-campaign")
+
+    assert entities.entity_hash(worlds.world_root(wid), "locations", "saltmarch") is not None
+    assert overlay.read_entity(cid, "locations", "saltmarch")["body"].strip() == "v1"
+
+
+def test_demote_refuses_a_target_belonging_to_another_world(monkeypatch, tmp_path):
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    other_world = worlds.create_world("Elsewhere")
+    stranger = campaigns.create_campaign("Stranger", other_world)
+    entities.create_entity(worlds.world_root(wid), "locations", "Saltmarch", "v1")
+
+    with pytest.raises(sync.UnknownTargetError):
+        sync.demote(wid, "locations", "saltmarch", copy_down=True, target=stranger)
+
+    assert entities.entity_hash(worlds.world_root(wid), "locations", "saltmarch") is not None
 
 
 def test_demote_refuses_an_actor(monkeypatch, tmp_path):

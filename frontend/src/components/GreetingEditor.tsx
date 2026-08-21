@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, api, type Appearance, type CharacterSummary, type Edges, type EntityScope, type EntitySummary, type Greeting, type GreetingMark } from "../api/client";
 import { Field } from "./Field";
+import { DemotePanel } from "./DemotePanel";
 import { GreetingMarkdown } from "./GreetingMarkdown";
+import { LibraryPanel } from "./LibraryPanel";
 import { StaleRecordBanner } from "./StaleRecordBanner";
 import { SubjectsPopover } from "./SubjectsPopover";
 import { TaggingQueue } from "./TaggingQueue";
@@ -372,6 +374,15 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
               <div className="form-actions">
                 <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
               </div>
+              {gid && (worldScope ? (
+                <DemotePanel key={`${scope.id}:greetings:${gid}`}
+                             wid={scope.id} kind="greetings" id={gid}
+                             onDemoted={() => { void reload(); setGid(null); }} />
+              ) : (
+                <LibraryPanel key={`${scope.id}:greetings:${gid}`}
+                              cid={scope.id} kind="greetings" id={gid}
+                              onMoved={() => { void reload(); }} />
+              ))}
               {form.pcless && (
                 <div className="side-section">
                   <h4>Offscreen</h4>

@@ -12,6 +12,13 @@ vi.mock("../api/client", () => ({
     }
   },
   api: {
+    // The campaign-scope sidebar's LibraryPanel (#52). "already library
+    // content, unedited" renders no button, so this suite is unchanged;
+    // LibraryPanel.test.tsx owns the panel's own behaviour.
+    libraryStatus: vi.fn().mockResolvedValue(
+      { in_library: true, diverged: false, can_promote: false, can_push: false }),
+    promoteToLibrary: vi.fn(), pushToLibrary: vi.fn(),
+    libraryDependents: vi.fn().mockResolvedValue([]), demoteFromLibrary: vi.fn(),
     listGreetings: vi.fn(), listCharacters: vi.fn(), listTags: vi.fn(), readGreeting: vi.fn(),
     createGreeting: vi.fn(), updateGreeting: vi.fn(), deleteGreeting: vi.fn(),
     setEdges: vi.fn(), importGreetings: vi.fn(), listEntities: vi.fn(),

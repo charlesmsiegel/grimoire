@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import { ApiError, api, ENTITY_FIELDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type Secrecy } from "../api/client";
 import { loreOwnerOptions, type LoreOwner } from "../api/loreOwners";
 import CreationWizard from "./CreationWizard";
+import { DemotePanel } from "./DemotePanel";
 import { Field } from "./Field";
 import { ImageDescriptionField } from "./ImageDescriptionField";
 import { GroupStatePanel } from "./GroupStatePanel";
@@ -542,14 +543,19 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
               <div className="form-actions">
                 <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
               </div>
-              {scope.kind === "campaign" && editing && (
-                // Keyed on the record, so switching rows remounts rather than
-                // showing the previous record's library state while the new
-                // one loads.
+              {/* Keyed on the record, so switching rows remounts rather than
+                  showing the previous record's library state while the new one
+                  loads. The two are opposites and never both apply: a campaign
+                  puts a record INTO the library, a world takes one out. */}
+              {editing && (scope.kind === "campaign" ? (
                 <LibraryPanel key={`${scope.id}:${kind}:${editing}`}
                               cid={scope.id} kind={kind} id={editing}
                               onMoved={() => { void reload(); }} />
-              )}
+              ) : (
+                <DemotePanel key={`${scope.id}:${kind}:${editing}`}
+                             wid={scope.id} kind={kind} id={editing}
+                             onDemoted={() => { void reload(); resetForm(); }} />
+              ))}
               <div className="side-section">
                 <h4>Keys</h4>
                 {keyList.length > 0

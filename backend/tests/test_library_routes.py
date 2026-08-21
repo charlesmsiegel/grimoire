@@ -239,6 +239,60 @@ def test_demote_defaults_to_copying_down(client):
     assert client.get(f"/api/campaigns/{cid}/locations/saltmarch").status_code == 200
 
 
+def test_demoting_to_a_target_that_is_not_a_dependent_is_refused(client):
+    wid, cid = _world_and_campaign(client)
+    client.post(f"/api/worlds/{wid}/locations", json={"name": "Saltmarch", "body": "v1"})
+
+    r = client.post(f"/api/worlds/{wid}/locations/saltmarch/demote",
+                    json={"copy_down": True, "target": "no-such-campaign"})
+
+    assert r.status_code == 409
+    assert r.json()["kind"] == "library_move_refused"
+    # and the record is still there, in both places
+    assert client.get(f"/api/worlds/{wid}/locations/saltmarch").status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/locations/saltmarch").status_code == 200
+
+
+def test_the_library_status_route_drives_the_editors_button(client):
+    wid, cid = _world_and_campaign(client)
+    eid = client.post(f"/api/campaigns/{cid}/locations",
+                      json={"name": "Saltmarch", "body": "mine"}).json()["id"]
+
+    local = client.get(f"/api/campaigns/{cid}/locations/{eid}/library").json()
+    assert local == {"in_library": False, "diverged": False,
+                     "can_promote": True, "can_push": False}
+
+    client.post(f"/api/campaigns/{cid}/locations/{eid}/promote")
+
+    assert client.get(f"/api/campaigns/{cid}/locations/{eid}/library").json() == {
+        "in_library": True, "diverged": False, "can_promote": False, "can_push": False}
+
+    client.put(f"/api/campaigns/{cid}/locations/{eid}",
+               json={"name": "Saltmarch", "body": "edited here"})
+
+    assert client.get(f"/api/campaigns/{cid}/locations/{eid}/library").json() == {
+        "in_library": True, "diverged": True, "can_promote": False, "can_push": True}
+    assert wid  # the world is the library these flags are about
+
+
+def test_library_status_offers_nothing_for_an_inherited_record(client):
+    wid, cid = _world_and_campaign(client)
+    client.post(f"/api/worlds/{wid}/locations", json={"name": "Saltmarch", "body": "v1"})
+
+    assert client.get(f"/api/campaigns/{cid}/locations/saltmarch/library").json() == {
+        "in_library": True, "diverged": False, "can_promote": False, "can_push": False}
+
+
+def test_library_status_offers_nothing_for_an_actor_it_cannot_push(client):
+    wid, cid = _world_and_campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Winifred"})
+
+    status = client.get(f"/api/campaigns/{cid}/characters/winifred/library").json()
+
+    assert status["can_push"] is False and status["can_promote"] is False
+    assert wid
+
+
 def test_demoting_an_actor_is_refused(client):
     wid, _cid = _world_and_campaign(client)
     client.post(f"/api/worlds/{wid}/characters", json={"name": "Winifred"})

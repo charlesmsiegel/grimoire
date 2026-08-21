@@ -22,6 +22,10 @@ vi.mock("../api/client", () => ({
     libraryStatus: vi.fn().mockResolvedValue(
       { in_library: true, diverged: false, can_promote: false, can_push: false }),
     promoteToLibrary: vi.fn(),
+    // World scope reaches DemotePanel; campaign scope reaches LibraryPanel.
+    // Both resolve to "nothing to do", so these views render as they always did.
+    libraryDependents: vi.fn().mockResolvedValue([]),
+    demoteFromLibrary: vi.fn(),
     pushToLibrary: vi.fn(),
     listUndescribedImages: vi.fn(),
     listPCs: vi.fn(),
