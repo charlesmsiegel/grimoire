@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { api } from "../api/client";
 import { getModels, type Model } from "../api/models";
-import type { LLMConnection, LLMConnectionKind } from "../api/types";
+import type { ActiveConnection, LLMConnection, LLMConnectionKind } from "../api/types";
 import ModelCombobox from "../routes/ModelCombobox";
 import { CLAUDE_MODEL_OPTIONS } from "./ConnectionForm";
 
@@ -12,12 +12,6 @@ import { CLAUDE_MODEL_OPTIONS } from "./ConnectionForm";
 export type RerollRoute = { connection_id: string; model: string };
 
 export const NO_REROLL_ROUTE: RerollRoute = { connection_id: "", model: "" };
-
-/** The active connection as `GET /config` reports it — enough to name the
- *  default without a second fetch for it. */
-export type ActiveConnection = {
-  id: string; kind: LLMConnectionKind; name: string; model: string;
-};
 
 /** Pick the connection and model ONE reroll runs on.
  *
@@ -111,10 +105,20 @@ export default function RerollRoutePicker({
           onChange({ connection_id: e.target.value, model: "" });
         }}
       >
-        <option value="">
-          {active ? `Default — ${active.name}` : "Default connection"}
+        {/* Just "Default", with the connection's name on hover. The name does
+            not fit a control this size — a real one ran as "Default — Oper" —
+            and it is the one thing here that is already said twice over: the
+            status bar names the active connection, and the model box beside
+            this shows the model leaving it alone would run. */}
+        <option value="" title={active ? `Default: ${active.name}` : undefined}>
+          Default
         </option>
-        {connections.map((c) => (
+        {/* The active connection is not offered again below: "Default" already
+            IS it, and for a call that runs immediately there is no difference
+            between naming it and letting it be resolved. Two rows reading
+            "OpenRouter" would only ask the reader to tell apart a distinction
+            that does not exist. */}
+        {connections.filter((c) => c.id !== active?.id).map((c) => (
           <option key={c.id} value={c.id}>{c.name}</option>
         ))}
       </select>

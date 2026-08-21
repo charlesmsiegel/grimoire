@@ -9,7 +9,7 @@ import {
   type SceneDatetime, type ProposalRecord, type SceneCheckActor,
   type ResponsePresetSummary, type ResponseOverride, type ResponseBundle,
   type Briefing, type Casefile, type Provenance, type SceneLocation, type SceneWeather,
-  type CampaignBudget,
+  type ActiveConnection, type CampaignBudget,
   type UsagePostBucket,
 } from "../api/client";
 import { isAbortError, newAttemptId, type ChatEvent } from "../api/stream";
@@ -31,7 +31,7 @@ import { PostCost, money } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
 import RerollRoutePicker, {
-  NO_REROLL_ROUTE, type ActiveConnection, type RerollRoute,
+  NO_REROLL_ROUTE, type RerollRoute,
 } from "../components/RerollRoute";
 import { initialsOf, Portrait } from "../components/Portrait";
 import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
@@ -3859,7 +3859,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                       )}
                       {rerollPrompt !== null && !busy &&
                        index === rerollAt && canReroll && (
-                        <span className="reroll-pop">
+                        /* Escape-to-dismiss on the container is what the rule
+                           below objects to, and it is the accessible choice
+                           here rather than a lapse from it: the alternative is
+                           a popover only one of its three controls can be
+                           backed out of. */
+                        // eslint-disable-next-line jsx-a11y/no-static-element-interactions
+                        <span className="reroll-pop"
+                              // On the popover, not on the guidance input it
+                              // used to sit on: the route row (#77) added two
+                              // more controls, and Escape backing out of one
+                              // of three of them is worse than not offering it
+                              // at all. Keydown bubbles from every child.
+                              onKeyDown={(e) => {
+                                if (e.key === "Escape") setRerollPrompt(null);
+                              }}>
                           {/* Above the guidance, not beside it: this is where
                               the reroll goes, and the hint is what it says once
                               it gets there. Untouched, both halves are the
@@ -3873,10 +3887,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                               aria-label="Reroll guidance"
                               value={rerollPrompt}
                               onChange={(e) => setRerollPrompt(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") reroll();
-                                if (e.key === "Escape") setRerollPrompt(null);
-                              }}
+                              onKeyDown={(e) => { if (e.key === "Enter") reroll(); }}
                             />
                             <button className="btn-chrome" onClick={() => reroll()} disabled={rolling}>Reroll ▸</button>
                           </span>

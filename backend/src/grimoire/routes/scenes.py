@@ -696,7 +696,12 @@ def post_regenerate(cid: str, sid: str, request: Request,
     # with no key, must refuse BEFORE the reservation below — past it the route
     # has archived and removed the outgoing reply, and a 400 raised there would
     # report a rejected request over a scene that is one reply short.
-    conn = _override_connection(body)
+    override = _override_connection(body)
+    # Spelled out twice rather than reusing `routed` as the condition: the
+    # narrowing a type checker can follow is the `is not None` itself, not a
+    # bool derived from it.
+    routed = override is not None
+    conn = override if override is not None else _require_connection()
     # RESERVED BEFORE THE FIRST MUTATOR, which matters more here than anywhere
     # else: this route archives the outgoing reply and removes it from the
     # transcript before the replacement exists, so a 409 raised afterwards
@@ -706,11 +711,11 @@ def post_regenerate(cid: str, sid: str, request: Request,
     if not fresh:
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
-        return _regenerate_run(cid, sid, body, request, client, conn, run)
+        return _regenerate_run(cid, sid, body, request, client, conn, run, routed=routed)
 
 
 def _regenerate_run(cid: str, sid: str, body, request: Request,
-                    client: LLMClient, conn: dict, run):
+                    client: LLMClient, conn: dict, run, *, routed: bool):
     """The body of a reroll, once the scene is reserved -- see `_chat_run`."""
     guidance = (body.guidance or "").strip() if body else ""
     # What this reroll will actually be sent to, after `_override_connection`
@@ -719,11 +724,12 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
     # naming only a connection reports THAT connection's model, and a Claude
     # connection with none configured reports the one the dispatcher
     # substitutes rather than the empty string it stores.
-    #
     ran_on = effective_model(conn)
-    # Whether the caller asked for a route at all, which the two stamps below
-    # answer to differently -- and deliberately, because they are answering
-    # different questions:
+    # `routed` is whether the caller asked for a route at all, decided once by
+    # `_override_connection` and passed in rather than re-read off the body: two
+    # readings of the same two fields is two places for the rule to drift. The
+    # two stamps below answer to it differently -- and deliberately, because
+    # they are answering different questions:
     #
     # - The ALTERNATE is stamped on every reroll. It is the only record a
     #   variant has of the generation that produced it, and the whole point of
@@ -739,7 +745,6 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
     #   matters more than either being exactly right. A deliberate one-shot
     #   override is the one case where they are describing different things
     #   (this turn, versus the next one) rather than drifting apart.
-    routed = bool(body and (body.connection_id or body.model))
     removed: dict | None = None   # set only when there is actually a reply to drop
     # ONE lock across the heal, the decision, the archive and the removal. A gap
     # anywhere in that span is a gap another writer's generation can land in —

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import atomic, config
 from .frontmatter import dump_frontmatter, parse_frontmatter
-from .paths import home, now_iso, slugify, uniquify
+from .paths import home, now_iso, safe_id, slugify, uniquify
 
 #: Every connection kind a stored connection may declare. Public, because
 #: whether a kind can carry an image is answered in two places -- `llm
@@ -54,9 +54,19 @@ def _write_raw(id: str, **fields: str) -> None:
 
 
 def _read(id: str) -> dict | None:
-    """None for missing, unreadable, or unrecognized-kind files — all three
-    count as "not a valid seeded/created connection", used both by normal
+    """None for unsafe, missing, unreadable, or unrecognized-kind files — all
+    four count as "not a valid seeded/created connection", used both by normal
     lookups and by migration's crash-recovery check."""
+    # #240's rule, which this module was outside: never join a caller-supplied
+    # id onto a path unchecked. Every read reaches a connection through here,
+    # and an id now arrives in a REQUEST BODY as well as a URL segment (#77's
+    # reroll override) -- which is precisely the case `test_path_guard_store`'s
+    # docstring calls out as getting no protection from the router's path
+    # matching. `..`, `a/b` and the Windows drive-relative forms all name
+    # something that is not a child of the connections directory, and "not a
+    # connection" is the honest answer for every one of them.
+    if not safe_id(id):
+        return None
     p = _path(id)
     if not p.exists():
         return None
@@ -140,6 +150,11 @@ def update_connection(id: str, **fields) -> None:
 
 def delete_connection(id: str) -> None:
     ensure_migrated()
+    # Guarded like `_read`, and separately from it, because this is the one
+    # caller-id path join that does not go through a read first -- and it is
+    # the one that unlinks.
+    if not safe_id(id):
+        raise ConnectionNotFound(id)
     p = _path(id)
     if not p.exists():
         raise ConnectionNotFound(id)

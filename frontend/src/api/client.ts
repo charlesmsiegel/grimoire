@@ -632,7 +632,10 @@ export const api = {
    *
    *  Empty fields are dropped rather than sent, so an untouched popover posts
    *  no body at all — `""` and "unset" mean the same thing for all four, and
-   *  the server reads a missing field as the standing configuration.
+   *  the server reads a missing field as the standing configuration. Falsy is
+   *  the test because every field here is a string or an object; a field whose
+   *  `false` or `0` meant something would need its own rule rather than this
+   *  one, and would be wrong to add without one.
    */
   regenerate: (cid: string, sid: string, onEvent: (e: ChatEvent) => void,
                body?: RegenerateOverrides, signal?: AbortSignal, attempt?: string,

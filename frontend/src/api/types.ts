@@ -20,6 +20,13 @@ export type LLMConnection = {
   key_set: boolean; rev: string;
 };
 export type LLMConnectionDetail = LLMConnection & { models: Model[]; fetched_at: string };
+/** The active connection as `GET /config` reports it — id, kind, name, and the
+ *  EFFECTIVE model (a `claude` connection with none configured still runs one).
+ *  Named rather than inlined on `Config` because two surfaces read it: the
+ *  status bar, and the reroll popover's route picker (#77). */
+export type ActiveConnection = {
+  id: string; kind: LLMConnectionKind; name: string; model: string;
+};
 export type LLMConnectionDraft = {
   kind?: LLMConnectionKind; name?: string; base_url?: string; api_key?: string;
   model?: string; post_process?: "none" | "strict";
@@ -29,7 +36,7 @@ export type Config = {
   theme: string; system_prompt: string;
   quote_color: string; user_label: string; assistant_label: string;
   active_connection_id: string;
-  active_connection: { id: string; kind: LLMConnectionKind; name: string; model: string } | null;
+  active_connection: ActiveConnection | null;
   ready: boolean;
   /** Seconds of silence before an LLM call is abandoned; "0" disables. */
   llm_timeout: string;

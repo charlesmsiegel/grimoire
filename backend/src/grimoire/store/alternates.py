@@ -13,10 +13,14 @@ structured and the transcript's frontmatter holds flat string scalars only::
 
 ``next_guidance`` and ``next_model`` are one *pending* pair — the hint and the
 model a reroll aimed at the replacement it has not received yet — and they are
-spent together onto whatever fills the slot (see ``_resolve``). ``model`` is
-empty for every variant the scene's own stamped model produced, which is every
-variant that existed before #77 and every reroll that did not override the
-route; a reader treats empty as "the scene's model" rather than "unknown".
+spent together onto whatever fills the slot (see ``_resolve``).
+
+``model`` is **"" for no record**, not for "the scene's model": the regenerate
+route stamps every reroll it archives, so the variants left empty are the ones
+nothing recorded a route for — every variant written before #77, and every
+variant ``_resolve`` reconciles out of the transcript rather than archiving (a
+plain turn's reply, a hand edit). A reader shows nothing for those rather than
+naming a model it is only guessing at.
 
 **What a set is keyed to.** One reroll can produce several posts
 (``scenes.split_reply`` segments a reply per speaker), so the unit here is the
@@ -81,11 +85,15 @@ MAX_ALTERNATES = 8
 #: stop one request from parking megabytes in a file read on every scene open.
 MAX_GUIDANCE_CHARS = 500
 
-#: The same bound, for the same reason, on the model a reroll was aimed at
-#: (#77). Far shorter than a hint because it is an identifier rather than
-#: prose -- the longest id any of the three connection kinds accepts is well
-#: under this -- but it arrives on the wire from the same unbounded string
-#: field, so it needs a ceiling of its own rather than the hint's.
+#: The same bound on the model a reroll was aimed at (#77), and enforced
+#: differently: an over-long hint is CLIPPED, an over-long model id is DROPPED.
+#: Clipping prose keeps most of its meaning; clipping an identifier invents a
+#: different one, and a tooltip naming a model that does not exist is worse
+#: than one naming none. Nothing legitimate comes near this — the longest id
+#: any of the three connection kinds accepts is an order of magnitude shorter —
+#: so past it the value is not a model id at all, and "no record" is the true
+#: thing to store. The ceiling exists at all because the field arrives on the
+#: wire as an unbounded string, in a file read on every scene open.
 MAX_MODEL_CHARS = 200
 
 
@@ -494,19 +502,21 @@ def archive(cid: str, sid: str, guidance: str = "", model: str = "") -> None:
     it, not against the run being archived.
 
     `model` is the same promise for the route (#77): the model the reroll is
-    about to be sent to, when the caller overrode it, and "" when the scene's
-    own stamped model is what will run. Recorded here rather than when the
-    reply lands, which is what makes it survive a stream that dies — and which
-    means it names the route the reroll ASKED for, not necessarily the one that
-    answered: a generation the primary fails is served by the configured
-    fallback (#144) on a different connection entirely. That is the same
-    inaccuracy the scene's own `model` frontmatter and `prompt_log`'s snapshots
-    already carry, deliberately (see `store.prompt_log`'s docstring) — every
-    stamp in this codebase names the configured route, and one field answering
-    a different question would be the surprise.
+    about to be sent to. "" is no record, which is what a caller that has
+    nothing to say passes.
+
+    Recorded here rather than when the reply lands, which is what makes it
+    survive a stream that dies — and which means it names the route the reroll
+    ASKED for, not necessarily the one that answered: a generation the primary
+    fails is served by the configured fallback (#144) on a different connection
+    entirely. That is the same inaccuracy the scene's own `model` frontmatter
+    and `prompt_log`'s snapshots already carry, deliberately (see
+    `store.prompt_log`'s docstring) — every stamp in this codebase names the
+    configured route, and one field answering a different question would be the
+    surprise.
     """
     pending = {"next_guidance": guidance[:MAX_GUIDANCE_CHARS],
-               "next_model": model[:MAX_MODEL_CHARS]}
+               "next_model": model if len(model) <= MAX_MODEL_CHARS else ""}
     with locks.campaign_lock(cid):
         slot = _slot(cid, sid)
         live = slot["segments"]
