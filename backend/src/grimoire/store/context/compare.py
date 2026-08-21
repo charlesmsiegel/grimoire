@@ -19,14 +19,21 @@ Three deliberate choices, each of which had a cheaper alternative:
   state line, a different `{{random}}` roll, a world-info entry that activated
   in place of another of similar length. So the comparison is per line, through
   `changes.line_diff`, the same primitive (and the same tagged-row output)
-  `ChangesPanel` already renders for record write-backs.
+  `ChangesPanel` already renders for record write-backs. That helper grew a
+  common-prefix/suffix trim and a size bound for this caller (#130) -- see its
+  docstring; a prompt section is two orders of magnitude longer than the record
+  field it was written for, and both the precision and the cost of a naive
+  difflib call go wrong at that size.
 
 - **Matched by `id`, not by position.** Sections move: one dropping out shifts
   every row after it, and a positional pairing would then report every section
-  in the prompt as changed. `id` is the stable identity #29 gave them. `label`
-  is the fallback for a snapshot frozen before ids existed -- those predate
-  editable labels too, so theirs are still unique -- and the occurrence counter
-  keeps a genuinely duplicated key from pairing two rows onto one.
+  in the prompt as changed. `id` is the stable identity #29 gave them. When a
+  snapshot frozen before ids existed is one of the two, BOTH sides fall back to
+  `label` -- keying each side by what it happens to have would compare
+  `Character state` against `character_state` and match nothing (see
+  `_key_field`). Labels predate editable labels too, so theirs are still
+  unique, and the occurrence counter keeps a genuinely duplicated key from
+  pairing two rows onto one.
 
 - **Long unchanged runs are elided.** A record field is a paragraph; a prompt
   section is the whole transcript, and one appended exchange would otherwise
@@ -92,26 +99,47 @@ def _int(value: object) -> int:
         return 0
 
 
-def _keyed(sections: object) -> list[tuple[str, dict]]:
-    """`(key, row)` per section, in prompt order.
-
-    The key is the row's `id`, or its `label` when there is none, plus how many
-    rows with that same key came before it. The counter is not paranoia about
-    hand-edited files: `_breakdown` numbers its appended rows precisely because
-    two of them can share a label, and a snapshot frozen before ids existed has
-    only labels to key on. Without it, difflib would pair the first occurrence
-    on each side and silently drop the rest.
-    """
+def _rows(sections: object) -> list[dict]:
+    """The section rows worth looking at. A payload that is not a list, or a row
+    that is not a dict, is a hand-edited file rather than a section."""
     if not isinstance(sections, list):
         return []
+    return [row for row in sections if isinstance(row, dict)]
+
+
+def _key_field(rows: list[dict]) -> str:
+    """`id` only when EVERY row across BOTH sides carries one; `label` for all
+    of them otherwise.
+
+    Decided across both sides together, which review caught the first version
+    getting wrong. Keying each side by whatever it happened to have looks right
+    and is the exact case this module advertises handling -- a snapshot frozen
+    before #29 against a composition made after it -- and it fails silently:
+    `Character state` on one side and `character_state` on the other never
+    match, so the panel reports every section of the prompt as removed and
+    re-added rather than the one that changed. Falling back for both sides
+    costs the newer side its stable identity for one comparison, which is the
+    lesser of the two: labels were unique before they were editable, and the
+    occurrence counter below covers the rest.
+    """
+    return "id" if all(row.get("id") for row in rows) else "label"
+
+
+def _keyed(rows: list[dict], field: str) -> list[tuple[str, dict]]:
+    """`(key, row)` per section, in prompt order.
+
+    The key is `field` -- see `_key_field` -- plus how many rows with that same
+    value came before it. The counter is not paranoia about hand-edited files:
+    `_breakdown` numbers its appended rows precisely because two of them can
+    share a label. Without it, difflib would pair the first occurrence on each
+    side and silently drop the rest.
+    """
     seen: Counter[str] = Counter()
     out: list[tuple[str, dict]] = []
-    for row in sections:
-        if not isinstance(row, dict):
-            continue
-        base = str(row.get("id") or row.get("label") or "")
-        seen[base] += 1
-        out.append((f"{base}#{seen[base]}", row))
+    for row in rows:
+        stem = str(row.get(field) or row.get("label") or "")
+        seen[stem] += 1
+        out.append((f"{stem}#{seen[stem]}", row))
     return out
 
 
@@ -166,7 +194,7 @@ def _row(key: str, before: dict | None, after: dict | None) -> dict:
     is the question restated, not answered.
     """
     shown = (after if after is not None else before) or {}
-    row: dict = {"id": key.rsplit("#", 1)[0],
+    row: dict = {"id": str(shown.get("id") or key.rsplit("#", 1)[0]),
                  "label": str(shown.get("label", "")),
                  "base": _side(before) if before is not None else None,
                  "head": _side(after) if after is not None else None,
@@ -206,16 +234,17 @@ def compare_breakdowns(base: dict, head: dict) -> dict:
     `total_tokens` is not the sum of its rows, so one computed here would
     contradict the two totals the caller already holds.
     """
-    left, right = _keyed(base.get("sections")), _keyed(head.get("sections"))
+    left_rows, right_rows = _rows(base.get("sections")), _rows(head.get("sections"))
+    field = _key_field(left_rows + right_rows)
+    left, right = _keyed(left_rows, field), _keyed(right_rows, field)
     keys_l, keys_r = [k for k, _ in left], [k for k, _ in right]
     rows: list[dict] = []
-    # `autojunk=False` as in `changes.line_diff`, though for less than the same
-    # reason and stated as such: section keys are near-unique, so the heuristic
-    # has almost nothing to call popular and this is not fixing an observed bad
-    # pairing. It costs nothing and removes a rule that would change how a
-    # prompt is matched once its section list crosses 200 -- which a customised
-    # layout can do, and which is not a threshold anyone would think to look
-    # for.
+    # `autojunk=False`, and safe here in a way it is NOT in `line_diff`: this
+    # sequence is one element per SECTION, so a customised layout crossing 200
+    # is reachable but thousands are not, and the quadratic term that made the
+    # per-line call need a bound has nothing to bite on. What it buys is that a
+    # prompt is matched the same way either side of that threshold, which is not
+    # one anyone would think to look for.
     matcher = difflib.SequenceMatcher(None, keys_l, keys_r, autojunk=False)
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":

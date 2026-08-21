@@ -138,3 +138,34 @@ test("two captured turns are not hedged, because both were recorded", () => {
   render(<ContextDiff diff={diff({ head: side({ id: "000002", ts: "2026-08-06T12:00:00Z" }) })} />);
   expect(screen.queryByText(/composed fresh/)).toBeNull();
 });
+
+test("a change to a section neither side sent says so", () => {
+  // The flags are EQUAL, so the difference-only rule would stay silent — and
+  // the panel would show a textual change with no sign that it cannot be the
+  // cause of anything, sending debugging at a non-cause.
+  render(<ContextDiff diff={diff({
+    sections: [section({ status: "changed",
+                         base: facts({ dropped: true }),
+                         head: facts({ dropped: true }),
+                         diff: [{ op: "insert", text: "a line neither turn sent" }] })],
+  })} />);
+  screen.getByText(/on both sides/);
+  screen.getByText(/saw neither version/);
+});
+
+test("a section dropped on neither side is not annotated", () => {
+  render(<ContextDiff diff={diff({
+    sections: [section({ status: "changed", diff: [{ op: "insert", text: "new" }] })],
+  })} />);
+  expect(screen.queryByText(/budget packer/)).toBeNull();
+});
+
+test("a comparison the live side has moved under says so rather than blanking", () => {
+  render(<ContextDiff diff={diff()} recomputing />);
+  screen.getByText(/A turn has landed since this was computed/);
+});
+
+test("a settled comparison carries no such notice", () => {
+  render(<ContextDiff diff={diff()} />);
+  expect(screen.queryByText(/recomputing/)).toBeNull();
+});

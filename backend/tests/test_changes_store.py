@@ -1,3 +1,5 @@
+import time
+
 from grimoire.store import changes
 
 
@@ -128,3 +130,49 @@ def test_apply_without_sid_records_nothing(monkeypatch, tmp_path):
     entities.create_entity(croot, "lore", "Pact", body="old body")
     absorb.apply_edits(cid, [_lore_edit("old body", "old body\n\nx")])
     assert changes.read(cid) == {}
+
+
+# --- the trimmed, bounded diff (#130) -----------------------------------------
+# `line_diff` matches the common prefix and suffix off directly and hands only
+# the middle to difflib, with `autojunk` back on when that middle is long. Both
+# halves of that rule are load-bearing and neither is visible in a small case,
+# so both are held here.
+
+
+def test_one_edit_in_a_huge_repetitive_body_is_one_edit():
+    """The case the prompt diff is for, at a size the record log can also reach.
+
+    Exact BECAUSE of the trimming: one edit leaves a one-line middle, so the
+    heuristic never engages and cannot refuse to anchor on the repeated line.
+    Without the trimming this same pair is 150-plus deletions and insertions
+    with `autojunk` on, and takes 13.7s with it off.
+    """
+    lines = ["- item"] * 10_000
+    edited = list(lines)
+    edited[5_000] = "- item CHANGED"
+    ops = changes.line_diff("\n".join(lines), "\n".join(edited))
+
+    assert [o for o in ops if o["op"] == "delete"] == [{"op": "delete", "text": "- item"}]
+    assert [o for o in ops if o["op"] == "insert"] == [{"op": "insert",
+                                                       "text": "- item CHANGED"}]
+    assert len(ops) == len(lines) + 1          # every other line still reported
+
+
+def test_a_long_differing_middle_stays_bounded():
+    """The other half: trimming cannot help two long spans that share neither
+    end, and there `autojunk` is a BOUND as well as a filter -- without it
+    SequenceMatcher is quadratic on repetitive input.
+
+    The ceiling is enormous on purpose. This is not a measurement of the runner
+    -- the repo has been bitten by one of those -- it is an algorithmic guard:
+    the bounded answer is milliseconds and the unbounded one is tens of seconds,
+    so any margin in between catches a regression and none of it flakes.
+    """
+    n = changes.EXACT_DIFF_LIMIT * 4
+    before = "\n".join(["head"] + ["- item"] * n + ["tail"])
+    after = "\n".join(["HEAD"] + ["- item"] * n + ["TAIL"])
+
+    started = time.perf_counter()
+    ops = changes.line_diff(before, after)
+    assert time.perf_counter() - started < 10.0
+    assert ops                                  # and it really did diff them

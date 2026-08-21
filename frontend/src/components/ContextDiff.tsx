@@ -19,7 +19,8 @@ const LIVE = "live";
  *  section as the first and shows the same kind of thing as the second, and a
  *  new vocabulary for either would only say they were unrelated.
  */
-export function ContextDiff({ diff }: { diff: PromptDiff }) {
+export function ContextDiff({ diff, recomputing = false }:
+                             { diff: PromptDiff; recomputing?: boolean }) {
   const moved = diff.sections.filter((s) => s.status !== "unchanged");
   const same = diff.sections.length - moved.length;
   const delta = diff.head.total_tokens - diff.base.total_tokens;
@@ -29,6 +30,12 @@ export function ContextDiff({ diff }: { diff: PromptDiff }) {
       <div className="ctx-caption">
         {sideLabel(diff.base)} → {sideLabel(diff.head)}
       </div>
+      {/* The live end moved under this comparison — a turn landed — and the
+          replacement is in flight. Said rather than blanked: see `recomputing`
+          in `SceneInspector`. */}
+      {recomputing && (
+        <p className="field-hint">A turn has landed since this was computed; recomputing…</p>
+      )}
       <div className="ctx-tokens">
         {diff.base.total_tokens.toLocaleString()} → {diff.head.total_tokens.toLocaleString()} tok
         {delta !== 0 && <span className={"ctx-delta " + (delta > 0 ? "up" : "down")}>
@@ -155,7 +162,12 @@ function flagNotes(section: PromptDiffSection): string[] {
   if (!base || !head)
     return only?.dropped ? [DROPPED] : [];
   const notes: string[] = [];
-  if (base.dropped !== head.dropped)
+  if (base.dropped && head.dropped)
+    // Equal flags, and still the first thing to say: the words below moved and
+    // NEITHER version reached the model. Without it the panel shows a textual
+    // change with no sign that it is not a cause of anything.
+    notes.push("Dropped by the budget packer on both sides — the model saw neither version.");
+  else if (base.dropped !== head.dropped)
     notes.push(head.dropped ? DROPPED : "Kept this time; the budget packer had dropped it.");
   if (base.pinned !== head.pinned)
     notes.push(head.pinned ? "Pinned, so the packer left it alone." : "No longer pinned.");
