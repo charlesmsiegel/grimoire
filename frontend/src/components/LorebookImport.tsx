@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
-import { api, type EntityKind, type LoreEntryDraft } from "../api/client";
+import { api, type LoreEntryDraft } from "../api/client";
+import { kindOptions, useEntityKinds } from "./useEntityKinds";
 
 const FORMATS = ["lorebook", "json", "png", "charx"];
 
@@ -9,6 +10,7 @@ export function LorebookImport({ wid, onImported }: { wid: string; onImported?: 
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const kinds = useEntityKinds();
 
   async function parse() {
     const file = fileRef.current?.files?.[0];
@@ -82,12 +84,8 @@ export function LorebookImport({ wid, onImported }: { wid: string; onImported?: 
                     </td>
                     <td>
                       <select aria-label={`category ${i}`} value={e.category}
-                              onChange={(ev) => patch(i, { category: ev.target.value as EntityKind })}>
-                        <option value="lore">lore</option>
-                        <option value="locations">locations</option>
-                        <option value="items">items</option>
-                        <option value="groups">groups</option>
-                        <option value="creatures">creatures</option>
+                              onChange={(ev) => patch(i, { category: ev.target.value })}>
+                        {kindOptions(kinds, e.category).map((k) => <option key={k} value={k}>{k}</option>)}
                       </select>
                     </td>
                     <td>{e.body.length > 80 ? e.body.slice(0, 80) + "…" : e.body}</td>

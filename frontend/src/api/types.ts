@@ -248,8 +248,19 @@ export type ScenePage = Scene & {
   offset?: number; total?: number; has_older?: boolean; has_user_message?: boolean;
 };
 
-// entities (locations | lore)
-export type EntityKind = "locations" | "lore" | "items" | "groups" | "creatures";
+// entities
+// The kinds THIS BUILD knows about, and the union everything else types
+// against. At runtime the authority is the server -- `GET /api/entity-kinds`
+// (see `components/useEntityKinds.ts`), which is what lets a kind added to
+// `store.entities.ENTITY_KINDS` reach the import dialogs' Category dropdown
+// with no frontend edit (#138). This list is what those dropdowns fall back to
+// when that read fails, and it stays the compile-time union because the tabs,
+// labels and per-kind field table are all written against named kinds.
+export const ENTITY_KINDS = ["locations", "lore", "items", "groups", "creatures"] as const;
+export type EntityKind = (typeof ENTITY_KINDS)[number];
+/** A kind as it comes back over HTTP: one of the above, or one this build has
+ *  not heard of. Use `EntityKind` for kinds this code names itself. */
+export type EntityKindName = string;
 export type EntityScope = { kind: "world" | "campaign"; id: string };
 
 // Mirrors backend/src/grimoire/store/entity_schema.py — keep in sync.
@@ -1220,7 +1231,11 @@ export type Briefing = {
 };
 
 // lorebook import
-export type LoreEntryDraft = { name: string; keys: string[]; body: string; category: EntityKind };
+// `EntityKindName`, not `EntityKind`: a draft's category is whatever the server
+// said a row may be filed under (`GET /api/entity-kinds`), which is allowed to
+// name a kind added after this build shipped (#138). Narrowing it to the local
+// union would only be a cast that claims something the round trip does not.
+export type LoreEntryDraft = { name: string; keys: string[]; body: string; category: EntityKindName };
 
 // scenario-card import (#217) — one card describing a whole setting, split into
 // the records a world is made of. A proposal speaks in cast NAMES, not ids: the

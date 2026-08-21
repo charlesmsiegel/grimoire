@@ -5089,6 +5089,24 @@ def test_lorebook_parse_then_import(client):
     assert [e["name"] for e in client.get(f"/api/worlds/{wid}/locations").json()] == ["The Docks"]
 
 
+def test_entity_kinds_endpoint_lists_the_store_s_kinds(client):
+    # The dialog's category dropdown is built from this, so it is the store's
+    # own tuple rather than a hand-kept copy -- a kind added to ENTITY_KINDS
+    # reaches the review table with no frontend edit (#138).
+    assert client.get("/api/entity-kinds").json()["kinds"] == list(store.entities.ENTITY_KINDS)
+
+
+def test_every_offered_kind_is_a_category_import_accepts(client):
+    # The load-bearing half: what the endpoint offers and what `lorebook.commit`
+    # accepts cannot drift, or the dropdown grows an option that 400s.
+    wid = _world(client)
+    kinds = client.get("/api/entity-kinds").json()["kinds"]
+    r = client.post(f"/api/worlds/{wid}/lorebook/import", json={"entries": [
+        {"name": f"Entry {k}", "keys": [], "body": "body", "category": k} for k in kinds]})
+    assert r.status_code == 200
+    assert [c["kind"] for c in r.json()["created"]] == kinds
+
+
 def test_lorebook_parse_bad_file_400(client):
     wid = _world(client)
     files = {"file": ("x.json", io.BytesIO(b"not json"), "application/json")}

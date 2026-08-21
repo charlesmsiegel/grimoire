@@ -679,7 +679,12 @@ export const api = {
   getWorld: (wid: string) =>
     request<{ meta: WorldMeta; body: string; counts: Record<string, number> }>("GET", `/api/worlds/${wid}`),
 
-  // entities (locations | lore), world or campaign scope
+  /** Every category an entity may be filed under, server-side and in its own
+   *  order. Read by the import review tables so their per-row Category
+   *  dropdown is the store's list rather than a copy of it (#138). */
+  entityKinds: () => request<{ kinds: string[] }>("GET", "/api/entity-kinds"),
+
+  // entities, world or campaign scope
   listEntities: (scope: EntityScope, kind: EntityKind) =>
     request<EntitySummary[]>("GET", `${entityBase(scope)}/${kind}`),
   createEntity: (scope: EntityScope, kind: EntityKind,

@@ -1,12 +1,12 @@
 import { useRef, useState } from "react";
 import {
-  api, type EntityKind, type LoreEntryDraft, type ScenarioCharacterDraft,
+  api, type LoreEntryDraft, type ScenarioCharacterDraft,
   type ScenarioGreetingDraft, type ScenarioImportResult, type ScenarioProposal,
 } from "../api/client";
 import { ErrorNote } from "./ErrorNote";
+import { kindOptions, useEntityKinds } from "./useEntityKinds";
 
 const FORMATS = ["json", "png", "charx"];
-const CATEGORIES: EntityKind[] = ["lore", "locations", "items", "groups", "creatures"];
 
 /** Which rows survive the review. Kept beside the proposal rather than inside
  *  it, because "skip this one" is a decision about the import, not a fact about
@@ -65,6 +65,7 @@ export function ScenarioImport({ wid, onImported }: { wid: string; onImported?: 
   const [error, setError] = useState<unknown>(null);
   const [result, setResult] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const kinds = useEntityKinds();
 
   async function run(load: () => Promise<ScenarioProposal>) {
     setError(null);
@@ -298,8 +299,8 @@ export function ScenarioImport({ wid, onImported }: { wid: string; onImported?: 
                     </td>
                     <td>
                       <select aria-label={`entry category ${i}`} value={e.category}
-                              onChange={(ev) => patchEntry(i, { category: ev.target.value as EntityKind })}>
-                        {CATEGORIES.map((k) => <option key={k} value={k}>{k}</option>)}
+                              onChange={(ev) => patchEntry(i, { category: ev.target.value })}>
+                        {kindOptions(kinds, e.category).map((k) => <option key={k} value={k}>{k}</option>)}
                       </select>
                     </td>
                     <td>{e.body.length > 80 ? e.body.slice(0, 80) + "…" : e.body}</td>
