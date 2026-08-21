@@ -306,10 +306,26 @@ def find_by_identity(cid: str, identity: str) -> str | None:
     if not _TOKEN.match(identity or ""):
         return None
     d = paths._scenes_dir(cid)
-    if not d.exists():
-        return None
+    # NOT `d.exists()`, for the reason `scene_identity_strict` does not use it
+    # either: it suppresses `OSError` and answers False, so a scenes directory
+    # on a store that is momentarily unresolvable read as "this campaign has no
+    # scenes" -- the route reported `scene_gone`, and `OpenScene` took the
+    # give-up path instead of the retry-on-`busy` one it has for exactly this.
+    # Listing raises instead, which is the same "I could not look everywhere"
+    # this function already distinguishes for individual files.
+    #
+    # `iterdir`, not `glob`: `Path.glob` swallows the errors it meets while
+    # walking and yields nothing, so it is a second fail-soft predicate wearing
+    # different clothes -- an unlistable directory would come back as an empty
+    # campaign exactly as `exists()` did.
+    try:
+        candidates = sorted(f for f in d.iterdir() if f.suffix == ".md")
+    except FileNotFoundError:
+        return None            # no scenes directory: a real answer
+    except OSError as exc:
+        raise UnreadableError(f"{cid}: the scenes directory could not be listed: {exc}") from exc
     blind = False
-    for p in sorted(d.glob("*.md")):
+    for p in candidates:
         if not safe_id(p.stem):   # enumeration agrees with the resolvers
             continue
         try:

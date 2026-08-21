@@ -577,10 +577,18 @@ export const api = {
     streamGet(`/api/campaigns/${cid}/scenes/${sid}/runs/${runId}/stream?from=${from}`,
               onEvent, signal, onIndex),
 
+  // The THIRD hop of the notification tap, after the two the Android shell
+  // makes, and it needs the same treatment: `safe_id` permits characters that
+  // are reserved in a URI, so a raw `cid` with a `?` or `#` in it turns the
+  // rest of this path into a query or a fragment and the backend is asked
+  // about a truncated campaign. `encodeSegment` rather than
+  // `encodeURIComponent` for the path part -- it is what every other route
+  // here uses, so a segment cannot be encoded two different ways.
   sceneByIdentity: (cid: string, identity: string) =>
     request<{ id: string }>(
       "GET",
-      `/api/campaigns/${cid}/scene-by-identity?identity=${encodeURIComponent(identity)}`,
+      `/api/campaigns/${encodeSegment(cid)}/scene-by-identity`
+      + `?identity=${encodeURIComponent(identity)}`,
       undefined, { fresh: true }),
 
   attemptState: (cid: string, sid: string, attempt: string) =>

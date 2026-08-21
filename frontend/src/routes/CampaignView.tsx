@@ -1901,10 +1901,40 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // A reattach that fails is not a failed turn: the run is on the server
       // and the reply is heading for the transcript either way. Left unsettled
       // so the next visibility change tries again.
+      //
+      // AND LEFT LOCKED, which review caught was not the case. Clearing `busy`
+      // here put Send back over a run that still owns the scene -- and the next
+      // send's `registry.begin()` overwrites this scene's one pending entry, so
+      // if the original run then rolls its post back, the words it was holding
+      // are gone with it. The same posture as an unconfirmed Stop, for the same
+      // reason: nothing has established what became of that run, so nothing may
+      // act as though something had.
+      //
+      // `abortRef` alone is cleared, because the adoption pass -- which is what
+      // resolves this -- bows out while it is set.
       if (!isAbortError(err)) setStreaming("");
       abortRef.current = null;
-      setBusy(false);
-      setStreamingId(null);
+      // UNLESS a Stop is what aborted it. `runStream`'s finally is where a
+      // pending cancel is normally waited on, and an adopted run never goes
+      // through it -- so without this the player presses Stop, the backend
+      // duly cancels, and the composer stays locked forever on a turn that is
+      // over. Confirmed the same way and unconfirmed the same way: the wait is
+      // what makes the button honest, here as there.
+      const pending = cancelRef.current;
+      if (pending) {
+        cancelRef.current = null;
+        try {
+          await pending;
+          registry.settle(cid, sid);
+          runRef.current = null;
+          setStreamingId(null);
+          setStreaming("");
+          setBusy(false);
+        } catch {
+          setError({ text: "could not reach the server to stop this turn — it "
+                           + "may still be generating", retryable: false });
+        }
+      }
       return;
     }
     if (finished) registry.settle(cid, sid);
@@ -1945,8 +1975,26 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // nothing here to restore and nothing to settle.
     if (!held) {
       if (abortRef.current) return;
-      const live = await api.findRun(cid, sid).then((r) => r.run).catch(() => null);
-      if (live && live.state === "running") await attachToRun(cid, sid, live.id);
+      let live;
+      try {
+        live = (await api.findRun(cid, sid)).run;
+      } catch {
+        return;                 // a failed lookup is not an answer; ask again later
+      }
+      if (live && live.state === "running") {
+        await attachToRun(cid, sid, live.id);
+        return;
+      }
+      // NOTHING IS RUNNING HERE, and that is a real answer -- so it is also the
+      // release. A reattach that failed deliberately leaves this view locked
+      // (see `attachToRun`'s catch), and with no pending attempt there is no
+      // other pass that would ever let go. Unconditional because the ordinary
+      // case has nothing to release and setting state to what it already is
+      // costs nothing.
+      runRef.current = null;
+      setStreamingId(null);
+      setStreaming("");
+      setBusy(false);
       return;
     }
     // Not while this component is already driving a turn. Adoption is for a
@@ -3024,9 +3072,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // that follows would detach a turn the player had already stopped. The
       // attempt route is remembered by the server and consumed when the
       // reservation happens, which is the only version of this without a race.
-      let state = handle.id
-        ? (await api.cancelRun(from, sid, handle.id)).run?.state
-        : (await api.cancelAttempt(from, sid, attempt)).run?.state;
+      // BY ID WHEN THERE IS ONE, on every round and not just the first. An
+      // adopted run is recorded with `attempt: ""` -- the provider was
+      // recreated empty, so this client never knew the id the backend reserved
+      // under -- and re-asking by that empty attempt matches nothing, so every
+      // poll answered null and a cancellation that was completing normally was
+      // reported unconfirmed. The id is the better handle wherever it exists;
+      // the attempt is what covers the window before any frame named one.
+      const ask = () => (handle.id
+        ? api.cancelRun(from, sid, handle.id)
+        : api.cancelAttempt(from, sid, attempt));
+      let state = (await ask()).run?.state;
       // The server's wait is bounded (30s) and can answer while the run is
       // still unwinding. Taking that as "it is over" is what re-enabled Send
       // over a run that still held the scene, which is the whole failure this
@@ -3049,7 +3105,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
            (state === "running" || state === undefined) && tries < STOP_POLLS;
            tries++) {
         if (state === undefined) await new Promise((r) => setTimeout(r, 100));
-        state = (await api.cancelAttempt(from, sid, attempt)).run?.state;
+        state = (await ask()).run?.state;
       }
       if (state === "running" || state === undefined) {
         // Out of rounds with the run still going, or still not reserved.
