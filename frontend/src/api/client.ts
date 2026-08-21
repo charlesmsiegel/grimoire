@@ -1303,12 +1303,14 @@ export const api = {
   // bundle carries what OTHER scopes resolve to, so a cached copy would show
   // an inherited value from before the write that prompted the reload.
   getGlobalRouting: () => request<RoutingBundle>("GET", "/api/routing", undefined, { fresh: true }),
+  // `notifyConfig` on both writes: the status bar names the model the next turn
+  // will run on, and a route is now one of the things that decides it.
   setGlobalRouting: (routes: Record<string, string>) =>
-    request<RoutingBundle>("PUT", "/api/routing", { routes }),
+    request<RoutingBundle>("PUT", "/api/routing", { routes }).then(notifyConfig),
   getCampaignRouting: (cid: string) =>
     request<RoutingBundle>("GET", `/api/campaigns/${cid}/routing`, undefined, { fresh: true }),
   setCampaignRouting: (cid: string, routes: Record<string, string>) =>
-    request<RoutingBundle>("PUT", `/api/campaigns/${cid}/routing`, { routes }),
+    request<RoutingBundle>("PUT", `/api/campaigns/${cid}/routing`, { routes }).then(notifyConfig),
 
   // Cost (#153). `fresh` on both: a turn that just landed is exactly what makes
   // a reader open the Cost section, and a cached read issued before it would

@@ -95,6 +95,10 @@ def _drive_opener(client, wid, cid, sid):
 
 
 def _drive_absorb(client, wid, cid, sid):
+    # An empty cast and no resolved module, so the extraction is the only phase
+    # that reaches a provider -- which is what lets the assertions here be "every
+    # request went to this connection" rather than "one of them did". The
+    # fan-out's own routing is `test_absorbs_phases_each_follow_their_own_route`.
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
 
 
@@ -299,7 +303,7 @@ def test_a_routed_connection_that_cannot_send_is_reported_not_silently_replaced(
 def test_a_route_naming_no_connection_is_refused_at_the_door(client):
     """Tolerated on read, refused on write -- see `_routing_fields`. A typo
     stored as a setting would sit on the page routing nothing."""
-    wid, cid, sid = _seed(client)
+    _wid, _cid, _sid = _seed(client)
     r = client.put("/api/routing", json={"routes": {"scene": "no-such-connection"}})
     assert r.status_code == 400 and "no-such-connection" in r.json()["detail"]
     assert client.get("/api/routing").json()["routes"]["scene"] == ""
@@ -365,6 +369,22 @@ def test_a_campaign_routing_write_does_not_disturb_the_rest_of_the_frontmatter(c
     assert after["name"] == before["name"] and after["world"] == before["world"]
     assert after["created"] == before["created"]
     assert after["updated"] >= before["updated"]
+
+
+def test_a_campaign_route_is_never_written_into_the_world(client):
+    """#142's invariant, stated in the issue and worth a test rather than a
+    promise: a world is shared between campaigns, so a routing choice made in
+    one of them must not reach it."""
+    wid, cid, _sid = _seed(client)
+    world_root = store.worlds.world_root(wid)
+    before = {p: p.read_bytes() for p in sorted(world_root.rglob("*")) if p.is_file()}
+
+    client.put(f"/api/campaigns/{cid}/routing",
+               json={"routes": {"scene": _connection(client, "elsewhere")}})
+
+    after = {p: p.read_bytes() for p in sorted(world_root.rglob("*")) if p.is_file()}
+    assert after == before
+    assert "route_scene" in store.campaigns.read_campaign(cid)["meta"]
 
 
 def test_routing_a_campaign_that_does_not_exist_is_a_404(client):

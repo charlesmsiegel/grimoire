@@ -101,12 +101,26 @@ def test_every_generation_names_a_task_and_every_task_has_a_route():
         f"the task to the route it belongs to: {unknown}")
 
 
-def test_the_definition_itself_is_not_counted_as_a_call_site():
-    """A guard that passed because it found nothing is the failure mode here."""
+def test_the_walk_finds_the_call_sites_and_not_the_definition():
+    """A guard that passed because it found nothing is the failure mode here.
+
+    Both halves matter. Finding nothing would make every assertion above
+    vacuous; counting `def _require_connection(...)` as a call site would make
+    the whole suite fail on the one line that is not one.
+    """
     seen = 0
+    definitions = 0
     for _path, text in _sources():
-        seen += sum(1 for _ in _calls(ast.parse(text), "_require_connection"))
+        tree = ast.parse(text)
+        seen += sum(1 for _ in _calls(tree, "_require_connection"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "_require_connection":
+                definitions += 1
+                assert not any(c.lineno == node.lineno
+                               for c in _calls(tree, "_require_connection")), (
+                    "the definition line is being read as a call site")
     assert seen >= 15, f"only {seen} call sites found; the walk is not finding them"
+    assert definitions == 1, f"expected one definition of the seam, found {definitions}"
 
 
 def test_the_only_way_into_a_provider_is_the_seam_this_guard_watches():

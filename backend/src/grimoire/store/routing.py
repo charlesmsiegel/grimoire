@@ -73,10 +73,14 @@ ROUTES: tuple[Route, ...] = (
           "Suggested next scenes, and the metadata read out of a scene description.",
           ("suggestions", "intent"), True),
     Route("voice", "Voice anchors & drift",
-          "Drafted voice anchors, and the drift check against them.",
+          "Drafted voice anchors, and the drift check against them. A campaign "
+          "override reaches its own cast; a world character's anchor is drafted "
+          "outside any campaign and follows the global route.",
           ("voice-anchor", "voice-drift"), True),
     Route("image", "Image descriptions",
-          "What a picture shows, drafted for the alt text and the art catalog.",
+          "What a picture shows, drafted for the alt text and the art catalog. A "
+          "campaign override reaches its own image library; a world record's "
+          "picture follows the global route.",
           ("image-description",), True),
     Route("tagline", "Character taglines",
           "The one-line tagline drafted for a character version.", ("tagline",), False),
@@ -102,6 +106,18 @@ def config_key(route_key: str) -> str:
 
 def route_by_key(route_key: str) -> Route:
     return _BY_KEY[route_key]
+
+
+def label_for(route_key: str) -> str:
+    """A route's name for a message, or the key itself for one nothing claims.
+
+    The lookup a *message* wants. `route_by_key` raises, which is right for code
+    that has already established the route exists and wrong for an error path --
+    a 409 explaining why a connection cannot send must not become a KeyError 500
+    on the way out.
+    """
+    got = _BY_KEY.get(route_key)
+    return got.label if got is not None else route_key
 
 
 def route(task: str) -> Route | None:
@@ -173,7 +189,11 @@ def bundle(*, campaign_meta: dict, cfg: dict, exists: Callable[[str], bool],
     routes = {r.key: str(own.get(config_key(r.key), "") or "") for r in mine}
     effective: dict[str, str] = {}
     provenance: dict[str, dict] = {}
-    for r in ROUTES:
+    # The same routes in all three maps, not every route in two of them: a
+    # campaign bundle that reported an effective value for a route the campaign
+    # cannot set would be answering a question its picker never asks, and a
+    # reader diffing the three keys would have to work out which is which.
+    for r in mine:
         # Any of the route's tasks answers for all of them -- they resolve
         # through the same key by construction -- so the first one stands in.
         got = resolve(r.tasks[0], campaign_meta=campaign_meta, cfg=cfg, exists=exists)
@@ -182,8 +202,8 @@ def bundle(*, campaign_meta: dict, cfg: dict, exists: Callable[[str], bool],
     return {"routes": routes, "effective": effective, "provenance": provenance}
 
 
-def writable(scope: str, fields: Iterable[str]) -> list[str]:
-    """The field names in `fields` this scope may not set.
+def refused(scope: str, fields: Iterable[str]) -> list[str]:
+    """The field names in `fields` this scope may NOT set.
 
     A campaign PUT naming `route_tagline` is a 400 rather than a stored key that
     never fires -- the setting would look applied and never route anything.

@@ -36,7 +36,8 @@ import RerollRoutePicker, {
 } from "../components/RerollRoute";
 import { initialsOf, Portrait } from "../components/Portrait";
 import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
-import { usePublishShellContext } from "../components/ShellStatus";
+import { onConfigChanged } from "../appEvents";
+import { usePublishSceneModel, usePublishShellContext } from "../components/ShellStatus";
 import { RollProposal, type ResolveBody } from "../components/RollProposal";
 import { PageShell } from "../components/PageShell";
 import { useFocus } from "../components/focus";
@@ -3649,6 +3650,29 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // the scene is off the screen, so the pill is the only thing still saying it.
   usePublishShellContext(
     name ? { campaign: name, scene: absorb ? `Absorbing ${absorbTitle}` : sceneTitle } : null);
+
+  // The model THIS campaign's turns run on, which since #142 is not necessarily
+  // the active connection's: a campaign can route its scene turns elsewhere, and
+  // so can the global routing page. Resolved here because the header has a
+  // pathname and no cid, and answered by the same bundle the picker renders --
+  // one place decides what a route means. A failed read publishes nothing and
+  // the header keeps naming the active connection, which is what it did before.
+  const [sceneModel, setSceneModel] = useState<string | null>(null);
+  const [routingRev, setRoutingRev] = useState(0);
+  useEffect(() => onConfigChanged(() => setRoutingRev((n) => n + 1)), []);
+  useEffect(() => {
+    let live = true;
+    // Cleared first: switching campaigns must not leave the previous one's
+    // model in the header for as long as this read takes.
+    setSceneModel(null);
+    api.getCampaignRouting(cid).then((r) => {
+      if (!live) return;
+      const id = r.effective.scene || r.active_connection_id;
+      setSceneModel(r.connections.find((c) => c.id === id)?.model || null);
+    }).catch(() => { if (live) setSceneModel(null); });
+    return () => { live = false; };
+  }, [cid, routingRev]);
+  usePublishSceneModel(sceneModel);
 
   // The scene's own keyboard (#193). Every binding here mirrors a control that
   // is on screen, and carries the same condition that control is disabled by —

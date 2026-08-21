@@ -98,6 +98,9 @@ export async function campaignApiMock() {
       getSceneBreak: vi.fn(), askSceneBreak: vi.fn(), dismissSceneBreak: vi.fn(),
       // Cost (#153): the page's budget banner, and the inspector's Cost section.
       getCampaignBudget: vi.fn(), setCampaignBudget: vi.fn(), getSceneUsage: vi.fn(),
+      // Per-task routing (#142): the page resolves the model its turns run on
+      // and publishes it to the header.
+      getCampaignRouting: vi.fn(), setCampaignRouting: vi.fn(),
       actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, n: string) =>
         `/img/${k}/${a}/${v}/${n}`,
       entityImageUrl: () => "/loc-img",

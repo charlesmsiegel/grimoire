@@ -150,15 +150,19 @@ def test_the_bundle_reports_own_values_effective_values_and_provenance():
     assert bundle["effective"]["absorb"] == "big"
     assert bundle["provenance"]["scene"] == {"scope": "campaign"}
     assert bundle["provenance"]["absorb"] == {"scope": "global"}
-    assert bundle["provenance"]["tagline"] == {"scope": "active"}
+    assert bundle["provenance"]["summary"] == {"scope": "active"}
 
 
 def test_the_campaign_bundle_omits_the_routes_a_campaign_cannot_override():
     bundle = routing.bundle(campaign_meta={}, cfg={}, exists=lambda cid: False,
                             scope="campaign")
-    assert "tagline" not in bundle["routes"]
-    assert "scenario" not in bundle["routes"]
-    assert "scene" in bundle["routes"]
+    for key in ("routes", "effective", "provenance"):
+        assert "tagline" not in bundle[key], key
+        assert "scenario" not in bundle[key], key
+        assert "scene" in bundle[key], key
+    # All three maps describe the same routes, so a caller can iterate any one
+    # of them and look the others up by key.
+    assert set(bundle["routes"]) == set(bundle["effective"]) == set(bundle["provenance"])
 
 
 def test_the_global_bundle_carries_every_route():
