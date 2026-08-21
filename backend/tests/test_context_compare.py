@@ -187,14 +187,36 @@ def test_duplicate_keys_pair_one_to_one():
     assert all(r["id"] == "Shape rules" for r in rows)
 
 
-def test_a_section_without_an_id_is_keyed_by_its_label():
-    """A snapshot frozen before #29 carries no `id` at all, and it still has to
-    diff against a composition that does."""
-    before = {"sections": [{"label": "Cast", "text": "Mara", "tokens": 1,
-                            "tier": "spotlight", "dropped": False, "trimmed": 0}]}
-    after = _bd(_row("Cast", "Winifred", label="Cast"))
+def test_a_snapshot_without_ids_is_matched_by_label_on_both_sides():
+    """A snapshot frozen before #29 carries no `id`, and it still has to diff
+    against a composition that does.
+
+    The ids are deliberately NOT equal to the labels here. Keying each side by
+    whatever it has would compare `Character state` against `character_state`,
+    match nothing, and report every section as removed and re-added -- which is
+    what an earlier version of this test hid by giving the newer row an id equal
+    to its label.
+    """
+    before = {"sections": [
+        {"label": "Character state", "text": "Mara is wary", "tokens": 3,
+         "tier": "spotlight", "dropped": False, "trimmed": 0},
+        {"label": "World lore", "text": "the marsh floods", "tokens": 3,
+         "tier": "background", "dropped": False, "trimmed": 0}]}
+    after = _bd(_row("character_state", "Mara is calm", label="Character state"),
+                _row("world_lore", "the marsh floods", label="World lore"))
+
     rows = context.compare_breakdowns(before, after)["sections"]
-    assert [r["status"] for r in rows] == ["changed"]
+    assert [r["status"] for r in rows] == ["changed", "unchanged"]
+    # ...and the row still names itself by the id the newer side has.
+    assert [r["id"] for r in rows] == ["character_state", "world_lore"]
+
+
+def test_ids_are_used_when_both_sides_have_them_even_if_labels_moved():
+    """The other half of the rule: a rename must not look like a replacement."""
+    before = _bd(_row("lore", "x", label="World lore"))
+    after = _bd(_row("lore", "x", label="Background"))
+    rows = context.compare_breakdowns(before, after)["sections"]
+    assert [r["status"] for r in rows] == ["changed"]      # not removed + added
 
 
 def test_a_corrupt_payload_is_described_rather_than_raised_on():

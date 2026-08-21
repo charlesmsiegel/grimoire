@@ -25,33 +25,61 @@ BROWSABLE_KINDS: tuple[str, ...] = (
     "new_location", "new_lore")
 
 
+#: Longest DIFFERING span `line_diff` will align exactly. Past it the input is
+#: handed back to difflib's `autojunk` heuristic, which is fast and imprecise
+#: rather than precise and quadratic. Chosen by measurement: the worst case at
+#: this length -- two maximally repetitive spans sharing neither end -- is
+#: ~0.1s, and it is ~1s at 3000.
+EXACT_DIFF_LIMIT = 1000
+
+
 def line_diff(before: str, after: str) -> list[dict]:
     """Tagged per-line diff of two text blobs. A `replace` span emits its deletes then
     its inserts, so the frontend can render removed-then-added lines.
 
-    `autojunk=False`, which is a no-op for the record fields this was written
-    for and load-bearing for the prompt sections `context.compare` now feeds it
-    (#130). The heuristic only engages past 200 lines, and what it does there is
-    refuse to let any line occurring in more than 1% of the input ANCHOR a
-    match. Prompt sections are full of exactly that -- a roster, a fact list, a
-    set of world-info entries sharing a bullet or a speaker prefix -- and the
-    cost is not marginal: editing one item of a 300-line list is reported as 150
-    deletions and 150 insertions with the heuristic on, and as one of each with
-    it off (`test_one_edit_in_a_long_repetitive_section_is_one_edit`). A panel
-    whose noise grows with the length of the section is one nobody reads twice.
+    The common prefix and suffix are matched off directly and only the middle
+    goes to difflib. That is an optimisation for the record fields this was
+    written for and a correctness fix for the prompt sections
+    `context.compare` now feeds it (#130), because difflib's `autojunk`
+    heuristic engages past 200 lines and then refuses to let any line occurring
+    in more than 1% of the input ANCHOR a match. Prompt sections are full of
+    exactly that -- a roster, a fact list, a set of world-info entries sharing a
+    bullet or a speaker prefix -- and editing one item of a 300-line list came
+    back as 150 deletions and 150 insertions.
+
+    Turning the heuristic off outright was the first fix and it was wrong, in
+    the way review caught: it is a bound as well as a filter, and without it
+    SequenceMatcher goes quadratic on the same repetitive input. Measured, one
+    edit in 10,000 identical lines: 13.7s. Trimming instead answers the same
+    case in 0.011s AND exactly, because a one-line edit leaves a one-line
+    middle. `EXACT_DIFF_LIMIT` covers what trimming cannot -- two long spans
+    that genuinely differ throughout -- by handing those back to the heuristic,
+    where an imprecise diff of two texts with nothing in common is no loss.
     """
     a, b = before.splitlines(), after.splitlines()
-    out: list[dict] = []
-    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+    head = 0
+    while head < len(a) and head < len(b) and a[head] == b[head]:
+        head += 1
+    tail = 0
+    while (tail < len(a) - head and tail < len(b) - head
+           and a[len(a) - 1 - tail] == b[len(b) - 1 - tail]):
+        tail += 1
+    mid_a, mid_b = a[head:len(a) - tail], b[head:len(b) - tail]
+    junk = max(len(mid_a), len(mid_b)) > EXACT_DIFF_LIMIT
+
+    out: list[dict] = [{"op": "equal", "text": t} for t in a[:head]]
+    matcher = difflib.SequenceMatcher(None, mid_a, mid_b, autojunk=junk)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
-            out += [{"op": "equal", "text": t} for t in a[i1:i2]]
+            out += [{"op": "equal", "text": t} for t in mid_a[i1:i2]]
         elif tag == "delete":
-            out += [{"op": "delete", "text": t} for t in a[i1:i2]]
+            out += [{"op": "delete", "text": t} for t in mid_a[i1:i2]]
         elif tag == "insert":
-            out += [{"op": "insert", "text": t} for t in b[j1:j2]]
+            out += [{"op": "insert", "text": t} for t in mid_b[j1:j2]]
         else:  # replace
-            out += [{"op": "delete", "text": t} for t in a[i1:i2]]
-            out += [{"op": "insert", "text": t} for t in b[j1:j2]]
+            out += [{"op": "delete", "text": t} for t in mid_a[i1:i2]]
+            out += [{"op": "insert", "text": t} for t in mid_b[j1:j2]]
+    out += [{"op": "equal", "text": t} for t in a[len(a) - tail:]]
     return out
 
 

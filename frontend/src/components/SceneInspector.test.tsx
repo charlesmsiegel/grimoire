@@ -1777,6 +1777,48 @@ test("a landed turn re-reads the comparison, because the live end has moved", as
   await screen.findByText("the pact was signed at dusk");
 });
 
+test("a turn landing does not re-read a comparison of two frozen turns", async () => {
+  // Both ends are frozen, so a completed turn cannot change the answer and the
+  // request could only return what is already on screen.
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  const { rerender } = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+  fireEvent.change(await screen.findByLabelText("Compare with"), { target: { value: "000002" } });
+  await waitFor(() => expect(api.getScenePromptDiff).toHaveBeenCalledTimes(1));
+
+  rerender(<SceneInspector cid="c" sid="s" refreshKey={1} onSceneChanged={() => {}} />);
+  await screen.findByText("the pact was signed at dusk");
+  expect(api.getScenePromptDiff).toHaveBeenCalledTimes(1);
+});
+
+test("a live comparison marks itself stale while the replacement is in flight", async () => {
+  // Blanking it would flip the panel to this turn's breakdown — a different
+  // kind of content, and one that is refetching too.
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  const { rerender } = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+  fireEvent.change(await screen.findByLabelText("Compare with"), { target: { value: "live" } });
+  await screen.findByText("the pact was signed at dusk");
+
+  let release: (v: any) => void = () => {};
+  (api.getScenePromptDiff as any).mockReturnValue(new Promise((r) => { release = r; }));
+  rerender(<SceneInspector cid="c" sid="s" refreshKey={1} onSceneChanged={() => {}} />);
+
+  await screen.findByText(/A turn has landed since this was computed/);
+  await screen.findByText("the pact was signed at dusk");   // still readable, not blanked
+  release(DIFF);
+  await waitFor(() =>
+    expect(screen.queryByText(/A turn has landed since this was computed/)).toBeNull());
+});
+
 test("an evicted turn on either end says so rather than blanking", async () => {
   (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
   (api.getScenePrompt as any).mockResolvedValue(FROZEN);
@@ -1789,6 +1831,25 @@ test("an evicted turn on either end says so rather than blanking", async () => {
                    { target: { value: "live" } });
   await screen.findByText(/aged out of the log/);
   await screen.findByText("the lore as it stood then");   // still on the frozen view
+});
+
+test("a failed comparison's banner clears when the reader tries again", async () => {
+  // Otherwise the retry renders its diff underneath "those turns could not be
+  // compared", which reads as a diff that failed.
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  (api.getScenePromptDiff as any).mockRejectedValueOnce({ status: 404, detail: "gone" });
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+
+  fireEvent.change(await screen.findByLabelText("Compare with"), { target: { value: "live" } });
+  await screen.findByText(/aged out of the log/);
+
+  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  fireEvent.change(screen.getByLabelText("Compare with"), { target: { value: "live" } });
+  await screen.findByText("the pact was signed at dusk");
+  expect(screen.queryByText(/aged out of the log/)).toBeNull();
 });
 
 test("a diff arriving after the reader moved on is dropped, not shown", async () => {

@@ -160,7 +160,8 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // without clearing the comparison, and a diff still in flight for the turn
   // they left would otherwise be painted under the one they arrived at.
   const [diff, setDiff] = useState<
-    { cid: string; sid: string; eid: string; against: string; data: PromptDiff } | null>(null);
+    { cid: string; sid: string; eid: string; against: string; key: number;
+      data: PromptDiff } | null>(null);
   const [recap, setRecap] = useState<ChronicleEntry[]>([]);
   // Held with the campaign AND scene it came from, the way `LedgerPanel` holds
   // its campaign: the inspector stays mounted across both switches, so a bare
@@ -730,6 +731,11 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // turn that moved it. A diff of a preview that has since changed describes a
   // prompt nobody would send.
   const compareWith = seen?.id;
+  // Which turn landing this comparison actually depends on. A turn-against-turn
+  // diff is frozen at BOTH ends, so a completed turn cannot change it and
+  // re-reading it on every `refreshKey` would be a request that can only return
+  // what is already on screen. Against the live preview it is the whole point.
+  const liveKey = compare === LIVE_SIDE ? refreshKey : 0;
   useEffect(() => {
     if (!compareWith || !compare) { setDiff(null); return; }
     let alive = true;
@@ -744,7 +750,8 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       ? [compareWith, compare] : [compare, compareWith];
     api.getScenePromptDiff(cid, sid, older, newer)
       .then((d) => {
-        if (alive) setDiff({ cid, sid, eid: compareWith, against: compare, data: d });
+        if (alive)
+          setDiff({ cid, sid, eid: compareWith, against: compare, key: liveKey, data: d });
       })
       .catch((err: { status?: number; detail?: string }) => {
         if (!alive) return;
@@ -760,7 +767,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           : (err.detail ?? "Those turns could not be compared."));
       });
     return () => { alive = false; };
-  }, [cid, sid, compareWith, compare, refreshKey]);
+  }, [cid, sid, compareWith, compare, liveKey]);
   // Held to both ends as well as to the scene: the reader can move to another
   // turn while a comparison is in flight, and an answer for the one they left
   // would otherwise be painted under the one they arrived at.
@@ -768,6 +775,12 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     () => (diff && diff.cid === cid && diff.sid === sid
            && diff.eid === compareWith && diff.against === compare ? diff.data : null),
     [diff, cid, sid, compareWith, compare]);
+  // Deliberately NOT part of the guard above: a turn landing must not blank the
+  // panel, because what it would fall back to is this turn's BREAKDOWN — a flip
+  // to a different kind of content, and to one that is refetching too. So the
+  // stale comparison stays on screen and says it is stale, which also covers
+  // the case a blanking guard could not: a request that never answers.
+  const recomputing = !!shownDiff && diff !== null && diff.key !== liveKey;
   // A transition line is a post like any other: a location move, a time advance
   // and a cast join/leave all append one (`scenes/moment.py`,
   // `appearances/transitions.py`), so any of them can be the post that crosses
@@ -1418,7 +1431,15 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
                 to be the "before" of. */}
             <label className="ctx-compare">
               <span>Compare with</span>
-              <select value={compare} onChange={(e) => setCompare(e.target.value)}>
+              {/* `setError(null)` here rather than in the effect below, the way
+                  `showTurn` clears it: a failed comparison leaves a banner and
+                  resets the picker, and without this the reader's retry renders
+                  its diff underneath "those turns could not be compared". The
+                  effect is the wrong place because it also runs on `refreshKey`,
+                  where clearing a banner nobody dismissed would hide someone
+                  else's error. */}
+              <select value={compare}
+                      onChange={(e) => { setError(null); setCompare(e.target.value); }}>
                 <option value="">Nothing — show this turn</option>
                 <option value={LIVE_SIDE}>The live preview</option>
                 {shownTurns.filter((t) => t.id !== seen.id).map((t) => (
@@ -1439,7 +1460,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
         {/* A comparison replaces the breakdown rather than sitting under it.
             Both are long, the rail is one column, and a reader who asked what
             MOVED is not helped by having to scroll past what did not. */}
-        {shownDiff ? <ContextDiff diff={shownDiff} />
+        {shownDiff ? <ContextDiff diff={shownDiff} recomputing={recomputing} />
                    : shown && <ContextBreakdown ctx={shown} models={models} />}
       </SideSection>
 
