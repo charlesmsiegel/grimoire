@@ -1,6 +1,6 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
-import { activeHotkeys, type Hotkey } from "./registry";
+import { activeHotkeys, type HotkeyRow } from "./registry";
 import { formatChord } from "./keys";
 import { useHotkeys } from "./useHotkeys";
 
@@ -26,8 +26,14 @@ function rank(group: string): number {
  *  Mounted once by the shell. Unmounted while closed, like the palette. */
 export default function ShortcutsHelp() {
   const [open, setOpen] = useState(false);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  // Where focus was when the sheet took it. A dialog that claims `aria-modal`
+  // and never takes focus is a claim nothing can act on — Tab would still walk
+  // the page behind it — and one that takes focus without giving it back
+  // strands the reader on `<body>` afterwards.
+  const cameFrom = useRef<HTMLElement | null>(null);
 
-  useHotkeys([
+  const self = useHotkeys([
     // `global`, so the sheet opens over an overlay too: a reader who cannot
     // remember how to close the thing in front of them is exactly who needs
     // it, and the sheet lists that overlay's own keys.
@@ -39,6 +45,19 @@ export default function ShortcutsHelp() {
     // one row in the sheet that is about the sheet.
     { keys: "escape", enabled: open, whileTyping: true, run: () => setOpen(false) },
   ], { modal: open });
+
+  useEffect(() => {
+    if (open) {
+      cameFrom.current = document.activeElement as HTMLElement | null;
+      sheetRef.current?.focus();
+      return;
+    }
+    const back = cameFrom.current;
+    cameFrom.current = null;
+    // Only if it is still on the page: the reader may have opened this from a
+    // control that has since unmounted.
+    if (back?.isConnected) back.focus();
+  }, [open]);
 
   // Typeable as well, because a key nobody can find is the gap this sheet
   // exists to close, one level up: `?` is itself undiscoverable, and the
@@ -55,20 +74,20 @@ export default function ShortcutsHelp() {
   // Deduped: two panels of the same kind, or a re-registered scope, would
   // otherwise list one binding twice.
   const seen = new Set<string>();
-  const rows: Hotkey[] = [];
-  for (const key of activeHotkeys()) {
-    if (!key.label) continue;
-    const id = `${key.group ?? ""}|${key.keys}|${key.label}`;
+  const rows: HotkeyRow[] = [];
+  for (const row of activeHotkeys(self)) {
+    if (!row.key.label) continue;
+    const id = `${row.key.group ?? ""}|${row.key.keys}|${row.key.label}`;
     if (seen.has(id)) continue;
     seen.add(id);
-    rows.push(key);
+    rows.push(row);
   }
-  const groups: Array<[string, Hotkey[]]> = [];
-  for (const key of rows) {
-    const group = key.group ?? "ANYWHERE";
+  const groups: Array<[string, HotkeyRow[]]> = [];
+  for (const row of rows) {
+    const group = row.key.group ?? "ANYWHERE";
     const found = groups.find(([g]) => g === group);
-    if (found) found[1].push(key);
-    else groups.push([group, [key]]);
+    if (found) found[1].push(row);
+    else groups.push([group, [row]]);
   }
   groups.sort((a, b) => rank(a[0]) - rank(b[0]));
 
@@ -78,7 +97,8 @@ export default function ShortcutsHelp() {
     // dialog with nothing bound to it.
     <div className="shortcuts-scrim" role="presentation"
          onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false); }}>
-      <div className="shortcuts" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+      <div className="shortcuts" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"
+           ref={sheetRef} tabIndex={-1}>
         <div className="shortcuts-head">
           <span className="palette-key" aria-hidden>?</span>
           <h3>Keyboard shortcuts</h3>
@@ -88,9 +108,9 @@ export default function ShortcutsHelp() {
           {groups.map(([group, keys]) => (
             <div className="shortcuts-section" key={group}>
               <div className="shortcuts-group section-label">{group}</div>
-              {keys.map((key) => (
+              {keys.map(({ key, reachable }) => (
                 <div key={`${key.keys}|${key.label}`}
-                     className={"shortcuts-row" + (key.enabled === false ? " off" : "")}>
+                     className={"shortcuts-row" + (reachable ? "" : " off")}>
                   <span className="shortcuts-label">{key.label}</span>
                   <kbd className="shortcuts-keys">{formatChord(key.keys)}</kbd>
                 </div>

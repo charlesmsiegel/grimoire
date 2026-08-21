@@ -4,7 +4,7 @@
  *  `keydown` listener, so that "which shortcut does this keystroke mean" has
  *  one answer computed in one place — including the answer "none of them,
  *  something is open on top". Before this, three components each added their
- *  own `window` listener and nothing could see the others (#193).
+ *  own `window` listener and none could see the others (#193).
  *
  *  Module state rather than a React context, deliberately. There is one
  *  keyboard and one `window`, so a second registry would be a bug rather than
@@ -17,7 +17,9 @@
 import { chordOf, isTypingTarget } from "./keys";
 
 export type Hotkey = {
-  /** The chord this fires on, as `keys.ts` spells one: `"n"`, `"mod+enter"`. */
+  /** The chord this fires on, as `keys.ts` spells one: `"n"`, `"mod+enter"`.
+   *  Lowercase, modifiers first — matched literally against what `chordOf`
+   *  produces. */
   keys: string;
   run: () => void;
   /** What the help overlay calls it. A binding with no label is real but
@@ -32,20 +34,37 @@ export type Hotkey = {
    *  inside the composer — the send chord, Escape — and nothing else: a bare
    *  letter that ignored this would eat the word being typed. */
   whileTyping?: boolean;
-  /** Fire even while an overlay is open. The palette and this help overlay
+  /** Fire even while an overlay is open. The palette and the help sheet
    *  promise to be reachable from anywhere; nothing else may claim that. */
   global?: boolean;
 };
 
 /** One component's bindings. `modal` means "I am covering the screen": while a
- *  modal scope is on top, only its own keys (and `global` ones) fire. */
+ *  modal scope is on top, only its own keys (and `global` ones) fire.
+ *
+ *  Held as a live object whose fields the owning component rewrites each
+ *  render, so a binding table needs no memoization from its caller, always
+ *  reflects the current render — and costs no allocation on the dispatch path,
+ *  which every keystroke in a writing app runs down. */
 export type Scope = { keys: Hotkey[]; modal?: boolean };
 
-/** Scopes are held as getters, called at dispatch, so a binding table needs no
- *  memoization from its caller and always reflects the current render. */
-type ScopeSource = () => Scope;
+const scopes: Scope[] = [];
 
-const scopes: ScopeSource[] = [];
+/** The first binding in `scope` that answers this keystroke, run. */
+function fire(
+  scope: Scope, e: KeyboardEvent, chord: string, typing: boolean, onlyGlobal: boolean,
+): boolean {
+  for (const key of scope.keys) {
+    if (key.keys !== chord) continue;
+    if (key.enabled === false) continue;
+    if (onlyGlobal && !key.global) continue;
+    if (typing && !key.whileTyping) continue;
+    e.preventDefault();
+    key.run();
+    return true;
+  }
+  return false;
+}
 
 function onKeyDown(e: KeyboardEvent) {
   // Something on the page already claimed this keystroke — the composer's own
@@ -53,8 +72,8 @@ function onKeyDown(e: KeyboardEvent) {
   // second half of a double send.
   if (e.defaultPrevented) return;
   // An IME sends a keydown for every keystroke that is still assembling a
-  // character (`keyCode` 229 is what browsers without `isComposing` send), and
-  // none of them is a chord the reader typed.
+  // character (`keyCode` 229 is what a browser without `isComposing` sends),
+  // and none of them is a chord the reader typed.
   if (e.isComposing || e.keyCode === 229) return;
   const chord = chordOf(e);
   if (!chord) return;
@@ -63,44 +82,59 @@ function onKeyDown(e: KeyboardEvent) {
   // is, and a keystroke inside a field is inside it either way.
   const typing = isTypingTarget(e.target) || isTypingTarget(document.activeElement);
 
-  // Newest first. An overlay registers after whatever it covers — either
-  // because it mounted later, or because opening re-registered it (see
-  // `useHotkeys`) — so registration order is z-order.
-  const open = scopes.map((get) => get()).reverse();
-  const modalAt = open.findIndex((s) => s.modal);
-  const tries: Array<[Scope, boolean]> = modalAt < 0
-    ? open.map((s) => [s, false])
-    // Under an overlay, only the bindings that said they outlive one are still
-    // eligible — and the overlay itself goes first, so a chord it binds is
-    // never answered by the view underneath.
-    : [[open[modalAt], false], ...open.filter((_, i) => i !== modalAt).map((s) => [s, true] as [Scope, boolean])];
-
-  for (const [scope, onlyGlobal] of tries) {
-    for (const key of scope.keys) {
-      if (key.keys !== chord) continue;
-      if (key.enabled === false) continue;
-      if (onlyGlobal && !key.global) continue;
-      if (typing && !key.whileTyping) continue;
-      e.preventDefault();
-      key.run();
-      return;
-    }
+  // Newest first — an overlay registers after whatever it covers, either by
+  // mounting later or by re-registering when it opened (see `useHotkeys`), so
+  // registration order is z-order.
+  const modalAt = topModal(scopes);
+  // The overlay on top answers first, and everything under it is left with
+  // only the bindings that said they outlive one.
+  if (modalAt >= 0 && fire(scopes[modalAt], e, chord, typing, false)) return;
+  for (let i = scopes.length - 1; i >= 0; i--) {
+    if (i === modalAt) continue;
+    if (fire(scopes[i], e, chord, typing, modalAt >= 0)) return;
   }
 }
 
-/** Offer `get`'s bindings until the returned function is called. */
-export function registerScope(get: ScopeSource): () => void {
+function topModal(list: Scope[]): number {
+  for (let i = list.length - 1; i >= 0; i--) if (list[i].modal) return i;
+  return -1;
+}
+
+/** Offer `scope`'s bindings until the returned function is called. */
+export function registerScope(scope: Scope): () => void {
   if (!scopes.length) window.addEventListener("keydown", onKeyDown);
-  scopes.push(get);
+  scopes.push(scope);
   return () => {
-    const at = scopes.indexOf(get);
+    const at = scopes.indexOf(scope);
     if (at >= 0) scopes.splice(at, 1);
     if (!scopes.length) window.removeEventListener("keydown", onKeyDown);
   };
 }
 
-/** Every binding currently registered, oldest scope first — what the help
- *  overlay lists, including the ones disabled right now. */
-export function activeHotkeys(): Hotkey[] {
-  return scopes.flatMap((get) => get().keys);
+/** A binding, and whether pressing it right now would actually do anything. */
+export type HotkeyRow = { key: Hotkey; reachable: boolean };
+
+/** Every binding registered, oldest scope first — what the help sheet lists.
+ *
+ *  `reachable` asks the same question dispatch does, on the reader's behalf: a
+ *  binding is unreachable while its own `enabled` is false, and also while an
+ *  overlay is holding its whole scope off. The sheet is opened from under an
+ *  overlay (it is `global`), so without the second half it would list half the
+ *  page's shortcuts as live at exactly the moment none of them work.
+ *
+ *  `ignoring` is the caller's own scope, left out of "what is on top" — the
+ *  sheet is a modal too, and the overlay that matters to the reader is the one
+ *  it opened in front of. Its keys are still listed, and still live: it is the
+ *  thing on top.
+ */
+export function activeHotkeys(ignoring?: Scope): HotkeyRow[] {
+  let modal: Scope | null = null;
+  for (let i = scopes.length - 1; i >= 0; i--) {
+    if (scopes[i] !== ignoring && scopes[i].modal) { modal = scopes[i]; break; }
+  }
+  return scopes.flatMap((scope) => scope.keys.map((key) => ({
+    key,
+    reachable: key.enabled !== false
+      && (!modal || scope === modal || scope === ignoring || !!key.global),
+  })));
 }

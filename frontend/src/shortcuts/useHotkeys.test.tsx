@@ -203,5 +203,5 @@ test("what is registered is what the help overlay can list", () => {
       <Bind keys={[{ keys: "x", run: () => {} }]} />
     </>,
   );
-  expect(activeHotkeys().map((k) => k.keys)).toEqual(["n", "x"]);
+  expect(activeHotkeys().map((r) => r.key.keys)).toEqual(["n", "x"]);
 });
