@@ -653,6 +653,53 @@ def test_start_from_greeting_survives_a_location_the_campaign_deleted(monkeypatc
     assert [m["content"] for m in scenes.read_scene(cid, sid)["messages"]] == ["She looks up."]
 
 
+def test_available_greetings_blanks_a_location_the_campaign_deleted(monkeypatch, tmp_path):
+    """The confirm form pre-fills its picker straight from this payload (#218),
+    and a picker cannot show an id the campaign has no record of -- it would
+    render blank while still holding the value, then 409/404 on Create. Every
+    other location reaching that form is server-validated; this one has to be
+    too."""
+    wid, wroot, loc = _world_with_location(monkeypatch, tmp_path)
+    g = greetings.create_greeting(wroot, "At the Ledger", "seraphine", "default",
+                                  location=loc)
+    cid, _sid = _campaign_after_seed(wid)
+    assert {x["id"]: x["location"] for x in playing.available_greetings(cid)}[g] == loc
+    overlay.delete_entity(cid, "locations", loc)
+    assert {x["id"]: x["location"] for x in playing.available_greetings(cid)}[g] == ""
+
+
+def test_available_greetings_skips_the_location_sweep_when_nothing_names_one(
+        monkeypatch, tmp_path):
+    """One file read per location, on the scene picker's open path: a world that
+    does not use the field must not pay for it."""
+    wid, wroot, _loc = _world_with_location(monkeypatch, tmp_path)
+    greetings.create_greeting(wroot, "Cold open", "seraphine", "default")
+    cid, _sid = _campaign_after_seed(wid)
+    calls: list[str] = []
+    real = overlay.list_entities
+
+    def spy(c, kind):
+        calls.append(kind)
+        return real(c, kind)
+
+    monkeypatch.setattr(overlay, "list_entities", spy)
+    playing.available_greetings(cid)
+    assert "locations" not in calls
+
+
+def test_start_from_greeting_can_be_told_not_to_seed(monkeypatch, tmp_path):
+    """The confirm pane pre-fills its picker from the greeting, so an empty
+    location there means the reader CLEARED it -- indistinguishable, from the
+    scene alone, from nobody having looked. A caller that has already decided
+    says so, and the greeting's location is not put back."""
+    wid, wroot, loc = _world_with_location(monkeypatch, tmp_path)
+    g = greetings.create_greeting(wroot, "At the Ledger", "seraphine", "default",
+                                  body="She looks up.", location=loc)
+    cid, sid = _campaign_after_seed(wid)
+    sid = playing.start_from_greeting(cid, sid, g, seed_location=False)
+    assert scenes.get_location_history(cid, sid) == []
+
+
 def test_start_from_greeting_without_a_location_leaves_the_scene_alone(monkeypatch, tmp_path):
     wid, wroot, _loc = _world_with_location(monkeypatch, tmp_path)
     g = greetings.create_greeting(wroot, "Cold open", "seraphine", "default", body="Silence.")

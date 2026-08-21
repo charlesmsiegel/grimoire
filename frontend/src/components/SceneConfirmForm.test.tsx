@@ -89,9 +89,23 @@ test("a greeting draft applies location and date BEFORE seeding", async () => {
   expect(locOrder).toBeLessThan(seedOrder);
   expect(dateOrder).toBeLessThan(seedOrder);
   // seeded against the dated scene, and the confirmed title lands after the rename
-  expect(api.startFromGreeting).toHaveBeenCalledWith("c", "s9-dated", "reck");
+  // `false`: this pane owns the location, so the server must not seed the
+  // greeting's over what the picker says (#218).
+  expect(api.startFromGreeting).toHaveBeenCalledWith("c", "s9-dated", "reck", false);
   expect(api.renameScene).toHaveBeenCalledWith("c", "s9-greet", "Reckoning");
   expect(onCreated).toHaveBeenCalledWith("s9-titled", undefined);
+});
+
+test("clearing a greeting's pre-filled location leaves the scene with none", async () => {
+  // The picker starts at the greeting's own location (#218). Emptying it is an
+  // answer, not an omission -- and the only way the pane can say so is to stop
+  // the server seeding, since an empty scene looks the same either way.
+  const onCreated = renderForm(GRT);
+  fireEvent.change(await screen.findByLabelText("Location"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalled());
+  expect(api.setSceneLocation).not.toHaveBeenCalled();
+  expect(api.startFromGreeting).toHaveBeenCalledWith("c", "s9-dated", "reck", false);
 });
 
 test("editing title, date, location, and premise reaches the write sequence", async () => {
