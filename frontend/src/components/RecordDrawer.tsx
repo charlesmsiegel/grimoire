@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type CastDetail, type CastSource } from "../api/client";
+import { useHotkeys } from "../shortcuts/useHotkeys";
 
 export type DrawerTarget =
   | { type: "actor"; kind: "characters" | "pcs"; id: string }
@@ -27,6 +28,17 @@ export function RecordDrawer({ cid, sid, target, onClose }:
   const [body, setBody] = useState("");
   const [avatar, setAvatar] = useState<string | null>(null);
   const [source, setSource] = useState<CastSource | null>(null);
+
+  // The drawer covers the transcript, so while it is up it owns the keyboard:
+  // Escape closes it, and the scene's own bindings are inert underneath. Until
+  // #193 this was the one overlay in the app with no key handling at all — the
+  // close button was the only way out of it, which the chooser beside it had
+  // never asked of anyone.
+  useHotkeys(
+    [{ keys: "escape", label: "Close this record", group: "THIS PANEL",
+       whileTyping: true, run: onClose }],
+    { modal: true },
+  );
 
   useEffect(() => {
     setAvatar(null);

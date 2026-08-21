@@ -15,6 +15,7 @@ import type { Mock } from "vitest";
 import CampaignView from "../routes/CampaignView";
 import CommandPalette, { usePaletteHotkey } from "../components/CommandPalette";
 import { PaletteProvider } from "../components/palette";
+import ShortcutsHelp from "../shortcuts/ShortcutsHelp";
 import type { ChatEvent } from "../api/stream";
 import { api } from "../api/client";
 import { getModels } from "../api/models";
@@ -270,6 +271,10 @@ export function withPalette(children: ReactNode) {
     <PaletteProvider>
       <PaletteHotkey />
       <CommandPalette />
+      {/* The other half of the shell's keyboard, mounted where `App` mounts
+       *  it (#193). Renders nothing until `?`, and registers the bindings the
+       *  page's own are listed beside. */}
+      <ShortcutsHelp />
       {children}
     </PaletteProvider>
   );

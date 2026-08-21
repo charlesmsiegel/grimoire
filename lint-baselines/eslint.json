@@ -212,8 +212,7 @@
   "frontend/src/components/NewSceneChooser.tsx": {
     "jsx-a11y/click-events-have-key-events": 2,
     "jsx-a11y/no-noninteractive-element-interactions": 1,
-    "jsx-a11y/no-static-element-interactions": 1,
-    "react-hooks/exhaustive-deps": 1
+    "jsx-a11y/no-static-element-interactions": 1
   },
   "frontend/src/components/OpenerComposer.tsx": {
     "@typescript-eslint/no-misused-promises": 3

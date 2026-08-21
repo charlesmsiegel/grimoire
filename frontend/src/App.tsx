@@ -9,6 +9,7 @@ import CommandPalette, { usePaletteHotkey } from "./components/CommandPalette";
 import { FocusProvider, FocusRestore, useFocus } from "./components/focus";
 import { PaletteProvider } from "./components/palette";
 import { ShellStatusProvider } from "./components/ShellStatus";
+import ShortcutsHelp from "./shortcuts/ShortcutsHelp";
 import { onConfigChanged } from "./appEvents";
 import CampaignsView from "./routes/CampaignsView";
 import CampaignWizard from "./routes/CampaignWizard";
@@ -56,6 +57,11 @@ function Shell(
              : <AppHeader model={model} connection={connection} ready={ready} />}
       <AppPaletteSource />
       <CommandPalette />
+      {/* `?`, and the sheet that lists whatever is bound where you are
+          standing. Mounted beside the palette because they are the same
+          promise from two directions: everything is one keystroke away, and
+          the keystrokes are discoverable without a manual. */}
+      <ShortcutsHelp />
       {/* Every route renders its own `PageShell`, so the 274px column belongs
           to the page rather than to the chrome. That is the whole reason the
           nav sidebar could be retired: a column that changes with the page can

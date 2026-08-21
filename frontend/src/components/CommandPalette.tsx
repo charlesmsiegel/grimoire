@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useHotkeys } from "../shortcuts/useHotkeys";
 import { highlight, matches, usePalette, type PaletteItem } from "./palette";
 
 /** The order groups appear in, whatever order the sources registered in. A
@@ -59,6 +60,18 @@ export default function CommandPalette() {
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+
+  // Open, this is what is on top of the screen, and Escape belongs to it —
+  // said here rather than only on the input so that a palette opened over a
+  // dossier drawer does not close the drawer underneath it as well. ⌘K is
+  // exempt (it is `global`), which is how the palette stays reachable from
+  // inside itself. The input keeps its own Escape: arrow keys and ⏎ have to
+  // live there anyway, and one of the two paths is always the one a test of
+  // this component reaches for.
+  useHotkeys(
+    [{ keys: "escape", enabled: open, whileTyping: true, run: () => setOpen(false) }],
+    { modal: open },
+  );
 
   // Fresh every time it opens. A palette that remembers last night's query is
   // a palette you have to clear before you can use it.
@@ -169,21 +182,18 @@ export default function CommandPalette() {
   );
 }
 
-/** ⌘K / Ctrl-K anywhere, Esc to close. Mounted once by the shell.
+/** ⌘K / Ctrl-K anywhere. Mounted once by the shell.
  *
- *  Deliberately not suppressed inside inputs: the composer is where you are
- *  when you realise you need to look someone up, and the whole point of the
- *  palette is that it does not cost you the draft you are holding. */
+ *  `whileTyping`, deliberately: the composer is where you are when you realise
+ *  you need to look someone up, and the whole point of the palette is that it
+ *  does not cost you the draft you are holding. `global` for the same reason
+ *  one step further out — an overlay must not be able to strand you, and
+ *  "everything is one keystroke away" is the promise the app's only navigation
+ *  surface makes. */
 export function usePaletteHotkey(): void {
   const { setOpen } = usePalette();
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setOpen(true);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [setOpen]);
+  useHotkeys([{
+    keys: "mod+k", label: "Go anywhere", group: "ANYWHERE",
+    whileTyping: true, global: true, run: () => setOpen(true),
+  }]);
 }
