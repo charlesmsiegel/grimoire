@@ -9,6 +9,25 @@ export type RollProposalPayload = {
 // `post_returned` on a chat error means the backend took the player's post back
 // off the transcript (#95) — so the composer has to give them their words back,
 // or a failed send silently destroys what they typed.
+/** A fresh attempt id: this client's name for one turn.
+ *
+ *  Chosen BEFORE the request goes out, which is the whole point -- it makes the
+ *  turn addressable in the window between the server accepting the work and its
+ *  leading `run` frame reaching the browser, and that window is exactly where a
+ *  dying connection lands. It is also the idempotency key: re-sending the same
+ *  id replays the original outcome instead of running the turn twice.
+ *
+ *  `randomUUID` is unavailable on insecure origins and in some test
+ *  environments, so it is not assumed. The fallback does not need to be
+ *  cryptographic -- ids are only ever compared within one scene, and the server
+ *  never treats one as a secret.
+ */
+export function newAttemptId(): string {
+  const c: Crypto | undefined = globalThis.crypto;
+  if (typeof c?.randomUUID === "function") return c.randomUUID();
+  return `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 // `run` is the leading frame every producing route now emits, before any delta
 // and before anything can fail. It names the detached run this send started, so
 // a client whose connection dies immediately can still address it -- to cancel

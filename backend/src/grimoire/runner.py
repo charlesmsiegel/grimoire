@@ -162,11 +162,21 @@ def cancel(app, run) -> None:
     unwinds and its abort hook has finished. Callers that need to know it is
     really over wait on ``run.terminal``, which is set only after that.
     """
+    # RECORDED FIRST, before anything is waited on. The wait below is bounded,
+    # and review caught what happens when it expires: a route whose synchronous
+    # setup is slow -- blocked on the campaign lock, say -- has not reached
+    # `runner.start` yet, so there is no scope to cancel and the old code
+    # returned having done nothing. The provider then started normally, after
+    # the user had already pressed Stop. `_guarded` reads this the moment it
+    # installs its scope, so a cancel that arrives at any point before that is
+    # honoured rather than raced for.
+    run.cancel_requested = True
     # Wait for the task to install its scope. Stop routinely arrives before
     # `_guarded` has run -- `start` only schedules -- and reading a missing
-    # scope and returning would drop the cancellation silently: the provider
-    # runs to completion while the cancel handler waits on `terminal`. Bounded,
-    # because a run that never becomes ready is already terminal or gone.
+    # scope and returning would drop the cancellation: the provider runs to
+    # completion while the cancel handler waits on `terminal`. Bounded, because
+    # a run that never becomes ready is already terminal or gone; the flag above
+    # is what makes an expired wait safe rather than silent.
     if run.state == "running":
         run.ready.wait(timeout=READY_TIMEOUT_SECONDS)
     scope = getattr(run, "cancel_scope", None)
@@ -219,8 +229,27 @@ async def _guarded(run, factory: Callable[[], Any]) -> None:
     with anyio.CancelScope() as scope:
         run.cancel_scope = scope
         run.ready.set()
+        # A Stop that arrived while the route was still doing synchronous setup
+        # found no scope to cancel and could only leave this flag. Read here,
+        # under the scope, so the cancellation lands exactly as a later one
+        # would -- and the `except` below records it as `cancelled` rather than
+        # as a failure.
+        if run.cancel_requested:
+            scope.cancel()
         outcome = None
         try:
+            if run.cancel_requested:
+                # A CHECKPOINT before the factory, not just a cancelled scope.
+                # Cancellation only fires at an await, and a producer's first
+                # statements run before its first one -- for `event_stream` that
+                # is far enough to open the meter and reach the provider call.
+                # `checkpoint()` rather than `sleep(0)`: same effect, and it
+                # says what it is for (ASYNC115 flags the sleep as a disguised
+                # one, which is exactly what it was).
+                # Relying on the scope alone would let a request go out on a
+                # turn the user had already stopped, which is the entire thing
+                # the flag exists to prevent.
+                await anyio.lowlevel.checkpoint()
             outcome = await factory()
         except anyio.get_cancelled_exc_class():
             # A deliberate Stop, or shutdown. The producer's own `finally` has

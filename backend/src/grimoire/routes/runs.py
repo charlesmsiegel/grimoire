@@ -201,6 +201,12 @@ class Run:
         # answer `run_in_flight` forever. `reservation` reads this to tell
         # "returned without starting" from "started and detached".
         self.started = False
+        # Set by `runner.cancel` before it waits for anything, and read by
+        # `_guarded` the moment it installs its scope. A Stop can arrive while
+        # the producing route is still doing synchronous setup -- there is no
+        # scope to cancel then, and without this the request was simply lost and
+        # the provider started after the user had stopped it.
+        self.cancel_requested = False
         self._lock = threading.Lock()
 
     def append_frame(self, frame: str) -> int:
@@ -367,6 +373,26 @@ class RunRegistry:
             return [self._runs[rid] for rid in self._by_subject.get(subject, [])
                     if self._owns(self._runs.get(rid), subject, identity)]
 
+    def for_attempt(self, subject: Subject, attempt_id: str | None,
+                    identity: str | None = None) -> Run | None:
+        """The run this attempt id already produced, if any. Read-only.
+
+        `start_or_existing` does the same lookup, but a route cannot get that
+        far without first passing its own preflight checks -- and a REPLAY must
+        not be subject to them. A client that lost the response to a completed
+        turn re-sends the same attempt id; if the LLM connection has been
+        removed or re-keyed since, the preflight refuses with `missing_key` and
+        the client is told a turn that actually landed did not, which is the
+        exact ambiguity the attempt id exists to remove. No provider is needed
+        to hand back an outcome that already exists.
+        """
+        if attempt_id is None:
+            return None
+        with self._lock:
+            known = self._by_attempt.get((subject, attempt_id))
+            run = self._runs.get(known) if known else None
+            return run if self._owns(run, subject, identity) else None
+
     def live_for_key(self, key: str | None) -> Run | None:
         """The running holder of an exclusion key, if there is one."""
         if key is None:
@@ -447,12 +473,35 @@ def _scene_subject(cid: str, sid: str) -> tuple[Subject, str | None]:
     replacement read or cancel the dead scene's run.
     """
     try:
-        return ("scene", cid, sid), scenes.scene_identity(cid, sid)
+        identity = scenes.scene_identity_strict(cid, sid)
     except CampaignNotFound as exc:
         # `scene_identity` reaches `campaign_root`, which refuses an id the
         # store cannot address. Unhandled that is a 500, and every id-carrying
         # route in this app is swept for exactly that.
         raise _gone("campaign_gone", "no such campaign") from exc
+    except OSError as exc:
+        # Could not READ the header. Retryable, and it must not fall through as
+        # "no identity" -- see `UNRESOLVED` below for what that would allow.
+        raise HTTPException(status_code=409, detail={
+            "kind": "busy", "detail": f"the scene could not be read: {exc}"}) from exc
+    # STRICT, and never `None` past this point. `_owns` reads `identity=None` as
+    # "caller did not ask", i.e. a wildcard -- correct for a subject-wide sweep,
+    # catastrophic here: a replacement scene that recycled a retained run's
+    # `sid` and has no identity of its own would match that run and be allowed
+    # to read its frames or cancel it. A scene with no identity has no runs
+    # either (`reserve_turn` mints one before it publishes anything), so a
+    # sentinel that matches nothing is the honest answer rather than a refusal
+    # -- discovery on such a scene still answers "no run" instead of an error.
+    return ("scene", cid, sid), identity or UNRESOLVED
+
+
+UNRESOLVED = "\x00unresolved"
+"""Stands in for a scene identity that could not be resolved.
+
+Deliberately not a valid token -- `_TOKEN` is 32 hex characters -- so `_owns`
+compares it against every stored identity and matches none. `None` cannot be
+used because that is already the wildcard.
+"""
 
 
 def _gone(kind: str, detail: str) -> HTTPException:
@@ -776,6 +825,30 @@ def lead_frame(run: Run) -> str:
     """
     return sse({"run": {"id": run.id, "attempt_id": run.attempt_id,
                         "state": run.state, "next_index": len(run.frames)}})
+
+
+def replay_attempt(app, cid: str, sid: str, attempt_id: str | None):
+    """The buffered response for an attempt that already ran, or `None`.
+
+    Called at the very top of a producing route, ahead of its preflight checks
+    -- see the call site for why that order matters. Resolves the subject the
+    same way the run routes do, so a replacement scene that recycled the `sid`
+    cannot replay the dead scene's turn.
+
+    Answers `None` for anything it cannot resolve rather than raising: this runs
+    before the route's own validation, and a malformed campaign or scene id must
+    still get that route's 404, not a different one from here.
+    """
+    if not attempt_id:
+        return None
+    try:
+        subject, identity = _scene_subject(cid, sid)
+    except HTTPException:
+        return None
+    run = app.state.runs.for_attempt(subject, attempt_id, identity)
+    if run is None:
+        return None
+    return tail_response(run, 0, lead=lead_frame(run))
 
 
 def reserve_turn(app, cid: str, sid: str, kind: str,

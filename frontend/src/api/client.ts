@@ -167,15 +167,23 @@ function entityBase(scope: EntityScope): string {
 // and unwound. A turn is detached from its request now -- that is the whole
 // point, so a locked phone does not kill a generation -- so an abort closes
 // only this subscriber and the run carries on. A caller that means "stop
-// generating" has to say so, with `api.cancelRun` and the run id from the
-// leading `run` frame; aborting alone leaves the provider spending and the
-// scene held. Callers still tell an abort from a real failure with
-// `isAbortError`.
+// generating" has to say so, with `api.cancelRun`; aborting alone leaves the
+// provider spending and the scene held. Callers still tell an abort from a
+// real failure with `isAbortError`.
+//
+// `attempt` is the caller's own id for this turn, sent as `X-Grimoire-Attempt`.
+// It is what makes a turn addressable BEFORE its leading `run` frame arrives:
+// the id is chosen here, so a connection that dies between the server
+// accepting the work and the first frame reaching the browser still leaves the
+// client able to find the run (`api.findRun`) and stop it. It doubles as the
+// idempotency key -- re-sending the same id replays the original outcome
+// instead of running the turn twice.
 async function streamPost<T = ChatEvent>(
   path: string,
   body: unknown,
   onEvent: (e: T) => void,
   signal?: AbortSignal,
+  attempt?: string,
 ): Promise<void> {
   // Tagged so a caller can tell "the server never got this" from "the server
   // got it and then something went wrong" (#95). The line between them is the
@@ -186,7 +194,10 @@ async function streamPost<T = ChatEvent>(
   // anywhere, and guessing either way loses or duplicates it.
   const res = await fetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(attempt ? { "X-Grimoire-Attempt": attempt } : {}),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal,
   }).catch((err) => {
@@ -455,9 +466,9 @@ export const api = {
   // `response` is a one-shot, unpersisted per-turn override (the length chip
   // beside Send) — rides only this call, exactly like regenerate's guidance.
   chat: (cid: string, sid: string, content: string, onEvent: (e: ChatEvent) => void,
-         response?: ResponseOverride, signal?: AbortSignal) =>
+         response?: ResponseOverride, signal?: AbortSignal, attempt?: string) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/chat`,
-               response ? { content, response } : { content }, onEvent, signal),
+               response ? { content, response } : { content }, onEvent, signal, attempt),
   /** Ask a detached run to stop.
    *
    *  Closing the connection is no longer the cancel. A turn now outlives the
@@ -470,6 +481,21 @@ export const api = {
   cancelRun: (cid: string, sid: string, runId: string) =>
     request<{ run: RunHandle }>(
       "POST", `/api/campaigns/${cid}/scenes/${sid}/runs/${runId}/cancel`),
+
+  /** The run this attempt id produced, if the server got that far.
+   *
+   *  How Stop finds its target when the leading `run` frame never arrived --
+   *  the server accepted and detached the turn, and the response died before
+   *  the first frame. Without this, that window has nothing to cancel and the
+   *  provider runs on after the player stopped it. Answers `{run: null}` on a
+   *  scene with no such run rather than 404, so "the send never landed" is an
+   *  ordinary answer and not an error to handle.
+   */
+  findRun: (cid: string, sid: string, attempt: string) =>
+    request<{ run: RunHandle | null }>(
+      "GET",
+      `/api/campaigns/${cid}/scenes/${sid}/run?attempt=${encodeURIComponent(attempt)}`,
+      undefined, { fresh: true }),
 
   retry: (cid: string, sid: string, onEvent: (e: ChatEvent) => void, response?: ResponseOverride,
           signal?: AbortSignal) =>

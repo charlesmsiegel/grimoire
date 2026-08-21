@@ -846,7 +846,7 @@ test("Enter sends a message in the active scene", async () => {
   fireEvent.change(ta, { target: { value: "hello" } });
   fireEvent.keyDown(ta, { key: "Enter" });
   await waitFor(() =>
-    expect(api.chat).toHaveBeenCalledWith("run", "s1", "hello", expect.any(Function), undefined, expect.any(AbortSignal)),
+    expect(api.chat).toHaveBeenCalledWith("run", "s1", "hello", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String)),
   );
 });
 
@@ -902,7 +902,8 @@ test("sends the one-shot override in the chat request payload", async () => {
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
   fireEvent.click(screen.getByRole("button", { name: /Send/ }));
   await waitFor(() => expect(api.chat).toHaveBeenCalledWith(
-    "run", "s1", "Go on.", expect.any(Function), { response_preset: "terse" }, expect.any(AbortSignal)));
+    "run", "s1", "Go on.", expect.any(Function), { response_preset: "terse" },
+    expect.any(AbortSignal), expect.any(String)));
 });
 
 test("a failed stream keeps the override, and retry carries it", async () => {
@@ -931,7 +932,7 @@ test("sending with no scene creates one first", async () => {
   fireEvent.change(ta, { target: { value: "hi" } });
   fireEvent.keyDown(ta, { key: "Enter" });
   await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("run"));
-  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "hi", expect.any(Function), undefined, expect.any(AbortSignal)));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "hi", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String)));
 });
 
 test("+ New Scene opens the chooser without creating a scene", async () => {
@@ -1136,6 +1137,73 @@ test("Stop before the run frame arrives cancels nothing rather than the wrong ru
   await screen.findByRole("button", { name: /continue ▶/i });
 
   expect(api.cancelRun).not.toHaveBeenCalled();
+});
+
+test("Stop cancels a turn whose leading frame never arrived", async () => {
+  // The window this exists for: the server accepted and detached the turn, and
+  // the response died before its first frame reached the browser. With nothing
+  // but the leading frame to go on, Stop had no target -- it closed the
+  // subscriber and the provider ran on, spending and eventually persisting a
+  // reply the player had stopped.
+  //
+  // The attempt id is minted client-side BEFORE the request, so the turn is
+  // addressable from the first byte; `findRun` trades it for the run id.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.findRun as any).mockResolvedValue({
+    run: { id: "run-discovered", attempt_id: "x", state: "running", next_index: 0 } });
+  (api.chat as any).mockImplementation(hangingChat());   // never emits a run frame
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await screen.findByRole("button", { name: /continue ▶/i });
+
+  const [, sid, attempt] = (api.findRun as any).mock.calls[0];
+  expect(sid).toBe("s1");
+  expect(attempt).toEqual(expect.any(String));
+  // and the attempt it asked about is the one the send actually carried
+  expect((api.chat as any).mock.calls[0][6]).toBe(attempt);
+  expect(api.cancelRun).toHaveBeenCalledWith("run", "s1", "run-discovered");
+});
+
+test("Stop holds the scene until the run is really over", async () => {
+  // The cancel route answers only once the run is terminal -- after its abort
+  // hook has written the partial and freed the exclusion key. Releasing on the
+  // flush poll's budget instead let a slow-unwinding provider keep the key
+  // while Send came back, so the next send was refused with `run_in_flight`.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let release: (() => void) | null = null;
+  (api.cancelRun as any).mockImplementation(
+    () => new Promise<void>((r) => { release = () => r(); }));
+  (api.chat as any).mockImplementation(async (
+    _c: string, _s: string, _t: string, onEvent: any, _r: unknown, signal: AbortSignal) => {
+    onEvent({ run: { id: "run-7", attempt_id: "a1", state: "running", next_index: 1 } });
+    onEvent({ delta: "The tide " });
+    await new Promise<void>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        const err = new Error("The operation was aborted.");
+        err.name = "AbortError";
+        reject(err);
+      });
+    });
+  });
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+
+  // The cancel has not answered yet, so the turn is still in flight as far as
+  // the backend is concerned -- and the composer says so. `send` gates on
+  // `busy` alone, so a Send button here IS a send the backend would refuse.
+  await waitFor(() => expect(api.cancelRun).toHaveBeenCalled());
+  expect(screen.getByRole("button", { name: /stop ■/i })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /(send ▸|continue ▶)/i })).toBeNull();
+
+  release!();
+  // and once the run really is over, the composer comes back
+  await screen.findByRole("button", { name: /(send ▸|continue ▶)/i });
+  expect((api.chat as any).mock.calls).toHaveLength(1);
 });
 
 test("a cancelled turn's partial appears even when the backend flush lands late", async () => {
@@ -3493,7 +3561,7 @@ test("offscreen scene: empty Continue sends an empty note", async () => {
   (api.listScenes as any).mockResolvedValue(OFFSCREEN_SCENE);
   renderCampaign();
   fireEvent.click(await screen.findByRole("button", { name: /continue ▶/i }));
-  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function), undefined, expect.any(AbortSignal)));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String)));
 });
 
 test("offscreen scene: typed note shows transiently, never lands in messages", async () => {
@@ -3522,7 +3590,7 @@ test("normal scene: empty Continue sends an ephemeral round, no user message add
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
   fireEvent.click(await screen.findByRole("button", { name: /continue ▶/i }));
-  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function), undefined, expect.any(AbortSignal)));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function), undefined, expect.any(AbortSignal), expect.any(String)));
 });
 
 test("Roll dice is disabled on a fresh scene until the opener/cast setup produces a message", async () => {
@@ -4898,7 +4966,7 @@ test("the first send into an empty campaign puts its new scene in the URL", asyn
 
   await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1"));
   expect(api.chat).toHaveBeenCalledWith("run", "s1", "we begin",
-    expect.anything(), undefined, expect.anything());
+    expect.anything(), undefined, expect.anything(), expect.any(String));
 });
 
 test("a scene list arriving after a campaign switch does not strand the view", async () => {

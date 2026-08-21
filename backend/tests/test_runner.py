@@ -351,3 +351,36 @@ def test_cancel_immediately_after_start_still_stops_the_run(app_with_lifespan):
     runner.cancel(app, run)          # no wait: race the scope install on purpose
     _wait_terminal(app, run.id)
     assert run.state == "cancelled"
+
+
+def test_a_cancel_before_the_run_is_even_scheduled_is_not_lost(app_with_lifespan,
+                                                              monkeypatch):
+    """Stop during the route's SYNCHRONOUS setup, before `runner.start` runs.
+
+    The readiness wait covers the ordinary race, but it is bounded -- and a
+    route blocked on the campaign lock can outlast it. `ready.wait` then expired
+    with no scope installed and `cancel` returned having recorded nothing, so
+    the provider started normally after the user had already stopped it. The
+    flag is what makes an expired wait safe instead of silent.
+
+    `start` is deliberately called AFTER `cancel` here: that is the window, and
+    a test that started first would only re-run the race above.
+    """
+    app = app_with_lifespan
+    ran = threading.Event()
+    # A real expiry, shortened. Nothing will ever set `ready` here -- `start`
+    # has not been called -- so the wait runs its full course either way; this
+    # only keeps the test from spending `READY_TIMEOUT_SECONDS` proving it.
+    monkeypatch.setattr(runner, "READY_TIMEOUT_SECONDS", 0.05)
+
+    async def should_never_run():
+        ran.set()
+        await anyio.sleep(30)
+
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    runner.cancel(app, run)
+    runner.start(app, run, should_never_run)
+
+    _wait_terminal(app, run.id)
+    assert run.state == "cancelled", f"the run was {run.state}: the Stop was dropped"
+    assert not ran.is_set(), "the provider started after the user cancelled it"

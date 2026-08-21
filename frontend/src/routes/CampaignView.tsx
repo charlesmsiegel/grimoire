@@ -11,7 +11,7 @@ import {
   type Briefing, type Casefile, type Provenance, type SceneLocation, type SceneWeather,
   type CampaignBudget,
 } from "../api/client";
-import { isAbortError, type ChatEvent } from "../api/stream";
+import { isAbortError, newAttemptId, type ChatEvent } from "../api/stream";
 import { forkNotes } from "../components/forkNotes";
 import { ErrorNote } from "../components/ErrorNote";
 import { errorText } from "../api/errors";
@@ -346,9 +346,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // the controller is not rendered, and rebuilding the component tree on every
   // send just to store it would remount the transcript mid-stream.
   const abortRef = useRef<AbortController | null>(null);
-  // The detached run the turn in flight belongs to, once its leading frame has
-  // arrived. Stop needs it: closing the connection is no longer the cancel.
-  const runRef = useRef<{ sid: string; id: string } | null>(null);
+  // How Stop reaches the turn in flight. Closing the connection is no longer
+  // the cancel, so the run has to be addressable -- and addressable BEFORE its
+  // leading frame arrives, because the window where the server has accepted and
+  // detached the work but no frame has reached the browser is exactly the
+  // window a dying connection lands in. `attempt` is minted client-side and
+  // sent with the request, so it names the turn from the first byte; `id` is
+  // filled in when the leading frame confirms it, and Stop falls back to
+  // discovery by attempt when it has not.
+  const runRef = useRef<{ sid: string; attempt: string; id: string | null } | null>(null);
+  // The in-flight `cancelRun`, so the stream's teardown can wait for it before
+  // releasing the scene. The route answers only once the run is really
+  // terminal, which is the authoritative "the partial is written and the
+  // exclusion key is free" signal -- without waiting for it, Stop re-enables
+  // Send while the old run still holds the scene and the next send is refused.
+  const cancelRef = useRef<Promise<void> | null>(null);
   // The flush poll can outlive the view by up to its whole budget, and it calls
   // setState on every tick. Nothing else here needs an unmount guard — a stream
   // deliberately runs to completion after a navigation, and its refresh is a
@@ -1799,7 +1811,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
 
   async function runStream(
     id: string,
-    start: (onEvent: (e: ChatEvent) => void, signal: AbortSignal) => Promise<void>,
+    start: (onEvent: (e: ChatEvent) => void, signal: AbortSignal,
+            attempt: string) => Promise<void>,
     onPromptUnstored?: () => void,
     rerolling = false,
   ) {
@@ -1813,6 +1826,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (renamesInFlight) return false;
     const controller = new AbortController();
     abortRef.current = controller;
+    // Minted here, before anything is sent. This is what makes the turn
+    // addressable in the window between the server accepting it and its first
+    // frame arriving -- see `runRef`.
+    const attempt = newAttemptId();
+    runRef.current = { sid: id, attempt, id: null };
     const streamToken = ++streamTokenRef.current;
     setBusy(true);
     setStreamingId(id);
@@ -1868,9 +1886,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           acc += e.delta;
           setStreaming(acc);
         } else if (e.run) {
-          // The leading frame, before any delta. This is the only thing that
-          // makes Stop work now that the turn outlives its socket.
-          runRef.current = { sid: id, id: e.run.id };
+          // The leading frame confirms the run id, so Stop can skip the
+          // discovery round trip. It is a shortcut, not the mechanism: the
+          // attempt id above already names this turn.
+          if (runRef.current?.attempt === attempt) runRef.current.id = e.run.id;
         } else if (e.error) {
           fail(e.error, !(rerolling && acc.trim().length > 0));
           errored = true;
@@ -1884,7 +1903,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         } else if (e.done) {
           finished = true;
         }
-      }, controller.signal);
+      }, controller.signal, attempt);
     } catch (err: any) {
       // A cancel is the user getting what they asked for, so it raises no error
       // banner. `done` is parsed before the body reports EOF and Stop stays live
@@ -1924,6 +1943,20 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // one -- terminal by then, so the route would answer politely and the
       // live turn would keep generating with nothing to stop it.
       runRef.current = null;
+      // AHEAD OF EVERY RELEASE BELOW, `busy` included. Only a Stop sets this,
+      // so an ordinary turn is unaffected and keeps releasing as early as it
+      // always has. On a Stop it is the difference between the button lying and
+      // not: the cancel route answers only once the run is really terminal --
+      // after its abort hook has written the partial and freed the exclusion
+      // key -- and `send` gates on `busy` alone, so clearing that first let the
+      // player fire a turn the backend then refused with `run_in_flight`. The
+      // streamed text stays on screen for the wait, which is the honest picture:
+      // it is still being stopped.
+      if (cancelRef.current) {
+        const pending = cancelRef.current;
+        cancelRef.current = null;
+        await pending;
+      }
       setStreaming("");
       setBusy(false);
       // NOT released with `busy`. Review caught that clearing it here unlocks
@@ -2135,9 +2168,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (activePcless || !content) {
       if (activePcless) setDirectorNote(content || null);
       try {
-        const landed = await runStream(id, (onEvent, signal) => pendingResponse
-          ? api.chat(cid, id!, content, onEvent, pendingResponse, signal)
-          : api.chat(cid, id!, content, onEvent, undefined, signal));
+        const landed = await runStream(id, (onEvent, signal, attempt) => pendingResponse
+          ? api.chat(cid, id!, content, onEvent, pendingResponse, signal, attempt)
+          : api.chat(cid, id!, content, onEvent, undefined, signal, attempt));
         if (landed) setPendingResponse(null);
       } finally {
         setDirectorNote(null);
@@ -2159,9 +2192,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // moved on. The appending rule that used to live here moved with it — see
     // `giveBackPrompt`. `id`, captured here, is the scene this prompt was
     // written for, and it stays right however long the recovery takes.
-    const landed = await runStream(id, (onEvent, signal) => pendingResponse
-      ? api.chat(cid, id!, content, onEvent, pendingResponse, signal)
-      : api.chat(cid, id!, content, onEvent, undefined, signal),
+    const landed = await runStream(id, (onEvent, signal, attempt) => pendingResponse
+      ? api.chat(cid, id!, content, onEvent, pendingResponse, signal, attempt)
+      : api.chat(cid, id!, content, onEvent, undefined, signal, attempt),
       () => recoverPrompt(id!, content));
     if (landed) setPendingResponse(null);
   }
@@ -2645,11 +2678,28 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   function cancelTurn() {
     const handle = runRef.current;
     abortRef.current?.abort();
-    // Best-effort. A run that landed a moment before the press is already
-    // terminal and the route says so without complaining; anything else here
-    // is a network failure on a request whose whole purpose was to stop work
-    // that is about to stop anyway, and a banner for it would be noise.
-    if (handle) void api.cancelRun(cid, handle.sid, handle.id).catch(() => {});
+    // Stored, not awaited here: this is an onClick and the button must not hang
+    // on it. `runStream`'s teardown awaits it before releasing the scene, which
+    // is where the waiting belongs -- see `cancelRef`.
+    if (handle) cancelRef.current = stopRun(handle);
+  }
+
+  async function stopRun(handle: { sid: string; attempt: string; id: string | null }) {
+    // Every rejection is swallowed. A run that landed a moment before the press
+    // is already terminal and the route says so without complaining; anything
+    // else is a network failure on a request whose whole purpose was to stop
+    // work that is about to stop anyway, and a banner for it would be noise.
+    try {
+      // No leading frame yet: the server may still have accepted and detached
+      // this turn. Ask it by the attempt id we chose before sending. Skipping
+      // this is what left a Stop pressed in that window closing the subscriber
+      // and nothing else, while the provider ran on.
+      const id = handle.id
+        ?? (await api.findRun(cid, handle.sid, handle.attempt)).run?.id;
+      if (id) await api.cancelRun(cid, handle.sid, id);
+    } catch {
+      // see above
+    }
   }
 
   // A scene already in the chronicle comes back as 409 "already_absorbed" rather

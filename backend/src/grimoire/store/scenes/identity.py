@@ -167,6 +167,24 @@ def scene_identity(cid: str, sid: str) -> str | None:
     return _read_token(p)
 
 
+def scene_identity_strict(cid: str, sid: str) -> str | None:
+    """``scene_identity``, but an unreadable file raises instead of answering
+    ``None``.
+
+    The read-only counterpart to ``ensure_identity``'s strict read, for callers
+    that use the answer to decide who OWNS something. There, "this scene has no
+    identity" and "I could not read this scene" have to be different: the run
+    registry treats an absent identity as a wildcard, so a replacement scene
+    whose header was momentarily unopenable would match -- and be handed the
+    dead scene's run to read or cancel, which is the recycled-id hazard this
+    whole module exists to close.
+    """
+    p = paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        return None
+    return _read_token_strict(p)
+
+
 @locking._serialized
 def ensure_identity(cid: str, sid: str, replace: bool = False) -> str:
     """This scene's identity, assigning one first if it has none.
