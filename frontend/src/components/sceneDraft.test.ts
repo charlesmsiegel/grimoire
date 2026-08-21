@@ -22,6 +22,14 @@ test("a greeting draft takes its title from the greeting and its date from nextD
                       location: "", pcless: false });
 });
 
+test("a greeting draft pre-fills the location the greeting names", () => {
+  // #218: the greeting records where its scene opens, so the confirm form's
+  // picker starts there -- and the reader can still change it, which is why
+  // start_from_greeting seeds rather than overrides.
+  expect(greetingDraft({ ...G, location: "counting-house" }, "2026-01-01", false).location)
+    .toBe("counting-house");
+});
+
 test("a suggestion draft prefers its own date and falls back to nextDate", () => {
   expect(suggestionDraft(S, "2026-01-01", false).date).toBe("2026-03-04");
   expect(suggestionDraft({ ...S, date: "" }, "2026-01-01", false).date).toBe("2026-01-01");

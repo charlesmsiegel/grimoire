@@ -411,6 +411,9 @@ export type Greeting = {
   requires_tags: string[];
   predecessor_join: "all" | "any";
   pcless?: boolean;
+  /** A location id, "" for none (#218). Greetings written before the key
+   *  existed simply lack it, which reads back as "". */
+  location?: string;
   mark?: GreetingMark;   // campaign lists carry it
 };
 export type Edges = { leads_to: string[]; excludes: string[] };
@@ -426,6 +429,7 @@ export type GreetingDraft = {
   requires_tags?: string[];
   predecessor_join?: "all" | "any";
   pcless?: boolean;
+  location?: string;
 };
 export type Style = { id: string; name: string; description: string; tags: string[]; built_in: boolean };
 export type StyleDetail = { meta: Style; body: string };
@@ -485,6 +489,9 @@ export type ResponseBundle = ResponseFields & { effective: ResponseEffective; pr
 export type Availability = {
   id: string; name: string; available: boolean; reasons: string[]; unlocked: boolean;
   pcless?: boolean;
+  /** The greeting's location id, "" for none — what `greetingDraft` pre-fills
+   *  the confirm form's location picker from (#218). */
+  location?: string;
   mark?: GreetingMark;
 };
 export type Appearance = { gid: string; greeting_name: string; name: string; url: string; thumb?: string };

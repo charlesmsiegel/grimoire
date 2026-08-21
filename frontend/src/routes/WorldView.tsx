@@ -432,7 +432,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                                           onNavConsumed={() => setEntityNav(null)} module={moduleCtx} />}
         {section === "creatures" && <EntityEditor wid={wid} scope={scope} kind="creatures" nav={navFor("creatures")}
                                           onNavConsumed={() => setEntityNav(null)} module={moduleCtx} />}
-        {section === "greetings" && <GreetingEditor scope={scope} wid={wid} onOpenCharacter={openCharacter} focus={focusGreeting} />}
+        {section === "greetings" && <GreetingEditor scope={scope} wid={wid} onOpenCharacter={openCharacter}
+                                          onOpenLocation={(id) => openEntity("locations", id)} focus={focusGreeting} />}
       </div>
     </PageShell>
   );

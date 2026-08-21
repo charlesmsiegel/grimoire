@@ -1,20 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, api, type Appearance, type CharacterSummary, type Edges, type EntityScope, type Greeting, type GreetingMark } from "../api/client";
+import { ApiError, api, type Appearance, type CharacterSummary, type Edges, type EntityScope, type EntitySummary, type Greeting, type GreetingMark } from "../api/client";
 import { Field } from "./Field";
 import { GreetingMarkdown } from "./GreetingMarkdown";
 import { StaleRecordBanner } from "./StaleRecordBanner";
 import { SubjectsPopover } from "./SubjectsPopover";
 import { TaggingQueue } from "./TaggingQueue";
 
-const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any", pcless: false };
+const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any", pcless: false, location: "" };
 const NO_EDGES: Edges = { leads_to: [], excludes: [] };
 
-export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
+export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, focus }:
   { scope: EntityScope; wid: string;
-    onOpenCharacter?: (cid: string, vid: string) => void; focus?: string | null }) {
+    onOpenCharacter?: (cid: string, vid: string) => void;
+    onOpenLocation?: (eid: string) => void; focus?: string | null }) {
   const worldScope = scope.kind === "world";
   const [greetings, setGreetings] = useState<Greeting[]>([]);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
+  const [locations, setLocations] = useState<EntitySummary[]>([]);
   const [tags, setTags] = useState<Record<string, string>>({});
   const [gid, setGid] = useState<string | null>(null); // null = new
   const [form, setForm] = useState(BLANK);
@@ -50,6 +52,12 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
       .catch(() => {})                   // a failed list is still a settled one
       .finally(() => setListsReady(true));
     api.listTags(wid).then(setTags);  // tag vocabulary stays a world concern
+    // Not in the `listsReady` gate above: that gate exists so the rail's "no
+    // matches" verdict waits for what it SEARCHES (names and characters), and
+    // locations are neither. A failed read leaves the picker empty and the
+    // stored id still renders as its raw slug, which is the same thing a
+    // deleted location does.
+    api.listEntities(scope, "locations").then(setLocations).catch(() => setLocations([]));
     if (worldScope) api.listUntaggedImages(wid).then(setUntagged).catch(() => setUntagged([]));
     // The rail filters describe THIS scope's list and must not survive into the
     // next one: this component is reused across a scope change, so a search and
@@ -96,6 +104,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
       name: g.meta.name, character: g.meta.character, version: g.meta.version,
       body: g.body.trim(), present: g.meta.present ?? [], requires_tags: g.meta.requires_tags,
       predecessor_join: g.meta.predecessor_join, pcless: g.meta.pcless ?? false,
+      location: g.meta.location ?? "",
     });
     setEdges(g.edges);
     setPredecessors(g.predecessors ?? []);
@@ -118,7 +127,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
         await api.updateGreeting(scope, id, {
           name: form.name, body: form.body, present: form.present,
           requires_tags: form.requires_tags, predecessor_join: form.predecessor_join,
-          pcless: form.pcless, ...(base ? { rev: base } : {}),
+          pcless: form.pcless, location: form.location, ...(base ? { rev: base } : {}),
         });
       } else {
         id = (await api.createGreeting(scope, { ...form })).id;
@@ -191,6 +200,10 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
 
   const others = greetings.filter((g) => g.id !== gid);
   const charName = (id: string) => chars.find((c) => c.id === id)?.name ?? id;
+  // Falls back to the raw id, as every other reference chip here does: a
+  // location the campaign has deleted (or a list that failed to load) still
+  // shows *something* the reader can recognise and clear.
+  const locName = (id: string) => locations.find((l) => l.id === id)?.name ?? id;
 
   // --- rail filtering -------------------------------------------------------
   // Marks are campaign-only (a world has no play history), so the chips are
@@ -375,6 +388,8 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
                   </div>
                 </div>
               )}
+              {sideList("Location", form.location ? [form.location] : [], locName,
+                        onOpenLocation)}
               {form.present.length > 0 && (
                 <div className="side-section">
                   <h4>Present characters</h4>
@@ -444,6 +459,22 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
                 Offscreen (no PC)
               </button>
             </div>
+          </Field>
+          <Field label="Location" hint="where the scene starts — seeded onto the scene unless you pick another">
+            <select value={form.location} aria-label="Location"
+                    onChange={(e) => setForm({ ...form, location: e.target.value })}>
+              <option value="">— no location —</option>
+              {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              {/* A stored id the list does not offer — deleted since, or a
+                  failed read. Without this the controlled select renders
+                  blank, which claims the greeting has no location while the
+                  field still holds one, and the next save would silently
+                  carry it through. Shown as itself, so it can be seen and
+                  cleared. */}
+              {form.location && !locations.some((l) => l.id === form.location) && (
+                <option value={form.location}>{form.location} (missing)</option>
+              )}
+            </select>
           </Field>
           {form.character && (
             <Field label="Present characters" hint="everyone cast into the scene when it starts from this greeting">

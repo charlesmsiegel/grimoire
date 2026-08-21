@@ -687,6 +687,7 @@
     {
       "character": "seraphine",
       "id": "after-the-tide",
+      "location": "",
       "name": "After the tide",
       "pcless": false,
       "predecessor_join": "all",
@@ -701,6 +702,7 @@
     {
       "character": "seraphine",
       "id": "at-the-ledger",
+      "location": "",
       "name": "At the ledger",
       "pcless": false,
       "predecessor_join": "all",
@@ -716,6 +718,7 @@
     "meta": {
       "character": "seraphine",
       "id": "after-the-tide",
+      "location": "",
       "name": "After the tide",
       "pcless": false,
       "predecessor_join": "all",
@@ -733,6 +736,7 @@
     "meta": {
       "character": "seraphine",
       "id": "at-the-ledger",
+      "location": "",
       "name": "At the ledger",
       "pcless": false,
       "predecessor_join": "all",
@@ -812,6 +816,7 @@
     {
       "character": "seraphine",
       "id": "after-the-tide",
+      "location": "",
       "name": "After the tide",
       "pcless": false,
       "predecessor_join": "all",
@@ -826,6 +831,7 @@
     {
       "character": "seraphine",
       "id": "at-the-ledger",
+      "location": "",
       "name": "At the ledger",
       "pcless": false,
       "predecessor_join": "all",

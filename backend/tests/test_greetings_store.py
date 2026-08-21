@@ -234,3 +234,38 @@ def test_availability_excludes_played_greetings():
     out = {x["id"]: x for x in greetings.availability(items, {}, {"a"}, set())}
     assert out["a"]["available"] is False
     assert "already played" in out["a"]["reasons"]
+
+
+def test_location_roundtrips_and_defaults_empty(tmp_path):
+    root = _world(tmp_path)
+    gid = greetings.create_greeting(root, "At the Ledger", "seraphine", "default",
+                                    location="counting-house")
+    assert greetings.read_greeting(root, gid)["meta"]["location"] == "counting-house"
+    # A greeting written before the key existed simply lacks it -- no migration
+    # (#218), so the fallback has to be the same "" a location-less new one gets.
+    bare = greetings.create_greeting(root, "Cold open", "", "")
+    assert greetings.read_greeting(root, bare)["meta"]["location"] == ""
+
+
+def test_update_location_clears_and_leaves_alone(tmp_path):
+    root = _world(tmp_path)
+    gid = greetings.create_greeting(root, "Open", "seraphine", "default", location="quay")
+    greetings.update_greeting(root, gid, location="counting-house")
+    assert greetings.read_greeting(root, gid)["meta"]["location"] == "counting-house"
+    # `None` means "not in this patch": an unrelated edit must not drop it.
+    greetings.update_greeting(root, gid, name="Renamed")
+    assert greetings.read_greeting(root, gid)["meta"]["location"] == "counting-house"
+    # "" is a value, not an omission -- it is how the form clears the field.
+    greetings.update_greeting(root, gid, location="")
+    assert greetings.read_greeting(root, gid)["meta"]["location"] == ""
+
+
+def test_availability_carries_the_location(tmp_path):
+    # The scene-confirm form pre-fills its location picker from this list, so a
+    # greeting's setting has to survive the availability pass (#218).
+    root = _world(tmp_path)
+    gid = greetings.create_greeting(root, "At the Ledger", "seraphine", "default",
+                                    location="counting-house")
+    [row] = greetings.availability(greetings.list_greetings(root), {}, set(), set())
+    assert row["id"] == gid
+    assert row["location"] == "counting-house"

@@ -14,7 +14,7 @@ vi.mock("../api/client", () => ({
   api: {
     listGreetings: vi.fn(), listCharacters: vi.fn(), listTags: vi.fn(), readGreeting: vi.fn(),
     createGreeting: vi.fn(), updateGreeting: vi.fn(), deleteGreeting: vi.fn(),
-    setEdges: vi.fn(), importGreetings: vi.fn(),
+    setEdges: vi.fn(), importGreetings: vi.fn(), listEntities: vi.fn(),
     getGreetingSubjects: vi.fn(), setImageSubjects: vi.fn(), listUntaggedImages: vi.fn(), markGreeting: vi.fn(),
   },
 }));
@@ -34,6 +34,10 @@ beforeEach(() => {
     { id: "seraphine", name: "Seraphine", default_version: "default", versions: [{ id: "default", name: "default" }] },
   ]);
   (api.listTags as any).mockResolvedValue({ vip: "VIP" });
+  (api.listEntities as any).mockResolvedValue([
+    { id: "counting-house", name: "The Counting House" },
+    { id: "the-quay", name: "The Quay" },
+  ]);
   (api.createGreeting as any).mockResolvedValue({ id: "open" });
   (api.setEdges as any).mockResolvedValue({ ok: true });
   (api.importGreetings as any).mockResolvedValue({ greetings: ["g1"] });
@@ -682,4 +686,99 @@ test("overwriting a greeting retries against the rev the refusal reported", asyn
     expect(api.updateGreeting).toHaveBeenLastCalledWith({ kind: "world", id: "w" }, "open",
       expect.objectContaining({ rev: "r2" })),
   );
+});
+
+// --- location (#218) -------------------------------------------------------
+
+/** A greeting read that carries `location`, plus the row that lists it. */
+function withLocation(location: string) {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "open", name: "Open", character: "seraphine", version: "default",
+      present: ["seraphine"], requires_tags: [], predecessor_join: "all", location },
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "open", name: "Open", character: "seraphine", version: "default",
+            present: ["seraphine"], requires_tags: [], predecessor_join: "all", location },
+    body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
+  });
+}
+
+test("the view sidebar shows the location as a chip that navigates to it", async () => {
+  withLocation("counting-house");
+  const onOpenLocation = vi.fn();
+  const { container } = render(
+    <GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" onOpenLocation={onOpenLocation} />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Open"));
+
+  // the read-only view has arrived once its Edit button has
+  await screen.findByRole("button", { name: /^edit$/i });
+  const aside = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(aside).getByText("Location")).toBeInTheDocument();
+  fireEvent.click(within(aside).getByRole("button", { name: "The Counting House" }));
+  expect(onOpenLocation).toHaveBeenCalledWith("counting-house");
+});
+
+test("a greeting with no location gets no Location section", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "open", name: "Open", character: "seraphine", version: "default",
+      present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
+  ]);
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Open"));
+  await screen.findByRole("button", { name: /^edit$/i });
+  const aside = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(aside).queryByText("Location")).toBeNull();
+});
+
+test("the form picks a location from the scope's own list and saves it", async () => {
+  withLocation("");
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  // the picker is scoped, not world-only: a campaign's own locations must show
+  expect(api.listEntities).toHaveBeenCalledWith({ kind: "world", id: "w" }, "locations");
+  fireEvent.click(await within(rail).findByText("Open"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+
+  const select = await screen.findByLabelText("Location");
+  fireEvent.change(select, { target: { value: "the-quay" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save greeting$/i }));
+  await waitFor(() =>
+    expect(api.updateGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open",
+      expect.objectContaining({ location: "the-quay" })));
+});
+
+test("the form can clear a location back to none", async () => {
+  withLocation("counting-house");
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Open"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+
+  const select = await screen.findByLabelText("Location");
+  expect((select as HTMLSelectElement).value).toBe("counting-house");
+  fireEvent.change(select, { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save greeting$/i }));
+  await waitFor(() =>
+    expect(api.updateGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open",
+      expect.objectContaining({ location: "" })));
+});
+
+test("a location the picker cannot offer is shown rather than silently blanked", async () => {
+  // Deleted since the greeting was written, or a list that failed to load. A
+  // controlled <select> would otherwise render blank while the field still
+  // holds the id, and the next save would carry it through unseen.
+  withLocation("the-drowned-library");
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Open"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+
+  const select = await screen.findByLabelText<HTMLSelectElement>("Location");
+  expect(select.value).toBe("the-drowned-library");
+  expect(within(select).getByText(/the-drowned-library \(missing\)/)).toBeInTheDocument();
 });

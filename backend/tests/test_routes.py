@@ -5009,6 +5009,43 @@ def test_greeting_present_cast_roundtrips_over_api(client):
     assert read["meta"]["present"] == ["mara", "rowan"]
 
 
+def test_greeting_location_roundtrips_and_seeds_the_scene(client):
+    """#218: a greeting references a location the way it references its
+    character, over both scopes, and the scene it opens starts there."""
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    loc = client.post(f"/api/worlds/{wid}/locations",
+                      json={"name": "The Counting House"}).json()["id"]
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "At the Ledger", "character": "mara", "version": "default",
+                            "body": "Mara looks up.", "location": loc}).json()["id"]
+    read = client.get(f"/api/worlds/{wid}/greetings/{gid}").json()
+    assert read["meta"]["location"] == loc
+    # available/ carries it too -- the confirm form pre-fills its picker from there
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    avail = client.get(f"/api/campaigns/{cid}/greetings/available").json()
+    assert {x["id"]: x["location"] for x in avail}[gid] == loc
+
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Opening"}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
+                      json={"greeting": gid}).json()["id"]
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/location").json()["current"]["id"] == loc
+
+    # and the field is editable after the fact, in both scopes
+    rev = client.get(f"/api/worlds/{wid}/greetings/{gid}").json()["rev"]
+    assert client.put(f"/api/worlds/{wid}/greetings/{gid}",
+                      json={"location": "", "rev": rev}).status_code == 200
+    assert client.get(f"/api/worlds/{wid}/greetings/{gid}").json()["meta"]["location"] == ""
+    cgid = client.post(f"/api/campaigns/{cid}/greetings",
+                       json={"name": "Aftermath", "character": "mara", "version": "default",
+                             "body": "Later.", "location": loc}).json()["id"]
+    assert client.get(f"/api/campaigns/{cid}/greetings/{cgid}").json()["meta"]["location"] == loc
+    crev = client.get(f"/api/campaigns/{cid}/greetings/{cgid}").json()["rev"]
+    client.put(f"/api/campaigns/{cid}/greetings/{cgid}",
+               json={"location": "the-quay", "rev": crev})
+    assert client.get(f"/api/campaigns/{cid}/greetings/{cgid}").json()["meta"]["location"] == "the-quay"
+
+
 def test_greeting_crud_import_edges_and_start(client):
     wid = _world(client)
     client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"})

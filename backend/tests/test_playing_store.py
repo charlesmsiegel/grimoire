@@ -6,7 +6,9 @@ from grimoire.store import appearances as ap
 from grimoire.store import (
     campaigns,
     characters,
+    entities,
     greetings,
+    overlay,
     pcs,
     playing,
     scenes,
@@ -598,3 +600,62 @@ def test_mark_greeting_none_holds_the_lock_across_its_scan(monkeypatch, tmp_path
     assert free, "the scan never ran -- the test proves nothing"
     assert not any(free), "a concurrent writer was not excluded during the scan"
     assert g not in playing.read_played(cid)  # the clear itself still went through
+
+
+def _world_with_location(monkeypatch, tmp_path, name="The Counting House"):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Seraphine", "default", characters.blank_card("Seraphine"))
+    eid = entities.create_entity(wroot, "locations", name)
+    return wid, wroot, eid
+
+
+def test_start_from_greeting_seeds_the_scenes_location(monkeypatch, tmp_path):
+    """A greeting is a scene opener and play happens somewhere (#218): the
+    setting it names becomes the scene's, silently -- an empty scene has no
+    location to move from, so `set_location` writes no transition line."""
+    wid, wroot, loc = _world_with_location(monkeypatch, tmp_path)
+    g = greetings.create_greeting(wroot, "At the Ledger", "seraphine", "default",
+                                  body="She looks up.", location=loc)
+    cid, sid = _campaign_after_seed(wid)
+    sid = playing.start_from_greeting(cid, sid, g)
+    assert scenes.get_location_history(cid, sid) == [loc]
+    assert [m["content"] for m in scenes.read_scene(cid, sid)["messages"]] == ["She looks up."]
+
+
+def test_start_from_greeting_keeps_a_location_the_scene_already_has(monkeypatch, tmp_path):
+    """Seeding, not overriding. The confirm form applies the reader's own pick
+    before it seeds, so a greeting's location is the default they were offered
+    and already had the chance to change -- re-imposing it here would make that
+    picker a decoration."""
+    wid, wroot, loc = _world_with_location(monkeypatch, tmp_path)
+    other = entities.create_entity(wroot, "locations", "The Quay")
+    g = greetings.create_greeting(wroot, "At the Ledger", "seraphine", "default",
+                                  body="She looks up.", location=loc)
+    cid, sid = _campaign_after_seed(wid)
+    scenes.set_location(cid, sid, other)
+    sid = playing.start_from_greeting(cid, sid, g)
+    assert scenes.get_location_history(cid, sid) == [other]
+
+
+def test_start_from_greeting_survives_a_location_the_campaign_deleted(monkeypatch, tmp_path):
+    """An inherited greeting can name a location this campaign has since
+    deleted. The setting is one optional piece of metadata; losing it costs the
+    scene nothing it cannot be given by hand, so it must not cost the reader
+    the opener itself."""
+    wid, wroot, loc = _world_with_location(monkeypatch, tmp_path)
+    g = greetings.create_greeting(wroot, "At the Ledger", "seraphine", "default",
+                                  body="She looks up.", location=loc)
+    cid, sid = _campaign_after_seed(wid)
+    overlay.delete_entity(cid, "locations", loc)
+    sid = playing.start_from_greeting(cid, sid, g)
+    assert scenes.get_location_history(cid, sid) == []
+    assert [m["content"] for m in scenes.read_scene(cid, sid)["messages"]] == ["She looks up."]
+
+
+def test_start_from_greeting_without_a_location_leaves_the_scene_alone(monkeypatch, tmp_path):
+    wid, wroot, _loc = _world_with_location(monkeypatch, tmp_path)
+    g = greetings.create_greeting(wroot, "Cold open", "seraphine", "default", body="Silence.")
+    cid, sid = _campaign_after_seed(wid)
+    sid = playing.start_from_greeting(cid, sid, g)
+    assert scenes.get_location_history(cid, sid) == []

@@ -49,6 +49,11 @@ def _meta_dict(gid: str, meta: dict) -> dict:
         "character": character,
         "version": meta.get("version", ""),
         "present": present,
+        # A greeting is a scene opener and play happens somewhere (#218), so it
+        # names a location the way it names its character. Optional: greetings
+        # written before the key existed simply lack it, and "" is the same
+        # answer a new location-less one gives -- no migration.
+        "location": meta.get("location", ""),
         "requires_tags": _tags_list(meta.get("requires_tags", "")),
         "predecessor_join": meta.get("predecessor_join", "all"),
         "pcless": meta.get("pcless") == "true",
@@ -95,7 +100,8 @@ def char_name(root: Path, character: str, version: str = "") -> str:
 
 def create_greeting(root: Path, name: str, character: str, version: str, body: str = "",
                     requires_tags: list[str] | None = None, predecessor_join: str = "all",
-                    present: list[str] | None = None, pcless: bool = False, taken=None) -> str:
+                    present: list[str] | None = None, pcless: bool = False,
+                    location: str = "", taken=None) -> str:
     _greetings_dir(root).mkdir(parents=True, exist_ok=True)
 
     def exists(c: str) -> bool:
@@ -110,7 +116,7 @@ def create_greeting(root: Path, name: str, character: str, version: str, body: s
 
     gid = uniquify(slugify(name), exists)
     meta = {"name": name, "character": character, "version": version,
-            "present": ",".join(present or []),
+            "present": ",".join(present or []), "location": location,
             "requires_tags": ",".join(requires_tags or []), "predecessor_join": predecessor_join,
             "pcless": "true" if pcless else ""}
     # #137: {{char}} is the greeting's own associated character, baked at write
@@ -164,7 +170,8 @@ def greeting_count(root: Path) -> int:
 
 def update_greeting(root: Path, gid: str, *, name: str | None = None, body: str | None = None,
                     requires_tags: list[str] | None = None, predecessor_join: str | None = None,
-                    present: list[str] | None = None, pcless: bool | None = None) -> None:
+                    present: list[str] | None = None, pcless: bool | None = None,
+                    location: str | None = None) -> None:
     p = _greeting_path(root, gid)
     if not safe_id(gid) or not p.exists():
         raise GreetingNotFound(gid)
@@ -175,6 +182,11 @@ def update_greeting(root: Path, gid: str, *, name: str | None = None, body: str 
         meta["requires_tags"] = ",".join(requires_tags)
     if present is not None:
         meta["present"] = ",".join(present)
+    if location is not None:
+        # "" is a value here, not an omission: it is how the form clears the
+        # field. Only `None` -- "this patch says nothing about the location" --
+        # leaves what is on disk alone.
+        meta["location"] = location
     if predecessor_join is not None:
         meta["predecessor_join"] = predecessor_join
     if pcless is not None:
@@ -308,5 +320,9 @@ def availability(items: list[dict], plotmap: dict, played, player_tags,
         if not (set(g["requires_tags"]) <= player_tags):
             reasons.append("missing required tags")
         out.append({"id": gid, "name": g["name"], "available": not reasons,
-                    "reasons": reasons, "pcless": g["pcless"]})
+                    "reasons": reasons, "pcless": g["pcless"],
+                    # carried so the scene-confirm form can pre-fill its
+                    # location picker from the greeting it is about to seed
+                    # (#218) -- the pane never re-reads the greeting itself.
+                    "location": g.get("location", "")})
     return out

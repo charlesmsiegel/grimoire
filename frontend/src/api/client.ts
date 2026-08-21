@@ -913,7 +913,8 @@ export const api = {
     request<GreetingDetail>("GET", `${entityBase(scope)}/greetings/${gid}`),
   updateGreeting: (scope: EntityScope, gid: string,
                    patch: { name?: string; body?: string; present?: string[]; requires_tags?: string[];
-                            predecessor_join?: string; pcless?: boolean; rev?: string }) =>
+                            predecessor_join?: string; pcless?: boolean; location?: string;
+                            rev?: string }) =>
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/greetings/${gid}`, patch),
   deleteGreeting: (scope: EntityScope, gid: string) =>
     request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/greetings/${gid}`),

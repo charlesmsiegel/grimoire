@@ -47,7 +47,7 @@ def post_world_greeting(wid: str, body: GreetingCreate):
     gid = store.greetings.create_greeting(_world_root_or_404(wid), body.name, body.character,
                                           body.version, body.body, body.requires_tags,
                                           body.predecessor_join, present=body.present,
-                                          pcless=body.pcless)
+                                          pcless=body.pcless, location=body.location)
     return {"id": gid}
 
 
@@ -87,7 +87,7 @@ def put_world_greeting(wid: str, gid: str, body: GreetingUpdate):
         store.greetings.update_greeting(root, gid, name=body.name,
                                         body=body.body, requires_tags=body.requires_tags,
                                         predecessor_join=body.predecessor_join, present=body.present,
-                                        pcless=body.pcless)
+                                        pcless=body.pcless, location=body.location)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     return {"ok": True}
@@ -239,7 +239,7 @@ def post_campaign_greeting(cid: str, body: GreetingCreate):
     gid = store.overlay.create_greeting(cid, body.name, body.character, body.version,
                                        body.body, body.requires_tags,
                                        body.predecessor_join, present=body.present,
-                                       pcless=body.pcless)
+                                       pcless=body.pcless, location=body.location)
     return {"id": gid}
 
 
@@ -264,7 +264,8 @@ def put_campaign_greeting(cid: str, gid: str, body: GreetingUpdate):
         store.overlay.update_greeting(cid, gid, name=body.name, body=body.body,
                                      requires_tags=body.requires_tags,
                                      predecessor_join=body.predecessor_join,
-                                     present=body.present, pcless=body.pcless)
+                                     present=body.present, pcless=body.pcless,
+                                     location=body.location)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     return {"ok": True}

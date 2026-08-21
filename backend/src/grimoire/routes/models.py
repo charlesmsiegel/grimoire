@@ -606,6 +606,7 @@ class GreetingCreate(BaseModel):
     predecessor_join: str = "all"
     present: list[str] | None = None
     pcless: bool = False
+    location: str = ""      # a location id, "" for none (#218)
 
 
 class SubjectsBody(BaseModel):
@@ -625,6 +626,8 @@ class GreetingUpdate(BaseModel):
     predecessor_join: str | None = None
     present: list[str] | None = None
     pcless: bool | None = None
+    # "" clears the location; None leaves whatever is on disk (#218)
+    location: str | None = None
     rev: str | None = None      # see EntityUpdate.rev (#35)
 
 

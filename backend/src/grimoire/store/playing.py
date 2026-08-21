@@ -3,16 +3,18 @@ campaign, and starting a scene from a greeting."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 
-from . import atomic, characters, greetings, locks, overlay, pcs, scene_ideas
+from . import atomic, characters, entities, greetings, locks, overlay, pcs, scene_ideas
 from .appearances import cast as appearances_cast
 from .appearances import transitions as appearances_transitions
 from .appearances import versions as appearances_versions
 from .campaigns import paths as campaigns_paths
 from .context import macros as context_macros
 from .scenes import lifecycle as scenes_lifecycle
+from .scenes import moment as scenes_moment
 from .scenes import read as scenes_read
 from .scenes import write as scenes_write
 
@@ -153,12 +155,15 @@ def greeting_ideas(cid: str) -> list[dict]:
     player tag -- is omitted. It is not an idea anyone can act on, and its
     gating is the plot map's business rather than the ledger's.
 
-    Cast, location and date are blank BY CONSTRUCTION, the same reason
-    `sceneDraft.greetingDraft` carries none: the greeting body is the opening
+    Cast and date are blank BY CONSTRUCTION, the same reason
+    `sceneDraft.greetingDraft` leaves them so: the greeting body is the opening
     post and `start_from_greeting` seats its own cast under locked-version
-    rules nothing here may re-implement. `used_scene` is blank too rather than
-    resolved -- `stamping_scene` is a per-greeting sweep of every scene's
-    frontmatter, which is affordable on an explicit unmark and not in a list.
+    rules nothing here may re-implement. The location is NOT in that set any
+    more (#218) -- a greeting now records the setting its scene opens at, so
+    there is a real answer to copy rather than a rule against inventing one.
+    `used_scene` is blank too rather than resolved -- `stamping_scene` is a
+    per-greeting sweep of every scene's frontmatter, which is affordable on an
+    explicit unmark and not in a list.
 
     This is not cheap: `available_greetings` parses the frontmatter of every
     greeting in the campaign, and the skipped ones need a second pass because
@@ -169,10 +174,17 @@ def greeting_ideas(cid: str) -> list[dict]:
     """
     marks = read_marks(cid)
     used = marks["played"] | marks["completed"]
+    # A greeting's location is checked against the campaign as it stands, the
+    # same read-side policy `suggest.validate_ideas` applies to a saved idea's
+    # refs: an inherited greeting can name a location this campaign deleted, and
+    # a card captioned with a dangling slug is worse than one with no setting.
+    known_locations = {e["id"] for e in overlay.list_entities(cid, "locations")}
 
     def entry(g: dict, status: str) -> dict:
+        location = g.get("location", "")
         return {"id": f"{scene_ideas.GREETING_PREFIX}{g['id']}", "title": g["name"],
-                "premise": "", "cast": [], "location": "", "date": "",
+                "premise": "", "cast": [],
+                "location": location if location in known_locations else "", "date": "",
                 "pcless": bool(g.get("pcless")), "source": scene_ideas.GREETING,
                 "status": status, "created": "", "used_scene": ""}
 
@@ -182,6 +194,31 @@ def greeting_ideas(cid: str) -> list[dict]:
         out += [entry(g, scene_ideas.DISMISSED)
                 for g in overlay.list_greetings(cid) if g["id"] in marks["skipped"]]
     return out
+
+
+def _seed_location(cid: str, sid: str, eid: str) -> None:
+    """Give a scene the setting its greeting names (#218) -- seeding, not
+    overriding.
+
+    Only a scene with no location yet is touched. The confirm pane applies the
+    reader's own pick before it calls us (and pre-fills that picker from this
+    same field), so a location already on the scene is a choice someone made
+    about *this* scene; the greeting's is the default they were offered and had
+    the chance to change. On an empty history `set_location` is silent, which
+    is what keeps the opener from being preceded by a "the scene moves to X"
+    line describing a move that never happened.
+
+    A missing location is skipped rather than raised. An inherited greeting can
+    name a location this campaign has since deleted, and the setting is one
+    optional piece of metadata a reader can supply by hand in a click -- losing
+    it must not cost them the opener, which is the part that cannot be
+    reconstructed. Placed before `stamp_greeting` so it runs while the scene is
+    still empty, and before the body is expanded and appended.
+    """
+    if not eid or scenes_read.get_location_history(cid, sid):
+        return
+    with contextlib.suppress(entities.EntityNotFound):
+        scenes_moment.set_location(cid, sid, eid)
 
 
 def start_from_greeting(cid: str, sid: str, gid: str) -> str:
@@ -214,6 +251,7 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
         appearances_transitions.appear(cid, sid, "characters", actor, version, "npc")
     if g["pcless"] and not scene_pcless:
         scenes_write.set_pcless(cid, sid)  # before substitution: {{user}} needs the pcless fallback
+    _seed_location(cid, sid, g["location"])
     scenes_write.stamp_greeting(cid, sid, gid)
     text = context_macros.expand_macros(overlay.read_greeting(cid, gid)["body"],
                                         context_macros.scene_substitutions(cid, sid), cid, sid)
