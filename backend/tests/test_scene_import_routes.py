@@ -73,6 +73,17 @@ def test_parse_rejects_a_file_that_is_not_a_transcript(client):
     assert r.status_code == 400 and "could not parse" in r.json()["detail"]
 
 
+def test_an_oversized_upload_is_refused_before_it_is_read(client):
+    """The bound is on the ALLOCATION, not the receipt -- this backend is
+    packaged verbatim into the Android app, where an unbounded read OOMs the
+    process before a 413 could be composed."""
+    _wid, cid = _campaign(client)
+    huge = b"**You:** " + b"x" * (store.scene_import.MAX_BYTES + 1)
+    r = client.post(f"/api/campaigns/{cid}/scenes/import/parse",
+                    files={"file": ("scene.md", huge, "text/markdown")})
+    assert r.status_code == 413
+
+
 def test_parse_404s_for_an_unknown_campaign(client):
     r = _upload(client, "nope", STORED)
     assert r.status_code == 404

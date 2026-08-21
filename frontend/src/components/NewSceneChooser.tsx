@@ -175,7 +175,7 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
              shown. `onCreated` takes no initial prompt — an imported scene
              opens on a transcript that is already written. */
           <SceneImport cid={cid} onBack={() => setMode(null)} onCancel={dismiss}
-                       onImported={(sid) => onCreated(sid)} />
+                       onImported={(sid) => onCreated(sid)} onWriting={setWriting} />
         ) : draft === null ? (
           <SceneIdeaPicker cid={cid} afterSid={afterSid} ready={ready}
                            pcless={mode === "offscreen"}

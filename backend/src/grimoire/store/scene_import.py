@@ -39,6 +39,30 @@ class SceneImportError(Exception):
     """The upload is not a grimoire transcript."""
 
 
+class TranscriptTooLargeError(SceneImportError):
+    """The upload is bigger than `MAX_BYTES` (HTTP 413).
+
+    Spelled with the suffix ruff's N818 asks for, unlike its older siblings
+    (`covers.CoverTooLarge`, `campaign_images.ImageTooLarge`) which predate the
+    widened rule selection and sit in the lint baseline. The baseline may only
+    shrink, so a new one has to be named the way the rule wants.
+    """
+
+
+#: Bounds the ALLOCATION, not the receipt: `parse` materializes the whole
+#: upload as one `bytes` and then again as one `str`, and this backend is
+#: packaged verbatim into the Android app (Chaquopy), where an unbounded read
+#: OOMs the process before a 413 could be composed -- the same reasoning, and
+#: the same belt-and-braces shape, as `covers.MAX_BYTES`: the route checks
+#: `UploadFile.size` before reading, and this re-checks the bytes, because
+#: `size` is Optional in the ASGI contract.
+#:
+#: 16 MB is far past any real transcript. The longest scene in a played
+#: campaign is a few hundred KB of text.
+MAX_BYTES = 16 * 1024 * 1024
+TOO_LARGE = "transcript is too large (max 16 MB)"
+
+
 #: The chapter heading `build_markdown_bundle` writes: `# 3. The Long Quay`.
 #: The number is the bundle's own chapter marker (`toc_label`), not part of the
 #: title, and re-importing it into the title is how "3. The Long Quay" becomes a
@@ -58,6 +82,8 @@ def _decoded(data: bytes) -> str:
     reason one step later: ``_MARKER`` is anchored per line, but ``_SAFE_LABEL``
     and the blank-line rule in ``_markers`` are both written against ``\\n``.
     """
+    if len(data) > MAX_BYTES:
+        raise TranscriptTooLargeError(TOO_LARGE)
     try:
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
