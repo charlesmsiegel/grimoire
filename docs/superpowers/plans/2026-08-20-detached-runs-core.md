@@ -122,6 +122,10 @@ module that uses it**, in the same commit; none is shared machinery:
 - `_wait_terminal(app, run_id, timeout=5)` -- poll the registry until the run
   leaves `running`; fail on timeout rather than hang.
 - `_scene_bytes(cid, sid)` -- the raw scene file, for byte-identical assertions.
+- `_sse(payload)` -- encode one SSE data frame, `f"data: {json.dumps(payload)}\n\n"`.
+  The tests build frames with it because `append_frame` takes the wire format;
+  do not import `streaming._sse`, which would couple a run test to the module
+  Task 2 is forbidden to depend on.
 - `_hold_a_run(cid, sid, cls="turn")` / `_release(cid, sid)` -- take and drop an
   exclusion key directly.
 
@@ -139,6 +143,45 @@ nothing else, so tests reach the registry through **`client.app.state.runs`**.
 An early draft of this plan declared `app` as a test parameter, which pytest
 rejects at collection with "fixture 'app' not found" before a single assertion
 runs.
+
+**And that bare `TestClient` never runs the lifespan.** `TestClient(app)`
+without a `with` block does not emit startup, which this tree already knows and
+writes down: `test_frozen_campaign.py:264` runs the migration by hand for
+exactly this reason, and `create_app` builds the gateway clients outside
+`_lifespan` with the comment "so the dependency resolves for a `TestClient`
+that never runs one" (`main.py:270`). So if `app.state.runs` were created only
+inside `_lifespan`, every test in this plan that touches `client.app.state.runs`
+would die on `AttributeError` before reaching its assertion — and so would
+every migrated route, since the handler reserves against a registry that is
+not there.
+
+**Split the install, following the precedent the gateway clients already set.**
+The registry is a dict and a lock — no async resources, nothing to close — so
+it is constructed in `create_app()` and is present for any client, lifespan or
+not. Only the parts that need a running loop (the portal, the task group, the
+reaper) are installed in `_lifespan`. Task 3's interface list says this
+explicitly.
+
+Which then splits the tests in two, and the split is not cosmetic:
+
+- Tests that only *inspect* the registry — reserve, read state, assert an
+  exclusion key is held, assert a 409 — take the ordinary `client`.
+- Tests where a run must actually **execute** take a lifespan-entered client,
+  `run_client`, a new `conftest` fixture that is `client`'s body ending in
+  `with TestClient(app) as c: yield c`.
+
+And `runner.start` raises a clear `RuntimeError("no run portal; the app's
+lifespan is not running")` when the portal is absent, rather than
+`AttributeError` on `app.state`. A test that picks the wrong fixture should say
+so in one line, not send its author into `main.py`.
+
+**The rule for classifying a test:** does anything here call a route that
+*produces* a run? If yes, `run_client`. If the test only reserves through
+`_hold_a_run` or `_finish_run` and then checks what some other route does about
+it, plain `client`. By that rule Task 5's whole freeze suite stays on `client`
+— every one of those tests holds a key directly and never lets a runner start —
+while Task 3's three end-to-end turn tests take `run_client`. When in doubt,
+`run_client` is never wrong, only slower.
 
 That same fixture builds a `TestClient`, which is why Task 5's disconnect test
 needs its own live-server harness rather than this one -- see the note there.
@@ -293,12 +336,26 @@ def backfill_scene_identities() -> None:
     value, so the identity check would pass and the corruption it exists to
     prevent would be untouched, while reading as solved.
     """
+    log = logging.getLogger(__name__)
     for c in campaigns_read.list_campaigns():
-        _backfill_campaign(c["id"])
+        # Per campaign, not per pass. The startup hook's own handler catches
+        # StoreBusy around the whole step, so letting it out of this loop
+        # abandons every campaign after the contended one -- they would wait
+        # for another startup or a scene-specific lazy repair, while the log
+        # said one campaign was skipped. Contention on one campaign says
+        # nothing about the next.
+        try:
+            _backfill_campaign(c["id"])
+        except locks.StoreBusy as exc:
+            log.warning("identity backfill skipped for %s -- %s; it will be "
+                        "retried", c["id"], exc)
 ```
 
 `_backfill_campaign` takes `locks.campaign_lock(cid)` for the whole pass, the
 way `_migrate_campaign` does, and writes through `store.atomic`.
+
+Test it with two campaigns where the first is held: the second must come back
+with identities, which fails against a loop that lets the exception out.
 
 - [ ] **Step 5: Register it in the startup hook**
 
@@ -567,9 +624,15 @@ cross-suite import couples two files for nothing. Remember `import pytest` and
 
 **Interfaces:**
 - Consumes: `runs.RunRegistry`, `runs.Run` (Task 2).
-- Produces: `runner.install(app) -> None` — called from `_lifespan` inside the
-  task group; stashes `app.state.runs` and `app.state.run_starter` and starts
-  the reaper.
+- Consumes: `runs.install_registry(app) -> None` — **lives in Task 2's
+  `routes/runs.py`**, not here, because it constructs the registry and nothing
+  else; it is listed here because this is the task that makes `main.py` call
+  it. Called from **`create_app`**, not the lifespan: the registry is pure data
+  and needs no running loop. See the fixture note above for why it cannot wait
+  for startup.
+- Produces: `runner.install(app, tg) -> None` — called from `_lifespan` inside
+  the task group; stashes `app.state.run_portal` and starts the reaper. It does
+  **not** create the registry; it attaches the machinery that needs a loop.
 - Produces: `runner.start(app, run, factory) -> None` — thread-safe from a
   synchronous handler. `factory` is a zero-arg callable returning the
   coroutine to run.
@@ -735,12 +798,22 @@ async def _guarded(run, factory):
 
 - [ ] **Step 6: Wire it into the lifespan and start the reaper**
 
-In `main.py`, inside the existing `async with anyio.create_task_group() as tg:`,
-call `runner.install(app, tg)` before `tg.start_soon(_backup_ticker)`, and start
-the reaper on the same group. The registry instance goes on `app.state`, **not**
-at module scope: this repo builds and tears down `create_app()` repeatedly in
-one process, and a module global's terminal records, attempt ids and exclusion
-keys would leak into the next app.
+In `main.py`, call `runs.install_registry(app)` from `create_app`, beside the
+gateway clients and for the same reason they are there. Then, inside the
+existing `async with anyio.create_task_group() as tg:`, call
+`runner.install(app, tg)` before `tg.start_soon(_backup_ticker)`, and start the
+reaper on the same group.
+
+The registry instance goes on `app.state`, **not** at module scope: this repo
+builds and tears down `create_app()` repeatedly in one process, and a module
+global's terminal records, attempt ids and exclusion keys would leak into the
+next app.
+
+Cover the split itself: one test asserts `create_app().state.runs` exists with
+no lifespan entered, and one asserts `runner.start` on that app raises the
+explicit "no run portal" error rather than `AttributeError`. Both fail against
+an implementation that puts the registry in the lifespan, which is the shape
+this plan had until it was checked against `conftest`.
 
 - [ ] **Step 7: Run tests to verify they pass**
 
@@ -802,11 +875,28 @@ def test_from_is_inclusive_and_a_reconnect_reproduces_the_reply_once(client, liv
     """`from=N` sends frame N itself, so a client that consumed through N must
     ask for N+1. Getting this backwards duplicates a delta in the middle of a
     reply -- invisible until someone reads the text."""
-    live_run.append_frame({"delta": "Wind off the "})   # index 0
-    live_run.append_frame({"delta": "water."})          # index 1
+    # Raw SSE frames, exactly what `event_stream` yields -- see `append_frame`
+    # in Task 2. A dict here would test a re-encoding path production never
+    # takes, and could not express the heartbeat case below at all.
+    live_run.append_frame(_sse({"delta": "Wind off the "}))   # index 0
+    live_run.append_frame(_sse({"delta": "water."}))          # index 1
     live_run.finish("landed")
     whole = _read_stream(client, live_run, frm=0)
     assert "".join(e["delta"] for e in whole) == "Wind off the water."
+    resumed = _read_stream(client, live_run, frm=1)
+    assert "".join(e["delta"] for e in resumed) == "water."
+
+
+def test_a_reconnect_across_a_heartbeat_does_not_lose_or_repeat_text(client, live_run):
+    """The heartbeat occupies an index like any other frame. A client that
+    resumes at `consumed + 1` while counting only the events `parseSSEChunk`
+    surfaced would be off by every heartbeat in between -- the failure this
+    whole absolute-index scheme exists to prevent, and it is invisible unless a
+    test puts a heartbeat in the middle."""
+    live_run.append_frame(_sse({"delta": "Wind off the "}))   # index 0
+    live_run.append_frame(": heartbeat\n\n")                  # index 1
+    live_run.append_frame(_sse({"delta": "water."}))          # index 2
+    live_run.finish("landed")
     resumed = _read_stream(client, live_run, frm=1)
     assert "".join(e["delta"] for e in resumed) == "water."
 
@@ -821,7 +911,7 @@ def test_from_past_the_buffer_tails_rather_than_erroring(client, live_run):
 
 def test_from_past_the_buffer_on_a_live_run_receives_later_frames(client, live_run):
     reader = _read_stream_async(client, live_run, frm=99)
-    live_run.append_frame({"delta": "later"})
+    live_run.append_frame(_sse({"delta": "later"}))
     live_run.finish("landed")
     assert [e["delta"] for e in reader.result()] == ["later"]
 
@@ -833,8 +923,13 @@ def test_a_reaped_or_unknown_run_id_is_run_gone(client, campaign_scene):
 
 
 def test_a_run_id_from_another_scene_is_run_gone(client, two_scenes, live_run):
+    # `Run` has `subject`, not `cid` -- the campaign id is the subject's second
+    # element. Reaching for `live_run.cid` raises AttributeError before the
+    # request goes out, so the isolation this test names would go unproven
+    # while the suite still went red somewhere confusing.
+    _, cid, _ = live_run.subject
     _, other_sid = two_scenes
-    r = client.get(f"/api/campaigns/{live_run.cid}/scenes/{other_sid}/runs/{live_run.id}")
+    r = client.get(f"/api/campaigns/{cid}/scenes/{other_sid}/runs/{live_run.id}")
     assert r.status_code == 404 and r.json()["detail"]["kind"] == "run_gone"
 
 
@@ -934,7 +1029,7 @@ know' into a confident wrong answer."
 
 ```python
 # backend/tests/test_runs_detach.py
-def test_a_dropped_subscriber_does_not_cancel_the_run(client, campaign_scene):
+def test_a_dropped_subscriber_does_not_cancel_the_run(live_server):
     """The inverse of today's behavior, and the single most important test in
     this plan. Disconnect used to mean cancel; now it detaches a subscriber."""
     cid, sid = live_server.campaign_scene
@@ -954,34 +1049,34 @@ def test_a_dropped_subscriber_does_not_cancel_the_run(client, campaign_scene):
     assert "dock" in store.scenes.read_scene(cid, sid)["messages"][-1]["content"].lower()
 
 
-def test_a_provider_failure_ends_failed_not_landed(client, campaign_scene):
+def test_a_provider_failure_ends_failed_not_landed(run_client, campaign_scene):
     """_fence_stream catches LLMError, emits an SSE error frame and returns
     NORMALLY. A runner inferring success from 'did not raise' would mark the
     turn landed and fire the success notification."""
     cid, sid = campaign_scene
-    run_id = _drive_failing_turn(client, cid, sid)
-    run = client.app.state.runs.get(run_id, ("scene", cid, sid))
+    run_id = _drive_failing_turn(run_client, cid, sid)
+    run = run_client.app.state.runs.get(run_id, ("scene", cid, sid))
     assert run.state == "failed"
 
 
-def test_a_rejected_send_leaves_the_transcript_byte_identical(client, campaign_scene):
+def test_a_rejected_send_leaves_the_transcript_byte_identical(run_client, campaign_scene):
     """The slot is reserved before the FIRST mutator, not just before the
     append: retry heals and supersedes proposals, regenerate archives a reply,
     replay stages posts. A 409 after any of those tells the player nothing
     happened when something did."""
     cid, sid = campaign_scene
-    _start_and_hold_a_turn(client, cid, sid)
+    _start_and_hold_a_turn(run_client, cid, sid)
     before = _scene_bytes(cid, sid)
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "second"})
+    r = run_client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "second"})
     assert r.status_code == 409 and r.json()["detail"]["kind"] == "run_in_flight"
     assert _scene_bytes(cid, sid) == before
 
 
-def test_two_scenes_in_one_campaign_do_not_cross_contaminate(client, two_scenes):
+def test_two_scenes_in_one_campaign_do_not_cross_contaminate(run_client, two_scenes):
     cid, (a, b) = two_scenes
-    ra = _start_turn(client, cid, a, "Seraphine waits.")
-    rb = _start_turn(client, cid, b, "Winifred does not.")
-    _wait_terminal(client.app, ra); _wait_terminal(client.app, rb)
+    ra = _start_turn(run_client, cid, a, "Seraphine waits.")
+    rb = _start_turn(run_client, cid, b, "Winifred does not.")
+    _wait_terminal(run_client.app, ra); _wait_terminal(run_client.app, rb)
     assert "seraphine" in _last_reply(cid, a).lower()
     assert "winifred" in _last_reply(cid, b).lower()
 ```
@@ -1514,8 +1609,8 @@ generated while the client was away."
 - Create: `android/app/src/main/java/app/grimoire/RunNotifier.kt`
 - Modify: `ServerService.kt`, `MainActivity.kt`, `AndroidManifest.xml`
 - Modify: `backend/src/grimoire/runner.py` (terminal hook)
-- Modify: `backend/src/grimoire/runs.py` (**reservation** hook — see below;
-  the runner alone cannot emit the live-count callback this task needs)
+- Modify: `backend/src/grimoire/routes/runs.py` (**reservation** hook — see
+  below; the runner alone cannot emit the live-count callback this task needs)
 
 **Files (additional):**
 - Modify: `android/app/src/main/python/android_entry.py` — accept and forward
@@ -1639,7 +1734,7 @@ than implying otherwise.
 
 ```bash
 make check-apk
-git add android backend/src/grimoire/runner.py
+git add android backend/src/grimoire/runner.py backend/src/grimoire/routes/runs.py
 git commit -m "Keep the process alive while a run is live, and say when it lands
 
 Channels are registered before anything posts: on 8.0+ an unregistered
