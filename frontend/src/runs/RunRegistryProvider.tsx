@@ -81,24 +81,101 @@ const key = (cid: string, sid: string) => JSON.stringify([cid, sid]);
 
 const Ctx = createContext<RunRegistry | null>(null);
 
+/** Where the pending map is mirrored so it can outlive the whole renderer.
+ *
+ *  React state does not survive a reload, and on Android the WebView's renderer
+ *  can be restarted out from under a perfectly healthy backend turn -- which is
+ *  the exact scenario this feature exists for. The provider then comes back
+ *  empty, reattaches to the live run, and holds no copy of what the player
+ *  typed; if that run fails and rolls its post back, the words are in neither
+ *  the transcript nor here.
+ *
+ *  `sessionStorage` is deliberately not used: it is per-tab and a renderer
+ *  restart is not a new tab, but a genuine reload of a killed process is close
+ *  enough to one that the distinction is not worth betting the player's text
+ *  on. `localStorage` survives both.
+ */
+const STORE_KEY = "grimoire.runs.pending";
+
+/** Every storage touch is wrapped. Access itself throws in a private window or
+ *  with site data blocked, and a registry that could not save is still a
+ *  registry -- degrading to in-memory is exactly what it did before. */
+function isEntry(v: unknown): v is [string, Attempt] {
+  if (!Array.isArray(v) || v.length !== 2 || typeof v[0] !== "string") return false;
+  const a = v[1] as Partial<Attempt> | null;
+  return !!a && typeof a === "object"
+    && typeof a.cid === "string" && typeof a.sid === "string"
+    && typeof a.attempt === "string" && typeof a.text === "string";
+}
+
+function readStored(): [string, Attempt][] {
+  try {
+    const raw = window.localStorage.getItem(STORE_KEY);
+    if (!raw) return [];
+    // `unknown`, and every entry shape-checked. This is data from a PREVIOUS
+    // build of the app -- an older schema, a half-written value, or anything
+    // else on the origin -- and trusting it would put a malformed record where
+    // recovery reads the player's text from.
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(isEntry) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** How many unresolved sends are kept on disk, oldest dropped first.
+ *
+ *  Bounded because nothing guarantees an entry is ever settled -- the app can
+ *  be closed mid-turn -- and an unbounded list would grow for the life of the
+ *  install. Generous next to the handful that can plausibly be outstanding: a
+ *  scene holds at most one, so this is 50 scenes left mid-send.
+ *
+ *  Age is deliberately NOT the bound. An old entry is not restored blindly:
+ *  recovery asks the server whether that attempt's post is still in the
+ *  transcript, and settles without restoring when it is. Expiring by time would
+ *  throw away words in exactly the case they are least recoverable elsewhere.
+ */
+const KEEP = 50;
+
+function writeStored(map: Map<string, Attempt>): void {
+  try {
+    // `Map` preserves insertion order, so the tail is the most recent.
+    const entries = [...map].slice(-KEEP);
+    window.localStorage.setItem(STORE_KEY, JSON.stringify(entries));
+  } catch {
+    /* full, blocked, or unavailable: the in-memory map is still authoritative */
+  }
+}
+
 export function RunRegistryProvider({ children }: { children: ReactNode }) {
-  const pending = useRef(new Map<string, Attempt>());
+  // Rehydrated ONCE, at construction. An effect would run after the first
+  // render -- and `CampaignView`'s mount-time adoption pass reads this
+  // synchronously in that same render, so a reload would find it empty in
+  // precisely the case it was persisted for.
+  const pending = useRef<Map<string, Attempt>>(new Map(readStored()));
   const consumed = useRef(new Map<string, number>());
 
   const value = useMemo<RunRegistry>(() => ({
-    begin(a) { pending.current.set(key(a.cid, a.sid), a); },
+    begin(a) {
+      pending.current.set(key(a.cid, a.sid), a);
+      writeStored(pending.current);
+    },
     attach(cid, sid, runId) {
       const found = pending.current.get(key(cid, sid));
-      if (found) found.runId = runId;
+      if (found) { found.runId = runId; writeStored(pending.current); }
     },
     pending(cid, sid) { return pending.current.get(key(cid, sid)); },
-    settle(cid, sid) { pending.current.delete(key(cid, sid)); },
+    settle(cid, sid) {
+      pending.current.delete(key(cid, sid));
+      writeStored(pending.current);
+    },
     rekey(cid, from, to) {
       if (from === to) return;
       const found = pending.current.get(key(cid, from));
       if (!found) return;
       pending.current.delete(key(cid, from));
       pending.current.set(key(cid, to), { ...found, sid: to });
+      writeStored(pending.current);
     },
     consume(runId, index) {
       const seen = consumed.current.get(runId);

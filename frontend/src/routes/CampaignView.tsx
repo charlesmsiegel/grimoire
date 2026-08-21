@@ -3833,6 +3833,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                          // on screen, and while one runs nothing else here may
                          // offer to start a second.
                          latch={() => takeRollLatch(activeId)}
+                         // A replay stream that ended with no answer leaves a
+                         // run that may still own the scene. This is the same
+                         // pass mount and `visibilitychange` run; calling it
+                         // now is the difference between the panel re-enabling
+                         // itself over that run and the view taking it back.
+                         onUnanswered={() => { void adoptPendingRun(cid, activeId); }}
                          onStartHandled={() => setReplayAt(null)}
                          // Into the SAME scene in the copy, not the campaign's
                          // front door: a fork copies the scenes wholesale, so

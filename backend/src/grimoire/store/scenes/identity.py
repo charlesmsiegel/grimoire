@@ -258,12 +258,26 @@ def ensure_identity(cid: str, sid: str, replace: bool = False) -> str:
     notification for one would open the other.
     """
     p = paths._scene_path(cid, sid)
-    if not safe_id(sid) or not p.exists():
+    if not safe_id(sid):
         raise paths.SceneNotFound(sid)
-    # STRICT, so a file we merely failed to open does not read as one with no
-    # identity. Minting there would publish a new token over a valid one and
-    # orphan every reference already holding it -- see `UnreadableError`.
-    existing = _read_token_strict(p)
+    # NO `exists()`, for the third time in this module and with the worst
+    # consequence of the three. It suppresses `OSError` and answers False, so a
+    # scene that is momentarily unstattable raised `SceneNotFound` -- and the
+    # STARTUP BACKFILL calls this. `_backfill_campaign` catches `OSError` per
+    # scene and the lifespan catches `StoreBusy`; `SceneNotFound` is neither, so
+    # one inaccessible file stopped the server from booting at all, on every
+    # launch, for a condition that clears by itself.
+    #
+    # STRICT for the read that follows, so a file we merely failed to open does
+    # not read as one with no identity. Minting there would publish a new token
+    # over a valid one and orphan every reference already holding it -- see
+    # `UnreadableError`.
+    try:
+        existing = _read_token_strict(p)
+    except UnreadableError as exc:
+        if isinstance(exc.__cause__, FileNotFoundError):
+            raise paths.SceneNotFound(sid) from exc
+        raise
     if existing and not replace:
         return existing
     token = mint()

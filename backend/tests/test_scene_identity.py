@@ -745,3 +745,50 @@ def test_a_campaign_with_no_scenes_directory_still_answers_none(tmp_path,
     cid = store.campaigns.create_campaign("Saltmarch", wid)
 
     assert identity.find_by_identity(cid, "f" * 32) is None
+
+
+def test_an_unstattable_scene_does_not_stop_the_backfill(tmp_path, monkeypatch, caplog):
+    """The third `Path.exists()` in this module and the worst of them: the
+    STARTUP backfill calls `ensure_identity`, and an `OSError` suppressed into
+    `SceneNotFound` is caught by nobody -- not `_backfill_campaign`'s per-scene
+    `except OSError`, not the lifespan's `StoreBusy` handler.
+
+    So one momentarily inaccessible file stopped the server booting at all, on
+    every launch, for a condition that clears by itself. It is now an
+    `UnreadableError` -- an `OSError` -- which the per-scene handler logs and
+    steps over, leaving the rest of the campaign backfilled.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    bad = store.scenes.create_scene(cid, "Mara")
+    good = store.scenes.create_scene(cid, "Winifred")
+    for sid in (bad, good):
+        p = store.scenes.paths._scene_path(cid, sid)
+        p.write_bytes(p.read_bytes().replace(b"identity: ", b"was_identity: "))
+
+    p = store.scenes.paths._scene_path(cid, bad)
+    raw = p.read_bytes()
+    p.unlink()
+    p.symlink_to(p)                                  # ELOOP on read
+    assert not p.exists(), "the premise: exists() cannot see this"
+
+    with caplog.at_level(logging.WARNING):
+        migrations.backfill_scene_identities()       # must not raise
+
+    assert identity.scene_identity(cid, good), "the rest of the campaign was skipped"
+    assert any("skipped for scene" in r.getMessage() for r in caplog.records), caplog.text
+
+    p.unlink()
+    p.write_bytes(raw)
+
+
+def test_a_scene_that_is_really_gone_is_still_scene_not_found(tmp_path, monkeypatch):
+    """The counterweight: absence is a real answer here too, and every caller
+    that creates-then-writes depends on the 404 it produces."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+
+    with pytest.raises(store.scenes.paths.SceneNotFound):
+        identity.ensure_identity(cid, "0001--nobody")
