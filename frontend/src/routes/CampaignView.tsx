@@ -47,6 +47,7 @@ import { useSceneReview } from "../components/review/useSceneReview";
 import DossierColumn from "../components/play/DossierColumn";
 import Conditions from "../components/play/Conditions";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
+import { useHotkeys } from "../shortcuts/useHotkeys";
 import { commentPlugin } from "../markdown/commentPlugin";
 import { quotePlugin } from "../markdown/quotePlugin";
 
@@ -3422,6 +3423,47 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // the scene is off the screen, so the pill is the only thing still saying it.
   usePublishShellContext(
     name ? { campaign: name, scene: absorb ? `Absorbing ${absorbTitle}` : sceneTitle } : null);
+
+  // The scene's own keyboard (#193). Every binding here mirrors a control that
+  // is on screen, and carries the same condition that control is disabled by —
+  // a shortcut that could do what no button offers is a second implementation
+  // of the guards, and the guards are the reason a turn cannot be sent twice.
+  // The functions guard themselves as well; this is what keeps the KEY inert,
+  // so nothing fires silently and the help sheet can say why.
+  //
+  // Nothing is bound bare that spends money without a further confirmation:
+  // `r` opens the reroll's guidance box exactly as ↻ does, and End scene —
+  // which absorbs a scene into the chronicle and cannot be undone by pressing
+  // the key again — is deliberately not bound at all.
+  useHotkeys([
+    {
+      keys: "mod+enter", label: "Send · continue the turn", group: "IN THIS SCENE",
+      // The one binding that belongs inside prose: the composer is where the
+      // reader IS. (The textarea's own Enter still handles the caret being in
+      // it, and prevents the default, so this cannot send the same keystroke
+      // twice.)
+      whileTyping: true,
+      enabled: !absorb && !busy && !rolling && !renamesInFlight,
+      run: () => void send(),
+    },
+    {
+      keys: "n", label: "New scene", group: "IN THIS SCENE",
+      enabled: !absorb, run: newScene,
+    },
+    {
+      keys: "r", label: "Reroll the last reply", group: "IN THIS SCENE",
+      enabled: !absorb && !busy && !rolling && canReroll,
+      run: () => setRerollPrompt(""),
+    },
+    {
+      keys: "t", label: "Retry the turn that failed", group: "IN THIS SCENE",
+      // Only while the banner is up. `retry()` with nothing to recover is a
+      // fresh generation the reader did not ask for, and a bare letter is far
+      // too cheap to press for that.
+      enabled: !absorb && !!error?.retryable && !busy && !rolling && !renamesInFlight,
+      run: () => void retry(),
+    },
+  ]);
 
   // The column is one swap zone: cast, or one actor. `columnMode` is derived
   // from `selectedActor` rather than stored beside it, so the two can never

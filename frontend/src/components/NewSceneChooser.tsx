@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useHotkeys } from "../shortcuts/useHotkeys";
 import { SceneConfirmForm } from "./SceneConfirmForm";
 import { SceneIdeaPicker } from "./SceneIdeaPicker";
 import { SceneImport } from "./SceneImport";
@@ -132,11 +133,16 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
     onClose(salvagedSid ?? undefined);
   }
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") dismiss(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, writing, salvagedSid]);
+  // Escape, and — because this is a modal — the scene's own bindings held off
+  // while it is up: `n` over the chooser must not open a second one. Disabled
+  // rather than absent while `writing`, which is the same refusal `dismiss()`
+  // makes and for the same reason: a create sequence several writes long does
+  // not stop because the modal went away.
+  useHotkeys(
+    [{ keys: "escape", label: "Close the chooser", group: "THIS PANEL",
+       enabled: !writing, whileTyping: true, run: dismiss }],
+    { modal: true },
+  );
 
   return (
     <div className="chooser-backdrop" role="dialog" aria-label="New scene"
