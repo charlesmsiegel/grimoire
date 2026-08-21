@@ -240,3 +240,61 @@ def test_by_identity_is_reachable_and_not_shadowed(client, campaign_scene):
     ident = store.scenes.scene_identity(cid, sid)
     r = client.get(f"/api/campaigns/{cid}/scene-by-identity?identity={ident}")
     assert r.status_code == 200 and r.json()["id"] == sid
+
+
+def test_a_live_stream_delivers_frames_appended_after_the_client_attached(client, campaign_scene):
+    """The foreground half of the feature. A client that attaches while the run
+    is still generating -- the ordinary case on reconnect, and the case where
+    `from` is already at the tail -- must keep receiving. Snapshotting the
+    buffer once and reaching EOF means the client disconnects before the run is
+    terminal and never sees the rest of the reply."""
+    import threading
+    cid, sid = campaign_scene
+    run = _reserve(client, cid, sid)
+    run.append_frame(_sse({"delta": "Wind off the "}))
+
+    def finish_later():
+        import time as _t
+        _t.sleep(0.2)
+        run.append_frame(_sse({"delta": "water."}))
+        run.finish("landed")
+        run.terminal.set()
+
+    threading.Thread(target=finish_later).start()
+    body = client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}/runs/{run.id}/stream?from=0").text
+    assert "".join(e["delta"] for e in _events(body)) == "Wind off the water."
+
+
+def test_attaching_at_the_tail_of_a_live_run_still_receives(client, campaign_scene):
+    """`from` equal to `next_index` is what an adopting client sends when it is
+    already caught up. A one-shot replay answers empty and closes."""
+    import threading
+    cid, sid = campaign_scene
+    run = _reserve(client, cid, sid)
+
+    def produce():
+        import time as _t
+        _t.sleep(0.2)
+        run.append_frame(_sse({"delta": "later"}))
+        run.finish("landed")
+        run.terminal.set()
+
+    threading.Thread(target=produce).start()
+    body = client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}/runs/{run.id}/stream?from=0").text
+    assert [e["delta"] for e in _events(body)] == ["later"]
+
+
+def test_discovery_orders_by_reservation_not_the_wall_clock(client, campaign_scene):
+    """A backward clock correction between two runs can give the newer one a
+    LOWER `started_at`, so a max() over that field answers with the older,
+    terminal run -- the client settles and misses the live reply."""
+    cid, sid = campaign_scene
+    old = _reserve(client, cid, sid, attempt="a1")
+    old.finish("landed")
+    live = _reserve(client, cid, sid, attempt="a2")
+    live.started_at = old.started_at - 3600      # the clock stepped backwards
+
+    r = client.get(f"/api/campaigns/{cid}/scenes/{sid}/run")
+    assert r.json()["run"]["id"] == live.id
