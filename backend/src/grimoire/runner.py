@@ -23,7 +23,6 @@ from __future__ import annotations
 import json
 import logging
 import threading
-import time
 from collections.abc import Callable
 from typing import Any
 
@@ -117,13 +116,12 @@ async def _reaper(app) -> None:
     while True:
         await anyio.sleep(REAP_INTERVAL_SECONDS)
         try:
-            # `time.time()`, NOT `anyio.current_time()`. `Run.finish` records a
-            # wall-clock stamp, and anyio's clock is monotonic-since-loop-start
-            # -- roughly 4e3 against roughly 1.8e9. Mixing them makes every
-            # `ended_at < cutoff` false, so the sweep silently reaps nothing and
-            # the registry grows for the life of the process. A test that calls
-            # `reap` directly cannot see this; only one that drives the loop can.
-            dropped = app.state.runs.reap(now=time.time())
+            # No clock passed: the registry measures retention on its own
+            # monotonic clock. Handing it `anyio.current_time()` (monotonic
+            # since loop start) or `time.time()` (wall) both mixed clocks with
+            # whatever `finish` recorded -- the first made every sweep a no-op
+            # and the registry grew for the life of the process.
+            dropped = app.state.runs.reap()
         except Exception:                                  # noqa: BLE001
             # Never let a bookkeeping slip kill the sweep for the life of the
             # process -- that turns one bad record into an unbounded leak.

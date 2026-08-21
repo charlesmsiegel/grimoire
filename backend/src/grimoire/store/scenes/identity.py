@@ -62,9 +62,15 @@ def _read_token(p) -> str | None:
     return value if _TOKEN.match(value) else None
 
 
-def _splice(text: str, line: str) -> str | None:
-    """``text`` with ``line`` inserted at the end of its frontmatter block,
-    every other byte untouched. ``None`` if there is no block to splice into.
+def _splice(raw: bytes, line: bytes) -> bytes | None:
+    """``raw`` with ``line`` inserted at the end of its frontmatter block, every
+    other byte untouched. ``None`` if there is no block to splice into.
+
+    BYTES, not text. ``Path.read_text`` performs universal-newline translation,
+    so a scene saved with CRLF comes back with every ``\r\n`` already collapsed
+    and writing it out again publishes the normalized copy. Other mutators only
+    touch a file the user is actively editing; this one touches every file in
+    the library on first boot, unprompted, so it must not reformat anything.
 
     Deliberately NOT parse-then-dump. `parse_frontmatter` models only
     ``key: value`` lines -- it drops anything without a colon and collapses
@@ -74,12 +80,16 @@ def _splice(text: str, line: str) -> str | None:
     boot. A transcript is the one artifact here that cannot be regenerated, so
     the migration edits the header surgically instead.
     """
-    if not text.startswith("---\n"):
-        return None
-    end = text.find("\n---", 4 - 1)     # the closing fence, from inside the block
-    if end == -1:
-        return None
-    return text[:end + 1] + line + text[end + 1:]
+    for eol in (b"\r\n", b"\n"):
+        head = b"---" + eol
+        if not raw.startswith(head):
+            continue
+        end = raw.find(eol + b"---", len(head) - len(eol))
+        if end == -1:
+            return None
+        at = end + len(eol)
+        return raw[:at] + line + eol + raw[at:]
+    return None
 
 
 def scene_identity(cid: str, sid: str) -> str | None:
@@ -98,29 +108,41 @@ def scene_identity(cid: str, sid: str) -> str | None:
 
 
 @locking._serialized
-def ensure_identity(cid: str, sid: str) -> str:
+def ensure_identity(cid: str, sid: str, replace: bool = False) -> str:
     """This scene's identity, assigning one first if it has none.
 
     Under the campaign lock because it is a read-modify-write of the whole scene
     file like every other mutator here; two concurrent callers would otherwise
     mint two values and one would win, handing the loser a token that no longer
     matches what is on disk.
+
+    ``replace`` forces a fresh token over an existing valid one. Only the
+    backfill uses it, and only for a duplicate: two scenes carrying the same
+    token make the reverse lookup answer with whichever file sorts first, so a
+    notification for one would open the other.
     """
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         raise paths.SceneNotFound(sid)
     existing = _read_token(p)
-    if existing:
+    if existing and not replace:
         return existing
     token = mint()
-    text = p.read_text(encoding="utf-8")
-    spliced = _splice(text, f"identity: {token}\n")
+    raw = p.read_bytes()
+    spliced: bytes | None
+    if existing:
+        # Replacing a token that is real but unusable -- a duplicate. Swap it in
+        # place so nothing else about the file moves.
+        spliced = raw.replace(f"identity: {existing}".encode(),
+                              f"identity: {token}".encode(), 1)
+    else:
+        spliced = _splice(raw, f"identity: {token}".encode())
     if spliced is None:
         # No frontmatter block to splice into. Give it one rather than
         # rewriting anything: the body is carried through byte for byte, and a
         # scene with no header was already unreadable to `read_scene`.
-        spliced = f"---\nidentity: {token}\n---\n\n{text}"
-    atomic.write_text(p, spliced)
+        spliced = b"---\nidentity: " + token.encode() + b"\n---\n\n" + raw
+    atomic.write_bytes(p, spliced)
     return token
 
 

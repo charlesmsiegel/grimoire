@@ -135,6 +135,15 @@ class Run:
         self.error: dict | None = None
         self.started_at = time.time()
         self.ended_at: float | None = None
+        # Expiry is measured on a MONOTONIC clock, separately from the
+        # wall-clock stamp above. A device that corrects a stale clock on
+        # reconnect -- routine on a phone -- moves wall time by minutes or
+        # more: forward, and a run that just finished is immediately past its
+        # window, destroying the reconnect this feature exists to provide;
+        # backward, and terminal runs are held with their frame buffers far
+        # longer than intended. `ended_at` stays for display and for anything
+        # a human reads.
+        self.ended_monotonic: float | None = None
         self.frames: list[dict] = []
         # Both events exist before the run is ever published, because the
         # pre-start window is real: a cancel or a discovery can arrive while the
@@ -170,7 +179,8 @@ class Run:
         with self._lock:
             return self.frames[max(index, 0):]
 
-    def finish(self, state: RunState, at: float | None = None) -> None:
+    def finish(self, state: RunState, at: float | None = None,
+               monotonic_at: float | None = None) -> None:
         """Mark the run terminal. ``at`` defaults to now; tests pass it so
         reaping is deterministic rather than a race against the clock.
 
@@ -182,6 +192,8 @@ class Run:
         """
         with self._lock:
             self.ended_at = time.time() if at is None else at
+            self.ended_monotonic = (time.monotonic() if monotonic_at is None
+                                    else monotonic_at)
             self.state = state
 
 
@@ -252,7 +264,28 @@ class RunRegistry:
                 self._by_key[key] = run.id
             return run, True
 
-    def get(self, run_id: str, subject: Subject) -> Run | None:
+    @staticmethod
+    def _now() -> float:
+        """The clock retention is measured on. Monotonic, never wall."""
+        return time.monotonic()
+
+    def _owns(self, run: Run | None, subject: Subject,
+              identity: str | None) -> bool:
+        """Whether ``subject`` (and, when given, ``identity``) owns this run.
+
+        The subject alone is not enough for a scene. A scene deleted and
+        replaced inside the retention window lands on the same ``sid`` -- ids
+        are recycled by design -- so the replacement would otherwise be handed
+        the dead scene's run and could read its frames or cancel it. The
+        identity is exactly the thing that distinguishes them; callers that
+        have it pass it.
+        """
+        if run is None or run.subject != subject:
+            return False
+        return identity is None or run.scene_identity == identity
+
+    def get(self, run_id: str, subject: Subject,
+            identity: str | None = None) -> Run | None:
         """The run, or ``None`` if this subject does not own it.
 
         The subject check is the isolation: a run id from another scene answers
@@ -260,9 +293,10 @@ class RunRegistry:
         """
         with self._lock:
             run = self._runs.get(run_id)
-            return run if run is not None and run.subject == subject else None
+            return run if self._owns(run, subject, identity) else None
 
-    def for_subject(self, subject: Subject) -> list[Run]:
+    def for_subject(self, subject: Subject,
+                    identity: str | None = None) -> list[Run]:
         """Every run on this subject, live and terminal, oldest first.
 
         A collection rather than a pointer: drafts and background work declare
@@ -271,7 +305,7 @@ class RunRegistry:
         """
         with self._lock:
             return [self._runs[rid] for rid in self._by_subject.get(subject, [])
-                    if rid in self._runs]
+                    if self._owns(self._runs.get(rid), subject, identity)]
 
     def live_for_key(self, key: str | None) -> Run | None:
         """The running holder of an exclusion key, if there is one."""
@@ -282,7 +316,7 @@ class RunRegistry:
             holder = self._runs.get(holder_id) if holder_id else None
             return holder if holder is not None and holder.state == "running" else None
 
-    def reap(self, now: float) -> int:
+    def reap(self, now: float | None = None) -> int:
         """Drop terminal runs older than the window. Returns how many went.
 
         Every index is cleared, not just ``_runs``: an entry left in
@@ -290,10 +324,10 @@ class RunRegistry:
         record that no longer exists, and one left in ``_by_key`` would wedge
         the scene permanently -- neither visible through ``get``.
         """
-        cutoff = now - REAP_SECONDS
+        cutoff = (self._now() if now is None else now) - REAP_SECONDS
         with self._lock:
             dead = [r for r in self._runs.values()
-                    if r.ended_at is not None and r.ended_at < cutoff]
+                    if r.ended_monotonic is not None and r.ended_monotonic < cutoff]
             for run in dead:
                 del self._runs[run.id]
                 ids = self._by_subject.get(run.subject)

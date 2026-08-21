@@ -256,9 +256,9 @@ def test_shutdown_cancels_live_runs_and_they_flush(app_with_lifespan_factory):
 def test_reap_drops_a_stale_terminal_run(app_with_lifespan):
     app = app_with_lifespan
     run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
-    run.finish("landed", at=0.0)          # far outside any window
+    run.finish("landed", at=0.0, monotonic_at=0.0)   # far outside any window
 
-    assert app.state.runs.reap(now=time.time()) == 1
+    assert app.state.runs.reap(now=time.monotonic()) == 1
     assert app.state.runs.get(run.id, SCENE) is None
 
 
@@ -280,11 +280,21 @@ def test_the_reaper_loop_itself_drops_a_stale_run(monkeypatch, tmp_path,
         # is below both a wall-clock and a monotonic cutoff, so it gets reaped
         # either way and the test proves nothing; that is how the first version
         # of this test passed against the very bug it was written for.
-        run.finish("landed", at=time.time() - runs_mod.REAP_SECONDS - 1)
+        run.finish("landed", at=time.time() - runs_mod.REAP_SECONDS - 1,
+                   monotonic_at=time.monotonic() - runs_mod.REAP_SECONDS - 1)
+
+        # And one that finished a moment ago, which must SURVIVE. Without this
+        # half the test passes against a sweep that reaps everything it sees --
+        # which is what mixing a wall clock into a monotonic comparison does,
+        # in the opposite direction from the original bug.
+        recent, _ = app.state.runs.start_or_existing(OTHER, "turn", "chat", "a2", "i", LABELS)
+        recent.finish("landed")
 
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             if app.state.runs.get(run.id, SCENE) is None:
+                assert app.state.runs.get(recent.id, OTHER) is recent, (
+                    "the sweep reaped a run that had only just finished")
                 return
             time.sleep(0.02)
         raise AssertionError("the reaper never dropped a long-terminal run")
