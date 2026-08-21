@@ -79,6 +79,18 @@ def _public_config(cfg: dict[str, str]) -> dict:
                                              store.config.DEFAULT_BACKUP_INTERVAL_HOURS),
             "backup_keep": cfg.get("backup_keep", store.config.DEFAULT_BACKUP_KEEP),
             "backup_dir": cfg.get("backup_dir", store.config.DEFAULT_BACKUP_DIR),
+            # Both fork nudges. `replay_fork_threshold` has been in
+            # `_CONFIG_KEYS` since #80 and reachable through `ConfigUpdate`, so
+            # a PUT stored it -- but it was never reported here, which is the
+            # half of the round trip nothing was checking: the Configuration
+            # page fell back to the default on every load and showed an empty
+            # box to whoever had set it. Added with `advance_fork_threshold`
+            # (#107) rather than after it, so the pair cannot disagree about
+            # whether a threshold is a thing the client can read back.
+            "replay_fork_threshold": cfg.get("replay_fork_threshold",
+                                             store.config.DEFAULT_REPLAY_FORK_THRESHOLD),
+            "advance_fork_threshold": cfg.get("advance_fork_threshold",
+                                              store.config.DEFAULT_ADVANCE_FORK_THRESHOLD),
             "active_connection_id": active["id"] if active else "",
             # `model` rides along because the global status bar names the model
             # every scene will use, and that is only ever this connection's --
