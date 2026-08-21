@@ -266,6 +266,10 @@ class RunRegistry:
         self._runs: dict[str, Run] = {}
         self._by_subject: dict[Subject, list[str]] = {}
         self._by_attempt: dict[tuple[Subject, str], str] = {}
+        # Stops that arrived before their attempt had a run. Insertion-ordered
+        # so the oldest can be dropped when the cap is reached -- see
+        # `precancel`. The values are unused; only membership matters.
+        self._precancelled: dict[tuple[Subject, str], None] = {}
         self._by_key: dict[str, str] = {}
 
     def set_event_factory(self, factory: Callable[[], HandshakeEvent]) -> None:
@@ -372,6 +376,31 @@ class RunRegistry:
         with self._lock:
             return [self._runs[rid] for rid in self._by_subject.get(subject, [])
                     if self._owns(self._runs.get(rid), subject, identity)]
+
+    def precancel(self, subject: Subject, attempt_id: str) -> None:
+        """Record a Stop for an attempt that has not reserved a run yet.
+
+        The window is real and not small: the POST is accepted, and the route's
+        synchronous setup can then block for as long as the campaign lock is
+        held before it reaches `reserve_turn`. A Stop in there finds no run to
+        cancel -- discovery answers "no such attempt" -- and the route goes on
+        to reserve and detach a turn the user already stopped. Polling for the
+        reservation only narrows that; refusing to forget the cancel closes it,
+        because the reservation is the thing that has to consume it.
+
+        Bounded by `_MAX_PRECANCEL`: these are client-supplied ids that may
+        never be reserved at all (the request died before the handler ran), so
+        the set has to be able to forget the oldest rather than grow forever.
+        """
+        with self._lock:
+            self._precancelled[(subject, attempt_id)] = None
+            while len(self._precancelled) > _MAX_PRECANCEL:
+                self._precancelled.pop(next(iter(self._precancelled)))
+
+    def take_precancel(self, subject: Subject, attempt_id: str) -> bool:
+        """Whether this attempt was stopped before it reserved. Consumes it."""
+        with self._lock:
+            return self._precancelled.pop((subject, attempt_id), "miss") is None
 
     def for_attempt(self, subject: Subject, attempt_id: str | None,
                     identity: str | None = None) -> Run | None:
@@ -494,6 +523,13 @@ def _scene_subject(cid: str, sid: str) -> tuple[Subject, str | None]:
     # -- discovery on such a scene still answers "no run" instead of an error.
     return ("scene", cid, sid), identity or UNRESOLVED
 
+
+_MAX_PRECANCEL = 256
+"""How many un-reserved Stops to remember.
+
+Generous next to the one or two that can plausibly be in flight, and small
+enough that a client inventing ids cannot grow the registry without bound.
+"""
 
 UNRESOLVED = "\x00unresolved"
 """Stands in for a scene identity that could not be resolved.
@@ -637,6 +673,31 @@ def post_run_cancel(cid: str, sid: str, run_id: str, request: Request) -> dict:
     return {"run": _run_payload(run)}
 
 
+@router.post("/campaigns/{cid}/scenes/{sid}/attempts/{attempt_id}/cancel")
+def post_attempt_cancel(cid: str, sid: str, attempt_id: str, request: Request) -> dict:
+    """Stop the turn this attempt id names, whether or not it has a run yet.
+
+    What Stop calls when discovery came back empty. The POST it is stopping may
+    have been accepted and then blocked in synchronous setup -- the campaign
+    lock is held by something else -- so "no run for this attempt" does not mean
+    "nothing is going to happen": the route can still reserve and detach a turn
+    after the lookup. Recording the cancel against the ATTEMPT closes that,
+    because the reservation consumes it (`reserve_turn`).
+
+    Idempotent, and safe to call for an attempt that never reserves: the record
+    is capped and forgotten oldest-first.
+    """
+    subject, identity = _scene_subject(cid, sid)
+    run = request.app.state.runs.for_attempt(subject, attempt_id, identity)
+    if run is None:
+        request.app.state.runs.precancel(subject, attempt_id)
+        return {"run": None}
+    if run.state == "running":
+        runner.cancel(request.app, run)
+        run.terminal.wait(timeout=CANCEL_TIMEOUT_SECONDS)
+    return {"run": _run_payload(run)}
+
+
 @router.get("/campaigns/{cid}/scenes/{sid}/runs/{run_id}/stream")
 def get_run_stream(cid: str, sid: str, run_id: str, request: Request,
                    from_: int = Query(0, alias="from")):
@@ -745,8 +806,14 @@ def start_detached(app, run: Run, producer, outcome=None) -> None:
             run.append_frame(frame)
         return None if outcome is None else outcome()
 
-    run.started = True
+    # AFTER the handoff, not before. `runner.start` can raise -- the lifespan
+    # portal is gone, or closing as the request hands off -- and `reservation`
+    # deliberately skips a started run, so marking it first left the record
+    # permanently `running` with no task, no terminal event, and its scene's
+    # exclusion key held for the rest of the process. Same thread, and nothing
+    # reads the flag until this route returns, so there is no window here.
     runner.start(app, run, pump)
+    run.started = True
 
 
 @contextlib.contextmanager
@@ -851,6 +918,29 @@ def replay_attempt(app, cid: str, sid: str, attempt_id: str | None):
     return tail_response(run, 0, lead=lead_frame(run))
 
 
+def require_scene_free(app, cid: str, sid: str) -> None:
+    """Refuse a change to the SHAPE of a scene while a turn is running on it.
+
+    Detaching a turn is what makes this necessary. A rename mints a new `sid`
+    (the slug is part of it), and the run and every one of its persistence hooks
+    hold the old one -- so after a rename the identity fence looks for a scene
+    that is no longer at that path, decides it is gone, and discards a reply the
+    provider may have spent minutes producing. That was survivable when a turn
+    died with its socket, because the window was the length of one request;
+    it is minutes now, and the rename button is one click away in another tab.
+
+    Deliberately a refusal rather than a repoint. Following the scene means
+    updating a live run's captured `sid` from outside it, which is the kind of
+    change the fence exists to make impossible; refusing costs the user a few
+    seconds and the composer already tells them a turn is in flight.
+    """
+    live = app.state.runs.live_for_key(exclusion_key(("scene", cid, sid), "turn"))
+    if live is not None:
+        raise HTTPException(status_code=409, detail={
+            "kind": "run_in_flight", "run_id": live.id,
+            "detail": "a turn is running on this scene; stop it first"})
+
+
 def reserve_turn(app, cid: str, sid: str, kind: str,
                  attempt_id: str | None) -> tuple[Run, bool]:
     """Reserve a `turn` run for this scene, or raise 409 if one is in flight.
@@ -871,6 +961,12 @@ def reserve_turn(app, cid: str, sid: str, kind: str,
         identity = scenes.ensure_identity(cid, sid)
     except CampaignNotFound as exc:
         raise _gone("campaign_gone", "no such campaign") from exc
+    except scenes.SceneNotFound as exc:
+        # `_require_scene` passed and then another request deleted or renamed
+        # the scene before this took the campaign lock. An ordinary concurrent
+        # mutation, and every other scene route answers it with a 404; leaving
+        # it to fall through made a send 500 instead.
+        raise _gone("scene_gone", "scene not found") from exc
     except OSError as exc:
         # The scene file could not be read or written just now -- a sync client
         # mid-write, a sharing violation (`identity.UnreadableError`), a device
@@ -881,14 +977,22 @@ def reserve_turn(app, cid: str, sid: str, kind: str,
         raise HTTPException(status_code=409, detail={
             "kind": "busy", "detail": f"the scene could not be read: {exc}"}) from exc
     labels = {"campaign": _campaign_label(cid), "scene": _scene_label(cid, sid)}
+    subject: Subject = ("scene", cid, sid)
+    attempt = attempt_id or uuid.uuid4().hex
     try:
-        return app.state.runs.start_or_existing(
-            ("scene", cid, sid), "turn", kind,
-            attempt_id or uuid.uuid4().hex, identity, labels)
+        run, fresh = app.state.runs.start_or_existing(
+            subject, "turn", kind, attempt, identity, labels)
     except RunInFlightError as exc:
         raise HTTPException(status_code=409, detail={
             "kind": "run_in_flight", "run_id": exc.run_id,
             "detail": "a turn is already running on this scene"}) from exc
+    # A Stop that arrived while this route was still in setup named this
+    # attempt and found nothing to cancel. Consume it now, before the producer
+    # is ever handed over: `runner` reads the same flag when it installs the
+    # cancel scope, so the turn ends without reaching a provider.
+    if fresh and app.state.runs.take_precancel(subject, attempt):
+        run.cancel_requested = True
+    return run, fresh
 
 
 def _campaign_label(cid: str) -> str:

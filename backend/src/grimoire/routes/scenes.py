@@ -313,10 +313,14 @@ def get_scene(cid: str, sid: str, limit: int | None = None, before: int | None =
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}")
-def put_scene(cid: str, sid: str, body: RenameScene):
+def put_scene(cid: str, sid: str, body: RenameScene, request: Request):
     title = body.title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
+    # A rename mints a new `sid`, and a detached turn holds the old one -- see
+    # `require_scene_free`. Ahead of the title check would refuse a malformed
+    # request with the wrong reason; behind the rename would be too late.
+    runs.require_scene_free(request.app, cid, sid)
     try:
         new_sid = store.scenes.rename_scene(cid, sid, title)
     except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
@@ -327,7 +331,12 @@ def put_scene(cid: str, sid: str, body: RenameScene):
 
 
 @router.delete("/campaigns/{cid}/scenes/{sid}")
-def delete_scene(cid: str, sid: str):
+def delete_scene(cid: str, sid: str, request: Request):
+    # Same reason as the rename above, one step worse: the transcript a live
+    # turn is about to write into would be gone. The identity fence keeps the
+    # reply off a REPLACEMENT scene, which is the corruption; this keeps the
+    # reply from being thrown away in the first place.
+    runs.require_scene_free(request.app, cid, sid)
     try:
         store.scenes.delete_scene(cid, sid)
     except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
