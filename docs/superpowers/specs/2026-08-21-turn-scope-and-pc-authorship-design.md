@@ -79,6 +79,11 @@ sentence rhythm, not turn scope.
 - **`/end` is parsed backend-side** off `ChatTurn.content`, **recorded in scene
   frontmatter** so retry and regenerate reproduce it, **prompt-only** in
   effect, and **a single special case** rather than a command framework.
+- **Input typed-only, output visible.** No composer control — `/end` is a
+  documented power-user gesture. But once set the flag is sticky and survives
+  re-rolls, so it gets a pending indicator and a one-click cancel. The
+  asymmetry is deliberate: discovering a command is a one-time cost, while
+  invisible state that changes generation is a recurring one.
 
 ### The PC line: sensation is the world's, volition is the player's
 
