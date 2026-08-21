@@ -284,6 +284,40 @@ def test_import_enforces_the_member_cap(monkeypatch, tmp_path):
              "world/a.md": "a", "world/b.md": "b"})
 
 
+def test_a_successful_import_leaves_no_staging_tree(monkeypatch, tmp_path):
+    """The staging directory is cleaned on the way out, not just on failure.
+
+    It was not: the name holding it was reassigned to the world's slug halfway
+    through, so the cleanup pointed somewhere else entirely and every import
+    leaked its tree.
+    """
+    _home(monkeypatch, tmp_path)
+    wid = seed_world()
+    assert world_bundle.import_bundle(_export(wid, tmp_path)) != wid
+    staging = worlds.staging.staging_root()
+    assert not staging.exists() or not any(staging.iterdir())
+
+
+def test_an_import_cannot_delete_a_directory_outside_the_store(monkeypatch, tmp_path):
+    """The consequence of that reassignment, and the reason it is worth a test
+    of its own: the cleanup rmtree'd a bare relative name, resolved against the
+    PROCESS WORKING DIRECTORY. Importing a world called "Saltmarch" from a
+    shell sitting beside a `saltmarch/` deleted it -- a directory that is not
+    the store's, holding files grimoire never wrote.
+    """
+    _home(monkeypatch, tmp_path)
+    wid = seed_world("Saltmarch")
+    bundle = _export(wid, tmp_path)
+
+    elsewhere = tmp_path / "cwd"
+    (elsewhere / "saltmarch").mkdir(parents=True)
+    (elsewhere / "saltmarch" / "notes.txt").write_text("not ours", encoding="utf-8")
+    monkeypatch.chdir(elsewhere)
+
+    assert world_bundle.import_bundle(bundle) != wid
+    assert (elsewhere / "saltmarch" / "notes.txt").read_text(encoding="utf-8") == "not ours"
+
+
 def test_a_rejected_import_leaves_no_trace(monkeypatch, tmp_path):
     """A half-extracted world in the library would be worse than a failed
     import: the staging tree is published by one rename or discarded whole."""

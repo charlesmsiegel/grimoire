@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import shutil
-import uuid
 from pathlib import Path
 
 from .. import atomic
@@ -79,9 +78,7 @@ def fork_world(wid: str, name: str) -> str:
         raise paths.WorldNotFound(wid)
     base = slugify(name)
     new_wid = uniquify(base, lambda c: paths.world_root(c).exists())
-    work = staging.staging_root() / uuid.uuid4().hex
-    try:
-        dest = work / "world"
+    with staging.staging_tree() as dest:
         # Symlinks are FOLLOWED (`symlinks` left False), the same call
         # `store/fork.py` documents for campaigns: copied as links, every file
         # in the fork would still be the source's file and the first edit to
@@ -108,8 +105,12 @@ def fork_world(wid: str, name: str) -> str:
         # metadata, because the store keeps every timestamp it cares about in
         # its own frontmatter and has no use for a mode bit; the fork's files
         # are new files, made now, under the process umask.
+        #
+        # `dirs_exist_ok`, because `staging_tree` has already made `dest`: the
+        # work directory it will remove has to exist before anything is put in
+        # it, which is the whole point of it owning both halves.
         shutil.copytree(root, dest, ignore=_skip_write_temps,
-                        copy_function=shutil.copyfile)
+                        copy_function=shutil.copyfile, dirs_exist_ok=True)
         mp = dest / "world.md"
         meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
         now = now_iso()
@@ -119,12 +120,6 @@ def fork_world(wid: str, name: str) -> str:
         atomic.write_text(mp, dump_frontmatter(meta, body))
         staging.repoint_urls(dest, wid, new_wid)
         return staging.publish(dest, base, new_wid)
-    finally:
-        # Whatever happened, nothing of ours is left behind: on success `dest`
-        # has been renamed away and only its empty parent remains, and on
-        # failure this is the whole partial copy. Never the published world --
-        # `publish` moves the tree OUT of here before it returns.
-        shutil.rmtree(work, ignore_errors=True)
 
 
 def _skip_write_temps(directory: str | Path, names: list[str]) -> set[str]:

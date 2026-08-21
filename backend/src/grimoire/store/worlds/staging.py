@@ -35,6 +35,10 @@ at.
 
 from __future__ import annotations
 
+import shutil
+import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from .. import atomic
@@ -60,6 +64,33 @@ def staging_root() -> Path:
     copy.
     """
     return home() / ".world-staging"
+
+
+@contextmanager
+def staging_tree() -> Iterator[Path]:
+    """A fresh, empty directory to build a world in; removed on the way out.
+
+    A context manager rather than two lines at each call site, because those
+    two lines went wrong: the import held its work directory and the world's
+    slug in ONE name, so its cleanup `rmtree`'d a bare relative name against
+    the process working directory — deleting a `saltmarch/` that happened to
+    sit beside the shell, and leaking the tree it meant to remove. There is
+    now one place that can make that mistake, and it does not.
+
+    Yields a `world/` child of a uuid-named work directory, and removes the
+    work directory whole. The child is what `publish` renames away, so on
+    success there is an empty parent left to clean up and on failure there is
+    the entire partial tree; one `rmtree` of the parent is right either way,
+    and can never reach the published world. The child's name is arbitrary —
+    nothing reads it.
+    """
+    work = staging_root() / uuid.uuid4().hex
+    try:
+        tree = work / "world"
+        tree.mkdir(parents=True)
+        yield tree
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def repoint_urls(staging: Path, old_wid: str, new_wid: str) -> int:
