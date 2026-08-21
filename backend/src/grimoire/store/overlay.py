@@ -345,6 +345,66 @@ def _recorded_base(cid: str, ref: str, base: str, commit: Path):
         _put_base(cid, ref, base)
 
 
+@contextmanager
+def recorded_base(cid: str, ref: str, base: str, commit: Path):
+    """`_recorded_base` for a copy that lands somewhere other than this campaign.
+
+    Same contract, same crash ordering, one difference in what `commit` names:
+    for a materialization it is the campaign file being written, and for a
+    *promotion* (`sync.promote`) it is the world file. The reasoning survives
+    the swap unchanged, because it only ever asks "did the copy this base
+    describes actually land?" -- and the answer is read off `commit` either way.
+
+    Public because the promoting caller lives in `store/sync.py`: base-hash
+    discipline is the one part of moving a record that must not be re-derived
+    at a second call site, which is the whole argument #52 makes for doing the
+    move server-side at all.
+    """
+    with _recorded_base(cid, ref, base, commit):
+        yield
+
+
+def record_text(cid: str, kind: str, eid: str) -> str | None:
+    """The bytes of the campaign's OWN copy of a flat record, or None when it
+    has none and reads the world's. Deliberately unresolved: a promotion copies
+    what this campaign holds, and inheriting content back up to the world it
+    came from is the one thing it must never do."""
+    if not safe_id(eid):
+        return None
+    p = _flat_path(croot_of(cid), kind, eid)
+    return p.read_text(encoding="utf-8") if p.exists() else None
+
+
+def actor_snapshot(cid: str, kind: str, aid: str):
+    """`characters.snapshot` / `pcs.snapshot` of the campaign's own actor dir,
+    or None when the actor is still inherited. Unresolved for the same reason
+    as `record_text`."""
+    if not safe_id(aid):
+        return None
+    snap = characters.snapshot if kind == "characters" else pcs.snapshot
+    return snap(croot_of(cid), aid)
+
+
+def record_dir(cid: str, kind: str, rid: str) -> Path:
+    """The campaign's `<kind>/<rid>/` -- assets and the record's sidecars."""
+    return _record_dir(croot_of(cid), kind, rid)
+
+
+def undetach(cid: str, ref: str) -> None:
+    """Drop a detachment because the record has a world ancestor again.
+
+    The inverse of what `forget_world_record` does on a world-side delete, and
+    the only thing that legitimately reverses it: `detached` means "mine, and
+    whatever holds that id in the world is a stranger", which stops being true
+    the moment this campaign's own copy becomes that world record (#52)."""
+    _undetach(cid, ref)
+
+
+def dependent_campaigns(wroot: Path) -> list[str]:
+    """Ids of the campaigns that inherit from `wroot`. See `_dependent_campaigns`."""
+    return _dependent_campaigns(wroot)
+
+
 def _put_base(cid: str, ref: str, base: str) -> None:
     manifest = campaigns_paths.read_manifest(cid)
     manifest[ref] = base

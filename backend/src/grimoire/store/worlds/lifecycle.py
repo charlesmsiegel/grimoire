@@ -170,11 +170,30 @@ def _skip_write_temps(directory: str | Path, names: list[str]) -> set[str]:
 
 
 def rename_world(wid: str, name: str) -> None:
+    _restamp(wid, name=name)
+
+
+def touch(wid: str) -> None:
+    """Refresh the world's `updated` stamp.
+
+    Renaming used to be the only thing that moved it, which made `updated` a
+    record of the last time the world was *named* rather than the last time its
+    library changed. The library-edit routes (`sync.push`, `sync.promote`,
+    `sync.demote`) call this, so a world whose content moved sorts as recently
+    touched -- and a failure to stamp is never allowed to fail the edit that
+    earned it, because a stale sort key is a smaller harm than a refused write
+    whose content already landed.
+    """
+    _restamp(wid)
+
+
+def _restamp(wid: str, *, name: str | None = None) -> None:
     mp = paths.world_meta_path(wid)
     if not mp.exists():
         raise paths.WorldNotFound(wid)
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
-    meta["name"] = name
+    if name is not None:
+        meta["name"] = name
     meta["updated"] = now_iso()
     atomic.write_text(mp, dump_frontmatter(meta, body))
 

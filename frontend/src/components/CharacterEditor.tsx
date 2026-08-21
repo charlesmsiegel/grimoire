@@ -8,6 +8,7 @@ import { GreetingMarkdown } from "./GreetingMarkdown";
 import { DescribeQueue } from "./DescribeQueue";
 import { HtmlNote } from "./HtmlNote";
 import { ImageDescriptionField } from "./ImageDescriptionField";
+import { LibraryPanel } from "./LibraryPanel";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import SheetPanel from "./SheetPanel";
 import { ErrorNote } from "./ErrorNote";
@@ -1109,7 +1110,10 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   async function newCharacter() {
     const name = window.prompt("New character name?")?.trim();
     if (!name) return;
-    const { character } = await api.createCharacter(wid, { name });
+    // `scope`, not `wid`: in campaign scope this makes a character who exists
+    // only in this campaign — an NPC who walked on mid-scene and was never in
+    // the library (#60). The sidebar's Publish to library is what ends that.
+    const { character } = await api.createCharacter(scope, { name });
     await reload();
     await openEdit(character);
   }
@@ -1530,7 +1534,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     return (
       <div className="character-editor">
         <CreationWizard scope={scope} kind="characters" module={module}
-                        createRecord={(n) => api.createCharacter(wid, { name: n }).then((r) => r.character)}
+                        createRecord={(n) => api.createCharacter(scope, { name: n }).then((r) => r.character)}
                         deleteRecord={(id) => api.deleteCharacter(wid, id).then(() => {})}
                         onDone={async (id) => { setWizardOpen(false); await reload(); await openEdit(id); }}
                         onCancel={() => setWizardOpen(false)} />
@@ -1566,9 +1570,14 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                          onClose={() => { setDescribeOpen(false); reloadUndescribed(); }} />
         )}
         <div className="grid-toolbar">
+          {/* Both scopes since #60. In campaign scope the label says whose
+              character it will be: the world's roster is the library, and this
+              one deliberately is not in it until somebody publishes it. */}
+          <button className="primary" onClick={newCharacter}>
+            {worldScope ? "+ New character" : "+ New NPC (this campaign)"}
+          </button>
           {worldScope && <>
-            <button className="primary" onClick={newCharacter}>+ New character</button>
-            {worldScope && module && Object.values(module.sheets.sheet_types).some((st) => st.kind === "characters") && (
+            {module && Object.values(module.sheets.sheet_types).some((st) => st.kind === "characters") && (
               <button className="subtle" onClick={() => setWizardOpen(true)}>+ New character with sheet…</button>
             )}
             <button className="subtle" onClick={() => fileRef.current?.click()}>Import card</button>
@@ -1821,6 +1830,16 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                 )}
               </div>
             </div>
+
+            {/* An emergent NPC's way into the library (#60). Only promote can
+                apply to an actor -- `push` deliberately does not carry them
+                (#53 option B) -- and `libraryStatus` is what says so, so this
+                renders nothing for a character the campaign merely inherits. */}
+            {!worldScope && (
+              <LibraryPanel key={`${scope.id}:characters:${detail.meta.id}`}
+                            cid={scope.id} kind="characters" id={detail.meta.id}
+                            onMoved={() => { void reload(); }} />
+            )}
 
             {/* Pinned, and the argument the whole layout is making. Which way
                 it points depends on the scope, and the two are opposites: a

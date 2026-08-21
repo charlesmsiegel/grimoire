@@ -7,6 +7,7 @@ import CreationWizard from "./CreationWizard";
 import { Field } from "./Field";
 import { ImageDescriptionField } from "./ImageDescriptionField";
 import { GroupStatePanel } from "./GroupStatePanel";
+import { LibraryPanel } from "./LibraryPanel";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import { Portrait } from "./Portrait";
 import SheetPanel from "./SheetPanel";
@@ -541,6 +542,14 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
               <div className="form-actions">
                 <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
               </div>
+              {scope.kind === "campaign" && editing && (
+                // Keyed on the record, so switching rows remounts rather than
+                // showing the previous record's library state while the new
+                // one loads.
+                <LibraryPanel key={`${scope.id}:${kind}:${editing}`}
+                              cid={scope.id} kind={kind} id={editing}
+                              onMoved={() => { void reload(); }} />
+              )}
               <div className="side-section">
                 <h4>Keys</h4>
                 {keyList.length > 0

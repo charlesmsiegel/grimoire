@@ -1,14 +1,25 @@
-"""The push/sync engine: per-campaign incoming changes + accept/reject.
+"""The push/sync engine: per-campaign incoming changes + accept/reject, and
+the three explicit moves that run the other way.
 
 Compares three content hashes per ref (kind, id):
   world = world entity's current hash (or None)
   base  = campaign sync.md[ref]        (or None)
   mine  = campaign entity's current hash (or None)
 An incoming change exists iff world is not None and world != base.
+
+`incoming`/`accept`/`reject` only ever advance the campaign. `promote`, `push`
+and `demote` (#52, #53, #60) move a record the other way, and each of them is
+something a user asked for by name -- never automatic, because all three relax
+the rule that library drift becomes a campaign-local override and never a
+library edit (#113).
+
+Design: docs/superpowers/specs/2026-08-21-library-promote-demote-design.md
 """
 
 from __future__ import annotations
 
+import logging
+import shutil
 from pathlib import Path
 
 from . import atomic, characters, entities, greetings, overlay, pcs
@@ -17,6 +28,10 @@ from .appearances import versions as appearances_versions
 from .campaigns import lifecycle as campaigns_lifecycle
 from .campaigns import paths as campaigns_paths
 from .campaigns import read as campaigns_read
+from .worlds import lifecycle as worlds_lifecycle
+from .worlds import paths as worlds_paths
+
+log = logging.getLogger(__name__)
 
 
 def _ref_str(kind: str, eid: str) -> str:
@@ -244,6 +259,384 @@ def accept(cid: str, refs: list[dict]) -> None:
 
 def reject(cid: str, refs: list[dict]) -> None:
     _advance(cid, refs, copy=False)
+
+
+# ---------------------------------------------------------------------------
+# Campaign → world: promote, push, demote (#52, #53, #60)
+# ---------------------------------------------------------------------------
+
+class LibraryMoveError(Exception):
+    """Base for every refusal below, so a route can map the family in one place."""
+
+
+class PromoteConflictError(LibraryMoveError):
+    """The world already holds that id, so promoting would overwrite a stranger."""
+
+
+class PushConflictError(LibraryMoveError):
+    """The world moved since the campaign's base — the mirror of a pull conflict."""
+
+
+class NotDivergedError(LibraryMoveError):
+    """Nothing to push: the campaign has no copy, or its copy matches the world."""
+
+
+class NotInLibraryError(LibraryMoveError):
+    """Nothing to push *to*: the record is campaign-local. That is a promote."""
+
+
+class NotPushableError(LibraryMoveError):
+    """A kind this operation deliberately does not carry."""
+
+
+class NotDemotableError(LibraryMoveError):
+    """A kind demote deliberately does not carry."""
+
+
+class DanglingReferenceError(LibraryMoveError):
+    """Promoting would publish a library record pointing at campaign-local content."""
+
+
+#: The sidecars a promoted actor carries. Both are world-level identity by the
+#: overlay's own rule (they resolve per file, from the world), which is exactly
+#: what makes them part of the record being promoted. Everything else in an
+#: actor directory -- dossier.md, state.md, voice_drift.md -- is campaign-local
+#: by definition and stays behind.
+ACTOR_WORLD_SIDECARS: tuple[str, ...] = ("tagline.md", "voice_anchor.md")
+
+
+def _flat_kind(kind: str) -> None:
+    if kind not in entities.SYNCED_KINDS:
+        raise entities.UnknownKind(kind)
+
+
+def _world_file(wroot: Path, kind: str, eid: str) -> Path:
+    return wroot / kind / f"{eid}.md"
+
+
+def _world_holds_flat(wroot: Path, kind: str, eid: str) -> bool:
+    """Is that id claimed in the world? The record DIRECTORY counts, exactly as
+    it does for `overlay.create_entity`'s uniquify: it holds the assets a
+    promoted record would silently adopt."""
+    return _world_file(wroot, kind, eid).exists() or (wroot / kind / eid).is_dir()
+
+
+def _world_holds_actor(wroot: Path, kind: str, aid: str) -> bool:
+    return (wroot / kind / aid).is_dir()
+
+
+def _copy_tree(src: Path, dst: Path) -> None:
+    if src.is_dir():
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+
+
+def _touch_world(wroot: Path) -> None:
+    """Stamp the world as edited, without letting the stamp fail the edit.
+
+    A library edit really is a change to the world (#53 asks for this, and #55
+    reads it), but the record it describes has already landed by the time we
+    get here -- reporting a 500 for a sort key would undo nothing and lose the
+    user's work."""
+    try:
+        worlds_lifecycle.touch(worlds_paths.canonical_id(wroot.name))
+    except Exception as exc:   # noqa: BLE001 - a sort key never fails a write
+        log.warning("could not stamp world %s as updated (%s)", wroot, exc)
+
+
+# ---- promote --------------------------------------------------------------
+
+def promote(cid: str, kind: str, eid: str) -> None:
+    """Copy a campaign-local record up into the campaign's world, and record the
+    sync base that makes the two one record from here on.
+
+    The precondition is that **the world holds no record under that id** —
+    deliberately a statement about the world rather than about the manifest
+    ref, so the residue of a crashed promote (a base whose world record never
+    landed) retries cleanly instead of being refused as already-materialized.
+    See the design doc for why that residue is the one chosen.
+    """
+    campaigns_lifecycle.ensure_campaign_slim(cid)   # only ever run against the overlay layout
+    wroot = campaigns_read.world_root_of(cid)
+    if kind in appearances_paths.ACTOR_KINDS:
+        _promote_actor(cid, kind, eid, wroot)
+    else:
+        _flat_kind(kind)
+        _promote_flat(cid, kind, eid, wroot)
+    _touch_world(wroot)
+
+
+def _promote_flat(cid: str, kind: str, eid: str, wroot: Path) -> None:
+    # Collision before existence, on purpose. A record the campaign merely
+    # inherits has no campaign-side file either, and answering *that* with "not
+    # found" would be a lie about a record the user is looking at: it exists,
+    # it is simply already library content. The 409 says so.
+    if _world_holds_flat(wroot, kind, eid):
+        raise PromoteConflictError(f"the library already has {kind}/{eid}")
+    text = overlay.record_text(cid, kind, eid)
+    if text is None:
+        raise entities.EntityNotFound(_ref_str(kind, eid))
+    if kind == "greetings":
+        _require_world_character(wroot, text, eid)
+    ref = _ref_str(kind, eid)
+    # Before the copy, not after: while the ref is detached the sync engine
+    # skips it, so a crash between the two writes would leave a promoted record
+    # that never syncs again -- silently. Undetaching first fails the other way,
+    # onto a record whose world original simply is not there yet (#225, #247).
+    overlay.undetach(cid, ref)
+    dst = _world_file(wroot, kind, eid)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    # hashed from the bytes we are writing, never re-read from the destination:
+    # the base has to describe the content that actually moved, even if another
+    # writer touches that path in between (the argument `_materialize_flat`
+    # makes in the opposite direction)
+    with overlay.recorded_base(cid, ref, entities.content_hash(text), dst):
+        atomic.write_text(dst, text)
+    # Assets only. The rest of a record directory (a group's state.md) is
+    # campaign-local state that has no business in the library.
+    _copy_tree(overlay.record_dir(cid, kind, eid) / "assets", wroot / kind / eid / "assets")
+
+
+def _require_world_character(wroot: Path, text: str, gid: str) -> None:
+    """A greeting names the character it belongs to, so the library needs that
+    character too -- otherwise promoting publishes a greeting pointing at
+    nothing, and the campaign that promoted it is the only place it reads."""
+    meta, _ = greetings.parse_frontmatter(text)
+    char = str(meta.get("character", "")).strip()
+    if char and not (wroot / "characters" / char / "character.md").exists():
+        raise DanglingReferenceError(
+            f"{gid} belongs to {char}, which is not in the library yet — promote it first")
+
+
+def _promote_actor(cid: str, kind: str, aid: str, wroot: Path) -> None:
+    if _world_holds_actor(wroot, kind, aid):     # see `_promote_flat` on the order
+        raise PromoteConflictError(f"the library already has {kind}/{aid}")
+    taken = overlay.actor_snapshot(cid, kind, aid)
+    if taken is None:
+        raise _actor_missing(kind, aid)
+    base, files = taken
+    meta_name = "character.md" if kind == "characters" else "pc.md"
+    ref = _ref_str(kind, aid)
+    overlay.undetach(cid, ref)      # see `_promote_flat`
+    dst = wroot / kind / aid
+    dst.mkdir(parents=True, exist_ok=True)
+    # The meta file is the commit point every reader keys an actor on, so it is
+    # written last and is what `recorded_base` watches: version files landing
+    # without it leave no actor at all, which is the harmless residue.
+    with overlay.recorded_base(cid, ref, base, dst / meta_name):
+        for name, text in files:
+            if name != meta_name:
+                atomic.write_text(dst / name, text)
+        atomic.write_text(dst / meta_name, dict(files)[meta_name])
+    src_dir = overlay.record_dir(cid, kind, aid)
+    for sidecar in ACTOR_WORLD_SIDECARS:
+        if (src_dir / sidecar).exists():
+            atomic.write_text(dst / sidecar, (src_dir / sidecar).read_text(encoding="utf-8"))
+    _copy_tree(src_dir / "assets", dst / "assets")
+
+
+def _actor_missing(kind: str, aid: str) -> Exception:
+    return (characters.CharacterNotFound(aid) if kind == "characters"
+            else pcs.PCNotFound(aid))
+
+
+# ---- push -----------------------------------------------------------------
+
+def diverged(cid: str) -> list[dict]:
+    """Every materialized flat record whose copy no longer matches its base —
+    the inverse of `incoming`, and the set `push` can act on.
+
+    Detached refs are excluded: their base is gone and the world record of that
+    id is a stranger, so there is nothing they could be pushed *back* into."""
+    manifest = campaigns_paths.read_manifest(cid)
+    gone = overlay.detached(cid)
+    out: list[dict] = []
+    for ref in sorted(set(manifest) - gone):
+        kind, _, eid = ref.partition("/")
+        if kind not in entities.SYNCED_KINDS:
+            continue     # actors carry their base elsewhere; see `push`
+        text = overlay.record_text(cid, kind, eid)
+        if text is None or entities.content_hash(text) == manifest.get(ref):
+            continue
+        out.append({"ref": {"kind": kind, "id": eid},
+                    "name": _blob_name(text, eid)})
+    return out
+
+
+def _blob_name(text: str, eid: str) -> str:
+    meta, _ = greetings.parse_frontmatter(text)
+    return str(meta.get("name", eid)) or eid
+
+
+def library_status(cid: str, kind: str, eid: str) -> dict:
+    """Where one campaign record stands relative to the library, in the three
+    facts an editor needs to decide which action to offer.
+
+    Computed here rather than pieced together client-side out of a world
+    listing and a `diverged` sweep: which of promote and push applies is the
+    same rule those two functions enforce, and a second copy of it in the
+    frontend would drift into offering the button that 409s.
+    """
+    wroot = campaigns_read.world_root_of(cid)
+    ref = _ref_str(kind, eid)
+    actor = kind in appearances_paths.ACTOR_KINDS
+    if actor:
+        mine = overlay.actor_snapshot(cid, kind, eid)
+        has_own = mine is not None
+        in_world = _world_holds_actor(wroot, kind, eid)
+    else:
+        _flat_kind(kind)
+        text = overlay.record_text(cid, kind, eid)
+        has_own = text is not None
+        in_world = _world_holds_flat(wroot, kind, eid)
+    detached_here = ref in overlay.detached(cid)
+    diverged_here = False
+    if has_own and in_world and not detached_here and not actor:
+        base = campaigns_paths.read_manifest(cid).get(ref)
+        diverged_here = base is None or entities.content_hash(text or "") != base
+    return {
+        "in_library": in_world and not detached_here,
+        "diverged": diverged_here,
+        # Exactly `promote`'s precondition, so the button is never offered for a
+        # call that would refuse -- including the detached record whose slug the
+        # library has since handed to somebody else.
+        "can_promote": has_own and not in_world,
+        # Actors are deliberately absent from push (#53 option B); saying so here
+        # keeps the editor from offering it and calling it a bug when it 409s.
+        "can_push": diverged_here,
+    }
+
+
+def push(cid: str, kind: str, eid: str, *, force: bool = False) -> None:
+    """Save a campaign's override of a library record back into the library.
+
+    Clears the override by construction: the world file becomes the campaign's
+    bytes and the base advances to match, so `mine == world == base` holds and
+    `incoming` has nothing to say about the ref.
+
+    Refuses when the world has moved since the campaign's base — that is a push
+    conflict, the mirror of the pull conflict `incoming` reports — unless the
+    caller has seen it and forced past it.
+    """
+    if kind in appearances_paths.ACTOR_KINDS:
+        # A locked actor's base lives in appearances.json and pushing one means
+        # minting a NEW world version (#53 option B) rather than overwriting the
+        # current one. Saying so beats doing the wrong one of those silently.
+        raise NotPushableError(
+            f"{kind} cannot be saved back to the library yet — "
+            "promote an emergent one, or edit the library copy directly")
+    _flat_kind(kind)
+    campaigns_lifecycle.ensure_campaign_slim(cid)
+    wroot = campaigns_read.world_root_of(cid)
+    ref = _ref_str(kind, eid)
+    text = overlay.record_text(cid, kind, eid)
+    if text is None:
+        raise NotDivergedError(f"{ref} is still inherited from the library — there is nothing to save")
+    if not _world_holds_flat(wroot, kind, eid):
+        raise NotInLibraryError(f"{ref} is campaign-local; promote it into the library instead")
+    if ref in overlay.detached(cid):
+        # Its world original was deleted and something else took the slug. The
+        # two records share nothing but an id, and overwriting a stranger is
+        # the exact harm detaching exists to prevent (#225).
+        raise NotInLibraryError(
+            f"{ref} no longer belongs to the library record of that name")
+    base = campaigns_paths.read_manifest(cid).get(ref)
+    world_h = entities.entity_hash(wroot, kind, eid)
+    if base is None and not force:
+        # A copy with no base: nothing proves the two share an ancestor, so
+        # this is a conflict rather than a clean save.
+        raise PushConflictError(f"{ref} has no recorded common version with the library")
+    mine = entities.content_hash(text)
+    if base is not None and mine == base and world_h == base:
+        raise NotDivergedError(f"{ref} already matches the library")
+    if base is not None and world_h != base and not force:
+        raise PushConflictError(f"{ref} changed in the library since this campaign copied it")
+    # World first, base second. The residue of a crash between them is a
+    # conflict whose two sides happen to be identical -- noisy, and rejecting it
+    # advances the base and clears it. The other order records a base for
+    # content the world does not have, and sync then offers to overwrite this
+    # campaign's edit with the library's older text.
+    atomic.write_text(_world_file(wroot, kind, eid), text)
+    manifest = campaigns_paths.read_manifest(cid)
+    manifest[ref] = mine     # the bytes we wrote, not a re-read of where they went
+    campaigns_paths.write_manifest(cid, manifest)
+    _touch_world(wroot)
+
+
+# ---- demote ---------------------------------------------------------------
+
+def dependents(wid: str, kind: str, eid: str) -> list[dict]:
+    """The campaigns that would notice this library record going away.
+
+    Every campaign of the world, not only the ones holding a manifest ref: under
+    the overlay a campaign with no copy is the one depending on the world record
+    *most*, since it has nothing else. Two are excluded, and neither is a
+    dependent in any sense -- one that tombstoned the record (it deliberately
+    does not have it) and one whose ref is detached (its record is its own, and
+    this world record is a stranger sharing the slug).
+    """
+    wroot = _require_world_record(wid, kind, eid)
+    ref = _ref_str(kind, eid)
+    out: list[dict] = []
+    for cid in overlay.dependent_campaigns(wroot):
+        if ref in overlay.deleted(cid) or ref in overlay.detached(cid):
+            continue
+        try:
+            name = campaigns_read.read_campaign(cid)["meta"].get("name", cid)
+        except campaigns_paths.CampaignNotFound:
+            continue    # deleted between the enumeration and its turn
+        out.append({"id": cid, "name": name,
+                    "has_copy": overlay.record_text(cid, kind, eid) is not None})
+    return sorted(out, key=lambda d: d["id"])
+
+
+def _require_world_record(wid: str, kind: str, eid: str) -> Path:
+    if not worlds_paths.world_exists(wid):
+        raise worlds_paths.WorldNotFound(wid)
+    wroot = worlds_paths.world_root(wid)
+    if kind in appearances_paths.ACTOR_KINDS:
+        raise NotDemotableError(f"{kind} cannot be demoted — see #52's v1 boundary")
+    _flat_kind(kind)
+    if not _world_file(wroot, kind, eid).exists():
+        raise entities.EntityNotFound(_ref_str(kind, eid))
+    return wroot
+
+
+def demote(wid: str, kind: str, eid: str, *, copy_down: bool = True,
+           target: str | None = None) -> dict:
+    """Take a record out of the library, optionally leaving each dependent
+    campaign holding its own copy.
+
+    The delete itself is the world route's ordinary one, followed by
+    `overlay.forget_world_record` -- the sweep that already knows how to detach
+    the campaigns holding copies and drop their now-meaningless bases. This
+    function's own work is the copy-down that happens *first*, so that a
+    campaign which would otherwise simply lose the record keeps it.
+
+    Copy-down before delete, and aborting if any of it fails: a partial
+    copy-down leaves campaigns holding copies they would have been given anyway
+    and the library record still standing, which is the state before the call.
+    Deleting first and copying after would lose the record outright for every
+    campaign the copy never reached.
+    """
+    wroot = _require_world_record(wid, kind, eid)
+    deps = dependents(wid, kind, eid)
+    if target is not None:
+        deps = [d for d in deps if d["id"] == target]
+    copied: list[str] = []
+    if copy_down:
+        for dep in deps:
+            if dep["has_copy"]:
+                continue     # already its own; materializing is a no-op anyway
+            overlay.materialize_entity(dep["id"], kind, eid)
+            copied.append(dep["id"])
+    if kind == "greetings":
+        greetings.delete_greeting(wroot, eid)     # also unwires the world's plot map
+    else:
+        entities.delete_entity(wroot, kind, eid)
+    overlay.forget_world_record(wroot, kind, eid)
+    _touch_world(wroot)
+    return {"copied_down": sorted(copied),
+            "dependents": [d["id"] for d in deps]}
 
 
 def campaigns_for_world(wid: str) -> list[dict]:

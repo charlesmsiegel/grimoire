@@ -22,10 +22,12 @@ import {
   type CharacterDetail,
   type CharacterSummary, type CheckResolution, type ChronicleEntry, type ChubImportResult,
   type ChubUnlinkedVersion, type Climate, type ClimateSummary, type Config, type ConfigUpdate,
-  type DataDirInfo, type Dossiers, type EntityDetail, type EntityKind, type EntityScope,
+  type DataDirInfo, type DivergedRecord, type Dossiers, type EntityDetail, type EntityKind,
+  type EntityScope,
   type EntitySummary, type Greeting, type GreetingDetail, type GreetingDraft, type GroupState,
   type IncomingItem, type IncomingRef, type JournalEntry, type LLMConnection,
   type LLMConnectionDetail, type LLMConnectionDraft, type Ledger, type LengthPreset,
+  type LibraryDependent, type LibraryKind, type LibraryStatus,
   type LoreEntryDraft, type Mechanics, type Message, type ModelsRefreshResult,
   type ModuleContentEntry,
   type ModuleDetail, type ModuleEditResult, type ModuleRenameKind, type ModuleSummary,
@@ -734,6 +736,24 @@ export const api = {
   deleteEntity: (scope: EntityScope, kind: EntityKind, id: string) =>
     request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/${kind}/${id}`),
 
+  // library moves: campaign -> world, and back (#52, #53, #60). `kind` is a
+  // LibraryKind rather than EntityKind: promote and the status read carry
+  // actors too, which the flat-entity CRUD above never does.
+  libraryStatus: (cid: string, kind: LibraryKind, id: string) =>
+    request<LibraryStatus>("GET", `/api/campaigns/${cid}/${kind}/${id}/library`),
+  promoteToLibrary: (cid: string, kind: LibraryKind, id: string) =>
+    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/${kind}/${id}/promote`),
+  pushToLibrary: (cid: string, kind: LibraryKind, id: string, force = false) =>
+    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/${kind}/${id}/push`, { force }),
+  listDiverged: (cid: string) =>
+    request<DivergedRecord[]>("GET", `/api/campaigns/${cid}/diverged`),
+  libraryDependents: (wid: string, kind: LibraryKind, id: string) =>
+    request<LibraryDependent[]>("GET", `/api/worlds/${wid}/${kind}/${id}/dependents`),
+  demoteFromLibrary: (wid: string, kind: LibraryKind, id: string,
+                      body: { copy_down: boolean; target?: string | null } = { copy_down: true }) =>
+    request<{ copied_down: string[]; dependents: string[] }>(
+      "POST", `/api/worlds/${wid}/${kind}/${id}/demote`, body),
+
   // tags
   listTags: (wid: string) => request<Record<string, string>>("GET", `/api/worlds/${wid}/tags`),
   addTag: (wid: string, name: string) => request<{ id: string }>("POST", `/api/worlds/${wid}/tags`, { name }),
@@ -743,8 +763,11 @@ export const api = {
 
   // characters
   listCharacters: (scope: EntityScope) => request<CharacterSummary[]>("GET", `${entityBase(scope)}/characters`),
-  createCharacter: (wid: string, body: { name: string; version_name?: string; card?: Card }) =>
-    request<{ character: string; version: string }>("POST", `/api/worlds/${wid}/characters`, body),
+  // Both scopes since #60: a campaign-scoped create makes a character who
+  // exists only here, with no world counterpart and no sync ref — which is
+  // exactly what "emergent" means. `promoteToLibrary` is what ends that.
+  createCharacter: (scope: EntityScope, body: { name: string; version_name?: string; card?: Card }) =>
+    request<{ character: string; version: string }>("POST", `${entityBase(scope)}/characters`, body),
   readCharacter: (scope: EntityScope, cid: string) =>
     request<CharacterDetail>("GET", `${entityBase(scope)}/characters/${cid}`),
   setDefaultVersion: (scope: EntityScope, cid: string, vid: string) =>

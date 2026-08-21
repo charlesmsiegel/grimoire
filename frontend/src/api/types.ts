@@ -300,6 +300,34 @@ export type EntityKind = (typeof ENTITY_KINDS)[number];
 export type EntityKindName = EntityKind | (string & {});
 export type EntityScope = { kind: "world" | "campaign"; id: string };
 
+// ---- library moves (#52, #53, #60) ----
+//
+// The kinds that can move between a campaign and its world. Wider than
+// EntityKind on both ends: greetings are a flat synced record too, and promote
+// carries actors. Which of the four operations accepts which kind is the
+// store's rule (`store/sync.py`), reported per record by `libraryStatus` —
+// this type only says what is addressable.
+export type LibraryKind = EntityKind | "greetings" | "characters" | "pcs";
+
+/** Where one campaign record stands relative to its world's library.
+ *
+ *  `can_promote` / `can_push` are the server's own preconditions rather than
+ *  anything derived here: an editor that recomputed them would drift into
+ *  offering the button that 409s. */
+export type LibraryStatus = {
+  in_library: boolean;
+  diverged: boolean;
+  can_promote: boolean;
+  can_push: boolean;
+};
+
+export type DivergedRecord = { ref: { kind: EntityKind | "greetings"; id: string }; name: string };
+
+/** A campaign that would notice a library record going away. `has_copy` says
+ *  whether it already holds its own — the ones that do not are what demote's
+ *  copy-down is for. */
+export type LibraryDependent = { id: string; name: string; has_copy: boolean };
+
 // Mirrors backend/src/grimoire/store/entity_schema.py — keep in sync.
 export const ENTITY_FIELDS: Record<EntityKind, { key: string; label: string }[]> = {
   locations: [

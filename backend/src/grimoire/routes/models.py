@@ -495,6 +495,17 @@ class RefList(BaseModel):
     refs: list[Ref]
 
 
+class PushBody(BaseModel):
+    # Set only after the user has been shown the library's competing version:
+    # this is the mirror of accepting a pull conflict, and it overwrites.
+    force: bool = False
+
+
+class DemoteBody(BaseModel):
+    copy_down: bool = True
+    target: str | None = None   # one campaign, rather than every dependent
+
+
 class NewScene(BaseModel):
     title: str | None = None
     suggested_date: str | None = None

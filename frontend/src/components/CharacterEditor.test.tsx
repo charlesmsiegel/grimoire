@@ -11,6 +11,12 @@ vi.mock("../api/client", async () => {
       actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string) =>
         `/img/${sc.id}/${k}/${a}/${v}/${n}`,
       listCharacters: vi.fn(), readCharacter: vi.fn(), createCharacter: vi.fn(),
+      // The campaign-scope sidebar's LibraryPanel (#60). Resolved rather than
+      // left undefined so every campaign-scope test here renders the pane it
+      // always did; LibraryPanel.test.tsx owns the panel's own behaviour.
+      libraryStatus: vi.fn().mockResolvedValue(
+        { in_library: true, diverged: false, can_promote: false, can_push: false }),
+      promoteToLibrary: vi.fn(), pushToLibrary: vi.fn(),
       updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
       deleteCharacter: vi.fn(), importCharacter: vi.fn(), localizeImages: vi.fn(),
       putImage: vi.fn(), deleteImage: vi.fn(), promoteImage: vi.fn(), setAvatarFocus: vi.fn(),
@@ -421,7 +427,20 @@ test("creating a character prompts and posts the name", async () => {
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   fireEvent.click(screen.getByRole("button", { name: /new character/i }));
-  await waitFor(() => expect(api.createCharacter).toHaveBeenCalledWith("w", { name: "Rook" }));
+  await waitFor(() => expect(api.createCharacter)
+    .toHaveBeenCalledWith({ kind: "world", id: "w" }, { name: "Rook" }));
+});
+
+test("in campaign scope the create is campaign-local (#60)", async () => {
+  // the same button, pointed at the campaign: an NPC who exists only here,
+  // with no world counterpart, which is what "emergent" means
+  vi.spyOn(window, "prompt").mockReturnValue("Winifred");
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  // the campaign roster is appearance-filtered, so it opens empty rather than
+  // listing the world's cast -- wait for the button, not for a name
+  fireEvent.click(await screen.findByRole("button", { name: /new npc/i }));
+  await waitFor(() => expect(api.createCharacter)
+    .toHaveBeenCalledWith({ kind: "campaign", id: "run" }, { name: "Winifred" }));
 });
 
 test("editing description + alternate greetings (repeatable) saves a rebuilt card", async () => {
