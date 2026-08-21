@@ -20,7 +20,7 @@ import { ErrorNote } from "./ErrorNote";
  *  trailing run.
  */
 export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onForked,
-                             disabled, latch }: {
+                             disabled, latch, onUnanswered }: {
   cid: string;
   sid: string;
   /** The post the reader asked to replay from, or null. Set by the transcript
@@ -43,6 +43,16 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
    *  offer to start a second one. Optional so the component stands alone in
    *  its own tests. */
   latch?: () => () => void;
+  /** Hand this scene's unresolved send to the parent's recovery pass.
+   *
+   *  A stream that ended with neither `done` nor `error` leaves a run that may
+   *  still be generating and still holding the scene -- but this panel's latch
+   *  and busy state are released the moment its request settles, so Replay,
+   *  Accept and the composer all come back and every one of them is then
+   *  refused. Waiting for the next mount or `visibilitychange` to notice is
+   *  what review caught: the parent already knows how to adopt such a run, and
+   *  the answer is to tell it now rather than to duplicate that logic here. */
+  onUnanswered?: () => void;
 }) {
   // The same provider the composer's turns are recorded in, so a replayed turn
   // is discoverable by attempt after the WebView is suspended. `useRunRegistry`
@@ -217,6 +227,11 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
       // exists for. Anything that got an answer is resolved and settles here,
       // the same rule `runStream` follows.
       if (answered) registry.settle(cid, sid);
+      // And an unanswered one is handed straight to the parent's adoption
+      // pass, which reattaches if the run is live and takes the scene back
+      // under its own busy state. Without this the panel simply re-enabled
+      // itself over a run that still owned the scene.
+      else onUnanswered?.();
     }
     if (failed && alive.current) setError(failed);
   }

@@ -321,3 +321,58 @@ test("a replayed turn is recorded in the run registry before it is sent", async 
   await waitFor(() => expect(api.replayTurn).toHaveBeenCalled());
   expect(seen.attempt, "no attempt was recorded before the request").not.toBeNull();
 });
+
+test("a replay stream that ends with no answer hands the run to recovery", async () => {
+  // `guard` releases this panel's latch and busy state the moment the request
+  // settles -- but a stream that ended with neither `done` nor `error` leaves a
+  // run that may still be generating and still holding the scene. Replay,
+  // Accept and the composer all came back, and every one of them was then
+  // refused, until some later mount or `visibilitychange` noticed.
+  //
+  // The parent already knows how to adopt such a run. This is telling it now.
+  const unanswered = vi.fn();
+  (api.getReplay as any).mockResolvedValue(SESSION);
+  (api.replayTurn as any).mockImplementation(
+    async (_c: string, _s: string, on: any) => {
+      on({ run: { id: "r-1", attempt_id: "a", state: "running", next_index: 1 } });
+      on({ delta: "The lamps " });        // and then the socket simply stops
+    });
+
+  render(
+    <RunRegistryProvider>
+      <MemoryRouter>
+        <ReplayPanel cid="c1" sid="s1" startAt={null} onStartHandled={noop}
+                     onChanged={noop} onForked={noop} onUnanswered={unanswered} />
+      </MemoryRouter>
+    </RunRegistryProvider>);
+  await act(async () => {});
+  fireEvent.click(screen.getByText("Replay next turn"));
+
+  await waitFor(() => expect(unanswered).toHaveBeenCalled());
+});
+
+test("a replay stream that finished properly does not", async () => {
+  // The counterweight: an answered stream is resolved, and asking the parent to
+  // adopt it would have the recovery pass re-litigate a turn that is over.
+  const unanswered = vi.fn();
+  (api.getReplay as any).mockResolvedValue(SESSION);
+  (api.replayTurn as any).mockImplementation(
+    async (_c: string, _s: string, on: any) => {
+      on({ run: { id: "r-1", attempt_id: "a", state: "running", next_index: 1 } });
+      on({ done: true });
+    });
+
+  render(
+    <RunRegistryProvider>
+      <MemoryRouter>
+        <ReplayPanel cid="c1" sid="s1" startAt={null} onStartHandled={noop}
+                     onChanged={noop} onForked={noop} onUnanswered={unanswered} />
+      </MemoryRouter>
+    </RunRegistryProvider>);
+  await act(async () => {});
+  fireEvent.click(screen.getByText("Replay next turn"));
+
+  await waitFor(() => expect(api.replayTurn).toHaveBeenCalled());
+  await act(async () => {});
+  expect(unanswered).not.toHaveBeenCalled();
+});

@@ -7,7 +7,7 @@
  *  `CampaignView.test.tsx` covers the wiring; this covers the rules.
  */
 import { render, screen, act } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RunRegistryProvider, useRunRegistry, type RunRegistry } from "./RunRegistryProvider";
 import { parseSSEChunk } from "../api/stream";
@@ -25,6 +25,12 @@ function capture(): { registry: RunRegistry; unmount: () => void } {
 }
 
 const SEND = { cid: "c1", sid: "s1", attempt: "a-1", text: "Mara waits.", runId: null };
+
+// FILE-WIDE, not per-describe. The registry now mirrors its pending map to
+// `localStorage` so a send survives the renderer being restarted -- which also
+// means every `capture()` rehydrates whatever the previous test left behind,
+// and two suites below already caught each other that way.
+beforeEach(() => window.localStorage.clear());
 
 describe("what survives the component", () => {
   it("remembers a send whose outcome nobody learned", () => {
@@ -178,5 +184,99 @@ describe("the key", () => {
     act(() => registry.settle("a b", "c"));
 
     expect(registry.pending("a", "b c")?.text).toBe("first");
+  });
+});
+
+describe("surviving the whole renderer", () => {
+  it("hands a pending send back to a provider built from scratch", () => {
+    // React state does not survive a reload, and on Android the WebView's
+    // renderer can be restarted out from under a healthy backend turn -- which
+    // is the exact scenario this feature exists for. The provider then came
+    // back empty, reattached to the live run, and held no copy of what the
+    // player typed; a rollback by that run left the words nowhere at all.
+    const first = capture();
+    act(() => first.registry.begin(SEND));
+    first.unmount();
+
+    const { registry } = capture();      // a fresh provider, as after a reload
+    expect(registry.pending("c1", "s1")?.text).toBe("Mara waits.");
+    expect(registry.pending("c1", "s1")?.attempt).toBe("a-1");
+  });
+
+  it("does not hand back a send that was settled before the restart", () => {
+    const first = capture();
+    act(() => first.registry.begin(SEND));
+    act(() => first.registry.settle("c1", "s1"));
+    first.unmount();
+
+    expect(capture().registry.pending("c1", "s1")).toBeUndefined();
+  });
+
+  it("follows a rename across the restart too", () => {
+    const first = capture();
+    act(() => first.registry.begin(SEND));
+    act(() => first.registry.rekey("c1", "s1", "s1-renamed"));
+    first.unmount();
+
+    expect(capture().registry.pending("c1", "s1-renamed")?.text).toBe("Mara waits.");
+  });
+
+  it("still works when storage is unavailable", () => {
+    // Private windows and blocked site data make the ACCESSOR throw, not just
+    // the write. A registry that could not save is still a registry -- it
+    // degrades to what it was before, rather than taking the app down.
+    // `Storage.prototype`, not the instance: spying on `window.localStorage`
+    // directly does not intercept in jsdom, so the first version of this test
+    // passed with the guard deleted -- it never reached a throw at all.
+    const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    try {
+      const { registry } = capture();
+      act(() => registry.begin(SEND));
+
+      expect(spy).toHaveBeenCalled();          // the premise
+      expect(registry.pending("c1", "s1")?.text).toBe("Mara waits.");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("mounts even when reading storage throws", () => {
+    // The accessor itself throws in a private window, which is the read side
+    // of the same hazard -- and this one happens during construction, so an
+    // unguarded read takes the whole app down rather than one send.
+    const spy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    try {
+      const { registry } = capture();
+      expect(spy).toHaveBeenCalled();
+      expect(registry.pending("c1", "s1")).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("ignores stored junk rather than failing to mount", () => {
+    window.localStorage.setItem("grimoire.runs.pending", "{not json");
+    expect(capture().registry.pending("c1", "s1")).toBeUndefined();
+  });
+});
+
+describe("what the stored copy is trusted to be", () => {
+  it("drops an entry that does not have the shape a send has", () => {
+    // Written by a PREVIOUS build of the app, or half-written, or simply
+    // something else on the origin. A malformed record here lands exactly
+    // where recovery reads the player's text from.
+    window.localStorage.setItem("grimoire.runs.pending", JSON.stringify([
+      ['["c1","s1"]', { cid: "c1", sid: "s1", attempt: "a-1", text: "kept", runId: null }],
+      ['["c1","s2"]', { cid: "c1", sid: "s2" }],            // no attempt, no text
+      ["not-an-entry"],
+    ]));
+    const { registry } = capture();
+
+    expect(registry.pending("c1", "s1")?.text).toBe("kept");
+    expect(registry.pending("c1", "s2")).toBeUndefined();
   });
 });
