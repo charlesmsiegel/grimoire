@@ -401,6 +401,22 @@ def test_config_context_scan_depth_defaults_and_roundtrips(client):
     assert client.get("/api/config").json()["context_scan_depth"] == "3"
 
 
+def test_config_fork_thresholds_default_and_roundtrip(client):
+    """Both fork nudges, and the round trip is the point. `replay_fork_threshold`
+    stored fine and was never reported back (#80's half of this), so the
+    Configuration page redisplayed the default and showed an empty box to
+    whoever had set it -- a PUT that answers 200 and a GET that forgets. The
+    clock's threshold (#107) is its twin and would have shipped with the same
+    hole."""
+    body = client.get("/api/config").json()
+    assert body["replay_fork_threshold"] == "10"
+    assert body["advance_fork_threshold"] == "30"
+    assert client.put("/api/config", json={"replay_fork_threshold": "4",
+                                           "advance_fork_threshold": "7"}).status_code == 200
+    body = client.get("/api/config").json()
+    assert (body["replay_fork_threshold"], body["advance_fork_threshold"]) == ("4", "7")
+
+
 def test_config_offscene_known_limit_defaults_and_roundtrips(client):
     body = client.get("/api/config").json()
     assert body["offscene_known_limit"] == "40"          # bounded out of the box
