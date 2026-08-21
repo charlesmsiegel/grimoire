@@ -9,8 +9,19 @@ export type RollProposalPayload = {
 // `post_returned` on a chat error means the backend took the player's post back
 // off the transcript (#95) — so the composer has to give them their words back,
 // or a failed send silently destroys what they typed.
+// `run` is the leading frame every producing route now emits, before any delta
+// and before anything can fail. It names the detached run this send started, so
+// a client whose connection dies immediately can still address it -- to cancel
+// it, to poll it, or to re-attach and finish reading the reply.
+export type RunHandle = {
+  id: string;
+  attempt_id: string;
+  state: "running" | "landed" | "failed" | "cancelled";
+  next_index: number;
+};
 export type ChatEvent = {
   delta?: string; done?: boolean; proposal?: RollProposalPayload;
+  run?: RunHandle;
   error?: { detail: string; kind: string; post_returned?: boolean };
 };
 

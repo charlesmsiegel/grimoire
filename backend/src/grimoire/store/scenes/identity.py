@@ -48,17 +48,48 @@ def mint() -> str:
     return uuid.uuid4().hex
 
 
+class UnreadableError(OSError):
+    """The header could not be read at all -- which is not the same as "has no
+    identity", and review caught the two being conflated.
+
+    ``_read_token`` used to answer ``None`` for both, so a scene whose file was
+    momentarily unopenable -- a sync client mid-write, a Windows sharing
+    violation, the exact conditions a synced library invites -- read as
+    identity-less. ``ensure_identity`` would then mint a *second* token over a
+    scene that already had a perfectly good one, and every run and notification
+    already holding the old value would stop matching the scene they name.
+
+    An ``OSError`` subclass on purpose: the backfill and the lazy callers
+    already skip a scene on ``OSError``, and "cannot read the file" is what this
+    is. Nothing has to learn a new exception to do the safe thing with it.
+    """
+
+
 def _read_token(p) -> str | None:
     """This file's identity if it has a valid one, else ``None``.
 
-    Never raises: a scene that vanished between enumeration and open, or one
-    whose bytes are not valid UTF-8, is simply not a match. The reverse lookup
-    runs when a notification is tapped, and one corrupt file must not blind it.
+    Never raises -- for the *lookup* sweep, where one unreadable file must not
+    blind a notification tap. Callers that would WRITE on a ``None`` must use
+    ``_read_token_strict`` instead, because here an absent identity and an
+    unreadable file are the same answer.
+    """
+    try:
+        return _read_token_strict(p)
+    except UnreadableError:
+        return None
+
+
+def _read_token_strict(p) -> str | None:
+    """This file's identity, ``None`` if it genuinely has none or has one that
+    is not a token, and ``UnreadableError`` if the question could not be asked.
+
+    The invalid-token case stays ``None`` deliberately: that is a value we read
+    and rejected, so replacing it loses nothing that ever worked.
     """
     try:
         value = parse_frontmatter_head(p).get("identity", "")
-    except (OSError, UnicodeDecodeError):
-        return None
+    except (OSError, UnicodeDecodeError) as exc:
+        raise UnreadableError(f"{p.name}: {exc}") from exc
     return value if _TOKEN.match(value) else None
 
 
@@ -153,22 +184,25 @@ def ensure_identity(cid: str, sid: str, replace: bool = False) -> str:
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         raise paths.SceneNotFound(sid)
-    existing = _read_token(p)
+    # STRICT, so a file we merely failed to open does not read as one with no
+    # identity. Minting there would publish a new token over a valid one and
+    # orphan every reference already holding it -- see `UnreadableError`.
+    existing = _read_token_strict(p)
     if existing and not replace:
         return existing
     token = mint()
     raw = p.read_bytes()
-    spliced: bytes | None
-    if existing:
-        # Replacing a token that is real but unusable -- a duplicate. Drop the
-        # existing line wherever it is and splice a canonical one back in, at
-        # the value rather than the whole line: `_read_token` accepts spellings
-        # a person would type (`identity : x`, a quoted value), so matching the
-        # canonical byte sequence would match nothing, return a token that was
-        # never written, and leave both files holding the duplicate.
-        spliced = _splice(_drop_identity_line(raw), f"identity: {token}".encode())
-    else:
-        spliced = _splice(raw, f"identity: {token}".encode())
+    # Drop any existing `identity` line before splicing the new one in, whatever
+    # `_read_token_strict` made of it. Two cases reach here with a line already
+    # on disk: a real token being replaced as a duplicate, and a value that is
+    # not a token at all. Gating the drop on the first left the second with TWO
+    # `identity:` lines -- the parser collapses duplicates, so it read as fixed
+    # while the rejected value stayed in the file, one header edit away from
+    # winning. Dropping unconditionally is also why the drop matches on the KEY
+    # rather than the canonical byte sequence: `_read_token` accepts spellings a
+    # person would type (`identity : x`, a quoted value), and a byte-exact match
+    # would find none of them.
+    spliced = _splice(_drop_identity_line(raw), f"identity: {token}".encode())
     if spliced is None:
         # No frontmatter block to splice into. Give it one rather than
         # rewriting anything: the body is carried through byte for byte, and a

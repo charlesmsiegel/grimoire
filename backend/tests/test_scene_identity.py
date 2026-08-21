@@ -478,3 +478,89 @@ def test_an_unreadable_scenes_directory_does_not_abort_startup(tmp_path, monkeyp
     monkeypatch.setattr(pathlib.Path, "glob", original)
 
     assert store.scenes.scene_identity(fine, sid), "the other campaign was abandoned"
+
+
+def test_a_momentarily_unopenable_header_does_not_cost_a_scene_its_identity(
+        tmp_path, monkeypatch):
+    """A file we could not READ must not be treated as a file with no identity.
+
+    The two used to be the same `None`. A sync client mid-write or a Windows
+    sharing violation -- the conditions a synced library invites, and this store
+    is meant to live in one -- would make `ensure_identity` mint a SECOND token
+    over a scene that already had a good one, and every run and notification
+    holding the old value would stop matching the scene it names.
+
+    The header open is failed and the whole-file read left working, which is the
+    interleaving that makes the overwrite reachable: a lock released between the
+    two.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    sid = store.scenes.create_scene(cid, "Mara")
+    before = store.scenes.scene_identity(cid, sid)
+    assert before
+
+    def blocked(_p):
+        raise PermissionError("the file is open in another process")
+
+    monkeypatch.setattr(store.scenes.identity, "parse_frontmatter_head", blocked)
+    with pytest.raises(OSError):
+        store.scenes.ensure_identity(cid, sid)
+
+    monkeypatch.undo()
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    assert store.scenes.scene_identity(cid, sid) == before, \
+        "a transient read failure re-minted an identity that was already valid"
+
+
+def test_the_backfill_skips_a_scene_whose_header_will_not_open(
+        tmp_path, monkeypatch, caplog):
+    """The safe direction, and it must stay a skip rather than a crash: the
+    unreadable failure is now an OSError, which the per-scene handler already
+    logs and steps over, so the rest of the campaign is still backfilled."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    stuck = store.scenes.create_scene(cid, "Mara")
+    good = store.scenes.create_scene(cid, "Winifred")
+    _strip_identity_from_disk(cid, stuck)
+    _strip_identity_from_disk(cid, good)
+
+    real = store.scenes.identity.parse_frontmatter_head
+
+    def blocked(p):
+        if p.stem == stuck:
+            raise PermissionError("the file is open in another process")
+        return real(p)
+
+    monkeypatch.setattr(store.scenes.identity, "parse_frontmatter_head", blocked)
+    with caplog.at_level(logging.WARNING):
+        migrations.backfill_scene_identities()          # must not raise
+    monkeypatch.undo()
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+
+    assert store.scenes.scene_identity(cid, good), "the rest of the campaign was abandoned"
+    assert store.scenes.scene_identity(cid, stuck) is None
+    assert stuck in caplog.text
+
+
+def test_an_identity_that_is_not_a_token_is_still_replaced_when_readable(
+        tmp_path, monkeypatch):
+    """The counterweight to the two above: refusing to write on an *unreadable*
+    header must not turn into refusing to write on a header we read and
+    rejected. A value we saw and would not adopt is worth nothing to anyone, so
+    replacing it loses nothing -- and if this stopped happening, the backfill
+    would leave those scenes permanently identity-less while looking fixed.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    sid = store.scenes.create_scene(cid, "Mara")
+    p = store.scenes.paths._scene_path(cid, sid)
+    p.write_bytes(p.read_bytes().replace(
+        f"identity: {store.scenes.scene_identity(cid, sid)}".encode(),
+        b"identity: not a token"))
+    assert store.scenes.scene_identity(cid, sid) is None
+
+    minted = store.scenes.ensure_identity(cid, sid)
+
+    assert store.scenes.scene_identity(cid, sid) == minted
+    assert b"not a token" not in p.read_bytes()

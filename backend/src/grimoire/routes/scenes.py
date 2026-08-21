@@ -54,7 +54,7 @@ from .models import (
     SceneIntent,
     SceneLocation,
 )
-from .streaming import _chat_stream
+from .streaming import StreamOutcome, _chat_stream
 
 router = APIRouter()
 
@@ -373,6 +373,22 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
         # This exact POST already ran -- a duplicate delivery after a lost
         # response. Replay it rather than doing the work twice.
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
+    with runs.reservation(request.app, run):
+        return _chat_run(cid, sid, turn, request, client, conn, run)
+
+
+def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
+              client: LLMClient, conn: dict, run):
+    """The body of a send, once the scene is reserved.
+
+    Split out so `runs.reservation` can wrap every exit from it. The run is
+    published and discoverable from the moment it is reserved, so a path that
+    returns or raises in here without handing a producer to the runner leaves
+    it `running` for the life of the process -- never reaped, and refusing
+    every later turn on the scene. There are more such paths than there are
+    `return` statements (any mutator below can raise), which is why this is a
+    wrapper rather than a checklist.
+    """
     # ephemeral turn, never stored: a director note steering one generation
     # (pcless), or — in any scene — an empty send meaning "next NPC round"
     ephemeral = store.scenes.is_pcless(cid, sid) or not turn.content.strip()
@@ -399,9 +415,18 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
         # Recording first would leave Turn history showing a request the model
         # never saw. The generator body has not run at this point; only the
         # claim has.
-        stream = _chat_stream(cid, sid, messages, conn, client, task="director")
+        outcome = StreamOutcome()
+        stream = _chat_stream(cid, sid, messages, conn, client, task="director",
+                              identity=run.scene_identity, outcome=outcome)
         _record_prompt(cid, sid, "director", breakdown)
-        return stream
+        # DETACHED, like the ordinary send below. This branch used to return the
+        # response directly, which left its reservation running forever -- the
+        # scene answered `run_in_flight` from then on -- while the generation
+        # itself still died with the socket. It persists a reply like any other
+        # turn; only the player's note is ephemeral.
+        runs.start_detached(request.app, run, lambda: stream.body_iterator,
+                            outcome=outcome.result)
+        return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     names = store.appearances.player_names(cid, sid)
     speaker = names[0] if len(names) == 1 else None
     if speaker:
@@ -433,17 +458,19 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
     # inside the runner's factory instead moved that claim off the request, and
     # a contended turn started answering 200 and failing later, which
     # `test_a_turn_that_never_claims_records_nothing` caught.
+    outcome = StreamOutcome()
     stream = _chat_stream(
         cid, sid, messages, conn, client,
         undo_user_post=lambda: store.scenes.remove_trailing_user_post(
             cid, sid, posted_at, content),
-        task="chat")
+        task="chat", identity=run.scene_identity, outcome=outcome)
     # AFTER the stream is built, never before: `_chat_stream` claims the turn
     # and can raise, and a prompt recorded ahead of it leaves Turn history
     # showing a request the model never saw (`test_a_turn_that_never_claims_
     # records_nothing`).
     _record_prompt(cid, sid, "chat", breakdown)
-    runs.start_detached(request.app, run, lambda: stream.body_iterator)
+    runs.start_detached(request.app, run, lambda: stream.body_iterator,
+                        outcome=outcome.result)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))
 
 
@@ -463,8 +490,11 @@ def post_retry(cid: str, sid: str, body: RetryBody | None = None,
         store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(body), describe=store.prompt_log.capturing())
+    # `identity=None, outcome=None`: not yet migrated, so this turn still dies
+    # with its socket and still infers its own success. Spelled out because
+    # `_chat_stream` requires it -- see its docstring for why there is no default.
     stream = _chat_stream(cid, sid, messages, conn, client,   # claims the turn; see above
-                          task="retry")
+                          task="retry", identity=None, outcome=None)
     _record_prompt(cid, sid, "retry", breakdown)
     return stream
 
@@ -689,7 +719,9 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     # stop deleting ahead of the replacement at all — remove the old run inside
     # `finalize`, under the same lock that writes the new reply — which is
     # tracked with the other transcript-identity work rather than bolted on.
+    # `identity=None, outcome=None` -- not yet migrated; see `post_retry`.
     stream = _chat_stream(cid, sid, messages, conn, client, restore_removed=restore,
+                          identity=None, outcome=None,
                           task="regenerate")
     # Last of all: after `supersede` (which can refuse and unwind the reroll) AND
     # after the turn claim inside `_chat_stream` (which can raise StoreBusy on a
@@ -3272,7 +3304,9 @@ def post_replay_turn(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
     # No `undo_user_post` hook, unlike `post_chat`. The staged posts are not
     # this request's to take back: `stage` recorded them as staged, a retry
     # re-uses them, and cancelling the replay is what puts the scene back.
-    stream = _chat_stream(cid, sid, messages, conn, client, task="replay")
+    # `identity=None, outcome=None` -- not yet migrated; see `post_retry`.
+    stream = _chat_stream(cid, sid, messages, conn, client, task="replay",
+                          identity=None, outcome=None)
     _record_prompt(cid, sid, "replay", breakdown)
     return stream
 

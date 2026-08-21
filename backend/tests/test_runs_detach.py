@@ -18,9 +18,26 @@ import httpx
 import grimoire.store as store
 
 
+def _lines(r):
+    """The response's line iterator, created once and reused.
+
+    `httpx` refuses a second `iter_lines()` on the same response --
+    `StreamConsumed` -- so a test that reads the leading frame and then drains
+    the rest has to keep the first iterator rather than asking for another. It
+    surfaced as a warning rather than a failure because the drain ran in a
+    worker thread, which meant the drain those tests perform was not happening
+    at all.
+    """
+    it = getattr(r, "_grimoire_lines", None)
+    if it is None:
+        it = r.iter_lines()
+        r._grimoire_lines = it
+    return it
+
+
 def _frames(r) -> list[dict]:
     """Decoded `data:` payloads read from a live response, as they arrive."""
-    return [json.loads(line[6:]) for line in r.iter_lines()
+    return [json.loads(line[6:]) for line in _lines(r)
             if line.startswith("data: ")]
 
 
@@ -28,7 +45,7 @@ def _first_run_frame(r, timeout: float = 5.0) -> dict:
     """The leading `run` frame, which every producing route emits first so the
     client can address the run even if the connection dies immediately after."""
     deadline = time.monotonic() + timeout
-    for line in r.iter_lines():
+    for line in _lines(r):
         if line.startswith("data: "):
             payload = json.loads(line[6:])
             if "run" in payload:
@@ -105,7 +122,7 @@ def test_two_scenes_generate_at_once_without_cross_contamination(live_server):
         with httpx.stream("POST", f"{live_server.url}/api/campaigns/{cid}/scenes/{sid}/chat",
                           json={"content": text}, timeout=15) as r:
             results[key] = _first_run_frame(r)["run"]["id"]
-            for _ in r.iter_lines():
+            for _ in _lines(r):
                 pass
 
     ta = threading.Thread(target=post, args=(a, "Seraphine?", "a"))
@@ -140,3 +157,43 @@ def test_a_second_send_while_a_turn_holds_the_scene_is_refused(live_server):
         assert second.json()["kind"] == "run_in_flight"
         r.close()
     held.release()
+
+
+def test_a_reply_never_lands_on_a_scene_that_recycled_the_id(live_server):
+    """The publish fence, which detachment is what makes necessary.
+
+    Scene ids are recycled -- `serialize._numbering` derives the next number
+    from the files on disk with no stored counter -- so deleting a scene frees
+    its id and a same-titled replacement lands on exactly the same one. A turn
+    used to die with its socket, which kept that window narrow; now it can be
+    held open for minutes while the player does anything at all, including
+    deleting the scene.
+
+    `_owns_turn` cannot catch this: the claim is keyed by `sid`, so the
+    replacement has not claimed anything and the old turn still reads as the
+    scene's owner. Only the identity token distinguishes them.
+    """
+    cid, _ = live_server.campaign_scene
+    # Made here, and made LAST: numbering derives from the files on disk, so
+    # only the highest-numbered scene frees its id by being deleted. The
+    # fixture's own scenes sit below it.
+    sid = store.scenes.create_scene(cid, "Winifred")
+    held = live_server.hold_provider("Mist over the dock.")
+
+    with httpx.stream("POST", f"{live_server.url}/api/campaigns/{cid}/scenes/{sid}/chat",
+                      json={"content": "Mara steps onto the dock."},
+                      timeout=10) as r:
+        run_id = _first_run_frame(r)["run"]["id"]
+        held.await_first_delta()
+        store.scenes.delete_scene(cid, sid)
+        recycled = store.scenes.create_scene(cid, "Winifred")
+        assert recycled == sid, "the premise failed: the id was not recycled"
+        r.close()
+
+    held.release()
+    run = _wait_terminal(live_server.app, run_id, ("scene", cid, sid))
+
+    assert run.state == "failed", f"the run was {run.state}, not failed"
+    assert run.error and run.error["kind"] == "scene_replaced"
+    assert not store.scenes.read_scene(cid, recycled)["messages"], \
+        "the dead scene's reply was appended to its replacement"

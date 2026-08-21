@@ -28,6 +28,11 @@ export async function campaignApiMock() {
       chat: vi.fn(),
       retry: vi.fn(),
       regenerate: vi.fn(),
+      // Stop. Closing the connection is no longer the cancel -- a turn outlives
+      // its socket now -- so the run has to be told, and a mock without this
+      // would make `cancelTurn` throw instead of failing the assertion that
+      // notices it was never called.
+      cancelRun: vi.fn(() => Promise.resolve({ run: null })),
       getAlternates: vi.fn(), pickAlternate: vi.fn(),
       roll: vi.fn(),
       getRollProposal: vi.fn(), resolveProposal: vi.fn(),

@@ -1066,6 +1066,78 @@ test("a turn in flight offers Stop in place of Send", async () => {
   expect(api.getScene).toHaveBeenCalled();
 });
 
+test("Stop tells the run to stop, not just this socket", async () => {
+  // The single most important consequence of detaching a turn from its request:
+  // closing the connection is no longer the cancel. Aborting the fetch now only
+  // drops this subscriber -- the provider keeps generating, keeps spending, and
+  // persists a reply the player explicitly stopped, while holding the scene
+  // against the next send. The run has to be told.
+  //
+  // The run id comes from the leading `run` frame, which is why the mock emits
+  // one before its delta: a Stop pressed before that frame arrives has nothing
+  // to address, and this test would pass vacuously if it asserted only that
+  // `cancelRun` was called with *something*.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(async (
+    _c: string, _s: string, _t: string, onEvent: any, _r: unknown, signal: AbortSignal) => {
+    onEvent({ run: { id: "run-7", attempt_id: "a1", state: "running", next_index: 1 } });
+    onEvent({ delta: "The tide " });
+    await new Promise<void>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        const err = new Error("The operation was aborted.");
+        err.name = "AbortError";
+        reject(err);
+      });
+    });
+  });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+
+  await screen.findByRole("button", { name: /continue ▶/i });
+  expect(api.cancelRun).toHaveBeenCalledWith("run", "s1", "run-7");
+});
+
+test("Stop before the run frame arrives cancels nothing rather than the wrong run", async () => {
+  // The handle is cleared when a stream ends, beside `abortRef`. Left set, a
+  // Stop pressed while the NEXT turn is still connecting would address the
+  // PREVIOUS turn'''s run -- terminal by then, so the route answers politely, the
+  // press is swallowed, and the live turn keeps generating with nothing to stop
+  // it. That is a worse failure than doing nothing, because it looks like it
+  // worked.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementationOnce(async (
+    _c: string, _s: string, _t: string, onEvent: any, _r: unknown, signal: AbortSignal) => {
+    onEvent({ run: { id: "run-first", attempt_id: "a1", state: "running", next_index: 1 } });
+    onEvent({ delta: "The tide " });
+    await new Promise<void>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        const err = new Error("The operation was aborted.");
+        err.name = "AbortError";
+        reject(err);
+      });
+    });
+  });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await screen.findByRole("button", { name: /continue ▶/i });
+  (api.cancelRun as any).mockClear();
+
+  // A second turn whose leading frame never arrives.
+  (api.chat as any).mockImplementation(hangingChat());
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "again?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await screen.findByRole("button", { name: /continue ▶/i });
+
+  expect(api.cancelRun).not.toHaveBeenCalled();
+});
+
 test("a cancelled turn's partial appears even when the backend flush lands late", async () => {
   // The abort rejects the fetch as soon as the socket is torn down client-side;
   // the backend only then notices the disconnect and runs its shielded flush.

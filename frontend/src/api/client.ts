@@ -1,4 +1,5 @@
-import { parseSSEChunk, type ChatEvent, type LocalizeEvent, type ChubGalleryEvent } from "./stream";
+import { parseSSEChunk, type ChatEvent, type LocalizeEvent, type ChubGalleryEvent,
+  type RunHandle } from "./stream";
 import { campaignsChanged, configChanged } from "../appEvents";
 import { encodeSegment } from "../urlSegment";
 // `errorText` and `isOffline` used to live here, next to `ApiError`. They are
@@ -161,11 +162,15 @@ function entityBase(scope: EntityScope): string {
   return scope.kind === "world" ? `/api/worlds/${scope.id}` : `/api/campaigns/${scope.id}`;
 }
 
-// `signal` is how a turn gets cancelled (#95). Aborting closes the connection,
-// which the backend sees as a disconnect — it persists whatever the model had
-// produced and unwinds — so there is no cancel endpoint to call and nothing to
-// clean up on this side beyond letting the rejection out. Callers tell an abort
-// from a real failure with `isAbortError`.
+// `signal` unsubscribes; it no longer cancels. Aborting used to BE the cancel:
+// the backend saw the disconnect, persisted whatever the model had produced,
+// and unwound. A turn is detached from its request now -- that is the whole
+// point, so a locked phone does not kill a generation -- so an abort closes
+// only this subscriber and the run carries on. A caller that means "stop
+// generating" has to say so, with `api.cancelRun` and the run id from the
+// leading `run` frame; aborting alone leaves the provider spending and the
+// scene held. Callers still tell an abort from a real failure with
+// `isAbortError`.
 async function streamPost<T = ChatEvent>(
   path: string,
   body: unknown,
@@ -453,6 +458,19 @@ export const api = {
          response?: ResponseOverride, signal?: AbortSignal) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/chat`,
                response ? { content, response } : { content }, onEvent, signal),
+  /** Ask a detached run to stop.
+   *
+   *  Closing the connection is no longer the cancel. A turn now outlives the
+   *  socket that started it -- which is the whole point -- so aborting the
+   *  fetch only drops this subscriber: the provider keeps generating, keeps
+   *  spending, and persists a reply the player pressed Stop on. The run has to
+   *  be told. Best-effort by design: it is a request, not a guarantee, and the
+   *  run ends when its provider call unwinds.
+   */
+  cancelRun: (cid: string, sid: string, runId: string) =>
+    request<{ run: RunHandle }>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/runs/${runId}/cancel`),
+
   retry: (cid: string, sid: string, onEvent: (e: ChatEvent) => void, response?: ResponseOverride,
           signal?: AbortSignal) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/retry`,

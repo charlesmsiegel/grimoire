@@ -7257,7 +7257,28 @@ def test_a_dribbling_one_shot_generation_is_cut_off(client):
 
     assert r.status_code == 504 and r.json()["kind"] == "timeout"
     # and the provider's stream is closed rather than left holding a connection
-    assert provider.closed
+    assert _closes(provider), "the cut-off provider was left holding its stream"
+
+
+def _closes(provider, timeout: float = 5.0) -> bool:
+    """Wait for an abandoned provider to finish unwinding.
+
+    Polled rather than asserted outright, because `_bounded_call` promises the
+    close *happens*, not that it happens before the 504 does: it cancels the
+    call and deliberately does not wait, so the unwinding runs on the loop
+    after the response is already on its way back. That used to be invisible --
+    a `TestClient` outside a `with` block builds a fresh portal per request and
+    exits it before returning, which ran the cancellation to completion as a
+    side effect of tearing the loop down. The suite's client now holds the
+    lifespan open, so the loop outlives the request and the race is real; it
+    failed one job on one interpreter and passed everywhere else.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if provider.closed:
+            return True
+        time.sleep(0.01)
+    return provider.closed
 
 
 def test_every_one_shot_generation_route_carries_the_ceiling(client):

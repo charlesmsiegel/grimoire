@@ -112,7 +112,9 @@ def _scene_ids(cid: str) -> list[str]:
     `_lifespan` catches only StoreBusy, so one unreadable scene in the user's
     library would stop the app booting at all, every launch, with no way back
     except finding and deleting the file. Enumerating names cannot fail that
-    way, and `ensure_identity` is tolerant of a file it cannot read.
+    way, and a file `ensure_identity` cannot open raises `OSError` (see
+    `identity.UnreadableError`), which the per-scene handler above skips and logs --
+    the scene keeps whatever identity it has and the next boot tries again.
     """
     d = scenes_paths._scenes_dir(cid)
     if not d.exists():
