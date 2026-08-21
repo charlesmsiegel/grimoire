@@ -421,10 +421,12 @@ def character_exists(root: Path, cid: str) -> bool:
 
     The container meta is the test, which is what `character_refs` and
     `character_count` enumerate by -- deliberately not `read_character`, which
-    additionally refuses an actor whose version files have all gone. A caller
-    asking this is asking whether the id names a record here *at all*, and a
-    versionless directory is still a record: answering "absent" for one would
-    hand it to whatever allocates the slug next.
+    additionally refuses an actor whose every version file has gone. The
+    question here is whether the id names a record in this root at all, not
+    whether that record can be opened: a world character with no addressable
+    version is still the library's claim on that slug, and a campaign copy of
+    her is still the library's character (`appearances.actor_source`), not one
+    the campaign invented.
     """
     return safe_id(cid) and _meta_path(root, cid).exists()
 

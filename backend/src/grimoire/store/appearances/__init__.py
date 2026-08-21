@@ -38,7 +38,6 @@ from .paths import (  # noqa: F401
 )
 from .transitions import appear, leave, suggestions  # noqa: F401
 from .versions import (  # noqa: F401
-    SOURCES,
     _copy_actor,
     _drop_manifest_ref,
     _lock,

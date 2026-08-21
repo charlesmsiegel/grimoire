@@ -31,17 +31,20 @@ beforeEach(() => {
 });
 
 test.each([
-  ["library", "Library"],
-  ["override", "Override"],
-  ["emergent", "Emergent"],
-])("a %s cast member is badged %s", async (source, label) => {
+  ["library", "Library", "unedited in this campaign"],
+  ["override", "Override", "this campaign's edits on top"],
+  ["emergent", "Emergent", "no library record behind it"],
+])("a %s cast member is badged %s", async (source, label, hint) => {
   (api.getCastDetail as any).mockResolvedValue(detail(source));
   open();
   const chip = await screen.findByText(label, { selector: ".cast-source" });
-  // The class carries the state, so the three are told apart by colour and not
-  // only by the word (#99).
+  // The state is on the element as well as in the word: `override` and
+  // `emergent` take a colour from it, and `library` is the one that stays in
+  // the role-chip default on purpose (#99).
   expect(chip).toHaveClass(source);
-  expect(chip.getAttribute("title")).toBeTruthy();
+  // A word each is not enough to act on — "Override" only means something
+  // once you know what it overrode — so each badge carries its own sentence.
+  expect(chip.getAttribute("title")).toContain(hint);
 });
 
 test("an unrecognized source renders no badge at all", async () => {
@@ -64,4 +67,19 @@ test("switching from an actor to a location clears the badge with the avatar", a
   rerender(<RecordDrawer cid="c" sid="s" target={{ type: "location", id: "the-docks" }} onClose={() => {}} />);
   await screen.findByText("The Docks");
   await waitFor(() => expect(screen.queryByText("Library", { selector: ".cast-source" })).toBeNull());
+});
+
+test("a slow read for a character the drawer has left cannot badge her successor", async () => {
+  // Two clicks, replies out of order. Losing this race mislabels a rewritten
+  // card as the library's, which is the one thing the badge must never say.
+  let landFirst = (_d: unknown) => {};
+  (api.getCastDetail as any)
+    .mockReturnValueOnce(new Promise((res) => { landFirst = res; }))
+    .mockResolvedValueOnce({ ...detail("override"), id: "mara", name: "Mara" });
+  const { rerender } = open();
+  rerender(<RecordDrawer cid="c" sid="s" target={{ ...ACTOR, id: "mara" }} onClose={() => {}} />);
+  await screen.findByText("Override", { selector: ".cast-source" });
+  landFirst(detail("library"));
+  await waitFor(() => expect(screen.getByText("Mara")).toBeInTheDocument());
+  expect(screen.queryByText("Library", { selector: ".cast-source" })).toBeNull();
 });
