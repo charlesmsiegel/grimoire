@@ -44,11 +44,13 @@ def test_campaign_reclassify_moves_only_this_campaigns_copy(client):
     assert client.get(f"/api/worlds/{wid}/lore/tidewatch").status_code == 200
 
 
-def test_reclassify_refuses_a_kind_that_is_not_generic(client):
+def test_reclassify_refuses_an_actor_kind_and_says_why(client):
     wid = _world(client)
-    r = client.post(f"/api/worlds/{wid}/lore/tidewatch/reclassify", json={"to": "characters"})
-    assert r.status_code == 400
-    assert "characters" in r.json()["detail"]
+    for kind in ("characters", "pcs"):
+        r = client.post(f"/api/worlds/{wid}/lore/tidewatch/reclassify", json={"to": kind})
+        assert r.status_code == 400
+        # not "no such kind": an actor IS a kind, it is just a different shape
+        assert "conversion rather than a move" in r.json()["detail"]
     assert client.get(f"/api/worlds/{wid}/lore/tidewatch").status_code == 200
 
 

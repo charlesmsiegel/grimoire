@@ -211,14 +211,21 @@ def _reclassify_target(kind: str, body: EntityReclassify) -> str:
     """The kind to move to, refused here rather than in the store when the
     request cannot mean anything.
 
-    Both refusals are 400s and not 404s: the record and its kind are real, and
-    it is the *destination* the caller named that is wrong -- a 404 would read
-    as "no such record" and send them looking for the wrong thing. `characters`
-    is the one worth naming, because it is a real kind and an obvious thing to
-    ask for; it is a conversion rather than a move (a folder plus a card per
-    version, no id to keep) and is not built.
+    Every refusal here is a 400 and not a 404: the record and its kind are real,
+    and it is the *destination* the caller named that is wrong -- a 404 would
+    read as "no such record" and send them looking for the wrong thing.
+
+    The actor kinds get their own sentence rather than a list to diff against,
+    because they are the obvious thing to ask for and the answer is not "no such
+    kind": a character is a folder plus a card per version, so lore -> character
+    is a conversion with no id to keep, and it is not built here.
     """
     to = (body.to or "").strip()
+    if to in store.appearances.ACTOR_KINDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"cannot reclassify as {to}: an actor is a different shape on disk, "
+                   "so this would be a conversion rather than a move")
     if to not in store.entities.ENTITY_KINDS:
         raise HTTPException(status_code=400,
                             detail=f"cannot reclassify as {to or '(nothing)'} (expected one of "

@@ -230,9 +230,14 @@ def repoint_records(cid: str, mapping: dict[str, str]) -> None:
     record sitting right there under its new kind. Reclassifying a record would
     otherwise quietly retire every undo offer standing against it.
 
-    Only `w == "entity"` targets carry a kind at all; the sidecar writers
-    (`state`, `dossier`, `group_state`, …) are keyed by actor id, and an actor
-    is not a kind this can move.
+    Only `w == "entity"` targets carry a kind at all. The sidecar writers name
+    their owner's kind implicitly, and the honest answer differs by owner:
+    `state`, `dossier` and `voice_drift` belong to a character, which is not a
+    kind a reclassify can move; `group_state` belongs to a GROUP, which is. A
+    group that has stopped being a group has no group state to put back, and
+    `undo._require_owner` refuses that entry rather than writing a sidecar into
+    a record that is not one -- while the `state.md` itself rides along in the
+    record's own directory, so moving it back to `groups` restores the offer.
     """
     pairs = _ref_pairs(mapping)
     if not pairs:

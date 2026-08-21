@@ -18,6 +18,7 @@ from grimoire.store import (
     sync,
     worlds,
 )
+from grimoire.store.context import world_state
 
 
 def _world(monkeypatch, tmp_path):
@@ -401,3 +402,67 @@ def test_a_world_record_that_cannot_be_swept_still_reaches_its_campaigns(
     assert out == {"id": "tidewatch", "campaigns": [cid]}
     assert [e["id"] for e in overlay.list_entities(cid, "locations")] == ["tidewatch"]
     assert sync.incoming(cid) == []
+
+
+def test_a_keyless_location_that_becomes_lore_starts_activating(monkeypatch, tmp_path):
+    # What the feature is FOR. The five kinds differ only in what the context
+    # builder does with them: a keyless location surfaces solely as the scene's
+    # current setting, and keyless lore is always-on. Correcting the kind has to
+    # actually change what reaches the prompt, or the move is bookkeeping.
+    _wid, wroot = _world(monkeypatch, tmp_path)
+    entities.create_entity(wroot, "locations", "Tidewatch", "A stretch of grey coast.")
+    cid = campaigns.create_campaign("Saltmarch", _wid)
+    assert world_state._world_info(cid, "nothing to match on")[0] == []
+    reclassify.campaign_entity(cid, "locations", "tidewatch", "lore")
+    activated = world_state._world_info(cid, "nothing to match on")[0]
+    assert [(e["kind"], e["id"]) for e in activated] == [("lore", "tidewatch")]
+
+
+def test_a_campaign_scope_round_trip_does_not_reclaim_the_tombstoned_slug(
+        monkeypatch, tmp_path):
+    # Pinned rather than accidental: the first move tombstones the world's
+    # `lore/tidewatch`, so the second finds that slug taken. Landing on it
+    # anyway would put the record under a ref whose tombstone hides its images.
+    _wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    assert reclassify.campaign_entity(cid, "lore", "tidewatch", "locations") == "tidewatch"
+    assert reclassify.campaign_entity(cid, "locations", "tidewatch", "lore") == "tidewatch-2"
+    assert [e["id"] for e in overlay.list_entities(cid, "lore")] == ["tidewatch-2"]
+    assert overlay.list_entities(cid, "locations") == []
+
+
+def test_a_world_scope_round_trip_gets_its_id_back(monkeypatch, tmp_path):
+    # No tombstone is involved when the world moves its own record, so the
+    # record comes home under the id it started with.
+    wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    overlay.materialize_entity(cid, "lore", "tidewatch")
+    assert reclassify.world_entity(wid, "lore", "tidewatch", "locations")["id"] == "tidewatch"
+    assert reclassify.world_entity(wid, "locations", "tidewatch", "lore")["id"] == "tidewatch"
+    assert [e["id"] for e in overlay.list_entities(cid, "lore")] == ["tidewatch"]
+    assert sync.incoming(cid) == []
+
+
+def test_a_groups_state_rides_along_and_comes_back(monkeypatch, tmp_path):
+    # `state.md` lives in the record's own directory, so it moves with it -- and
+    # a group that has stopped being a group has no group state to read, which
+    # is the honest answer rather than a loss.
+    _wid, _wroot = _world(monkeypatch, tmp_path)
+    cid = campaigns.create_campaign("Saltmarch", _wid)
+    overlay.create_entity(cid, "groups", "The Tidewatch")
+    croot = overlay.croot_of(cid)
+    (croot / "groups" / "the-tidewatch").mkdir(parents=True, exist_ok=True)
+    (croot / "groups" / "the-tidewatch" / "state.md").write_text("secrets", encoding="utf-8")
+    reclassify.campaign_entity(cid, "groups", "the-tidewatch", "lore")
+    assert (croot / "lore" / "the-tidewatch" / "state.md").read_text() == "secrets"
+    reclassify.campaign_entity(cid, "lore", "the-tidewatch", "groups")
+    assert (croot / "groups" / "the-tidewatch" / "state.md").read_text() == "secrets"
+
+
+def test_a_sheet_ref_that_is_not_a_safe_id_moves_nothing(monkeypatch, tmp_path):
+    _wid, _wroot = _world(monkeypatch, tmp_path)
+    cid = campaigns.create_campaign("Saltmarch", _wid)
+    sheet_dir = overlay.croot_of(cid) / "sheets"
+    sheet_dir.mkdir(parents=True, exist_ok=True)
+    (sheet_dir / "lore--tidewatch.json").write_text("{}", encoding="utf-8")
+    sheets.repoint_records(cid, {"lore/tidewatch": "locations/../../escape"})
+    assert (sheet_dir / "lore--tidewatch.json").exists()
+    assert sorted(p.name for p in sheet_dir.iterdir()) == ["lore--tidewatch.json"]

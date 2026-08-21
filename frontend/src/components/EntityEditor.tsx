@@ -285,21 +285,34 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
 
   /** Move the selected record to another generic kind (#119).
    *
-   *  `askReclassify` is the confirmed entry point, and its world-scope wording
-   *  says the part the user cannot see: the sweep reaches every campaign of
-   *  this world. The confirm is deliberately not in here, so the stale banner's
-   *  "Reclassify anyway" -- already a deliberate second click -- does not ask
-   *  the same question twice. It carries the same `rev` a save does -- a reclassify moves the very text the
-   *  editor is showing, so a record rewritten elsewhere in the meantime is the
-   *  case the precondition exists for -- and it reuses the same stale banner,
-   *  where "keep mine anyway" is a second, deliberate click.
+   *  `askReclassify` is the confirmed entry point, and its wording says the two
+   *  parts the user cannot see: how far the move reaches, and (leaving
+   *  `locations`) that scenes set here stop showing a setting. The confirm is
+   *  deliberately not in HERE, so the stale banner's "Reclassify anyway" --
+   *  already a deliberate second click -- does not ask the same question twice.
+   *
+   *  It carries the same `rev` a save does: a reclassify moves the very text
+   *  the editor is showing, so a record rewritten elsewhere in the meantime is
+   *  exactly what the precondition exists to refuse. The refusal reuses the
+   *  shared banner, relabelled, because "Overwrite with mine" would name a
+   *  write this is not about to make.
    */
   function askReclassify(to: EntityKind) {
     if (!editing || !to) return;
     const where = scope.kind === "world"
       ? " Every campaign of this world follows it."
       : " The world keeps its own copy under the old kind.";
-    if (window.confirm(`Reclassify '${name}' as a ${KIND_LABELS[to]}?${where}`)) void reclassify(to);
+    // The one loss worth naming before the click, and it only happens in this
+    // direction: a scene's location history stores bare ids with no kind beside
+    // them, so nothing can follow the record out of `locations`. The history
+    // stays as the play left it; what goes is the setting block the prompt
+    // builds from the record.
+    const leaving = kind === "locations"
+      ? " Scenes set here keep their history, but will no longer show a setting."
+      : "";
+    if (window.confirm(`Reclassify '${name}' as a ${KIND_LABELS[to]}?${where}${leaving}`)) {
+      void reclassify(to);
+    }
   }
 
   async function reclassify(to: EntityKind, base: string | null = rev) {

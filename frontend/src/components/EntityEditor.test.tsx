@@ -951,3 +951,23 @@ test("the campaign hint says the world keeps its own copy", async () => {
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(side).getByText(/the world keeps its own/i)).toBeInTheDocument();
 });
+
+test("moving out of locations warns that scenes lose their setting", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  render(<EntityEditor wid="w" kind="locations" />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.change(screen.getByLabelText("Reclassify as"), { target: { value: "lore" } });
+  expect(confirm.mock.calls[0][0]).toMatch(/no longer show a setting/);
+});
+
+test("moving into locations says nothing about settings", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.change(screen.getByLabelText("Reclassify as"), { target: { value: "locations" } });
+  expect(confirm.mock.calls[0][0]).not.toMatch(/setting/);
+});
