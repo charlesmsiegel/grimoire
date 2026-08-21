@@ -17,12 +17,17 @@ import { errorText } from "../api/errors";
  *  half-written scene for a dismissal or a campaign switch to strand — the
  *  reason that form needs a `writing` gate and this one does not.
  */
-export function SceneImport({ cid, onBack, onCancel, onImported }: {
+export function SceneImport({ cid, onBack, onCancel, onImported, onWriting }: {
   cid: string;
   /** back to the mode cards, matching what Back means in the other panes */
   onBack: () => void;
   onCancel: () => void;
   onImported: (sid: string) => void;
+  /** reports the import in and out of flight, so the orchestrator can refuse to
+   *  dismiss mid-write. Unmounting does not cancel the request: an Escape while
+   *  it is in flight would leave a real scene that nothing is ever told about,
+   *  since `onImported` is (correctly) skipped once this pane is gone. */
+  onWriting?: (active: boolean) => void;
 }) {
   const [draft, setDraft] = useState<SceneImportDraft | null>(null);
   const [title, setTitle] = useState("");
@@ -94,6 +99,7 @@ export function SceneImport({ cid, onBack, onCancel, onImported }: {
   async function commit() {
     if (!draft) return;
     setBusy(true);
+    onWriting?.(true);
     setError(null);
     try {
       const { id } = await api.sceneImport(cid, {
@@ -103,9 +109,10 @@ export function SceneImport({ cid, onBack, onCancel, onImported }: {
         cast: chosen().map((c) => ({ kind: c.kind, id: c.id, role: c.role })),
       });
       if (!live.current) return;   // switched campaigns mid-import: the scene is
-      onImported(id);              // real, but this is no longer its campaign
+      onWriting?.(false);          // real, but this is no longer its campaign
+      onImported(id);
     } catch (err) {
-      if (live.current) { setError(errorText(err)); setBusy(false); }
+      if (live.current) { setError(errorText(err)); setBusy(false); onWriting?.(false); }
     }
   }
 

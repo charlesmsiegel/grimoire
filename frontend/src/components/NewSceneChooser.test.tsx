@@ -73,6 +73,27 @@ test("importing reports the scene it created", async () => {
   expect(api.addCastBatch).not.toHaveBeenCalled();
 });
 
+test("Escape and the backdrop are ignored while an import is in flight", async () => {
+  // Unmounting cancels nothing. `SceneImport` correctly skips `onImported`
+  // once it is gone, so a dismissal here would leave a real scene that the
+  // campaign is never told about -- the same reason the create sequence is
+  // gated.
+  let release: (v: any) => void = () => {};
+  (api.sceneImport as any).mockReturnValue(new Promise((r) => { release = r; }));
+  const onClose = vi.fn();
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("Import a transcript"));
+  fireEvent.change(await screen.findByLabelText(/transcript file/i),
+                   { target: { files: [new File(["**You:** hi\n"], "scene.md")] } });
+  fireEvent.click(screen.getByRole("button", { name: /read file/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /import scene/i }));
+
+  fireEvent.keyDown(window, { key: "Escape" });
+  fireEvent.click(screen.getByRole("dialog"));
+  expect(onClose).not.toHaveBeenCalled();
+  await act(async () => { release({ id: "s9", messages: 1, cast: 0 }); });
+});
+
 test("Back from the import pane returns to the mode cards", async () => {
   render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("Import a transcript"));

@@ -145,9 +145,22 @@ def post_scene(cid: str, body: NewScene, request: Request):
 async def post_scene_import_parse(cid: str, file: UploadFile = File(...)):
     """Read a grimoire transcript into a reviewable draft. Writes nothing."""
     _campaign_root_or_404(cid)
+    # Before the read, like every other upload route here: `read()` materializes
+    # the whole body as one `bytes`, and that allocation is what the bound
+    # exists for (see `scene_import.MAX_BYTES`). Starlette spools the body to
+    # disk above 1 MB and fills in `size`, so this costs nothing -- and `parse`
+    # re-checks the bytes, since `size` is Optional in the ASGI contract.
+    if file.size is not None and file.size > store.scene_import.MAX_BYTES:
+        raise HTTPException(status_code=413, detail=store.scene_import.TOO_LARGE)
     data = await file.read()
     try:
-        return store.scene_import.parse(cid, data)
+        # In a worker, not on the loop. This route is `async` only because the
+        # upload has to be awaited; the parse itself is a megabyte of regex plus
+        # a card read per actor in the campaign, and the lifespan loop it would
+        # otherwise run on is the one every detached turn streams through.
+        return await run_in_threadpool(store.scene_import.parse, cid, data)
+    except store.scene_import.TranscriptTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except store.scene_import.SceneImportError as exc:
         raise HTTPException(status_code=400, detail=f"could not parse: {exc}") from exc
 

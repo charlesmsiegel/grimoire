@@ -93,6 +93,14 @@ def test_parse_rejects_a_file_with_no_speaker_blocks(monkeypatch, tmp_path):
         scene_import.parse(cid, b"Just some prose about a quay.\n")
 
 
+def test_parse_refuses_an_upload_too_big_to_hold(monkeypatch, tmp_path):
+    """The route checks `UploadFile.size` first; this is the belt to that
+    brace, since `size` is Optional in the ASGI contract."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    with pytest.raises(scene_import.TranscriptTooLargeError):
+        scene_import.parse(cid, b"x" * (scene_import.MAX_BYTES + 1))
+
+
 def test_parse_rejects_a_file_that_is_not_text(monkeypatch, tmp_path):
     _wid, cid = _campaign(monkeypatch, tmp_path)
     with pytest.raises(scene_import.SceneImportError):
