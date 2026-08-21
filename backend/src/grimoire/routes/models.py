@@ -57,6 +57,7 @@ class ConfigUpdate(BaseModel):
     backup_keep: str | None = None
     backup_dir: str | None = None
     replay_fork_threshold: str | None = None
+    advance_fork_threshold: str | None = None
 
 
 class PromptLayoutSection(BaseModel):

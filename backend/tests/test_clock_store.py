@@ -14,6 +14,7 @@ from grimoire.store import (
     characters,
     chronicle,
     clock,
+    config,
     plot,
     scenes,
     worlds,
@@ -328,6 +329,93 @@ def test_a_capped_crossing_list_reports_itself_as_truncated(monkeypatch, tmp_pat
     digest = clock.advance(cid, days=40, reason="through the new year")["digest"]
     assert digest["truncated"] is True
     assert len(digest["holidays"]) == 1   # trimmed, not emptied
+
+
+# ---- the checkpoint nudge (#107) -------------------------------------------
+#
+# A flag on the digest, not a refusal: the same shape `replay.preview`'s `fork`
+# has (#80), because it is the same question asked about a different cost.
+
+
+def test_digest_nudges_a_checkpoint_past_the_configured_threshold(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    monkeypatch.setattr(config, "advance_fork_threshold", lambda: 30)
+    clock.advance(cid, to="2026-01-01", reason="start")
+    digest = clock.preview(cid, days=31)
+    assert digest["fork"] is True
+    assert digest["fork_threshold"] == 30
+
+
+def test_a_skip_of_exactly_the_threshold_is_not_nudged(monkeypatch, tmp_path):
+    """The boundary, so `> threshold` cannot quietly become `>=` — the scan
+    limit beside it is held to the same rule for the same reason."""
+    cid = _campaign(monkeypatch, tmp_path)
+    monkeypatch.setattr(config, "advance_fork_threshold", lambda: 30)
+    clock.advance(cid, to="2026-01-01", reason="start")
+    assert clock.preview(cid, days=30)["fork"] is False
+
+
+def test_a_long_backward_correction_is_nudged_too(monkeypatch, tmp_path):
+    """Magnitude, not direction. Un-living two months is exactly as much of the
+    campaign's recorded present to lose as living them, and the copy left
+    behind is what makes either recoverable."""
+    cid = _campaign(monkeypatch, tmp_path)
+    monkeypatch.setattr(config, "advance_fork_threshold", lambda: 30)
+    clock.advance(cid, to="2026-06-01", reason="start")
+    digest = clock.preview(cid, to="2026-03-01")
+    assert digest["backward"] is True and digest["fork"] is True
+
+
+def test_a_campaign_with_no_moment_yet_is_never_nudged(monkeypatch, tmp_path):
+    """There is no span, so there is nothing to checkpoint back to. The digest
+    reports `elapsed_days: 0` here already, and the nudge follows it rather
+    than reading the target as though it were a distance."""
+    cid = _campaign(monkeypatch, tmp_path)
+    monkeypatch.setattr(config, "advance_fork_threshold", lambda: 30)
+    digest = clock.preview(cid, to="2099-01-01")
+    assert digest["elapsed_days"] == 0 and digest["fork"] is False
+
+
+def test_an_unreadable_stored_moment_is_never_nudged(monkeypatch, tmp_path):
+    """Same rule as the clock with no moment at all: an anchor the calendar
+    cannot read yields no span, and a nudge computed off the target alone
+    would offer to checkpoint every skip in a broken campaign."""
+    cid = _campaign(monkeypatch, tmp_path, calendar="gregorian")
+    monkeypatch.setattr(config, "advance_fork_threshold", lambda: 30)
+    clock._write(cid, {"now": "banana", "log": []})
+    digest = clock.preview(cid, to="2099-01-01")
+    assert digest["from"] == "banana" and digest["fork"] is False
+
+
+def test_the_checkpoint_nudge_survives_a_span_too_long_to_itemize(monkeypatch, tmp_path):
+    """`truncated` empties the crossing lists; the span it was computed from is
+    still exact, and a thirty-year skip is the case the nudge exists for."""
+    cid = _campaign(monkeypatch, tmp_path)
+    monkeypatch.setattr(config, "advance_fork_threshold", lambda: 30)
+    clock.advance(cid, to="2026-01-01", reason="start")
+    digest = clock.preview(cid, days=clock.SCAN_LIMIT_DAYS + 1)
+    assert digest["truncated"] is True and digest["fork"] is True
+
+
+def test_a_threshold_of_zero_nudges_every_skip_but_not_a_standstill(monkeypatch, tmp_path):
+    """0 means "ask every time", the same reading `replay_fork_threshold` has.
+    A move that crosses no days is still not a skip, so it is still not asked
+    about — otherwise a same-day nudge would fire on the setting that means
+    "be careful", which is the setting most likely to be chosen."""
+    cid = _campaign(monkeypatch, tmp_path)
+    monkeypatch.setattr(config, "advance_fork_threshold", lambda: 0)
+    clock.advance(cid, to="2026-01-01T09:00", reason="start")
+    assert clock.preview(cid, days=1)["fork"] is True
+    assert clock.preview(cid, to="2026-01-01T21:00")["fork"] is False
+
+
+def test_the_advance_response_carries_the_nudge_it_was_confirmed_under(monkeypatch, tmp_path):
+    """The flag rides the digest, and `advance` returns the same digest a
+    preview would — so the two cannot disagree about what the reader was asked."""
+    cid = _campaign(monkeypatch, tmp_path)
+    monkeypatch.setattr(config, "advance_fork_threshold", lambda: 5)
+    clock.advance(cid, to="2026-01-01", reason="start")
+    assert clock.advance(cid, days=10, reason="a long road")["digest"]["fork"] is True
 
 
 def test_digest_carries_both_ends_in_friendly_form(monkeypatch, tmp_path):

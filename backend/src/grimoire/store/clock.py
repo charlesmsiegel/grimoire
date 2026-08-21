@@ -49,7 +49,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import aging, atomic, birthdays, calendars, chronicle, commitments, events, locks, plot
+from . import (
+    aging,
+    atomic,
+    birthdays,
+    calendars,
+    chronicle,
+    commitments,
+    config,
+    events,
+    locks,
+    plot,
+)
 from .appearances import cast as appearances_cast
 from .campaigns import paths as campaigns_paths
 from .paths import now_iso
@@ -384,6 +395,15 @@ def digest(cid: str, provider, from_native: str, to_native: str) -> dict:
     name transitions "for the digest": that sweep is scoped to the locations one
     *scene* has visited, and a campaign-level advance is in no scene. The scene
     datetime route still reports it, which is the only place the scope exists.
+
+    `fork` is the checkpoint nudge (#107), and it is a flag rather than a
+    refusal: over `config.advance_fork_threshold` days, the client offers to
+    copy the campaign first (`POST /campaigns/{cid}/fork`) and skip in the
+    original, leaving the copy standing where the story was. It lives on the
+    digest for the reason every other number here does — the span is calendar
+    arithmetic, which is the server's, and in "skip to a date" mode a client
+    cannot know it without asking. The same shape `replay.preview` gives the
+    retcon walk's nudge (#80).
     """
     to_fixed = calendars.fixed_of(provider, to_native)
     to_friendly = provider.describe(to_fixed)["friendly"]
@@ -443,6 +463,7 @@ def digest(cid: str, provider, from_native: str, to_native: str) -> dict:
     # would leave it unfired forever.
     crossed_events = events.crossed(cid, provider, lo, hi) if hi > lo else []
 
+    threshold = config.advance_fork_threshold()
     return {"from": from_native or "", "to": to_native,
             "from_friendly": from_friendly, "to_friendly": to_friendly,
             "elapsed_days": elapsed, "backward": elapsed < 0,
@@ -458,6 +479,21 @@ def digest(cid: str, provider, from_native: str, to_native: str) -> dict:
             # and can say what "stale" means in this campaign's days.
             "aging": {**aging.summary(threads + owed),
                       "stale_after": ctx["stale_after"]},
+            # The checkpoint nudge (#107). `hi - lo` and not `elapsed`: magnitude,
+            # not the signed span, because un-living two months loses exactly as
+            # much of the campaign's recorded present as living them and the copy
+            # left behind is what makes either recoverable.
+            #
+            # Two cases fall out of that span rather than needing a guard, and
+            # both matter. A campaign with no readable moment yet has `hi == lo`
+            # -- no anchor, so nothing to checkpoint back to, and reading the
+            # target as a distance would nudge every first advance in a campaign
+            # dated later than year zero. And a threshold of 0, which means "ask
+            # every time", is `0 > 0` for a move that crosses no days: still not
+            # a skip, so still not asked about. That second one holds only
+            # because `config._count` clamps a negative setting to 0; a
+            # threshold that could go below zero would need the guard back.
+            "fork": hi - lo > threshold, "fork_threshold": threshold,
             "truncated": truncated}
 
 

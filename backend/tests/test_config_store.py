@@ -234,3 +234,32 @@ def test_an_unparseable_replay_threshold_falls_back_to_the_default(monkeypatch, 
     s = reload_with_home(monkeypatch, tmp_path)
     s.write_config(replay_fork_threshold="")
     assert s.config.replay_fork_threshold() == 10
+
+
+def test_the_advance_fork_threshold_round_trips(monkeypatch, tmp_path):
+    """The clock's checkpoint nudge (#107) is configuration for the same reason
+    the replay's is: what counts as "a large time skip" is a judgement about
+    this campaign's pace, and a story told in seasons and one told in hours do
+    not agree about thirty days."""
+    s = reload_with_home(monkeypatch, tmp_path)
+    assert s.config.advance_fork_threshold() == 30
+    s.write_config(advance_fork_threshold="7")
+    assert s.config.advance_fork_threshold() == 7
+
+
+def test_an_unparseable_advance_threshold_falls_back_to_the_default(monkeypatch, tmp_path):
+    """Cleared or mangled, the nudge stays on — the same direction the replay
+    threshold errs in, and for the same reason."""
+    s = reload_with_home(monkeypatch, tmp_path)
+    s.write_config(advance_fork_threshold="")
+    assert s.config.advance_fork_threshold() == 30
+
+
+def test_a_negative_advance_threshold_reads_as_zero(monkeypatch, tmp_path):
+    """`_count`'s clamp, pinned here because `clock.digest` leans on it: with
+    the threshold at 0 the nudge is `hi - lo > 0`, which is what makes a move
+    crossing no days still not a skip. A threshold that could go negative would
+    make every same-day nudge ask about a checkpoint."""
+    s = reload_with_home(monkeypatch, tmp_path)
+    s.write_config(advance_fork_threshold="-5")
+    assert s.config.advance_fork_threshold() == 0
