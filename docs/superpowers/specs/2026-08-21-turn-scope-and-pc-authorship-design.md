@@ -634,8 +634,10 @@ top of an unvalidated assumption.
 Verbatim-presence evals prove the instruction is *present*, not *obeyed* —
 they pass against a section the model ignores completely. The headline rule is
 the one thing here that is mechanically checkable, so `evals/graders.py` gets
-a grader over recorded output: **the last block of a reply is not
-`**Grimoire:**`** (inverted under `wrap`).
+a grader over recorded output: **the last speaker block of a reply is a
+character's, not `**Grimoire:**`**. It ships unconditional in Phase 1; the
+`wrap` inversion arrives with the flag in Phase 2, since there is nothing to
+invert on before then.
 
 This is the `length_drift` precedent. That module exists because the codebase
 does not trust the prompt to hold a word budget — it measures the transcript
