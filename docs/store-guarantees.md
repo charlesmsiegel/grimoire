@@ -71,6 +71,14 @@ is deliberate: handing out the path opens an interval in which another process
 can unlink the temp and substitute a symlink for the write, the `chmod` and the
 rename to follow. A caller that needs a real path is out of scope.
 
+One more public name is not a writer at all: `atomic.is_write_temp(path)`
+answers whether a name is one of these temps caught mid-write. It exists for
+the walks that copy or pack a whole directory of records — a world export, a
+world fork — which must skip such a file: it is not part of the store's
+content, and the writer that owns it will rename or unlink it out from under
+the walk. The pattern lives beside the code that generates the name rather
+than in those callers, where it would drift the day the prefix changes.
+
 ### What it does not guarantee
 
 - **Durability across power loss.** CPython's `os.replace` uses `MoveFileExW`

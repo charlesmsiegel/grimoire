@@ -371,12 +371,17 @@ def test_no_api_hands_out_the_temp_pathname(tmp_path):
     public = sorted(
         n for n, v in vars(atomic).items()
         if not n.startswith("_") and callable(v) and getattr(v, "__module__", "") == atomic.__name__)
-    # Two reviewed additions, neither of which hands back a temp's name.
+    # Three reviewed additions, none of which hands back a temp's name.
     # `append_line` writes THROUGH a caller-named path (#152's ledger), so it
     # opens no swap window at all; `streaming_write` uses a temp but yields the
-    # file OBJECT, which the test below pins directly. The list is the shape of
-    # the API, and every entry on it is here because someone argued for it.
-    assert public == ["append_line", "streaming_write", "write_bytes", "write_text"], \
+    # file OBJECT, which the test below pins directly; `is_write_temp` is a
+    # pure predicate over a name a caller already has, and exists so the walks
+    # that copy or pack a directory of records (a world export, a world fork)
+    # recognize this module's temps from this module rather than from a
+    # pattern of their own that drifts. The list is the shape of the API, and
+    # every entry on it is here because someone argued for it.
+    assert public == ["append_line", "is_write_temp", "streaming_write",
+                      "write_bytes", "write_text"], \
         f"unexpected public API: {public}"
 
 

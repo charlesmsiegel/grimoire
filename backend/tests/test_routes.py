@@ -13582,6 +13582,77 @@ def test_world_import_413(client):
     assert r.status_code == 413
 
 
+# ---- world fork (#41) ----
+
+def test_world_fork_route_copies_the_world(client):
+    wid = _world(client, "Saltmarch")
+    client.post(f"/api/worlds/{wid}/locations", json={"name": "The Drowned Library"})
+
+    r = client.post(f"/api/worlds/{wid}/fork", json={"name": "Saltmarch (fork)"})
+    assert r.status_code == 200
+    new = r.json()["id"]
+    assert new != wid
+    assert {w["id"] for w in client.get("/api/worlds").json()} == {wid, new}
+    assert client.get(f"/api/worlds/{new}").json()["meta"]["name"] == "Saltmarch (fork)"
+    assert len(client.get(f"/api/worlds/{new}/locations").json()) == 1
+    # The source is untouched, and still has exactly what it had.
+    assert client.get(f"/api/worlds/{wid}").json()["meta"]["name"] == "Saltmarch"
+    assert len(client.get(f"/api/worlds/{wid}/locations").json()) == 1
+
+
+def test_forked_localized_image_urls_actually_serve(client):
+    """The point of rewriting the URLs, over HTTP rather than on disk: the URL
+    sitting in the forked card must return the image. Asserting the rewritten
+    path exists on disk would pass even if the route could not serve it."""
+    wid, cid = _world_char(client)
+    png = _png_bytes()
+    name = "embed-abc123"
+    assert client.put(f"/api/worlds/{wid}/characters/{cid}/versions/main/images/{name}",
+                      files={"file": ("a.png", io.BytesIO(png), "image/png")}).status_code == 200
+
+    def _card(world: str) -> dict:
+        detail = client.get(f"/api/worlds/{world}/characters/{cid}").json()
+        return next(v for v in detail["versions"] if v["id"] == "main")["card"]
+
+    card = _card(wid)
+    url = f"/api/worlds/{wid}/characters/{cid}/versions/main/images/{name}"
+    card["data"]["description"] = f"A tidewitch.\n\n![]({url})\n"
+    assert client.put(f"/api/worlds/{wid}/characters/{cid}/versions/main",
+                      json={"card": card}).status_code == 200
+
+    new = client.post(f"/api/worlds/{wid}/fork", json={"name": "Copy"}).json()["id"]
+    new_url = _card(new)["data"]["description"].split("](")[1].split(")")[0]
+    assert new_url == f"/api/worlds/{new}/characters/{cid}/versions/main/images/{name}"
+    served = client.get(new_url)
+    assert served.status_code == 200
+    assert served.content == png
+    # And the source still serves its own copy at its own URL.
+    assert client.get(url).status_code == 200
+
+
+def test_world_fork_is_not_read_as_an_entity_kind(client):
+    """`fork` is a literal second segment competing with the generic
+    POST /worlds/{wid}/{kind}, which would answer 200 with a created entity --
+    so the id it returns naming a world is what proves this one won."""
+    wid = _world(client, "Saltmarch")
+    new = client.post(f"/api/worlds/{wid}/fork", json={"name": "Copy"}).json()["id"]
+    assert client.get(f"/api/worlds/{new}").status_code == 200
+    assert client.get(f"/api/worlds/{wid}/fork").status_code in (404, 405)
+
+
+def test_world_fork_unknown_world_404(client):
+    r = client.post("/api/worlds/nope/fork", json={"name": "Copy"})
+    assert r.status_code == 404
+    assert client.get("/api/worlds").json() == []
+
+
+def test_world_fork_requires_a_name(client):
+    wid = _world(client, "Saltmarch")
+    for body in ({"name": ""}, {"name": "   "}):
+        assert client.post(f"/api/worlds/{wid}/fork", json=body).status_code == 400
+    assert [w["id"] for w in client.get("/api/worlds").json()] == [wid]
+
+
 # ------------------------------------------------- prompt layout (#29)
 
 def test_prompt_layout_lists_the_whole_catalog_in_render_order(client):

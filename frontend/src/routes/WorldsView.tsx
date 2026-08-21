@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, type WorldMeta } from "../api/client";
+import { errorText } from "../api/errors";
 import LibraryPage from "../components/LibraryPage";
 
 function footerLabel(counts: Record<string, number> | undefined): string {
@@ -19,6 +20,7 @@ export default function WorldsView() {
   const [name, setName] = useState("");
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const [importing, setImporting] = useState(false);
+  const [forking, setForking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -48,6 +50,40 @@ export default function WorldsView() {
     } catch (err: any) {
       window.alert(err?.message ?? "Could not delete the world.");
       return;
+    }
+    setWorlds(await api.listWorlds());
+  }
+
+  /** Fork a world into a copy of its own, from the card of the world to copy.
+   *
+   *  The grid is refreshed rather than navigated to: `listWorlds` orders by
+   *  `updated` and the fork stamps its own, so the copy lands at the front of
+   *  the grid the user is already looking at. An import navigates instead
+   *  because it has no such anchor — nothing on screen said where it came
+   *  from.
+   *
+   *  Reported, not dropped, and with the row's button disabled meanwhile: a
+   *  world runs to a gigabyte of character art, so this is a request that can
+   *  take real time, and a second click on a pending one would make a second
+   *  copy. `rename` and `remove` above let a rejection become an unhandled
+   *  promise — the card simply does not change, which reads as "nothing
+   *  happened" and is near enough true for them. It is not true here.
+   */
+  async function fork(w: WorldMeta) {
+    const name = window.prompt(`Fork '${w.name}' as?`, `${w.name} (fork)`)?.trim();
+    if (!name) return;
+    setError(null);
+    setForking(w.id);
+    try {
+      await api.forkWorld(w.id, name);
+    } catch (err) {
+      // `errorText` rather than this file's older `catch (err: any)`: the
+      // `any` bought nothing and cost the compiler's check on the rest of the
+      // handler (see `api/errors.ts`).
+      setError(`'${w.name}' could not be forked: ${errorText(err)}`);
+      return;
+    } finally {
+      setForking(null);
     }
     setWorlds(await api.listWorlds());
   }
@@ -128,6 +164,10 @@ export default function WorldsView() {
                 <a aria-label={`Export ${w.name}`} title="Export as a bundle"
                    href={api.exportWorldUrl(w.id)} download>⭳</a>
                 <button aria-label={`Rename ${w.name}`} onClick={() => setRenaming({ id: w.id, name: w.name })}>✎</button>
+                <button aria-label={`Fork ${w.name}`} title="Fork into a new world"
+                        disabled={forking !== null} onClick={() => { void fork(w); }}>
+                  {forking === w.id ? "…" : "⑂"}
+                </button>
                 <button aria-label={`Delete ${w.name}`} onClick={() => remove(w)}>✕</button>
               </div>
             </div>

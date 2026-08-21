@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
-import re
 import shutil
 import uuid
 import zipfile
@@ -53,8 +52,9 @@ from pathlib import Path
 
 from . import atomic, ziputil
 from .frontmatter import parse_frontmatter
-from .paths import ensure_home, home, now_iso, safe_id, slugify, uniquify
+from .paths import ensure_home, now_iso, safe_id, slugify, uniquify
 from .worlds import paths as worlds_paths
+from .worlds import staging as worlds_staging
 
 FORMAT = 1
 MANIFEST_NAME = "grimoire-bundle.json"
@@ -66,19 +66,12 @@ WORLD_PREFIX = "world"
 MAX_MEMBERS = 100_000
 MAX_UNCOMPRESSED = 8 * 1024 * 1024 * 1024
 
-# Two different questions, deliberately answered by two different sets (Codex
-# review found them conflated, and an `.svg` portrait rewritten as a result).
-#
 # What is worth deflating on the way out: anything textual. Getting this wrong
-# costs CPU, nothing else.
+# costs CPU, nothing else. Deliberately NOT the same set as the one the import
+# may rewrite (`worlds.staging._REWRITABLE`) -- Codex review found the two
+# conflated, and an `.svg` portrait rewritten as a result.
 _COMPRESSIBLE = frozenset({".md", ".json", ".txt", ".csv", ".css", ".html",
                            ".svg", ".yaml", ".yml"})
-# What the import may rewrite: exactly the two extensions the store writes its
-# *records* in. Getting this wrong edits a user's asset, so it is a closed list
-# rather than "textual and not under a directory called assets" -- `.svg` is a
-# text format and an image at once, and no directory-name heuristic can tell
-# which one a given file is.
-_REWRITABLE = frozenset({".md", ".json"})
 
 
 class BundleError(Exception):
@@ -88,11 +81,11 @@ class BundleError(Exception):
 class BundleConflict(BundleError):
     """A readable bundle that could not be published -- a lost id race, not a
     bad file. Separated so the route can answer 409 rather than blaming the
-    upload with a 400 (Codex review)."""
+    upload with a 400 (Codex review).
 
-
-def _staging_root() -> Path:
-    return home() / ".world-staging"
+    The bundle-shaped face of `worlds.staging.WorldIdConflictError`, which fork
+    raises too: this stays a `BundleError` so one `except` in the route still
+    covers everything an import can refuse for."""
 
 
 def app_version() -> str:
@@ -113,23 +106,6 @@ def bundle_filename(wid: str) -> str:
 
 # ---- export ----
 
-def _is_write_temp(path: Path) -> bool:
-    """An ``store.atomic`` temp caught mid-write.
-
-    Not part of the world, and the writer that owns it will rename or unlink it
-    out from under the walk -- so packing one is both wrong and racy.
-
-    Matched against what ``atomic._mkstemp_beside`` actually produces --
-    ``.<target-name>.<mkstemp's 8 random chars>.tmp`` -- rather than the
-    dot-prefix-and-.tmp-suffix approximation this started as, which also
-    swallowed a legitimate ``.notes.tmp`` sitting in the world (Codex review).
-    """
-    return bool(_ATOMIC_TEMP.fullmatch(path.name))
-
-
-_ATOMIC_TEMP = re.compile(r"\..+\.[a-z0-9_]{8}\.tmp")
-
-
 def write_bundle(wid: str, dest: Path) -> None:
     """Zip the world at `wid` into `dest`. Raises ``WorldNotFound``.
 
@@ -141,6 +117,10 @@ def write_bundle(wid: str, dest: Path) -> None:
     can be packed half-old and half-new. Files that vanish mid-walk are skipped
     rather than failing the export: by then they are genuinely not part of the
     world any more.
+
+    ``store.atomic``'s in-flight temps are skipped (`atomic.is_write_temp`):
+    they are not part of the world, and the writer that owns one will rename or
+    unlink it out from under the walk.
 
     Symlinks are skipped. ``is_file()`` follows them, so a link inside the world
     would otherwise be packed as a *copy of whatever it points at* -- and the
@@ -163,7 +143,7 @@ def write_bundle(wid: str, dest: Path) -> None:
                    compress_type=zipfile.ZIP_DEFLATED)
         for p in sorted(root.rglob("*")):
             try:
-                if _is_write_temp(p) or p.is_symlink() or not p.is_file():
+                if atomic.is_write_temp(p) or p.is_symlink() or not p.is_file():
                     continue
             except OSError:
                 continue                                    # vanished mid-walk
@@ -246,75 +226,6 @@ def _world_name(staging: Path, manifest: dict) -> str:
     return "Imported World"
 
 
-def _repoint_urls(staging: Path, old_wid: str, new_wid: str) -> int:
-    """Rewrite localized image URLs from `old_wid` to `new_wid` in place.
-
-    Byte-level, and over ``.md``/``.json`` only -- the two extensions the store
-    writes its records in, which is also exactly the scope #54 specified. A
-    substitution that had to decode every file would fail on the first asset,
-    and one that touched an asset would corrupt it. The prefix carries its
-    trailing slash so a world id that is a prefix of another (``realm`` beside
-    ``realm-2``) cannot be rewritten by half.
-
-    A file's *extension* decides this, with no exception for where it sits.
-    Widening to every textual suffix pulled in ``.svg``, which is a text format
-    and an image at once, so a portrait got edited (Codex review); narrowing
-    that back out with a "not under a directory called assets" rule only traded
-    one guess for another, and would have skipped a genuine ``.md`` record that
-    happened to live under such a directory. The sidecars that do sit under
-    ``assets/`` are scanned along with everything else. ``subjects.json`` and
-    ``focus.json`` hold ids and offsets, so for them this is a no-op.
-    ``descriptions.json`` is the one that holds free prose an author wrote, and
-    so *can* contain a URL — which is a reason to scan it rather than to skip
-    it: a description naming an image by its world-scoped URL should follow the
-    world being renamed exactly as a record body does. The prefix carries its
-    trailing slash, so the substitution is as precise here as in a ``.md``.
-    """
-    old = f"/api/worlds/{old_wid}/".encode()
-    new = f"/api/worlds/{new_wid}/".encode()
-    touched = 0
-    for p in staging.rglob("*"):
-        if p.suffix.lower() not in _REWRITABLE or not p.is_file():
-            continue
-        data = p.read_bytes()
-        if old in data:
-            atomic.write_bytes(p, data.replace(old, new))
-            touched += 1
-    return touched
-
-
-_PUBLISH_ATTEMPTS = 4
-
-
-def _publish(staging: Path, base: str, current: str) -> str:
-    """Move the staged tree into the library under a free id; return that id.
-
-    ``uniquify`` picked ``current`` a moment ago, so a concurrent import can
-    have taken it in between -- and a plain rename would *merge into* it on
-    POSIX when the destination happens to be an empty directory. So the id is
-    re-picked and retried rather than refused: losing a race is not a reason to
-    reject a perfectly good bundle (Codex review). Each retry re-points the
-    URLs from the id the records currently carry to the new candidate, so the
-    published world always references itself.
-    """
-    for attempt in range(_PUBLISH_ATTEMPTS):
-        dest = worlds_paths.world_root(current)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if not dest.exists():
-            try:
-                staging.rename(dest)
-                return current
-            except OSError:
-                pass          # lost the race inside the check-to-rename window
-        if attempt == _PUBLISH_ATTEMPTS - 1:
-            break
-        nxt = uniquify(base, lambda c: worlds_paths.world_root(c).exists())
-        _repoint_urls(staging, current, nxt)
-        current = nxt
-    raise BundleConflict(
-        f"could not claim a world id for the import (last tried {current})")
-
-
 def import_bundle(path: Path) -> str:
     """Import the bundle at `path` as a brand-new world; returns its id."""
     ensure_home()
@@ -327,7 +238,7 @@ def import_bundle(path: Path) -> str:
                              max_uncompressed=MAX_UNCOMPRESSED, err=BundleError)
         manifest = _read_manifest(z, infos)
         members = _world_members(infos)
-        base = _staging_root() / uuid.uuid4().hex
+        base = worlds_staging.staging_root() / uuid.uuid4().hex
         try:
             staging = base / WORLD_PREFIX
             staging.mkdir(parents=True)
@@ -335,7 +246,13 @@ def import_bundle(path: Path) -> str:
             base = slugify(_world_name(staging, manifest))
             wid = uniquify(base, lambda c: worlds_paths.world_root(c).exists())
             if wid != manifest["world_id"]:
-                _repoint_urls(staging, manifest["world_id"], wid)
-            return _publish(staging, base, wid)
+                worlds_staging.repoint_urls(staging, manifest["world_id"], wid)
+            try:
+                return worlds_staging.publish(staging, base, wid)
+            except worlds_staging.WorldIdConflictError as e:
+                # Re-dressed as a BundleError subclass so the import's callers
+                # keep one exception family to catch, and the route keeps
+                # answering 409 for it.
+                raise BundleConflict(str(e)) from e
         finally:
             shutil.rmtree(base, ignore_errors=True)

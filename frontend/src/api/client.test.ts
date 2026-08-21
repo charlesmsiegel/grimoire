@@ -731,6 +731,40 @@ test("exportWorldUrl is a plain href the browser can download", () => {
   expect(api.exportWorldUrl("saltmarch")).toBe("/api/worlds/saltmarch/export.zip");
 });
 
+test("forkWorld POSTs the new name to the source world's fork route", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "saltmarch-fork" }));
+  // No `as unknown as typeof fetch`, for the reason the turn-producer test
+  // below gives: the ratchet counts that assertion and this file already
+  // carries sixty of them.
+  globalThis.fetch = fetchMock;
+  expect(await api.forkWorld("saltmarch", "Saltmarch (fork)")).toEqual({ id: "saltmarch-fork" });
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/worlds/saltmarch/fork",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ name: "Saltmarch (fork)" }),
+    }),
+  );
+});
+
+test("a fork does not invalidate the cached config", async () => {
+  // Unlike createWorld and importWorld: forking needs a world to fork, so
+  // `first_run` was already false and the cached config still says so.
+  invalidateConfigCache();
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk(CFG));
+  globalThis.fetch = fetchMock;
+  await api.getConfig();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+
+  fetchMock.mockResolvedValue(jsonOk({ id: "w-2" }));
+  await api.forkWorld("w", "Copy");
+
+  fetchMock.mockResolvedValue(jsonOk(CFG));
+  await api.getConfig();                        // still cached: 2 calls, not 3
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  invalidateConfigCache();
+});
+
 test("importWorld POSTs the raw zip body", async () => {
   const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "saltmarch-2" }));
   globalThis.fetch = fetchMock as unknown as typeof fetch;

@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import errno
 import os
+import re
 import stat
 import tempfile
 import time
@@ -58,6 +59,13 @@ _RETRY_DELAYS = (0.005, 0.010, 0.015, 0.020)  # ~50 ms total, then give up
 # name near the 255-character component limit would otherwise be writable
 # directly yet fail once the prefix and random suffix are added.
 _MAX_NAME_HINT = 40
+
+# What `_mkstemp_beside` produces: `.<target-name>.<mkstemp's 8 chars>.tmp`.
+# Declared here, beside the code that generates it, because the readers are
+# elsewhere -- a world export skips these on its way into a bundle and a world
+# fork skips them on its way into a copy -- and a pattern kept in one of those
+# callers is a pattern that drifts the day this prefix changes.
+_TEMP_NAME = re.compile(r"\..+\.[a-z0-9_]{8}\.tmp")
 
 # Read once, at import, while the process is still single-threaded. There is no
 # getter for the umask -- you must set it to read it -- and doing that inside a
@@ -149,6 +157,20 @@ def _assert_target_writable(path: Path) -> None:
 def _mkstemp_beside(path: Path) -> tuple[int, str]:
     return tempfile.mkstemp(
         dir=str(path.parent), prefix=f".{path.name[:_MAX_NAME_HINT]}.", suffix=".tmp")
+
+
+def is_write_temp(path: Path) -> bool:
+    """Is `path` one of this module's temps, caught mid-write?
+
+    For a walk that copies or packs a directory of records. Such a temp is not
+    part of the store's content, and the writer that owns it will rename or
+    unlink it out from under the walk -- so taking one is both wrong and racy.
+
+    Matched against what `_mkstemp_beside` actually produces rather than the
+    dot-prefix-and-`.tmp`-suffix approximation this started as, which also
+    swallowed a legitimate `.notes.tmp` sitting in a world (Codex review).
+    """
+    return bool(_TEMP_NAME.fullmatch(path.name))
 
 
 def _discard(tmp_name: str) -> None:

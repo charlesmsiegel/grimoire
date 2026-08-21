@@ -16,6 +16,7 @@ vi.mock("../api/client", () => ({
     deleteWorld: vi.fn(),
     exportWorldUrl: vi.fn(),
     importWorld: vi.fn(),
+    forkWorld: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -28,6 +29,7 @@ beforeEach(() => {
   (api.deleteWorld as any).mockResolvedValue({ ok: true });
   (api.exportWorldUrl as any).mockImplementation((wid: string) => `/api/worlds/${wid}/export.zip`);
   (api.importWorld as any).mockResolvedValue({ id: "imported" });
+  (api.forkWorld as any).mockResolvedValue({ id: "saltmarch-fork" });
 });
 
 function renderView() {
@@ -163,4 +165,71 @@ test("a rejected bundle shows the server's reason and creates nothing", async ()
   expect(await screen.findByRole("alert")).toHaveTextContent(/not a world bundle/i);
   expect(navigate).not.toHaveBeenCalled();
   expect(api.listWorlds).toHaveBeenCalledTimes(BASE);   // no refresh, nothing changed
+});
+
+// ---- world fork (#41) ----
+
+const ONE_WORLD = [
+  { id: "w1", name: "Saltmarch", created: "", updated: "", counts: {} },
+];
+
+test("forking prompts for a name, posts it, and refreshes the grid", async () => {
+  // Refreshed rather than navigated to: `listWorlds` orders by `updated` and
+  // the fork stamps its own, so the copy lands at the front of the grid the
+  // user is already looking at.
+  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Saltmarch (fork)");
+  renderView();
+  fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
+  await waitFor(() => expect(api.forkWorld).toHaveBeenCalledWith("w1", "Saltmarch (fork)"));
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE + 1));
+  expect(navigate).not.toHaveBeenCalled();
+  expect(prompt).toHaveBeenCalledWith("Fork 'Saltmarch' as?", "Saltmarch (fork)");
+  prompt.mockRestore();
+});
+
+test("a dismissed or blank fork prompt copies nothing", async () => {
+  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  const prompt = vi.spyOn(window, "prompt").mockReturnValue(null);
+  renderView();
+  fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
+  prompt.mockReturnValue("   ");
+  fireEvent.click(screen.getByLabelText("Fork Saltmarch"));
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE));
+  expect(api.forkWorld).not.toHaveBeenCalled();
+  prompt.mockRestore();
+});
+
+test("a failed fork names the world and the reason, and refreshes nothing", async () => {
+  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  (api.forkWorld as any).mockRejectedValue({ detail: "could not claim a world id" });
+  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Copy");
+  renderView();
+  fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    /'Saltmarch' could not be forked: could not claim a world id/i);
+  expect(api.listWorlds).toHaveBeenCalledTimes(BASE);
+  prompt.mockRestore();
+});
+
+test("a fork in flight cannot be started twice", async () => {
+  // A world runs to a gigabyte of art, so this request takes real time and a
+  // second click on a pending one would make a second copy.
+  (api.listWorlds as any).mockResolvedValue([
+    ...ONE_WORLD,
+    { id: "w2", name: "Realm", created: "", updated: "", counts: {} },
+  ]);
+  let release: (v: unknown) => void = () => {};
+  (api.forkWorld as any).mockReturnValue(new Promise((r) => { release = r; }));
+  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Copy");
+  renderView();
+  fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
+  await waitFor(() => expect(screen.getByLabelText("Fork Saltmarch")).toBeDisabled());
+  expect(screen.getByLabelText("Fork Realm")).toBeDisabled();
+  fireEvent.click(screen.getByLabelText("Fork Realm"));
+  expect(api.forkWorld).toHaveBeenCalledTimes(1);
+
+  release({ id: "copy" });
+  await waitFor(() => expect(screen.getByLabelText("Fork Saltmarch")).toBeEnabled());
+  prompt.mockRestore();
 });

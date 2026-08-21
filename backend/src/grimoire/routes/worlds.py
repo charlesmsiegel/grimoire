@@ -101,6 +101,39 @@ def delete_world(wid: str):
     return {"ok": True}
 
 
+# Declared here rather than in `entities`, which registers the
+# `/worlds/{wid}/{kind}` catch-all -- `routes/__init__` includes that module
+# last precisely so a literal second segment like `fork` is still reachable,
+# and `tests/test_route_order.py` fails if that ever stops being true.
+@router.post("/worlds/{wid}/fork")
+def post_world_fork(wid: str, body: NameBody):
+    """Copy `wid` into a brand-new world called `body.name`.
+
+    A deep copy of the whole directory, not a reference: nothing the fork holds
+    is shared with the world it came from, and nothing at all happens to that
+    world (`store/worlds/lifecycle.py`). Returns the new world's id, the same
+    shape `POST /worlds` and `POST /worlds/import` return -- the client
+    navigates or refreshes with it.
+
+    A `def`, so FastAPI runs it in a threadpool: copying a world with a full
+    character gallery is a gigabyte of I/O, and doing that on the event loop
+    would stall every other request for its duration.
+    """
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    try:
+        return {"id": store.worlds.fork_world(wid, name)}
+    except store.worlds.WorldNotFound:
+        raise HTTPException(status_code=404, detail="world not found") from None
+    except store.worlds.WorldIdConflictError as exc:
+        # The copy is finished and fine; it just could not be given an id
+        # before another writer took one. 409 rather than 500: retrying is the
+        # right move, which is not what a 500 tells a client (matching the
+        # answer `POST /worlds/import` gives for the same collision).
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/worlds/{wid}/campaigns")
 def get_world_campaigns(wid: str):
     return store.sync.campaigns_for_world(wid)

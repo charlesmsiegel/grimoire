@@ -26,59 +26,10 @@ from grimoire.store import (
     worlds,
 )
 
-# A one-pixel PNG: real binary that must survive verbatim (deflate on an
-# already-compressed asset is exactly what the export must not corrupt).
-PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-       b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
-       b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
-
+from .world_fixtures import PNG, seed_world, tree
 
 def _home(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-
-
-def _seed_world(name: str = "Saltmarch") -> str:
-    """A world exercising every corner the bundle has to carry: entities of two
-    kinds, a character with a localized avatar URL in its card, a greeting with
-    a localized image in its body, tags, a plotmap and a calendar."""
-    wid = worlds.create_world(name)
-    root = worlds.world_root(wid)
-
-    entities.create_entity(root, "locations", "The Drowned Library")
-    entities.create_entity(root, "lore", "The Tide Accord")
-
-    cid = characters.create_character(root, "Seraphine", "default",
-                                      characters.blank_card("Seraphine"))[0]
-    vid = "default"
-    card = characters.read_card(root, cid, vid)
-    avatar = f"/api/worlds/{wid}/characters/{cid}/versions/{vid}/images/embed-abc123"
-    card["data"]["description"] = f"A tidewitch.\n\n![]({avatar})\n"
-    characters.update_version(root, cid, vid, card)
-    assets_dir = root / "characters" / cid / "assets" / vid
-    assets_dir.mkdir(parents=True, exist_ok=True)
-    (assets_dir / "embed-abc123.png").write_bytes(PNG)
-
-    gid = greetings.create_greeting(root, "The Gala", cid, vid, body="Come in.")
-    greetings.update_greeting(
-        root, gid,
-        body=f"Come in.\n\n![](/api/worlds/{wid}/greetings/{gid}/images/embed-def456)\n")
-    gassets = root / "greetings" / gid / "assets" / "default"
-    gassets.mkdir(parents=True, exist_ok=True)
-    (gassets / "embed-def456.png").write_bytes(PNG)
-
-    tags.add_tag(root, "Coastal")
-    greetings.set_edges(root, gid, leads_to=[gid])
-    (root / "calendar.json").write_text(json.dumps({"primary": "gregorian"}), encoding="utf-8")
-    # The round-trip tests are only worth anything if the seed really produced
-    # each of these; an elided plotmap would let a whole category pass untested.
-    for rel in ("world.md", "plotmap.json", "tags.md", "calendar.json"):
-        assert (root / rel).is_file(), f"seed did not produce {rel}"
-    return wid
-
-
-def _tree(root: Path) -> dict[str, bytes]:
-    return {p.relative_to(root).as_posix(): p.read_bytes()
-            for p in sorted(root.rglob("*")) if p.is_file()}
 
 
 def _zip_bytes(entries: dict[str, str | bytes]) -> bytes:
@@ -104,7 +55,7 @@ def _export(wid: str, tmp_path: Path, label: str = "bundle") -> Path:
 
 def test_export_writes_manifest_and_prefixed_members(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
-    wid = _seed_world()
+    wid = seed_world()
     with zipfile.ZipFile(_export(wid, tmp_path)) as z:
         names = z.namelist()
         manifest = json.loads(z.read(world_bundle.MANIFEST_NAME))
@@ -122,18 +73,18 @@ def test_export_writes_manifest_and_prefixed_members(monkeypatch, tmp_path):
 
 def test_export_carries_every_file(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
-    wid = _seed_world()
+    wid = seed_world()
     root = worlds.world_root(wid)
     with zipfile.ZipFile(_export(wid, tmp_path)) as z:
         packed = {n[len(world_bundle.WORLD_PREFIX) + 1:]: z.read(n)
                   for n in z.namelist() if n != world_bundle.MANIFEST_NAME}
-    assert packed == _tree(root)
+    assert packed == tree(root)
 
 
 def test_export_stores_already_compressed_assets_uncompressed(monkeypatch, tmp_path):
     """Deflating a PNG costs CPU on a gigabyte-scale world and saves nothing."""
     _home(monkeypatch, tmp_path)
-    wid = _seed_world()
+    wid = seed_world()
     with zipfile.ZipFile(_export(wid, tmp_path)) as z:
         by_name = {i.filename: i for i in z.infolist()}
     png = next(i for n, i in by_name.items() if n.endswith(".png"))
@@ -152,7 +103,7 @@ def test_export_unknown_world_raises(monkeypatch, tmp_path):
 
 def test_round_trip_preserves_content_and_repoints_urls(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
-    old = _seed_world()
+    old = seed_world()
     bundle = _export(old, tmp_path)
 
     new = world_bundle.import_bundle(bundle)
@@ -165,7 +116,7 @@ def test_round_trip_preserves_content_and_repoints_urls(monkeypatch, tmp_path):
     assert counts == worlds.read_world(old)["counts"]
     assert worlds.read_world(new)["meta"]["name"] == "Saltmarch"
 
-    before, after = _tree(worlds.world_root(old)), _tree(worlds.world_root(new))
+    before, after = tree(worlds.world_root(old)), tree(worlds.world_root(new))
     assert set(before) == set(after)
     for rel, data in before.items():
         if f"/api/worlds/{old}/".encode() in data:
@@ -186,7 +137,7 @@ def test_imported_image_urls_resolve(monkeypatch, tmp_path):
     """The repointed URLs are not just textually right -- they name files that
     exist under the new world."""
     _home(monkeypatch, tmp_path)
-    old = _seed_world()
+    old = seed_world()
     new = world_bundle.import_bundle(_export(old, tmp_path))
     root = worlds.world_root(new)
 
@@ -210,41 +161,41 @@ def test_import_into_empty_store_keeps_the_original_id(monkeypatch, tmp_path):
     """Nothing to collide with, so the world lands under its own id and no URL
     rewriting is needed at all."""
     _home(monkeypatch, tmp_path)
-    old = _seed_world()
+    old = seed_world()
     bundle = _export(old, tmp_path)
-    before = _tree(worlds.world_root(old))
+    before = tree(worlds.world_root(old))
     worlds.delete_world(old)
 
     new = world_bundle.import_bundle(bundle)
     assert new == old
-    assert _tree(worlds.world_root(new)) == before
+    assert tree(worlds.world_root(new)) == before
 
 
 def test_import_twice_makes_two_independent_worlds(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
-    old = _seed_world()
+    old = seed_world()
     bundle = _export(old, tmp_path)
     a = world_bundle.import_bundle(bundle)
     b = world_bundle.import_bundle(bundle)
     assert len({old, a, b}) == 3
     assert len(worlds.list_worlds()) == 3
     for wid in (a, b):
-        for data in _tree(worlds.world_root(wid)).values():
+        for data in tree(worlds.world_root(wid)).values():
             assert f"/api/worlds/{old}/".encode() not in data
 
 
 def test_import_does_not_touch_the_source_world(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
-    old = _seed_world()
+    old = seed_world()
     bundle = _export(old, tmp_path)
-    before = _tree(worlds.world_root(old))
+    before = tree(worlds.world_root(old))
     world_bundle.import_bundle(bundle)
-    assert _tree(worlds.world_root(old)) == before
+    assert tree(worlds.world_root(old)) == before
 
 
 def test_manifest_is_not_extracted_into_the_world(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
-    new = world_bundle.import_bundle(_export(_seed_world(), tmp_path))
+    new = world_bundle.import_bundle(_export(seed_world(), tmp_path))
     assert not (worlds.world_root(new) / world_bundle.MANIFEST_NAME).exists()
 
 
@@ -342,7 +293,7 @@ def test_a_rejected_import_leaves_no_trace(monkeypatch, tmp_path):
                                     **GOOD_WORLD, "world/../evil.txt": "x"})
     assert worlds.list_worlds() == []
     assert not (tmp_path / "evil.txt").exists()
-    staging = world_bundle._staging_root()
+    staging = worlds.staging.staging_root()
     assert not staging.is_dir() or not any(staging.iterdir())
 
 
@@ -398,7 +349,7 @@ def test_import_leaves_text_assets_byte_identical(monkeypatch, tmp_path):
     """`.svg` is a text suffix and an image format at once. Rewriting by suffix
     alone edited real asset bytes; asset subtrees are excluded by path."""
     _home(monkeypatch, tmp_path)
-    old = _seed_world()
+    old = seed_world()
     root = worlds.world_root(old)
     cid = characters.list_characters(root)[0]["id"]
     svg = (f'<svg><desc>/api/worlds/{old}/characters/{cid}/versions/default/'
@@ -419,7 +370,7 @@ def test_export_keeps_a_file_that_merely_looks_like_a_write_temp(monkeypatch, tm
     """`.notes.tmp` is a world file; `.world.md.a1b2c3d4.tmp` is store.atomic
     mid-write. Only the second may be dropped from the bundle."""
     _home(monkeypatch, tmp_path)
-    wid = _seed_world()
+    wid = seed_world()
     root = worlds.world_root(wid)
     (root / ".notes.tmp").write_bytes(b"mine")
     (root / ".world.md.a1b2c3d4.tmp").write_bytes(b"half-written")
@@ -435,7 +386,7 @@ def test_a_failure_partway_through_extraction_also_leaves_no_trace(monkeypatch, 
     exists -- so none of them would notice the cleanup disappearing. This one
     fails after files have already been written (Codex review)."""
     _home(monkeypatch, tmp_path)
-    bundle = _export(_seed_world(), tmp_path)
+    bundle = _export(seed_world(), tmp_path)
     real_open = zipfile.ZipFile.open
 
     def boom(self, name, *a, **k):
@@ -450,7 +401,7 @@ def test_a_failure_partway_through_extraction_also_leaves_no_trace(monkeypatch, 
     monkeypatch.setattr(zipfile.ZipFile, "open", real_open)
 
     assert [w["id"] for w in worlds.list_worlds()] == ["saltmarch"]   # only the source
-    staging = world_bundle._staging_root()
+    staging = worlds.staging.staging_root()
     assert not staging.is_dir() or not any(staging.iterdir())
 
 
@@ -460,7 +411,7 @@ def test_only_record_extensions_are_rewritten(monkeypatch, tmp_path):
     that is also an image -- it must NOT be touched) and an `.md` inside one (a
     record that must be, whatever directory it sits in)."""
     _home(monkeypatch, tmp_path)
-    old = _seed_world()
+    old = seed_world()
     root = worlds.world_root(old)
     url = f"/api/worlds/{old}/greetings/x/images/y".encode()
     (root / "maps").mkdir()
@@ -483,7 +434,7 @@ def test_export_does_not_follow_a_symlink_out_of_the_world(monkeypatch, tmp_path
     _home(monkeypatch, tmp_path)
     secret = tmp_path / "secret.md"
     secret.write_text("private", encoding="utf-8")
-    wid = _seed_world()
+    wid = seed_world()
     try:
         (worlds.world_root(wid) / "lore" / "leak.md").symlink_to(secret)
     except (OSError, NotImplementedError):
@@ -499,7 +450,7 @@ def test_publish_retries_when_the_chosen_id_is_taken(monkeypatch, tmp_path):
     """Losing an id race is not a reason to reject a good bundle: the id is
     re-picked, the URLs re-pointed at it, and the import succeeds."""
     _home(monkeypatch, tmp_path)
-    bundle = _export(_seed_world(), tmp_path)
+    bundle = _export(seed_world(), tmp_path)
     worlds.create_world("Occupied")          # the id the first pick will collide with
 
     real_uniquify = world_bundle.uniquify
@@ -517,16 +468,16 @@ def test_publish_retries_when_the_chosen_id_is_taken(monkeypatch, tmp_path):
 
     assert new not in ("occupied", "saltmarch")
     assert worlds.read_world("occupied")["meta"]["name"] == "Occupied"   # untouched
-    for data in _tree(worlds.world_root(new)).values():
+    for data in tree(worlds.world_root(new)).values():
         assert b"/api/worlds/occupied/" not in data
         assert b"/api/worlds/saltmarch/" not in data
     assert any(f"/api/worlds/{new}/".encode() in d
-               for d in _tree(worlds.world_root(new)).values())
+               for d in tree(worlds.world_root(new)).values())
 
 
 def test_manifest_carries_the_app_version(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
-    with zipfile.ZipFile(_export(_seed_world(), tmp_path)) as z:
+    with zipfile.ZipFile(_export(seed_world(), tmp_path)) as z:
         manifest = json.loads(z.read(world_bundle.MANIFEST_NAME))
     assert manifest["app_version"] == world_bundle.app_version()
     assert manifest["app_version"]

@@ -8,8 +8,14 @@ from __future__ import annotations
 # attributes on this package before `lifecycle`'s import runs, or the
 # in-progress `campaigns.read` import (itself triggered from here) would see
 # an as-yet-unbound `worlds.paths`.
-from . import lifecycle, paths, read  # noqa: F401
-from .lifecycle import WorldInUse, create_world, delete_world, rename_world  # noqa: F401
+from . import lifecycle, paths, read, staging  # noqa: F401
+from .lifecycle import (  # noqa: F401
+    WorldInUse,
+    create_world,
+    delete_world,
+    fork_world,
+    rename_world,
+)
 from .paths import (  # noqa: F401
     WorldNotFound,
     _worlds_dir,
@@ -21,3 +27,4 @@ from .paths import (  # noqa: F401
     world_root,
 )
 from .read import has_worlds, list_worlds, read_world, world_name  # noqa: F401
+from .staging import WorldIdConflictError  # noqa: F401
