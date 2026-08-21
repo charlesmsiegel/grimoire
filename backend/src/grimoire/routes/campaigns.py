@@ -43,6 +43,7 @@ from .models import (
     AvatarFocus,
     CalendarConfig,
     CampaignClimate,
+    CharacterCreate,
     CopyFromGreeting,
     DefaultVersion,
     ForkCampaign,
@@ -1554,6 +1555,33 @@ def _campaign_wroot(cid: str):
 def get_campaign_characters(cid: str):
     _campaign_root_or_404(cid)
     return store.overlay.list_characters(cid)
+
+
+@router.post("/campaigns/{cid}/characters")
+def post_campaign_character(cid: str, body: CharacterCreate):
+    """A character who exists only in this campaign — an NPC who walked on
+    mid-scene and was never in the library (#60).
+
+    The world side has had this route all along; the campaign side had every
+    piece except the door. `overlay.create_character` writes no `sync.md` ref
+    and the world has no counterpart, and that *absence* is the whole "emergent"
+    signal: nothing in `sync.incoming` enumerates the record, so it can never
+    surface as a phantom world change. `POST .../{kind}/{eid}/promote` is what
+    ends that state.
+    """
+    _campaign_root_or_404(cid)
+    aid, vid = store.overlay.create_character(cid, body.name, body.version_name, body.card)
+    return {"character": aid, "version": vid}
+
+
+@router.get("/campaigns/{cid}/diverged")
+def get_diverged(cid: str):
+    """Every campaign copy that no longer matches the library record it came
+    from — the inverse of `/incoming`, and what `push` can act on (#53)."""
+    # `_campaign_root_or_404` has already answered for a campaign that is not
+    # there; past it, `diverged` reads sync.md, which is absent-means-empty.
+    _campaign_root_or_404(cid)
+    return store.sync.diverged(cid)
 
 
 @router.get("/campaigns/{cid}/characters/{char}")

@@ -17,6 +17,12 @@ vi.mock("../api/client", () => ({
     getCampaign: vi.fn(),
     listCampaigns: vi.fn(),
     listCharacters: vi.fn(),
+    // Reached through the editors' campaign-scope LibraryPanel (#52, #53);
+    // "library content, unedited" renders no button, so this view is unchanged.
+    libraryStatus: vi.fn().mockResolvedValue(
+      { in_library: true, diverged: false, can_promote: false, can_push: false }),
+    promoteToLibrary: vi.fn(),
+    pushToLibrary: vi.fn(),
     listUndescribedImages: vi.fn(),
     listPCs: vi.fn(),
     listTags: vi.fn(),

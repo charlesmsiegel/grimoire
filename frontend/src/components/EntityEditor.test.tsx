@@ -33,6 +33,13 @@ vi.mock("../api/client", () => ({
     draftEntityImageDescription: vi.fn(),
     putEntityImage: vi.fn(),
     promoteEntityImage: vi.fn(),
+    // The campaign-scope sidebar's LibraryPanel (#52, #53). "already library
+    // content, unedited" is the state that renders no button, so every test
+    // here sees the sidebar it always did; LibraryPanel.test.tsx owns the rest.
+    libraryStatus: vi.fn().mockResolvedValue(
+      { in_library: true, diverged: false, can_promote: false, can_push: false }),
+    promoteToLibrary: vi.fn(),
+    pushToLibrary: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
     actorImageUrl: (sc: { kind: string; id: string }, k: string, a: string, v: string, n: string) =>
       `/img/${sc.id}/${k}/${a}/${v}/${n}`,

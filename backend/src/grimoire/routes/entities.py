@@ -23,7 +23,7 @@ from .common import (
     _world_root_or_404,
     get_llm,
 )
-from .models import EntityCreate, EntityUpdate, ImageDescription
+from .models import DemoteBody, EntityCreate, EntityUpdate, ImageDescription, PushBody
 
 router = APIRouter()
 
@@ -467,3 +467,79 @@ def promote_campaign_entity_image(cid: str, kind: str, eid: str, name: str):
         # an externally-placed file whose extension we never accepted for upload
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True}
+
+
+# ---- library moves: promote / push / dependents / demote (#52, #53, #60) ----
+#
+# All four live here rather than in `campaigns`/`worlds` because they are
+# `{kind}`-shaped, and this module is included last -- so a literal fifth
+# segment can neither shadow anything nor be shadowed. `kind` is left to the
+# store to judge: unlike the CRUD above, these carry actors as well as flat
+# entities, and which kinds each one accepts is part of what `store/sync.py`
+# documents.
+def _library_move_or_409(fn):
+    """Run a store-level move, mapping its refusals onto HTTP.
+
+    Every refusal is a 409 rather than a 400: each reports the *state* of two
+    records that cannot both be what the caller assumed, which is what 409
+    means -- and it keeps the frontend to one branch per code.
+    """
+    try:
+        return fn()
+    except store.entities.UnknownKind as exc:
+        raise HTTPException(status_code=404, detail="unknown kind") from exc
+    except (store.entities.EntityNotFound, store.greetings.GreetingNotFound,
+            store.characters.CharacterNotFound, store.pcs.PCNotFound) as exc:
+        raise HTTPException(status_code=404, detail="record not found") from exc
+    except store.worlds.WorldNotFound as exc:
+        raise HTTPException(status_code=404, detail="world not found") from exc
+    except store.sync.PushConflictError as exc:
+        # Its own `kind`: this is the one refusal the caller can resolve by
+        # forcing, and the UI must be able to offer that without matching prose.
+        raise HTTPException(status_code=409,
+                            detail={"detail": str(exc), "kind": "push_conflict"}) from exc
+    except store.sync.LibraryMoveError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"detail": str(exc), "kind": "library_move_refused"}) from exc
+
+
+@router.post("/campaigns/{cid}/{kind}/{eid}/promote")
+def post_promote_to_library(cid: str, kind: str, eid: str):
+    """Publish a campaign-local record into the campaign's world (#52, #60)."""
+    _campaign_root_or_404(cid)
+    _library_move_or_409(lambda: store.sync.promote(cid, kind, eid))
+    return {"ok": True}
+
+
+@router.get("/campaigns/{cid}/{kind}/{eid}/library")
+def get_library_status(cid: str, kind: str, eid: str):
+    """Where this campaign record stands relative to the library — which of
+    promote and push the editor should offer, decided server-side (#52, #53)."""
+    _campaign_root_or_404(cid)
+    return _library_move_or_409(lambda: store.sync.library_status(cid, kind, eid))
+
+
+@router.post("/campaigns/{cid}/{kind}/{eid}/push")
+def post_push_to_library(cid: str, kind: str, eid: str, body: PushBody | None = None):
+    """Save a campaign's override of a library record back into the library (#53)."""
+    _campaign_root_or_404(cid)
+    force = bool(body.force) if body is not None else False
+    _library_move_or_409(lambda: store.sync.push(cid, kind, eid, force=force))
+    return {"ok": True}
+
+
+@router.get("/worlds/{wid}/{kind}/{eid}/dependents")
+def get_library_dependents(wid: str, kind: str, eid: str):
+    """The campaigns that would notice this library record going away (#52)."""
+    return _library_move_or_409(lambda: store.sync.dependents(wid, kind, eid))
+
+
+@router.post("/worlds/{wid}/{kind}/{eid}/demote")
+def post_demote_from_library(wid: str, kind: str, eid: str, body: DemoteBody | None = None):
+    """Take a record out of the library, optionally leaving each dependent
+    campaign holding its own copy (#52)."""
+    opts = body or DemoteBody()
+    return _library_move_or_409(
+        lambda: store.sync.demote(wid, kind, eid,
+                                  copy_down=bool(opts.copy_down), target=opts.target))

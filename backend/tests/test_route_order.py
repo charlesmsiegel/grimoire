@@ -135,6 +135,12 @@ CROSSING_PAIRS = [
      "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
     ("/api/campaigns/{cid}/sheets/{kind}/{eid}",
      "/api/campaigns/{cid}/{kind}/{eid}/images"),
+    # Same shape and the same decision as the `images` crossing directly above
+    # (#52/#53): `/campaigns/c/sheets/X/library` matches both, "sheets" is not
+    # a record kind so the library route can never legitimately claim a URL
+    # under it, and `mechanics` is included before `entities`, so sheets wins.
+    ("/api/campaigns/{cid}/sheets/{kind}/{eid}",
+     "/api/campaigns/{cid}/{kind}/{eid}/library"),
     ("/api/campaigns/{cid}/sheets/{kind}/{eid}/creation",
      "/api/campaigns/{cid}/{kind}/{eid}/images/{name}"),
     ("/api/campaigns/{cid}/sheets/{kind}/{eid}/advance",
