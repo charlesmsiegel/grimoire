@@ -257,3 +257,36 @@ def test_for_subject_filters_by_identity_too():
     old, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-old", LABELS)
     assert r.for_subject(SCENE, identity="ident-new") == []
     assert r.for_subject(SCENE, identity="ident-old") == [old]
+
+
+def test_attempt_adoption_also_checks_the_scene_identity():
+    """A stale client retrying an old attempt id after the scene was deleted and
+    its `sid` recycled would otherwise adopt the dead scene's run through the
+    attempt path -- which `get` and `for_subject` already refuse."""
+    r = runs.RunRegistry()
+    old, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-old", LABELS)
+    old.finish("landed")
+
+    fresh, started = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-new", LABELS)
+    assert started and fresh is not old
+
+
+def test_events_are_not_built_while_the_registry_lock_is_held():
+    """A loop-backed factory blocks on a portal round trip. Called under the
+    registry lock, it can deadlock the server: the handler holds the lock and
+    waits on the loop, while the loop's own reaper blocks on that same lock.
+    """
+    r = runs.RunRegistry()
+    held = []
+
+    def factory():
+        # Whatever this does must not need the registry lock -- which is what a
+        # portal round trip effectively needs, since loop-side code takes it.
+        held.append(r._lock.acquire(blocking=False))
+        if held[-1]:
+            r._lock.release()
+        return runs._PlainEvent()
+
+    r.set_event_factory(factory)
+    r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    assert all(held), "an event was constructed while the registry lock was held"

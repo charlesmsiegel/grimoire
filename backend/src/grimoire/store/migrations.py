@@ -75,14 +75,25 @@ def _backfill_campaign(cid: str) -> None:
             # life of the install, and after the first pass every scene already
             # has one -- so without this precheck the steady state is reading
             # every transcript in the library, in full, on every boot.
-            token = scenes_identity.scene_identity(cid, sid)
-            if token is None:
-                token = scenes_identity.ensure_identity(cid, sid)
-            elif token in seen:
-                # Two scenes carrying the same token: the reverse lookup would
-                # answer with whichever file sorts first, so a notification for
-                # one would open the other. Re-mint the later one.
-                token = scenes_identity.ensure_identity(cid, sid, replace=True)
+            # Per SCENE, not just per campaign. A transcript that is read-only,
+            # or held open by a sync client, makes the write fail -- and
+            # `_lifespan` catches only StoreBusy, so an OSError escaping here
+            # stops the app booting at all. One stubborn file must cost that
+            # file its identity until the lazy path repairs it, nothing more.
+            try:
+                token = scenes_identity.scene_identity(cid, sid)
+                if token is None:
+                    token = scenes_identity.ensure_identity(cid, sid)
+                elif token in seen:
+                    # Two scenes carrying the same token: the reverse lookup
+                    # would answer with whichever file sorts first, so a
+                    # notification for one would open the other. Re-mint the
+                    # later one.
+                    token = scenes_identity.ensure_identity(cid, sid, replace=True)
+            except OSError as exc:
+                _log.warning("identity backfill skipped for scene %s in %s -- %s",
+                             sid, cid, exc)
+                continue
             seen.add(token)
 
 
