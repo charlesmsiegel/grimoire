@@ -340,6 +340,13 @@ export const api = {
   renameWorld: (wid: string, name: string) =>
     request<{ id: string; name: string }>("PUT", `/api/worlds/${wid}`, { name }),
   deleteWorld: (wid: string) => request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}`),
+  /** Fork `wid` into a brand-new world called `name` (#41) — a deep copy of the
+   *  whole directory, sharing nothing with the world it came from and changing
+   *  nothing about it. No `invalidateConfigCache`, unlike `createWorld` and
+   *  `importWorld`: forking needs a world to fork, so `first_run` was already
+   *  false before the call and the cached config still says so. */
+  forkWorld: (wid: string, name: string) =>
+    request<{ id: string }>("POST", `/api/worlds/${wid}/fork`, { name }),
 
   // world bundles (#54). Export is a plain href so the browser streams the zip
   // straight to disk -- a world runs to a gigabyte, which is not something to
