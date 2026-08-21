@@ -107,6 +107,38 @@ test("renders from the bundle the write returned, not from the click", async () 
     expect(screen.getByLabelText<HTMLSelectElement>("Scene turns").value).toBe("cheap"));
 });
 
+test("a slow first write cannot overwrite what a later one already showed", async () => {
+  // Nothing orders two responses. Without the ticket, the first write's bundle
+  // landing second renders a state the store has already moved past -- the
+  // second row snapping back to inherit while the store holds the connection
+  // the reader picked.
+  const slow = bundle({
+    routes: { scene: "big", dossier: "" },
+    effective: { scene: "big", dossier: "" },
+    provenance: { scene: { scope: "global" }, dossier: { scope: "active" } },
+  });
+  const fast = bundle({
+    routes: { scene: "big", dossier: "cheap" },
+    effective: { scene: "big", dossier: "cheap" },
+    provenance: { scene: { scope: "global" }, dossier: { scope: "global" } },
+  });
+  let releaseSlow: (b: unknown) => void = () => {};
+  vi.mocked(api.setGlobalRouting)
+    .mockImplementationOnce(() => new Promise((res) => { releaseSlow = res; }) as never)
+    .mockResolvedValueOnce(fast as never);
+
+  render(<ModelRoutingPicker scope="global" />);
+  fireEvent.change(await screen.findByLabelText("Scene turns"), { target: { value: "big" } });
+  fireEvent.change(screen.getByLabelText("Dossier refresh"), { target: { value: "cheap" } });
+
+  await waitFor(() =>
+    expect(screen.getByLabelText<HTMLSelectElement>("Dossier refresh").value).toBe("cheap"));
+  releaseSlow(slow);
+
+  await waitFor(() => expect(api.setGlobalRouting).toHaveBeenCalledTimes(2));
+  expect(screen.getByLabelText<HTMLSelectElement>("Dossier refresh").value).toBe("cheap");
+});
+
 test("a refused write shows the reason and restores what the store actually has", async () => {
   // A real refusal, not a bare object: `request` throws `ApiError`, and a
   // component that only reads `.detail` off whatever it caught is how a

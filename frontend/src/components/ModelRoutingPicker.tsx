@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api, type RoutingBundle } from "../api/client";
 
 /** What went wrong, in the words the server used when it had any. `unknown`
@@ -30,10 +30,18 @@ export function ModelRoutingPicker({ scope, cid }: { scope: "global" | "campaign
   const [bundle, setBundle] = useState<RoutingBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
+  // Nothing orders two responses. Changing two rows quickly issues two writes,
+  // and if the first one's bundle lands second the page renders a state the
+  // store has already moved past -- the second row snapping back to inherit
+  // while the store holds the connection that was chosen. Every read and write
+  // takes a ticket and only the newest may render.
+  const ticket = useRef(0);
 
   const load = useCallback(() => {
+    const n = (ticket.current += 1);
     const get = scope === "global" ? api.getGlobalRouting() : api.getCampaignRouting(cid!);
-    return get.then(setBundle).catch((err: unknown) => {
+    return get.then((r) => { if (n === ticket.current) setBundle(r); }).catch((err: unknown) => {
+      if (n !== ticket.current) return;
       setBundle(null);
       setError(reason(err));
     });
@@ -44,6 +52,7 @@ export function ModelRoutingPicker({ scope, cid }: { scope: "global" | "campaign
   async function choose(route: string, connectionId: string) {
     setError(null);
     setBusy(route);
+    const n = (ticket.current += 1);
     try {
       // One route per write, not the whole map: two tabs editing different
       // routes must not clobber each other, and a partial map is what the
@@ -51,8 +60,9 @@ export function ModelRoutingPicker({ scope, cid }: { scope: "global" | "campaign
       const next = scope === "global"
         ? await api.setGlobalRouting({ [route]: connectionId })
         : await api.setCampaignRouting(cid!, { [route]: connectionId });
-      setBundle(next);
+      if (n === ticket.current) setBundle(next);
     } catch (err: unknown) {
+      if (n !== ticket.current) return;
       setError(reason(err));
       // The select is rendered from the bundle, so a failed write would
       // otherwise leave the row showing a choice the store never took.

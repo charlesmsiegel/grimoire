@@ -123,18 +123,35 @@ def test_an_unknown_task_resolves_to_the_active_connection_rather_than_raising()
 
 
 def test_resolution_does_not_consult_the_store():
-    # The purity that lets config.py import this module. If routing ever reaches
-    # for the store, config -> routing -> ... -> config closes a cycle and the
-    # import guard fails somewhere far away from here.
-    import pathlib
+    """The purity that lets config.py import this module.
+
+    If routing ever reaches for the store, `config -> routing -> config` closes
+    a cycle and the import guard fails somewhere far away from here, with a
+    message about a graph rather than about this rule.
+
+    Read off the AST rather than by searching the text: `from . import config`
+    and `import grimoire.store.config` are the same mistake spelled two ways,
+    and a substring check catches whichever one the author of the check thought
+    of.
+    """
+    import ast
+    import pathlib as pl
 
     import grimoire.store.routing as mod
-    src = pathlib.Path(mod.__file__ or "")
+
+    src = pl.Path(mod.__file__ or "")
     assert src.name == "routing.py"
-    text = src.read_text(encoding="utf-8")
-    assert "import" in text
-    for banned in ("from . import", "from .config", "from .llm_connections", "from .campaigns"):
-        assert banned not in text, f"routing.py must stay a pure leaf; found {banned!r}"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+    reached = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            # level>0 is a relative import, which inside `store/` can only be a
+            # sibling of this module.
+            if node.level:
+                reached.append("." * node.level + (node.module or ""))
+        elif isinstance(node, ast.Import):
+            reached += [a.name for a in node.names if a.name.startswith("grimoire")]
+    assert not reached, f"routing.py must stay a pure leaf; it imports {reached}"
 
 
 # --- what the surfaces need ---
