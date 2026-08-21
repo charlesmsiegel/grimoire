@@ -75,7 +75,7 @@ def test_a_runaway_message_is_clipped_and_says_so(home):
     assert len(row["message"]) < logs.MAX_MESSAGE + 20
 
 
-def test_a_traceback_is_clipped_from_the_FRONT_so_the_exception_survives(home):
+def test_a_traceback_is_clipped_from_the_front_so_the_exception_survives(home):
     trace = "old frames\n" * 500 + "ValueError: the part that matters"
 
     logs.record("error", "runner", "boom", trace=trace)

@@ -146,7 +146,7 @@ it("says nothing has gone wrong rather than drawing an empty table", async () =>
   vi.mocked(api.getStats).mockResolvedValue({
     ...structuredClone(STATS),
     errors: { ...ERRORS, total: 0, modules: [], kinds: [], daily: [], rows: [] },
-  } as never);
+  });
   view();
   await screen.findByRole("heading", { name: "Performance" });
 
@@ -285,7 +285,7 @@ it("does not report the abort it caused by switching Live off", async () => {
 
 // ---- failure ----
 it("reports a stats read that failed instead of spinning forever", async () => {
-  vi.mocked(api.getStats).mockRejectedValue(new Error("the ledger is unreadable") as never);
+  vi.mocked(api.getStats).mockRejectedValue(new Error("the ledger is unreadable"));
   view();
 
   expect(await screen.findByText("Error: the ledger is unreadable")).toBeInTheDocument();

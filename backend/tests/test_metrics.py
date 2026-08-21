@@ -152,8 +152,8 @@ def test_a_hand_edited_duration_costs_its_own_row_and_not_the_report(home):
     # A ledger a human edited: a string where the milliseconds belong.
     ledger = home / "usage" / f"{_today()[:7]}.jsonl"
     with ledger.open("a", encoding="utf-8") as fh:
-        fh.write('{"ts": "%sT10:00:00Z", "kind": "llm", "task": "chat", '
-                 '"duration_ms": "ages", "status": "ok"}\n' % _today())
+        fh.write(f'{{"ts": "{_today()}T10:00:00Z", "kind": "llm", "task": "chat", '
+                 '"duration_ms": "ages", "status": "ok"}\n')
 
     out = metrics.performance(30)
     assert out["totals"]["calls"] == 3

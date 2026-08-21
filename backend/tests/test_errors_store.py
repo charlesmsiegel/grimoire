@@ -106,7 +106,7 @@ def test_counts_cover_the_window_and_the_list_is_only_a_page(home):
     assert out["total"] == 12
     assert len(out["rows"]) == 5
     assert out["truncated"] is True
-    assert [r["message"] for r in out["rows"]][0] == "429 #11"   # newest first
+    assert next(r["message"] for r in out["rows"]) == "429 #11"   # newest first
 
 
 def test_the_daily_series_is_the_trend_half(home):
@@ -145,10 +145,10 @@ def test_each_module_carries_its_most_recent_failure(home):
 
 # ---- the meter is the LLM choke point ----
 def test_a_failed_llm_call_is_recorded_against_the_task_that_made_it(home):
-    with pytest.raises(RuntimeError):
-        with usage.meter("dossier", campaign="saltmarch", scene="001-arrival") as m:
-            m.usage.update({"model": "realm/opus", "prompt_tokens": 10})
-            raise RuntimeError("provider said no")
+    with pytest.raises(RuntimeError), \
+            usage.meter("dossier", campaign="saltmarch", scene="001-arrival") as m:
+        m.usage.update({"model": "realm/opus", "prompt_tokens": 10})
+        raise RuntimeError("provider said no")
 
     row, = _log_rows(home)
     assert row["module"] == "dossier"
@@ -160,10 +160,9 @@ def test_a_failed_llm_call_is_recorded_against_the_task_that_made_it(home):
 def test_an_llm_error_carries_its_kind_rather_than_its_class_name(home):
     from grimoire.llm_errors import LLMError
 
-    with pytest.raises(LLMError):
-        with usage.meter("chat", campaign="saltmarch") as m:
-            m.usage.update({"model": "realm/opus"})
-            raise LLMError("rate_limit", "429 Too Many Requests")
+    with pytest.raises(LLMError), usage.meter("chat", campaign="saltmarch") as m:
+        m.usage.update({"model": "realm/opus"})
+        raise LLMError("rate_limit", "429 Too Many Requests")
 
     row, = _log_rows(home)
     assert row["kind"] == "rate_limit"
@@ -176,9 +175,8 @@ def test_a_failure_before_anything_was_sent_is_recorded_though_no_ledger_row_is(
     exactly the failure a user most needs written down."""
     from grimoire.llm_errors import LLMError
 
-    with pytest.raises(LLMError):
-        with usage.meter("tagline") as m:      # m.usage never filled
-            raise LLMError("missing_key", "no connection is configured")
+    with pytest.raises(LLMError), usage.meter("tagline"):   # `usage` never filled
+        raise LLMError("missing_key", "no connection is configured")
 
     assert not list((home / "usage").glob("*.jsonl"))
     row, = _log_rows(home)
@@ -190,10 +188,9 @@ def test_a_cancelled_call_is_not_an_error(home):
     them -- the distinction `Meter.__exit__` already draws for the ledger."""
     import asyncio
 
-    with pytest.raises(asyncio.CancelledError):
-        with usage.meter("suggestions") as m:
-            m.usage.update({"model": "realm/opus"})
-            raise asyncio.CancelledError
+    with pytest.raises(asyncio.CancelledError), usage.meter("suggestions") as m:
+        m.usage.update({"model": "realm/opus"})
+        raise asyncio.CancelledError
 
     assert errors.summary(30)["total"] == 0
 
@@ -208,10 +205,9 @@ def test_a_successful_call_records_no_error(home):
 def test_one_failure_is_one_error_row_however_the_meter_is_closed(home):
     """`done()` explicitly and then unwound by the same exception files one
     ledger row; it must file one error row too."""
-    with pytest.raises(RuntimeError):
-        with usage.meter("chat") as m:
-            m.usage.update({"model": "realm/opus"})
-            m.done("error", "network", detail="connection reset")
-            raise RuntimeError("and then this")
+    with pytest.raises(RuntimeError), usage.meter("chat") as m:
+        m.usage.update({"model": "realm/opus"})
+        m.done("error", "network", detail="connection reset")
+        raise RuntimeError("and then this")
 
     assert errors.summary(30)["total"] == 1
