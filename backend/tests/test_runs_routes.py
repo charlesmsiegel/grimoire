@@ -28,7 +28,13 @@ def _sse(payload: dict) -> str:
 
 
 def _subject(cid, sid):
-    return ("scene", cid, sid)
+    """A scene run's subject: the campaign and the scene's IDENTITY.
+
+    Not the `sid`. The id moves on rename and is reissued after a delete, so it
+    cannot name a run that outlives the request that started it -- see
+    `runs.Subject`.
+    """
+    return ("scene", cid, store.scenes.scene_identity(cid, sid) or runs_mod.UNRESOLVED)
 
 
 def _reserve(client, cid, sid, attempt="a1", cls="turn"):
@@ -730,3 +736,50 @@ def test_an_attempt_id_with_a_slash_can_still_be_cancelled(client, sending_scene
 
     assert _latest(client, cid, sid).state == "cancelled", \
         "a structured attempt id could not stop its own turn"
+
+
+def test_a_rename_keeps_a_finished_runs_result_reachable(client, campaign_scene):
+    """A scene's `sid` moves when it is renamed, and a terminal run keeps the
+    one it started with.
+
+    Keyed by `sid`, the run was then reachable from neither URL: not the old
+    one, which no longer names a scene, and not the new one, whose subject did
+    not match. So a client that reconnected inside the retention window could
+    not tell "my turn landed" from "my send never arrived" -- and re-sending is
+    what it does when it cannot tell, which duplicates the post and the reply.
+    The identity is the one name that survives a rename, which is what the
+    subject is built from.
+    """
+    cid, sid = campaign_scene
+    run = _reserve(client, cid, sid)
+    run.append_frame(_sse({"delta": "Mist over the dock."}))
+    run.finish("landed")
+
+    renamed = client.put(f"/api/campaigns/{cid}/scenes/{sid}",
+                         json={"title": "Winifred"}).json()["id"]
+    assert renamed != sid, "the premise failed: the rename did not move the id"
+
+    got = client.get(f"/api/campaigns/{cid}/scenes/{renamed}/runs/{run.id}")
+    assert got.status_code == 200, "the finished run was lost by the rename"
+    assert got.json()["run"]["state"] == "landed"
+
+    replay = client.get(f"/api/campaigns/{cid}/scenes/{renamed}/runs/{run.id}/stream")
+    assert "Mist over the dock." in replay.text, "its frames went with it"
+
+
+def test_a_rename_does_not_make_a_finished_attempt_run_twice(client, sending_scene):
+    """The consequence the lookup failure actually has. A client re-sending a
+    lost attempt after a rename must adopt the original outcome, not repeat the
+    turn -- repeating it appends the player's post and a second reply."""
+    cid, sid = sending_scene
+    first = _chat(client, cid, sid, headers={"X-Grimoire-Attempt": "a-77"})
+    assert first.status_code == 200
+    renamed = client.put(f"/api/campaigns/{cid}/scenes/{sid}",
+                         json={"title": "Winifred"}).json()["id"]
+    before = store.scenes.read_scene(cid, renamed)["messages"]
+
+    again = _chat(client, cid, renamed, headers={"X-Grimoire-Attempt": "a-77"})
+
+    assert again.status_code == 200
+    assert store.scenes.read_scene(cid, renamed)["messages"] == before, \
+        "the renamed scene ran the same attempt a second time"

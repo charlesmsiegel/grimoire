@@ -564,3 +564,42 @@ def test_an_identity_that_is_not_a_token_is_still_replaced_when_readable(
 
     assert store.scenes.scene_identity(cid, sid) == minted
     assert b"not a token" not in p.read_bytes()
+
+
+def test_a_scan_that_could_not_read_everything_does_not_report_the_scene_gone(
+        tmp_path, monkeypatch):
+    """"I looked everywhere and it is not here" and "I could not look
+    everywhere" are different answers, and only the first should send a
+    notification tap back to the campaign.
+
+    One unreadable file must not blind the scan -- it keeps going, and
+    `test_find_by_identity_keeps_looking_past_an_unreadable_file` holds that.
+    But finishing WITHOUT a match having skipped a file it could not open means
+    the identity has not been ruled out, and answering `None` there turned a
+    scene that exists into a scene reported gone.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    stuck = store.scenes.create_scene(cid, "Mara")
+    real = store.scenes.identity.parse_frontmatter_head
+
+    def blocked(p):
+        if p.stem == stuck:
+            raise PermissionError("the file is open in another process")
+        return real(p)
+
+    monkeypatch.setattr(store.scenes.identity, "parse_frontmatter_head", blocked)
+    with pytest.raises(OSError):
+        store.scenes.find_by_identity(cid, "f" * 32)
+
+
+def test_a_scan_that_read_everything_still_reports_a_missing_identity(tmp_path,
+                                                                     monkeypatch):
+    """The counterweight: a clean scan that finds nothing must still say so,
+    or a tap for a genuinely deleted scene would retry forever instead of
+    falling back to the campaign."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    store.scenes.create_scene(cid, "Mara")
+
+    assert store.scenes.find_by_identity(cid, "f" * 32) is None

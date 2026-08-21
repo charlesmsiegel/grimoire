@@ -77,7 +77,16 @@ a store change and not a registry one.
 """
 
 Subject = tuple
-"""``("scene", cid, sid)`` / ``("campaign", cid)`` / ``("world", wid)`` /
+"""``("scene", cid, identity)`` / ``("campaign", cid)`` / ``("world", wid)`` /
+
+A scene is named by its IDENTITY, not by its `sid`. The id is neither stable nor
+unique over time -- a rename mints a new one and a deletion frees the old one
+for the next scene -- so keying runs by it broke twice over: a rename left a
+terminal run reachable from neither the old URL nor the new one (so a client
+could not tell "it landed" from "it never sent", and re-sent), and a
+replacement that recycled the id could reach the dead scene's run. The identity
+is the one name that survives the first and is not shared by the second.
+
 ``("global",)``.
 
 A plain tuple on purpose: hashable, so it keys the indexes directly, and
@@ -513,10 +522,11 @@ router = APIRouter()
 def _scene_subject(cid: str, sid: str) -> tuple[Subject, str | None]:
     """The subject for a scene, plus the scene's current identity.
 
-    The identity is what distinguishes a scene from a *replacement* that
-    recycled its id -- ids are recycled by design, and a terminal run stays
-    readable for the whole retention window, so the subject alone would let the
-    replacement read or cancel the dead scene's run.
+    The subject IS the identity (see `Subject`): a scene's `sid` moves on
+    rename and is handed to the next scene on delete, so it cannot name a run
+    that outlives the request that started it. Both are returned because
+    callers pass the identity to `_owns` as well, where it stays a belt-and-
+    braces check on a run that was indexed before this was true.
     """
     try:
         identity = scenes.scene_identity_strict(cid, sid)
@@ -538,7 +548,8 @@ def _scene_subject(cid: str, sid: str) -> tuple[Subject, str | None]:
     # either (`reserve_turn` mints one before it publishes anything), so a
     # sentinel that matches nothing is the honest answer rather than a refusal
     # -- discovery on such a scene still answers "no run" instead of an error.
-    return ("scene", cid, sid), identity or UNRESOLVED
+    resolved = identity or UNRESOLVED
+    return ("scene", cid, resolved), resolved
 
 
 _MAX_PRECANCEL = 256
@@ -632,6 +643,13 @@ def get_scene_by_identity(cid: str, identity: str) -> dict:
         sid = scenes.find_by_identity(cid, identity)
     except CampaignNotFound as exc:
         raise _gone("campaign_gone", "no such campaign") from exc
+    except OSError as exc:
+        # The scan could not read every candidate, so it cannot rule the
+        # identity out. A 404 here tells a notification tap the scene is gone
+        # and sends it back to the campaign, which is a wrong answer the user
+        # sees; contention is retryable and is what this actually is.
+        raise HTTPException(status_code=409, detail={
+            "kind": "busy", "detail": str(exc)}) from exc
     if sid is None:
         raise _gone("scene_gone", "no scene carries that identity")
     return {"id": sid}
@@ -961,7 +979,10 @@ def require_scene_free(app, cid: str, sid: str) -> None:
     change the fence exists to make impossible; refusing costs the user a few
     seconds and the composer already tells them a turn is in flight.
     """
-    live = app.state.runs.live_for_key(exclusion_key(("scene", cid, sid), "turn"))
+    identity = scenes.scene_identity_strict(cid, sid)
+    if identity is None:
+        return                       # no identity, so no run can name this scene
+    live = app.state.runs.live_for_key(exclusion_key(("scene", cid, identity), "turn"))
     if live is not None:
         raise HTTPException(status_code=409, detail={
             "kind": "run_in_flight", "run_id": live.id,
@@ -1025,7 +1046,7 @@ def reserve_turn(app, cid: str, sid: str, kind: str,
         raise HTTPException(status_code=409, detail={
             "kind": "busy", "detail": f"the scene could not be read: {exc}"}) from exc
     labels = {"campaign": _campaign_label(cid), "scene": _scene_label(cid, sid)}
-    subject: Subject = ("scene", cid, sid)
+    subject: Subject = ("scene", cid, identity)
     attempt = attempt_id or uuid.uuid4().hex
     try:
         # Under the campaign lock, which is what lets `scene_held_free` exclude
