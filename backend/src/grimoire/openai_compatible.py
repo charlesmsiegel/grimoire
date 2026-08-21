@@ -17,6 +17,14 @@ import httpx
 from . import catalog, llm_usage
 from .llm_errors import LLMError, retry_after_seconds
 
+#: Bound for the health probe (#146). The client's own 120s default is sized
+#: for a generation; a reader who pressed "Test connection" is watching a
+#: spinner, and two minutes of one is indistinguishable from a hung app. The
+#: same value and the same reasoning as `openrouter.PROBE_TIMEOUT` — separate
+#: because these two modules deliberately share no code (see the module
+#: docstring), not because the number is a different one.
+PROBE_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
+
 
 class OpenAICompatibleError(LLMError):
     pass
@@ -179,13 +187,25 @@ class OpenAICompatibleClient:
         return "".join([chunk async for chunk
                         in self.stream(messages, model, key, base_url, strict, usage)])
 
-    async def list_models(self, base_url: str, key: str) -> list[dict]:
+    async def list_models(self, base_url: str, key: str,
+                          bound: httpx.Timeout | None = None) -> list[dict]:
+        """This endpoint's catalog. `bound` overrides the client's own timeout,
+        which is sized for a generation — see `PROBE_TIMEOUT`. (Not spelled
+        `timeout`: a parameter by that name on an async function is what
+        ASYNC109 flags, and it means the httpx one either way.)"""
         if not base_url:
             raise OpenAICompatibleError("missing_key", "No base URL configured")
         url = base_url.rstrip("/") + "/models"
         try:
             http = self._client()
-            resp = await http.get(url, headers=self._headers(key))
+            headers = self._headers(key)
+            # Two spellings rather than a `**kwargs` splat: httpx distinguishes
+            # "the client's default" (the argument absent) from "no timeout at
+            # all" (`timeout=None`), so there is no single value that means
+            # "leave it alone" -- and a splatted dict types as `Any` at every
+            # other parameter of `get`, which is five mypy errors for one call.
+            resp = await (http.get(url, headers=headers, timeout=bound) if bound is not None
+                          else http.get(url, headers=headers))
             if resp.status_code >= 400:
                 raise OpenAICompatibleError(_status_kind(resp.status_code), _extract_error(resp.text))
             data = resp.json().get("data", [])
@@ -214,8 +234,12 @@ class OpenAICompatibleClient:
         URL with a typo in it, and reporting healthy on the strength of *any*
         HTTP response would call a 404 from an unrelated web server a working
         LLM endpoint.
+
+        The catalog's own 120s bound is not this call's: the reader is watching
+        a spinner, not a generation. `list_models` keeps its when it is being
+        used as a catalog.
         """
-        await self.list_models(base_url, key)
+        await self.list_models(base_url, key, bound=PROBE_TIMEOUT)
 
     async def aclose(self) -> None:
         # Reset, not just close: `_client()` is lazy, so leaving the closed

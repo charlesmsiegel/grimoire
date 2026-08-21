@@ -40,6 +40,36 @@ export function errorText(err: unknown): string {
   return typeof detail === "string" && detail ? detail : String(err);
 }
 
+/** Every `kind` an LLM provider failure carries — `llm_errors.KINDS`.
+ *
+ *  Spelled out rather than read as "has a kind at all", because `kind` is the
+ *  app's word for "what sort of failure this is" and one route already uses it
+ *  for something that is not a provider at all (`PUT /config/data-dir` answers
+ *  `data_dir`). A list that has to be kept in step with the backend is the
+ *  price of not treating those as an LLM going down.
+ */
+const PROVIDER_KINDS = new Set([
+  "missing_key", "auth", "rate_limit", "network", "bad_response",
+  "missing_dependency", "timeout",
+]);
+
+/** Did a provider just fail us?
+ *
+ *  Read structurally, like the two below, because this fires on an SSE `error`
+ *  frame as often as on an `ApiError` — a scene turn is the failure that
+ *  matters most here and never reaches the browser as a rejection.
+ *
+ *  Its one caller-facing consequence: whatever the app was saying about that
+ *  connection's health is now out of date (#146). The server has already
+ *  recorded the failure; this is how the *client* learns to go and look.
+ */
+export function isProviderFailure(err: unknown): boolean {
+  const kind = typeof err === "object" && err !== null
+    ? (err as { kind?: unknown }).kind
+    : undefined;
+  return typeof kind === "string" && PROVIDER_KINDS.has(kind);
+}
+
 /** Is this failure the network being gone rather than anything the app did?
  *
  *  `LLMError.kind` is the seam (#210): every provider tags a refused

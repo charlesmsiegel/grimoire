@@ -17,8 +17,8 @@ vi.mock("../api/models", () => ({ priceLabel: () => "", contextLabel: () => "" }
 import { api, ApiError } from "../api/client";
 
 const UNCHECKED = { state: "unknown", kind: "", detail: "", at: "" };
-const OPENROUTER = { id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "", model: "anthropic/claude-opus-4.1", post_process: "none", key_set: true, rev: "r1" };
-const CUSTOM = { id: "zai-glm", kind: "openai_compatible", name: "z.ai GLM", base_url: "https://api.z.ai/v4", model: "glm-4.6", post_process: "strict", key_set: true, rev: "r2" };
+const OPENROUTER = { id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "", model: "anthropic/claude-opus-4.1", post_process: "none", key_set: true, rev: "r1", health: UNCHECKED };
+const CUSTOM = { id: "zai-glm", kind: "openai_compatible", name: "z.ai GLM", base_url: "https://api.z.ai/v4", model: "glm-4.6", post_process: "strict", key_set: true, rev: "r2", health: UNCHECKED };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -280,6 +280,42 @@ test("a refused connection reports the provider's reason, not an app error", asy
   // The answer to the question asked — not the banner that means "this page
   // could not do the thing you clicked".
   expect(screen.queryByText(/Couldn.t reach the model provider/)).toBeNull();
+});
+
+test("the rail marks a failing connection, so the reason is findable from the list", async () => {
+  (api.listConnections as any).mockResolvedValue([
+    { ...OPENROUTER, health: { state: "error", kind: "auth", detail: "bad key", at: "2026-08-21T09:00:00Z" } },
+    CUSTOM,
+  ]);
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+
+  expect(await within(rail).findByText("failing")).toBeInTheDocument();
+  expect(within(rail).getAllByText("failing")).toHaveLength(1);   // only the one
+});
+
+test("a catalog that lands after the reader has moved on does not fill the wrong picker", async () => {
+  // The fetch is slower than the click that starts it, so "the connection this
+  // response is about" and "the connection on screen" are different questions.
+  let landSlow: (v: any) => void;
+  (api.refreshConnectionModels as any).mockImplementation((id: string) =>
+    id === "openrouter"
+      ? new Promise((res) => { landSlow = res; })
+      : Promise.resolve({ models: [], fetched_at: "", rev: "r2" }));
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+
+  fireEvent.click(await within(rail).findByText("OpenRouter"));   // starts the slow fetch
+  await waitFor(() => expect(api.refreshConnectionModels).toHaveBeenCalledWith("openrouter"));
+  fireEvent.click(await within(rail).findByText("z.ai GLM"));
+  await waitFor(() => expect(api.readConnection).toHaveBeenCalledWith("zai-glm"));
+  landSlow!({ models: [{ id: "openrouter-only/model", name: "OR", context: null, prompt: null, completion: null }],
+              fetched_at: "2026-08-21", rev: "r1" });
+
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  const model = await screen.findByDisplayValue("glm-4.6");
+  fireEvent.focus(model);
+  expect(screen.queryByText("openrouter-only/model")).toBeNull();
 });
 
 test("a stored failure is shown when the connection is opened, not only after a click", async () => {

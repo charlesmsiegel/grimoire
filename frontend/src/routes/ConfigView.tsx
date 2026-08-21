@@ -158,6 +158,29 @@ function NumField(
 /** Whether two layouts would store the same thing. Compared field by field
  *  rather than by JSON string so a key-order change in the API response cannot
  *  read as an edit the reader never made. */
+/** What the picked connection's line says beneath it.
+ *
+ *  Three claims, weakest last. A recorded failure is the strongest thing known
+ *  and is said in the provider's own words (#146); a missing credential is the
+ *  next, because it means nothing will be sent at all; and "key set" — all this
+ *  page could say before — is what is left when nothing has been observed.
+ *
+ *  Reads the SELECTED connection, not `config.ready`: the latter describes the
+ *  one on disk, which is the wrong one to report the moment this select has
+ *  been changed and not yet saved — exactly when someone is looking at it.
+ */
+function connectionCaption(conn: LLMConnection | undefined): string {
+  if (!conn) return "no connection selected";
+  if (conn.health.state === "error") {
+    return `last attempt failed — ${conn.health.detail || conn.health.kind}`;
+  }
+  if (conn.kind === "openrouter" && !conn.key_set) return "no key set — scenes will not send";
+  if (conn.kind === "openai_compatible" && !conn.base_url) {
+    return "no base URL set — scenes will not send";
+  }
+  return conn.health.state === "ok" ? "working" : "not checked yet";
+}
+
 function sameLayout(a: PromptLayoutSection[], b: PromptLayoutSection[]) {
   return a.length === b.length && a.every((row, i) =>
     row.id === b[i].id && row.label === b[i].label && row.enabled === b[i].enabled);
@@ -571,11 +594,13 @@ export default function ConfigView() {
                     latter describes the one on disk, which is the wrong one to
                     report the moment this select has been changed and not yet
                     saved — exactly when someone is looking at this line. */}
-                <p className="config-caption">
-                  {connections.find((c) => c.id === draft.active_connection_id)?.key_set
-                    ? "key set"
-                    : "no key set — scenes will not send"}
-                </p>
+                {/* "key set" was the whole of what this page could say until
+                    #146, and it is a claim about a string in a file. Whatever
+                    the provider last actually did outranks it: a rejected key
+                    is *set*, and reading "key set" over one is how someone
+                    ends up debugging their prompt. */}
+                <p className="config-caption">{connectionCaption(
+                  connections.find((c) => c.id === draft.active_connection_id))}</p>
               </div>
               <NumField id="cfg-llm-retries" label="Retries" placeholder="2"
                         caption="0 = send once, then report the failure"

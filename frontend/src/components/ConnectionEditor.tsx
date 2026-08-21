@@ -48,6 +48,13 @@ export function ConnectionEditor() {
   // re-render that reselects it — and the failure is exactly the case where
   // retrying in a loop is worst.
   const fetchedOnce = useRef(new Set<string>());
+  // Which connection the body is showing (null = the New form). A ref rather
+  // than the `id` state because the async fetches below have to compare
+  // against what is open *when they land*, not against what was open when
+  // they were started — a catalog fetch is slow enough to outlive the click
+  // that started it, and a reader who moves to another connection meanwhile
+  // would otherwise get the first one's models in the second one's picker.
+  const openId = useRef<string | null>(null);
 
   const reload = useCallback(() => api.listConnections().then(setConnections), []);
   useEffect(() => { reload(); }, [reload]);
@@ -63,13 +70,18 @@ export function ConnectionEditor() {
     setModelsError(false);
     if (form.kind !== "openrouter") { setModels([]); return; }
     let alive = true;
+    // Both guards, and they are not the same guard. `alive` retires the effect
+    // when its deps move; `openId` is what the *body* is showing, which changes
+    // synchronously on a click and so can already have moved on while this
+    // effect's cleanup is still one render away.
     api.previewModels({ kind: "openrouter" })
-      .then((r) => alive && setModels(r.models))
-      .catch(() => alive && setModelsError(true));
+      .then((r) => alive && openId.current === null && setModels(r.models))
+      .catch(() => alive && openId.current === null && setModelsError(true));
     return () => { alive = false; };
   }, [id, form.kind]);
 
   function resetForm() {
+    openId.current = null;
     setId(null);
     setDetail(null);
     setForm(BLANK_CONNECTION);
@@ -83,7 +95,9 @@ export function ConnectionEditor() {
     setError(null);
     setChecked(null);
     setModelsError(false);
+    openId.current = cid;
     const d = await api.readConnection(cid);
+    if (openId.current !== cid) return;   // moved on while this read was out
     setId(cid);
     setDetail(d);
     setForm({ kind: d.kind, name: d.name, base_url: d.base_url, model: d.model, post_process: d.post_process });
@@ -167,17 +181,18 @@ export function ConnectionEditor() {
     setModelsError(false);
     try {
       const result = await api.refreshConnectionModels(forId);
-      setModels(result.models);
       // Discard a response that arrived after the open form moved on to a
       // different connection or a newer revision of this one (e.g. the
       // user saved a base_url change while the fetch was in flight) — the
       // same stale-async-response guard used elsewhere in this codebase
       // (ModelCombobox/StyleGuideEditor's `alive` pattern), keyed here on
       // the connection's rev instead of a mount flag.
+      if (openId.current === forId) setModels(result.models);
       setDetail((d) => (d && d.id === forId && d.rev === result.rev
         ? { ...d, models: result.models, fetched_at: result.fetched_at }
         : d));
     } catch (err: unknown) {
+      if (openId.current !== forId) return;   // a failure about a closed form
       setModelsError(true);
       if (!quiet) setError(err);
     } finally {
@@ -194,8 +209,10 @@ export function ConnectionEditor() {
       const r = await api.previewModels({
         kind: form.kind, base_url: form.base_url, api_key: key,
       });
+      if (openId.current !== null) return;   // a saved connection is open now
       setModels(r.models);
     } catch (err: unknown) {
+      if (openId.current !== null) return;
       setModelsError(true);
       setError(err);
     } finally {
@@ -213,7 +230,14 @@ export function ConnectionEditor() {
     setChecked(null);
     try {
       const result = await api.checkConnection(forId);
+      // A verdict about a connection nobody is looking at any more belongs in
+      // the registry (where the server already put it), not on this panel.
+      if (openId.current !== forId) return;
       setChecked(result);
+      // The rail badges a failing connection, and it is drawn from the list —
+      // so a check whose verdict only reached this panel would leave the two
+      // halves of the same page disagreeing about the same connection.
+      await reload();
       setDetail((d) => (d && d.id === forId
         ? { ...d, health: {
               state: result.ok ? "ok" : "error", kind: result.kind,
@@ -238,6 +262,10 @@ export function ConnectionEditor() {
             {c.name}
             <span className="mark-badge">{c.kind}</span>
             {activeId === c.id && <span className="mark-badge">active</span>}
+            {/* Only the failure. A rail that badged all three states would
+                spend two thirds of its ink saying nothing happened. */}
+            {c.health.state === "error" &&
+              <span className="mark-badge health-error" title={c.health.detail}>failing</span>}
           </button>
         ))}
       </div>
@@ -310,7 +338,7 @@ export function ConnectionEditor() {
                 <p className="field-hint">
                   {id
                     ? (detail?.fetched_at ? `Cached models last fetched ${detail.fetched_at}. ` : "No cached models yet. ")
-                    : "Models are listed from this endpoint. "}
+                    : "Models are listed from this provider. "}
                   <button className="link" disabled={refreshing}
                           onClick={() => (id ? refreshModels(id) : previewModels())}>
                     {fetchLabel}

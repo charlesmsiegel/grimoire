@@ -3,6 +3,7 @@ import pytest
 
 from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import (
+    PROBE_TIMEOUT,
     OpenAICompatibleClient,
     OpenAICompatibleError,
     _strict_messages,
@@ -229,6 +230,47 @@ async def test_list_models_keeps_its_own_read_bound():
 
     await make_client(handler).list_models("https://x/v1", "")
     assert seen["read"] is not None
+
+
+async def test_the_probe_imposes_its_own_bound_where_the_catalog_inherits_one():
+    """The same request, asked for two different reasons (#146). A catalog is a
+    download and keeps the client's generation-sized bound; a health check is
+    somebody watching a spinner, so it names a tighter one — which is only
+    visible as *whether an override was sent*, since the client's own default
+    is not the request's to read."""
+    seen = []
+
+    def handler(request):
+        seen.append(request.extensions.get("timeout"))
+        return httpx.Response(200, json={"data": []})
+
+    client = make_client(handler)
+    await client.list_models("https://x/v1", "")
+    await client.probe("https://x/v1", "")
+
+    catalog, probe = seen
+    assert catalog != {"connect": PROBE_TIMEOUT.connect, "read": PROBE_TIMEOUT.read,
+                       "write": PROBE_TIMEOUT.write, "pool": PROBE_TIMEOUT.pool}
+    assert probe["read"] == PROBE_TIMEOUT.read == 20.0
+    assert probe["connect"] == PROBE_TIMEOUT.connect == 10.0
+
+
+async def test_probe_reports_an_endpoint_that_refuses_the_key():
+    def handler(request):
+        return httpx.Response(401, json={"error": {"message": "invalid api key"}})
+
+    with pytest.raises(OpenAICompatibleError) as exc:
+        await make_client(handler).probe("https://x/v1", "sk-dead")
+    assert (exc.value.kind, exc.value.detail) == ("auth", "invalid api key")
+
+
+async def test_probe_reports_an_endpoint_that_is_not_listening():
+    def handler(request):
+        raise httpx.ConnectError("connection refused")
+
+    with pytest.raises(OpenAICompatibleError) as exc:
+        await make_client(handler).probe("http://127.0.0.1:9/v1", "")
+    assert exc.value.kind == "network"
 
 
 # ---- usage capture (#152) ----

@@ -36,10 +36,10 @@ export type LLMConnection = {
   id: string; kind: LLMConnectionKind; name: string;
   base_url: string; model: string; effective_model: string;
   post_process: "none" | "strict";
-  key_set: boolean; rev: string;
+  key_set: boolean; rev: string; health: ProviderHealth;
 };
 export type LLMConnectionDetail = LLMConnection & {
-  models: Model[]; fetched_at: string; health: ProviderHealth;
+  models: Model[]; fetched_at: string;
 };
 /** The active connection as `GET /config` reports it — id, kind, name, and the
  *  EFFECTIVE model (a `claude` connection with none configured still runs one).

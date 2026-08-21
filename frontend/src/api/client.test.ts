@@ -624,6 +624,34 @@ test("a rejected store move announces nothing", async () => {
   off();
 });
 
+test("a provider failure announces on the config channel — the status bar is stale", async () => {
+  // The server records what a provider did as it happens (#146); the client
+  // only finds out by reading the config again, and nothing else would tell it
+  // to before the next navigation.
+  const seen: string[] = [];
+  const off = onConfigChanged(() => seen.push("config"));
+  globalThis.fetch = vi.fn().mockResolvedValue(
+    { ok: false, status: 502, json: async () => ({ detail: "bad key", kind: "auth" }) }) as any;
+
+  await expect(api.generateCharacterTagline("realm", "mara")).rejects.toThrow();
+  expect(seen).toEqual(["config"]);
+  off();
+});
+
+test("a failure that is not a provider's announces nothing", async () => {
+  // `kind` is the app's word for "what sort of failure this is", and one route
+  // uses it for something that is not a provider at all — a data-dir refusal
+  // is not an LLM going down.
+  const seen: string[] = [];
+  const off = onConfigChanged(() => seen.push("config"));
+  globalThis.fetch = vi.fn().mockResolvedValue(
+    { ok: false, status: 400, json: async () => ({ detail: "not a directory", kind: "data_dir" }) }) as any;
+
+  await expect(api.putDataDir("/nope")).rejects.toThrow();
+  expect(seen).toEqual([]);
+  off();
+});
+
 test("a fresh read retires the pending one, so the next caller cannot adopt it", async () => {
   // The fresh read bypasses the share, but leaving the pre-mutation GET in the
   // map means the *next* caller joins it and stores the very answer the fresh

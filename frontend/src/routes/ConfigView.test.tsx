@@ -44,10 +44,11 @@ const dataDir = {
   data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
   is_default: true, source: "default" as const, exists: true,
 };
+const UNCHECKED = { state: "unknown", kind: "", detail: "", at: "" };
 const connections = [
-  { id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "", model: "m", post_process: "none", key_set: true, rev: "r1" },
-  { id: "claude", kind: "claude", name: "Claude", base_url: "", model: "opus", post_process: "none", key_set: false, rev: "r2" },
-  { id: "local", kind: "openai_compatible", name: "Local vectors", base_url: "http://localhost:1234/v1", model: "", post_process: "none", key_set: false, rev: "r3" },
+  { id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "", model: "m", post_process: "none", key_set: true, rev: "r1", health: UNCHECKED },
+  { id: "claude", kind: "claude", name: "Claude", base_url: "", model: "opus", post_process: "none", key_set: false, rev: "r2", health: UNCHECKED },
+  { id: "local", kind: "openai_compatible", name: "Local vectors", base_url: "http://localhost:1234/v1", model: "", post_process: "none", key_set: false, rev: "r3", health: UNCHECKED },
 ];
 beforeEach(() => {
   vi.clearAllMocks();
@@ -215,6 +216,42 @@ test("switching the active connection waits for Save like everything else", asyn
   save();
   await waitFor(() =>
     expect(api.putConfig).toHaveBeenCalledWith({ active_connection_id: "claude" }));
+});
+
+test("the connection line reports what the provider did, not what the file holds", async () => {
+  // "key set" is a claim about a string in config.md. A rejected key is *set*,
+  // and reading that over one is how somebody ends up debugging their prompt
+  // (#146).
+  (api.listConnections as any).mockResolvedValue([
+    { ...connections[0],
+      health: { state: "error", kind: "auth", detail: "No auth credentials found", at: "2026-08-21T09:00:00Z" } },
+    ...connections.slice(1),
+  ]);
+  renderView();
+  await open(/^Connection/);
+
+  expect(screen.getByText(/last attempt failed — No auth credentials found/)).toBeInTheDocument();
+  expect(screen.queryByText("key set")).toBeNull();
+});
+
+test("a connection nothing has exercised says so, rather than claiming to work", async () => {
+  renderView();
+  await open(/^Connection/);
+
+  expect(screen.getByText("not checked yet")).toBeInTheDocument();
+});
+
+test("a missing credential still outranks an unobserved connection", async () => {
+  // The order matters: nothing will be sent at all, so this is more useful
+  // than "not checked yet" — which is true of it as well.
+  (api.getConfig as any).mockResolvedValue({ ...cfg, active_connection_id: "openrouter" });
+  (api.listConnections as any).mockResolvedValue([
+    { ...connections[0], key_set: false }, ...connections.slice(1),
+  ]);
+  renderView();
+  await open(/^Connection/);
+
+  expect(screen.getByText(/no key set — scenes will not send/)).toBeInTheDocument();
 });
 
 test("picks a fallback connection, excluding the active one", async () => {

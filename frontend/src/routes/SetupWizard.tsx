@@ -215,16 +215,19 @@ export default function SetupWizard(
       await api.putConfig({ active_connection_id: id });
       setConnected(form.name.trim());
       // Then ask the provider whether the thing just saved actually works
-      // (#146). Deliberately after `setConnected`, and deliberately unable to
-      // undo it: the connection IS saved and active either way, and a wizard
-      // that refused to move on because a key was rejected would trap someone
-      // whose provider is merely down. A failed check is a warning beside the
-      // tick, not a gate.
-      try {
-        setHealth(await api.checkConnection(id));
-      } catch {
+      // (#146). Deliberately after `setConnected`, deliberately unable to undo
+      // it, and deliberately NOT awaited.
+      //
+      // The connection IS saved and active either way, so a wizard that
+      // refused to move on because a key was rejected would trap someone whose
+      // provider is merely down — a failed check is a warning beside the tick,
+      // not a gate. And awaiting it would hold `busy`, which every control on
+      // this step is disabled by: the Claude path's only honest probe is a
+      // real (tiny) generation, so "Saving…" would sit there for seconds after
+      // the save it names had finished.
+      void api.checkConnection(id).then(setHealth).catch(() => {
         /* the check is a courtesy; a connection that saved is still saved */
-      }
+      });
     } catch (err: any) {
       setError(err.detail ?? String(err));
     } finally {

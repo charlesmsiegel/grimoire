@@ -4,7 +4,7 @@ import Markdown from "react-markdown";
 import { hideArtHandles } from "../artHandles";
 import remarkGfm from "remark-gfm";
 import {
-  api, ApiError, type Actor, type SceneMeta,
+  api, ApiError, invalidateConfigCache, type Actor, type SceneMeta,
   type Message, type RosterEntry, type SceneAlternates,
   type SceneDatetime, type ProposalRecord, type SceneCheckActor,
   type ResponsePresetSummary, type ResponseOverride, type ResponseBundle,
@@ -16,7 +16,8 @@ import { isAbortError, newAttemptId, type ChatEvent } from "../api/stream";
 import { useRunRegistry } from "../runs/RunRegistryProvider";
 import { forkNotes } from "../components/forkNotes";
 import { ErrorNote } from "../components/ErrorNote";
-import { errorText } from "../api/errors";
+import { errorText, isProviderFailure } from "../api/errors";
+import { configChanged } from "../appEvents";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import { CastPanel } from "../components/CastPanel";
 import { NewSceneChooser } from "../components/NewSceneChooser";
@@ -430,8 +431,18 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // sentence out of nothing that failed, and set `text` alone.
   const [error, setError] =
     useState<{ text: string; retryable: boolean; from?: string; err?: unknown } | null>(null);
-  const fail = (e: any, retryable = true, from?: string) =>
+  const fail = (e: any, retryable = true, from?: string) => {
     setError({ text: errorText(e), retryable, from, err: e });
+    // A turn that failed is the freshest thing anyone knows about that
+    // connection, and it arrives as an SSE frame — so it never passes through
+    // the api client's rejection path, where the same signal is raised for
+    // every other provider call (#146). Without this the status dot keeps
+    // yesterday's verdict until the reader navigates.
+    if (isProviderFailure(e)) {
+      invalidateConfigCache();
+      configChanged();
+    }
+  };
   const [ctxKey, setCtxKey] = useState(0);
   // The campaign's budget, and the level the reader has already been told about
   // (#153). Held as a level rather than a boolean so dismissing the 80% warning
