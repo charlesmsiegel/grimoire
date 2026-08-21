@@ -152,7 +152,7 @@ def test_backfill_continues_past_a_contended_campaign(tmp_path, monkeypatch, cap
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = store.worlds.create_world("Realm")
     first = store.campaigns.create_campaign("Saltmarch", wid)
-    second = store.campaigns.create_campaign("Greenhollow", wid)
+    second = store.campaigns.create_campaign("Winifred", wid)
     sid = store.scenes.create_scene(second, "Mara")
     _strip_identity_from_disk(second, sid)
 
@@ -243,3 +243,73 @@ def test_identity_survives_a_repad(tmp_path, monkeypatch):
     found = store.scenes.find_by_identity(cid, ident)
     assert found in ids
     assert store.scenes.scene_identity(cid, found) == ident
+
+
+def test_backfill_preserves_hand_edited_frontmatter_verbatim(tmp_path, monkeypatch):
+    """The backfill touches every scene file in a real library, including ones
+    a user has edited by hand.
+
+    `parse_frontmatter` models only `key: value` lines -- it drops anything
+    without a colon and collapses duplicate keys -- and `dump_frontmatter`
+    requotes what survives. Parsing and re-dumping a hand-edited header
+    therefore DELETES the parts it does not model, silently, on first boot.
+    The identity line has to be spliced into the raw text instead.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    sid = store.scenes.create_scene(cid, "Mara")
+    p = store.scenes.paths._scene_path(cid, sid)
+
+    hand_edited = (
+        "---\n"
+        "title: Mara\n"
+        "# a note the user typed by hand\n"
+        "created: 2024-01-01\n"
+        "---\n"
+        "\n"
+        "**Mara:** hello\n"
+    )
+    p.write_text(hand_edited, encoding="utf-8")
+
+    migrations.backfill_scene_identities()
+
+    after = p.read_text(encoding="utf-8")
+    assert "# a note the user typed by hand" in after, "a hand-edited line was deleted"
+    added = [ln for ln in after.splitlines(True) if ln not in hand_edited.splitlines(True)]
+    assert len(added) == 1 and added[0].startswith("identity:"), added
+    assert after.replace(added[0], "") == hand_edited
+
+
+def test_find_by_identity_keeps_looking_past_an_unreadable_file(tmp_path, monkeypatch):
+    """One corrupt file must not blind the whole lookup. This runs when a
+    notification is tapped, so aborting means the tap opens nothing."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    sid = store.scenes.create_scene(cid, "Winifred")
+    ident = store.scenes.scene_identity(cid, sid)
+
+    # Sorts before the real scene, so a scan that aborts never reaches it.
+    bad = store.scenes.paths._scenes_dir(cid) / "0000--broken.md"
+    bad.write_bytes(b"---\ntitle: \xff\xfe not utf-8\n---\n\nbody\n")
+
+    assert store.scenes.find_by_identity(cid, ident) == sid
+
+
+def test_a_legacy_identity_that_is_not_a_token_is_replaced(tmp_path, monkeypatch):
+    """A pre-feature scene may already carry an unrelated `identity` key. Any
+    non-empty value would otherwise be adopted as the correctness token -- and
+    a value like `foo/bar` cannot survive the by-identity route's path segment,
+    while a value duplicated across scenes makes the reverse lookup return
+    whichever file sorts first."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = _new_campaign()
+    sid = store.scenes.create_scene(cid, "Mara")
+    p = store.scenes.paths._scene_path(cid, sid)
+    meta, body = frontmatter.parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["identity"] = "foo/bar"
+    p.write_text(frontmatter.dump_frontmatter(meta, body), encoding="utf-8")
+
+    assert store.scenes.scene_identity(cid, sid) is None, "a non-token is not an identity"
+    got = store.scenes.ensure_identity(cid, sid)
+    assert len(got) == 32 and all(c in "0123456789abcdef" for c in got)
+    assert store.scenes.scene_identity(cid, sid) == got
