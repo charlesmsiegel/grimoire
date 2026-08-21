@@ -32,7 +32,7 @@ router = APIRouter()
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/roll")
-def post_scene_roll(cid: str, sid: str, body: RollBody):
+def post_scene_roll(cid: str, sid: str, body: RollBody, request: Request):
     """Manual dice roll: resolve, log to <campaign>/rolls.json, and write the
     result into the scene transcript as a narrator line."""
     _require_scene(cid, sid)
@@ -51,6 +51,12 @@ def post_scene_roll(cid: str, sid: str, body: RollBody):
     # a *second* roll while the first stays invisible forever. Reentrant, so the
     # inner acquisitions are free.
     with store.locks.campaign_lock(cid):
+        # A manual roll APPENDS to the transcript, which makes it a shape change
+        # like any other: a detached turn composed its prompt without this line
+        # and would append its reply after it, so the roll reads as something
+        # the narration ignored. Inside the hold, so a send cannot reserve
+        # between the check and the append.
+        runs.require_scene_free(request.app, cid, sid)
         entry = store.rolls.append(cid, sid, label, result)
         store.scenes.append_message(cid, sid, "assistant", line,
                                     speaker=store.scenes.ROLL_SPEAKER)
@@ -249,7 +255,7 @@ def get_scene_checks(cid: str, sid: str):
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/check")
-def post_scene_check(cid: str, sid: str, body: CheckBody):
+def post_scene_check(cid: str, sid: str, body: CheckBody, request: Request):
     """Manual check: run the pure resolver, log the roll (no proposal tag), and
     append the 🎲 line — the same resolution path an accepted proposal takes."""
     _require_scene(cid, sid)
@@ -262,6 +268,8 @@ def post_scene_check(cid: str, sid: str, body: CheckBody):
     # (#234): a 409 landing between them strands a durable roll outside the
     # transcript and the retry logs a duplicate.
     with store.locks.campaign_lock(cid):
+        # Appends the 🎲 line, so the same refusal as the manual roll above.
+        runs.require_scene_free(request.app, cid, sid)
         entry = store.rolls.append(cid, sid, store.checks.roll_label(resolution),
                                    resolution["result"],
                                    tier=resolution.get("tier"))

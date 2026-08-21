@@ -135,9 +135,13 @@ streaming handler, but it is a `draft` and Phase 1 leaves draft routes alone.)
   rename and is reissued after a delete, so it cannot name a run that outlives
   its request.
 - Every terminal write is **fenced** on that identity under the campaign lock,
-  and every route that changes a scene's *shape* (rename, delete, message edit,
-  cut, retcon, and a width-crossing create) is refused with `scene_busy` while a
-  turn holds it.
+  and every route that changes a scene's *shape* is refused with `scene_busy`
+  while a turn holds it: rename, delete, message edit, cut, retcon, alternate
+  promotion, replay begin/accept/cancel, a manual roll or check, and a
+  width-crossing create. The check is taken **inside** the campaign-lock hold
+  that covers the mutation — checking first and locking after leaves room for a
+  send to reserve in between. `test_scene_freeze.py` is one case per door,
+  because the guard is applied per call site.
 - `store.attempts` is the durable half: whether a send's post is still in the
   transcript, recorded beside the append and cleared inside the rollback. It is
   what lets recovery after the run record expired ask a question that has a
