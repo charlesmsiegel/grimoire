@@ -463,7 +463,6 @@ def test_an_unreadable_scenes_directory_does_not_abort_startup(tmp_path, monkeyp
     sid = store.scenes.create_scene(fine, "Mara")
     _strip_identity_from_disk(fine, sid)
 
-    real_glob = store.scenes.paths.Path.glob if hasattr(store.scenes.paths, "Path") else None
     broken_dir = store.scenes.paths._scenes_dir(broken)
 
     import pathlib
