@@ -80,7 +80,7 @@ import time
 from datetime import date, timedelta
 from pathlib import Path
 
-from . import atomic, paths, pricing
+from . import atomic, errors, paths, pricing
 
 #: The row kinds this ledger holds. ``llm`` is the only one written today;
 #: the field exists from the first row so image generation (#159) can share the
@@ -386,12 +386,14 @@ class Meter:
             # `kind` is the LLMError taxonomy the frontend already branches on;
             # anything else is recorded by its type name, which is the only
             # label a non-LLM failure has.
-            self.done("error", getattr(exc, "kind", None) or type(exc).__name__)
+            self.done("error", getattr(exc, "kind", None) or type(exc).__name__,
+                      detail=str(exc).strip())
         else:
             self.done("aborted")
         return False
 
-    def done(self, status: str = "ok", error: str = "") -> dict | None:
+    def done(self, status: str = "ok", error: str = "",
+             detail: str = "") -> dict | None:
         """File the row. A second call is a no-op — see the class docstring.
 
         **A request that never went out is not a row.** `llm._stamp` fills the
@@ -403,10 +405,33 @@ class Meter:
         put calls that cost nothing, took no time and never happened into every
         rollup, and would make an absorb that ran out of budget look like one
         that made a dozen free requests.
+
+        **A failure is recorded even when the row is not** (#156), and the two
+        conditions are deliberately not the same one. Every LLM call in the app
+        runs under a meter, which makes this the one place that sees all of
+        them go wrong -- so the error store is instrumented here rather than at
+        sixteen call sites, half of which would end up passing no `kind` and
+        dropping out of the per-kind counts. `missing_key` is the case that
+        forces the ordering: nothing is ever sent, so `usage` stays empty and
+        the early return below fires -- and a provider that has never been
+        configured is precisely the failure a user most needs written down.
+
+        The ledger is not the error store and this is not a double write. A
+        ledger row is one call's *accounting* -- what it cost, how long it took,
+        whether it worked -- and its `errors` count is what gives an error
+        RATE its denominator. The error store is the failure log, per module,
+        including the failures that were never a call at all. `store.metrics`
+        reads both and says which number came from where.
         """
         if self._done:
             return self.row
         self._done = True
+        if status == "error":
+            # `task` is the module axis #156 aggregates on: "dossier",
+            # "tagline", "suggestions", "chat" -- what a reader would name, and
+            # what they would say was broken.
+            errors.record(self.task, error or "unspecified", detail or error,
+                          campaign=self.campaign, scene=self.scene, task=self.task)
         if not self.usage:
             return None
         cost = self.usage.get("cost_usd")
@@ -438,6 +463,27 @@ def meter(task: str, *, kind: str = KIND_LLM, campaign: str = "", scene: str = "
 
 
 # ---- rollups ----
+def calls(days: int = 30, campaign: str = ""):
+    """Every generation in the last ``days``, oldest first.
+
+    The public half of `_read_rows`, for a reader that wants the rows rather
+    than a rollup -- `store.metrics` needs each call's own `duration_ms` to
+    take a percentile of, and a bucket's summed duration cannot be
+    un-averaged back into a distribution.
+
+    Same window arithmetic and the same clamp `summary` uses, so "the last 30
+    days" means the same span on both halves of the stats page; and the same
+    `_is_call` filter, so a rename row cannot enter a latency distribution as a
+    call that took no time.
+    """
+    days = max(1, min(int(days), MAX_DAYS))
+    until = _today()
+    since = (date.fromisoformat(until) - timedelta(days=days - 1)).isoformat()
+    for row in _read_rows(since, until):
+        if _is_call(row) and not (campaign and row.get("campaign") != campaign):
+            yield row
+
+
 def _read_rows(since: str, until: str):
     """Every well-formed row stamped in ``[since, until]``, oldest file first.
 

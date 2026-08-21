@@ -61,6 +61,7 @@ from . import (
     mechanics,
     models,
     modules,
+    observability,
     runs,
     scenes,
     search,
@@ -82,7 +83,8 @@ __all__ = [
 router = APIRouter()
 
 for _domain in (config, modules, worlds, characters, greetings,
-                runs, scenes, weather, mechanics, usage, campaigns, search):
+                runs, scenes, weather, mechanics, usage, observability,
+                campaigns, search):
     router.include_router(_domain.router)
 
 router.include_router(entities.router)  # keep last: generic /{kind} catch-alls

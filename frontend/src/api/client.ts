@@ -24,10 +24,12 @@ import {
   type ChubUnlinkedVersion, type Climate, type ClimateSummary, type Config, type ConfigUpdate,
   type DataDirInfo, type DivergedRecord, type Dossiers, type EntityDetail, type EntityKind,
   type EntityScope,
-  type EntitySummary, type Greeting, type GreetingDetail, type GreetingDraft, type GroupState,
+  type EntitySummary, type ErrorSummary, type Greeting, type GreetingDetail, type GreetingDraft,
+  type GroupState,
   type IncomingItem, type IncomingRef, type JournalEntry, type LLMConnection,
   type LLMConnectionDetail, type LLMConnectionDraft, type Ledger, type LengthPreset,
   type LibraryDependent, type LibraryKind, type LibraryStatus,
+  type LogLevel, type LogLevelInfo, type LogPage, type LogTailEvent,
   type LoreEntryDraft, type Mechanics, type Message, type ModelsRefreshResult,
   type ModuleContentEntry,
   type ModuleDetail, type ModuleEditResult, type ModuleRenameKind, type ModuleSummary,
@@ -45,7 +47,7 @@ import {
   type SceneMeta, type ScenePage, type SceneSuggestion, type SceneUsage,
   type SceneWeather, type ScheduledEvent, type SearchMode,
   type SearchResult, type Sheet, type SheetBulkResult, type SheetCoverage,
-  type SheetExpected, type SheetRoster, type StagedEdit,
+  type SheetExpected, type SheetRoster, type StagedEdit, type Stats,
   type StoreConflicts, type Style, type StyleDetail, type StyleDraft, type Suggestion,
   type Timeline, type TimelineEvent, type UndescribedImage,
   type WeatherOverrideBody, type WeatherRangeBody,
@@ -1649,4 +1651,56 @@ export const api = {
       scope.kind === "campaign"
         ? `/api/campaigns/${scope.id}/sheets/${kind}/${eid}${gen ? `?gen=${encodeURIComponent(gen)}` : ""}`
         : `/api/worlds/${scope.id}/sheets/${mid}/${kind}/${eid}${gen ? `?gen=${encodeURIComponent(gen)}` : ""}`),
+
+  // ---- observability (#154/#155/#156) ----
+  //
+  // Three reads and one stream over two files. Every one of them is `fresh`:
+  // this page exists to show what is happening RIGHT NOW, and a reply shared
+  // with an in-flight read of the same path would answer a reload with the
+  // numbers that prompted it.
+  getStats: (days: number, campaign = "") =>
+    request<Stats>("GET", `/api/stats?days=${days}` +
+      (campaign ? `&campaign=${encodeURIComponent(campaign)}` : ""),
+      undefined, { fresh: true }),
+  getErrorSummary: (days: number, opts: { module?: string; campaign?: string; limit?: number } = {}) =>
+    request<ErrorSummary>("GET", "/api/errors?" + new URLSearchParams({
+      days: String(days),
+      ...(opts.module ? { module: opts.module } : {}),
+      ...(opts.campaign ? { campaign: opts.campaign } : {}),
+      ...(opts.limit ? { limit: String(opts.limit) } : {}),
+    }), undefined, { fresh: true }),
+  getLogs: (opts: { level?: LogLevel; module?: string; q?: string; campaign?: string;
+                    since?: string; until?: string; limit?: number } = {}) =>
+    request<LogPage>("GET", "/api/logs?" + new URLSearchParams({
+      ...(opts.level ? { level: opts.level } : {}),
+      ...(opts.module ? { module: opts.module } : {}),
+      ...(opts.q ? { q: opts.q } : {}),
+      ...(opts.campaign ? { campaign: opts.campaign } : {}),
+      ...(opts.since ? { since: opts.since } : {}),
+      ...(opts.until ? { until: opts.until } : {}),
+      ...(opts.limit ? { limit: String(opts.limit) } : {}),
+    }), undefined, { fresh: true }),
+  getLogLevel: () => request<LogLevelInfo>("GET", "/api/logs/level", undefined, { fresh: true }),
+  /** Follow the log as it is written.
+   *
+   *  `streamGet`, the same primitive a client uses to re-attach to a running
+   *  turn -- an SSE GET with no body. The first frame carries a cursor and no
+   *  rows: the tail is about what happens NEXT, and `getLogs` is where the
+   *  backlog comes from. Hand the newest cursor back on reconnect and nothing
+   *  written during the gap is missed.
+   *
+   *  `signal` is how it ends. Nothing on the server side of this writes, so an
+   *  abort has nothing to reconcile -- unlike a scene turn, which is why this
+   *  is a plain stream and not a run.
+   */
+  streamLogTail: (opts: { cursor?: string; level?: LogLevel; module?: string;
+                          q?: string; campaign?: string },
+                  onEvent: (e: LogTailEvent) => void, signal?: AbortSignal) =>
+    streamGet<LogTailEvent>("/api/logs/tail?" + new URLSearchParams({
+      ...(opts.cursor ? { cursor: opts.cursor } : {}),
+      ...(opts.level ? { level: opts.level } : {}),
+      ...(opts.module ? { module: opts.module } : {}),
+      ...(opts.q ? { q: opts.q } : {}),
+      ...(opts.campaign ? { campaign: opts.campaign } : {}),
+    }), onEvent, signal),
 };

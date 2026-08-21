@@ -3231,3 +3231,82 @@ a.column-back { text-decoration: none; }
   .timeline-card { flex-direction: column; gap: 4px; }
   .timeline-when { width: auto; line-height: 1.45; }
 }
+
+/* ---- instrumentation: performance, errors, the debug log (#154/#155/#156) ---- */
+/* One page of readings, built out of the shell every other page uses. Nothing
+   here is a new layout — the tables are `.ledger-table`, the column is
+   `PageShell`'s — so what this block adds is only the shapes the ledger has no
+   equivalent for: a row of headline numbers, a proportional bar per day, and a
+   log line dense enough that four hundred of them are still scannable. */
+.stats-block { margin-bottom: 8px; }
+.stats-table td { padding: 10px 12px 10px 0; }
+.stats-key { font-family: var(--fm); font-size: 11px; color: var(--ink); }
+/* The one colour rule on this page: a failure is the thing you came to find. */
+.stats-bad { color: var(--alert); }
+
+.stats-cards {
+  display: flex; flex-wrap: wrap; gap: 26px; margin: 18px 0 4px; padding: 0;
+}
+.stats-cards div { margin: 0; }
+.stats-cards dt {
+  font-family: var(--fm); font-size: 9px; letter-spacing: 0.18em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 6px;
+}
+.stats-cards dd {
+  margin: 0; font-family: var(--fm); font-size: 22px; color: var(--ink);
+}
+
+/* The trend. A list, not a canvas: each row is a labelled measurement that a
+   screen reader can read out in order, and the bar is decoration over it. */
+.stats-trend { list-style: none; margin: 0; padding: 0; }
+.stats-trend li {
+  display: flex; align-items: center; gap: 12px; padding: 5px 0;
+  font-family: var(--fm); font-size: 11px; color: var(--ink);
+}
+.stats-trend-day { width: 92px; flex: none; color: var(--muted); }
+.stats-trend-track {
+  flex: 1; min-width: 0; height: 8px; background: var(--track);
+}
+.stats-trend-bar { display: block; height: 100%; background: var(--accent); }
+.stats-trend-value { width: 74px; flex: none; text-align: right; }
+
+.stats-filters {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 18px; margin: 18px 0 10px;
+}
+.stats-filters label { display: flex; flex-direction: column; gap: 4px; }
+.stats-filters .section-label { margin: 0; border-bottom: 0; padding-bottom: 0; }
+.stats-search { flex: 1; min-width: 180px; }
+.stats-search input { width: 100%; }
+.stats-live { flex-direction: row !important; align-items: center; gap: 6px; }
+.stats-threshold { margin: 0 0 10px; }
+.stats-window { display: flex; flex-direction: column; gap: 4px; padding: 10px 16px; }
+.stats-window .section-label { margin: 0; border-bottom: 0; padding-bottom: 0; }
+
+/* A log line. Fixed columns for everything but the message, so four hundred
+   rows read as a table without being one — a real table would make every
+   message cell as tall as the longest in its window. */
+.stats-log { list-style: none; margin: 0; padding: 0; }
+.stats-log-row {
+  display: flex; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line);
+  font-family: var(--fm); font-size: 11px; line-height: 1.5; color: var(--ink);
+}
+.stats-log-row:last-child { border-bottom: 0; }
+.stats-log-level { width: 62px; flex: none; color: var(--muted); letter-spacing: 0.1em; }
+.stats-log-row.level-warning .stats-log-level { color: var(--accent); }
+.stats-log-row.level-error .stats-log-level,
+.stats-log-row.level-critical .stats-log-level { color: var(--alert); }
+.stats-log-time { width: 96px; flex: none; color: var(--muted); }
+.stats-log-module { width: 132px; flex: none; color: var(--accent); }
+/* `break-word`, not `nowrap`: a log message is the payload, and clipping the
+   half that says what went wrong to keep the column tidy is the wrong trade. */
+.stats-log-message { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.stats-log-kind { margin-left: 8px; }
+
+/* The phone: the fixed columns stop fitting well before 720px, so the row
+   becomes two lines with the metadata above the message it describes. */
+@media (max-width: 720px) {
+  .stats-log-row { flex-wrap: wrap; gap: 4px 10px; }
+  .stats-log-message { flex-basis: 100%; }
+  .stats-trend-day { width: 74px; }
+  .stats-cards { gap: 18px; }
+}

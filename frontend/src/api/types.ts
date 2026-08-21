@@ -118,6 +118,10 @@ export type Config = {
    *  comparison itself is the server's (`AdvanceDigest.fork`); this is only
    *  where the number is set. */
   advance_fork_threshold: string;
+  /** The quietest level `store/logs.py` writes down. The STORED setting, which
+   *  is not necessarily what is in force: an unrecognized value is narrowed to
+   *  the default on the server, and `GET /logs/level` reports the real one. */
+  log_level: string;
 };
 /**
  * The subset of Config the Configuration page writes — the mirror of the
@@ -138,7 +142,7 @@ export type ConfigUpdate = Partial<Pick<Config,
   "semantic_recall_depth" | "semantic_recall_threshold" |
   "prompt_layout_enabled" | "speaker_turn_taking" |
   "backup_enabled" | "backup_interval_hours" | "backup_keep" | "backup_dir" |
-  "replay_fork_threshold" | "advance_fork_threshold">>;
+  "replay_fork_threshold" | "advance_fork_threshold" | "log_level">>;
 /** One archive written by `store/backups.py`. */
 export type BackupEntry = {
   name: string;
@@ -1630,3 +1634,94 @@ export type SheetBulkResult = {
   skipped: { kind: string; reason: string }[];
   failed: { kind: string; id: string; detail: string }[];
 };
+
+// ---- observability: performance, errors, the structured log (#154/#155/#156) ----
+/** The five severities `store.logs` writes, quietest first. A floor everywhere
+ *  it is used as a filter: `warning` means warnings and worse. */
+export type LogLevel = "debug" | "info" | "warning" | "error" | "critical";
+
+export type LogRow = {
+  ts: string;
+  level: LogLevel;
+  module: string;
+  message: string;
+  kind?: string;
+  campaign?: string;
+  scene?: string;
+  task?: string;
+  trace?: string;
+};
+
+export type LogPage = {
+  rows: LogRow[];
+  /** Every module present in the WINDOW, not just on this page — so a filter
+   *  dropdown built from it does not lose an option when something else gets
+   *  chatty. `counts` and `total` are the window's too. */
+  modules: string[];
+  counts: Record<LogLevel, number>;
+  total: number;
+  truncated: boolean;
+  level: LogLevel;
+  since: string;
+  until: string;
+  levels: LogLevel[];
+};
+
+export type LogTailEvent = {
+  cursor: string;
+  /** Absent on the opening frame, which carries a cursor and no backlog. */
+  rows?: LogRow[];
+};
+
+export type ErrorKindCount = { kind: string; count: number };
+export type ErrorModule = {
+  module: string;
+  count: number;
+  kinds: ErrorKindCount[];
+  last: string;
+  last_detail: string;
+};
+export type ErrorSummary = {
+  since: string; until: string; days: number;
+  total: number;
+  modules: ErrorModule[];
+  kinds: ErrorKindCount[];
+  daily: { day: string; count: number }[];
+  rows: LogRow[];
+  truncated: boolean;
+};
+
+/** One latency distribution: a bucket of calls with its percentiles.
+ *
+ *  `errors` here counts CALLS THAT FAILED, out of the usage ledger — which is
+ *  the only source that also knows how many succeeded, so it is the only one
+ *  that can give `error_rate` a denominator. `Stats.errors` is the other
+ *  question and the other source; see there. */
+export type PerfBucket = {
+  key: string;
+  calls: number;
+  errors: number;
+  error_rate: number;
+  /** True when the window held more calls than one distribution keeps, so the
+   *  percentiles are over a sample. Both tails are preserved. */
+  sampled: boolean;
+  p50: number; p90: number; p99: number;
+  min: number; max: number;
+};
+
+export type Stats = {
+  days: number; since: string; until: string; campaign: string;
+  generated_at: string;
+  percentiles: number[];
+  totals: PerfBucket;
+  by_task: PerfBucket[];
+  by_model: PerfBucket[];
+  /** Chronological: a trend is read left to right. */
+  by_day: PerfBucket[];
+  /** Failures RECORDED ANYWHERE, from the error store — including the ones
+   *  that were never a call, so this total and `totals.errors` differ on
+   *  purpose. */
+  errors: ErrorSummary;
+};
+
+export type LogLevelInfo = { level: LogLevel; levels: LogLevel[] };

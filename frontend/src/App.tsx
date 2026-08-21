@@ -29,6 +29,7 @@ import ResponsePresetsView from "./routes/ResponsePresetsView";
 import ClimatesView from "./routes/ClimatesView";
 import ConnectionsView from "./routes/ConnectionsView";
 import ConfigView from "./routes/ConfigView";
+import StatsView from "./routes/StatsView";
 import SetupWizard from "./routes/SetupWizard";
 
 /** The shell's own body: header, palette, routes. Split out from `App` only so
@@ -140,6 +141,11 @@ function Shell(
         <Route path="/climates" element={<ClimatesView />} />
         <Route path="/connections" element={<ConnectionsView />} />
         <Route path="/config" element={<ConfigView />} />
+        {/* A room, not a tab inside Configuration (#154 asked for a "tab").
+            Config is a page of settings; this is a page of readings, and the
+            only thing on it that can be changed -- the log's own level -- is
+            saved through Configuration like every other setting. */}
+        <Route path="/stats" element={<StatsView />} />
       </Routes>
     </>
   );
