@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .. import atomic, entities
 from ..campaigns import paths as campaigns_paths
+from ..paths import safe_id
 from ..worlds import paths as worlds_paths
 
 
@@ -118,7 +119,10 @@ def _repoint_in(directory: Path, mapping: dict[str, str]) -> None:
     for old, new in mapping.items():
         okind, _, oid = old.partition("/")
         nkind, _, nid = new.partition("/")
-        if not (okind and oid and nkind and nid):
+        # Every component through `safe_id` before it becomes a filename: this
+        # is an id-to-path resolver like any other (#240), and its ids arrive
+        # off a ledger rather than from a caller who has already checked them.
+        if not all(safe_id(part) for part in (okind, oid, nkind, nid)):
             continue
         src = directory / f"{okind}--{oid}.json"
         dst = directory / f"{nkind}--{nid}.json"

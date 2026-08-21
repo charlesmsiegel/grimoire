@@ -28,9 +28,9 @@ Two scopes, and the difference is not cosmetic:
   because a campaign that reclassifies an inherited record is disagreeing with
   its world about what that record is -- and there is no way to say that without
   holding a copy. The world's record stays where it is, so it is tombstoned
-  campaign-side (`overlay.hide_inherited`) or it would show through under the
-  old kind beside the new one, and its sync base is dropped: there is no world
-  record at the new ref for a base to be about.
+  campaign-side -- `overlay.would_inherit` asks whether it would otherwise show
+  through under the old kind beside the new one -- and its sync base is
+  dropped: there is no world record at the new ref for a base to be about.
 
 **What a reclassify does not reach**, each for a reason rather than an oversight:
 
@@ -47,11 +47,22 @@ Two scopes, and the difference is not cosmetic:
   conflict on a record its owner never touched. (Campaign scope is the other
   way round and rewrites everything it can see, materializing as it goes --
   `overlay.rewrite_owner_refs` says why.)
-- **The freed slug.** After `lore/tidewatch` becomes `locations/tidewatch`, the
-  next lore entry named Tidewatch takes `lore/tidewatch` back, exactly as it
-  does after a delete -- `entities.create_entity` hands out ids by slug against
-  what exists *now*. Every ref this module can see has been repointed by then,
-  so what it inherits is the same residue a delete leaves (#225), no more.
+- **A campaign-scope move BACK to a kind it has already left.** The first move
+  tombstones the world's record under the old kind, so the second finds that
+  slug taken and lands on `-2`. It is the conservative answer and it is
+  deliberate: the tombstone says "the world's record at this ref is deleted
+  here", and nothing on disk distinguishes the record this campaign hid on its
+  way out from an unrelated one that happened to hold the id. Clearing it would
+  be right for the first and would un-delete the second.
+- **The slug a WORLD-scope move frees.** After the world's `lore/tidewatch`
+  becomes `locations/tidewatch`, the next lore entry named Tidewatch takes
+  `lore/tidewatch` back, exactly as it does after a delete --
+  `entities.create_entity` hands out ids by slug against what exists *now*.
+  Every ref named above has been repointed by then, so what the newcomer
+  inherits is the same residue a delete leaves (#225), no more -- with the
+  location history above as the one thing that still points its way.
+  (Campaign scope frees nothing: the old ref is tombstoned, which is what the
+  round-trip bullet is about.)
 - **Actors.** Characters are a folder plus a V3 card per version, not a flat
   record, so lore -> character is a conversion rather than a move and has no id
   continuity to preserve. It is the issue's Option B and is not built here.

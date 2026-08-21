@@ -302,9 +302,10 @@ def reclassify(root: Path, kind: str, eid: str, new_kind: str, taken=None,
         # a caller-supplied namespace (overlay: the world's files, tombstones).
         return _occupied(root, new_kind, c) or (taken is not None and taken(c))
 
-    new_eid = (prefer if prefer is not None and safe_id(prefer)
-               and not _occupied(root, new_kind, prefer)
-               else uniquify(eid, exists))
+    if prefer is not None and safe_id(prefer) and not _occupied(root, new_kind, prefer):
+        new_eid = prefer
+    else:
+        new_eid = uniquify(eid, exists)
     src.replace(_entity_path(root, new_kind, new_eid))
     old_dir = _record_dir(root, kind, eid)
     if old_dir.is_dir():
