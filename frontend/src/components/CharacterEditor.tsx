@@ -384,6 +384,15 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     return true;
   }
 
+  // A derive dies with the view that started it. Nothing here is a detached run
+  // (`runs/RunRegistryProvider` is where work that must survive navigation
+  // lives, and the route is deliberately not one), so leaving the editor takes
+  // the progress line and the Stop button with it -- and a stream nobody can
+  // see or stop, still spending a provider call per character, is the one
+  // outcome worse than having to click Derive again. Stopping is cheap by
+  // construction: a re-run targets whatever is still blank.
+  useEffect(() => () => taglineAbort.current?.abort(), [scope.kind, scope.id]);
+
   const reload = useCallback(() => api.listCharacters(scope).then(setChars), [scope.kind, scope.id]);  // eslint-disable-line react-hooks/exhaustive-deps
   /** Re-read the backlog. Failure leaves it empty, which hides the button —
    *  the right answer for a count nobody can trust, and the same posture the
@@ -943,6 +952,11 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     setTaglineBatch({ done: 0, total: untagged.length, name: "" });
     const ctl = new AbortController();
     taglineAbort.current = ctl;
+    // The scope this run belongs to. Everything after the await below has to be
+    // checked against `liveScope`, for `adopt`'s reason: a continuation that
+    // installs scope A's roster while the component renders scope B hands the
+    // grid cards whose ids belong to a library nobody is looking at.
+    const from = scope;
     // Counted from the frames rather than read off the summary alone: a run the
     // user stops never sends one, and "you spent forty calls, here is nothing"
     // is not an acceptable answer to Stop.
@@ -968,8 +982,11 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     } finally {
       taglineAbort.current = null;
       setTaglineBatch(null);
-      await reload();
+      // `reload` is the closure this render captured, so it reads `from` --
+      // right while the editor is still there, wrong the moment it is not.
+      if (liveScope.current.kind === from.kind && liveScope.current.id === from.id) await reload();
     }
+    if (liveScope.current.kind !== from.kind || liveScope.current.id !== from.id) return;
     const parts = [`Derived ${run.written} tagline${run.written === 1 ? "" : "s"}`];
     // Why nothing was written for a character, not just how many: "12 skipped"
     // and "12 already had one" are different news about the same run.

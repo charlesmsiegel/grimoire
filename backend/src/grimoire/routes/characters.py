@@ -323,14 +323,31 @@ async def post_world_taglines_generate(wid: str, client: LLMClient = Depends(get
         frame: dict = {}
         try:
             for done, c in enumerate(targets, start=1):
-                frame = {"done": done, "character": c["id"], "name": c["name"]}
+                cid = c["id"]
+                frame = {"done": done, "character": cid, "name": c["name"]}
+                # The scan is a snapshot, and a roster's worth of calls can take
+                # a very long time to walk. Everything below re-reads rather
+                # than trusting it, because each thing it recorded can move.
+                #
+                # The default version most of all: changing it leaves the old
+                # card in place, so a stale id still READS -- it just answers
+                # with the wrong card, and the tagline derived from it is not
+                # blank any more for a later run to correct.
                 try:
-                    card = store.characters.read_card(root, c["id"], c["default_version"])
+                    ch = store.characters.read_character(root, cid)
+                    card = store.characters.read_card(root, cid, ch["meta"]["default_version"])
                 except (store.characters.CharacterNotFound, store.characters.VersionNotFound):
-                    # Deleted or re-pointed since the scan. One unusable card is
+                    # Deleted or unreadable since the scan. One unusable card is
                     # not a reason to abandon the rest of the roster.
                     skipped += 1
                     yield _sse({**frame, "skipped": "unreadable card"})
+                    continue
+                if store.taglines.read(root, cid):
+                    # Before the call, not only after it: a target somebody else
+                    # filled in the meantime is a call whose answer this route
+                    # would throw away, and it is billed either way.
+                    skipped += 1
+                    yield _sse({**frame, "skipped": "already set"})
                     continue
                 messages = store.taglines.build_prompt(_card_data(card))
                 try:
@@ -345,12 +362,24 @@ async def post_world_taglines_generate(wid: str, client: LLMClient = Depends(get
                     skipped += 1
                     yield _sse({**frame, "skipped": "blank"})
                     continue
-                if store.taglines.read(root, c["id"]):
-                    # Written since the scan -- by hand, or by another run. Theirs wins.
+                # Both checks again, because a generation takes seconds and the
+                # grid stays live throughout. A delete landing inside that
+                # window matters more than it looks: `taglines.write` creates
+                # the parent directory, so writing to a character who is gone
+                # rebuilds `characters/<cid>/` holding nothing but tagline.md --
+                # invisible to every listing (they need character.md) and still
+                # enough to make `create_character` suffix the id of the next
+                # character to be given that name.
+                if not store.characters.character_exists(root, cid):
+                    skipped += 1
+                    yield _sse({**frame, "skipped": "gone"})
+                    continue
+                if store.taglines.read(root, cid):
+                    # Written during the call -- by hand, or by another run. Theirs wins.
                     skipped += 1
                     yield _sse({**frame, "skipped": "already set"})
                     continue
-                store.taglines.write(root, c["id"], tagline)
+                store.taglines.write(root, cid, tagline)
                 written += 1
                 yield _sse({**frame, "tagline": tagline})
         except Exception as exc:  # noqa: BLE001 — surface a stream error like the localize route

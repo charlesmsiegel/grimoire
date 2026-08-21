@@ -192,16 +192,17 @@ def test_a_blank_reply_is_skipped_not_written(client):
     assert frames[-1]["summary"] == {"total": 1, "written": 0, "skipped": 1, "stopped": False}
 
 
-def test_a_tagline_written_during_the_run_is_not_overwritten(client, monkeypatch):
+def test_a_tagline_written_before_a_target_s_turn_costs_no_call(client, monkeypatch):
+    """Filled since the scan, so there is nothing to derive — and finding that
+    out after paying for the generation is the expensive way to do it."""
     wid = _world(client)
     cid = _character(client, wid, "Mara")
-    _answers(client, ["A courier with cold hands."])
+    fake = _answers(client, ["A courier with cold hands."])
     root = store.worlds.world_root(wid)
     real_read_card = store.characters.read_card
 
     def racing_read_card(r, c, v):
-        # Stands in for another request landing between the roster scan and the
-        # write — the window the second blank-check exists to close.
+        # Another request landing between the roster scan and this target's turn.
         store.taglines.write(root, c, "Hand-written, mid-run.")
         return real_read_card(r, c, v)
 
@@ -209,9 +210,100 @@ def test_a_tagline_written_during_the_run_is_not_overwritten(client, monkeypatch
 
     _, frames = _derive(client, wid)
 
+    assert fake.calls == 0
     assert _tagline(client, wid, cid) == "Hand-written, mid-run."
     assert frames[1]["skipped"] == "already set"
     assert frames[-1]["summary"] == {"total": 1, "written": 0, "skipped": 1, "stopped": False}
+
+
+def test_a_tagline_written_during_the_call_is_not_overwritten(client, monkeypatch):
+    """The other side of the same window: the check before the call cannot see a
+    save that lands while the model is still answering, so the one after it is
+    what actually protects the write."""
+    wid = _world(client)
+    cid = _character(client, wid, "Mara")
+    _answers(client, ["A courier with cold hands."])
+    root = store.worlds.world_root(wid)
+    real_parse = store.taglines.parse_output
+
+    def racing_parse(text):
+        # Runs after the reply and before the write -- the moment a hand-save
+        # landing during the generation would become visible.
+        store.taglines.write(root, "mara", "Hand-written, mid-call.")
+        return real_parse(text)
+
+    monkeypatch.setattr(store.taglines, "parse_output", racing_parse)
+
+    _, frames = _derive(client, wid)
+
+    assert _tagline(client, wid, cid) == "Hand-written, mid-call."
+    assert frames[1]["skipped"] == "already set"
+
+
+def test_a_character_deleted_during_the_call_is_not_resurrected(client, monkeypatch):
+    """`taglines.write` creates the parent directory, so writing to a character
+    who has just been deleted would rebuild `characters/<cid>/` holding nothing
+    but tagline.md: invisible to every listing, and still enough to make the
+    next character of that name take a suffixed id."""
+    wid = _world(client)
+    cid = _character(client, wid, "Mara")
+    root = store.worlds.world_root(wid)
+    _answers(client, ["A courier with cold hands."])
+    real_parse = store.taglines.parse_output
+
+    def deleting_parse(text):
+        store.characters.delete_character(root, "mara")
+        return real_parse(text)
+
+    monkeypatch.setattr(store.taglines, "parse_output", deleting_parse)
+
+    _, frames = _derive(client, wid)
+
+    assert not (root / "characters" / cid).exists(), "the deleted character was rebuilt"
+    assert frames[1]["skipped"] == "gone"
+    assert frames[-1]["summary"] == {"total": 1, "written": 0, "skipped": 1, "stopped": False}
+
+
+def test_each_target_is_prompted_from_its_current_default_version(client, monkeypatch):
+    """A default version changed after the scan leaves the old card in place, so
+    a stale id still reads -- it just answers with the wrong card, and the
+    tagline written from it is not blank for a later run to correct.
+
+    The change has to land INSIDE the run to mean anything, so it is made while
+    the first character's reply is being parsed and asserted on the second's
+    prompt."""
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/characters",
+                json={"name": "Mara", "version_name": "main"})
+    win = client.post(f"/api/worlds/{wid}/characters",
+                      json={"name": "Winifred", "version_name": "main",
+                            "card": {"data": {"name": "Winifred",
+                                              "description": "a courier still"}}}).json()["character"]
+    later = client.post(f"/api/worlds/{wid}/characters/{win}/versions",
+                        json={"name": "later",
+                              "card": {"data": {"name": "Winifred",
+                                                "description": "a locksmith now"}}}).json()["version"]
+    fake = _answers(client, ["A courier with cold hands.", "A locksmith who never sleeps."])
+    root = store.worlds.world_root(wid)
+    real_parse = store.taglines.parse_output
+    moved = []
+
+    def repointing_parse(text):
+        if not moved:      # once, during the FIRST character's turn
+            # Through the store, not a nested request: the run holds the test
+            # client's only worker, so an HTTP call from in here never returns.
+            store.characters.set_default_version(root, win, later)
+            moved.append(later)
+        return real_parse(text)
+
+    monkeypatch.setattr(store.taglines, "parse_output", repointing_parse)
+
+    _derive(client, wid)
+
+    assert moved == [later]
+    assert fake.calls == 2
+    prompt = fake.messages[-1]["content"]      # the second character's user message
+    assert "a locksmith now" in prompt and "a courier still" not in prompt
 
 
 def test_a_card_with_no_data_is_prompted_from_nothing_rather_than_500ing(client):
