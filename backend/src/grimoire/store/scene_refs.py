@@ -2,7 +2,7 @@
 
 A scene's id is its filename stem, so file renames (title renames, first-date
 stamps, width re-pads, legacy migration) must be followed by every persisted
-reference. Sixteen stores hold scene ids: appearances (per-actor scenes lists),
+reference. Eighteen stores hold scene ids: appearances (per-actor scenes lists),
 audit (sheet baselines keyed by scene id), chronicle (record keys + id
 fields), changes (per-record scene field), plot and commitments (both
 beats[].scene + last_scene), facts (each fact's recording scene and, once it
@@ -15,13 +15,19 @@ keyed by scene id then post index), scene_ideas (the scene ledger's
 `used_scene`, the scene a saved idea became), pins (each scene-scoped pin or
 exclude, which carries its scene id in the record *and* in its key), replay (the
 retcon-replay session's scene, whose backlog is the only copy of the posts that
-scene's cut removed), and alternates (a
-`<sid>.alts.json` sidecar, which moves rather than being rewritten — it is the
-one store keyed by *filename* instead of by a field, and so is not reachable
+scene's cut removed), alternates and pending_reviews (a `<sid>.alts.json`
+and a `<sid>.review.json` sidecar, which move rather than being rewritten —
+the two stores keyed by *filename* instead of by a field, and so not reachable
 through the fan-out the others share). Callers rename the `.md` files
 themselves.
 
-A sixteenth, `usage`, joins the fan-out without rewriting anything: the cost
+A pending review has to move for a reason the others do not share: once a
+review lands its scene is no longer held, so renaming a scene before saving its
+review is ordinary use rather than an exotic race — and left behind, the durable
+review sits orphaned under the old id while `GET .../{new_sid}/pending-review`
+answers 404 for a scene whose review demonstrably exists.
+
+A nineteenth, `usage`, joins the fan-out without rewriting anything: the cost
 ledger is append-only and its writes take no lock, so a rewrite would race
 them. It appends a row saying the rename happened and its readers follow the
 trail (`store.usage.KIND_RENAME`).
@@ -37,6 +43,7 @@ from . import (
     commits,
     facts,
     journal,
+    pending_reviews,
     pins,
     plot,
     prompt_log,
@@ -56,6 +63,6 @@ def repoint(cid: str, mapping: dict[str, str]) -> None:
     if not mapping:
         return
     for mod in (alternates, appearances_paths, audit_baselines, changes, chronicle,
-                commitments, commits, facts, journal, pins, plot, prompt_log,
-                provenance, replay, rolls, scene_ideas, turnstate, usage):
+                commitments, commits, facts, journal, pending_reviews, pins, plot,
+                prompt_log, provenance, replay, rolls, scene_ideas, turnstate, usage):
         mod.repoint_scenes(cid, mapping)

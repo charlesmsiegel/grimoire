@@ -38,13 +38,14 @@ class ServerService : Service() {
             override fun onRunTerminal(
                 runId: String,
                 state: String,
+                runClass: String,
                 campaignName: String,
                 sceneTitle: String,
                 cid: String,
                 sceneIdentity: String,
             ) {
                 RunNotifier.postTerminal(
-                    this@ServerService, runId, state, campaignName, sceneTitle,
+                    this@ServerService, runId, state, runClass, campaignName, sceneTitle,
                     cid, sceneIdentity,
                 )
             }

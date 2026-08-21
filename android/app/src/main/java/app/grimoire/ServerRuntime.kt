@@ -23,7 +23,8 @@ fun interface PortCallback {
  * whole reason a locked phone can now finish a turn.
  *
  * `onRunTerminal` carries what a notification needs to be worth tapping --
- * which campaign, which scene -- plus the scene IDENTITY rather than its id,
+ * which campaign, which scene, and which CLASS of work landed (a `turn` is a
+ * reply, a `review` is an end-of-scene form) -- plus the scene IDENTITY rather than its id,
  * because an id goes stale on rename and a notification can sit unread for a
  * long time. The tap resolves it through `GET /scene-by-identity`.
  */
@@ -32,6 +33,7 @@ interface RunCallback {
     fun onRunTerminal(
         runId: String,
         state: String,
+        runClass: String,
         campaignName: String,
         sceneTitle: String,
         cid: String,
@@ -156,6 +158,7 @@ object ServerRuntime {
                     override fun onRunTerminal(
                         runId: String,
                         state: String,
+                        runClass: String,
                         campaignName: String,
                         sceneTitle: String,
                         cid: String,
@@ -163,7 +166,8 @@ object ServerRuntime {
                     ) {
                         runCatching {
                             runs?.onRunTerminal(
-                                runId, state, campaignName, sceneTitle, cid, sceneIdentity,
+                                runId, state, runClass, campaignName, sceneTitle, cid,
+                                sceneIdentity,
                             )
                         }.onFailure { Log.w(TAG, "onRunTerminal failed", it) }
                     }

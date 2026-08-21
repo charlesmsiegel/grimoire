@@ -180,6 +180,14 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # handing the loser a token that no longer matches what is on disk -- which
     # is the publish fence failing open in exactly the case it exists for.
     "store.scenes.identity",
+    # The end-of-scene review held between generating it and saving it (#396).
+    # Every mutator takes the lock, and the bracketing is the point rather than
+    # a formality: `publish` has to land inside the same hold as the run's
+    # cancellation check (or a Cancel is undone by the run it cancelled), and
+    # `merge` has to read, fold and write inside one (or two retries answering
+    # at once lose one phase). New module, so it starts inside the exclusion
+    # rather than joining the frozen `UNREVIEWED` backlog.
+    "store.pending_reviews",
     # `commitments.json` is rewritten whole by `set_movement` and
     # `repoint_scenes`, exactly like `plot.json` -- but this module is new
     # (#115), so it starts inside the exclusion rather than joining the

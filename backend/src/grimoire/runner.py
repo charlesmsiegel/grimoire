@@ -141,6 +141,12 @@ async def _reaper(app) -> None:
 def _announce_terminal(app, run) -> None:
     """Tell the shell a run ended, and let the registry retire it.
 
+    The run's CLASS goes with it, because what landed decides what the
+    notification may say. A `turn` produces a reply and a `review` produces a
+    form to read; telling the player "New Post" when what arrived is an
+    end-of-scene review is a small lie they act on -- they open the scene
+    looking for narration that is not there.
+
     Both AFTER the bookkeeping and each in its own fail-soft boundary. Inside
     `_guarded`'s try, a notification the OS refused would flip a successfully
     persisted run from `landed` to `failed`; outside any boundary, it would
@@ -157,7 +163,7 @@ def _announce_terminal(app, run) -> None:
     if sink is None:
         return
     try:
-        sink(run.id, run.state, run.labels.get("campaign", ""),
+        sink(run.id, run.state, run.cls, run.labels.get("campaign", ""),
              run.labels.get("scene", ""), run.subject[1] if len(run.subject) > 1 else "",
              run.scene_identity or "")
     except Exception:                                        # noqa: BLE001

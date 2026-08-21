@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
+from tests import review_runs
 from tests.llm_fakes import FailingOpenRouter, FakeOpenRouter, FakeOpenRouterComplete
 
 
@@ -260,7 +261,7 @@ def test_an_absorb_step_the_budget_refuses_files_no_row(client, home, monkeypatc
 
     monkeypatch.setattr(store.dossiers, "read", slow_read)
 
-    client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    review_runs.absorb(client, cid, sid)
 
     tasks = [r["task"] for r in _rows(home)]
     assert "dossier" not in tasks, "a call the budget refused must file no row"

@@ -9,8 +9,18 @@ import contextlib
 import logging
 import threading
 import time
+import uuid
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Header,
+    Query,
+    Request,
+    UploadFile,
+)
 from starlette.concurrency import run_in_threadpool
 
 from .. import prompts, store
@@ -1317,22 +1327,12 @@ class Abandoned(Exception):
 
 ABANDON_POLL = 0.5
 
-# What a scoped retry answers once nobody is waiting for it. Vestigial by
-# construction -- the connection these would travel down is closed -- but the
-# route still has to return something, and a body that claims the phase ran
-# would be the one thing worse than none. `attempted` is deliberately true: a
-# call did go out, it just has no reader.
+# What a review says about itself once the reviewer has dismissed it. The
+# vestigial `_ABANDONED_DOSSIERS`/`_ABANDONED_AUDIT` bodies that used to sit
+# here went with the socket: a scoped retry no longer answers down a connection
+# nobody is holding, so there is no body to invent -- the run is marked
+# `cancelled` and this is what its error says.
 _ABANDONED_REASON = "the review this was for was closed before it finished"
-_ABANDONED_DOSSIERS = {
-    "dossiers": {"status": "failed", "reason": _ABANDONED_REASON,
-                 "proposed": [], "failed": [], "skipped": [],
-                 "attempted": True, "budget_exhausted": False},
-    "edits": []}
-_ABANDONED_AUDIT = {
-    "mechanics": {"status": "failed", "reason": _ABANDONED_REASON,
-                  "warnings": [], "dropped": [],
-                  "attempted": True, "budget_exhausted": False},
-    "edits": []}
 
 
 async def _watched(coro, abandoned, poll: float = ABANDON_POLL):
@@ -2057,17 +2057,31 @@ def _already_absorbed(scene: dict) -> bool:
     return str(scene.get("meta", {}).get("done", "")).lower() == "true"
 
 
-def _absorb_snapshot(cid: str, sid: str) -> tuple[int, dict, list]:
+def _absorb_snapshot(cid: str, sid: str, identity: str | None) -> tuple[int, dict, list]:
     """The scene, its commit epoch and its transient-state ledger as of one
     instant, under one lock hold.
 
-    Split out of `post_absorb` so it can be handed to a worker thread: the
-    acquire blocks, and `post_absorb` runs on the event loop. Raises
-    `_require_scene`'s 404 like any other handler code -- run_in_threadpool
-    propagates it.
+    Split out of `post_absorb` so the whole of it is one critical section.
+    Raises `_require_scene`'s 404 like any other handler code.
+
+    Taken in the HANDLER and handed to the run, never read when the result is
+    collected. Detached, those two moments are minutes apart, and an epoch read
+    at collection would date the response rather than the snapshot -- letting a
+    review built from pre-save state pass its own supersession check, which is
+    exactly what #271 warns against. `_already_absorbed` is judged from this
+    same snapshot for the other half of the pair: it has to raise its 409
+    before a token is spent.
+
+    `identity` is the one the reservation captured. Checked here rather than
+    trusted, because a scene deleted and replaced between the reservation and
+    this read lands on the same `sid` -- ids are recycled by design -- and the
+    review would then be built from the replacement's transcript and published
+    onto it.
     """
     with store.locks.campaign_lock(cid):
         scene = _require_scene(cid, sid)
+        if streaming._scene_moved(cid, sid, identity):
+            raise HTTPException(status_code=404, detail="scene not found")
         # The ledger travels with the scene, not derived from it afterwards.
         # An edit or a reroll landing while the extraction call is in flight
         # rewrites entries *below* the tail, so a length is not a snapshot --
@@ -2092,38 +2106,167 @@ def _contradictions(cid: str, sid: str, edits: list) -> list[dict]:
         return []
 
 
-@router.post("/campaigns/{cid}/scenes/{sid}/absorb")
+# ---- the review family, detached (#396) -------------------------------------
+#
+# `absorb`, `audit` and `dossiers` are the `review` class: their value is a
+# payload nobody has written down, and losing it costs the longest generation
+# in the app rather than a cheap retry. So each starts a run, answers 202 with
+# the run's id, and persists its result to `store.pending_reviews`; the client
+# polls `GET .../runs/{id}` and then reads the review back off the store, which
+# is what makes it survive a locked phone, a closed tab and a process restart
+# alike.
+#
+# Three refusals guard the record, and each has its own kind because a client
+# does something different with each:
+#
+# * `review_cancelled` -- the reviewer pressed Cancel. Recorded on the run
+#   under the campaign lock BEFORE the record is deleted, and read by the
+#   terminal persist under that same hold, so the run cannot recreate a review
+#   that has just been dismissed.
+# * `scene_gone` -- the scene this run captured is no longer at that id. An
+#   existence check is not enough: `scenes/serialize._numbering` derives the
+#   next number from the files on disk, so a deleted scene's id comes back, and
+#   publishing onto it would put one scene's review on another's transcript.
+# * `review_replaced` / `review_missing` -- a retry had nothing of its own to
+#   fold into. Writing `{mechanics, edits}` or `{dossiers, edits}` whole would
+#   destroy the absorb's prose, its staged edits and its commit token.
+
+
+class _ReviewCancelled(Exception):
+    """The reviewer dismissed this review while the run was still preparing it."""
+
+
+class _SceneMoved(Exception):
+    """The scene this run captured is no longer the scene at that id."""
+
+
+#: How many times a terminal persist waits out a contended campaign lock.
+#: `campaign_lock` already blocks for `LOCK_TIMEOUT`, so this is a second and
+#: third full wait rather than a busy loop -- worth it here and nowhere else,
+#: because what is being written is ten minutes of generation and there is no
+#: copy of it anywhere: a `StoreBusy` swallowed at this one line costs the
+#: whole absorb.
+_PERSIST_ATTEMPTS = 3
+_PERSIST_BACKOFF = 0.5
+
+
+def _review_abandoned(run):
+    """"Is anyone still waiting for this?", asked of the RUN rather than the socket.
+
+    `abandoned=request.is_disconnected` was right when a disconnect could only
+    mean the reviewer walked away. It is exactly wrong once a disconnect
+    routinely means the screen locked, which is the whole of #396: the work now
+    outlives the request that asked for it, and the only thing that means
+    "nobody wants this any more" is the reviewer's own Cancel.
+
+    Both flags, because they are different intents that want the same answer: a
+    Stop on the run (`POST .../runs/{id}/cancel`) and a Discard of the review
+    (`DELETE .../pending-review`). An awaitable, because that is the shape
+    `_watched` and the phase loops already expect -- a bare bool would make
+    `Abandoned` unreachable without a word of warning.
+    """
+    async def gone() -> bool:
+        return run.review_cancelled or run.cancel_requested
+    return gone
+
+
+def _run_error(exc: HTTPException) -> dict:
+    """One refusal as the error a polling client reads off the run.
+
+    Carries the HTTP status the same failure would have had when these routes
+    answered synchronously, so a client's existing handling of `409
+    missing_key` or `504 timeout` needs no second shape to understand -- the
+    only thing that moved is where it reads it from.
+    """
+    detail = exc.detail
+    if isinstance(detail, dict):
+        return {"kind": detail.get("kind", "refused"),
+                "detail": str(detail.get("detail", "")),
+                "status": exc.status_code}
+    return {"kind": "refused", "detail": str(detail), "status": exc.status_code}
+
+
+def _cancelled_error() -> dict:
+    return {"kind": "review_cancelled", "detail": _ABANDONED_REASON, "status": 409}
+
+
+def _under_review_lock(cid: str, sid: str, run, write) -> None:
+    """Run `write` under the campaign lock, fenced on the two things that make
+    a terminal review write wrong rather than merely late.
+
+    The cancellation check and the write are ONE hold, deliberately: split
+    apart, the reviewer's Cancel lands between them and the run recreates the
+    review they just dismissed. The identity check is in the same hold for the
+    same reason -- a scene replaced between the two would receive this review.
+
+    Retried on contention, and only here: everything else in this file answers
+    a busy campaign with a 409 the caller can repeat, and this caller cannot --
+    the payload exists nowhere else.
+    """
+    for attempt in range(_PERSIST_ATTEMPTS):
+        try:
+            with store.locks.campaign_lock(cid):
+                if run.review_cancelled:
+                    raise _ReviewCancelled
+                if streaming._scene_moved(cid, sid, run.scene_identity):
+                    raise _SceneMoved
+                write()
+                return
+        except store.locks.StoreBusy:
+            if attempt == _PERSIST_ATTEMPTS - 1:
+                raise
+            time.sleep(_PERSIST_BACKOFF)
+
+
+def _accepted(run, generation: str) -> dict:
+    """The 202 body: which run to poll, and which review it is preparing.
+
+    The generation rather than only the run id, because Cancel is addressed to
+    the REVIEW and not to one of the runs that build it -- an absorb and the
+    retries of its phases all carry the same one.
+    """
+    return {"run": runs.run_payload(run), "generation": generation}
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/absorb", status_code=202)
 @computes_only  # every edit here is staged; PUT /chronicle is what persists them
-async def post_absorb(cid: str, sid: str, force: bool = False,
-                      client: LLMClient = Depends(get_llm)):
-    # Read before ANY of the scene state this review is built from (#271),
-    # `meta.done` included. The token minted at the end of this handler is
-    # stamped with this value, and the stamp has to date the snapshot, not the
-    # response: a save landing while this handler runs advances the epoch, and a
-    # stamp taken afterwards would match it -- letting a proposal built from
-    # pre-save state pass its own supersession check, and letting the
-    # already-absorbed guard below read a `done` that the save has since set.
-    #
-    # The campaign is validated first because this reads under campaign_root,
-    # and an unusable cid has to surface as a 404 rather than a 500
-    # (test_path_guard_store).
-    #
-    # Both reads under ONE hold, because `PUT /chronicle` advances the epoch in
-    # `reserve()` and writes `meta.done` in `mark_absorbed()` several steps
-    # later. Reading across that gap would pair the new epoch with a stale
-    # `done` -- the already-absorbed guard below would wave the review through,
-    # and its token would carry an epoch current enough to survive the
-    # supersession check, so a second absorption of the same transcript could
-    # save. The hold is two reads long and the commit holds the same lock for
-    # its whole sequence, so this snapshot falls wholly before or wholly after.
-    # Off the event loop, because this handler is async and the acquire is a
-    # blocking one: a save holding the campaign lock would otherwise stall the
-    # whole process for up to `locks.LOCK_TIMEOUT`, freezing every unrelated
-    # request and open stream rather than just this campaign's absorb. Same
-    # treatment `streaming.py` gives its blocking finalizers.
+def post_absorb(cid: str, sid: str, request: Request, force: bool = False,
+                client: LLMClient = Depends(get_llm)):
+    """Start the end-of-scene review. Answers 202 and a run to poll.
+
+    Not a stream, so there is no `tail_response` here: End Scene is a form the
+    reviewer reads, edits and saves, and the client wants "started, here is a
+    run id" followed by polling. The result lands in `store.pending_reviews`,
+    which is what survives the phone locking mid-absorb -- the failure this
+    route exists to fix, and by user impact the worst one in the app, because
+    an absorb is the longest single generation in it and putting the phone down
+    while it runs is exactly what people do.
+
+    **Reserved before the snapshot**, which is the ordering the whole design
+    turns on -- see `runs.reserve_review`. The pre-flight refusals below then
+    release the reservation through `runs.reservation`, so a scene refused for
+    having nothing to absorb is not left holding its own exclusion key.
+    """
     _campaign_root_or_404(cid)
-    epoch, scene, ledger = await run_in_threadpool(_absorb_snapshot, cid, sid)
+    _require_scene(cid, sid)
     conn = _require_connection("absorb", cid)
+    generation = uuid.uuid4().hex
+    run = runs.reserve_review(request.app, cid, sid, "absorb", generation)
+    with runs.reservation(request.app, run):
+        return _absorb_start(cid, sid, force, request, client, conn, run, generation)
+
+
+def _absorb_start(cid: str, sid: str, force: bool, request: Request,
+                  client: LLMClient, conn: dict, run, generation: str) -> dict:
+    """Everything an absorb decides synchronously, then the handoff.
+
+    Split out so `runs.reservation` can wrap every exit: the run is
+    discoverable from the moment it is reserved, and a path that returns or
+    raises in here without handing a producer to the runner would leave it
+    `running` for the life of the process -- refusing every later turn and
+    review on the scene.
+    """
+    epoch, scene, ledger = _absorb_snapshot(cid, sid, run.scene_identity)
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to absorb")
     # Absorb is not idempotent: lore edits append and plot movements add a beat,
@@ -2133,6 +2276,14 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
         raise HTTPException(
             status_code=409,
             detail={"detail": "this scene has already been absorbed", "kind": "already_absorbed"})
+    # The same snapshot the review is built from, digested. Validated again
+    # when the review is retrieved and again at save: once this run lands its
+    # exclusion slot is released and the composer re-enables, so the player can
+    # keep playing while the review sits on disk -- and none of that advances
+    # the commit epoch (`commits.reserve` is called from exactly one place),
+    # so the token alone would let a summary of a transcript that has moved
+    # save with every check returning green.
+    mark = store.pending_reviews.watermark(scene["messages"])
     facts = store.chronicle.scene_facts(cid, sid)
     transcript = store.chronicle.transcript_text(scene["messages"])
     messages = store.absorb.build_prompt(
@@ -2140,6 +2291,21 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
         store.absorb.state_snapshot(cid, sid), store.absorb.relationships_snapshot(cid, sid),
         store.absorb.plot_snapshot(cid), store.absorb.group_snapshot(cid),
         store.absorb.commitment_snapshot(cid), store.absorb.fact_snapshot(cid, sid))
+
+    async def work():
+        return await _absorb_work(cid, sid, client, conn, run, generation, epoch,
+                                  scene, ledger, facts, transcript, messages, mark)
+
+    runs.start_computing(request.app, run, work)
+    return _accepted(run, generation)
+
+
+async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
+                       generation: str, epoch: int, scene: dict, ledger: list,
+                       facts: dict, transcript: str, messages: list,
+                       mark: dict) -> dict:
+    """The four phases, and the durable write that is this run's whole value."""
+    abandoned = _review_abandoned(run)
     budget = _Budget(store.config.absorb_budget())
     # All four phases AT ONCE. Nothing here ever needed the one before it:
     # `_run_audit` re-reads the scene and transcript itself and never touches
@@ -2206,53 +2372,212 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     edits += dossier_edits
     edits += voice_edits
     staged = edits + audit_edits
-    return {"one_line": parsed["one_line"], "summary": parsed["summary"],
-            "keywords": parsed["keywords"], "timeline_events": parsed["timeline_events"],
-            **facts, "edits": staged, "mechanics": mechanics,
-            # Which staged rows a LATER scene has already answered differently
-            # (#78). Empty for the ordinary case -- absorbing the newest scene,
-            # which has no later scene to disagree with -- so the pass is
-            # unconditional rather than a mode the caller has to know to ask
-            # for, and it lights up exactly where it matters: a re-extraction
-            # after a retcon of an old scene.
-            "contradictions": _contradictions(cid, sid, staged),
-            "dossiers": dossiers, "voice": voice,
-            # One uniform row per step so a short absorb is legible as one
-            # (see _phase_report) rather than as a model with nothing to say.
-            "phases": _phase_report(dossiers, voice, mechanics),
-            # Idempotency key for the save this review will become (#235): the
-            # commit appends in six places, so a replay whose first response was
-            # lost must return that result rather than apply it again. It also
-            # carries the scene's commit epoch as captured at the TOP of this
-            # handler -- what tells a save that some OTHER review of the scene
-            # committed while this one was being prepared or sat open (#271).
-            "commit_token": store.commits.mint(epoch)}
+    review = {
+        "one_line": parsed["one_line"], "summary": parsed["summary"],
+        "keywords": parsed["keywords"], "timeline_events": parsed["timeline_events"],
+        **facts, "edits": staged, "mechanics": mechanics,
+        # Which staged rows a LATER scene has already answered differently
+        # (#78). Empty for the ordinary case -- absorbing the newest scene,
+        # which has no later scene to disagree with -- so the pass is
+        # unconditional rather than a mode the caller has to know to ask
+        # for, and it lights up exactly where it matters: a re-extraction
+        # after a retcon of an old scene.
+        "contradictions": _contradictions(cid, sid, staged),
+        "dossiers": dossiers, "voice": voice,
+        # One uniform row per step so a short absorb is legible as one
+        # (see _phase_report) rather than as a model with nothing to say.
+        "phases": _phase_report(dossiers, voice, mechanics),
+        # Idempotency key for the save this review will become (#235): the
+        # commit appends in six places, so a replay whose first response was
+        # lost must return that result rather than apply it again. It also
+        # carries the scene's commit epoch as captured at the TOP of this
+        # run -- what tells a save that some OTHER review of the scene
+        # committed while this one was being prepared or sat open (#271).
+        "commit_token": store.commits.mint(epoch)}
+    return await _persist_review(
+        cid, sid, run, generation,
+        lambda: store.pending_reviews.publish(cid, sid, generation, review, mark))
 
 
-@router.post("/campaigns/{cid}/scenes/{sid}/audit")
+async def _persist_review(cid: str, sid: str, run, generation: str, write,
+                          result: dict | None = None) -> dict:
+    """The terminal write shared by an absorb and by both retries.
+
+    Off the event loop, because the acquire blocks and this runs on the
+    lifespan's loop: a campaign held by a save would otherwise stall every
+    unrelated request and open stream in the process rather than just this
+    review.
+    """
+    try:
+        await run_in_threadpool(_under_review_lock, cid, sid, run, write)
+    except _ReviewCancelled:
+        return {"state": "cancelled", "error": _cancelled_error()}
+    except _SceneMoved:
+        return {"state": "failed", "error": {
+            "kind": "scene_gone", "status": 404,
+            "detail": "the scene this review was prepared for is gone"}}
+    except store.pending_reviews.NoPendingReview:
+        return {"state": "failed", "error": {
+            "kind": "review_missing", "status": 409,
+            "detail": "there is no review to fold this into any more"}}
+    except store.pending_reviews.ReviewReplaced:
+        return {"state": "failed", "error": {
+            "kind": "review_replaced", "status": 409,
+            "detail": "a newer review of this scene replaced the one this was retrying"}}
+    except (OSError, store.locks.StoreBusy, store.pending_reviews.CorruptReview) as exc:
+        return {"state": "failed", "error": {
+            "kind": "busy", "status": 409,
+            "detail": f"the review could not be stored: {exc}"}}
+    return {"state": "landed",
+            "result": {"generation": generation, "sid": sid, **(result or {})}}
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/pending-review")
+def get_pending_review(cid: str, sid: str, request: Request) -> dict:
+    """The review waiting to be saved for this scene, if there is one.
+
+    `{"review": None}` rather than a 404 for a scene with none: that is the
+    ordinary case on every mount, and an error there would make every quiet
+    scene look broken -- the same call `GET .../run` makes.
+
+    **The watermark is checked here, under the campaign lock, and the review is
+    withheld when it fails.** Once the absorb landed the scene stopped being
+    held, so the player can have appended turns, cut posts or retconned since;
+    none of that advances the commit epoch, so the review's token would still
+    pass its supersession check and the save would mark the scene absorbed with
+    a summary of posts that are no longer there. Saying so on the way in is
+    what lets the panel offer "re-run" instead of letting the reviewer fill in
+    a form that is going to be refused.
+    """
+    with store.locks.campaign_lock(cid):
+        scene = _require_scene(cid, sid)
+        try:
+            record = store.pending_reviews.read(cid, sid)
+        except store.pending_reviews.CorruptReview as exc:
+            # NOT "no review". A file that will not parse cannot be repaired by
+            # asking again, and an empty panel reads as "the absorb never
+            # happened" -- inviting the reviewer to spend the whole budget a
+            # second time rather than telling them what is wrong.
+            raise HTTPException(status_code=409, detail={
+                "kind": "review_unreadable",
+                "detail": f"the stored review could not be read: {exc}"}) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=409, detail={
+                "kind": "busy",
+                "detail": f"the stored review could not be read: {exc}"}) from exc
+        if record is None:
+            return {"review": None, "generation": None, "stale": None}
+        mark = store.pending_reviews.watermark(scene["messages"])
+        stale = mark != record.get("watermark")
+    if stale:
+        return {"review": None, "generation": record.get("generation"),
+                "stale": {"prepared_posts": (record.get("watermark") or {}).get("count"),
+                          "current_posts": mark["count"]}}
+    return {"review": record["review"], "generation": record.get("generation"),
+            "stale": None}
+
+
+@router.delete("/campaigns/{cid}/scenes/{sid}/pending-review")
+def delete_pending_review(cid: str, sid: str, request: Request,
+                          generation: str = Query(...)) -> dict:
+    """Discard this scene's pending review, and stop whatever is still making it.
+
+    **The run is flagged before the record is deleted, both under one hold.**
+    Left unordered the two lose to each other: the reviewer cancels while an
+    absorb is finishing, the DELETE lands, and the runner then publishes and
+    recreates the review they just dismissed. A cancelled review that reappears
+    minutes later is worse than one that was never saved.
+
+    Idempotent, and named by generation rather than by run id: a DELETE for a
+    generation that has already gone flags nothing, removes nothing and reports
+    success, because the reviewer's intent is satisfied either way.
+    """
+    _require_scene(cid, sid)
+    with store.locks.campaign_lock(cid):
+        stopped = runs.cancel_review(request.app, cid, sid, generation)
+        removed = store.pending_reviews.clear(cid, sid, generation)
+    return {"removed": removed, "stopped": stopped}
+
+
+def _pending_for_retry(cid: str, sid: str) -> dict:
+    """The review a scoped retry is about to re-run one phase of.
+
+    Refused up front rather than at the terminal write, and before a token is
+    spent: a retry with nothing to merge into can only be dropped, and a retry
+    of a review whose transcript has moved would be folded into a review the
+    save is going to refuse anyway.
+    """
+    try:
+        record = store.pending_reviews.read(cid, sid)
+    except store.pending_reviews.CorruptReview as exc:
+        raise HTTPException(status_code=409, detail={
+            "kind": "review_unreadable",
+            "detail": f"the stored review could not be read: {exc}"}) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail={
+            "kind": "busy",
+            "detail": f"the stored review could not be read: {exc}"}) from exc
+    if record is None:
+        raise HTTPException(status_code=409, detail={
+            "kind": "review_missing",
+            "detail": "there is no open review for this scene to retry a step of"})
+    return record
+
+
+def _retry_start(cid: str, sid: str, request: Request, kind: str, work_for) -> dict:
+    """Reserve a `review` run for a scoped retry and hand it its work.
+
+    The generation comes from the STORED review, not from this request: a retry
+    belongs to the review it is retrying, so Cancel on that review stops it and
+    a fresh absorb landing in the meantime makes its merge refuse rather than
+    fold one review's phase into another's.
+    """
+    record = _pending_for_retry(cid, sid)
+    generation = record.get("generation") or ""
+    run = runs.reserve_review(request.app, cid, sid, kind, generation)
+    with runs.reservation(request.app, run):
+        runs.start_computing(request.app, run, work_for(run, generation))
+        return _accepted(run, generation)
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/audit", status_code=202)
 @computes_only  # a retry of absorb's audit step alone: same staged edits, same nothing written
-async def post_audit(cid: str, sid: str, request: Request,
-                     client: LLMClient = Depends(get_llm)):
+def post_audit(cid: str, sid: str, request: Request,
+               client: LLMClient = Depends(get_llm)):
     """Standalone audit retry: re-runs ONLY the audit step (never the prose
     absorb), returning fresh `expect` values on any resulting sheet edits.
 
-    Takes the request for its disconnect check, the dossier retry's reason: a
-    hangup does not cancel a plain endpoint, so releasing the review would
-    otherwise leave this call running against a provider that dribbles inside
-    the idle bound -- forever, when `absorb_budget = 0`."""
+    Detached like its absorb (#396), and merged into the stored review rather
+    than returned whole: this answers `{mechanics, edits}`, a *part* of a
+    review, and writing that part over the record would destroy the absorb's
+    prose, its staged edits and its commit token -- the token being the piece
+    nothing else can reconstruct.
+    """
     _require_scene(cid, sid)
     conn = _require_connection("audit", cid)
     if store.modules.resolve(cid) is None:
         raise HTTPException(status_code=400, detail="no module resolved")
-    # A retry gets its own budget — it never inherits the deadline of whatever
-    # absorb ran out of time earlier.
-    try:
-        edits, mechanics = await _run_audit(cid, sid, client, conn,
-                                            _Budget(store.config.absorb_budget()),
-                                            abandoned=request.is_disconnected)
-    except Abandoned:
-        return _ABANDONED_AUDIT
-    return {"mechanics": mechanics, "edits": edits}
+
+    def work_for(run, generation):
+        async def work():
+            # A retry gets its own budget — it never inherits the deadline of
+            # whatever absorb ran out of time earlier.
+            try:
+                edits, mechanics = await _run_audit(
+                    cid, sid, client, conn, _Budget(store.config.absorb_budget()),
+                    abandoned=_review_abandoned(run))
+            except Abandoned:
+                return {"state": "cancelled", "error": _cancelled_error()}
+            result = {"mechanics": mechanics, "edits": edits}
+            return await _persist_review(
+                cid, sid, run, generation,
+                lambda: store.pending_reviews.merge(
+                    cid, sid, generation,
+                    lambda review: store.pending_reviews.merge_audit(review, result)),
+                result=result)
+        return work
+
+    return _retry_start(cid, sid, request, "audit", work_for)
 
 
 # ---- the live rolling summary (#85) ----
@@ -2967,9 +3292,10 @@ def post_scene_break_dismiss(cid: str, sid: str):
     return _break_body(_break_view(scene, every, _break_provider(cid)), every)
 
 
-@router.post("/campaigns/{cid}/scenes/{sid}/dossiers")
-async def post_dossiers(cid: str, sid: str, request: Request,
-                        client: LLMClient = Depends(get_llm)):
+@router.post("/campaigns/{cid}/scenes/{sid}/dossiers", status_code=202)
+@computes_only  # a retry of absorb's dossier step alone: same staged edits, same nothing written
+def post_dossiers(cid: str, sid: str, request: Request,
+                  client: LLMClient = Depends(get_llm)):
     """Standalone dossier retry: re-runs ONLY the dossier phase (never the prose
     absorb), returning the same `dossiers` block and staged edits an absorb
     carries (#286).
@@ -2992,11 +3318,11 @@ async def post_dossiers(cid: str, sid: str, request: Request,
     with the rest of the batch in PUT /chronicle, so a reviewer who hits Cancel
     leaves nothing behind.
 
-    Cancel also stops the work, not just the waiting. A disconnect does NOT
-    cancel a plain endpoint -- uvicorn runs it to completion -- so leaving this
-    to the client's abort alone would keep one LLM call per remaining NPC going
-    for a review that no longer exists, unbounded when `absorb_budget = 0`. The
-    loop is given the request's own disconnect check instead."""
+    Detached like its absorb (#396), and folded into the stored review rather
+    than replacing it: only the NPCs this run actually re-proposed are swapped,
+    so a retry that failed for one of them cannot delete their perfectly good
+    proposal from the first pass and put nothing in its place.
+    """
     scene = _require_scene(cid, sid)
     conn = _require_connection("dossier", cid)
     if not scene["messages"]:
@@ -3006,15 +3332,87 @@ async def post_dossiers(cid: str, sid: str, request: Request,
         # stage a proposal to overwrite a real dossier with fiction.
         raise HTTPException(status_code=400, detail="nothing to build dossiers from")
     transcript = store.chronicle.transcript_text(scene["messages"])
-    # A retry gets its own budget — it never inherits the deadline of whatever
-    # absorb ran out of time earlier (post_audit's reason, verbatim).
+
+    def work_for(run, generation):
+        async def work():
+            # A retry gets its own budget — it never inherits the deadline of
+            # whatever absorb ran out of time earlier (post_audit's reason).
+            try:
+                edits, dossiers = await _stage_dossiers(
+                    cid, sid, transcript, client, conn,
+                    _Budget(store.config.absorb_budget()),
+                    abandoned=_review_abandoned(run))
+            except Abandoned:
+                return {"state": "cancelled", "error": _cancelled_error()}
+            result = {"dossiers": dossiers, "edits": edits}
+            return await _persist_review(
+                cid, sid, run, generation,
+                lambda: store.pending_reviews.merge(
+                    cid, sid, generation,
+                    lambda review: store.pending_reviews.merge_dossiers(review, result)),
+                result=result)
+        return work
+
+    return _retry_start(cid, sid, request, "dossiers", work_for)
+
+
+def _require_unmoved_review(cid: str, sid: str, token: str) -> None:
+    """Refuse a save whose review was prepared against a transcript that moved.
+
+    MUST be called inside the campaign-lock hold that covers the writes: read
+    outside one, it answers a question that was true a moment ago.
+
+    The stored review is evidence about ONE save: the one carrying its token.
+    A body with a different token -- a caller-minted key, which is supported,
+    or a review this app did not set up -- is not described by it, and refusing
+    that on the strength of a record about something else would reject a save
+    the store has nothing against. So the check is scoped to a matching token,
+    and a scene with no stored review falls through to the epoch check alone.
+
+    That boundary is where the watermark's reach ends, and saying so is better
+    than implying more: a client holding a review whose record has since been
+    discarded can still save it. Every path in this app that discards a record
+    -- Cancel, a completed save, a fresh absorb -- drops the client's copy in
+    the same step, so the gap is reachable by a hand-made request and not by
+    the panel.
+    """
     try:
-        edits, dossiers = await _stage_dossiers(cid, sid, transcript, client, conn,
-                                                _Budget(store.config.absorb_budget()),
-                                                abandoned=request.is_disconnected)
-    except Abandoned:
-        return _ABANDONED_DOSSIERS
-    return {"dossiers": dossiers, "edits": edits}
+        record = store.pending_reviews.read(cid, sid)
+    except (store.pending_reviews.CorruptReview, OSError):
+        # Unreadable is not "no review", but it is also not evidence that this
+        # save is stale -- and the epoch check below still stands. Logged
+        # rather than refused: a garbled sidecar must not be able to wedge a
+        # scene's review out of ever being saved.
+        log.warning("pending review for %s/%s could not be read at save",
+                    cid, sid, exc_info=True)
+        return
+    if record is None or (record["review"] or {}).get("commit_token") != token:
+        return
+    scene = _require_scene(cid, sid)
+    mark = store.pending_reviews.watermark(scene["messages"])
+    if mark != record.get("watermark"):
+        raise HTTPException(
+            status_code=409,
+            detail={"detail": "the scene changed after this review was prepared — "
+                              "re-run End Scene to review what is there now",
+                    "kind": "review_stale",
+                    "prepared_posts": (record.get("watermark") or {}).get("count"),
+                    "current_posts": mark["count"]})
+
+
+def _clear_pending_review(cid: str, sid: str) -> None:
+    """Drop the pending review a completed save has made obsolete.
+
+    Never fatal. The commit has landed by the time this runs, so a sidecar that
+    will not go must not turn a successful save into a 500 -- the review it
+    leaves behind is refused at its next retrieval by the watermark, and
+    replaced outright by the next absorb.
+    """
+    try:
+        store.pending_reviews.clear(cid, sid)
+    except OSError:
+        log.warning("pending review for %s/%s could not be cleared after the save",
+                    cid, sid, exc_info=True)
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}/chronicle")
@@ -3069,6 +3467,16 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request):
                                       "records directly",
                             "kind": "commit_body_changed"})
             if prior["done"]:
+                # The review goes on the REPLAY path too, not only the
+                # fresh-success tail. The commit is idempotent by design
+                # (#235), so a save whose first response was lost returns the
+                # recorded result through here -- and cleanup that lived only
+                # on the first-execution path would never run for a process
+                # that exited after recording the commit and before deleting
+                # the review, leaving an obsolete review retrievable forever
+                # for a scene that is demonstrably absorbed. Under the same
+                # hold, so nothing reads it between the two.
+                _clear_pending_review(cid, sid)
                 return prior["result"]
             if not prior["journalled"]:
                 # Reserved before #271, so there is no account of what it did --
@@ -3108,6 +3516,19 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request):
             # than repeated.
             progress = prior["progress"]
         else:
+            # The transcript watermark, and it does NOT overlap with the epoch
+            # check below. The epoch guards against another REVIEW committing;
+            # this guards against play continuing. `commits.reserve` is called
+            # from exactly one place -- this route -- so appending a turn,
+            # cutting a post or retconning one after the review landed advances
+            # nothing, and the token minted from the older snapshot still
+            # passes every check while the scene is marked absorbed with a
+            # summary of posts nobody reviewed.
+            #
+            # Read under the hold that already covers the whole sequence, and
+            # ahead of the first write, so a refusal leaves the chronicle
+            # untouched and the commit token unspent.
+            _require_unmoved_review(cid, sid, body.commit_token)
             epoch = store.commits.token_epoch(body.commit_token)
             if epoch is not None and epoch != store.commits.scene_epoch(cid, sid):
                 # Two reviews of one scene carry different tokens, so the key
@@ -3201,6 +3622,11 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request):
             checkpoint=lambda: store.commits.checkpoint(cid, body.commit_token, progress))
         result = {**record, "applied": applied, "failures": started + failures}
         store.commits.record(cid, body.commit_token, result, fp, sid)
+        # The scene is absorbed, so its pending review describes work that has
+        # now landed. Inside the hold, after the ledger entry, so a save that
+        # raised before this point leaves the review where the retry can find
+        # it.
+        _clear_pending_review(cid, sid)
     return result
 
 

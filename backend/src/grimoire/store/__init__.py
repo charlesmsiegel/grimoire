@@ -89,6 +89,7 @@ from . import (
     modules,
     overlay,
     pcs,
+    pending_reviews,
     pins,
     playing,
     playstate,
@@ -265,6 +266,11 @@ __all__ = [
     "playing",
     "PlayError",
     "pins",
+    # The end-of-scene review held on disk between generating it and saving it
+    # (#396) -- a deliberate addition to the facade, not a leak: `routes.scenes`
+    # reaches it the way it reaches `store.commits`, which is the other half of
+    # the same save.
+    "pending_reviews",
     "playstate",
     "plot",
     "pricing",
