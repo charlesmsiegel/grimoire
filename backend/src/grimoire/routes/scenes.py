@@ -16,6 +16,7 @@ from starlette.concurrency import run_in_threadpool
 from .. import prompts, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
+from . import runs
 from .common import (
     _bounded_call,
     _campaign_root_or_404,
@@ -32,7 +33,6 @@ from .common import (
     computes_only,
     get_llm,
 )
-from . import runs
 from .models import (
     Appear,
     AppearBatch,

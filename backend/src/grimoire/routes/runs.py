@@ -24,14 +24,12 @@ graph cyclic; ``test_import_guard`` holds it to that.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 import uuid
 from collections.abc import Callable
 from typing import Literal, Protocol
-
-import json
-import uuid
 
 import anyio
 from fastapi import APIRouter, HTTPException, Query, Request

@@ -11,8 +11,8 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from fastapi.testclient import TestClient
 from fastapi import Request
+from fastapi.testclient import TestClient
 from PIL import Image
 
 import grimoire.store as store
