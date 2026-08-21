@@ -133,11 +133,13 @@ module that uses it**, in the same commit; none is shared machinery:
 Task 3's disconnect test and Task 5's cancel tests both need a real socket,
 which `TestClient` cannot give them (the reasoning is at that test). It starts
 uvicorn on an ephemeral port once per module against the same app and
-`GRIMOIRE_HOME`, and exposes `.url`, `.app`, `.campaign_scene`, `.two_scenes`
-and `.hold_provider(scene=None, reply=None)` — the last wrapping the
+`GRIMOIRE_HOME`, and exposes `.url`, `.app`, `.campaign_scene`, `.two_scenes`,
+`.same_sid_in_two_campaigns` — two campaigns each holding a first scene, so
+both carry the id `0001--…`, which is the point — and
+`.hold_provider(scene=None, campaign=None, reply=None)`, the last wrapping the
 `llm_fakes` provider so it blocks after its first delta until the test releases
-it, optionally scripting a distinct reply per scene so two concurrent runs are
-distinguishable. Two tasks needing it is what makes it shared rather than
+it, optionally scripting a distinct reply per scene *or per campaign* so two
+concurrent runs are distinguishable. Two tasks needing it is what makes it shared rather than
 local; nothing else here is.
 
 **Anything asserting that two things happen AT ONCE belongs here, not on
@@ -512,6 +514,7 @@ from grimoire.routes import runs
 
 SCENE = ("scene", "saltmarch", "0001--mara")
 OTHER = ("scene", "saltmarch", "0002--winifred")
+TWIN  = ("scene", "realm", "0001--mara")     # SAME sid, different campaign
 WORLD = ("world", "realm")
 LABELS = {"campaign": "Saltmarch", "scene": "Mara"}
 
@@ -519,6 +522,13 @@ LABELS = {"campaign": "Saltmarch", "scene": "Mara"}
 def test_turn_and_review_share_one_exclusion_key_per_scene():
     assert runs.exclusion_key(SCENE, "turn") == runs.exclusion_key(SCENE, "review")
     assert runs.exclusion_key(SCENE, "turn") != runs.exclusion_key(OTHER, "turn")
+    # Scene ids are CAMPAIGN-LOCAL: `_numbering` derives the next number from
+    # the files in that campaign's own directory (serialize.py:261), so
+    # `0001--mara` exists in every campaign that has a first scene. A key or
+    # lookup built from `sid` alone passes every other test here and then
+    # either rejects a turn in campaign B because campaign A has one live, or
+    # -- worse -- routes B's reply onto A's scene.
+    assert runs.exclusion_key(SCENE, "turn") != runs.exclusion_key(TWIN, "turn")
 
 
 def test_background_and_draft_declare_no_key():
@@ -1218,6 +1228,28 @@ def test_two_scenes_in_one_campaign_do_not_cross_contaminate(live_server):
     _wait_terminal(live_server.app, ra); _wait_terminal(live_server.app, rb)
     assert "seraphine" in _last_reply(cid, a).lower()
     assert "winifred" in _last_reply(cid, b).lower()
+
+
+def test_the_same_sid_in_two_campaigns_does_not_collide(live_server):
+    """The case one campaign cannot express, and the likeliest one in real use.
+
+    Scene ids are campaign-local, so `0001--...` exists in every campaign with
+    a first scene -- and a phone user with two campaigns open hits this on
+    their first turn in each. An implementation that keys the registry on `sid`
+    alone passes the same-campaign test above and then either 409s the second
+    campaign's turn or publishes its reply onto the first campaign's scene."""
+    (cid_a, sid), (cid_b, twin) = live_server.same_sid_in_two_campaigns
+    assert sid == twin                      # the premise, asserted not assumed
+    held_a = live_server.hold_provider(campaign=cid_a, reply="Seraphine waits.")
+    held_b = live_server.hold_provider(campaign=cid_b, reply="Winifred does not.")
+    with _in_flight(live_server, cid_a, sid, "Seraphine?") as ra, \
+         _in_flight(live_server, cid_b, twin, "Winifred?") as rb:
+        held_a.await_first_delta()
+        held_b.await_first_delta()   # neither reservation excluded the other
+        held_a.release(); held_b.release()
+    _wait_terminal(live_server.app, ra); _wait_terminal(live_server.app, rb)
+    assert "seraphine" in _last_reply(cid_a, sid).lower()
+    assert "winifred" in _last_reply(cid_b, twin).lower()
 ```
 
 `_in_flight(server, cid, sid, text)` is a context manager local to this module:
@@ -1524,6 +1556,8 @@ guessing costs a debugging cycle:
 | `post_replay` / `post_replay_cancel` | `POST .../replay`, `.../replay/cancel` | `scenes.py:3186`, `:3264` |
 | `post_scene_alternate` | `POST .../alternates/{vid}` | `scenes.py:703` |
 | `put_chronicle` (review save) | `PUT .../chronicle` | `scenes.py:2483` |
+| `post_first_post` | `POST .../first-post` | `greetings.py:328` |
+| `post_start_from_greeting` | `POST .../start-from-greeting` | `greetings.py:306` |
 
 `post_replay` calls `store.replay.begin`, which **cuts** the transcript;
 `post_replay_cancel` can restore the cut posts; and `post_scene_alternate`
@@ -1537,6 +1571,25 @@ the transcript, and the first `set_datetime` **renames the scene** — so these
 do not merely change context the live run is generating from, they can trip the
 identity check and discard a completed result. Each gets the guard under the
 same lock hold as its mutation, and a route test.
+
+**The two greeting routes are the ones the inventory kept missing, because
+they live in a different module.** Every guard and test listed here is in
+`scenes.py` and `mechanics.py`; `greetings.py` was simply never looked at, so
+its routes pass the whole suite untouched. Both mutate a live scene:
+
+- `post_first_post` (`greetings.py:328`) persists an adopted opener as the
+  scene's first assistant message. Its existing guard — 409 if
+  `read_scene(...)["messages"]` is non-empty — does *not* help here, because
+  the case is an **empty** scene: an opener or director turn holds it, the
+  scene is still empty at check time, the stale creation tab's adoption
+  succeeds, and the live run then appends its reply after a first post that
+  appeared from nowhere.
+- `post_start_from_greeting` (`greetings.py:306`) is worse: `start_from_greeting`
+  returns a **new sid**, so it changes cast, appends, stamps metadata and moves
+  the scene out from under a run mid-generation — the identity fence's exact
+  trigger, reached by a route the fence's own task never listed.
+
+Both get the same under-lock scene-free check, and a stale-tab test each.
 
 **`put_chronicle` is the subtlest entry, and the one with no fallback.** The
 review panel survives a scene switch and a stale tab, so a review prepared
@@ -1823,6 +1876,24 @@ recovery the client then cannot call `GET .../run?attempt=...`, which is the
 only unambiguous way to learn whether *its* send landed, and #95's ambiguity is
 back. Test a response lost before the first frame, then a remount.
 
+**And it must actually be SENT.** Storing the id and never putting it on the
+wire is the failure this whole mechanism dies of quietly: the server, seeing no
+`X-Grimoire-Attempt`, generates its own, so the id the provider is holding
+names nothing. `GET .../run?attempt=` then reports no run for a turn that ran
+perfectly, and the "did my send land?" recovery answers *no* when the truth is
+yes — after which a retry submits the turn a second time. Every symptom points
+at the backend and none of it is there.
+
+`streamPost` (`client.ts:186`) and the five producing wrappers cannot carry a
+header today; their signatures have to grow one. Do it in one place — an
+options argument threaded through `streamPost` — rather than five ad-hoc
+parameters, and default it to absent so nothing else in the app changes.
+
+Assert it on the **real outgoing request**, not on a wrapper's arguments: the
+test reads the header off the intercepted fetch and compares it to the id in
+provider state. A test that checks "we passed the id to the wrapper" passes
+against a wrapper that drops it, which is precisely the bug.
+
 **Keep the submitted prompt text alongside the attempt**, until the outcome
 proves it durable. The id alone cannot honour `post_returned`: if the response
 is lost before the run frame, the provider then fails, and the backend takes
@@ -1853,6 +1924,28 @@ discovery. The spec requires this branch for turns; it is the same handler, and
 the two cases differ only in that one of them has no run record left to read.
 Test a scene hidden longer than the reap window with a turn that landed while
 it was away, and assert the new message is on screen and the composer is live.
+
+**But "settle" must not mean "discard", and for one case it would.** The branch
+above reasons from a run that *landed*. A run can also have **failed with
+`post_returned: true`** — the backend took the player's post back off the
+transcript — and then been reaped before the tab returned. Now: the structured
+outcome that would have said so is gone with the record, and the refetched
+transcript is *correctly* missing the post. An unconditional settle drops the
+provider's held text, which at that moment is the only copy in existence. The
+player watched their words vanish, and every artifact agrees nothing was ever
+sent.
+
+The refetch cannot distinguish the two cases on its own — "the post is absent"
+means both "it was rolled back" and "it never landed", which is exactly #95's
+ambiguity resurfacing after the evidence expired. So resolve it by what the
+client can still see: **settle only when the refetch proves the attempt
+durable** — the transcript's tail matches the submitted text — and otherwise
+restore that text to the composer and leave the attempt unresolved. Choosing
+wrongly in this direction costs the player one duplicate send they can see and
+delete; choosing wrongly the other way costs them their words with no trace.
+
+Test the hidden-past-`REAP_SECONDS` case for a **failed** turn as well as a
+landed one, and assert the composer holds the text again.
 
 Attach only to a **live** run. A terminal run is reported for state so the view
 can settle rather than spin, and never replayed: a fresh mount has no cursor
@@ -2041,8 +2134,26 @@ dead route after a delete or rename.
 Run: `make apk`
 Then on device: start a turn, lock the phone, confirm the ongoing notification,
 unlock and confirm the reply landed and the completion notification appeared.
-There is no automated coverage for this beyond `make check-apk`; say so rather
-than implying otherwise.
+
+**Then tap one — twice, in the two cases Step 5's routing contract exists
+for.** Confirming a notification *appears* proves nothing about where it goes,
+and tap routing is the half with no automated coverage at all: a missing
+intent extra, a stored `sid` instead of an identity, or a cold-start handler
+that drops the payload all leave a notification that looks perfect and opens
+the wrong thing.
+
+1. Start a turn, background the app, **rename the scene** while it runs, then
+   tap the completion notification. The renamed scene must open — the rename
+   minted a new `sid`, so this is what resolving by identity buys.
+2. Start a turn, background, **delete the scene**, tap the error notification.
+   The campaign must open, not a crash and not an empty scene view.
+
+Do both from a **cold start** (swipe the app away first), which is the path
+that actually breaks: a warm activity often has the state a cold one has to
+reconstruct from the intent.
+
+There is no automated coverage for any of this beyond `make check-apk`; say so
+rather than implying otherwise.
 
 - [ ] **Step 7: Commit**
 
