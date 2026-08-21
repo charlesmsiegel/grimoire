@@ -443,6 +443,16 @@ three closing posts with nothing on screen explaining why.
   ordinary post, i.e. to generate a reply they don't want purely to undo a
   flag.
 
+**Cancelling during a live turn does not un-wrap that turn**, and the UI has
+to say so. The prompt was assembled when the run started, so a click mid-
+stream clears the flag for *next* time while the reply now landing still
+closes the scene. Left unexplained that reads as the cancel button not
+working. The indicator therefore addresses the next reply explicitly — *"the
+next reply will close this scene"* — and the control is disabled while a run
+is live on this scene, with the flag still clearing on the send that follows.
+Cheaper than the alternative, which is refusing the route mid-run and leaving
+the player no way to act at all.
+
 **The cancel route is deliberately NOT `scene_busy`-guarded**, and this needs
 recording in `test_scene_freeze.py` as an explicit non-door rather than an
 omission — CLAUDE.md notes that file is one case per door precisely because
@@ -562,6 +572,17 @@ it is worth naming here rather than discovering it in a token breakdown.
 - **`post_history`** — the PC line renders after the card blocks and before
   the voice corrective; renders nothing in a pcless scene, leaving
   `post_history` omissible there.
+- **The frozen campaign reads as unwrapped.** Its scenes were written before
+  `wrap_next` existed, so `get_wrap` must answer `False` for frontmatter that
+  has never heard of the key. This is precisely what that fixture is for — the
+  only store in the repo today's code did not write — so it is worth an
+  explicit case rather than leaving it to the snapshot diff.
+- **Atomicity** — the set/clear goes through `store.atomic` like every other
+  scene write; `test_atomic_guard.py` fails it otherwise.
+- **Frontend fixtures** — the scene payload gains a field, so the shared
+  `testkit/campaignHarness.tsx` fixtures grow it rather than each suite
+  patching its own copy (CLAUDE.md: shared scaffolding lives in `testkit/`,
+  which coverage excludes).
 
 ### The behavioral grader
 
