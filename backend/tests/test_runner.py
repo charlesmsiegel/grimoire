@@ -1,0 +1,290 @@
+"""Starting a run: the thread bridge, the per-run boundary, the reaper.
+
+The mechanism the whole feature rests on. Every streaming route in this app is
+`def`, not `async def`, so FastAPI runs it in a threadpool worker -- and
+`start_soon` is not thread-safe from there.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import threading
+import time
+
+import anyio
+import pytest
+from fastapi.testclient import TestClient
+
+from grimoire import runner
+from grimoire.main import create_app
+from grimoire.routes import runs as runs_mod
+
+SCENE = ("scene", "saltmarch", "0001--mara")
+OTHER = ("scene", "saltmarch", "0002--winifred")
+WORLD = ("world", "realm")
+LABELS = {"campaign": "Saltmarch", "scene": "Mara"}
+
+
+@pytest.fixture
+def app_with_lifespan_factory(monkeypatch, tmp_path):
+    """The lifespan as a context manager, so a test can EXIT it and watch
+    shutdown cancel what is still live."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+
+    @contextlib.contextmanager
+    def factory():
+        app = create_app()
+        with TestClient(app):          # `with`, so startup and shutdown run
+            yield app
+
+    return factory
+
+
+@pytest.fixture
+def app_with_lifespan(app_with_lifespan_factory):
+    with app_with_lifespan_factory() as app:
+        yield app
+
+
+def _wait_terminal(app, run_id, timeout=5.0):
+    """Poll the registry until the run leaves `running`; fail rather than hang."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for run in app.state.runs._runs.values():
+            if run.id == run_id and run.state != "running":
+                return run
+        time.sleep(0.01)
+    raise AssertionError(f"run {run_id} never became terminal")
+
+
+def test_the_registry_exists_without_a_lifespan(monkeypatch, tmp_path):
+    """`conftest.client` is a bare `TestClient(app)` and never emits startup.
+    A registry created only in the lifespan would be missing for every route
+    test and every migrated handler -- an AttributeError on `app.state` before
+    any assertion runs."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    app = create_app()
+    assert app.state.runs is not None
+    run, started = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    assert started and run.ready is not None
+
+
+def test_start_without_a_portal_says_so_instead_of_attribute_erroring(monkeypatch, tmp_path):
+    """A test that picks the wrong fixture should say so in one line, not send
+    its author into main.py."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    app = create_app()
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+
+    async def work():
+        pass
+
+    with pytest.raises(RuntimeError, match="portal"):
+        runner.start(app, run, work)
+
+
+def test_start_works_from_a_synchronous_handler_thread(app_with_lifespan):
+    """The streaming routes are `def`, so FastAPI runs them in a threadpool
+    worker. This is the test that would have caught the whole design failing at
+    runtime."""
+    app = app_with_lifespan
+    done = threading.Event()
+
+    async def work():
+        done.set()
+
+    def from_worker_thread():
+        run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+        runner.start(app, run, work)
+
+    threading.Thread(target=from_worker_thread).start()
+    assert done.wait(timeout=5), "the run never reached the lifespan loop"
+
+
+def test_one_runner_raising_does_not_cancel_its_siblings(app_with_lifespan):
+    """anyio cancels all siblings and propagates out of `_lifespan`, so without
+    a per-run boundary one malformed scene would abort every other live run and
+    stop the backup ticker."""
+    app = app_with_lifespan
+
+    async def boom():
+        raise RuntimeError("one bad turn")
+
+    async def fine():
+        await anyio.sleep(0.05)
+
+    bad, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    good, _ = app.state.runs.start_or_existing(OTHER, "turn", "chat", "a2", "i", LABELS)
+    runner.start(app, bad, boom)
+    runner.start(app, good, fine)
+
+    # NOT a flag the coroutine sets: `_guarded` writes `landed` only after the
+    # factory returns, so waking on such a flag and asserting the state is a
+    # race that goes green idle and red under load -- in this test, which is
+    # about isolation and would then be blamed for a defect it does not have.
+    _wait_terminal(app, bad.id)
+    _wait_terminal(app, good.id)
+    assert bad.state == "failed"
+    assert good.state == "landed"
+
+
+def test_a_failed_run_records_why(app_with_lifespan):
+    app = app_with_lifespan
+
+    async def boom():
+        raise RuntimeError("one bad turn")
+
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    runner.start(app, run, boom)
+    _wait_terminal(app, run.id)
+    assert run.state == "failed"
+    assert run.error and "one bad turn" in str(run.error)
+
+
+def test_both_handshake_events_are_set_once_a_run_is_terminal(app_with_lifespan):
+    """A cancel or a poll waiting on either event must never wait forever."""
+    app = app_with_lifespan
+
+    async def work():
+        await anyio.lowlevel.checkpoint()
+
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    runner.start(app, run, work)
+    _wait_terminal(app, run.id)
+    assert run.ready.is_set() and run.terminal.is_set()
+
+
+def test_cancel_stops_a_live_run_and_it_ends_cancelled(app_with_lifespan):
+    app = app_with_lifespan
+    started = threading.Event()
+
+    async def slow():
+        started.set()
+        await anyio.sleep(30)
+
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    runner.start(app, run, slow)
+    assert started.wait(timeout=5)
+
+    runner.cancel(app, run)
+    _wait_terminal(app, run.id)
+    assert run.state == "cancelled"
+
+
+def test_terminal_is_set_only_after_the_abort_hook_finishes(app_with_lifespan):
+    """The slot stays held until the partial is persisted. Setting `terminal`
+    first lets a fast re-send race that write."""
+    app = app_with_lifespan
+    started = threading.Event()
+    seen = {}
+
+    async def slow():
+        started.set()
+        try:
+            await anyio.sleep(30)
+        finally:
+            # The abort hook's stand-in. Sample `terminal` FROM INSIDE it: an
+            # assertion made after the run settles is true either way and
+            # proves nothing about the order -- which is how the first version
+            # of this test passed against an implementation that set `terminal`
+            # before the hook ran.
+            seen["terminal_already_set"] = run.terminal.is_set()
+
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    runner.start(app, run, slow)
+    assert started.wait(timeout=5)
+    runner.cancel(app, run)
+    _wait_terminal(app, run.id)
+
+    assert run.terminal.is_set()
+    assert seen["terminal_already_set"] is False, (
+        "terminal was set before the abort hook finished, so a fast re-send "
+        "could race the partial-persist")
+
+
+def test_release_before_start_marks_the_run_terminal_and_sets_both_events(app_with_lifespan):
+    """Task 5 allows a producing route to return early -- a validation failure,
+    a check that could not resolve -- without ever scheduling the runner. A
+    discovery or cancel landing in that window finds a real run and would
+    otherwise wait forever on events no task will set."""
+    app = app_with_lifespan
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+
+    runner.release_before_start(app, run, state="failed",
+                                error={"kind": "check_error", "detail": "no"})
+
+    assert run.state == "failed"
+    assert run.ready.is_set() and run.terminal.is_set()
+    assert run.error == {"kind": "check_error", "detail": "no"}
+
+
+def test_an_early_error_is_replayable_by_the_same_attempt(app_with_lifespan):
+    """`start_or_existing` returns an existing run even when terminal, so a
+    client whose response was lost re-POSTs and adopts this record. If the
+    early error was never buffered it streams NOTHING -- an empty terminal
+    stream where the first caller got a specific, actionable error."""
+    app = app_with_lifespan
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    runner.release_before_start(app, run, state="failed",
+                                error={"kind": "check_error", "detail": "no"})
+
+    again, started = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    assert again is run and not started
+    assert again.frames, "the early error left nothing to replay"
+    assert "check_error" in "".join(f["raw"] for f in again.frames)
+
+
+def test_shutdown_cancels_live_runs_and_they_flush(app_with_lifespan_factory):
+    flushed = []
+
+    async def slow():
+        try:
+            await anyio.sleep(30)
+        finally:
+            flushed.append("partial")
+
+    with app_with_lifespan_factory() as app:
+        run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+        runner.start(app, run, slow)
+        # Let the task actually reach its sleep, or shutdown may cancel a task
+        # that never entered the `try` and the flush would not be the thing
+        # under test.
+        assert run.ready.wait(timeout=5)
+    assert flushed == ["partial"]
+
+
+def test_reap_drops_a_stale_terminal_run(app_with_lifespan):
+    app = app_with_lifespan
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    run.finish("landed", at=0.0)          # far outside any window
+
+    assert app.state.runs.reap(now=time.time()) == 1
+    assert app.state.runs.get(run.id, SCENE) is None
+
+
+def test_the_reaper_loop_itself_drops_a_stale_run(monkeypatch, tmp_path,
+                                                    app_with_lifespan_factory):
+    """Drive the loop, not `reap`.
+
+    Calling `reap` directly proves the registry can drop a run; it says nothing
+    about whether the background sweep ever does. The first version of this
+    module passed `anyio.current_time()` -- a monotonic clock reading a few
+    thousand -- into a comparison against wall-clock `ended_at` values around
+    1.8e9, so every sweep found nothing and the registry grew for the life of
+    the process. A test that calls `reap` itself cannot see that, and did not.
+    """
+    monkeypatch.setattr(runner, "REAP_INTERVAL_SECONDS", 0.05)
+    with app_with_lifespan_factory() as app:
+        run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+        # A REALISTIC stamp -- what `finish()` would really have written. `0.0`
+        # is below both a wall-clock and a monotonic cutoff, so it gets reaped
+        # either way and the test proves nothing; that is how the first version
+        # of this test passed against the very bug it was written for.
+        run.finish("landed", at=time.time() - runs_mod.REAP_SECONDS - 1)
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if app.state.runs.get(run.id, SCENE) is None:
+                return
+            time.sleep(0.02)
+        raise AssertionError("the reaper never dropped a long-terminal run")
