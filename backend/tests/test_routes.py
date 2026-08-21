@@ -5275,6 +5275,21 @@ def test_post_tagline_generate_from_model(client):
     assert client.get(f"/api/worlds/{wid}/characters/{cid}/tagline").json() == {"tagline": ""}
 
 
+def test_post_tagline_generate_survives_a_card_with_no_data(client):
+    # Version PUT accepts ANY dict as a card, so `{}` is supported state — and
+    # reading `card["data"]` blind 500'd the request before the model was ever
+    # called. Same guard the voice-anchor route already had (#59).
+    wid, cid = _world_char(client)
+    vid = client.get(f"/api/worlds/{wid}/characters/{cid}").json()["meta"]["default_version"]
+    client.put(f"/api/worlds/{wid}/characters/{cid}/versions/{vid}", json={"card": {}})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete("A silent snowleopardgirl.")
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/tagline/generate")
+    assert r.status_code == 200
+    assert r.json() == {"tagline": "A silent snowleopardgirl."}
+
+
 def test_post_tagline_generate_requires_key(client):
     wid, cid = _world_char(client)
     r = client.post(f"/api/worlds/{wid}/characters/{cid}/tagline/generate")

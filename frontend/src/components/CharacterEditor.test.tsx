@@ -24,6 +24,7 @@ vi.mock("../api/client", async () => {
       downloadCharacterChubGallery: vi.fn(), downloadCharacterChubLorebooks: vi.fn(),
       findChubUnlinked: vi.fn(),
       getCharacterTagline: vi.fn(), setCharacterTagline: vi.fn(), generateCharacterTagline: vi.fn(),
+      generateWorldTaglines: vi.fn(),
       getCharacterVoiceAnchor: vi.fn(), setCharacterVoiceAnchor: vi.fn(),
       generateCharacterVoiceAnchor: vi.fn(),
       listImageAppearances: vi.fn(), copyGreetingImage: vi.fn(), listGreetings: vi.fn(),
@@ -655,6 +656,125 @@ test("bumping resetSignal returns from the editor to the grid", async () => {
   rerender(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" resetSignal={1} />);
   await screen.findByRole("button", { name: /new character/i }); // back at the grid
   expect(screen.queryByLabelText("Description")).toBeNull();
+});
+
+// ---- the world-wide derive (#57) ----
+
+/** A roster where `blanks` characters have no tagline and `set` do. */
+function roster(blanks: string[], set: Record<string, string> = {}) {
+  return [
+    ...blanks.map((id) => ({ id, name: id, default_version: "default", has_avatar: false,
+                             tagline: "", versions: [] })),
+    ...Object.entries(set).map(([id, tagline]) => ({ id, name: id, default_version: "default",
+                                                     has_avatar: false, tagline, versions: [] })),
+  ];
+}
+
+/** Drive the route's frames through the component's own callback. */
+function derives(frames: any[]) {
+  (api.generateWorldTaglines as any).mockImplementation(
+    (_w: string, cb: (e: any) => void) => { frames.forEach(cb); return Promise.resolve(); });
+}
+
+test("the derive button counts the characters with no tagline", async () => {
+  (api.listCharacters as any).mockResolvedValue(roster(["mara", "winifred"], { seraphine: "Set." }));
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await screen.findByRole("button", { name: /Derive taglines \(2\)/ });
+});
+
+test("the derive button is absent when every tagline is set", async () => {
+  (api.listCharacters as any).mockResolvedValue(roster([], { seraphine: "Set." }));
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await screen.findByText("seraphine");
+  expect(screen.queryByRole("button", { name: /Derive taglines/ })).toBeNull();
+});
+
+test("the derive button is absent in campaign scope", async () => {
+  // A tagline is a world-level property; a campaign's grid is a view of one.
+  (api.listCharacters as any).mockResolvedValue(roster(["mara"]));
+  (api.listAppearances as any).mockResolvedValue(appearedRoster("mara"));
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  await screen.findByText("mara");
+  expect(screen.queryByRole("button", { name: /Derive taglines/ })).toBeNull();
+});
+
+test("deriving reports what was written and reloads the grid", async () => {
+  (api.listCharacters as any).mockResolvedValue(roster(["mara", "winifred"]));
+  derives([
+    { total: 2 },
+    { done: 1, character: "mara", name: "Mara", tagline: "A courier with cold hands." },
+    { done: 2, character: "winifred", name: "Winifred", tagline: "A locksmith who never sleeps." },
+    { summary: { total: 2, written: 2, skipped: 0, stopped: false } },
+  ]);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Derive taglines \(2\)/ }));
+  await screen.findByText("Derived 2 taglines");
+  // The route wrote as it went, so the grid is re-read rather than patched.
+  expect(api.listCharacters).toHaveBeenCalledTimes(2);
+});
+
+test("a stopped run names the failure and points at the re-run", async () => {
+  (api.listCharacters as any).mockResolvedValue(roster(["mara", "winifred", "seraphine"]));
+  derives([
+    { total: 3 },
+    { done: 1, character: "mara", name: "Mara", tagline: "A courier with cold hands." },
+    { done: 2, character: "winifred", name: "Winifred",
+      error: { detail: "rate limited", kind: "rate_limit" } },
+    { summary: { total: 3, written: 1, skipped: 0, stopped: true } },
+  ]);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Derive taglines \(3\)/ }));
+  const note = await screen.findByText(/Derived 1 tagline/);
+  expect(note.textContent).toContain("rate limited");
+  expect(note.textContent).toContain("run it again");
+  // ...and the button's count is the roster's, so it is right without arithmetic.
+  await screen.findByRole("button", { name: /Derive taglines \(3\)/ });
+});
+
+test("the report says why nothing was written, not just how many", async () => {
+  (api.listCharacters as any).mockResolvedValue(roster(["mara", "winifred", "seraphine"]));
+  derives([
+    { total: 3 },
+    { done: 1, character: "mara", name: "Mara", tagline: "A courier with cold hands." },
+    { done: 2, character: "winifred", name: "Winifred", skipped: "already set" },
+    { done: 3, character: "seraphine", name: "Seraphine", skipped: "blank" },
+    { summary: { total: 3, written: 1, skipped: 2, stopped: false } },
+  ]);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Derive taglines \(3\)/ }));
+  const note = await screen.findByText(/Derived 1 tagline/);
+  expect(note.textContent).toContain("1 already set");
+  expect(note.textContent).toContain("1 blank");
+});
+
+test("Stop ends the run and still reports what landed", async () => {
+  (api.listCharacters as any).mockResolvedValue(roster(["mara", "winifred"]));
+  // A run that never finishes on its own: it answers for the first character
+  // and then waits, exactly as a real one waits on the provider.
+  (api.generateWorldTaglines as any).mockImplementation(
+    (_w: string, cb: (e: any) => void, signal: AbortSignal) => new Promise((_ok, fail) => {
+      cb({ total: 2 });
+      cb({ done: 1, character: "mara", name: "Mara", tagline: "A courier with cold hands." });
+      signal.addEventListener("abort", () => fail(new DOMException("aborted", "AbortError")));
+    }));
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Derive taglines \(2\)/ }));
+  // The live progress line, which only a run still in flight can show.
+  await screen.findByText(/Deriving taglines 1\/2 — Mara/);
+  fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
+  // The abort is the user's own doing, so it reports rather than banners — and
+  // what the run wrote before it was stopped is still written.
+  const note = await screen.findByText(/Derived 1 tagline/);
+  expect(note.textContent).toContain("run it again");
+  expect(screen.queryByText(/aborted/)).toBeNull();
+});
+
+test("a refusal before the stream starts is an error banner, not a report", async () => {
+  (api.listCharacters as any).mockResolvedValue(roster(["mara"]));
+  (api.generateWorldTaglines as any).mockRejectedValue(new ApiError(409, "no connection configured"));
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Derive taglines \(1\)/ }));
+  await screen.findByText(/no connection configured/);
 });
 
 test("importing a .json posts multipart with json format", async () => {

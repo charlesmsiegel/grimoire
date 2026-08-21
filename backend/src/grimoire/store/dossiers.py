@@ -4,6 +4,25 @@ elsewhere" tier. Campaign-level; proposed at absorb and written when the reviewe
 the chronicle. Plain text at <croot>/characters/<cid>/dossier.md. Pure file IO +
 prompt/parse/stage only; the LLM call lives in the route layer and the prompt text in
 templates/dossier/.
+
+**No staleness hash, and that is a decision (#57).** `taglines.py` has none either,
+but for a reason that does not carry over on its own: a tagline is often hand-written,
+and hand-written text must not silently expire when a card changes. A dossier is
+derived from play, so it needs its own answer. It has two, and either alone is enough:
+
+- **There is nothing honest to hash.** A tagline is a claim about one card. A dossier
+  is a claim about everything this campaign has played, folded forward a scene at a
+  time -- `build_prompt` takes the *prior* paragraph plus the new transcript, so its
+  source is the whole history and not any one file. A hash over that would change on
+  every scene in the campaign, including the ones this character was not in, where the
+  paragraph is not stale but exactly right.
+- **It is re-derived whenever it could have moved.** Absorb proposes a refresh for
+  every NPC present, on every scene. A dossier that has not been refreshed belongs to
+  someone who has not been on stage, and "nothing has happened to her since" is her
+  current status, not a warning.
+
+And a proposal the reviewer edits before saving the chronicle is hand-written text like
+any other, so `taglines.py`'s rule then covers it unchanged.
 """
 
 from __future__ import annotations

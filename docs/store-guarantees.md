@@ -365,6 +365,13 @@ Collected, so that nothing here has to be inferred from an absence.
   apart.
 - **Not every campaign-scoped mutator serializes.** `OUTSIDE_DOMAIN` and the
   frozen `UNREVIEWED` backlog in `store/locks.py` are the current, honest list.
+- **The derived sidecars do not expire.** A tagline, a voice anchor and a
+  campaign dossier stand until something writes over them; none carries a hash
+  of what it was derived from, so none is ever marked out of date when the card
+  or the campaign underneath it moves on. `store/taglines.py`,
+  `store/voice_anchors.py` and `store/dossiers.py` each record the reason
+  beside the code — three absences with two different arguments behind them,
+  and all three deliberate (#57).
 - **Nothing across devices**, and nothing across OS users.
 - **No background watcher.** The rebuilt app runs no resident machinery;
   conflict detection is on demand, and nothing notices an external write until

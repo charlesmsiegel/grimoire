@@ -46,3 +46,32 @@ def test_build_prompt_includes_name_prior_and_transcript():
 def test_build_prompt_handles_empty_prior():
     msgs = dossiers.build_prompt("Aese", "", "transcript")
     assert "(none)" in msgs[1]["content"]
+
+
+def test_a_dossier_does_not_expire_when_the_card_moves_on(monkeypatch, tmp_path):
+    """The staleness decision (#57), as behaviour rather than a paragraph.
+
+    A dossier carries no hash of what it was derived from, so nothing about it
+    changes when the card does. The reasoning is in the module docstring; what
+    a future refactor could break silently is this: a read after the card is
+    rewritten still answers with the stored paragraph, not with "" or a flag.
+    """
+    root = _root(monkeypatch, tmp_path)
+    dossiers.write(root, "aese", "Aese now trusts the owner.")
+    card = characters.blank_card("Aese")
+    card["data"]["description"] = "rewritten from scratch"
+    characters.update_version(root, "aese",
+                              characters.read_character(root, "aese")["meta"]["default_version"],
+                              card)
+    assert dossiers.read(root, "aese") == "Aese now trusts the owner."
+
+
+def test_a_refresh_that_says_the_same_thing_proposes_nothing(monkeypatch, tmp_path):
+    """The other half of the same decision: the only thing that supersedes a
+    dossier is a *different* paragraph the reviewer accepts. An unchanged
+    refresh is not an edit, so it never reaches the review as one."""
+    root = _root(monkeypatch, tmp_path)
+    prior = "Aese now trusts the owner."
+    dossiers.write(root, "aese", prior)
+    assert dossiers.stage_edit("aese", "Aese", prior, prior) is None
+    assert dossiers.stage_edit("aese", "Aese", prior, "  ") is None
