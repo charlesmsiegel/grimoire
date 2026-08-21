@@ -49,6 +49,9 @@ def test_every_shape_change_is_refused_while_a_run_holds_the_scene(held_scene, c
         ("put",    f"{base}/messages/0",        {"content": "edited"}),
         ("delete", f"{base}/messages/0",        None),
         ("post",   f"{base}/messages/0/retcon", {"content": "retconned"}),
+        ("post",   f"{base}/alternates/v-nope",  None),
+        ("post",   f"{base}/replay",             {"index": 0}),
+        ("post",   f"{base}/roll",               {"notation": "1d20"}),
     ]
     for method, path, body in calls:
         r = getattr(client, method)(path, **({"json": body} if body else {}))
@@ -144,3 +147,72 @@ def test_an_ordinary_create_still_works_while_a_turn_generates(held_scene, clien
     r = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Winifred"})
 
     assert r.status_code == 200, r.text
+
+
+def test_a_replay_walk_cannot_be_stepped_while_a_turn_holds_the_scene(client):
+    """Accept and cancel both move the transcript -- one keeps the replayed turn
+    and releases the next original, the other puts every unreplayed post back --
+    and neither goes through `POST /replay`, so guarding the cut alone left both
+    open.
+
+    The walk is started BEFORE the run, because starting it afterwards is the
+    door the test above covers.
+    """
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    store.scenes.append_message(cid, sid, "user", "Mara steps onto the dock.")
+    store.scenes.append_message(cid, sid, "assistant", "The boards give underfoot.")
+    store.scenes.append_message(cid, sid, "user", "She keeps walking.")
+    store.replay.begin(cid, sid, 1)
+    identity = store.scenes.scene_identity(cid, sid)
+    client.app.state.runs.start_or_existing(
+        ("scene", cid, identity), "turn", "chat", "a1", identity,
+        {"campaign": "Saltmarch", "scene": "Mara"})
+
+    base = f"/api/campaigns/{cid}/scenes/{sid}/replay"
+    for path in (f"{base}/accept", f"{base}/cancel"):
+        r = client.post(path)
+        assert r.status_code == 409, f"{path} answered {r.status_code}"
+        # NOT `replay_refused` or `no_replay`: the session is live and this
+        # scene's, so a 409 alone would pass against an unguarded route.
+        assert r.json()["kind"] == "scene_busy", f"{path}: {r.json()}"
+
+
+def test_a_manual_check_is_refused_while_a_turn_holds_the_scene(client):
+    """The 🎲 line is an append like any other, and the check route reaches it by
+    a different path than the plain roll -- it resolves against the sheet first,
+    so a guard placed only in `post_scene_roll` would leave this one open.
+
+    Set up in full rather than aimed at a bogus check: an unresolvable one is a
+    400 raised before the lock, which would pass with no guard present at all.
+    """
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    chid = client.post(f"/api/worlds/{wid}/characters",
+                       json={"name": "Mara"}).json()["character"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes",
+                      json={"title": "Mara"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": chid, "version": "default",
+                      "role": "npc"})
+    store.sheets.write(cid, "characters", chid, "medium",
+                       {"vigor": 3, "brawl": 2, "wits": 2, "occult": 1}, expected=None)
+    body = {"check": "brawl", "actor": "characters:mara", "difficulty": 6}
+    # It resolves when the scene is free -- otherwise the refusal below proves
+    # nothing about the guard.
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/check",
+                       json=body).status_code == 200
+
+    identity = store.scenes.scene_identity(cid, sid)
+    client.app.state.runs.start_or_existing(
+        ("scene", cid, identity), "turn", "chat", "a1", identity,
+        {"campaign": "Saltmarch", "scene": "Mara"})
+
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/check", json=body)
+
+    assert r.status_code == 409, r.text
+    assert r.json()["kind"] == "scene_busy"

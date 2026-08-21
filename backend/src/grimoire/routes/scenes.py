@@ -877,7 +877,7 @@ def get_scene_alternates(cid: str, sid: str):
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/alternates/{vid}")
-def post_scene_alternate(cid: str, sid: str, vid: str):
+def post_scene_alternate(cid: str, sid: str, vid: str, request: Request):
     """Cycle (or pin) a stored variant into the transcript, parking the live one.
 
     Addressed by `variant_id`, not by position: retention shifts every index
@@ -899,6 +899,10 @@ def post_scene_alternate(cid: str, sid: str, vid: str):
         # source `repoint_scenes` leaves behind on purpose, and the over-long
         # sidecar name `delete_scene` is allowed to fail to unlink.
         _require_scene(cid, sid)
+        # A promotion rewrites the post a live turn is about to append after,
+        # and parks the current one as a variant. Inside the hold that already
+        # covers the swap, so nothing reserves a turn between the two.
+        runs.require_scene_free(request.app, cid, sid)
         # Resolve FIRST. The id comes from a client snapshot that another tab
         # may have moved on from, and retiring a decision is not something a
         # request that then 404s gets to do: a stale click would cancel a
@@ -3197,7 +3201,6 @@ def get_cast_detail(cid: str, sid: str, kind: str, id: str):
 def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
                       request: Request):
     _require_scene(cid, sid)
-    runs.require_scene_free(request.app, cid, sid)
     # Macros resolved once at persist time (#137), same as a fresh send.
     content = store.context.expand_macros(
         body.content, store.context.scene_substitutions(cid, sid), cid, sid)
@@ -3207,7 +3210,12 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
         # reply parks the pre-edit text as a variant — but that variant exists
         # only in the transcript until this runs, so a *second* edit would
         # overwrite the sole copy of the first and drop it from the set.
-        with store.locks.campaign_lock(cid):
+        #
+        # The scene-free check is INSIDE that hold rather than ahead of it, and
+        # review caught that it was not: checking and then locking leaves room
+        # for a send to reserve and detach in between, so the edit lands under a
+        # turn that started after the check said there was none.
+        with runs.scene_held_free(request.app, cid, sid):
             store.scenes.edit_message(cid, sid, index, content)
             # Retire the transient-state ledger from this post on (#120). An
             # edit is the one transcript change the tail filter cannot see:
@@ -3265,9 +3273,12 @@ def delete_scene_messages_from(cid: str, sid: str, index: int, request: Request)
     the place to close. Editing a post (`PUT`) accepts exactly the same exposure.
     """
     _require_scene(cid, sid)
-    runs.require_scene_free(request.app, cid, sid)
     try:
-        return store.cascade.delete_from(cid, sid, index)
+        # Held across the check and the cascade, not merely ahead of it: the
+        # campaign lock is reentrant, so the cascade's own acquisitions are
+        # free, and a send cannot reserve a turn in the gap.
+        with runs.scene_held_free(request.app, cid, sid):
+            return store.cascade.delete_from(cid, sid, index)
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
     except (store.SceneNotFound, store.CampaignNotFound):
@@ -3293,14 +3304,15 @@ def post_scene_retcon(cid: str, sid: str, index: int, body: EditMessage,
     contradict, and the reason to re-absorb this scene and read the badges.
     """
     _require_scene(cid, sid)
-    runs.require_scene_free(request.app, cid, sid)
     # Macros resolved once at persist time, the same as a fresh send and the
     # same as the plain edit (#137): a retconned `{{roll:1d20}}` must not
     # re-roll on every later context build.
     content = store.context.expand_macros(
         body.content, store.context.scene_substitutions(cid, sid), cid, sid)
     try:
-        return store.retcon.retcon(cid, sid, index, content)
+        # One hold over check and rewrite, as for the cascade delete above.
+        with runs.scene_held_free(request.app, cid, sid):
+            return store.retcon.retcon(cid, sid, index, content)
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
     except store.scenes.RollMessageImmutable:
@@ -3365,7 +3377,7 @@ def get_replay(cid: str, sid: str):
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/replay")
-def post_replay(cid: str, sid: str, body: ReplayStart):
+def post_replay(cid: str, sid: str, body: ReplayStart, request: Request):
     """Start a replay: cut the scene at `index` and hold the rest for review.
 
     The cut is the cascade's (#75), so everything the removed posts caused the
@@ -3379,7 +3391,12 @@ def post_replay(cid: str, sid: str, body: ReplayStart):
     """
     _require_scene(cid, sid)
     try:
-        return store.replay.begin(cid, sid, body.index)
+        # The most destructive shape change there is -- it cuts the transcript
+        # at `index` and reverses everything the removed posts caused. Under a
+        # live turn that is history moving out from under a reply already being
+        # written.
+        with runs.scene_held_free(request.app, cid, sid):
+            return store.replay.begin(cid, sid, body.index)
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
     except store.replay.ReplayError as exc:
@@ -3447,12 +3464,15 @@ def _replay_turn_run(cid: str, sid: str, request: Request,
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/replay/accept")
-def post_replay_accept(cid: str, sid: str):
+def post_replay_accept(cid: str, sid: str, request: Request):
     """Keep the replayed turn and step forward. Null when that was the last one."""
     _require_scene(cid, sid)
     _replay_session(cid, sid)
     try:
-        session = store.replay.accept(cid)
+        # Stepping the walk forward moves the transcript: the accepted turn
+        # stays and the next original comes back out of the held tail.
+        with runs.scene_held_free(request.app, cid, sid):
+            session = store.replay.accept(cid)
     except store.replay.ReplayError as exc:
         raise HTTPException(status_code=409,
                             detail={"detail": str(exc), "kind": "replay_refused"})
@@ -3462,7 +3482,8 @@ def post_replay_accept(cid: str, sid: str):
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/replay/cancel")
-def post_replay_cancel(cid: str, sid: str, body: ReplayCancel | None = None):
+def post_replay_cancel(cid: str, sid: str, request: Request,
+                       body: ReplayCancel | None = None):
     """Stop the replay. By default the unreplayed originals go back.
 
     The scene the session names is trusted over the path's — a session whose
@@ -3472,7 +3493,10 @@ def post_replay_cancel(cid: str, sid: str, body: ReplayCancel | None = None):
     _require_scene(cid, sid)
     _replay_session(cid, sid)
     try:
-        return store.replay.cancel(cid, restore=body.restore if body else True)
+        # Restoring the unreplayed originals appends them back, which is the
+        # same shape change as the cut that removed them.
+        with runs.scene_held_free(request.app, cid, sid):
+            return store.replay.cancel(cid, restore=body.restore if body else True)
     except store.replay.ReplayError as exc:
         raise HTTPException(status_code=409,
                             detail={"detail": str(exc), "kind": "replay_refused"})

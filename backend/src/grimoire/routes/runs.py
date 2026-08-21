@@ -1129,11 +1129,16 @@ def scene_held_free(app, cid: str, sid: str):
     it guards.
 
     Every route that changes a scene's SHAPE goes through this -- rename,
-    delete, message edit, message cut, retcon -- because detaching a turn made
-    all of them concurrent with generation. A turn composes its prompt from the
-    transcript as it stood and finalizes against the transcript as it is, so a
-    post edited or cut underneath it produces a reply answering a question
-    nobody asked any more, appended to history that has moved.
+    delete, message edit, message cut, retcon, replay begin/accept/cancel --
+    because detaching a turn made all of them concurrent with generation. The
+    doors that already open a campaign-lock hold of their own (alternate
+    promotion, the manual roll, the manual check) call `require_scene_free`
+    inside it instead: the same guarantee, without a second acquisition.
+
+    A turn composes its prompt from the transcript as it stood and finalizes
+    against the transcript as it is, so a post edited or cut underneath it
+    produces a reply answering a question nobody asked any more, appended to
+    history that has moved.
 
     Checking and then mutating is two steps, and a reservation fits between
     them: the check sees no run, a send reserves and detaches, and the rename
