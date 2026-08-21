@@ -769,6 +769,43 @@ test("Stop ends the run and still reports what landed", async () => {
   expect(screen.queryByText(/aborted/)).toBeNull();
 });
 
+test("leaving the editor aborts the run rather than leaving it spending", async () => {
+  // The progress line and Stop go with the view, so a run that outlived it
+  // would be a stream nobody can see or stop, still paying per character.
+  (api.listCharacters as any).mockResolvedValue(roster(["mara", "winifred"]));
+  let signal: AbortSignal | null = null;
+  (api.generateWorldTaglines as any).mockImplementation(
+    (_w: string, cb: (e: any) => void, sig: AbortSignal) => new Promise((_ok, fail) => {
+      signal = sig;
+      cb({ total: 2 });
+      sig.addEventListener("abort", () => fail(new DOMException("aborted", "AbortError")));
+    }));
+  const view = render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Derive taglines \(2\)/ }));
+  await screen.findByRole("button", { name: "Stop" });
+  view.unmount();
+  expect(signal!.aborted).toBe(true);
+});
+
+test("a run whose editor has moved on reports nothing into the new world", async () => {
+  // `adopt`'s rule, applied to the batch: a continuation belonging to world A
+  // must not paint anything onto the editor now showing world B.
+  (api.listCharacters as any).mockResolvedValue(roster(["mara"]));
+  let finish: () => void = () => {};
+  (api.generateWorldTaglines as any).mockImplementation(
+    (_w: string, cb: (e: any) => void) => new Promise<void>((ok) => {
+      cb({ total: 1 });
+      cb({ done: 1, character: "mara", name: "Mara", tagline: "A courier with cold hands." });
+      cb({ summary: { total: 1, written: 1, skipped: 0, stopped: false } });
+      finish = ok;   // the request itself has not settled yet
+    }));
+  const view = render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Derive taglines \(1\)/ }));
+  view.rerender(<CharacterEditor scope={{ kind: "world", id: "w2" }} wid="w2" />);
+  await act(async () => { finish(); });
+  expect(screen.queryByText(/Derived 1 tagline/)).toBeNull();
+});
+
 test("a refusal before the stream starts is an error banner, not a report", async () => {
   (api.listCharacters as any).mockResolvedValue(roster(["mara"]));
   (api.generateWorldTaglines as any).mockRejectedValue(new ApiError(409, "no connection configured"));

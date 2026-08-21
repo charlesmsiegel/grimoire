@@ -67,9 +67,10 @@ export type LocalizeEvent = {
  *  Unlike the per-character preview, this route WRITES each sentence as it
  *  lands — so a frame carrying `tagline` is a fact about the store, not a
  *  draft awaiting a save. `skipped` says why nothing was written for that
- *  character ("blank" reply, tagline "already set" by someone else mid-run, or
- *  an "unreadable card"); `error` is the provider failure that stopped the run,
- *  and no character after it was attempted. */
+ *  character — a "blank" reply, a tagline "already set" by someone else, an
+ *  "unreadable card", or one "gone" (deleted while its own call was in
+ *  flight); `error` is the provider failure that stopped the run, and no
+ *  character after it was attempted. */
 export type TaglineBatchSummary = {
   total: number;
   written: number;
