@@ -14,8 +14,10 @@ import { errorText } from "../api/errors";
  *  Unlike `SceneConfirmForm`, the commit is ONE request: the backend creates
  *  the scene, dates it, places it, writes every post and seats the cast in one
  *  call, and removes the scene again if any of that fails. So there is no
- *  half-written scene for a dismissal or a campaign switch to strand — the
- *  reason that form needs a `writing` gate and this one does not.
+ *  PARTIAL scene for a dismissal or a campaign switch to strand — but a whole
+ *  one still is, since the request outlives this pane and `onImported` is
+ *  skipped once it is gone, which is why the write is still reported through
+ *  `onWriting` and still gates the modal's dismissal.
  */
 export function SceneImport({ cid, onBack, onCancel, onImported, onWriting }: {
   cid: string;

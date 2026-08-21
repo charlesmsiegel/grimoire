@@ -157,6 +157,33 @@ def test_a_width_crossing_create_is_refused_while_any_scene_is_generating(held_s
     assert r.json()["kind"] == "scene_busy"
 
 
+def test_a_width_crossing_import_is_refused_while_any_scene_is_generating(held_scene,
+                                                                           client):
+    """The same door in another module (#92), which is exactly the kind an
+    inventory of *this* one misses: importing a transcript creates a scene, so
+    it crosses the number-width boundary and repads the campaign just as the
+    create route does."""
+    cid, _, _ = held_scene
+    _campaign_at_width_edge(cid)
+
+    r = client.post(f"/api/campaigns/{cid}/scenes/import",
+                    json={"title": "Winifred", "messages": [{"role": "user", "content": "hi"}]})
+
+    assert r.status_code == 409, f"the repad was allowed: {r.status_code}"
+    assert r.json()["kind"] == "scene_busy"
+
+
+def test_an_ordinary_import_still_works_while_a_turn_generates(held_scene, client):
+    """The counterweight, for the same reason the create route has one: an
+    import touches nothing but its own new file."""
+    cid, _, _ = held_scene
+
+    r = client.post(f"/api/campaigns/{cid}/scenes/import",
+                    json={"title": "Winifred", "messages": [{"role": "user", "content": "hi"}]})
+
+    assert r.status_code == 200, r.text
+
+
 def test_an_ordinary_create_still_works_while_a_turn_generates(held_scene, client):
     """The counterweight, and the reason the guard is conditional. An ordinary
     create touches nothing but its own new file, so refusing every create
