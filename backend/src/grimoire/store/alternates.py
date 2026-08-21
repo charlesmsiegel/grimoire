@@ -6,8 +6,17 @@ structured and the transcript's frontmatter holds flat string scalars only::
 
     {"anchor": 4,
      "next_guidance": "",
-     "runs": [{"created": "...", "guidance": "", "segments": [{"speaker": ..., "content": ...}]},
+     "next_model": "",
+     "runs": [{"created": "...", "guidance": "", "model": "",
+               "segments": [{"speaker": ..., "content": ...}]},
               ...]}
+
+``next_guidance`` and ``next_model`` are one *pending* pair — the hint and the
+model a reroll aimed at the replacement it has not received yet — and they are
+spent together onto whatever fills the slot (see ``_resolve``). ``model`` is
+empty for every variant the scene's own stamped model produced, which is every
+variant that existed before #77 and every reroll that did not override the
+route; a reader treats empty as "the scene's model" rather than "unknown".
 
 **What a set is keyed to.** One reroll can produce several posts
 (``scenes.split_reply`` segments a reply per speaker), so the unit here is the
@@ -71,6 +80,13 @@ MAX_ALTERNATES = 8
 #: bound: `guidance` is an unbounded string on the wire, and nothing else would
 #: stop one request from parking megabytes in a file read on every scene open.
 MAX_GUIDANCE_CHARS = 500
+
+#: The same bound, for the same reason, on the model a reroll was aimed at
+#: (#77). Far shorter than a hint because it is an identifier rather than
+#: prose -- the longest id any of the three connection kinds accepts is well
+#: under this -- but it arrives on the wire from the same unbounded string
+#: field, so it needs a ceiling of its own rather than the hint's.
+MAX_MODEL_CHARS = 200
 
 
 class AlternateNotFound(Exception):
@@ -345,33 +361,45 @@ def _resolve(cid: str, sid: str) -> dict:
     anchor = key
     players = _players(cid, sid)
     runs = _distinct(rec["runs"], players)
+    # The pending pair a reroll left aimed at the run that has not landed yet:
+    # the hint it was given and the model it was aimed at (#77). Read together
+    # and spent together, because they describe one attempt — an override with
+    # no hint has to reach its variant exactly as a hint with no override does.
+    hint, aimed = rec.get("next_guidance", ""), rec.get("next_model", "")
     if live is None:
         active = None                       # the slot is empty (a reroll in flight)
     else:
         active = next((i for i, r in enumerate(runs)
                        if _unforged(r["segments"], players) == live), None)
         if active is None:
-            runs.append({"created": _landed_at(cid, sid),
-                         "guidance": rec.get("next_guidance", ""), "segments": live})
+            runs.append({"created": _landed_at(cid, sid), "guidance": hint,
+                         "model": aimed, "segments": live})
             active = len(runs) - 1
-        elif rec.get("next_guidance"):
+        elif hint or aimed:
             # The model answered a guided reroll with text the set already had.
             # Deduplicating is right — two identical takes are one variant — but
             # the hint is spent either way, so leaving the matched run labelled
             # with the *older* instruction credits what is on screen to one it
             # was not generated from. The latest wins: it is the one that
             # actually produced this take.
-            runs[active] = {**runs[active], "guidance": rec["next_guidance"],
+            #
+            # `model` goes with it, and unconditionally rather than only when
+            # `aimed` is set: an override-free reroll that lands on a matched
+            # variant means the scene's own model produced what is on screen, so
+            # a stamp left over from the take it duplicates would name a route
+            # this generation did not use.
+            runs[active] = {**runs[active], "guidance": hint, "model": aimed,
                             "created": _landed_at(cid, sid)}
     runs, active = _trimmed(runs, active)
-    # The hint is one-shot: it steers whatever fills the slot, and the run above
+    # The pair is one-shot: it steers whatever fills the slot, and the run above
     # has just recorded it. Carrying it forward would re-label the *next* thing
     # to land there — a hand edit of that reply, most obviously — with an
     # instruction nothing about it received. Spent as soon as a live run
     # occupies the slot, matched or newly appended, since either way a
     # generation it steered is what produced what is on screen.
-    pending = "" if live is not None else rec.get("next_guidance", "")
-    return {"anchor": anchor, "next_guidance": pending, "runs": runs, "active": active}
+    spent = live is not None
+    return {"anchor": anchor, "next_guidance": "" if spent else hint,
+            "next_model": "" if spent else aimed, "runs": runs, "active": active}
 
 
 def _write(cid: str, sid: str, rec: dict) -> None:
@@ -458,12 +486,27 @@ def reconcile(cid: str, sid: str) -> None:
             _write(cid, sid, rec)
 
 
-def archive(cid: str, sid: str, guidance: str = "") -> None:
+def archive(cid: str, sid: str, guidance: str = "", model: str = "") -> None:
     """Keep the generation a reroll is about to replace. Called BEFORE the
     removal, so the outgoing run survives even a stream that never lands; the
     replacement joins the set on its own when the next read reconciles.
     `guidance` is the hint steering that replacement and is recorded against
-    it, not against the run being archived."""
+    it, not against the run being archived.
+
+    `model` is the same promise for the route (#77): the model the reroll is
+    about to be sent to, when the caller overrode it, and "" when the scene's
+    own stamped model is what will run. Recorded here rather than when the
+    reply lands, which is what makes it survive a stream that dies — and which
+    means it names the route the reroll ASKED for, not necessarily the one that
+    answered: a generation the primary fails is served by the configured
+    fallback (#144) on a different connection entirely. That is the same
+    inaccuracy the scene's own `model` frontmatter and `prompt_log`'s snapshots
+    already carry, deliberately (see `store.prompt_log`'s docstring) — every
+    stamp in this codebase names the configured route, and one field answering
+    a different question would be the surprise.
+    """
+    pending = {"next_guidance": guidance[:MAX_GUIDANCE_CHARS],
+               "next_model": model[:MAX_MODEL_CHARS]}
     with locks.campaign_lock(cid):
         slot = _slot(cid, sid)
         live = slot["segments"]
@@ -474,32 +517,36 @@ def archive(cid: str, sid: str, guidance: str = "") -> None:
             # the one steering whatever lands next, and that is the run it will
             # be shown against.
             if rec:
-                _write(cid, sid, {**rec, "next_guidance": guidance[:MAX_GUIDANCE_CHARS]})
+                _write(cid, sid, {**rec, **pending})
             return
         # `_resolve` has already folded the live generation into `runs`; an
         # empty result means this generation is the set's first variant.
         rec = rec or {"anchor": slot["gen"],
                       "runs": [{"created": _landed_at(cid, sid),
-                                "guidance": "", "segments": live}]}
-        _write(cid, sid, {**rec, "next_guidance": guidance[:MAX_GUIDANCE_CHARS]})
+                                "guidance": "", "model": "", "segments": live}]}
+        _write(cid, sid, {**rec, **pending})
 
 
-def disown_guidance(cid: str, sid: str) -> None:
-    """Take the pending hint back, without reconciling on the way.
+def disown_pending(cid: str, sid: str) -> None:
+    """Take the pending hint and model back, without reconciling on the way.
 
-    `archive(cid, sid, "")` is the usual way to re-aim it and is right over an
+    `archive(cid, sid, "")` is the usual way to re-aim them and is right over an
     *empty* slot, where there is no live run to credit. Over a live one it
-    resolves first — and resolving now stamps that run with the pending hint,
+    resolves first — and resolving now stamps that run with the pending pair,
     which is the very attribution this is trying to undo.
 
     For the one caller that records a hint and then fails to make room for what
     it was aimed at: a reroll whose removal did not complete. The reply on
     screen is the one the hint was meant to replace, not something it produced.
+
+    Both fields, not just the hint: an override with no guidance leaves
+    `next_model` set on its own (#77), and taking back half of a pending pair
+    would credit the surviving reply with a route it was not generated on.
     """
     with locks.campaign_lock(cid):
         rec = _read_raw(cid, sid)
-        if rec.get("next_guidance"):
-            _write(cid, sid, {**rec, "next_guidance": ""})
+        if rec.get("next_guidance") or rec.get("next_model"):
+            _write(cid, sid, {**rec, "next_guidance": "", "next_model": ""})
 
 
 def promote(cid: str, sid: str, index: int) -> None:
@@ -520,7 +567,7 @@ def promote(cid: str, sid: str, index: int) -> None:
         live = rec["active"] is not None
         # Persist the reconciliation before the swap, so a variant only ever
         # seen in a view is on disk before the transcript stops carrying it.
-        _write(cid, sid, {**rec, "next_guidance": ""})
+        _write(cid, sid, {**rec, "next_guidance": "", "next_model": ""})
         if live:
             scenes_write.remove_trailing_assistant_run(cid, sid)
         scenes_write.append_reply(

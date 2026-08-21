@@ -145,3 +145,15 @@ const CLAUDE_PINNED = [
   "claude-sonnet-4-6",
   "claude-haiku-4-5",
 ];
+
+/** The same roster as the `<select>` above, in the shape `ModelCombobox` reads.
+ *
+ *  Exported because a Claude connection is the one kind with no model *list* to
+ *  fetch — OpenRouter has a catalog and a custom endpoint has its cached
+ *  sidecar — so any other picker offering Claude models has to get them from
+ *  here or hard-code a second copy that drifts the next time a model ships.
+ *  Priced and sized as null: this file knows the ids, not the tariff. */
+export const CLAUDE_MODEL_OPTIONS: Model[] = [
+  ...CLAUDE_ALIASES.map((m) => ({ id: m.id, name: m.label })),
+  ...CLAUDE_PINNED.map((id) => ({ id, name: id })),
+].map((m) => ({ ...m, context: null, prompt: null, completion: null }));

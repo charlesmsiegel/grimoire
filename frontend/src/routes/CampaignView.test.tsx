@@ -1335,7 +1335,10 @@ const PRODUCERS: { api: "retry" | "regenerate" | "resolveProposal";
       fireEvent.click(await screen.findByRole("button", { name: /^reroll$/i }));
       fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
     },
-    attemptAt: 6,
+    // One lower than it was: reroll's four optional body fields became one
+    // object argument (#77), which is what stops the position moving again
+    // the next time a field is added.
+    attemptAt: 5,
   },
   {
     api: "resolveProposal",
@@ -2208,7 +2211,11 @@ test("a manual roll cannot land in the window a cancelled reroll restores into",
     messages: [{ role: "user", content: "and then?" },
                { role: "assistant", content: "The tide turns." }],
   });
-  (api.regenerate as any).mockImplementation(hangingChat([]));   // no first token
+  // `hangingStream`, not `hangingChat`: the chat-shaped one reads its signal
+  // out of a fixed argument position, and reroll's body fields are one object
+  // now (#77). `hangingStream` finds the signal by type, so it survives the
+  // next signature change too.
+  (api.regenerate as any).mockImplementation(hangingStream());   // no first token
   renderCampaign();
   await screen.findByText("The tide turns.");
   // The roll is available before the turn — this is the control being locked,
@@ -2357,7 +2364,7 @@ test("Retry after a failed reroll rerolls again, with its guidance", async () =>
   fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledTimes(2));
   expect(api.retry).not.toHaveBeenCalled();
-  expect((api.regenerate as any).mock.calls[1][3]).toBe("darker this time");
+  expect((api.regenerate as any).mock.calls[1][3].guidance).toBe("darker this time");
 });
 
 test("a remembered reroll does not follow the player to another scene", async () => {
@@ -2948,8 +2955,8 @@ test("Reroll on the last assistant post replaces it with a fresh reply", async (
   expect(screen.getByTitle("Reroll")).toBeInTheDocument(); // hovertext present
   fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i })); // empty = plain reroll
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
-    "run", "s1", expect.any(Function), undefined, undefined, expect.any(AbortSignal),
-    expect.any(String), expect.any(Function)));
+    "run", "s1", expect.any(Function), { guidance: "", connection_id: "", model: "" },
+    expect.any(AbortSignal), expect.any(String), expect.any(Function)));
   await screen.findByText("fresh reply");
   expect(screen.queryByText("old reply")).toBeNull();
 });
@@ -2965,8 +2972,9 @@ test("typed guidance is passed to regenerate", async () => {
   fireEvent.change(input, { target: { value: "make her angrier" } });
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
-    "run", "s1", expect.any(Function), "make her angrier", undefined, expect.any(AbortSignal),
-    expect.any(String), expect.any(Function)));
+    "run", "s1", expect.any(Function),
+    { guidance: "make her angrier", connection_id: "", model: "" },
+    expect.any(AbortSignal), expect.any(String), expect.any(Function)));
 });
 
 test("Escape closes the reroll popover without firing", async () => {
@@ -2980,6 +2988,130 @@ test("Escape closes the reroll popover without firing", async () => {
   expect(screen.queryByPlaceholderText(/guide the reroll/i)).toBeNull();
   expect(api.regenerate).not.toHaveBeenCalled();
 });
+
+// ---- the per-reroll route override (#77) ----
+/** A scene with a reply to replace, plus a second connection to send the
+ *  reroll to. `CONNECTIONS` is the harness default plus a local endpoint, so
+ *  the picker has something to choose that a bare model id could not name. */
+const LOCAL_CONN = {
+  id: "local", kind: "openai_compatible", name: "Local", base_url: "http://localhost:11434/v1",
+  model: "llama3", post_process: "none", key_set: false, rev: "r2",
+};
+
+function rerollableScene() {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "old reply" }] });
+  (api.listConnections as any).mockResolvedValue([
+    { id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "",
+      model: "campaign/model", post_process: "none", key_set: true, rev: "r1" },
+    LOCAL_CONN,
+  ]);
+  (api.readConnection as any).mockResolvedValue({ ...LOCAL_CONN, models: [], fetched_at: "" });
+}
+
+test("a reroll sent to another connection names it on the wire", async () => {
+  rerollableScene();
+  renderCampaign();
+  await screen.findByText("old reply");
+  fireEvent.click(await screen.findByTitle("Reroll"));
+  await screen.findByRole("option", { name: "Local" });
+
+  fireEvent.change(screen.getByLabelText("Reroll connection"), { target: { value: "local" } });
+  fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
+
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
+    "run", "s1", expect.any(Function), { guidance: "", connection_id: "local", model: "" },
+    expect.any(AbortSignal), expect.any(String), expect.any(Function)));
+});
+
+test("a reroll may name a model without leaving the campaign's connection", async () => {
+  rerollableScene();
+  renderCampaign();
+  await screen.findByText("old reply");
+  fireEvent.click(await screen.findByTitle("Reroll"));
+  const box = await screen.findByLabelText("Reroll model");
+
+  fireEvent.change(box, { target: { value: "vendor/bigger" } });
+  fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
+
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
+    "run", "s1", expect.any(Function),
+    { guidance: "", connection_id: "", model: "vendor/bigger" },
+    expect.any(AbortSignal), expect.any(String), expect.any(Function)));
+});
+
+test("the route rides the guidance, and neither steers the next reroll", async () => {
+  rerollableScene();
+  renderCampaign();
+  await screen.findByText("old reply");
+  fireEvent.click(await screen.findByTitle("Reroll"));
+  await screen.findByRole("option", { name: "Local" });
+  fireEvent.change(screen.getByLabelText("Reroll connection"), { target: { value: "local" } });
+  fireEvent.change(screen.getByPlaceholderText(/guide the reroll/i),
+                   { target: { value: "warmer" } });
+  fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalledTimes(1));
+
+  // A second reroll, popover reopened and left alone: one-shot means the local
+  // endpoint does not quietly keep serving this scene.
+  fireEvent.click(await screen.findByTitle("Reroll"));
+  fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
+
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalledTimes(2));
+  expect((api.regenerate as any).mock.calls[1][3]).toEqual(
+    { guidance: "", connection_id: "", model: "" });
+});
+
+test("Retry after a failed reroll repeats its route, not just its guidance", async () => {
+  rerollableScene();
+  (api.regenerate as any).mockImplementation(
+    async (_c: string, _s: string, onEvent: any) => {
+      onEvent({ error: { detail: "the endpoint refused", kind: "network" } });
+    });
+  renderCampaign();
+  await screen.findByText("old reply");
+  fireEvent.click(await screen.findByTitle("Reroll"));
+  await screen.findByRole("option", { name: "Local" });
+  fireEvent.change(screen.getByLabelText("Reroll connection"), { target: { value: "local" } });
+  fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
+  await screen.findByText(/the endpoint refused/);
+
+  fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
+
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalledTimes(2));
+  // "Try that again" means the same reroll. A Retry that dropped the endpoint
+  // the player chose would answer from the campaign's model while looking like
+  // a repeat.
+  expect((api.regenerate as any).mock.calls[1][3].connection_id).toBe("local");
+});
+
+test("a variant generated elsewhere says so on the swipe control", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "second" }] });
+  (api.getAlternates as any).mockResolvedValue(
+    { active: 1, alternates: [ALT("first"), ALT("second", "local/llama3")] });
+  renderCampaign();
+  await screen.findByText("second");
+
+  // The counter is the one place a take's route is visible at all: two
+  // alternates read identically, and nothing else says which model wrote them.
+  await waitFor(() => expect(screen.getByTitle(/Model: local\/llama3/)).toBeInTheDocument());
+});
+
+test("a variant with no recorded route adds no line to the swipe control", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "second" }] });
+  (api.getAlternates as any).mockResolvedValue(
+    { active: 1, alternates: [ALT("first"), ALT("second")] });
+  renderCampaign();
+  await screen.findByText("second");
+
+  await waitFor(() => expect(screen.getByTitle("second")).toBeInTheDocument());
+});
+
 
 test("regenerate carries a pending override", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
@@ -2996,14 +3128,15 @@ test("regenerate carries a pending override", async () => {
   fireEvent.click(await screen.findByTitle("Reroll"));
   fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i })); // empty guidance = plain reroll
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
-    "run", "s1", expect.any(Function), undefined, { response_preset: "terse" }, expect.any(AbortSignal),
-    expect.any(String), expect.any(Function)));
+    "run", "s1", expect.any(Function),
+    { guidance: "", response: { response_preset: "terse" }, connection_id: "", model: "" },
+    expect.any(AbortSignal), expect.any(String), expect.any(Function)));
 });
 
 // The wire addresses a variant by a content-derived `id`, not by position:
 // retention shifts every index when a full set gains a take.
-const ALT = (preview: string) =>
-  ({ id: `id-${preview}`, created: "t", guidance: "", posts: 1, preview });
+const ALT = (preview: string, model = "") =>
+  ({ id: `id-${preview}`, created: "t", guidance: "", model, posts: 1, preview });
 
 test("a rerolled post carries a swipe control counting its alternates", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
@@ -5228,7 +5361,7 @@ test("renaming the scene keeps a failed reroll's Retry a reroll", async () => {
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledTimes(2));
   expect(api.retry).not.toHaveBeenCalled();
   expect((api.regenerate as any).mock.calls[1][1]).toBe("s1-renamed");
-  expect((api.regenerate as any).mock.calls[1][3]).toBe("darker this time");
+  expect((api.regenerate as any).mock.calls[1][3].guidance).toBe("darker this time");
 });
 
 // ------------------------------------------ #110/#112: confidence routing

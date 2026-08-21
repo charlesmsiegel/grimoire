@@ -138,8 +138,27 @@ class ResponsePresetUpdate(BaseModel):
 
 
 class RegenerateBody(BaseModel):
+    """One reroll's overrides, every one of them riding this call alone.
+
+    `connection_id` and `model` are the manual route override (#77), and they
+    are two fields rather than one because neither can express the other's
+    case. A bare model id cannot reach a *different provider* — the interesting
+    reroll is "try that again on the local Ollama", and the credentials, base
+    URL and prompt post-processing that makes possible live on a connection,
+    not in a string. A bare connection id cannot say "the same provider, its
+    bigger model", which is the cheap everyday case and the one that needs no
+    setup at all. Sent together they compose: the named connection, driven at
+    the named model.
+
+    Both are optional and both default to the standing configuration — an
+    absent `connection_id` means the active connection, an absent `model` means
+    whatever model the resolved connection carries. Nothing here is persisted
+    as a preference; #142/#143 are where standing per-task routing lives.
+    """
     guidance: str | None = None
     response: ResponseSettings | None = None
+    connection_id: str | None = None
+    model: str | None = None
 
 
 class RetryBody(BaseModel):

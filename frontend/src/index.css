@@ -1526,14 +1526,31 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 
 .color-quotes .quoted { color: var(--quote); font-weight: 500; }
 
-/* ---- reroll guidance popover (anchored to the post gutter) ---- */
+/* ---- reroll popover (anchored to the post gutter) ----
+   Two rows: where this reroll goes (#77), then what it is told once it gets
+   there. The route row is on top because it is the coarser choice, and because
+   the guidance input keeps the autofocus it has always had. */
 .reroll-pop { position: absolute; left: 100%; bottom: 0; margin-left: 10px; z-index: 5;
-  display: flex; background: var(--surface); border: 1px solid var(--rule); box-shadow: var(--shadow-glow); }
-.reroll-pop input {
+  display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--rule); box-shadow: var(--shadow-glow); }
+.reroll-guide { display: flex; }
+.reroll-guide input {
   width: 260px; background: transparent; color: var(--ink); border: none; outline: none;
   padding: 7px 10px; font-family: var(--fm); font-size: 12px;
 }
 .reroll-pop .btn-chrome { border: none; border-left: 1px solid var(--rule); padding: 7px 12px; box-shadow: none; font-size: 11px; white-space: nowrap; }
+.reroll-route { display: flex; border-bottom: 1px solid var(--rule); }
+.reroll-route select {
+  flex: 0 0 auto; max-width: 140px; background: transparent; color: var(--ink);
+  border: none; border-right: 1px solid var(--rule); outline: none;
+  padding: 7px 10px; font-family: var(--fm); font-size: 12px;
+}
+/* The combobox is sized for a settings form; in a gutter overlay it has to
+   match the guidance input beneath it rather than tower over it. */
+.reroll-route .combobox { flex: 1 1 auto; min-width: 0; }
+.reroll-route .combobox input[type="text"] {
+  background: transparent; border: none; padding: 7px 10px; font-size: 12px;
+}
+.reroll-route .combobox-list { max-height: 220px; }
 
 /* ---- manual dice roll popover (anchored to the input bar) ---- */
 .roll-pop { position: absolute; bottom: 100%; left: 0; margin-bottom: 8px; z-index: 5;

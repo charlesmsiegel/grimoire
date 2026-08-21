@@ -30,6 +30,9 @@ import { SceneInspector } from "../components/SceneInspector";
 import { PostCost, money } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
+import RerollRoutePicker, {
+  NO_REROLL_ROUTE, type ActiveConnection, type RerollRoute,
+} from "../components/RerollRoute";
 import { initialsOf, Portrait } from "../components/Portrait";
 import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
 import { usePublishShellContext } from "../components/ShellStatus";
@@ -441,6 +444,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  offers that actor's art, a narrator post the campaign's own library. */
   const [picking, setPicking] = useState<{ index: number; target: PickerTarget } | null>(null);
   const [rerollPrompt, setRerollPrompt] = useState<string | null>(null); // null = popover closed
+  // Which connection and model THIS reroll runs on (#77). One-shot, like the
+  // guidance beside it and like `pendingResponse`: reset whenever the popover
+  // opens, so a route chosen for one reroll cannot silently steer the next.
+  const [rerollRoute, setRerollRoute] = useState<RerollRoute>(NO_REROLL_ROUTE);
+  // The active connection, for naming the picker's default. From `/config`
+  // rather than `/llm-connections`, which is where the status bar reads it too:
+  // the model there is the EFFECTIVE one, so a Claude connection with none
+  // configured names the model it will actually run.
+  const [activeConn, setActiveConn] = useState<ActiveConnection | null>(null);
   // Every variant of the generation reroll targets, refreshed by selectScene
   // (which every mutating path already funnels through). `active` is null when
   // the slot is empty — a reroll whose stream died — and picking a variant
@@ -653,6 +665,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     api.getConfig().then((c) => {
       setColorQuotes(c.quote_color === "on");
       setLabels({ user: c.user_label || "You", assistant: c.assistant_label || "Grimoire" });
+      setActiveConn(c.active_connection);
     }).catch(() => {});
     api.listResponsePresets().then(setResponsePresets).catch(() => setResponsePresets([]));
     readModuleBound(true);   // new campaign: nothing known about it yet
@@ -2852,12 +2865,18 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // written for a different scene (review, #95). A switch also clears the
   // banner now, so the button is usually gone; the scene check is what makes
   // that airtight rather than merely likely.
-  const rerollToRetryRef = useRef<{ sid: string; guidance: string } | null>(null);
+  //
+  // The route rides along with the guidance (#77) for the same reason: "try
+  // that again" means the same reroll, and a Retry that quietly dropped the
+  // local endpoint the player chose would answer with the campaign's model
+  // while looking like a repeat.
+  const rerollToRetryRef =
+    useRef<{ sid: string; guidance: string; route: RerollRoute } | null>(null);
 
   async function retry() {
     if (!activeId || busy || rolling || renamesInFlight) return;
     const again = rerollToRetryRef.current;
-    if (again && again.sid === activeId) return void await reroll(again.guidance);
+    if (again && again.sid === activeId) return void await reroll(again);
     const landed = await runStream(activeId, (onEvent, signal, attempt, onIndex) =>
       pendingResponse
         ? api.retry(cid, activeId, onEvent, pendingResponse, signal, attempt, onIndex)
@@ -2865,7 +2884,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (landed) setPendingResponse(null);
   }
 
-  async function reroll(repeatGuidance?: string) {
+  async function reroll(repeat?: { guidance: string; route: RerollRoute }) {
     if (!activeId || busy || rolling || renamesInFlight) return;
     // The affordance and the optimistic removal below both read the RENDERED
     // messages while `api.regenerate` targets `activeId`, so during the
@@ -2873,9 +2892,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // reader was never shown. Guarded here as well as on `canReroll`, because
     // `retry` reaches this function without going past the button.
     if (!transcriptIsActive) return;
-    const guidance = repeatGuidance ?? (rerollPrompt ?? "").trim();
+    const guidance = repeat?.guidance ?? (rerollPrompt ?? "").trim();
+    const route = repeat?.route ?? rerollRoute;
     setRerollPrompt(null);
-    rerollToRetryRef.current = { sid: activeId, guidance };
+    rerollToRetryRef.current = { sid: activeId, guidance, route };
     // one turn is a run of assistant posts — drop the whole trailing run, but
     // keep any trailing transition lines, which the backend also preserves
     showOptimistically((m) => {
@@ -2885,18 +2905,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       while (end > 0 && m[end - 1].role === "assistant") end--;
       return [...m.slice(0, end), ...kept];
     });
-    // The trailing arguments stay positional-explicit here rather than being
-    // omitted: the signal sits behind them, so a plain reroll still has to say
-    // `undefined, undefined` to reach it. What the four branches preserve is
-    // the promise retry makes — a pending one-shot override rides regenerate.
-    const landed = await runStream(activeId, (onEvent, signal, attempt, onIndex) => {
-      if (guidance && pendingResponse) return api.regenerate(cid, activeId!, onEvent, guidance, pendingResponse, signal, attempt, onIndex);
-      if (guidance) return api.regenerate(cid, activeId!, onEvent, guidance, undefined, signal, attempt, onIndex);
-      if (pendingResponse) return api.regenerate(cid, activeId!, onEvent, undefined, pendingResponse, signal, attempt, onIndex);
-      return api.regenerate(cid, activeId!, onEvent, undefined, undefined, signal, attempt, onIndex);
+    // One object, and `api.regenerate` drops the empty fields — what used to be
+    // a branch per combination of the two it could carry, which the route
+    // override would have doubled again. The pending one-shot response override
+    // rides regenerate here for the reason retry carries it: it is the promise
+    // both make.
+    const body = { guidance, response: pendingResponse ?? undefined, ...route };
+    const landed = await runStream(activeId, (onEvent, signal, attempt, onIndex) =>
       // `rerolling`: a reroll that fails wants a different recovery offered
       // than a failed send does — see `runStream`.
-    }, undefined, true);
+      api.regenerate(cid, activeId!, onEvent, body, signal, attempt, onIndex),
+      undefined, true);
     if (landed) {
       setPendingResponse(null);
       rerollToRetryRef.current = null;   // it worked; Retry is a plain retry again
@@ -3264,11 +3283,23 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // What the counter says on hover. The guidance leads: while cycling, "which
   // instruction produced this take" is the thing the preview cannot tell you,
   // and it is the only place the stored hint is visible at all.
+  //
+  // The model follows it whenever the variant carries one (#77). Not filtered
+  // against the campaign's current model, deliberately: the control only
+  // appears while there are takes to tour, which is precisely when "which model
+  // produced this one" is the question — and a take generated somewhere else
+  // reads no differently from one that was not, so this is the only place it
+  // can be said. Every variant archived before the override existed, and every
+  // one reconciled out of the transcript, stores "" and adds no line.
   const altTitle = (() => {
     if (alternates.active === null) return "no alternate is showing — the last reroll didn't land";
     const variant = alternates.alternates[alternates.active];
     if (!variant) return undefined;
-    return variant.guidance ? `Guided: ${variant.guidance}\n\n${variant.preview}` : variant.preview;
+    const lines = [
+      variant.guidance ? `Guided: ${variant.guidance}` : "",
+      variant.model ? `Model: ${variant.model}` : "",
+    ].filter(Boolean);
+    return lines.length ? `${lines.join("\n")}\n\n${variant.preview}` : variant.preview;
   })();
 
   // The transition tag is internal drift metadata, never a speaker: a
@@ -3761,7 +3792,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                         <span className="gutter-icons">
                           {index === rerollAt && canReroll && (
                             <button className="msg-edit" title="Reroll" aria-label="Reroll"
-                                    disabled={rolling} onClick={() => setRerollPrompt("")}>↻</button>
+                                    disabled={rolling} onClick={() => {
+                                      setRerollPrompt("");
+                                      // Cleared on OPEN rather than on close, so
+                                      // a popover dismissed with Escape and
+                                      // reopened does not come back wearing the
+                                      // route the player backed out of.
+                                      setRerollRoute(NO_REROLL_ROUTE);
+                                    }}>↻</button>
                           )}
                           {index === rerollAt && canSwipe && (
                             <span className="swipe-nav">
@@ -3822,18 +3860,26 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                       {rerollPrompt !== null && !busy &&
                        index === rerollAt && canReroll && (
                         <span className="reroll-pop">
-                          <input
-                            autoFocus
-                            placeholder="Guide the reroll (optional)…"
-                            aria-label="Reroll guidance"
-                            value={rerollPrompt}
-                            onChange={(e) => setRerollPrompt(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") reroll();
-                              if (e.key === "Escape") setRerollPrompt(null);
-                            }}
-                          />
-                          <button className="btn-chrome" onClick={() => reroll()} disabled={rolling}>Reroll ▸</button>
+                          {/* Above the guidance, not beside it: this is where
+                              the reroll goes, and the hint is what it says once
+                              it gets there. Untouched, both halves are the
+                              campaign's standing configuration. */}
+                          <RerollRoutePicker value={rerollRoute} onChange={setRerollRoute}
+                                             active={activeConn} />
+                          <span className="reroll-guide">
+                            <input
+                              autoFocus
+                              placeholder="Guide the reroll (optional)…"
+                              aria-label="Reroll guidance"
+                              value={rerollPrompt}
+                              onChange={(e) => setRerollPrompt(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") reroll();
+                                if (e.key === "Escape") setRerollPrompt(null);
+                              }}
+                            />
+                            <button className="btn-chrome" onClick={() => reroll()} disabled={rolling}>Reroll ▸</button>
+                          </span>
                         </span>
                       )}
                     </span>

@@ -244,7 +244,7 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
 
   const again = () => guard(async () => {
     await streamed((on, attempt, onIndex) =>
-      api.regenerate(cid, sid, on, undefined, undefined, undefined, attempt, onIndex));
+      api.regenerate(cid, sid, on, undefined, undefined, attempt, onIndex));
     await refresh();
   });
 

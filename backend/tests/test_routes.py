@@ -4253,6 +4253,214 @@ def test_rerolling_an_empty_slot_re_aims_the_guidance(client):
     assert body["alternates"][1]["guidance"] == "warmer"
 
 
+# ---- the per-reroll route override (#77) ----
+def _rerollable(client, fake=None):
+    """A scene whose trailing reply a reroll would replace, plus the gateway
+    fake the reroll will reach. Returned rather than read off the fixture,
+    because the fixture builds a NEW `FakeOpenRouter` per call and so cannot be
+    asked afterwards which connection it was handed."""
+    fake = fake or FakeOpenRouter(["Hel", "lo"])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    client.put("/api/llm-connections/openrouter",
+               json={"api_key": "sk-or-secret", "model": "campaign/model"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    return fake, cid, sid
+
+
+def _local_endpoint(client, model="llama3", key="sk-local"):
+    """A second connection of a different kind, so an override that names it is
+    expressing something a bare model string could not."""
+    return client.post("/api/llm-connections",
+                       json={"kind": "openai_compatible", "name": "Local",
+                             "base_url": "http://localhost:11434/v1",
+                             "api_key": key, "model": model}).json()["id"]
+
+
+def test_a_reroll_with_no_override_still_runs_on_the_active_connection(client):
+    fake, cid, sid = _rerollable(client)
+
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate").status_code == 200
+
+    assert fake.conn["id"] == "openrouter"
+    assert fake.conn["model"] == "campaign/model"
+
+
+def test_a_reroll_may_name_a_model_without_naming_a_connection(client):
+    """The cheap everyday case: same provider, a different model of it."""
+    fake, cid, sid = _rerollable(client)
+
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                       json={"model": "vendor/bigger"}).status_code == 200
+
+    assert fake.conn["id"] == "openrouter"          # still the active connection
+    assert fake.conn["model"] == "vendor/bigger"
+    # A one-shot: the stored connection is untouched, so the next turn is back
+    # on the campaign's model.
+    assert client.get("/api/llm-connections/openrouter").json()["model"] == "campaign/model"
+
+
+def test_a_reroll_may_name_a_whole_connection(client):
+    """The case a bare model id cannot express — a different provider, with its
+    own base URL and credentials."""
+    fake, cid, sid = _rerollable(client)
+    other = _local_endpoint(client)
+
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                       json={"connection_id": other}).status_code == 200
+
+    assert fake.conn["kind"] == "openai_compatible"
+    assert fake.conn["base_url"] == "http://localhost:11434/v1"
+    assert fake.conn["api_key"] == "sk-local"        # the named connection's own
+    assert fake.conn["model"] == "llama3"            # and its own model
+
+
+def test_a_reroll_may_name_a_connection_and_a_model_together(client):
+    fake, cid, sid = _rerollable(client)
+    other = _local_endpoint(client)
+
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                       json={"connection_id": other, "model": "qwen3"}).status_code == 200
+
+    assert fake.conn["kind"] == "openai_compatible"
+    assert fake.conn["model"] == "qwen3"
+    assert client.get(f"/api/llm-connections/{other}").json()["model"] == "llama3"
+
+
+def test_an_override_naming_no_connection_is_a_400_and_touches_nothing(client):
+    """Not a 404: this route's 404 means "the scene is gone" and the client acts
+    on it. The reply it would have replaced has to still be there, too — the
+    override is resolved before the archive-and-remove."""
+    fake, cid, sid = _rerollable(client)
+
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                    json={"connection_id": "no-such-connection"})
+
+    assert r.status_code == 400
+    assert fake.calls == 0
+    assert [m["content"] for m in client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]] == ["hi", "old reply"]
+    assert client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()["alternates"] == []
+
+
+def test_an_override_that_cannot_send_is_refused_rather_than_quietly_rerouted(client):
+    """A 409 the reader can act on, not a silent fall back to the active
+    connection: "reroll this locally" served from OpenRouter reads like any
+    other reply."""
+    fake, cid, sid = _rerollable(client)
+    blank = client.post("/api/llm-connections",
+                        json={"kind": "openai_compatible", "name": "Half-set",
+                              "base_url": "", "model": "m"}).json()["id"]
+
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                    json={"connection_id": blank})
+
+    assert r.status_code == 409
+    assert r.json()["kind"] == "missing_key"
+    assert fake.calls == 0
+
+
+def test_an_override_works_while_the_active_connection_is_unusable(client):
+    """The session-fixing reroll: the OpenRouter key is gone, the local endpoint
+    is fine, and requiring the active one first would refuse the request that
+    gets play moving again."""
+    fake, cid, sid = _rerollable(client)
+    other = _local_endpoint(client)
+    store.llm_connections._write_raw("openrouter", kind="openrouter",
+                                     name="OpenRouter", api_key="", model="campaign/model")
+
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate").status_code == 409
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                       json={"connection_id": other}).status_code == 200
+    assert fake.conn["kind"] == "openai_compatible"
+
+
+def test_the_alternate_a_reroll_produces_is_stamped_with_the_model_that_ran(client):
+    """#77's third half: `SceneInspector` sizes a prompt against a stamped
+    model, so a variant generated somewhere else must not inherit the
+    campaign's."""
+    _fake, cid, sid = _rerollable(client)
+    other = _local_endpoint(client, model="llama3")
+
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                json={"connection_id": other, "guidance": "warmer"})
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert [a["preview"] for a in body["alternates"]] == ["old reply", "Hello"]
+    assert body["alternates"][1]["model"] == "llama3"
+    assert body["alternates"][1]["guidance"] == "warmer"
+    # The take that was already there is not retroactively credited to a route
+    # it was not generated on.
+    assert body["alternates"][0]["model"] == ""
+
+
+def test_an_override_free_reroll_stamps_the_connection_it_actually_used(client):
+    """Not left blank. The scene's own frontmatter is stamped once, at creation,
+    so it is the stale answer the moment the active connection is repointed."""
+    _fake, cid, sid = _rerollable(client)
+    client.put("/api/llm-connections/openrouter", json={"model": "repointed/model"})
+
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert body["alternates"][1]["model"] == "repointed/model"
+
+
+def test_an_override_only_reroll_still_reaches_the_variant_that_lands(client):
+    """The pending pair is spent together. With no guidance to carry it, a model
+    stamp on its own has to reach the run that fills the slot."""
+    _fake, cid, sid = _rerollable(client)
+    other = _local_endpoint(client, model="llama3")
+    store.alternates.archive(cid, sid, "", "llama3")     # the stream then died
+    store.scenes.remove_trailing_assistant_run(cid, sid)
+
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                json={"connection_id": other})
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert body["alternates"][1]["model"] == "llama3"
+
+
+def test_a_rerolls_snapshot_names_the_model_the_reroll_was_sent_to(client):
+    """The frozen prompt panel measures its context percentage against the model
+    it recorded. A reroll filed under the campaign's 200k model, sent to a 32k
+    endpoint, reads comfortable for a prompt that did not fit."""
+    _fake, cid, sid = _rerollable(client)
+    other = _local_endpoint(client, model="llama3")
+
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                json={"connection_id": other})
+
+    rows = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
+    latest = next(r for r in rows if r["task"] == "regenerate")
+    assert latest["model"] == "llama3"
+
+
+@pytest.mark.parametrize("task, send", [
+    ("chat", lambda c, cid, sid: c.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                                        json={"content": "more"})),
+    ("regenerate", lambda c, cid, sid: c.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/regenerate")),
+])
+def test_a_turn_with_no_override_still_records_the_scenes_stamped_model(client, task, send):
+    """An explicit override is the ONLY thing that displaces the scene's stamp.
+    `store.prompt_log` argues that the frozen panel and the live one agreeing
+    about a scene beats either being exactly right, and a reroll that ran on the
+    standing configuration is not an exception to that — it is the case the
+    argument is about."""
+    _fake, cid, sid = _rerollable(client)
+    client.put("/api/llm-connections/openrouter", json={"model": "repointed/model"})
+
+    send(client, cid, sid)
+
+    rows = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
+    latest = next(r for r in rows if r["task"] == task)
+    assert latest["model"] == "campaign/model"
+
+
 def test_a_sidecar_that_cannot_be_written_does_not_fail_the_landed_reply(client, monkeypatch):
     """The reply is in the transcript by the time the set is reconciled. A full
     disk must not turn that into a reported failure — the client would offer a

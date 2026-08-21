@@ -31,7 +31,7 @@ import {
   type PCDetail, type PCSummary, type Persona, type PinRule, type PricingEntry,
   type PricingTable, type PromptEntry,
   type PromptLayout, type PromptSnapshot, type ProposalRecord, type Provenance,
-  type RecordChange, type ReplayPreview, type ReplaySession, type ResponseBundle, type ResponseFields, type ResponseOverride,
+  type RecordChange, type RegenerateOverrides, type ReplayPreview, type ReplaySession, type ResponseBundle, type ResponseFields, type ResponseOverride,
   type ResponsePresetDetail, type ResponsePresetDraft, type ResponsePresetSummary,
   type ResponsePresetUsage, type RollEntry, type RollingSummary, type RollingSummaryRefresh,
   type RetconReport, type RosterEntry, type ScenarioImportResult, type ScenarioProposal, type SceneAbsorb,
@@ -621,14 +621,28 @@ export const api = {
           signal?: AbortSignal, attempt?: string, onIndex?: (i: number) => void) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/retry`,
                response ? { response } : undefined, onEvent, signal, attempt, onIndex),
-  regenerate: (cid: string, sid: string, onEvent: (e: ChatEvent) => void, guidance?: string,
-               response?: ResponseOverride, signal?: AbortSignal, attempt?: string,
-               onIndex?: (i: number) => void) =>
-    streamPost(`/api/campaigns/${cid}/scenes/${sid}/regenerate`,
-               (guidance || response)
-                 ? { ...(guidance ? { guidance } : {}), ...(response ? { response } : {}) }
-                 : undefined,
-               onEvent, signal, attempt, onIndex),
+  /** Reroll the trailing generation.
+   *
+   *  `body` is one object rather than a parameter each, and that is not
+   *  cosmetic: every field of it is optional and the `signal` sits behind
+   *  them, so a plain reroll had to spell out an `undefined` per field to
+   *  reach it — and the caller, which decides them independently, needed one
+   *  branch per COMBINATION. Two fields was already four branches; the route
+   *  override (#77) would have made it eight.
+   *
+   *  Empty fields are dropped rather than sent, so an untouched popover posts
+   *  no body at all — `""` and "unset" mean the same thing for all four, and
+   *  the server reads a missing field as the standing configuration.
+   */
+  regenerate: (cid: string, sid: string, onEvent: (e: ChatEvent) => void,
+               body?: RegenerateOverrides, signal?: AbortSignal, attempt?: string,
+               onIndex?: (i: number) => void) => {
+    const payload = Object.fromEntries(
+      Object.entries(body ?? {}).filter(([, v]) => Boolean(v)));
+    return streamPost(`/api/campaigns/${cid}/scenes/${sid}/regenerate`,
+                      Object.keys(payload).length ? payload : undefined,
+                      onEvent, signal, attempt, onIndex);
+  },
 
   // Reroll alternates: every variant of the generation a reroll would replace,
   // `active` being the one the transcript is showing (null once a reroll's
