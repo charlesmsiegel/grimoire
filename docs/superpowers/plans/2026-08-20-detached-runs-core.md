@@ -133,10 +133,20 @@ module that uses it**, in the same commit; none is shared machinery:
 Task 3's disconnect test and Task 5's cancel tests both need a real socket,
 which `TestClient` cannot give them (the reasoning is at that test). It starts
 uvicorn on an ephemeral port once per module against the same app and
-`GRIMOIRE_HOME`, and exposes `.url`, `.app`, `.campaign_scene` and
-`.hold_provider()` — the last wrapping the `llm_fakes` provider so it blocks
-after its first delta until the test releases it. Two tasks needing it is what
-makes it shared rather than local; nothing else here is.
+`GRIMOIRE_HOME`, and exposes `.url`, `.app`, `.campaign_scene`, `.two_scenes`
+and `.hold_provider(scene=None, reply=None)` — the last wrapping the
+`llm_fakes` provider so it blocks after its first delta until the test releases
+it, optionally scripting a distinct reply per scene so two concurrent runs are
+distinguishable. Two tasks needing it is what makes it shared rather than
+local; nothing else here is.
+
+**Anything asserting that two things happen AT ONCE belongs here, not on
+`client`.** `TestClient` buffers a streaming response to completion, so two
+sequential calls through it never overlap no matter how the test is worded —
+the first run is terminal before the second is reserved. That is what made the
+disconnect test vacuous, and it is the same reason the cross-scene isolation
+test uses this fixture: concurrency that the harness cannot express is
+concurrency the test cannot check.
 
 **There is no `app` fixture.** `conftest.client` returns `TestClient(app)` and
 nothing else, so tests reach the registry through **`client.app.state.runs`**.
@@ -888,11 +898,16 @@ def test_from_is_inclusive_and_a_reconnect_reproduces_the_reply_once(client, liv
 
 
 def test_a_reconnect_across_a_heartbeat_does_not_lose_or_repeat_text(client, live_run):
-    """The heartbeat occupies an index like any other frame. A client that
-    resumes at `consumed + 1` while counting only the events `parseSSEChunk`
-    surfaced would be off by every heartbeat in between -- the failure this
-    whole absolute-index scheme exists to prevent, and it is invisible unless a
-    test puts a heartbeat in the middle."""
+    """The heartbeat occupies an index like any other frame.
+
+    NOTE what this does and does not prove. It hard-codes `frm=1`, so it proves
+    only that the SERVER honours an offset that lands on a heartbeat. The bug
+    this scheme exists to prevent is on the CLIENT -- deriving the cursor by
+    counting decoded data events, which `parseSSEChunk` strips heartbeats from.
+    An implementation with exactly that defect passes this test and then, having
+    consumed frames 0, 1 and 2, records cursor 1 and resumes at 2, replaying the
+    final delta. Task 6 carries the test that catches it; this one is its
+    server-side half and is not sufficient alone."""
     live_run.append_frame(_sse({"delta": "Wind off the "}))   # index 0
     live_run.append_frame(": heartbeat\n\n")                  # index 1
     live_run.append_frame(_sse({"delta": "water."}))          # index 2
@@ -983,7 +998,8 @@ Expected: PASS
 
 ```bash
 make check-py check-lint check-mypy && make baseline
-git add backend/src/grimoire/routes lint-baselines backend/tests/test_runs_routes.py
+git add backend/src/grimoire/routes lint-baselines \
+        backend/tests/test_runs_routes.py backend/tests/test_route_order.py
 git commit -m "Run routes: discover, stream from an offset, poll, cancel
 
 `from` is inclusive, so a client that consumed through N asks for N+1.
@@ -1072,14 +1088,40 @@ def test_a_rejected_send_leaves_the_transcript_byte_identical(run_client, campai
     assert _scene_bytes(cid, sid) == before
 
 
-def test_two_scenes_in_one_campaign_do_not_cross_contaminate(run_client, two_scenes):
-    cid, (a, b) = two_scenes
-    ra = _start_turn(run_client, cid, a, "Seraphine waits.")
-    rb = _start_turn(run_client, cid, b, "Winifred does not.")
-    _wait_terminal(run_client.app, ra); _wait_terminal(run_client.app, rb)
+def test_two_scenes_in_one_campaign_do_not_cross_contaminate(live_server):
+    """The runs must genuinely OVERLAP, which is why this is on `live_server`
+    and not `run_client`.
+
+    `TestClient` buffers a streaming response to completion -- the same
+    property that made the disconnect test vacuous. Two sequential
+    `_start_turn` calls through it therefore run one after the other: A is
+    already terminal before B is reserved, and a shared mutable producer that
+    cross-contaminates genuinely concurrent scenes passes anyway. The isolation
+    this test names would be untested while reading as covered.
+
+    So: both providers are held behind a barrier, both requests are in flight
+    on real sockets before either is released, and only then does either
+    finish."""
+    cid, (a, b) = live_server.two_scenes
+    held_a = live_server.hold_provider(scene=a, reply="Seraphine waits.")
+    held_b = live_server.hold_provider(scene=b, reply="Winifred does not.")
+    with _in_flight(live_server, cid, a, "Seraphine?") as ra, \
+         _in_flight(live_server, cid, b, "Winifred?") as rb:
+        held_a.await_first_delta()
+        held_b.await_first_delta()   # both live at once, which is the point
+        held_a.release()
+        held_b.release()
+    _wait_terminal(live_server.app, ra); _wait_terminal(live_server.app, rb)
     assert "seraphine" in _last_reply(cid, a).lower()
     assert "winifred" in _last_reply(cid, b).lower()
 ```
+
+`_in_flight(server, cid, sid, text)` is a context manager local to this module:
+it issues the POST on its own thread, yields the run id off the first frame,
+and leaves the socket open until the block exits. `live_server.hold_provider`
+takes a `scene=` so the two runs get distinguishable scripted replies —
+without that, "no cross-contamination" cannot be told apart from "both scenes
+got the same text".
 
 **The disconnect test must not use `TestClient`.** Starlette's in-process
 client buffers a streaming response while driving the ASGI app, so the `with`
@@ -1191,7 +1233,8 @@ Expected: PASS, including the existing streaming suites unchanged
 
 ```bash
 make check-py check-lint check-mypy check-pydantic1 && make baseline
-git add backend/src lint-baselines backend/tests/test_runs_detach.py
+git add backend/src lint-baselines backend/tests/test_runs_detach.py \
+        backend/tests/conftest.py
 git commit -m "Scene turns outlive their request
 
 A closed socket now detaches a subscriber and nothing else; cancellation is
@@ -1428,12 +1471,36 @@ it("keeps a run alive across navigation and re-attaches to the right one", async
   const { user } = renderCampaign();
   await startTurn("scene-a", "Mara waits.");
   await user.click(screen.getByRole("button", { name: /winifred/i }));
+  // Narration generated while we are LOOKING AT ANOTHER SCENE. This is the
+  // text the whole feature is about, and it is the only text that proves
+  // replay happened: asserting on "Mara waits." would prove nothing, because
+  // that is our own submitted post and the scene refetch carries it back
+  // whether or not a single replayed delta was applied. An implementation that
+  // requests the right offset and then drops every frame it receives passed
+  // the earlier version of this test.
+  await emitWhileAway("scene-a", "The lamps are already lit.");
   await user.click(screen.getByRole("button", { name: /mara/i }));
-  // Re-attached by id, resuming from OUR consumed index -- not next_index,
-  // which is the live tail and would silently drop everything generated while
-  // we were away.
-  expect(await screen.findByText(/Mara waits\./)).toBeInTheDocument();
-  expect(lastStreamRequest().from).toBe(consumedIndexFor("scene-a") + 1);
+  expect(await screen.findByText(/The lamps are already lit\./)).toBeInTheDocument();
+});
+
+it("derives the resume cursor from the wire index, not the event count", async () => {
+  // The defect this catches: `parseSSEChunk` discards comment frames, so a
+  // provider counting the events it surfaced undercounts by every heartbeat
+  // and resumes one frame early, duplicating text mid-reply. Drive the REAL
+  // parser and provider -- a test helper that recomputes the cursor its own
+  // way would agree with a broken implementation and prove nothing.
+  const { user } = renderCampaign();
+  await startTurn("scene-a", "Mara waits.");
+  await emitFrames("scene-a", [
+    { index: 0, frame: sse({ delta: "The lamps " }) },
+    { index: 1, frame: ": heartbeat\n\n" },
+    { index: 2, frame: sse({ delta: "are already lit." }) },
+  ]);
+  await user.click(screen.getByRole("button", { name: /winifred/i }));
+  await user.click(screen.getByRole("button", { name: /mara/i }));
+  expect(lastStreamRequest().from).toBe(3);
+  expect(await screen.findByText(/The lamps are already lit\./)).toBeInTheDocument();
+  expect(screen.queryByText(/are already lit\.are already lit\./)).toBeNull();
 });
 
 it("disables the composer while the scene has a live turn, and re-enables after", async () => {
