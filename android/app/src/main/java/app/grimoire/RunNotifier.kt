@@ -152,7 +152,15 @@ object RunNotifier {
             .setAction(Intent.ACTION_VIEW)
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         if (cid != null && identity != null) {
-            intent.data = Uri.parse("grimoire://scene/$cid/$identity")
+            // BUILT, not interpolated. `store.safe_id` deliberately permits
+            // characters that are reserved in a URI -- `?`, `#`, `%`, `&` --
+            // and a campaign directory named with one would silently become a
+            // query or a fragment here, so the tap would ask the backend about
+            // a truncated campaign or find no scene target at all.
+            intent.data = Uri.Builder()
+                .scheme("grimoire").authority("scene")
+                .appendPath(cid).appendPath(identity)
+                .build()
         }
         return PendingIntent.getActivity(
             context,

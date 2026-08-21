@@ -13,7 +13,7 @@
 import { useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import { encodeSegment } from "../urlSegment";
 
 export default function OpenScene() {
@@ -25,16 +25,32 @@ export default function OpenScene() {
   useEffect(() => {
     let alive = true;
     if (!cid) { navigate("/", { replace: true }); return; }
-    void api.sceneByIdentity(cid, identity)
-      .then((r) => {
-        if (alive) {
-          navigate(`/campaigns/${encodeSegment(cid)}/scenes/${encodeSegment(r.id)}`,
-                   { replace: true });
+    void (async () => {
+      // `scene_busy`-style 409s from this lookup are RETRYABLE and a 404 is
+      // not, and folding them together sent a tap to the campaign because a
+      // sharing violation happened to land on that read. The route reports an
+      // unreadable header as `busy` precisely so a caller can tell the two
+      // apart; the fallback is for a scene that is genuinely gone.
+      for (let tries = 0; ; tries++) {
+        try {
+          const r = await api.sceneByIdentity(cid, identity);
+          if (alive) {
+            navigate(`/campaigns/${encodeSegment(cid)}/scenes/${encodeSegment(r.id)}`,
+                     { replace: true });
+          }
+          return;
+        } catch (err) {
+          const busy = err instanceof ApiError && err.kind === "busy";
+          // Bounded, and short: this is a blank screen the player is looking
+          // at, so a lookup that keeps saying "busy" has to end somewhere --
+          // and the campaign is a useful place to be.
+          if (!busy || tries >= 2) break;
+          await new Promise((r) => setTimeout(r, 150 * (tries + 1)));
+          if (!alive) return;
         }
-      })
-      .catch(() => {
-        if (alive) navigate(`/campaigns/${encodeSegment(cid)}`, { replace: true });
-      });
+      }
+      if (alive) navigate(`/campaigns/${encodeSegment(cid)}`, { replace: true });
+    })();
     return () => { alive = false; };
   }, [cid, identity, navigate]);
 

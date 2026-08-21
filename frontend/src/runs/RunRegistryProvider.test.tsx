@@ -123,3 +123,35 @@ describe("without a provider", () => {
     expect(screen.getByText("true")).toBeInTheDocument();
   });
 });
+
+describe("following a rename", () => {
+  it("keeps a pending send reachable under the scene's new id", () => {
+    // A `sid` carries the slug, so renaming mints a new one. Left under the
+    // old key the entry is unreachable: opening the renamed scene looks under
+    // the new id and finds nothing, so a failed run whose post was rolled back
+    // strands the player's words under an id no route will select again.
+    const { registry } = capture();
+    act(() => registry.begin(SEND));
+    act(() => registry.rekey("c1", "s1", "s1-renamed"));
+
+    expect(registry.pending("c1", "s1-renamed")?.text).toBe("Mara waits.");
+    expect(registry.pending("c1", "s1")).toBeUndefined();
+  });
+
+  it("carries the new id on the record too, not just in the key", () => {
+    // `settle` and `attach` are called with the sid the caller is holding, and
+    // recovery re-selects `held.sid`. A record whose own `sid` still said the
+    // old one would resolve into a scene that no longer exists.
+    const { registry } = capture();
+    act(() => registry.begin(SEND));
+    act(() => registry.rekey("c1", "s1", "s1-renamed"));
+
+    expect(registry.pending("c1", "s1-renamed")?.sid).toBe("s1-renamed");
+  });
+
+  it("does not invent an entry for a scene that had no pending send", () => {
+    const { registry } = capture();
+    act(() => registry.rekey("c1", "s1", "s1-renamed"));
+    expect(registry.pending("c1", "s1-renamed")).toBeUndefined();
+  });
+});

@@ -48,6 +48,22 @@ export type RunRegistry = {
   pending(cid: string, sid: string): Attempt | undefined;
   /** Forget a send whose outcome is established. */
   settle(cid: string, sid: string): void;
+  /** Follow a scene that has been renamed.
+   *
+   *  A `sid` carries the slug, so a rename mints a new one -- and an entry
+   *  left under the old key is unreachable: opening the renamed scene looks
+   *  under the new id, finds nothing, and a failed run whose post was rolled
+   *  back leaves the player's words stranded under an id no route will ever
+   *  select again. (The backend has the same problem and solved it by keying
+   *  runs on the scene's stable identity; the identity is deliberately kept
+   *  out of `read_scene`'s payload, so the client cannot key on it and follows
+   *  the rename instead.)
+   *
+   *  This covers a rename made HERE, which is the case the freeze guard leaves
+   *  reachable -- a scene can only be renamed once its run is terminal. A
+   *  rename from another device still strands the entry; the words are then
+   *  recoverable only from that other client. */
+  rekey(cid: string, from: string, to: string): void;
   /** Record how far a run has been read, by WIRE index. */
   consume(runId: string, index: number): void;
   /** Where to resume this run: one past the last frame actually read. */
@@ -70,6 +86,13 @@ export function RunRegistryProvider({ children }: { children: ReactNode }) {
     },
     pending(cid, sid) { return pending.current.get(key(cid, sid)); },
     settle(cid, sid) { pending.current.delete(key(cid, sid)); },
+    rekey(cid, from, to) {
+      if (from === to) return;
+      const found = pending.current.get(key(cid, from));
+      if (!found) return;
+      pending.current.delete(key(cid, from));
+      pending.current.set(key(cid, to), { ...found, sid: to });
+    },
     consume(runId, index) {
       const seen = consumed.current.get(runId);
       // Monotonic: a replay that re-delivers an earlier frame must not move
@@ -100,6 +123,6 @@ export function useRunRegistry(): RunRegistry {
   const found = useContext(Ctx);
   return useMemo<RunRegistry>(() => found ?? {
     begin() {}, attach() {}, pending() { return undefined; },
-    settle() {}, consume() {}, resumeFrom() { return 0; },
+    settle() {}, rekey() {}, consume() {}, resumeFrom() { return 0; },
   }, [found]);
 }

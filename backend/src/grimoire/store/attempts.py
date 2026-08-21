@@ -92,10 +92,12 @@ def remember(cid: str, identity: str | None, attempt: str | None) -> None:
 def forget(cid: str, identity: str | None, attempt: str | None) -> None:
     """Record that this attempt's post is no longer in the transcript.
 
-    Part of the rollback, in the same lock hold that removes the post. Written
-    separately -- afterwards, on the way out -- there is a window where the
-    transcript has lost the post and this still says it has it, and a recovery
-    landing in it settles and discards the player's only copy.
+    Part of the rollback, in the same lock hold that removes the post, and
+    BEFORE it -- see `routes.scenes._take_the_post_back` for why that order is
+    the fail-safe one. The lock makes the pair atomic for a concurrent reader
+    but not for a process that exits between two files, so the surviving
+    inconsistency has to be the one that costs a visible duplicate rather than
+    the one that costs the player's words.
     """
     if not identity or not attempt:
         return
