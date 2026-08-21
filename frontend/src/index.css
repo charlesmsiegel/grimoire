@@ -1723,6 +1723,39 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
   font-family: var(--fm); font-size: 10px; letter-spacing: 0.06em;
   text-transform: uppercase; color: var(--accent);
 }
+/* Comparing two turns (#130). The picker lives inside the frozen banner
+   because that is the only place the comparison exists -- the live composition
+   has nothing to be the "before" of. */
+.ctx-compare { display: flex; flex-direction: column; gap: 2px; margin: 0 0 6px; }
+.ctx-compare > span {
+  font-family: var(--fm); font-size: 10px; color: var(--muted);
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+.ctx-compare select { width: 100%; }
+/* A signed token delta, beside the totals and beside each section. Up is the
+   alert colour and down the accent for one reason: on this panel growth is what
+   costs money and eventually overruns the budget, so it is the direction worth
+   catching the eye. */
+.ctx-delta { font-family: var(--fm); margin-left: 6px; }
+.ctx-delta.up { color: var(--alert); }
+.ctx-delta.down { color: var(--accent); }
+/* Built out of `.ctx-drop`'s own type, because it is the same kind of mark:
+   one word about what the packer or the diff did to this section. */
+.ctx-status {
+  font-family: var(--fm); font-size: 9px; letter-spacing: 0.06em;
+  text-transform: uppercase; border: 1px solid var(--rule-soft);
+  color: var(--muted); padding: 0 4px;
+}
+.ctx-status.added { color: var(--accent); border-color: var(--accent); }
+.ctx-status.removed { color: var(--alert); border-color: var(--alert); }
+.ctx-diff-section.removed .ctx-label { color: var(--muted); text-decoration: line-through; }
+/* Scrolls internally like `.ctx-text`, and for the same reason: one section of
+   a prompt is long enough to push everything below it off the rail. */
+.ctx-diff-lines {
+  max-height: 220px; overflow-y: auto; margin: 0 0 8px;
+  padding: 6px 0; font-size: 10.5px;
+  background: var(--panel2); border: 1px solid var(--rule-soft);
+}
 .inspector-row.on .inspector-name { color: var(--accent); }
 .drawer-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; justify-content: flex-end; z-index: 20; }
 .drawer { width: 360px; max-width: 90vw; background: var(--bg); border-left: 1px solid var(--muted); padding: 16px; overflow-y: auto; }
@@ -1844,6 +1877,14 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .diff-insert { background: rgba(60, 160, 90, 0.18); }
 .diff-delete { background: rgba(200, 70, 70, 0.18); text-decoration: line-through; }
 .diff-equal { opacity: 0.7; }
+/* The fourth op, and only the prompt diff emits it (#130): a run of unchanged
+   lines too far from any change to print. Dimmed, italic and centred so it
+   cannot be misread as a line the prompt actually contained. */
+.diff-skip {
+  color: var(--muted); font-style: italic; text-align: center;
+  border-top: 1px solid var(--rule-soft); border-bottom: 1px solid var(--rule-soft);
+  margin: 2px 0;
+}
 
 .tagline-modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 30; }
 .tagline-modal { background: var(--panel); border: 1px solid var(--muted); padding: 20px; width: min(520px, 92vw); }

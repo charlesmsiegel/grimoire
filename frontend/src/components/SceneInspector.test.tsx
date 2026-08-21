@@ -9,7 +9,7 @@ vi.mock("../api/client", async () => {
     api: {
       getCast: vi.fn(), getCampaign: vi.fn(), listCharacters: vi.fn(), listPCs: vi.fn(),
       listCampaignPCs: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
-      listScenePrompts: vi.fn(), getScenePrompt: vi.fn(),
+      listScenePrompts: vi.fn(), getScenePrompt: vi.fn(), getScenePromptDiff: vi.fn(),
       // Resolves to "no weather" so the widget renders nothing: these suites
       // assert on the rest of the inspector, not the sky.
       getSceneWeather: vi.fn(() => Promise.resolve({ weather: null, location: null, native: null })),
@@ -86,6 +86,7 @@ beforeEach(() => {
   });
   (api.listScenePrompts as any).mockResolvedValue({ entries: [] });
   (api.getScenePrompt as any).mockResolvedValue(null);
+  (api.getScenePromptDiff as any).mockResolvedValue(null);
   (api.getCastDetail as any).mockResolvedValue({ kind: "characters", id: "seraphine", name: "Seraphine", version: "default", body: "keeper", source: "library" });
   (getModels as any).mockResolvedValue([{ id: "m", name: "M", context: 1000, prompt: "0", completion: "0" }]);
   (api.getChronicle as any).mockResolvedValue([
@@ -1623,4 +1624,189 @@ test("the picker's options do not survive a campaign switch", async () => {
   (api.listEntities as any).mockReturnValue(new Promise(() => {}));
   rerender(<SceneInspector cid="c2" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   await waitFor(() => expect(picker().queryByRole("option", { name: "Tide oath" })).toBeNull());
+});
+
+// ---- comparing a captured turn against another composition (#130) ----
+
+const DIFF = {
+  base: { id: "000001", task: "chat", ts: "2026-08-06T11:00:00Z", model: "m",
+          total_tokens: 80, dropped_tokens: 0, budget_tokens: 0 },
+  head: { id: "live", task: "live", ts: "", model: "m",
+          total_tokens: 120, dropped_tokens: 0, budget_tokens: 0 },
+  sections: [{
+    id: "world", label: "World info", status: "changed",
+    base: { label: "World info", tokens: 80, dropped: false, trimmed: 0, pinned: false },
+    head: { label: "World info", tokens: 120, dropped: false, trimmed: 0, pinned: false },
+    diff: [{ op: "insert", text: "the pact was signed at dusk" }],
+  }],
+};
+
+async function openTurnAndCompare(value: string) {
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+  fireEvent.change(await screen.findByLabelText("Compare with"),
+                   { target: { value } });
+}
+
+test("the comparison picker is offered only from a past turn", async () => {
+  // The live composition has nothing to be the "before" of.
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  renderInspector();
+  await screen.findByText("lore text");
+  expect(screen.queryByLabelText("Compare with")).toBeNull();
+
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByLabelText("Compare with");
+});
+
+test("comparing a turn with the live preview replaces the breakdown with the diff", async () => {
+  await openTurnAndCompare("live");
+
+  await waitFor(() => expect(api.getScenePromptDiff)
+    .toHaveBeenCalledWith("c", "s", "000001", "live"));
+  await screen.findByText("the pact was signed at dusk");
+  // Neither breakdown is on screen underneath it: the reader asked what moved.
+  expect(screen.queryByText("the lore as it stood then")).toBeNull();
+  expect(screen.queryByText("lore text")).toBeNull();
+});
+
+test("the turn being compared against is offered, and the one being compared is not", async () => {
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+
+  const picker = await screen.findByLabelText<HTMLSelectElement>("Compare with");
+  const values = Array.from(picker.options).map((o) => o.value);
+  expect(values).toContain("live");
+  expect(values).toContain("000002");
+  expect(values).not.toContain("000001");     // that is the turn being compared
+});
+
+test("two captured turns compare against each other, oldest end first", async () => {
+  // The rail is newest-first, so a reader picking a row means "what changed
+  // since then" — and a diff whose insertions are what the OLDER prompt had is
+  // one running backwards through time.
+  await openTurnAndCompare("000002");
+  await waitFor(() => expect(api.getScenePromptDiff)
+    .toHaveBeenCalledWith("c", "s", "000001", "000002"));
+  await screen.findByText("the pact was signed at dusk");
+});
+
+test("picking an OLDER turn still asks for the diff oldest end first", async () => {
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue({ ...FROZEN, id: "000002", task: "regenerate" });
+  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /^Regenerate/ }));
+  await screen.findByText("the lore as it stood then");
+
+  fireEvent.change(await screen.findByLabelText("Compare with"),
+                   { target: { value: "000001" } });
+  await waitFor(() => expect(api.getScenePromptDiff)
+    .toHaveBeenCalledWith("c", "s", "000001", "000002"));
+});
+
+test("clearing the picker returns to the frozen turn", async () => {
+  await openTurnAndCompare("live");
+  await screen.findByText("the pact was signed at dusk");
+
+  fireEvent.change(screen.getByLabelText("Compare with"), { target: { value: "" } });
+  await screen.findByText("the lore as it stood then");
+  expect(screen.queryByText("the pact was signed at dusk")).toBeNull();
+});
+
+test("comparing against the live preview survives moving to another turn", async () => {
+  // "At which turn did this section change?" is walked by clicking down the
+  // rail; re-picking the comparison at every step would make that unusable.
+  await openTurnAndCompare("live");
+  await screen.findByText("the pact was signed at dusk");
+  // Each row answers with its own snapshot, or the second click would land the
+  // first turn again and the assertion below would pass without moving.
+  (api.getScenePrompt as any).mockImplementation((_c: string, _s: string, eid: string) =>
+    Promise.resolve({ ...FROZEN, id: eid, task: eid === "000002" ? "regenerate" : "chat" }));
+
+  fireEvent.click(screen.getByRole("button", { name: /^Regenerate/ }));
+  await waitFor(() => expect(api.getScenePromptDiff)
+    .toHaveBeenCalledWith("c", "s", "000002", "live"));
+  expect(screen.getByLabelText<HTMLSelectElement>("Compare with").value).toBe("live");
+});
+
+test("comparing against a specific turn does NOT survive moving to another", async () => {
+  // The turn just clicked can be the one being compared against, and an entry
+  // diffed with itself is a panel that has quietly stopped answering.
+  await openTurnAndCompare("000002");
+  await screen.findByText("the pact was signed at dusk");
+
+  fireEvent.click(screen.getByRole("button", { name: /^Regenerate/ }));
+  await screen.findByText("the lore as it stood then");
+  expect(screen.getByLabelText<HTMLSelectElement>("Compare with").value).toBe("");
+});
+
+test("going back to live context ends the comparison", async () => {
+  await openTurnAndCompare("live");
+  await screen.findByText("the pact was signed at dusk");
+
+  fireEvent.click(screen.getByRole("button", { name: /Back to live context/ }));
+  await screen.findByText("lore text");
+  expect(screen.queryByText("the pact was signed at dusk")).toBeNull();
+});
+
+test("a landed turn re-reads the comparison, because the live end has moved", async () => {
+  // A diff against a preview that has since changed describes a prompt nobody
+  // would send. `refreshKey` is bumped by the very turn that moved it.
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  const { rerender } = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+  fireEvent.change(await screen.findByLabelText("Compare with"),
+                   { target: { value: "live" } });
+  await waitFor(() => expect(api.getScenePromptDiff).toHaveBeenCalledTimes(1));
+
+  rerender(<SceneInspector cid="c" sid="s" refreshKey={1} onSceneChanged={() => {}} />);
+  await waitFor(() => expect(api.getScenePromptDiff).toHaveBeenCalledTimes(2));
+  // ...and the reader is still where they were, not yanked back to live.
+  await screen.findByText("the pact was signed at dusk");
+});
+
+test("an evicted turn on either end says so rather than blanking", async () => {
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  (api.getScenePromptDiff as any).mockRejectedValue({ status: 404, detail: "not found" });
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+
+  fireEvent.change(await screen.findByLabelText("Compare with"),
+                   { target: { value: "live" } });
+  await screen.findByText(/aged out of the log/);
+  await screen.findByText("the lore as it stood then");   // still on the frozen view
+});
+
+test("a diff arriving after the reader moved on is dropped, not shown", async () => {
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  let release: (v: any) => void = () => {};
+  (api.getScenePromptDiff as any).mockReturnValue(new Promise((r) => { release = r; }));
+
+  const { rerender } = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+  fireEvent.change(await screen.findByLabelText("Compare with"),
+                   { target: { value: "live" } });
+
+  rerender(<SceneInspector cid="c" sid="s2" refreshKey={0} onSceneChanged={() => {}} />);
+  release(DIFF);
+
+  await screen.findByText("lore text");
+  expect(screen.queryByText("the pact was signed at dusk")).toBeNull();
 });

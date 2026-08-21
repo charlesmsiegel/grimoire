@@ -4,11 +4,12 @@ import {
   api, type Actor, type SceneContext, type SceneLocation, type ChronicleEntry,
   type CalendarConfig, type RosterEntry, type SceneDatetime,
   type CharacterSummary, type PCSummary, type Briefing, type BriefingRow,
-  type PinRule, type PromptEntry, type PromptSnapshot,
+  type PinRule, type PromptDiff, type PromptEntry, type PromptSnapshot,
   type RollingSummary, type SceneBreak,
 } from "../api/client";
 import { getModels, type Model } from "../api/models";
 import { ContextBreakdown, contextPercent } from "./ContextBreakdown";
+import { ContextDiff } from "./ContextDiff";
 import { CostPanel } from "./CostPanel";
 import { Portrait } from "./Portrait";
 import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
@@ -19,6 +20,7 @@ import { EventsPanel } from "./EventsPanel";
 import { WeatherWidget } from "./WeatherWidget";
 import { ResponsePresetPicker } from "./ResponsePresetPicker";
 import { LOCKED_WHILE_GENERATING } from "./sceneLock";
+import { taskLabel, whenLabel } from "./turnLabels";
 import { SuggestedCast } from "./SuggestedCast";
 
 const SECTIONS_KEY = "grimoire.inspector.sections";
@@ -30,23 +32,15 @@ const SECTIONS_KEY = "grimoire.inspector.sections";
  *  both directions forever, which auto-collapsing on a timer could not do. */
 const BRIEFING_OPEN_POSTS = 6;
 
+/** The `against` value naming the composition as it stands now rather than a
+ *  captured turn. Matches `routes.scenes.LIVE_SIDE`. */
+const LIVE_SIDE = "live";
+
 /** What a pin or exclude can name (#129) — the world-info kinds plus the two
  *  actor kinds, mirroring `store/pins.py`'s KINDS. The order is the picker's. */
 const PIN_KINDS = ["lore", "locations", "items", "groups", "creatures",
                    "characters", "pcs"] as const;
 type PinKind = typeof PIN_KINDS[number];
-
-const TASK_LABELS: Record<PromptEntry["task"], string> = {
-  chat: "Send", director: "Director", retry: "Retry",
-  regenerate: "Regenerate", continuation: "Roll result", opener: "Opener",
-  replay: "Replay",
-};
-
-/** The captured timestamp is UTC (`…Z`, stamped by the store); show it local. */
-function whenLabel(ts: string): string {
-  const d = new Date(ts);
-  return isNaN(d.getTime()) ? ts : d.toLocaleString();
-}
 
 function loadSectionCollapse(): Record<string, boolean> {
   try {
@@ -156,6 +150,17 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // frame. Comparing during render makes that impossible rather than brief.
   const [frozen, setFrozen] = useState<
     { cid: string; sid: string; data: PromptSnapshot } | null>(null);
+  // What the selected turn is being compared against (#130): "" for nothing,
+  // "live" for the composition as it stands now, or another entry id. Held as
+  // the CHOICE rather than as the answer, so the fetch below can re-run when
+  // the live side moves under it.
+  const [compare, setCompare] = useState("");
+  // Scoped by both ends as well as by scene, for the reason `frozen` is scoped
+  // at all AND one more: the reader can switch which turn they are looking at
+  // without clearing the comparison, and a diff still in flight for the turn
+  // they left would otherwise be painted under the one they arrived at.
+  const [diff, setDiff] = useState<
+    { cid: string; sid: string; eid: string; against: string; data: PromptDiff } | null>(null);
   const [recap, setRecap] = useState<ChronicleEntry[]>([]);
   // Held with the campaign AND scene it came from, the way `LedgerPanel` holds
   // its campaign: the inspector stays mounted across both switches, so a bare
@@ -605,6 +610,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     liveScene.current = `${cid}/${sid}`;
     wantedTurn.current = null;
     setFrozen(null);
+    setCompare("");
   }, [cid, sid]);
 
   const showTurn = useCallback(async (eid: string) => {
@@ -614,6 +620,13 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     // turn the reader did not pick last. So the newest request wins, tracked by
     // the entry it asked for.
     wantedTurn.current = eid;
+    // Comparing against the LIVE preview survives moving to another turn: "at
+    // which turn did this section change?" is walked by clicking down the rail,
+    // and clearing the comparison at every step would make the reader re-pick
+    // it each time. Comparing against a specific turn does not, because the
+    // turn just clicked can BE that one, and a diff of an entry against itself
+    // is a panel that has quietly stopped answering.
+    setCompare((c) => (c === LIVE_SIDE ? c : ""));
     const current = () => liveScene.current === `${cid}/${sid}` && wantedTurn.current === eid;
     try {
       const snapshot = await api.getScenePrompt(cid, sid, eid);
@@ -711,6 +724,50 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const shownTurns = useMemo(
     () => (turns && turns.cid === cid && turns.sid === sid ? turns.rows : []),
     [turns, cid, sid]);
+  // The comparison itself (#130). An effect rather than a fetch in the picker's
+  // `onChange`, because only ONE end of it is frozen: against the live preview
+  // the answer moves with the store, and `refreshKey` is bumped by the very
+  // turn that moved it. A diff of a preview that has since changed describes a
+  // prompt nobody would send.
+  const compareWith = seen?.id;
+  useEffect(() => {
+    if (!compareWith || !compare) { setDiff(null); return; }
+    let alive = true;
+    // Ordered oldest-first before it is asked for. The route takes the two ends
+    // as given and does not reorder them — that is deliberate there, so a
+    // caller who means "this one as the before" gets it — but a READER picking
+    // an earlier turn out of a newest-first list means "what changed since
+    // then", and answering with insertions that are things the older prompt had
+    // is a diff running backwards through time. Ids are a monotonic counter and
+    // the live preview is newer than any of them.
+    const [older, newer] = compare === LIVE_SIDE || Number(compare) > Number(compareWith)
+      ? [compareWith, compare] : [compare, compareWith];
+    api.getScenePromptDiff(cid, sid, older, newer)
+      .then((d) => {
+        if (alive) setDiff({ cid, sid, eid: compareWith, against: compare, data: d });
+      })
+      .catch((err: { status?: number; detail?: string }) => {
+        if (!alive) return;
+        // Either end can have been evicted by the retention window while the
+        // picker was open, which is a 404 and routine rather than alarming.
+        setDiff(null);
+        setCompare("");
+        // No `String(err)` fallback, unlike its neighbours above: those read a
+        // rejection typed `any`, and stringifying THIS one would print
+        // "[object Object]" at the reader rather than a reason.
+        setError(err.status === 404
+          ? "One of those turns has aged out of the log."
+          : (err.detail ?? "Those turns could not be compared."));
+      });
+    return () => { alive = false; };
+  }, [cid, sid, compareWith, compare, refreshKey]);
+  // Held to both ends as well as to the scene: the reader can move to another
+  // turn while a comparison is in flight, and an answer for the one they left
+  // would otherwise be painted under the one they arrived at.
+  const shownDiff = useMemo(
+    () => (diff && diff.cid === cid && diff.sid === sid
+           && diff.eid === compareWith && diff.against === compare ? diff.data : null),
+    [diff, cid, sid, compareWith, compare]);
   // A transition line is a post like any other: a location move, a time advance
   // and a cast join/leave all append one (`scenes/moment.py`,
   // `appearances/transitions.py`), so any of them can be the post that crosses
@@ -1345,22 +1402,45 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
         <WeatherWidget cid={cid} sid={sid} refreshKey={refreshKey} />
       </SideSection>
 
-      <SideSection id="context" title={frozen ? "Context (past turn)" : "Context"}
+      <SideSection id="context"
+                   title={shownDiff ? "Context (compared)"
+                          : frozen ? "Context (past turn)" : "Context"}
                    collapsed={!!collapsed.context} onToggle={toggleSection}
-                   extra={shown && contextPercent(shown, models) > 0
+                   extra={!shownDiff && shown && contextPercent(shown, models) > 0
                      ? <span className="ctx-pct">{contextPercent(shown, models)}%</span> : undefined}>
         {seen && (
           <div className="ctx-frozen">
             <div className="field-hint">
-              What the model saw · {TASK_LABELS[seen.task] ?? seen.task} · {whenLabel(seen.ts)}
+              What the model saw · {taskLabel(seen.task)} · {whenLabel(seen.ts)}
             </div>
+            {/* The comparison is offered only from a past turn, which is the
+                only place it means anything: the live composition has nothing
+                to be the "before" of. */}
+            <label className="ctx-compare">
+              <span>Compare with</span>
+              <select value={compare} onChange={(e) => setCompare(e.target.value)}>
+                <option value="">Nothing — show this turn</option>
+                <option value={LIVE_SIDE}>The live preview</option>
+                {shownTurns.filter((t) => t.id !== seen.id).map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {taskLabel(t.task) + " · " + whenLabel(t.ts)}
+                  </option>
+                ))}
+              </select>
+            </label>
             <button className="ctx-frozen-back"
-                    onClick={() => { wantedTurn.current = null; setFrozen(null); }}>
+                    onClick={() => {
+                      wantedTurn.current = null; setFrozen(null); setCompare("");
+                    }}>
               ← Back to live context
             </button>
           </div>
         )}
-        {shown && <ContextBreakdown ctx={shown} models={models} />}
+        {/* A comparison replaces the breakdown rather than sitting under it.
+            Both are long, the rail is one column, and a reader who asked what
+            MOVED is not helped by having to scroll past what did not. */}
+        {shownDiff ? <ContextDiff diff={shownDiff} />
+                   : shown && <ContextBreakdown ctx={shown} models={models} />}
       </SideSection>
 
       {/* Directly under Context, and that adjacency is the point (#153): the
@@ -1385,7 +1465,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           <button key={t.id}
                   className={"inspector-row" + (seen?.id === t.id ? " on" : "")}
                   onClick={() => showTurn(t.id)}>
-            <span className="inspector-name">{TASK_LABELS[t.task] ?? t.task}</span>
+            <span className="inspector-name">{taskLabel(t.task)}</span>
             <span className="ctx-meta">{whenLabel(t.ts)}</span>
           </button>
         ))}

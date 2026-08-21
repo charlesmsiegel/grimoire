@@ -3441,6 +3441,68 @@ def get_scene_prompt(cid: str, sid: str, eid: str):
     return entry
 
 
+#: The `against` value that means "the composition as it stands now" rather than
+#: a second frozen turn. Not a valid entry id -- those are all digits -- so it
+#: cannot collide with one.
+LIVE_SIDE = "live"
+
+
+def _diff_side(entry: dict) -> dict:
+    """One end of a comparison, as the panel labels it. The metadata only: the
+    section rows are what the diff itself carries, and shipping them twice more
+    would put the whole of both prompts in a response that exists to say what is
+    different about them."""
+    return {k: entry.get(k) for k in
+            ("id", "task", "ts", "model", "total_tokens", "dropped_tokens", "budget_tokens")}
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/prompts/{eid}/diff")
+def get_scene_prompt_diff(cid: str, sid: str, eid: str, against: str = LIVE_SIDE):
+    """What changed between two compositions of this scene's prompt (#130).
+
+    `eid` is the BEFORE side and `against` the after -- either another entry id
+    or `live`, the composition as it stands now, which is the comparison the
+    feature is named for: a past turn against the preview. The direction is the
+    caller's and is not reordered by timestamp, so a reader who picks an older
+    turn to compare against gets the diff they asked for rather than a silently
+    flipped one.
+
+    Both entries are scoped to the scene for the same reason the detail route
+    scopes one: ids are campaign-wide, and an unscoped `against` would diff this
+    scene's prompt against another scene's while naming neither.
+
+    404 covers a missing scene, a missing entry and an evicted one -- the
+    retention window is why the third is routine rather than exceptional, and
+    nothing downstream can tell it from the second.
+
+    The live side is COMPOSED on each request, which is what makes it live and
+    is also its one caveat, the same one `store.prompt_log` opens with:
+    `context.macros.expand_macros` resolves `{{random:a,b}}` and `{{roll:1d20}}`
+    at render time, so a section built out of those differs between two calls
+    over an unchanged store. Against a preview, a handful of such lines can show
+    as changed when nothing in the campaign moved. Two frozen entries do not
+    have this: both were recorded, so the comparison is exact.
+    """
+    scene = _require_scene(cid, sid)
+    base = store.prompt_log.read_entry(cid, eid, scene=sid)
+    if base is None:
+        raise HTTPException(status_code=404, detail="prompt snapshot not found")
+    if against == LIVE_SIDE:
+        # Composed here rather than read: `context_breakdown` runs the same
+        # assemble/pack pass `GET .../context` does, so the side this diff calls
+        # "live" is the one the Context panel is showing.
+        head = {"id": LIVE_SIDE, "task": LIVE_SIDE, "ts": "",
+                "model": scene["meta"].get("model", ""),
+                **store.context.context_breakdown(cid, sid)}
+    else:
+        other = store.prompt_log.read_entry(cid, against, scene=sid)
+        if other is None:
+            raise HTTPException(status_code=404, detail="prompt snapshot not found")
+        head = other
+    return {"base": _diff_side(base), "head": _diff_side(head),
+            **store.context.compare_breakdowns(base, head)}
+
+
 @router.get("/campaigns/{cid}/scenes/{sid}/cast/{kind}/{id}/casefile")
 def get_cast_casefile(cid: str, sid: str, kind: str, id: str):
     """Everything the campaign has decided about one actor: standing state,
