@@ -359,3 +359,104 @@ def test_the_frontend_ships_the_same_kind_list():
     assert m, "ENTITY_KINDS is not declared in types.ts in the shape this guard reads"
     assert re.findall(r'"([^"]+)"', m.group(1)) == list(entities.ENTITY_KINDS), \
         "frontend/src/api/types.ts ENTITY_KINDS has drifted from entities.ENTITY_KINDS"
+
+
+# ---- reclassify (#119): a record changes kind, and keeps its id ----
+
+def test_reclassify_keeps_the_id_and_the_record(tmp_path: Path):
+    eid = entities.create_entity(tmp_path, "lore", "Tidewatch", "A stretch of grey coast.",
+                                 keys="tide", owners="characters:mara")
+    assert entities.reclassify(tmp_path, "lore", eid, "locations") == eid
+    got = entities.read_entity(tmp_path, "locations", eid)
+    assert got["meta"]["name"] == "Tidewatch"
+    assert got["meta"]["keys"] == "tide"
+    assert got["meta"]["owners"] == "characters:mara"
+    assert got["body"].strip() == "A stretch of grey coast."
+    with pytest.raises(entities.EntityNotFound):
+        entities.read_entity(tmp_path, "lore", eid)
+
+
+def test_reclassify_carries_the_record_directory(tmp_path: Path):
+    eid = entities.create_entity(tmp_path, "lore", "Tidewatch")
+    art = tmp_path / "lore" / eid / "assets" / "default"
+    art.mkdir(parents=True)
+    (art / "avatar.png").write_bytes(b"png")
+    entities.reclassify(tmp_path, "lore", eid, "locations")
+    assert (tmp_path / "locations" / eid / "assets" / "default" / "avatar.png").read_bytes() == b"png"
+    assert not (tmp_path / "lore" / eid).exists()
+
+
+def test_reclassify_uniquifies_only_when_the_slug_is_taken(tmp_path: Path):
+    entities.create_entity(tmp_path, "locations", "Tidewatch")     # holds `tidewatch`
+    eid = entities.create_entity(tmp_path, "lore", "Tidewatch")
+    assert entities.reclassify(tmp_path, "lore", eid, "locations") == "tidewatch-2"
+    assert entities.read_entity(tmp_path, "locations", "tidewatch")["meta"]["name"] == "Tidewatch"
+    assert entities.read_entity(tmp_path, "locations", "tidewatch-2")["meta"]["name"] == "Tidewatch"
+
+
+def test_reclassify_treats_an_orphaned_asset_dir_as_taken(tmp_path: Path):
+    # #225's hazard, at the destination: a directory with no record is the art
+    # of a deleted one, and landing on it would adopt it.
+    (tmp_path / "locations" / "tidewatch" / "assets").mkdir(parents=True)
+    eid = entities.create_entity(tmp_path, "lore", "Tidewatch")
+    assert entities.reclassify(tmp_path, "lore", eid, "locations") == "tidewatch-2"
+
+
+def test_reclassify_consults_the_callers_namespace(tmp_path: Path):
+    eid = entities.create_entity(tmp_path, "lore", "Tidewatch")
+    assert entities.reclassify(tmp_path, "lore", eid, "locations",
+                               taken=lambda c: c == "tidewatch") == "tidewatch-2"
+
+
+def test_reclassify_refuses_the_kind_it_already_has(tmp_path: Path):
+    eid = entities.create_entity(tmp_path, "lore", "Tidewatch")
+    with pytest.raises(entities.SameKindError):
+        entities.reclassify(tmp_path, "lore", eid, "lore")
+    assert entities.read_entity(tmp_path, "lore", eid)["meta"]["name"] == "Tidewatch"
+
+
+def test_reclassify_refuses_unknown_kinds_and_missing_records(tmp_path: Path):
+    eid = entities.create_entity(tmp_path, "lore", "Tidewatch")
+    with pytest.raises(entities.UnknownKind):
+        entities.reclassify(tmp_path, "lore", eid, "characters")
+    with pytest.raises(entities.UnknownKind):
+        entities.reclassify(tmp_path, "weapons", eid, "lore")
+    with pytest.raises(entities.EntityNotFound):
+        entities.reclassify(tmp_path, "lore", "nobody", "locations")
+    with pytest.raises(entities.EntityNotFound):
+        entities.reclassify(tmp_path, "lore", "../escape", "locations")
+
+
+def test_reclassify_leaves_no_kind_dir_behind_for_an_empty_source(tmp_path: Path):
+    eid = entities.create_entity(tmp_path, "lore", "Tidewatch")
+    entities.reclassify(tmp_path, "lore", eid, "creatures")
+    assert entities.list_entities(tmp_path, "lore") == []
+    assert [e["id"] for e in entities.list_entities(tmp_path, "creatures")] == [eid]
+
+
+def test_rewrite_owner_refs_repoints_every_kind(tmp_path: Path):
+    entities.create_entity(tmp_path, "lore", "Rumour", owners="locations:tidewatch")
+    entities.create_entity(tmp_path, "items", "Charm", owners="characters:mara, locations:tidewatch")
+    entities.create_entity(tmp_path, "groups", "Watch", owners="characters:mara")
+    touched = entities.rewrite_owner_refs(tmp_path, "locations:tidewatch", "lore:tidewatch")
+    assert sorted(touched) == [("items", "charm"), ("lore", "rumour")]
+    assert entities.read_entity(tmp_path, "lore", "rumour")["meta"]["owners"] == "lore:tidewatch"
+    assert (entities.read_entity(tmp_path, "items", "charm")["meta"]["owners"]
+            == "characters:mara, lore:tidewatch")
+    # untouched records are not rewritten, so their hashes do not move
+    assert entities.read_entity(tmp_path, "groups", "watch")["meta"]["owners"] == "characters:mara"
+
+
+def test_rewrite_owner_refs_collapses_a_record_that_had_both(tmp_path: Path):
+    entities.create_entity(tmp_path, "lore", "Rumour",
+                           owners="lore:tidewatch, characters:mara, locations:tidewatch")
+    entities.rewrite_owner_refs(tmp_path, "locations:tidewatch", "lore:tidewatch")
+    assert (entities.read_entity(tmp_path, "lore", "rumour")["meta"]["owners"]
+            == "lore:tidewatch, characters:mara")
+
+
+def test_owner_refs_parses_the_frontmatter_line(tmp_path: Path):
+    assert entities.owner_refs(" characters:mara ,, locations:tidewatch ") == [
+        "characters:mara", "locations:tidewatch"]
+    assert entities.owner_refs("") == []
+    assert entities.owner_refs(None) == []

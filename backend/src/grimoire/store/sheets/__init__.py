@@ -42,6 +42,8 @@ from .paths import (  # noqa: F401
                _next_gen,
                _world_dir,
                _world_path,
+               repoint_records,
+               repoint_world_records,
                sheet_kind,
 )
 from .pools import _pool_budget, _pool_floor, _pool_group_fields  # noqa: F401

@@ -6,6 +6,7 @@ import { ShellStatusProvider, useShellStatus } from "../components/ShellStatus";
 vi.mock("../api/client", () => ({
   SECRECY_LEVELS: ["public", "secret", "gm-only"],
   SECRECY_LABELS: { public: "Public", secret: "Secret", "gm-only": "GM-only" },
+  ENTITY_KINDS: ["locations", "lore", "items", "groups", "creatures"],
   ENTITY_FIELDS: {
     locations: [], lore: [],
     items: [{ key: "item_type", label: "Type" }, { key: "rarity", label: "Rarity" }],
@@ -32,6 +33,7 @@ vi.mock("../api/client", () => ({
     listTags: vi.fn(),
     listEntities: vi.fn(),
     readEntity: vi.fn(),
+    reclassifyEntity: vi.fn(),
     listEntityImages: vi.fn(),
     listGreetings: vi.fn(),
     readCharacter: vi.fn(),
@@ -89,6 +91,7 @@ beforeEach(() => {
     body: "Debts written in salt.",
   });
   (api.listEntityImages as any).mockResolvedValue([]);
+  (api.reclassifyEntity as any).mockResolvedValue({ id: "the-salt-pact", campaigns: [] });
   (api.listGreetings as any).mockResolvedValue([]);
   (api.readCharacter as any).mockResolvedValue({
     meta: { id: "mira", name: "Mira", default_version: "main" },
@@ -379,6 +382,19 @@ test("a nav aimed at one kind is not consumed by another editor", async () => {
   expect(await screen.findByRole("heading", { name: "Items" })).toBeInTheDocument();
   expect(indexRow("Items")).toHaveClass("active");
 });
+
+test("reclassifying a record opens it in the section it moved to", async () => {
+  // The move takes it out of Lore entirely, so leaving the user on Lore would
+  // read as a delete. `openEntity` is the same deep-link path a search hit uses.
+  (api.listEntities as any).mockResolvedValue([{ id: "the-salt-pact", name: "The Salt Pact" }]);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderAtUrl("/worlds/w?section=lore&id=the-salt-pact");
+  const picker = await screen.findByLabelText("Reclassify as");
+  fireEvent.change(picker, { target: { value: "locations" } });
+  expect(await screen.findByRole("heading", { name: "Locations" })).toBeInTheDocument();
+  expect(indexRow("Locations")).toHaveClass("active");
+});
+
 
 test("?section=characters&v= opens that character's version", async () => {
   (api.listCharacters as any).mockResolvedValue([{ id: "mira", name: "Mira", versions: 1 }]);

@@ -152,6 +152,36 @@ def forget(cid: str, keys) -> None:
         atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
+def repoint_records(cid: str, mapping: dict[str, str]) -> None:
+    """Follow reclassified records (#119): rekey each citation from
+    `<kind>/<id>#<field>` to the ref the record now answers to.
+
+    The ref is a *prefix* of the key here, not the whole of it -- one record has
+    a citation per cited field -- so this matches on the part before the `#` and
+    keeps the field. Left behind, those rows would explain fields of a record no
+    key can reach: `forget` is called with a key built from the record's current
+    kind, so an undo would stop clearing them and the panel would keep quoting a
+    post at a value that had been put back.
+
+    Takes the campaign lock for the reason `record` and `forget` do: a
+    read-modify-write of one whole file.
+    """
+    mapping = {old: new for old, new in mapping.items() if old != new}
+    if not mapping:
+        return
+    with locks.campaign_lock(cid):
+        data = read(cid)
+        moved = {}
+        for k in list(data):
+            ref, sep, field = k.partition("#")
+            if sep and ref in mapping:
+                moved[f"{mapping[ref]}#{field}"] = data.pop(k)
+        if not moved:
+            return
+        data.update(moved)
+        atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     """Follow renamed scene ids in each row's ``scene`` field.
 

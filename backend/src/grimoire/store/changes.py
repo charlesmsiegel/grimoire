@@ -283,6 +283,26 @@ def forget_scene(cid: str, sid: str) -> int:
     return len(doomed)
 
 
+def repoint_records(cid: str, mapping: dict[str, str]) -> None:
+    """Follow reclassified records (#119): rekey each delta from `<kind>/<id>`
+    to the ref the record now answers to.
+
+    The key IS the ref, so this is a rekey rather than a field rewrite. A
+    destination that somehow already has a row loses it, which is the same
+    last-write-wins `record`'s upsert has always applied to this rolling log --
+    and a reclassify only lands on a free slug, so the two rows would have to
+    have been written for records that cannot both exist.
+    """
+    mapping = {old: new for old, new in mapping.items() if old != new}
+    data = read(cid)
+    hit = [ref for ref in mapping if ref in data]
+    if not hit:
+        return
+    for ref in hit:
+        data[mapping[ref]] = data.pop(ref)
+    atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     """Follow renamed scene ids in each record's scene field."""
     data = read(cid)

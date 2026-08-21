@@ -322,7 +322,9 @@ export type ScenePage = Scene & {
 // `GET /api/entity-kinds` (see `components/useEntityKinds.ts`), so a kind
 // added to `store.entities.ENTITY_KINDS` reaches it without either dialog
 // being edited (#138) — once this list learns the kind, which
-// `test_the_frontend_ships_the_same_kind_list` requires. It has to stay the
+// `test_the_frontend_ships_the_same_kind_list` requires. The reclassify
+// picker enumerates the array too, so a kind present in the union but
+// missing from the list is simply unofferable, with nothing to say so. It has to stay the
 // compile-time union anyway: the tabs, labels and per-kind field table are all
 // written against named kinds, which is the same reason the dropdown will not
 // offer a kind that is missing from it.

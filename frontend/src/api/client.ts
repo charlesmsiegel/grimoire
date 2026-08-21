@@ -753,6 +753,18 @@ export const api = {
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/${kind}/${id}`, patch),
   deleteEntity: (scope: EntityScope, kind: EntityKind, id: string) =>
     request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/${kind}/${id}`),
+  /** Move a record to another generic kind, keeping its id where the
+   *  destination is free (#119). World scope sweeps every campaign of that
+   *  world and reports which; campaign scope moves only that campaign's copy.
+   *  `rev` is the same precondition a save carries: the record is about to be
+   *  moved, and moving text somebody else has rewritten is the write it
+   *  refuses. The returned id is the one to navigate to -- it differs from
+   *  `id` when the destination already held that slug. */
+  reclassifyEntity: (scope: EntityScope, kind: EntityKind, id: string,
+                     to: EntityKind, rev?: string | null) =>
+    request<{ id: string; campaigns?: string[] }>(
+      "POST", `${entityBase(scope)}/${kind}/${id}/reclassify`,
+      { to, ...(rev ? { rev } : {}) }),
 
   // library moves: campaign -> world, and back (#52, #53, #60). `kind` is a
   // LibraryKind rather than EntityKind: promote and the status read carry

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ApiError, api, ENTITY_FIELDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type Secrecy } from "../api/client";
+import { ApiError, api, ENTITY_FIELDS, ENTITY_KINDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail, type Secrecy } from "../api/client";
 import { loreOwnerOptions, type LoreOwner } from "../api/loreOwners";
 import CreationWizard from "./CreationWizard";
 import { DemotePanel } from "./DemotePanel";
@@ -85,7 +85,7 @@ const asSecrecy = (v: unknown): Secrecy => {
   return (SECRECY_LEVELS as readonly string[]).includes(level) ? (level as Secrecy) : "public";
 };
 
-export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, onOpenOwner, onOpenLore, module = null }: {
+export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, onOpenOwner, onOpenLore, onReclassified, module = null }: {
   wid: string;
   kind: EntityKind;
   scope?: EntityScope;
@@ -93,6 +93,10 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   onNavConsumed?: () => void;
   onOpenOwner?: (ref: string) => void;
   onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void;
+  // A reclassified record leaves this editor's list entirely, so the parent is
+  // told where it went rather than being left showing a section it is no longer
+  // in. Without it the move looks exactly like a delete.
+  onReclassified?: (kind: EntityKind, id: string) => void;
   module?: ModuleDetail | null;
 }) {
   const scope: EntityScope = scopeProp ?? { kind: "world", id: wid };
@@ -114,7 +118,10 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   // land on top of an edit made outside the app (#35); `stale` holds the
   // refusal, with the on-disk rev an overwrite would have to be based on.
   const [rev, setRev] = useState<string | null>(null);
-  const [stale, setStale] = useState<{ rev: string | null } | null>(null);
+  // `to` is set only when the refusal came from a reclassify, and it is what
+  // makes "do it anyway" repeat the right write rather than turning a move into
+  // a save.
+  const [stale, setStale] = useState<{ rev: string | null; to?: EntityKind } | null>(null);
   // `description` is undefined until the listing says otherwise, and that is
   // load-bearing: undefined means never reviewed, "" means reviewed and
   // deliberately undescribed. `described` from the server is what separates them.
@@ -273,6 +280,43 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
       await select(editing);
     } catch {
       resetForm(); // the record is gone from disk entirely
+    }
+  }
+
+  /** Move the selected record to another generic kind (#119).
+   *
+   *  `askReclassify` is the confirmed entry point, and its world-scope wording
+   *  says the part the user cannot see: the sweep reaches every campaign of
+   *  this world. The confirm is deliberately not in here, so the stale banner's
+   *  "Reclassify anyway" -- already a deliberate second click -- does not ask
+   *  the same question twice. It carries the same `rev` a save does -- a reclassify moves the very text the
+   *  editor is showing, so a record rewritten elsewhere in the meantime is the
+   *  case the precondition exists for -- and it reuses the same stale banner,
+   *  where "keep mine anyway" is a second, deliberate click.
+   */
+  function askReclassify(to: EntityKind) {
+    if (!editing || !to) return;
+    const where = scope.kind === "world"
+      ? " Every campaign of this world follows it."
+      : " The world keeps its own copy under the old kind.";
+    if (window.confirm(`Reclassify '${name}' as a ${KIND_LABELS[to]}?${where}`)) void reclassify(to);
+  }
+
+  async function reclassify(to: EntityKind, base: string | null = rev) {
+    if (!editing || !to) return;
+    setError(null);
+    setStale(null);
+    try {
+      const { id } = await api.reclassifyEntity(scope, kind, editing, to, base);
+      resetForm();
+      await reload();
+      onReclassified?.(to, id);
+    } catch (err) {
+      if (err instanceof ApiError && err.kind === "stale_record") {
+        setStale({ rev: (err.body?.rev as string | null) ?? null, to });
+        return;
+      }
+      setError(err instanceof ApiError ? err.detail : String(err));
     }
   }
 
@@ -460,7 +504,10 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
         {error && <div className="banner">{error}</div>}
         {stale && (
           <StaleRecordBanner label={label} rev={stale.rev} onReload={discardAndReload}
-                             onOverwrite={() => save(stale.rev)} />
+                             overwriteLabel={stale.to ? "Reclassify anyway" : undefined}
+                             onOverwrite={() => (stale.to
+                               ? reclassify(stale.to, stale.rev)
+                               : save(stale.rev))} />
         )}
         {wizardOpen && module ? (
           <CreationWizard scope={scope} kind={kind} module={module}
@@ -621,6 +668,26 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
               {kind === "groups" && scope.kind === "campaign" && editing && (
                 <GroupStatePanel cid={scope.id} gid={editing} />
               )}
+              {/* The record keeps its id across the move (#119), so everything
+                  filed against it -- its images, its sheet, its pins, its undo
+                  history -- comes with it. A select rather than a row of
+                  buttons: there are four destinations and this is a rare,
+                  deliberate correction, not a control to make prominent. */}
+              <div className="side-section">
+                <h4>Reclassify</h4>
+                <select aria-label="Reclassify as" value=""
+                        onChange={(e) => askReclassify(e.target.value as EntityKind)}>
+                  <option value="">Reclassify as…</option>
+                  {ENTITY_KINDS.filter((k) => k !== kind).map((k) => (
+                    <option key={k} value={k}>{KIND_LABELS[k]}</option>
+                  ))}
+                </select>
+                <div className="field-hint">
+                  {scope.kind === "world"
+                    ? "Moves this record for every campaign of this world."
+                    : "Moves this campaign's copy only; the world keeps its own."}
+                </div>
+              </div>
               {module && editing && (
                 <SheetPanel scope={scope} module={module} kind={kind} eid={editing}
                             onOpenRef={(kind, id) => onOpenOwner?.(`${kind}:${id}`)} />

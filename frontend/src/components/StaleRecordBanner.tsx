@@ -7,10 +7,16 @@
  *  refusal, not a loss.
  *
  *  `rev === null` means the record is gone rather than changed, so there is
- *  nothing to overwrite and only the dismissal is offered. */
+ *  nothing to overwrite and only the dismissal is offered.
+ *
+ *  `overwriteLabel` names what the second button actually does, because not
+ *  every write this refuses is a save: a reclassify (#119) moves the record
+ *  rather than replacing its text, and "Overwrite with mine" would describe a
+ *  write it is not about to make. */
 export function StaleRecordBanner(
-  { label, rev, onReload, onOverwrite }:
-  { label: string; rev: string | null; onReload: () => void; onOverwrite: () => void },
+  { label, rev, onReload, onOverwrite, overwriteLabel = "Overwrite with mine" }:
+  { label: string; rev: string | null; onReload: () => void; onOverwrite: () => void;
+    overwriteLabel?: string },
 ) {
   return (
     <div className="banner stale-banner" role="alert">
@@ -26,7 +32,7 @@ export function StaleRecordBanner(
           {rev === null ? "Close" : "Discard mine and reload"}
         </button>
         {rev !== null && (
-          <button className="subtle" onClick={onOverwrite}>Overwrite with mine</button>
+          <button className="subtle" onClick={onOverwrite}>{overwriteLabel}</button>
         )}
       </div>
     </div>

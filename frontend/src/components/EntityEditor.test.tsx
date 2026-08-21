@@ -13,6 +13,7 @@ vi.mock("../api/client", () => ({
     }
   },
   SECRECY_LEVELS: ["public", "secret", "gm-only"],
+  ENTITY_KINDS: ["locations", "lore", "items", "groups", "creatures"],
   SECRECY_LABELS: { public: "Public", secret: "Secret", "gm-only": "GM-only" },
   ENTITY_FIELDS: {
     locations: [], lore: [],
@@ -26,6 +27,7 @@ vi.mock("../api/client", () => ({
     readEntity: vi.fn(),
     updateEntity: vi.fn(),
     deleteEntity: vi.fn(),
+    reclassifyEntity: vi.fn(),
     listCharacters: vi.fn(),
     listPCs: vi.fn(),
     listEntityImages: vi.fn(),
@@ -67,6 +69,7 @@ beforeEach(() => {
   (api.createEntity as any).mockResolvedValue({ id: "e1" });
   (api.updateEntity as any).mockResolvedValue({ ok: true });
   (api.deleteEntity as any).mockResolvedValue({ ok: true });
+  (api.reclassifyEntity as any).mockResolvedValue({ id: "salt", campaigns: [] });
   (api.readEntity as any).mockResolvedValue({ meta: { id: "salt", name: "Salt", keys: "pact" }, body: "x", rev: "r1" });
   (api.listCharacters as any).mockResolvedValue([{ id: "tanaka", name: "Tanaka" }]);
   (api.listPCs as any).mockResolvedValue([]);
@@ -852,4 +855,99 @@ test("a failure that is not a conflict still reaches the error banner", async ()
 
   expect(await screen.findByText("bad fields")).toBeInTheDocument();
   expect(screen.queryByRole("alert")).toBeNull();
+});
+
+// ---- reclassify (#119) ----
+
+test("the detail sidebar offers every kind but this one", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const picker = screen.getByLabelText<HTMLSelectElement>("Reclassify as");
+  expect([...picker.options].map((o) => o.value))
+    .toEqual(["", "locations", "items", "groups", "creatures"]);
+});
+
+test("reclassifying sends the record's rev and reports where it went", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  const onReclassified = vi.fn();
+  render(<EntityEditor wid="w" kind="lore" onReclassified={onReclassified} />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.change(screen.getByLabelText("Reclassify as"), { target: { value: "locations" } });
+  await waitFor(() =>
+    expect(api.reclassifyEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore", "salt",
+      "locations", "r1"));
+  await waitFor(() => expect(onReclassified).toHaveBeenCalledWith("locations", "salt"));
+});
+
+test("the id the server hands back is the one navigated to", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  (api.reclassifyEntity as any).mockResolvedValue({ id: "salt-2", campaigns: [] });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  const onReclassified = vi.fn();
+  render(<EntityEditor wid="w" kind="lore" onReclassified={onReclassified} />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.change(screen.getByLabelText("Reclassify as"), { target: { value: "locations" } });
+  await waitFor(() => expect(onReclassified).toHaveBeenCalledWith("locations", "salt-2"));
+});
+
+test("declining the confirm reclassifies nothing", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.spyOn(window, "confirm").mockReturnValue(false);
+  render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.change(screen.getByLabelText("Reclassify as"), { target: { value: "locations" } });
+  await waitFor(() => expect(api.reclassifyEntity).not.toHaveBeenCalled());
+});
+
+test("a stale record refuses the move and offers to make it anyway", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  (api.reclassifyEntity as any).mockRejectedValueOnce(
+    fail(409, "record changed", "stale_record", { rev: "r2" }));
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  const onReclassified = vi.fn();
+  render(<EntityEditor wid="w" kind="lore" onReclassified={onReclassified} />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.change(screen.getByLabelText("Reclassify as"), { target: { value: "locations" } });
+  const anyway = await screen.findByRole("button", { name: /reclassify anyway/i });
+  expect(onReclassified).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: /overwrite with mine/i })).toBeNull();
+  confirm.mockClear();
+  (api.reclassifyEntity as any).mockResolvedValue({ id: "salt", campaigns: [] });
+  fireEvent.click(anyway);
+  // the on-disk rev, not the one the editor loaded -- and no second confirm
+  await waitFor(() =>
+    expect(api.reclassifyEntity).toHaveBeenLastCalledWith({ kind: "world", id: "w" }, "lore",
+      "salt", "locations", "r2"));
+  expect(confirm).not.toHaveBeenCalled();
+  await waitFor(() => expect(onReclassified).toHaveBeenCalledWith("locations", "salt"));
+});
+
+test("a refused move reports the error and leaves the record where it is", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  (api.reclassifyEntity as any).mockRejectedValue(fail(400, "already a lore record"));
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  const onReclassified = vi.fn();
+  render(<EntityEditor wid="w" kind="lore" onReclassified={onReclassified} />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.change(screen.getByLabelText("Reclassify as"), { target: { value: "locations" } });
+  expect(await screen.findByText("already a lore record")).toBeInTheDocument();
+  expect(onReclassified).not.toHaveBeenCalled();
+});
+
+test("the campaign hint says the world keeps its own copy", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  const { container } = render(
+    <EntityEditor wid="w" scope={{ kind: "campaign", id: "c1" }} kind="lore" />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).getByText(/the world keeps its own/i)).toBeInTheDocument();
 });

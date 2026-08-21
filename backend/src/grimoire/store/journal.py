@@ -199,6 +199,67 @@ def mark_undone(cid: str, jid: str, by: str) -> bool:
         return False
 
 
+def _ref_pairs(mapping: dict[str, str]) -> dict[tuple[str, str], tuple[str, str]]:
+    """`{"lore/pact": "items/pact"}` as `{("lore", "pact"): ("items", "pact")}`.
+
+    An entry holds the kind and the id in separate fields, so the ledger's
+    joined form has to be split before it can be matched against one. A half of
+    a ref that is empty names nothing and is dropped rather than matched.
+    """
+    pairs = {}
+    for old, new in mapping.items():
+        if old == new:
+            continue
+        okind, _, oid = old.partition("/")
+        nkind, _, nid = new.partition("/")
+        if okind and oid and nkind and nid:
+            pairs[(okind, oid)] = (nkind, nid)
+    return pairs
+
+
+def repoint_records(cid: str, mapping: dict[str, str]) -> None:
+    """Follow reclassified records (#119) through both places an entry names one:
+    the display `ref` and the `undo.target` of an entity write.
+
+    `mapping` is in `<kind>/<id>` form; entries hold the pair unjoined, so it is
+    split here rather than at the caller.
+
+    The reversal half is why this is not cosmetic. `undo.read_value` resolves an
+    entity target through `overlay.read_entity(cid, kind, id)`, so an entry left
+    pointing at the old kind does not reverse anything -- it *refuses*, with the
+    record sitting right there under its new kind. Reclassifying a record would
+    otherwise quietly retire every undo offer standing against it.
+
+    Only `w == "entity"` targets carry a kind at all; the sidecar writers
+    (`state`, `dossier`, `group_state`, …) are keyed by actor id, and an actor
+    is not a kind this can move.
+    """
+    pairs = _ref_pairs(mapping)
+    if not pairs:
+        return
+    with locks.campaign_lock(cid):
+        doc = _load(cid)
+        hit = False
+        for entry in doc["entries"]:
+            undo = entry.get("undo")
+            target = undo.get("target") if isinstance(undo, dict) else None
+            if not isinstance(target, dict) or target.get("w") != "entity":
+                target = None
+            for named in (entry.get("ref"), target):
+                if not isinstance(named, dict):
+                    continue
+                kind, rid = named.get("kind"), named.get("id")
+                if not isinstance(kind, str) or not isinstance(rid, str):
+                    continue
+                moved = pairs.get((kind, rid))
+                if moved is None:
+                    continue
+                named["kind"], named["id"] = moved
+                hit = True
+        if hit:
+            _write(cid, doc)
+
+
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     """Follow renamed scene ids in each entry's scene field."""
     with locks.campaign_lock(cid):

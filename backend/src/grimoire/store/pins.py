@@ -350,6 +350,53 @@ def drop_scene(cid: str, sid: str) -> None:
             _write(cid, data)
 
 
+def repoint_records(cid: str, mapping: dict[str, str]) -> None:
+    """Follow reclassified records (#119), in both the `ref` field and the key
+    it forms. `mapping` is in `<kind>/<id>` form, the one every other ledger
+    uses; a pin ref is `<kind>:<id>`, so it is translated here rather than at
+    each of this module's callers.
+
+    Both halves, for `repoint_scenes`' reason one level down: the key carries
+    the ref, so a rule left keyed by the old one is filed against a record that
+    no longer exists and would be handed to the next record to take that slug --
+    an *exclude* silently applying to a stranger, which is the direction of
+    this file that fails quietly.
+
+    Unreadable and malformed records are stepped over for the same reason as
+    well: this runs after the record has already moved, and raising here would
+    500 a reclassify that has happened.
+    """
+    mapping = {old.replace("/", ":", 1): new.replace("/", ":", 1)
+               for old, new in mapping.items() if old != new}
+    if not mapping:
+        return
+    with locks.campaign_lock(cid):
+        try:
+            data = read(cid)
+        except Exception:  # noqa: BLE001 — unparseable pins.json: skip this store
+            return
+        if not isinstance(data, dict):
+            return
+        moved = {}
+        for key, rec in list(data.items()):
+            if not isinstance(rec, dict):
+                continue
+            ref = rec.get("ref")
+            if not isinstance(ref, str) or ref not in mapping:
+                continue
+            rec["ref"] = mapping[ref]
+            moved[key] = rec
+        if not moved:
+            return
+        for key, rec in moved.items():
+            del data[key]
+            scope = rec.get("scope")
+            sid = rec.get("sid")
+            data[_key(scope if scope == SCENE else CAMPAIGN,
+                      sid if isinstance(sid, str) else "", rec["ref"])] = rec
+        _write(cid, data)
+
+
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     """Follow renamed scene ids, in both the `sid` field and the key it forms.
     Part of the `scene_refs.repoint` fan-out.
