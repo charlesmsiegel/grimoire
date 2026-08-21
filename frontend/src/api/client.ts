@@ -29,7 +29,7 @@ import {
   type LoreEntryDraft, type Mechanics, type ModelsRefreshResult, type ModuleContentEntry,
   type ModuleDetail, type ModuleEditResult, type ModuleRenameKind, type ModuleSummary,
   type PCDetail, type PCSummary, type Persona, type PinRule, type PricingEntry,
-  type PricingTable, type PromptEntry,
+  type PricingTable, type PromptDiff, type PromptEntry,
   type PromptLayout, type PromptSnapshot, type ProposalRecord, type Provenance,
   type RecordChange, type ReplayPreview, type ReplaySession, type ResponseBundle, type ResponseFields, type ResponseOverride,
   type ResponsePresetDetail, type ResponsePresetDraft, type ResponsePresetSummary,
@@ -1231,6 +1231,17 @@ export const api = {
   getScenePrompt: (cid: string, sid: string, eid: string) =>
     request<PromptSnapshot>(
       "GET", `/api/campaigns/${cid}/scenes/${sid}/prompts/${eid}`),
+  // `against` is another entry id, or "live" for the composition as it stands
+  // now — the comparison the feature is named for (#130). `fresh`, unlike
+  // `getScenePrompt` above and for the reason that route is not: against "live"
+  // only one end is frozen, so the answer moves with the store, and it is
+  // re-read on the refreshKey a completed turn bumps precisely because that
+  // turn is what moved it. Turn-against-turn could be shared, but one cache
+  // rule for one route is worth more than the request it would save.
+  getScenePromptDiff: (cid: string, sid: string, eid: string, against: string) =>
+    request<PromptDiff>(
+      "GET", `/api/campaigns/${cid}/scenes/${sid}/prompts/${eid}/diff`
+             + `?against=${encodeURIComponent(against)}`, undefined, { fresh: true }),
   // `fresh`, like `sceneBriefing`: the panel re-reads this immediately after the
   // automatic POST commits, which is exactly when a shared in-flight GET issued
   // *before* that write would hand back a pre-write answer — and the read token

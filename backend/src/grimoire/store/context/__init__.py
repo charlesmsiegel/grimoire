@@ -39,6 +39,7 @@ from . import (  # noqa: F401
                art,
                assemble,
                cast,
+               compare,
                layout,
                macros,
                mechanics,
@@ -80,6 +81,7 @@ from .cast import (  # noqa: F401
                _voice_notes,
                cast_datetime_facts,
 )
+from .compare import compare_breakdowns  # noqa: F401
 from .macros import (  # noqa: F401
                _LITERAL_MACROS,
                _MACRO_TOKEN,

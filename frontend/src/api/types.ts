@@ -835,6 +835,44 @@ export type PromptEntry = {
 /** A frozen breakdown: the same shape `getSceneContext` returns, plus which
  *  turn it was. Rendered by the same component, pointed at stored text. */
 export type PromptSnapshot = SceneContext & Omit<PromptEntry, "scene">;
+/** One line of a prompt-section diff (#130). The record-diff vocabulary plus
+ *  `skip`: a run of unchanged lines too far from any change to be worth
+ *  printing, collapsed to its `count`. A prompt section is the whole
+ *  transcript, so without it one appended exchange ships several hundred rows
+ *  to say the rest stood still. `text` is present and empty on a `skip`, so a
+ *  reader written against `DiffLine` meets an op it does not know rather than a
+ *  row with no content field at all. */
+export type ContextDiffLine = {
+  op: "equal" | "insert" | "delete" | "skip"; text: string; count?: number;
+};
+/** What one side of a comparison says about one section — everything except
+ *  the text, which the diff lines carry. */
+export type PromptDiffFacts = {
+  label: string; tokens: number; dropped: boolean; trimmed: number; pinned: boolean;
+};
+/** One section, compared. `base`/`head` is null on the side that does not have
+ *  it. `diff` is empty on an `unchanged` row, and ALSO on a `changed` one whose
+ *  words are identical — a section the packer dropped this turn and kept last
+ *  turn is a change with nothing to show line by line. */
+export type PromptDiffSection = {
+  id: string; label: string;
+  status: "added" | "removed" | "changed" | "unchanged";
+  base: PromptDiffFacts | null; head: PromptDiffFacts | null;
+  diff: ContextDiffLine[];
+};
+/** Which turn each end of the comparison was, and what it totalled. `id` is
+ *  `"live"` for the composition as it stands now — its `task` is `"live"` too
+ *  and it has no timestamp, being a preview rather than a turn that happened. */
+export type PromptDiffSide = {
+  id: string; task: string; ts: string; model: string;
+  total_tokens: number; dropped_tokens: number; budget_tokens: number;
+};
+/** `base` -> `head`, section by section (#130). No summary count and no token
+ *  delta: both are derived from what is already here, and the server declines
+ *  to ship a figure that could disagree with the rows beside it. */
+export type PromptDiff = {
+  base: PromptDiffSide; head: PromptDiffSide; sections: PromptDiffSection[];
+};
 /** The live running summary of a scene still being played (#85).
  *  `at` is how many posts it covers, `total` how many there are; `stale` means
  *  the posts it covered have since been rerolled, edited or trimmed, so it

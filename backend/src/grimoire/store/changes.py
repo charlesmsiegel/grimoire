@@ -27,10 +27,22 @@ BROWSABLE_KINDS: tuple[str, ...] = (
 
 def line_diff(before: str, after: str) -> list[dict]:
     """Tagged per-line diff of two text blobs. A `replace` span emits its deletes then
-    its inserts, so the frontend can render removed-then-added lines."""
+    its inserts, so the frontend can render removed-then-added lines.
+
+    `autojunk=False`, which is a no-op for the record fields this was written
+    for and load-bearing for the prompt sections `context.compare` now feeds it
+    (#130). The heuristic only engages past 200 lines, and what it does there is
+    refuse to let any line occurring in more than 1% of the input ANCHOR a
+    match. Prompt sections are full of exactly that -- a roster, a fact list, a
+    set of world-info entries sharing a bullet or a speaker prefix -- and the
+    cost is not marginal: editing one item of a 300-line list is reported as 150
+    deletions and 150 insertions with the heuristic on, and as one of each with
+    it off (`test_one_edit_in_a_long_repetitive_section_is_one_edit`). A panel
+    whose noise grows with the length of the section is one nobody reads twice.
+    """
     a, b = before.splitlines(), after.splitlines()
     out: list[dict] = []
-    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b).get_opcodes():
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
         if tag == "equal":
             out += [{"op": "equal", "text": t} for t in a[i1:i2]]
         elif tag == "delete":
