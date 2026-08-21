@@ -1919,6 +1919,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       .then((r) => r.retained)
       .catch(() => false);   // unresolvable means keep the text; see below
     registry.settle(cid, sid);
+    // Whatever this component was left holding for that send is resolved now.
+    // An unconfirmed Stop deliberately leaves the composer locked and `runRef`
+    // set (see `runStream`'s finally), on the grounds that the run may still be
+    // generating; this is the pass that finally answers that question, so it
+    // has to be the pass that lets go. Unconditional because the ordinary case
+    // has nothing left to release -- `runStream` cleared it all -- and setting
+    // state that is already that value is a no-op.
+    runRef.current = null;
+    setStreamingId(null);
+    setStreaming("");
+    setBusy(false);
     await selectScene(sid).catch(() => -1);
     if (!durable) {
       // The post is not in the scene. Either it was rolled back or it never
@@ -2097,11 +2108,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // exists for, and it is left for the adoption pass to resolve.
       if (finished || errored || refused) registry.settle(cid, id);
       abortRef.current = null;
-      // Beside `abortRef`, and load-bearing for the same reason: left set, a
-      // Stop pressed while the NEXT turn is still connecting would address this
-      // one -- terminal by then, so the route would answer politely and the
-      // live turn would keep generating with nothing to stop it.
-      runRef.current = null;
       // AHEAD OF EVERY RELEASE BELOW, `busy` included. Only a Stop sets this,
       // so an ordinary turn is unaffected and keeps releasing as early as it
       // always has. On a Stop it is the difference between the button lying and
@@ -2111,6 +2117,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // player fire a turn the backend then refused with `run_in_flight`. The
       // streamed text stays on screen for the wait, which is the honest picture:
       // it is still being stopped.
+
+      // Set by the branch below that could not confirm the Stop. A Stop
+      // the server never heard is not a stopped turn, and the releases
+      // under the guard would say it was.
+      let unstopped = false;
       if (cancelRef.current) {
         const pending = cancelRef.current;
         cancelRef.current = null;
@@ -2126,167 +2137,188 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           // adoption pass re-litigate a turn the player already ended.
           registry.settle(cid, id);
         } catch {
+          // The player pressed a button and it did not work. Reported,
+          // not swallowed -- and NOT released: the backend run may still
+          // be generating and still holding the scene.
+          unstopped = true;
           setError({ text: "could not reach the server to stop this turn — it "
                            + "may still be generating", retryable: false });
         }
       }
-      setStreaming("");
-      setBusy(false);
-      // NOT released with `busy`. Review caught that clearing it here unlocks
-      // the scene while `on_abort` may still be writing to it: the poll below
-      // exists precisely because the backend's shielded flush lands seconds
-      // after the socket died, and a rename in that gap moves the file out from
-      // under the very write the poll is waiting for. The lock is released at
-      // the bottom of this block instead, once there is nothing left to land.
-      // the reply is persisted as per-speaker posts — re-fetch to show them
-      // (selectScene also bumps ctxKey and refreshes the player name)
+      // NOT a `return` -- this is a `finally`, and returning from one
+      // discards whatever the block was already returning or throwing. The
+      // rest of the teardown is skipped by a guard instead.
       //
-      // Guarded, because `setBusy(false)` above already re-enabled Send and this
-      // fetch is an await: the player can start the next turn while it is in
-      // flight, and the stale response would then apply `setMessages` over that
-      // turn's optimistic post and `setStreaming("")` over its live preview.
-      // Review caught this one on the immediate refresh after it had already
-      // been fixed on the polling ones — the mechanism was sitting right here.
-      //
-      // Only `abortRef`, unlike the poll's predicate — and deliberately so,
-      // even though it means this refresh can install the turn's scene over
-      // one the reader has since opened. That pull-back is load-bearing: a
-      // turn that failed parks the player's words under ITS scene, and the
-      // composer is one shared box, so the view has to return to that scene
-      // or the recovered prompt is either invisible or shown against the
-      // wrong transcript ("a recovered prompt is never shown against the
-      // scene the player moved to").
-      //
-      // Adding a scene check here was tried and reverted: it silently broke
-      // prompt recovery, which is the one thing in this file that guards text
-      // existing nowhere else. The divergence it would have prevented is
-      // instead made harmless where it does damage — `saveEdit` refuses to
-      // write while the transcript on screen belongs to another scene.
-      //
-      // Its failure is caught rather than thrown, because it is the *same*
-      // failure the turn just had: a POST that never reached the server usually
-      // means this GET will not either. Letting it escape from a `finally`
-      // skipped the restoration below and replaced the original error on the
-      // way out, so the one case that most needs the player's words back was
-      // the one case that dropped them (review, #95).
-      let seen = -1;
-      let refreshed = false;
-      try {
-        seen = await selectScene(id, () => !abortRef.current);
-        refreshed = true;
-      } catch (err: any) {
-        // Keep whatever the turn itself reported; say something if it reported
-        // nothing, since the view is now showing a transcript it could not
-        // confirm (a cancel raises no banner of its own).
-        // Built here rather than through `fail`, which overwrites: the rule is
-        // to keep whatever the turn reported. Retryable — this is the failure
-        // path of a *generation*, so generating again is the right recovery.
-        setError((cur) => cur ?? { text: err?.detail ?? String(err), retryable: true });
+      // `abortRef` above is cleared either way: the socket really is gone,
+      // and leaving it set would block the adoption pass, which is what
+      // resolves this if the run ends on its own. Everything below --
+      // `busy`, the streamed preview, `runRef` -- is skipped when the Stop
+      // went unconfirmed, so Stop is still there to press and still knows
+      // what to press about.
+      if (!unstopped) {
+        // Beside `abortRef`, and load-bearing for the same reason: left set, a
+        // Stop pressed while the NEXT turn is still connecting would address this
+        // one -- terminal by then, so the route would answer politely and the
+        // live turn would keep generating with nothing to stop it.
+        runRef.current = null;
+        setStreaming("");
+        setBusy(false);
+        // NOT released with `busy`. Review caught that clearing it here unlocks
+        // the scene while `on_abort` may still be writing to it: the poll below
+        // exists precisely because the backend's shielded flush lands seconds
+        // after the socket died, and a rename in that gap moves the file out from
+        // under the very write the poll is waiting for. The lock is released at
+        // the bottom of this block instead, once there is nothing left to land.
+        // the reply is persisted as per-speaker posts — re-fetch to show them
+        // (selectScene also bumps ctxKey and refreshes the player name)
+        //
+        // Guarded, because `setBusy(false)` above already re-enabled Send and this
+        // fetch is an await: the player can start the next turn while it is in
+        // flight, and the stale response would then apply `setMessages` over that
+        // turn's optimistic post and `setStreaming("")` over its live preview.
+        // Review caught this one on the immediate refresh after it had already
+        // been fixed on the polling ones — the mechanism was sitting right here.
+        //
+        // Only `abortRef`, unlike the poll's predicate — and deliberately so,
+        // even though it means this refresh can install the turn's scene over
+        // one the reader has since opened. That pull-back is load-bearing: a
+        // turn that failed parks the player's words under ITS scene, and the
+        // composer is one shared box, so the view has to return to that scene
+        // or the recovered prompt is either invisible or shown against the
+        // wrong transcript ("a recovered prompt is never shown against the
+        // scene the player moved to").
+        //
+        // Adding a scene check here was tried and reverted: it silently broke
+        // prompt recovery, which is the one thing in this file that guards text
+        // existing nowhere else. The divergence it would have prevented is
+        // instead made harmless where it does damage — `saveEdit` refuses to
+        // write while the transcript on screen belongs to another scene.
+        //
+        // Its failure is caught rather than thrown, because it is the *same*
+        // failure the turn just had: a POST that never reached the server usually
+        // means this GET will not either. Letting it escape from a `finally`
+        // skipped the restoration below and replaced the original error on the
+        // way out, so the one case that most needs the player's words back was
+        // the one case that dropped them (review, #95).
+        let seen = -1;
+        let refreshed = false;
+        try {
+          seen = await selectScene(id, () => !abortRef.current);
+          refreshed = true;
+        } catch (err: any) {
+          // Keep whatever the turn itself reported; say something if it reported
+          // nothing, since the view is now showing a transcript it could not
+          // confirm (a cancel raises no banner of its own).
+          // Built here rather than through `fail`, which overwrites: the rule is
+          // to keep whatever the turn reported. Retryable — this is the failure
+          // path of a *generation*, so generating again is the right recovery.
+          setError((cur) => cur ?? { text: err?.detail ?? String(err), retryable: true });
+        }
+        // Anything that ended without `done` may have left a partial the backend
+        // is still flushing — a cancel, or a body cut short. An error frame is
+        // NOT one of those: the backend ran its handler before sending it, so the
+        // refresh above already sees whatever it wrote.
+        //
+        // Not gated on having seen text, either. Gating on `acc` was wrong and
+        // review caught it: what reached the client is not what the backend has to
+        // flush. `FenceWatcher.feed` returns "" for the whole of a roll fence and
+        // withholds anything that might yet become one, so a reply that opens with
+        // a fence streams nothing at all while the server still persists a
+        // proposal — invisible until some later refresh under the old gate.
+        // Now the transcript has answered it: no growth means the post never
+        // landed, so the prompt exists nowhere and the composer has to have it
+        // back. `seen < 0` is `selectScene` bowing out to a newer owner — it did
+        // not look, so it cannot say.
+        //
+        // And when the transcript cannot answer — the refresh failed, or this
+        // scene's length before the turn was never established — restore anyway.
+        // Both mean the same thing: nothing proves the post landed. Erring the
+        // other way risks a duplicate the player can see and delete; erring this
+        // way destroys text that exists in no other place.
+        //
+        // Both outcomes that can leave the post unwritten ask the same question,
+        // so they share the answer: the request that never arrived, and the one
+        // the server refused. `nothingLanded` is the transcript saying it, out
+        // loud — not merely the absence of evidence that it did.
+        //
+        // `seen < 0` belongs in `unverifiable`, and review caught that it was not
+        // there. It is `selectScene` retiring its own read because a newer owner
+        // took the view — the comment above already calls that "it did not look,
+        // so it cannot say", which is the definition of unverifiable, but the code
+        // said otherwise: the await did not throw, so `refreshed` was true, and a
+        // prompt that genuinely never landed went unrestored because the read that
+        // would have proved it was thrown away.
+        const unverifiable = !refreshed || totalBefore === null || seen < 0;
+        const nothingLanded = !unverifiable && seen <= totalBefore;
+        // A stream that started and then stopped without either frame is the
+        // third way to end up with no post, and review caught it as the one the
+        // client had no answer for: the backend rolls the post back *before* it
+        // yields the error frame, so a connection dropped in between leaves a
+        // rollback that happened and a client that was never told. Nothing is set
+        // — not errored, not unreached, not refused — and the poll cannot help,
+        // because it watches for growth and a rollback only ever shrinks.
+        //
+        // Only on positive proof, unlike the two above. Headers arrived, which
+        // for a chat means `post_chat` already appended; so an unverifiable
+        // refresh here means the post is most likely sitting in the transcript,
+        // and restoring on a guess would duplicate it. `nothingLanded` is the
+        // transcript saying the rollback ran.
+        const interrupted = !finished && !errored && !unreached && !refused;
+        if (((unreached || refused) && (unverifiable || nothingLanded))
+            || (interrupted && nothingLanded)) {
+          onPromptUnstored?.();
+        }
+        // Nothing to wait for when nothing on the server can produce a partial: a
+        // refusal never started a stream, and a request that verifiably never
+        // arrived never made a turn.
+        //
+        // `unreached` alone is not that proof, and review caught it standing in
+        // for it. It says no *response* came back, which the server can do having
+        // already appended the post and begun generating — and growth in the
+        // refresh proves exactly that happened. So the poll is skipped only when
+        // the transcript confirms the turn does not exist; an unverified guess
+        // costs a few reads, while being wrong the other way loses the partial.
+        //
+        // The poll needs a length to watch for growth past, and a refresh that
+        // failed did not produce one. Fall back to this scene's pre-turn length:
+        // still the right question (did the flush land?), just measured from
+        // where the turn started. `-1` only when even that is unknown, which
+        // makes the first successful read count as growth — the poll refreshes
+        // once and stops, which is what an unmeasurable scene can honestly do.
+        if (!finished && !errored && !refused && !(unreached && nothingLanded)) {
+          await awaitFlushedPartial(id, seen >= 0 ? seen : (totalBefore ?? -1));
+        }
+        // Now nothing else can write to this scene through this turn, so its file
+        // is free to move again — unless a newer turn has claimed the lock in the
+        // meantime. `busy` was cleared before the poll, so that is a real race and
+        // clearing unconditionally would unlock the scene the *new* turn is
+        // streaming into. Same token idiom as `windowTokenRef`.
+        if (streamTokenRef.current === streamToken) setStreamingId(null);
+        // Ask the server whether this turn was the one that makes the scene's
+        // running summary due (#85). Deliberately NOT awaited: the player's next
+        // send must never queue behind a summarization, which is the whole
+        // meaning of "non-blocking" here. Sent without `force`, so the decision —
+        // and the cost — stay on the server; an ordinary turn answers
+        // `refreshed: false` having reached no provider.
+        //
+        // Every rejection is swallowed. A missing key, a dead provider, a busy
+        // store: none of them is a reason to put a banner over a turn that landed,
+        // and the panel's own Refresh button reports the failure when the player
+        // actually asks for one.
+        //
+        // The `ctxKey` bump is guarded on the reader still being here, like every
+        // other post-await write in this function: a summary written for the scene
+        // they just left must not re-read the panel for the scene they are on.
+        // `seen` is how long the transcript was when this turn finished, and it
+        // is passed as the fold's boundary: `setStreamingId(null)` above has
+        // already released the scene, so the player can send again before this
+        // request reaches the server, and a fold that swallowed that unanswered
+        // post would keep the reply out of the summary until another threshold.
+        // A `seen` of -1 is a read that was retired rather than one that saw an
+        // empty transcript, so it is no boundary at all; `askAfterPost`
+        // declines it rather than falling back to an unbounded fold.
+        askAfterPost(id, seen);
       }
-      // Anything that ended without `done` may have left a partial the backend
-      // is still flushing — a cancel, or a body cut short. An error frame is
-      // NOT one of those: the backend ran its handler before sending it, so the
-      // refresh above already sees whatever it wrote.
-      //
-      // Not gated on having seen text, either. Gating on `acc` was wrong and
-      // review caught it: what reached the client is not what the backend has to
-      // flush. `FenceWatcher.feed` returns "" for the whole of a roll fence and
-      // withholds anything that might yet become one, so a reply that opens with
-      // a fence streams nothing at all while the server still persists a
-      // proposal — invisible until some later refresh under the old gate.
-      // Now the transcript has answered it: no growth means the post never
-      // landed, so the prompt exists nowhere and the composer has to have it
-      // back. `seen < 0` is `selectScene` bowing out to a newer owner — it did
-      // not look, so it cannot say.
-      //
-      // And when the transcript cannot answer — the refresh failed, or this
-      // scene's length before the turn was never established — restore anyway.
-      // Both mean the same thing: nothing proves the post landed. Erring the
-      // other way risks a duplicate the player can see and delete; erring this
-      // way destroys text that exists in no other place.
-      //
-      // Both outcomes that can leave the post unwritten ask the same question,
-      // so they share the answer: the request that never arrived, and the one
-      // the server refused. `nothingLanded` is the transcript saying it, out
-      // loud — not merely the absence of evidence that it did.
-      //
-      // `seen < 0` belongs in `unverifiable`, and review caught that it was not
-      // there. It is `selectScene` retiring its own read because a newer owner
-      // took the view — the comment above already calls that "it did not look,
-      // so it cannot say", which is the definition of unverifiable, but the code
-      // said otherwise: the await did not throw, so `refreshed` was true, and a
-      // prompt that genuinely never landed went unrestored because the read that
-      // would have proved it was thrown away.
-      const unverifiable = !refreshed || totalBefore === null || seen < 0;
-      const nothingLanded = !unverifiable && seen <= totalBefore;
-      // A stream that started and then stopped without either frame is the
-      // third way to end up with no post, and review caught it as the one the
-      // client had no answer for: the backend rolls the post back *before* it
-      // yields the error frame, so a connection dropped in between leaves a
-      // rollback that happened and a client that was never told. Nothing is set
-      // — not errored, not unreached, not refused — and the poll cannot help,
-      // because it watches for growth and a rollback only ever shrinks.
-      //
-      // Only on positive proof, unlike the two above. Headers arrived, which
-      // for a chat means `post_chat` already appended; so an unverifiable
-      // refresh here means the post is most likely sitting in the transcript,
-      // and restoring on a guess would duplicate it. `nothingLanded` is the
-      // transcript saying the rollback ran.
-      const interrupted = !finished && !errored && !unreached && !refused;
-      if (((unreached || refused) && (unverifiable || nothingLanded))
-          || (interrupted && nothingLanded)) {
-        onPromptUnstored?.();
-      }
-      // Nothing to wait for when nothing on the server can produce a partial: a
-      // refusal never started a stream, and a request that verifiably never
-      // arrived never made a turn.
-      //
-      // `unreached` alone is not that proof, and review caught it standing in
-      // for it. It says no *response* came back, which the server can do having
-      // already appended the post and begun generating — and growth in the
-      // refresh proves exactly that happened. So the poll is skipped only when
-      // the transcript confirms the turn does not exist; an unverified guess
-      // costs a few reads, while being wrong the other way loses the partial.
-      //
-      // The poll needs a length to watch for growth past, and a refresh that
-      // failed did not produce one. Fall back to this scene's pre-turn length:
-      // still the right question (did the flush land?), just measured from
-      // where the turn started. `-1` only when even that is unknown, which
-      // makes the first successful read count as growth — the poll refreshes
-      // once and stops, which is what an unmeasurable scene can honestly do.
-      if (!finished && !errored && !refused && !(unreached && nothingLanded)) {
-        await awaitFlushedPartial(id, seen >= 0 ? seen : (totalBefore ?? -1));
-      }
-      // Now nothing else can write to this scene through this turn, so its file
-      // is free to move again — unless a newer turn has claimed the lock in the
-      // meantime. `busy` was cleared before the poll, so that is a real race and
-      // clearing unconditionally would unlock the scene the *new* turn is
-      // streaming into. Same token idiom as `windowTokenRef`.
-      if (streamTokenRef.current === streamToken) setStreamingId(null);
-      // Ask the server whether this turn was the one that makes the scene's
-      // running summary due (#85). Deliberately NOT awaited: the player's next
-      // send must never queue behind a summarization, which is the whole
-      // meaning of "non-blocking" here. Sent without `force`, so the decision —
-      // and the cost — stay on the server; an ordinary turn answers
-      // `refreshed: false` having reached no provider.
-      //
-      // Every rejection is swallowed. A missing key, a dead provider, a busy
-      // store: none of them is a reason to put a banner over a turn that landed,
-      // and the panel's own Refresh button reports the failure when the player
-      // actually asks for one.
-      //
-      // The `ctxKey` bump is guarded on the reader still being here, like every
-      // other post-await write in this function: a summary written for the scene
-      // they just left must not re-read the panel for the scene they are on.
-      // `seen` is how long the transcript was when this turn finished, and it
-      // is passed as the fold's boundary: `setStreamingId(null)` above has
-      // already released the scene, so the player can send again before this
-      // request reaches the server, and a fold that swallowed that unanswered
-      // post would keep the reply out of the summary until another threshold.
-      // A `seen` of -1 is a read that was retired rather than one that saw an
-      // empty transcript, so it is no boundary at all; `askAfterPost`
-      // declines it rather than falling back to an unbounded fold.
-      askAfterPost(id, seen);
     }
     // Landed means the backend said so, not that the promise resolved.
     return finished && !errored;
