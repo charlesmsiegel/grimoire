@@ -441,6 +441,50 @@ test("a skip to a date is priced before the question, so the prompt cannot be do
   expect(api.advanceTime).not.toHaveBeenCalled();
 });
 
+test("a clock that moved under a preview is re-priced, not confirmed against", async () => {
+  // The inputs held still and the campaign's present moved: setting a scene's
+  // date carries the clock forward, and that control is one section up from
+  // this one. Priced small from December and confirmed after the clock reached
+  // June, the same "skip to a date" is a long correction BACKWARD -- over any
+  // threshold, and the question would never have been asked.
+  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: { ...DIGEST, fork: false } });
+  const { rerender } = render(<ClockPanel cid="c" refreshKey={0} />);
+  await screen.findByText(/Now: 24 December 2026/);
+  fireEvent.click(screen.getByText("Preview"));
+  await screen.findByText(/Would advance/);
+
+  vi.mocked(api.getCampaignClock).mockResolvedValue(
+    { ...CLOCK, now: "2027-06-01", friendly: "1 June 2027" });
+  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  rerender(<ClockPanel cid="c" refreshKey={1} />);
+  await screen.findByText(/Now: 1 June 2027/);
+  // The stale span is off the screen the moment the present it was measured
+  // from stopped being the present.
+  expect(screen.queryByText(/Would advance/)).not.toBeInTheDocument();
+
+  fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "a season passes" } });
+  fireEvent.click(screen.getByText("Advance time"));
+  // Re-priced against the moment it will actually land from, so the checkpoint
+  // question is asked after all.
+  expect(await screen.findByText(/large time skip/)).toBeInTheDocument();
+  expect(api.advanceTime).not.toHaveBeenCalled();
+});
+
+test("confirming prices the move even when Preview just ran on the same inputs", async () => {
+  // The reuse this replaces was the bug above: a digest that looks current
+  // because the inputs have not changed is not current if the clock has.
+  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: { ...DIGEST, fork: false } });
+  render(<ClockPanel cid="c" />);
+  await screen.findByText(/Now: 24 December 2026/);
+  fireEvent.click(screen.getByText("Preview"));
+  await screen.findByText(/Would advance/);
+  vi.mocked(api.previewAdvance).mockClear();
+  fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "onwards" } });
+  fireEvent.click(screen.getByText("Advance time"));
+  await screen.findByText(/^Advanced/);
+  expect(api.previewAdvance).toHaveBeenCalledTimes(1);
+});
+
 test("a landed advance is priced again rather than reusing its own digest", async () => {
   // The digest left on screen after a move describes the move that HAPPENED.
   // Reading a nudge off it would answer for the wrong span -- skipping to a
