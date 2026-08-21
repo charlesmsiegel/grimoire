@@ -1552,6 +1552,7 @@ guessing costs a debugging cycle:
 | `post_scene_roll` | `POST .../roll` | `mechanics.py:34` |
 | `post_scene_check` | `POST .../check` | `mechanics.py:203` |
 | `post_scene_cast` / `_batch` / `post_emergent_cast` / `post_dismiss` | `POST .../cast`, `.../cast/batch`, `.../emergent-cast`, `.../dismiss` | `scenes.py:2729`+ |
+| `delete_scene_cast` | `DELETE .../cast/{kind}/{id}` | `scenes.py:2739` |
 | `set_location` / `set_datetime` setters | the scene's location and clock routes | `store/scenes/moment.py` |
 | `post_replay` / `post_replay_cancel` | `POST .../replay`, `.../replay/cancel` | `scenes.py:3186`, `:3264` |
 | `post_scene_alternate` | `POST .../alternates/{vid}` | `scenes.py:703` |
@@ -1563,6 +1564,15 @@ guessing costs a debugging cycle:
 `post_replay_cancel` can restore the cut posts; and `post_scene_alternate`
 promotes a different assistant run into the transcript. Each rewrites history
 underneath a live run's snapshot.
+
+**`delete_scene_cast` is the one that was missing, and it is the most
+destructive of the cast routes.** The inventory listed `post_dismiss`, which
+only hides a suggestion and touches no transcript — so the entry that looked
+like cast-removal coverage was the one route in the group that needs it least.
+`delete_scene_cast` (`scenes.py:2739`) calls `store.appearances.leave`, which
+removes the actor **and appends a "leaves the scene" transition** when the
+transcript is non-empty. A second tab can therefore rewrite both the cast and
+the transcript under a live run, and every listed guard and test still passes.
 
 **The cast and moment routes belong here too**, even though the UI already
 disables them with `sceneLocked`: a second tab or a direct API call is not
@@ -1645,11 +1655,31 @@ edited transcript) or the turn wins (the edit's guard sees the run and 409s),
 and there is no third outcome.
 
 The lock is reentrant, so the handler taking it around reserve-and-snapshot
-costs nothing where a mutator takes it again underneath. Keep the hold short:
-it covers the reservation and the read, not the provider call — a lock held
-across an LLM call would freeze the campaign for the length of a turn. And
-`test_lock_domain_guard.py` will want `routes/runs.py` classified once
-reservation takes a campaign lock; classify it rather than marking it.
+costs nothing where a mutator takes it again underneath.
+
+**Keep the hold to the reservation and the synchronous scene writes — release
+it before composing the prompt.** "Not across the provider call" is too weak a
+line, because the expensive part starts earlier: `store.context.compose_turn`
+can issue an **external embeddings request** when semantic recall is on. Held
+under `campaign_lock(cid)`, a slow embeddings endpoint stalls the campaign's
+cross-process write lock until its network deadline — every other mutation in
+that campaign queues behind it or 409s, and the user sees a campaign that has
+seized up because one turn is thinking.
+
+Releasing early is safe precisely because of what the reservation already did:
+once it is published, the guarded mutators refuse to touch the scene, so the
+snapshot the run composes from cannot move underneath it. The lock establishes
+the ordering; the reservation sustains it. Holding longer buys nothing and
+costs the whole campaign.
+
+**Do not add `routes/runs.py` to `store.locks.DOMAIN_MODULES`.** An earlier
+revision of this plan said to classify it, which is wrong and would fail the
+backend gate: `_survey()` collects modules that mutate the campaign *store*,
+`routes/runs.py` maintains an in-memory registry and mutates nothing on disk,
+so declaring it makes it a phantom and
+`test_the_declaration_has_no_phantom_modules` fails naming it. The lock is
+taken by the **handler**, which is where it belongs — the domain lists describe
+store mutators, and the registry is not one.
 
 Test it as an interleaving, not a sequence: hold the edit inside its lock,
 attempt the reservation from another thread, and assert the reservation blocks
@@ -1937,12 +1967,35 @@ sent.
 
 The refetch cannot distinguish the two cases on its own — "the post is absent"
 means both "it was rolled back" and "it never landed", which is exactly #95's
-ambiguity resurfacing after the evidence expired. So resolve it by what the
-client can still see: **settle only when the refetch proves the attempt
-durable** — the transcript's tail matches the submitted text — and otherwise
-restore that text to the composer and leave the attempt unresolved. Choosing
-wrongly in this direction costs the player one duplicate send they can see and
-delete; choosing wrongly the other way costs them their words with no trace.
+ambiguity resurfacing after the evidence expired.
+
+**Matching the submitted text against the transcript does not resolve it, and
+an earlier revision of this plan said it did.** Two ways that fails, and both
+are ordinary:
+
+- *A player repeats themselves.* "I wait." submitted twice in a session means
+  the tail matches an **earlier** turn, so the newer attempt is declared
+  durable and its text discarded — the exact loss the rule exists to prevent,
+  now triggered by the remedy.
+- *A landed turn does not end with the post.* It ends with assistant
+  narration, so "the tail matches the submitted text" is false for precisely
+  the case that should settle.
+
+Text is not an identifier. **The attempt id has to outlive the run record**, so
+correlation survives the reap: when the post is appended, the attempt is
+recorded durably alongside it — `store.commits` is the existing shape for this
+(`reserve`/`lookup`, already used for chronicle idempotency at
+`scenes.py:2629`), and it survives both the reap window and a restart, which
+in-memory run state does not. Recovery then asks a question with a definite
+answer — *was attempt X ever appended to this scene?* — instead of guessing
+from prose.
+
+**And where the answer is not definite, keep the text.** Any outcome other than
+a clear "this attempt is durable" — no record, an unreadable one, a scene that
+no longer exists — restores the prompt to the composer and leaves the attempt
+unresolved. Choosing wrongly in that direction costs the player one duplicate
+they can see and delete; choosing wrongly the other way costs them their words
+with no trace. Ambiguity resolves toward the recoverable error, always.
 
 Test the hidden-past-`REAP_SECONDS` case for a **failed** turn as well as a
 landed one, and assert the composer holds the text again.
@@ -2135,6 +2188,16 @@ Run: `make apk`
 Then on device: start a turn, lock the phone, confirm the ongoing notification,
 unlock and confirm the reply landed and the completion notification appeared.
 
+**Then confirm the ongoing notification is GONE.** Promotion is the half that
+gets tested because it is the half you notice; demotion is the half that
+breaks. `onRunsChanged(0)` has to reach the Kotlin side and actually call
+`stopForeground` — and if it does not, `make check-apk` passes, every automated
+test passes, this procedure passes, and the user is left with a permanent
+"grimoire is running" notification over a process that never gets reclaimed.
+That is a worse daily experience than the bug this whole feature fixes. Watch
+it disappear when the run lands, and again after a **cancelled** run, which
+takes the other release path.
+
 **Then tap one — twice, in the two cases Step 5's routing contract exists
 for.** Confirming a notification *appears* proves nothing about where it goes,
 and tap routing is the half with no automated coverage at all: a missing
@@ -2142,11 +2205,19 @@ intent extra, a stored `sid` instead of an identity, or a cold-start handler
 that drops the payload all leave a notification that looks perfect and opens
 the wrong thing.
 
-1. Start a turn, background the app, **rename the scene** while it runs, then
-   tap the completion notification. The renamed scene must open — the rename
-   minted a new `sid`, so this is what resolving by identity buys.
-2. Start a turn, background, **delete the scene**, tap the error notification.
-   The campaign must open, not a crash and not an empty scene view.
+1. Start a turn, background the app, **let it finish** and post its
+   notification. *Then* rename the scene, then tap. The renamed scene must open
+   — the rename minted a new `sid`, which is what resolving by identity buys.
+
+   The order matters and an earlier revision of this plan got it backwards, in
+   a way that contradicted its own Task 5b: renaming *while the run holds the
+   scene* is exactly what `put_scene`'s freeze guard now refuses with a 409, so
+   that procedure could never have been carried out and would have "verified"
+   routing by never exercising it. Rename after the run is terminal and the
+   slot is released.
+2. Start a turn, background, let it finish, **delete the scene**, tap the
+   notification. The campaign must open — not a crash, not an empty scene view.
+   (Deletion is likewise refused while the run holds the scene.)
 
 Do both from a **cold start** (swipe the app away first), which is the path
 that actually breaks: a warm activity often has the state a cold one has to
