@@ -1149,8 +1149,6 @@ test("Stop cancels a turn whose leading frame never arrived", async () => {
   // The attempt id is minted client-side BEFORE the request, so the turn is
   // addressable from the first byte; `findRun` trades it for the run id.
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.findRun as any).mockResolvedValue({
-    run: { id: "run-discovered", attempt_id: "x", state: "running", next_index: 0 } });
   (api.chat as any).mockImplementation(hangingChat());   // never emits a run frame
   renderCampaign();
   const ta = await screen.findByRole("textbox");
@@ -1159,12 +1157,68 @@ test("Stop cancels a turn whose leading frame never arrived", async () => {
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
   await screen.findByRole("button", { name: /continue ▶/i });
 
-  const [, sid, attempt] = (api.findRun as any).mock.calls[0];
+  // Cancelled by ATTEMPT, not by looking the run up first. A lookup is a
+  // one-shot question and the POST may still be in the server's setup, so it
+  // can answer "no such run" and then reserve one; the attempt route is
+  // remembered and consumed by that reservation instead.
+  const [, sid, attempt] = (api.cancelAttempt as any).mock.calls[0];
   expect(sid).toBe("s1");
-  expect(attempt).toEqual(expect.any(String));
-  // and the attempt it asked about is the one the send actually carried
+  // and the attempt it cancelled is the one the send actually carried
   expect((api.chat as any).mock.calls[0][6]).toBe(attempt);
-  expect(api.cancelRun).toHaveBeenCalledWith("run", "s1", "run-discovered");
+});
+
+test("Stop reaches the run's own campaign after the player has moved to another",
+     async () => {
+  // React Router reuses this component across `/campaigns/A` -> `/campaigns/B`,
+  // so `cid` is whichever campaign is on screen when Stop is pressed. Scene ids
+  // are campaign-local, so cancelling A's turn through B's id reaches nothing
+  // and the turn goes on generating and persisting. The handle has to carry the
+  // campaign the turn started in.
+  //
+  // This one compiles either way -- `cid` is in scope at the call site -- which
+  // is why it needs a test rather than a type.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(hangingChat());
+  render(
+    <MemoryRouter initialEntries={["/campaigns/run"]}>
+      {withPalette(<>
+        <Here />
+        <Link to="/campaigns/elsewhere">elsewhere</Link>
+        {playRoutes()}
+      </>)}
+    </MemoryRouter>,
+  );
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByRole("button", { name: /stop ■/i });
+
+  fireEvent.click(screen.getByRole("link", { name: /elsewhere/i }));
+  await waitFor(() => expect(here()).toBe("/campaigns/elsewhere"));
+  fireEvent.click(screen.getByRole("button", { name: /stop ■/i }));
+
+  await waitFor(() => expect(api.cancelAttempt).toHaveBeenCalled());
+  expect((api.cancelAttempt as any).mock.calls[0][0]).toBe("run");
+});
+
+test("Stop keeps asking while the server says the run is still unwinding", async () => {
+  // The cancel route waits for the run, but that wait is bounded (30s) and can
+  // answer while it is still `running`. Reading that as "it is over" put Send
+  // back over a run that still held the scene -- the exact failure the wait was
+  // added to prevent, arrived at by trusting its first answer.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(hangingChat());
+  (api.cancelAttempt as any)
+    .mockResolvedValueOnce({ run: { id: "r", attempt_id: "a", state: "running", next_index: 0 } })
+    .mockResolvedValueOnce({ run: { id: "r", attempt_id: "a", state: "running", next_index: 0 } })
+    .mockResolvedValue({ run: { id: "r", attempt_id: "a", state: "cancelled", next_index: 0 } });
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await screen.findByRole("button", { name: /continue ▶/i });
+
+  // three rounds: two that answered `running`, one that answered terminal
+  expect((api.cancelAttempt as any).mock.calls).toHaveLength(3);
 });
 
 test("Stop holds the scene until the run is really over", async () => {

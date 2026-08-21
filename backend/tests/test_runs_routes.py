@@ -624,3 +624,90 @@ def test_a_scene_replaced_before_setup_keeps_the_players_post_off_it(client, sen
     assert r.status_code == 404, f"the send answered {r.status_code}"
     assert not store.scenes.read_scene(cid, sid)["messages"], \
         "the replacement scene was given the old turn's post"
+
+
+def test_a_stop_that_beats_the_reservation_is_consumed_by_it(client, sending_scene):
+    """Stop during the route's synchronous setup, before any run exists.
+
+    Discovery is a one-shot question, and the POST it is stopping may have been
+    accepted and then blocked -- on the campaign lock, say -- before reserving.
+    So "no run for this attempt" does not mean nothing will happen: the route
+    goes on to reserve and detach a turn the player already stopped. Recording
+    the cancel against the ATTEMPT is what closes it, because the reservation
+    is the thing that consumes it.
+    """
+    cid, sid = sending_scene
+    pre = client.post(f"/api/campaigns/{cid}/scenes/{sid}/attempts/a-9/cancel")
+    assert pre.status_code == 200 and pre.json()["run"] is None
+
+    _chat(client, cid, sid, headers={"X-Grimoire-Attempt": "a-9"})
+
+    run = _latest(client, cid, sid)
+    assert run.state == "cancelled", \
+        f"the run was {run.state}: a Stop that beat the reservation was lost"
+    assert not store.scenes.read_scene(cid, sid)["messages"][-1:] \
+        or store.scenes.read_scene(cid, sid)["messages"][-1]["role"] != "assistant", \
+        "the provider answered a turn the player had already stopped"
+
+
+def test_a_run_that_could_not_be_scheduled_frees_the_scene(client, sending_scene,
+                                                           monkeypatch):
+    """`runner.start` can raise -- the lifespan portal is gone, or closing as
+    the request hands off. Marking the run started before that succeeded made
+    `reservation` skip it (it deliberately spares started runs), leaving the
+    record `running` with no task, no terminal event, and the scene's exclusion
+    key held for the rest of the process."""
+    cid, sid = sending_scene
+
+    def no_portal(*_a, **_k):
+        raise RuntimeError("no run portal")
+
+    real = runs_mod.runner.start
+    monkeypatch.setattr(runs_mod.runner, "start", no_portal)
+    with pytest.raises(RuntimeError):
+        _chat(client, cid, sid)
+    # restore just this one -- `monkeypatch.undo()` would also revert the
+    # GRIMOIRE_HOME the fixture set, pointing the rest at the real store
+    monkeypatch.setattr(runs_mod.runner, "start", real)
+
+    run = _latest(client, cid, sid)
+    assert run.state == "failed", f"the unscheduled run was left {run.state}"
+    assert _chat(client, cid, sid).status_code == 200, "the scene stayed held"
+
+
+def test_a_rename_is_refused_while_a_turn_is_running(client, campaign_scene):
+    """A rename mints a new `sid`, and a detached run holds the old one -- so
+    after one the identity fence looks for a scene that is no longer at that
+    path, calls it gone, and discards a reply the provider may have spent
+    minutes on. Survivable when a turn died with its socket; not now."""
+    cid, sid = campaign_scene
+    _reserve(client, cid, sid)
+
+    renamed = client.put(f"/api/campaigns/{cid}/scenes/{sid}", json={"title": "Winifred"})
+    deleted = client.delete(f"/api/campaigns/{cid}/scenes/{sid}")
+
+    assert renamed.status_code == 409 and renamed.json()["kind"] == "run_in_flight"
+    assert deleted.status_code == 409, "the transcript could be deleted mid-turn"
+    assert store.scenes.read_scene_meta(cid, sid), "the scene was renamed anyway"
+
+
+def test_an_unexpected_producer_failure_reaches_the_wire(client, sending_scene,
+                                                         monkeypatch):
+    """A handled `LLMError` emits its own error frame; an unexpected exception
+    had none. `tail_response` sees the terminal state, drains what is there and
+    closes -- so the failure reached every subscriber as an unexplained EOF,
+    which the client shows as an interrupted stream rather than the reason."""
+    cid, sid = sending_scene
+
+    class Exploding:
+        async def stream(self, *_a, **_k):
+            raise RuntimeError("the provider module is broken")
+            yield ""                      # pragma: no cover - makes it a generator
+
+    client.app.dependency_overrides[routes.get_llm] = Exploding
+    body = _chat(client, cid, sid).text
+
+    errors = [e["error"] for e in _events(body) if "error" in e]
+    assert errors, "the subscriber was given an unexplained EOF"
+    assert errors[-1]["kind"] == "run_failed"
+    assert _latest(client, cid, sid).state == "failed"

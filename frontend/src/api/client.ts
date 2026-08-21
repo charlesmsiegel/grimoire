@@ -491,6 +491,20 @@ export const api = {
    *  scene with no such run rather than 404, so "the send never landed" is an
    *  ordinary answer and not an error to handle.
    */
+  /** Stop the turn an attempt id names, whether or not it has a run yet.
+   *
+   *  Discovery alone is a one-shot lookup, and the POST it is stopping may
+   *  have been accepted and then blocked in the server's synchronous setup --
+   *  so "no run for this attempt" does not mean nothing is going to happen:
+   *  the route can still reserve and detach a turn after the lookup returns.
+   *  Recording the cancel against the attempt is what closes that, because the
+   *  reservation consumes it.
+   */
+  cancelAttempt: (cid: string, sid: string, attempt: string) =>
+    request<{ run: RunHandle | null }>(
+      "POST",
+      `/api/campaigns/${cid}/scenes/${sid}/attempts/${encodeURIComponent(attempt)}/cancel`),
+
   findRun: (cid: string, sid: string, attempt: string) =>
     request<{ run: RunHandle | null }>(
       "GET",

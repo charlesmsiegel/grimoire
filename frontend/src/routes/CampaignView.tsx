@@ -96,6 +96,12 @@ const NO_ALTERNATES: ScopedAlternates = {
 // recent end. Older posts arrive by scrolling up (or the button that scroll
 // falls back to), which prepends the next page and holds the viewport still.
 const PAGE_SIZE = 60;
+// How many extra rounds Stop will ask the server before giving the composer
+// back. The cancel route waits for the run itself, but that wait is bounded, so
+// a provider slow to unwind can answer while still `running`; each round is
+// another full server-side wait, so a handful covers minutes without the client
+// having to know what the server's timeout is.
+const STOP_POLLS = 4;
 // Scrolled this close to the top, "show me more" is what the reader means.
 const NEAR_TOP_PX = 120;
 // ...and this close to the bottom, they are following the reply as it streams,
@@ -354,7 +360,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // sent with the request, so it names the turn from the first byte; `id` is
   // filled in when the leading frame confirms it, and Stop falls back to
   // discovery by attempt when it has not.
-  const runRef = useRef<{ sid: string; attempt: string; id: string | null } | null>(null);
+  const runRef = useRef<
+    { cid: string; sid: string; attempt: string; id: string | null } | null>(null);
   // The in-flight `cancelRun`, so the stream's teardown can wait for it before
   // releasing the scene. The route answers only once the run is really
   // terminal, which is the authoritative "the partial is written and the
@@ -1830,7 +1837,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // addressable in the window between the server accepting it and its first
     // frame arriving -- see `runRef`.
     const attempt = newAttemptId();
-    runRef.current = { sid: id, attempt, id: null };
+    // The CAMPAIGN travels with the handle. React Router reuses this component
+    // across `/campaigns/A` -> `/campaigns/B`, so `cid` is whichever campaign
+    // is on screen when Stop is pressed -- and scene ids are campaign-local, so
+    // cancelling A's turn through B's id reaches nothing and the turn runs on.
+    runRef.current = { cid, sid: id, attempt, id: null };
     const streamToken = ++streamTokenRef.current;
     setBusy(true);
     setStreamingId(id);
@@ -2684,19 +2695,32 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (handle) cancelRef.current = stopRun(handle);
   }
 
-  async function stopRun(handle: { sid: string; attempt: string; id: string | null }) {
+  async function stopRun(
+    handle: { cid: string; sid: string; attempt: string; id: string | null },
+  ) {
     // Every rejection is swallowed. A run that landed a moment before the press
     // is already terminal and the route says so without complaining; anything
     // else is a network failure on a request whose whole purpose was to stop
     // work that is about to stop anyway, and a banner for it would be noise.
+    const { cid: from, sid, attempt } = handle;
     try {
-      // No leading frame yet: the server may still have accepted and detached
-      // this turn. Ask it by the attempt id we chose before sending. Skipping
-      // this is what left a Stop pressed in that window closing the subscriber
-      // and nothing else, while the provider ran on.
-      const id = handle.id
-        ?? (await api.findRun(cid, handle.sid, handle.attempt)).run?.id;
-      if (id) await api.cancelRun(cid, handle.sid, id);
+      // No leading frame yet: cancel by ATTEMPT rather than looking the run up.
+      // A lookup is a one-shot question, and the POST being stopped may have
+      // been accepted and then blocked in the server's setup -- so "no run for
+      // this attempt" does not mean nothing will happen, and the reservation
+      // that follows would detach a turn the player had already stopped. The
+      // attempt route is remembered by the server and consumed when the
+      // reservation happens, which is the only version of this without a race.
+      let state = handle.id
+        ? (await api.cancelRun(from, sid, handle.id)).run?.state
+        : (await api.cancelAttempt(from, sid, attempt)).run?.state;
+      // The server's wait is bounded (30s) and can answer while the run is
+      // still unwinding. Taking that as "it is over" is what re-enabled Send
+      // over a run that still held the scene, which is the whole failure this
+      // wait exists to prevent -- so ask again rather than assume.
+      for (let tries = 0; state === "running" && tries < STOP_POLLS; tries++) {
+        state = (await api.cancelAttempt(from, sid, attempt)).run?.state;
+      }
     } catch {
       // see above
     }

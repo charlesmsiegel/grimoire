@@ -259,7 +259,16 @@ async def _guarded(run, factory: Callable[[], Any]) -> None:
             raise
         except Exception as exc:                            # noqa: BLE001
             _log.exception("run %s failed", run.id)
-            run.error = {"kind": "run_failed", "detail": str(exc)}
+            error = {"kind": "run_failed", "detail": str(exc)}
+            run.error = error
+            # BUFFERED, not just recorded. `tail_response` sees the terminal
+            # state, drains what is there and closes -- so a failure recorded
+            # only on the record reaches every subscriber, live and replaying,
+            # as an unexplained EOF. The client cannot tell that from a stream
+            # someone cut, and shows an interrupted turn instead of the reason.
+            # A handled `LLMError` emits its own frame; this is the path that
+            # had none.
+            run.append_frame(_error_frame(error))
             run.finish("failed")
         else:
             # A producer that handles its own failure RETURNS an outcome rather

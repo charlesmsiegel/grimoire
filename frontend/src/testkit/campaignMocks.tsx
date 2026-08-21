@@ -37,6 +37,11 @@ export async function campaignApiMock() {
       // attempt id the client minted. Defaults to "no such run", which is the
       // answer for a send the server never accepted.
       findRun: vi.fn(() => Promise.resolve({ run: null })),
+      // Stop when no leading frame arrived: cancel by attempt id, which the
+      // server consumes at reservation time. Defaults to a terminal answer so
+      // the poll loop settles on the first round.
+      cancelAttempt: vi.fn(() => Promise.resolve(
+        { run: { id: "r", attempt_id: "a", state: "cancelled", next_index: 0 } })),
       getAlternates: vi.fn(), pickAlternate: vi.fn(),
       roll: vi.fn(),
       getRollProposal: vi.fn(), resolveProposal: vi.fn(),
