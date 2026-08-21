@@ -179,6 +179,7 @@ cannot fail a test run.
 | `test_lock_order_guard.py` | only `locks.hold_all` holds more than one campaign lock | `# lock-order-ok:` |
 | `test_lock_domain_guard.py` | campaign-scoped mutators take `locks.campaign_lock(cid)` | `# lock-domain-ok:` |
 | `test_usage_guard.py` | every generation route meters what it spends | `# usage-ok:` |
+| `test_routing_guard.py` | every generation names a task, and every task belongs to a route in `store/routing.py` | `# routing-ok:` |
 | `test_import_guard.py` | module-scope imports, acyclic graph, submodule binding inside `store/` | `# import-ok:` |
 | `test_path_guard_store.py` | the store never joins a caller-supplied id onto a path unchecked | — |
 | `test_docs_guard.py` | this page, `AGENTS.md` and `docs/store-guarantees.md` still match the code | — |

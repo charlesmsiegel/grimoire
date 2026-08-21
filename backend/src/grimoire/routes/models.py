@@ -142,6 +142,23 @@ class ResponseSettings(BaseModel):
     length_blocks_per_speaker: str | None = None
 
 
+class RoutingUpdate(BaseModel):
+    """Which connection each route runs on, at one scope (#142).
+
+    A free-form `{route: connection_id}` map rather than ten declared fields:
+    the route list is `store.routing.ROUTES` and declaring it twice is how the
+    two drift. Unknown keys are refused by the handler, which is where the
+    scope's own list of allowed routes lives -- a campaign may not set the
+    world-scoped ones.
+
+    `dict` bare, not `dict[str, str]`: the Android build may pin pydantic 1.x
+    (docs/android-architecture.md §7), and the coercion the two versions apply
+    to a typed mapping differs. The handler validates the values it stores.
+    """
+
+    routes: dict | None = None
+
+
 class ResponsePresetCreate(BaseModel):
     name: str
     description: str = ""

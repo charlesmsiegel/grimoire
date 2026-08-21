@@ -380,10 +380,14 @@ def test_config_active_connection_id_roundtrip(client):
 
 
 def test_config_exposes_the_active_connection_model(client):
-    """The global status bar names the model every scene will use, and the
-    only model that exists is the active connection's -- there is no
-    per-campaign override. Without this field the bar would have to fetch
-    the whole connection (key_set and all) just to print one string."""
+    """The global status bar names the active connection's model. Without this
+    field the bar would have to fetch the whole connection (key_set and all)
+    just to print one string.
+
+    It is the ACTIVE connection's model, not necessarily the one a given scene
+    turn runs on: per-task routing (#142) can send scene prose elsewhere, and
+    per campaign at that, which a global bar has no campaign to resolve. The
+    routing pickers are where a reader sees what each job actually uses."""
     r = client.post("/api/llm-connections", json={
         "kind": "openrouter", "name": "OR-status", "model": "vendor/model-x"})
     client.put("/api/config", json={"active_connection_id": r.json()["id"]})

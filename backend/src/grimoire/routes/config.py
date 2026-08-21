@@ -17,6 +17,8 @@ from .common import (
     _dump,
     _llm_http_error,
     _response_body,
+    _routing_body,
+    _routing_fields,
     _write_response,
     get_health,
     get_llm,
@@ -31,6 +33,7 @@ from .models import (
     ResponsePresetCreate,
     ResponsePresetUpdate,
     ResponseSettings,
+    RoutingUpdate,
     StyleCreate,
     StyleUpdate,
 )
@@ -47,7 +50,7 @@ HEALTH_CHECK_CEILING = 45.0
 
 # ---- config ----
 def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict:
-    active = store.llm_connections.get_active()
+    active = store.llm_connections.get_active()  # routing-ok: display only, generates nothing
     setup_done, first_run = _setup_state(cfg)
     return {"theme": cfg["theme"], "system_prompt": cfg.get("system_prompt", ""),
             "quote_color": cfg.get("quote_color", "off"),
@@ -671,6 +674,18 @@ def put_global_response(body: ResponseSettings):
     _write_response(lambda f: store.write_config(**f), fields,
                     style_key="default_style_id")
     return {"ok": True}
+
+
+# ---- per-task routing (#142) ----
+@router.get("/routing")
+def get_global_routing():
+    return _routing_body("global", {})
+
+
+@router.put("/routing")
+def put_global_routing(body: RoutingUpdate):
+    store.write_config(**_routing_fields("global", body))
+    return _routing_body("global", {})
 
 
 @router.get("/length-presets")

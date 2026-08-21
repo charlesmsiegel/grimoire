@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from . import atomic, locks
+from . import atomic, locks, routing
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import ensure_home, home
 
@@ -218,7 +218,7 @@ _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "prompt_layout_enabled", "speaker_turn_taking",
                 "backup_enabled", "backup_interval_hours", "backup_keep",
                 "backup_dir", "replay_fork_threshold",
-                "advance_fork_threshold", "log_level") + _LENGTH_KEYS
+                "advance_fork_threshold", "log_level") + _LENGTH_KEYS + routing.CONFIG_KEYS
 
 
 def _config_path():
@@ -262,6 +262,10 @@ def read_config() -> dict[str, str]:
                 "backup_keep": DEFAULT_BACKUP_KEEP,
                 "backup_dir": DEFAULT_BACKUP_DIR,
                 "log_level": DEFAULT_LOG_LEVEL,
+                # Every route: "" is "inherit", which is what an install that
+                # has never set one has and what makes this change invisible
+                # until someone asks for it (#142).
+                **dict.fromkeys(routing.CONFIG_KEYS, ""),
                 **dict.fromkeys(_LENGTH_KEYS, "")}
     if not path.exists():
         # Materializing the defaults is a write, and two first-ever readers

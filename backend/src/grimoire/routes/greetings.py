@@ -326,7 +326,7 @@ def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting, reques
 @router.post("/campaigns/{cid}/scenes/{sid}/opener")
 def post_opener(cid: str, sid: str, body: Opener, client: LLMClient = Depends(get_llm)):
     _require_scene(cid, sid)
-    conn = _require_connection()
+    conn = _require_connection("opener", cid)
     messages, breakdown = store.context.compose_opener(
         cid, sid, body.prompt, describe=store.prompt_log.capturing())
     _record_prompt(cid, sid, "opener", breakdown)

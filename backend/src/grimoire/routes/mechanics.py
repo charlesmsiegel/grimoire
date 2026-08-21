@@ -128,7 +128,7 @@ def post_roll_proposal(cid: str, sid: str, body: ProposalAction, request: Reques
     if replay is not None:
         return replay
     _require_scene(cid, sid)
-    conn = _require_connection()
+    conn = _require_connection("continuation", cid)
     # RESERVED BEFORE THE FIRST CAS. Every transition below writes the proposal
     # record, so a 409 raised after one would report that nothing happened over
     # a record that has already moved. The exits that answer without generating

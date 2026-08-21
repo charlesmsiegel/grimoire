@@ -21,6 +21,10 @@ vi.mock("../theme/ThemeProvider", () => ({
 vi.mock("../components/ResponsePresetPicker", () => ({
   ResponsePresetPicker: () => <div data-testid="response-preset-picker" />,
 }));
+vi.mock("../components/ModelRoutingPicker", () => ({
+  ModelRoutingPicker: ({ scope }: { scope: string }) =>
+    <div data-testid="model-routing-picker">{scope}</div>,
+}));
 import { api } from "../api/client";
 
 const cfg = {
@@ -99,13 +103,23 @@ test("the column indexes every section in three groups", async () => {
   expect(groups.map((g) => g.textContent))
     .toEqual(["The install", "What the model sees", "What you see"]);
   for (const label of [
-    /^Storage/, /^Backups/, /^Connection/, /^Timeouts/, /^Context/, /^Prompt layout/,
+    /^Storage/, /^Backups/, /^Connection/, /^Model routing/, /^Timeouts/, /^Context/,
+    /^Prompt layout/,
     /^Transient state/,
     /^Semantic recall/, /^System prompt/, /^Response preset/, /^Transcript/,
     /^While playing/, /^Appearance/,
   ]) {
     expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
   }
+});
+
+test("the routing section carries the global picker", async () => {
+  renderView();
+  await open(/^Model routing/);
+  // Scope, not merely presence: the campaign scope of the same component lives
+  // in the scene inspector, and mounting the wrong one here would write every
+  // reader's global routes into whichever campaign was open.
+  expect(screen.getByTestId("model-routing-picker")).toHaveTextContent("global");
 });
 
 test("main shows one section at a time", async () => {

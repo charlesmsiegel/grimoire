@@ -612,6 +612,22 @@ export type RegenerateOverrides = {
   model?: string;
 };
 export type ResponseBundle = ResponseFields & { effective: ResponseEffective; provenance: ResponseProvenance };
+// --- per-task model routing (#142) ---
+/** One routing slot: a named job, and the usage tasks it covers. */
+export type RoutingRoute = { key: string; label: string; hint: string; tasks: string[] };
+/** What a routing scope says, what actually resolves, and where from.
+ *  `routes` holds only what THIS scope set (""=inherit); `effective` is the
+ *  cascade's answer, where "" means the active connection. */
+export type RoutingBundle = {
+  scope: "global" | "campaign";
+  routes: Record<string, string>;
+  effective: Record<string, string>;
+  provenance: Record<string, { scope: string }>;
+  catalog: RoutingRoute[];
+  connections: { id: string; name: string; kind: string; model: string }[];
+  active_connection_id: string;
+};
+
 export type Availability = {
   id: string; name: string; available: boolean; reasons: string[]; unlocked: boolean;
   pcless?: boolean;

@@ -371,6 +371,15 @@ would answer neither question.
   / `# paths-ok: <reason>` / `# lock-order-ok: <reason>` /
   `# lock-domain-ok: <reason>` — a marker with no
   reason fails, deliberately, and each guard caps how many exist.
+- **Adding an LLM call site?** Resolve its connection with
+  `_require_connection(<task>, cid)` and name the task the call meters under.
+  `store/routing.py` maps that task to a route the user can point at a
+  connection of its own (global, or per campaign in `campaign.md`);
+  `test_routing_guard.py` fails a call that names no task, a task no route
+  claims, and a route whose tasks nothing uses. A route names a whole
+  connection rather than a model string, because since `llm_connections/` a
+  model name no longer says which provider serves it — the same call #144's
+  fallback made.
 - **Adding a module that mutates campaign-scoped state?** Classify it in
   `store/locks.py`, or `test_lock_domain_guard.py` fails naming your module. The
   campaign lock domain used to be a docstring list, which is how two mutators

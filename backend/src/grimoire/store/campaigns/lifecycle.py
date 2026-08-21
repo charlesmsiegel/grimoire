@@ -20,6 +20,7 @@ from .. import (
     modules,
     overlay,
     pcs,
+    routing,
     sheets,
     usage,
 )
@@ -393,6 +394,45 @@ def set_campaign_response(cid: str, fields: dict) -> None:
     # file, not merely incomplete about the campaign.
     meta["updated"] = now_iso()
     atomic.write_text(mp, dump_frontmatter(meta, body))
+
+
+def set_campaign_routing(cid: str, fields: dict) -> None:
+    """Which connection each route runs on for THIS campaign (#142).
+
+    `set_campaign_response`'s twin, including the `updated` stamp: this rewrites
+    campaign.md, so the field that says when the metadata last changed has to
+    move with it.
+
+    Two deliberate differences from its twin. It writes only keys
+    `store.routing` recognizes for the campaign scope, so a caller cannot put an
+    arbitrary key into the campaign's frontmatter through this door -- and a
+    cleared route is REMOVED rather than written as "": the resolver reads an
+    empty value and an absent key identically ("no opinion"), and leaving ten
+    empty keys in every campaign that ever opened the picker is noise in a file
+    people read by hand. `set_campaign_budget` clears the same way, for the same
+    reason.
+
+    And unlike its twin it takes the campaign lock. The unlocked
+    read-modify-write the mutators above share is a known gap recorded in
+    `store.locks.OUTSIDE_DOMAIN`, not a design -- a new one would be adding to
+    it knowingly, and this write has nothing in it but frontmatter.
+    """
+    allowed = {routing.config_key(r.key) for r in routing.routes_for("campaign")}
+    with locks.campaign_lock(cid):
+        mp = paths.campaign_meta_path(cid)
+        if not mp.exists():
+            raise paths.CampaignNotFound(cid)
+        meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+        for key, value in fields.items():
+            if key not in allowed:
+                continue
+            text = str(value or "").strip()
+            if text:
+                meta[key] = text
+            else:
+                meta.pop(key, None)
+        meta["updated"] = now_iso()
+        atomic.write_text(mp, dump_frontmatter(meta, body))
 
 
 #: The two campaign.md keys a cost budget occupies (#153). Named together

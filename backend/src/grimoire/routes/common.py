@@ -503,6 +503,71 @@ def _response_body(scene_meta: dict, campaign_meta: dict, cfg: dict, own: dict) 
             "provenance": resolved["provenance"]}
 
 
+# ---- routing bundle (#142) ----
+def _routing_body(scope: str, campaign_meta: dict) -> dict:
+    """What a routing picker renders, at either scope.
+
+    `/response`'s shape and its reason: the picker offers "inherit", so it has
+    to be able to say what inheriting currently gets you -- and for routing that
+    answer can be a connection two scopes away.
+
+    The connection list rides along because every value in the bundle is an
+    opaque id: without it the picker would have to fetch the whole connection
+    list (keys, base URLs and all) to render ten option labels.
+    """
+    conns = store.llm_connections.list_connections()
+    known = {c["id"]: c for c in conns}
+    bundle = store.routing.bundle(campaign_meta=campaign_meta, cfg=store.read_config(),
+                                  exists=lambda conn_id: conn_id in known, scope=scope)
+    active = store.llm_connections.get_active()  # routing-ok: names the cascade's base
+    return {**bundle, "scope": scope,
+            "active_connection_id": active["id"] if active else "",
+            "catalog": [{"key": r.key, "label": r.label, "hint": r.hint,
+                         "tasks": list(r.tasks)}
+                        for r in store.routing.routes_for(scope)],
+            "connections": [{"id": c["id"], "name": c["name"], "kind": c["kind"],
+                             "model": c.get("model", "")} for c in conns]}
+
+
+def _routing_fields(scope: str, body) -> dict:
+    """The `{route: connection_id}` map a PUT means, validated for this scope.
+
+    A route the scope cannot set is a 400 rather than a stored key: written
+    silently it would look applied on the page and route nothing at all, which
+    is the failure mode `store/routing.py`'s `campaign_scoped` flag exists to
+    make impossible.
+    """
+    routes = _dump(body).get("routes") or {}
+    if not isinstance(routes, dict):
+        raise HTTPException(status_code=400, detail="routes must be an object")
+    fields = {store.routing.config_key(str(k)): str(v or "").strip() for k, v in routes.items()}
+    refused = store.routing.writable(scope, fields)
+    if refused:
+        raise HTTPException(
+            status_code=400,
+            detail=f"not routable at this scope: {sorted(k[len('route_'):] for k in refused)}")
+    # A value naming no connection is refused HERE and tolerated on READ, which
+    # looks inconsistent and is the whole point: a write is a decision, made
+    # against the list this same response carries, so a typo has to fail rather
+    # than be stored as a setting that quietly routes nothing. A stored value
+    # that stops naming a connection LATER is a deletion, which cannot reach
+    # into every campaign's frontmatter -- so resolution walks past it instead
+    # of failing a turn (`routing._opinion`).
+    unknown = sorted({v for v in fields.values() if v and not _connection_exists(v)})
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"no such connection: {unknown}")
+    return fields
+
+
+def _connection_exists(conn_id: str) -> bool:
+    try:
+        store.llm_connections.read_connection_raw(conn_id)
+    except (store.llm_connections.ConnectionNotFound, store.locks.StoreBusy,
+            OSError, UnicodeDecodeError):
+        return False
+    return True
+
+
 def _write_response(setter, fields: dict, style_key: str = "style_id") -> None:
     """Map the picker's style_id back onto the scope's own spelling."""
     out = dict(fields)
@@ -516,7 +581,7 @@ _IMAGE_MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
                 "gif": "image/gif", "webp": "image/webp"}
 
 
-async def _draft_description(client, path, subject: str) -> dict:
+async def _draft_description(client, path, subject: str, cid: str = "") -> dict:
     """One model-drafted first pass at what the picture at `path` shows.
 
     Shared by the four surfaces rather than copied into each, because the only
@@ -527,8 +592,13 @@ async def _draft_description(client, path, subject: str) -> dict:
     Preview only, like `tagline/generate` and `voice-anchor/generate`: the caller
     persists through the PUT on Save, so a draft nobody read is never written
     (#59).
+
+    `cid` is the CAMPAIGN whose routing applies (#142), and only the campaign
+    library surface has one -- the other three describe a picture belonging to a
+    world record, where the path's `cid` is a character id and naming a campaign
+    would be a coincidence of spelling.
     """
-    conn = _require_connection()
+    conn = _require_connection("image-description", cid)
     if conn.get("kind") not in store.image_drafts.SUPPORTED_KINDS:
         # A refusal the user can act on, rather than a 500 out of the SDK path:
         # `claude_agent` joins message content as a string, so a multimodal
@@ -836,12 +906,80 @@ def _content_fields(kind: str, content: dict) -> dict:
     return {k: content[k] for k in store.entity_schema.field_keys(kind) if k in content}
 
 
-def _require_connection() -> dict:
-    conn = store.llm_connections.get_active()
+def _campaign_routing_meta(cid: str) -> dict:
+    """A campaign's frontmatter, for the routing walk -- {} for anything unreadable.
+
+    Never raises. A missing or damaged `campaign.md` is a 404 (or a 500) on the
+    routes that need the campaign itself, and every one of them has already said
+    so by the time a connection is resolved; re-deciding it here would let a
+    stale read turn "this campaign routes elsewhere" into a failed generation.
+    """
+    if not cid:
+        return {}
+    try:
+        return store.campaigns.read_campaign(cid)["meta"]
+    except (store.campaigns.CampaignNotFound, store.locks.StoreBusy,
+            OSError, UnicodeDecodeError):
+        return {}
+
+
+def _routed_connection(task: str, cid: str) -> tuple[dict | None, dict]:
+    """The connection `task` is routed to, and how that was decided (#142).
+
+    `(None, resolution)` means no route applies and the ACTIVE connection is the
+    answer -- which is every task on an install that has never set a route, and
+    what makes this change invisible until someone asks for it.
+
+    At most two connection files are read: `exists` caches, and the cascade
+    consults at most one id per scope.
+    """
+    seen: dict[str, dict | None] = {}
+
+    def exists(conn_id: str) -> bool:
+        if conn_id not in seen:
+            try:
+                seen[conn_id] = store.llm_connections.read_connection_raw(conn_id)
+            except (store.llm_connections.ConnectionNotFound, store.locks.StoreBusy,
+                    OSError, UnicodeDecodeError):
+                seen[conn_id] = None
+        return seen[conn_id] is not None
+
+    resolution = store.routing.resolve(
+        task, campaign_meta=_campaign_routing_meta(cid),
+        cfg=store.read_config(), exists=exists)
+    return seen.get(resolution["connection_id"]), resolution
+
+
+def _require_connection(task: str = "", cid: str = "") -> dict:
+    """The connection this generation runs on, or a 409 saying why there is none.
+
+    `task` is the same string the call site meters under (`store.usage.meter`),
+    and `store/routing.py` maps it to a route; `cid` lets a campaign override
+    that route. Both default to "unrouted", which resolves to the active
+    connection -- but `test_routing_guard.py` fails a call site in `routes/`
+    that leaves `task` off, so the default covers callers outside the route
+    layer rather than being an option for one inside it.
+    """
+    conn, resolution = _routed_connection(task, cid)
+    routed = conn is not None
+    if conn is None:
+        conn = store.llm_connections.get_active()  # routing-ok: this IS the seam
     if conn is None:
         raise HTTPException(
             status_code=409, detail={"detail": "No LLM connection selected", "kind": "missing_key"})
     problem = _connection_problem(conn)
+    if problem is not None and routed:
+        # A ROUTED connection that cannot send is reported, not walked past.
+        # The walk skips a route naming a connection that no longer exists --
+        # a delete cannot reach into every campaign's frontmatter, so that
+        # reference is stale rather than meant. This one is meant: the user
+        # pointed this task at this connection and it has no key. Falling back
+        # to the active connection would generate a scene on a model they did
+        # not choose and never say so.
+        raise HTTPException(status_code=409, detail={
+            "detail": f"{problem} ({conn.get('name') or conn['id']}, routed for "
+                      f"{store.routing.route_by_key(resolution['route']).label.lower()})",
+            "kind": "missing_key"})
     if problem is not None:
         # Deliberately *before* the facade, so a configured fallback does not
         # rescue this and the 409 still fires. The two look inconsistent — the

@@ -239,7 +239,7 @@ def put_character_tagline(wid: str, cid: str, body: TaglineSave):
 async def post_character_tagline_generate(wid: str, cid: str,
                                           client: LLMClient = Depends(get_llm)):
     root = _world_root_or_404(wid)
-    conn = _require_connection()
+    conn = _require_connection("tagline")
     try:
         ch = store.characters.read_character(root, cid)
     except store.characters.CharacterNotFound:
@@ -486,7 +486,7 @@ def put_character_voice_anchor(wid: str, cid: str, body: VoiceAnchorSave):
 async def post_character_voice_anchor_generate(wid: str, cid: str,
                                                client: LLMClient = Depends(get_llm)):
     root = _world_root_or_404(wid)
-    conn = _require_connection()
+    conn = _require_connection("voice-anchor")
     try:
         ch = store.characters.read_character(root, cid)
     except store.characters.CharacterNotFound:
