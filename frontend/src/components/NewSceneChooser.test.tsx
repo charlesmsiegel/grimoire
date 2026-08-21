@@ -11,6 +11,7 @@ vi.mock("../api/client", () => ({
     listCampaignPCs: vi.fn(), listAppearances: vi.fn(),
     listSceneIdeas: vi.fn(), saveSceneIdea: vi.fn(), setSceneIdeaStatus: vi.fn(),
     getCampaignClock: vi.fn(),   // SceneConfirmForm's date-fill button
+    sceneImportParse: vi.fn(), sceneImport: vi.fn(),   // the import pane (#92)
   },
 }));
 vi.mock("./CalendarDatePicker", () => ({
@@ -37,6 +38,47 @@ beforeEach(() => {
   (api.listCampaignPCs as any).mockResolvedValue([]);
   (api.listSceneIdeas as any).mockResolvedValue([]);
   (api.setSceneIdeaStatus as any).mockResolvedValue({ ok: true });
+  (api.sceneImportParse as any).mockResolvedValue(
+    { title: "The Long Quay", date: "", location: "", pcless: false,
+      messages: [{ role: "user", content: "hi" }], cast: [], unmatched: [], warnings: [] });
+  (api.sceneImport as any).mockResolvedValue({ id: "s9", messages: 1, cast: 0 });
+});
+
+test("the import mode opens the import pane and asks for no suggestions", async () => {
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("Import a transcript"));
+
+  await screen.findByLabelText(/transcript file/i);
+  // An imported scene brings its own title, cast and transcript: there is
+  // nothing to rank and nothing to open it with.
+  expect(api.sceneSuggestions).not.toHaveBeenCalled();
+  expect(api.availableGreetings).not.toHaveBeenCalled();
+  expect(api.createScene).not.toHaveBeenCalled();
+});
+
+test("importing reports the scene it created", async () => {
+  const onCreated = vi.fn();
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={onCreated} />);
+  fireEvent.click(screen.getByText("Import a transcript"));
+
+  fireEvent.change(await screen.findByLabelText(/transcript file/i),
+                   { target: { files: [new File(["**You:** hi\n"], "scene.md")] } });
+  fireEvent.click(screen.getByRole("button", { name: /read file/i }));
+  await screen.findByDisplayValue("The Long Quay");
+  fireEvent.click(screen.getByRole("button", { name: /import scene/i }));
+
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9"));
+  // The import is one request: nothing else creates, dates, places or casts.
+  expect(api.createScene).not.toHaveBeenCalled();
+  expect(api.addCastBatch).not.toHaveBeenCalled();
+});
+
+test("Back from the import pane returns to the mode cards", async () => {
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("Import a transcript"));
+  await screen.findByLabelText(/transcript file/i);
+  fireEvent.click(screen.getByRole("button", { name: /back/i }));
+  expect(screen.getByText("With your PC")).toBeInTheDocument();
 });
 
 test("mode is chosen first and nothing is fetched before it", () => {

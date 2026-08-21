@@ -103,6 +103,7 @@ from . import (
     scene_break,
     scene_ideas,
     scene_ids,
+    scene_import,
     scene_refs,
     scenes,
     search,
@@ -156,6 +157,7 @@ from .paths import (
 from .pcs import PCNotFound, PCVersionNotFound
 from .playing import PlayError
 from .rolls import RollNotFound
+from .scene_import import SceneImportError
 from .scenes import SceneNotFound
 from .styles import BuiltInStyleImmutable, StyleNotFound
 from .tags import TagNotFound
@@ -280,6 +282,8 @@ __all__ = [
     "BuiltInStyleImmutable",
     "suggest",
     "scene_ideas",
+    "scene_import",
+    "SceneImportError",
     "lorebook",
     "LorebookError",
     "scenario",

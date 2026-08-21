@@ -25,7 +25,8 @@ import {
   type EntitySummary, type Greeting, type GreetingDetail, type GreetingDraft, type GroupState,
   type IncomingItem, type IncomingRef, type JournalEntry, type LLMConnection,
   type LLMConnectionDetail, type LLMConnectionDraft, type Ledger, type LengthPreset,
-  type LoreEntryDraft, type Mechanics, type ModelsRefreshResult, type ModuleContentEntry,
+  type LoreEntryDraft, type Mechanics, type Message, type ModelsRefreshResult,
+  type ModuleContentEntry,
   type ModuleDetail, type ModuleEditResult, type ModuleRenameKind, type ModuleSummary,
   type PCDetail, type PCSummary, type Persona, type PinRule, type PromptEntry,
   type PromptLayout, type PromptSnapshot, type ProposalRecord, type Provenance,
@@ -34,7 +35,8 @@ import {
   type ResponsePresetUsage, type RollEntry, type RollingSummary, type RollingSummaryRefresh,
   type RetconReport, type RosterEntry, type ScenarioImportResult, type ScenarioProposal, type SceneAbsorb,
   type SceneAlternates, type SceneCheckActor, type SceneContext, type SceneDatetime,
-  type SceneIdea, type SceneIdeaDraft, type SceneIntentResult, type SceneLocation,
+  type SceneIdea, type SceneIdeaDraft, type SceneImportDraft, type SceneIntentResult,
+  type SceneLocation,
   type SceneBreak, type SceneBreakAnswer,
   type SceneMeta, type ScenePage, type SceneSuggestion, type SceneUsage,
   type SceneWeather, type ScheduledEvent, type SearchMode,
@@ -1373,6 +1375,21 @@ export const api = {
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/opener`, { prompt }, onEvent),
   firstPost: (cid: string, sid: string, text: string) =>
     request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/first-post`, { text }),
+
+  // scene import (#92). The same split as the lorebook pair below: parse
+  // writes NOTHING and hands back a draft to review, and only sceneImport
+  // creates the scene — in one request, so a half-imported scene cannot exist
+  // because the browser navigated away between two of them.
+  sceneImportParse: (cid: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return requestForm<SceneImportDraft>(`/api/campaigns/${cid}/scenes/import/parse`, form);
+  },
+  sceneImport: (cid: string, body: {
+    title: string; date: string; location: string; pcless: boolean;
+    messages: Message[]; cast: { kind: string; id: string; role?: string }[];
+  }) => request<{ id: string; messages: number; cast: number }>(
+    "POST", `/api/campaigns/${cid}/scenes/import`, body),
 
   // lorebook import
   lorebookParse: (wid: string, file: File, format: string) => {

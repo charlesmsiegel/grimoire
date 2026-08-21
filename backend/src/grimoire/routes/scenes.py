@@ -10,7 +10,7 @@ import logging
 import threading
 import time
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from .. import prompts, store
@@ -51,6 +51,7 @@ from .models import (
     SceneDatetime,
     SceneIdeaCreate,
     SceneIdeaStatus,
+    SceneImportCommit,
     SceneIntent,
     SceneLocation,
 )
@@ -129,6 +130,80 @@ def post_scene(cid: str, body: NewScene, request: Request):
         raise HTTPException(status_code=409, detail={
             "kind": "busy",
             "detail": f"the campaign could not be read: {exc}"}) from exc
+
+
+# ---- importing an existing transcript (#92) ----
+# Declared before the `{sid}` routes below and before `entities`' generic
+# `/campaigns/{cid}/{kind}` catch-alls (which `routes/__init__` includes last),
+# so "import" is read as the literal it is rather than as a scene id.
+#
+# Two routes, one flow, the same split `lorebook` makes: the first reads an
+# upload into a draft and writes NOTHING, the second writes the draft the
+# reviewer approved. Only the second creates anything, which is what makes the
+# review step a gate rather than a confirmation dialog over work already done.
+@router.post("/campaigns/{cid}/scenes/import/parse")
+async def post_scene_import_parse(cid: str, file: UploadFile = File(...)):
+    """Read a grimoire transcript into a reviewable draft. Writes nothing."""
+    _campaign_root_or_404(cid)
+    data = await file.read()
+    try:
+        return store.scene_import.parse(cid, data)
+    except store.scene_import.SceneImportError as exc:
+        raise HTTPException(status_code=400, detail=f"could not parse: {exc}") from exc
+
+
+@router.post("/campaigns/{cid}/scenes/import")
+def post_scene_import(cid: str, body: SceneImportCommit, request: Request):
+    """Write a reviewed import draft as a new scene.
+
+    Everything the draft can get wrong is settled BEFORE the create: an actor
+    this campaign does not have, a role that fights the campaign's lock, a
+    player seated in an offscreen scene. Those are the failures an import
+    actually has -- the review step surfaces the speakers it could not match,
+    and this is where a reviewer who confirmed one anyway finds out -- and
+    raising them after the create would leave a stray half-scene behind for
+    every one of them.
+
+    What cannot be settled early still cleans up after itself: a date the
+    calendar refuses, a location that was deleted between the parse and the
+    commit, a store that goes busy mid-append all discard the scene rather than
+    leave a fragment of the transcript standing (see `scene_import.commit`).
+    """
+    _campaign_root_or_404(cid)
+    messages = [_dump(m) for m in body.messages]
+    if not messages:
+        raise HTTPException(status_code=400,
+                            detail="an imported scene needs at least one message")
+    cast = [{"kind": ref.kind, "id": ref.id,
+             "role": _resolve_role(ref.kind, ref.role, body.pcless),
+             "version": _actor_version(cid, ref.kind, ref.id, ref.version)}
+            for ref in body.cast]
+    try:
+        # The same hold, for the same reason, as `post_scene`: crossing the
+        # number-width boundary repads every scene in the campaign, renaming
+        # them all under any live turn. See that route.
+        with store.locks.campaign_lock(cid):
+            if store.scenes.create_would_repad(cid):
+                runs.require_campaign_free(request.app, cid)
+            sid = store.scenes.create_scene(cid, body.title or "Imported scene",
+                                            pcless=body.pcless)
+    except store.campaigns.CampaignNotFound:
+        # `from None`: the store's own exception says nothing the caller can act
+        # on beyond the 404 -- the same reading `_campaign_root_or_404` takes.
+        raise HTTPException(status_code=404, detail="campaign not found") from None
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail={
+            "kind": "busy",
+            "detail": f"the campaign could not be read: {exc}"}) from exc
+    try:
+        # All or nothing: `commit` removes the scene again on any failure. It
+        # has to be the one that does -- `set_datetime` renames the scene, so
+        # after that step `sid` here is not the id the scene has.
+        return store.scene_import.commit(cid, sid, messages, date=body.date,
+                                         location=body.location, cast=cast)
+    except (store.calendars.CalendarError, store.entities.EntityNotFound,
+            store.appearances.AppearError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _resolve_cast(cid: str, tokens: list[str], memo: dict[str, str] | None = None) -> list[dict]:
@@ -2920,6 +2995,24 @@ def get_scene_cast(cid: str, sid: str):
     return store.appearances.scene_cast(cid, sid)
 
 
+def _resolve_role(kind: str, role: str | None, pcless: bool) -> str:
+    """The role a cast addition will take, given what the scene IS.
+
+    Takes `pcless` rather than reading it, so the import route can ask the same
+    question about a scene it has not created yet (`is_pcless` answers False
+    for a scene that does not exist, which would let a player through into an
+    offscreen import and then fail inside `appear`).
+    """
+    if kind not in store.appearances.ACTOR_KINDS:
+        raise HTTPException(status_code=404, detail="unknown actor kind")
+    resolved = "player" if kind == "pcs" else (role or "npc")
+    if resolved not in ("player", "npc"):
+        raise HTTPException(status_code=400, detail="role must be player or npc")
+    if resolved == "player" and pcless:
+        raise HTTPException(status_code=400, detail="cannot seat a player in an offscreen scene")
+    return resolved
+
+
 def _cast_role(cid: str, sid: str, kind: str, role: str | None) -> str:
     """The role a cast addition will take. Raises HTTPException saying why not.
 
@@ -2927,38 +3020,38 @@ def _cast_role(cid: str, sid: str, kind: str, role: str | None) -> str:
     (the emergent route) can settle the role before writing anything: a 400
     raised after the create would leave a character behind that nothing seats.
     """
-    if kind not in store.appearances.ACTOR_KINDS:
-        raise HTTPException(status_code=404, detail="unknown actor kind")
-    resolved = "player" if kind == "pcs" else (role or "npc")
-    if resolved not in ("player", "npc"):
-        raise HTTPException(status_code=400, detail="role must be player or npc")
-    if resolved == "player" and store.scenes.is_pcless(cid, sid):
-        raise HTTPException(status_code=400, detail="cannot seat a player in an offscreen scene")
-    return resolved
+    return _resolve_role(kind, role, store.scenes.is_pcless(cid, sid))
+
+
+def _actor_version(cid: str, kind: str, aid: str, version: str | None) -> str:
+    """The version a seat locks: the one asked for, or the actor's default.
+
+    A first appearance locks lazily by copying from the world when the campaign
+    lacks the version; validate a supplied version against the campaign-visible
+    actor first so a purged/tombstoned one can't be revived. An already-cast
+    actor skips this -- `appear()` reports the lock conflict (409), no revival.
+    """
+    try:
+        if version is None:
+            if kind == "characters":
+                version = store.characters.read_character(
+                    store.overlay.char_root(cid, aid), aid)["meta"]["default_version"]
+            else:
+                version = store.pcs.read_pc(
+                    store.overlay.pc_root(cid, aid), aid)["meta"]["default_version"]
+    except (store.characters.CharacterNotFound, store.pcs.PCNotFound):
+        raise HTTPException(status_code=404, detail="actor not found")
+    if store.appearances.locked_version(cid, kind, aid) is None and store.appearances.actor_hash(
+            store.overlay.actor_root(cid, kind, aid), kind, aid, version) is None:
+        raise HTTPException(status_code=404, detail="actor or version not found in campaign")
+    return version
 
 
 def _seat_cast_member(cid: str, sid: str, body: Appear) -> None:
     """Validate + resolve one cast addition and record it. Raises HTTPException
     (404 unknown, 400 bad role) or store.appearances.AppearError (already cast)."""
     role = _cast_role(cid, sid, body.kind, body.role)
-    version = body.version
-    try:
-        if version is None:
-            if body.kind == "characters":
-                version = store.characters.read_character(
-                    store.overlay.char_root(cid, body.id), body.id)["meta"]["default_version"]
-            else:
-                version = store.pcs.read_pc(
-                    store.overlay.pc_root(cid, body.id), body.id)["meta"]["default_version"]
-    except (store.characters.CharacterNotFound, store.pcs.PCNotFound):
-        raise HTTPException(status_code=404, detail="actor not found")
-    # A first appearance locks lazily by copying from the world when the campaign
-    # lacks the version; validate a supplied version against the campaign-visible
-    # actor first so a purged/tombstoned one can't be revived. An already-cast
-    # actor skips this — appear() reports the lock conflict (409), no revival.
-    if store.appearances.locked_version(cid, body.kind, body.id) is None and store.appearances.actor_hash(
-            store.overlay.actor_root(cid, body.kind, body.id), body.kind, body.id, version) is None:
-        raise HTTPException(status_code=404, detail="actor or version not found in campaign")
+    version = _actor_version(cid, body.kind, body.id, body.version)
     store.appearances.appear(cid, sid, body.kind, body.id, version, role)
 
 

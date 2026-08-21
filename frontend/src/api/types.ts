@@ -1219,6 +1219,24 @@ export type Briefing = {
   relationships: string[]; last_time: BriefingFact | null;
 };
 
+// scene import (#92) — a grimoire transcript read back in. The draft is a
+// proposal: parsing writes nothing, and every field here is one the review form
+// can change before it is committed. `cast` is what the speaker labels resolved
+// to in this campaign, `unmatched` the labels that resolved to nobody, and
+// `warnings` everything the file could not settle on its own (a header bit that
+// is either a date or a location, a date this campaign's calendar cannot read,
+// text the marker grammar will not carry).
+export type SceneImportCast = {
+  label: string; kind: "characters" | "pcs"; id: string; name: string; role: "player" | "npc";
+};
+export type SceneImportDraft = {
+  title: string; date: string; location: string; pcless: boolean;
+  messages: Message[];
+  cast: SceneImportCast[];
+  unmatched: string[];
+  warnings: string[];
+};
+
 // lorebook import
 export type LoreEntryDraft = { name: string; keys: string[]; body: string; category: EntityKind };
 
