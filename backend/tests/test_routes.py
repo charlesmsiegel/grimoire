@@ -11215,6 +11215,27 @@ def test_accept_resolve_failure_reverts_to_pending(client, monkeypatch):
     assert _roll_lines(client, cid, sid) == []
 
 
+def test_a_check_that_will_not_resolve_records_the_run_as_failed(client, monkeypatch):
+    """The frames and the run record are read by different clients and neither
+    knows about the other: the stream carries an `error`, while a poll and the
+    Android completion notification read the run's state. Recorded `landed`,
+    the phone announced a reply for a turn that generated nothing and persisted
+    nothing.
+    """
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    monkeypatch.setattr(store.checks, "resolve_check",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal",
+                       json=_accept_body(rec))
+
+    assert resp.status_code == 200
+    assert any("error" in f for f in _frames(resp))
+    run = client.get(f"/api/campaigns/{cid}/scenes/{sid}/run").json()["run"]
+    assert run["state"] == "failed", run
+
+
 def test_accept_superseded_mid_resolve_discards_roll(client, monkeypatch):
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)

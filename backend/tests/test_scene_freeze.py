@@ -308,3 +308,68 @@ def test_the_rollback_retires_the_marker_before_it_removes_the_post(monkeypatch,
     scenes_mod._take_the_post_back(cid, sid, None, "Mara waits.", run)
 
     assert order == ["forget", "remove"], order
+
+
+def test_a_send_cannot_reserve_while_the_storage_root_is_moving(client, tmp_path):
+    """The other half of the refusal above, and the one a bare check left open.
+
+    `any_live()` and then `set_data_dir` are two steps with the registry lock
+    released in between, so a send reserving in that gap makes the move proceed
+    with a run now live -- its setup writing into the old tree while its
+    terminal write resolves the campaign against the new one. Held rather than
+    checked, the reservation is what has to lose.
+
+    Driven from inside the move: `set_data_dir` is patched to attempt the
+    reservation at the one instant the flag is up, which is the interleaving
+    itself rather than an imitation of it.
+    """
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    identity = store.scenes.scene_identity(cid, sid)
+    registry = client.app.state.runs
+    attempted: list[object] = []
+
+    real_set = store.set_data_dir
+
+    def racing_set(path):
+        try:
+            registry.start_or_existing(("scene", cid, identity), "turn", "chat",
+                                       "a-race", identity, {})
+            attempted.append("reserved")
+        except runs_mod.StoreMovingError:
+            attempted.append("refused")
+        return real_set(path)
+
+    dest = tmp_path / "moved"
+    import grimoire.routes.config as config_mod
+    config_mod.store.set_data_dir = racing_set
+    try:
+        r = client.put("/api/config/data-dir", json={"data_dir": str(dest)})
+    finally:
+        config_mod.store.set_data_dir = real_set
+
+    assert r.status_code == 200, r.text
+    assert attempted == ["refused"], attempted
+    assert registry.any_live() is None, "a run was reserved into a moving store"
+
+
+def test_the_refusal_lifts_once_the_move_is_done(client, tmp_path):
+    """A flag left up by a move that raised would make every later send fail
+    with a transient-looking error until the app is restarted."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    identity = store.scenes.scene_identity(cid, sid)
+
+    # A move that fails: the destination is a file, not a directory.
+    bad = tmp_path / "not-a-dir"
+    bad.write_text("x", encoding="utf-8")
+    client.put("/api/config/data-dir", json={"data_dir": str(bad)})
+
+    run, fresh = client.app.state.runs.start_or_existing(
+        ("scene", cid, identity), "turn", "chat", "a1", identity, {})
+
+    assert fresh and run.state == "running"

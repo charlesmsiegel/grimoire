@@ -590,10 +590,16 @@ export const api = {
         + `?attempt=${encodeURIComponent(attempt)}`,
       undefined, { fresh: true }),
 
-  findRun: (cid: string, sid: string, attempt: string) =>
+  // `attempt` is optional, and the difference matters. WITH one this asks
+  // "what became of my send?"; WITHOUT one the route answers with the scene's
+  // newest run, which is the only question a client that has lost its local
+  // state can ask -- a full reload, or the Android WebView's renderer being
+  // restarted, leaves the provider empty while the backend turn generates on.
+  findRun: (cid: string, sid: string, attempt?: string) =>
     request<{ run: RunHandle | null }>(
       "GET",
-      `/api/campaigns/${cid}/scenes/${sid}/run?attempt=${encodeURIComponent(attempt)}`,
+      `/api/campaigns/${cid}/scenes/${sid}/run`
+      + (attempt ? `?attempt=${encodeURIComponent(attempt)}` : ""),
       undefined, { fresh: true }),
 
   // `attempt`/`onIndex` ride every turn producer, not just `chat`. All five are

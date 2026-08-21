@@ -194,17 +194,19 @@ def get_data_dir():
 def put_data_dir(update: DataDirUpdate, request: Request):
     # Not under a campaign lock, deliberately: there is no campaign to lock --
     # the root itself is moving, and a lock taken in the old tree would not name
-    # anything in the new one. This is a narrow refusal rather than a
-    # guarantee, and it is the honest one available: a run reserved in the gap
-    # is a race the store's own docs already place outside what any lock here
-    # can promise (`store/locks.py`), while the case this actually closes -- a
-    # player wandering to Configuration mid-turn -- is now reachable for the
-    # first time and was not before.
-    runs.require_store_free(request.app)
-    try:
-        store.set_data_dir(update.data_dir)
-    except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail={"detail": str(exc), "kind": "data_dir"})
+    # anything in the new one. The exclusion that IS available is the run
+    # registry's own, and it is held across the move rather than consulted
+    # before it: checking and then moving leaves a window for a send to reserve,
+    # and that run's setup writes into the old tree while its terminal write
+    # resolves against the new one. What remains outside any lock here is
+    # another *process* sharing the store, which `store/locks.py` already places
+    # outside what this can promise.
+    with runs.store_held_still(request.app):
+        try:
+            store.set_data_dir(update.data_dir)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400,
+                                detail={"detail": str(exc), "kind": "data_dir"})
     return store.data_dir_info()
 
 

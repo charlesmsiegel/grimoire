@@ -5,6 +5,9 @@ Pure data. Scheduling is task 3, and nothing here imports it.
 
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 
 from grimoire.routes import runs
@@ -442,3 +445,72 @@ def test_a_failing_callback_does_not_reach_the_run():
 
     assert fresh and run.state == "running"
     reg.retire(run.id)                  # and the other direction too
+
+
+def test_a_stale_live_transition_is_dropped_rather_than_delivered():
+    """The count is decided under the registry lock and delivered outside it,
+    so two threads can reach the sink in the opposite order to the transitions
+    they describe: retiring the last run computes 0, a new send reserves and
+    delivers 1, and the delayed 0 arrives last.
+
+    That is not a cosmetic ordering bug. `ServerService` demotes on 0, so the
+    process becomes reclaimable while a run is generating -- the phone locks
+    and the turn this feature exists to save is lost.
+
+    Driven through `_fire_live` directly, with the stamps the registry would
+    have given them. Racing two real threads does NOT discriminate here and an
+    earlier version of this test proved it: the delivery lock serializes them,
+    so the sequence guard can be deleted outright and the threaded version
+    still passes. The rule is "a stamp older than the last delivered is not
+    delivered", and this is that rule.
+    """
+    reg = runs.RunRegistry()
+    seen: list[int] = []
+    reg.set_live_sink(seen.append)
+
+    reg._fire_live(1, 7)      # the new run's reservation, delivered first
+    reg._fire_live(0, 6)      # the retire it overtook, arriving late
+
+    assert seen == [1], "a superseded transition was announced as the present"
+
+
+def test_deliveries_do_not_interleave_inside_the_sink():
+    """The other half, and the reason the guard is not merely a comparison:
+    held across the call, not just around the compare. Two sinks running
+    concurrently would otherwise be inside the Android runtime at once, and
+    `_delivered_seq` would say the newer had landed while the older was still
+    executing.
+    """
+    reg = runs.RunRegistry()
+    inside = threading.Semaphore(0)
+    overlapped: list[bool] = []
+    running = threading.Event()
+
+    def sink(_live: int) -> None:
+        overlapped.append(running.is_set())
+        running.set()
+        inside.release()
+        time.sleep(0.05)
+        running.clear()
+
+    reg.set_live_sink(sink)
+    threads = [threading.Thread(target=reg._fire_live, args=(1, n)) for n in (1, 2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(2)
+
+    assert overlapped == [False, False], "two deliveries were in the sink at once"
+
+
+def test_an_ordinary_pair_of_transitions_still_both_arrive():
+    """The counterweight: a sequence guard that dropped anything but a stale
+    delivery would leave the service pinned, or never promoted at all."""
+    reg = runs.RunRegistry()
+    seen: list[int] = []
+    reg.set_live_sink(seen.append)
+
+    run, _ = reg.start_or_existing(("scene", "c", "i"), "turn", "chat", "a1", "i", {})
+    reg.retire(run.id)
+
+    assert seen == [1, 0]

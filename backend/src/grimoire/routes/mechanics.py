@@ -214,8 +214,13 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
                 store.proposals.transition(cid, sid, pid, ("resolving",), "pending")
                 detail = (str(exc) if isinstance(exc, store.checks.CheckError)
                           else "the check could not be resolved")
+                # `failed`, not the default `landed`: nothing was generated
+                # and nothing was persisted. Recorded `landed`, a poll would
+                # read success while the stream carried an error, and the
+                # phone would announce a reply that does not exist.
                 return runs.answer_without_running(request.app, run, [
-                    _sse({"error": {"detail": detail, "kind": "check_error"}})])
+                    _sse({"error": {"detail": detail, "kind": "check_error"}})],
+                    state="failed")
             if not store.proposals.transition(cid, sid, pid, ("resolving",), "resolved", resolution):
                 # superseded mid-resolve: the pure roll result is discarded unlogged
                 raise HTTPException(status_code=409, detail="proposal was superseded")

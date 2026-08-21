@@ -539,6 +539,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // since the retconned post itself stands. Held here rather than in the panel
   // because the transcript gutter is what sets it.
   const [replayAt, setReplayAt] = useState<number | null>(null);
+  // Part of `ReplayPanel`'s key, so bumping it re-mounts the panel and makes it
+  // re-read the replay session. Adopting a detached run is the case: it
+  // refreshes the transcript, which is not what that panel reads. See
+  // `attachToRun`.
+  const [replayEpoch, setReplayEpoch] = useState(0);
   // The end-of-scene review, whole (#378): its state, the absorb and save that
   // fill and commit it, and the counts its column and panel read off it. A
   // review is a MODE of this page rather than a panel inside it -- the
@@ -1900,11 +1905,37 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // Holding the preview means the reader sees the reply either way.
     await selectScene(sid).catch(() => -1);
     setStreaming("");
+    // The REPLAY PANEL does not read the transcript, it reads the replay
+    // session -- and it loads that once, on `cid`/`sid`. So an adopted run
+    // that happened to be a replay turn refreshes everything the panel does
+    // not look at: `session.pending` stays false and it keeps offering
+    // "Replay next turn", which the already-pending session then 409s.
+    //
+    // Bumped unconditionally rather than only for replay runs, because from
+    // here a run is just a run -- `attachRun` carries no kind, and inventing
+    // one to avoid a re-mount that costs one GET would be the wrong trade.
+    setReplayEpoch((n) => n + 1);
   }, [registry]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const adoptPendingRun = useCallback(async (cid: string, sid: string) => {
     const held = registry.pending(cid, sid);
-    if (!held) return;
+    // NO HELD ATTEMPT IS NOT NOTHING TO DO. The provider is recreated empty by
+    // a full reload -- and on Android the WebView's renderer can be restarted
+    // out from under a perfectly healthy backend turn, which is precisely the
+    // scenario this feature exists for. Returning here left that view showing
+    // an unlocked composer over a stale transcript, and the next send refused
+    // with `run_in_flight` by the run it could not see.
+    //
+    // The attemptless lookup is a different question -- "what is the newest
+    // run on this scene?" -- and only its LIVE answer is acted on. A terminal
+    // one belongs to a turn some other client owns the words for; there is
+    // nothing here to restore and nothing to settle.
+    if (!held) {
+      if (abortRef.current) return;
+      const live = await api.findRun(cid, sid).then((r) => r.run).catch(() => null);
+      if (live && live.state === "running") await attachToRun(cid, sid, live.id);
+      return;
+    }
     // Not while this component is already driving a turn. Adoption is for a
     // send we LOST -- the socket died, the tab was suspended, the view
     // unmounted -- and running it alongside a live stream has two of them
@@ -2192,13 +2223,27 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // it and skip the whole teardown, because the turn is still ours.
       // `abortRef` is already cleared above, which is what lets `attachToRun`
       // take the view back.
+      //
+      // And a lookup that FAILED is not an answer of "no run". The socket
+      // dying and this request failing are the same outage, so of every call
+      // in this file these two are the likeliest to fail together -- and
+      // reading that as "no run" runs the teardown, unlocks the composer, and
+      // lets the next Send overwrite the registry's one pending entry for this
+      // scene while the original may still be generating. Held instead, like
+      // an unconfirmed Stop: the composer stays locked, the send stays
+      // pending, and `adoptPendingRun` resolves it when the tab next comes
+      // forward.
       let adopted = false;
+      let undiscoverable = false;
       if (!unstopped && !stopped && !finished && !errored && !refused) {
-        const live = await api.findRun(cid, id, attempt)
-          .then((r) => r.run).catch(() => null);
-        if (live && live.state === "running") {
-          adopted = true;
-          void attachToRun(cid, id, live.id);
+        try {
+          const live = (await api.findRun(cid, id, attempt)).run;
+          if (live && live.state === "running") {
+            adopted = true;
+            void attachToRun(cid, id, live.id);
+          }
+        } catch {
+          undiscoverable = true;
         }
       }
       // NOT a `return` -- this is a `finally`, and returning from one
@@ -2211,7 +2256,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // `busy`, the streamed preview, `runRef` -- is skipped when the Stop
       // went unconfirmed, so Stop is still there to press and still knows
       // what to press about.
-      if (!unstopped && !adopted) {
+      if (!unstopped && !adopted && !undiscoverable) {
         // Beside `abortRef`, and load-bearing for the same reason: left set, a
         // Stop pressed while the NEXT turn is still connecting would address this
         // one -- terminal by then, so the route would answer politely and the
@@ -2973,15 +3018,33 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // still unwinding. Taking that as "it is over" is what re-enabled Send
       // over a run that still held the scene, which is the whole failure this
       // wait exists to prevent -- so ask again rather than assume.
-      for (let tries = 0; state === "running" && tries < STOP_POLLS; tries++) {
+      //
+      // NO RUN AT ALL IS THE SAME ANSWER, and review caught that it was read
+      // as the opposite. A precancel recorded before the POST reserved returns
+      // `run: null`, which is not "there is nothing to stop" -- it is
+      // "cancellation is pending": the original request is still in its
+      // synchronous setup and will consume that record when it reserves.
+      // Resolving on it settled the attempt and unlocked the composer while
+      // that was still to happen, so the next Send raced the very request it
+      // had just cancelled.
+      //
+      // A short wait between rounds only on that branch: an unwinding run is
+      // already being waited on server-side, but a pending one needs the other
+      // request to get somewhere first, and four immediate re-asks would all
+      // arrive before it did.
+      for (let tries = 0;
+           (state === "running" || state === undefined) && tries < STOP_POLLS;
+           tries++) {
+        if (state === undefined) await new Promise((r) => setTimeout(r, 100));
         state = (await api.cancelAttempt(from, sid, attempt)).run?.state;
       }
-      if (state === "running") {
-        // Out of rounds with the run still going. Resolving here would settle
-        // the turn on a guess: the backend still holds the scene, so Send comes
-        // back and the next turn is refused. Exhaustion is an UNCONFIRMED
-        // cancellation, which is the same answer as one that never arrived --
-        // and it takes the same path below.
+      if (state === "running" || state === undefined) {
+        // Out of rounds with the run still going, or still not reserved.
+        // Resolving here would settle the turn on a guess: the backend still
+        // holds the scene (or is about to), so Send comes back and the next
+        // turn is refused. Exhaustion is an UNCONFIRMED cancellation, which is
+        // the same answer as one that never arrived -- and it takes the same
+        // path below.
         throw new Error("the run did not stop");
       }
     } catch {
@@ -3693,7 +3756,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                across a scene switch would offer Accept for a reply in another
                scene. `onChanged` is the same refresh every transcript mutation
                here funnels through. */
-            <ReplayPanel key={activeId} cid={cid} sid={activeId} startAt={replayAt}
+            <ReplayPanel key={`${activeId}:${replayEpoch}`}
+                         cid={cid} sid={activeId} startAt={replayAt}
                          disabled={busy || rolling}
                          // The same latch every other write to this transcript
                          // takes: a replayed turn is a generation into the scene
