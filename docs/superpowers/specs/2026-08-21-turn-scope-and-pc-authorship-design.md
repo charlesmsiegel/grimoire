@@ -306,10 +306,25 @@ reinforce rather than compete.
   - `transient_tracker.j2` asks for a fenced `state` block and says *"Write
     nothing after it."* Off by default (`turnstate_depth: 0`), live when on.
 
-  Both legitimately put something after the last character block, and neither
-  is a speaker block — `_persist_reply` strips the tracker before the reply is
-  split into posts, and the fence is machine-readable output. Talking about
-  speaker blocks lets all three rules be true at once.
+  The tracker case is genuinely reconciled by talking about speaker blocks:
+  `_persist_reply` strips it before the reply is split into posts, so it is
+  not one.
+
+  **The roll case is not, and needs an outright exception.**
+  `mechanics_response_format.j2` asks for the fence *"mid-narration, at the
+  moment of the attempt, then STOP writing immediately after the closing
+  fence"* — so in a compliant roll request the enclosing speaker block **is**
+  `**Grimoire:**`, and the reply ends there by design. Scoping to speaker
+  blocks does not help, because narration is the last speaker block. Worse,
+  when the character attempting the check is the PC, §2 leaves no permissible
+  character block at all.
+
+  So the rule carries an explicit exemption — it does not apply to a reply
+  that ends in a roll fence — and **the grader takes the same exemption**,
+  skipping any reply containing one. Without it the grader would reject
+  correct roll requests, which the existing roll fixture demonstrates is the
+  normal shape. Fence detection reuses `store/fence.py`'s `OPENER`, as
+  `length_drift` already does, rather than a second copy of the grammar.
 
   **`transient_tracker.j2` still needs one word changed.** It currently opens
   *"After the last line of narration, and only there"* — an instruction that
@@ -499,10 +514,21 @@ changes generation is how "why did it do that" happens.** `wrap_next` survives
 regenerate and retry by design, so a player can re-roll three times and get
 three closing posts with nothing on screen explaining why.
 
-- The scene payload gains `wrap_next` (bool), read off the same frontmatter
-  the assembler reads.
-- `CampaignView` renders a small pending indicator near the composer — *"the
-  next reply will close this scene"* — with a cancel control.
+- **`wrap_next` is two-valued, not a bool**: `pending` (a `/end` is waiting to
+  be answered) and `consumed` (its wrap reply has landed, and the flag is
+  deliberately still set so retry and regenerate reproduce it). One boolean
+  cannot describe both, and the difference is user-visible: after a wrap reply
+  succeeds, *"the next reply will close this scene"* is simply false — the
+  next ordinary send clears the flag and resumes play. Only a re-roll still
+  closes. The state is stored rather than derived, because after a bare
+  `/end` — which appends no post — the transcript's last message cannot tell
+  the two apart.
+- The scene payload carries that state, read off the same frontmatter the
+  assembler reads.
+- `CampaignView` renders an indicator near the composer whose copy follows the
+  state: *"the next reply will close this scene"* while pending, and while
+  consumed, that the scene is closed and only a retry or regenerate stays in
+  closing mode. Both offer cancel.
 - **`DELETE /campaigns/{cid}/scenes/{sid}/wrap`** clears the flag. Without it
   the only way to clear a wrap the player no longer wants is to send an
   ordinary post, i.e. to generate a reply they don't want purely to undo a
@@ -517,12 +543,27 @@ the setup lock at `:525`, and only composes afterwards (`:528` ephemeral,
 window would clear `wrap_next` before `_assemble` ever read it and silently
 un-wrap the reply already starting.
 
-The fix rides existing machinery rather than adding a guard: read the flag
-inside the hold that already covers setup, and pass it through
-`_turn_override(turn)` — the one-shot, unpersisted per-turn override that
-`_assemble` already accepts and that `response_presets.resolve` already lets
-outrank every stored scope. Composition then reads the snapshot, not the
-file, and the race closes without making the route refuse anything.
+The fix is to read the flag inside the hold that already covers setup and
+hand it to composition explicitly.
+
+**Not through `_turn_override`,** which cannot carry it: that helper returns a
+dict built from the typed `ResponseSettings` wire model
+(`routes/common.py:254`), and `_assemble` feeds it to
+`response_presets.resolve`, which walks only `("style_id",) + lengths.KNOBS`
+(`response_presets.py:251`). A `wrap` key put there is silently dropped, and
+composition would go on reading live frontmatter — the race intact and now
+harder to see. That path is for response settings; this is not one.
+
+Instead `compose_turn`, `compose_director_turn` and `_assemble` take a
+separate keyword — `wrap: bool | None`, `None` meaning "read the file" — and
+each route passes the value it snapshotted under its setup lock. Two
+independent overrides rather than one overloaded dict, which also keeps the
+response-preset cascade free of a flag that has nothing to do with presets.
+
+**`post_retry` needs it too.** `_retry_run` closes its setup lock at `:619`
+and composes at `:621-622`, the same shape as chat and regenerate, so a cancel
+in that window turns an already-starting retry of a wrap reply into an
+ordinary continuation. It is in the inventory and in the race tests.
 
 **The same snapshot applies to `post_roll_proposal`.** CLAUDE.md inventories
 it as one of the five scene-turn handlers that start detached runs, and a wrap
@@ -628,8 +669,18 @@ of thing rather than a taste"* — and the reasoning transfers exactly: a
 control whose only function is to let the model write someone else's character
 is not a preference.
 
-**`turn_scope` stays removable.** Pacing is a taste; someone who wants the old
-rushed shape may have it. Whose words these are is not.
+**`turn_scope` stays removable — and the opt-out has to be complete to be
+honest.** Pacing is a taste; someone who wants the old shape may have it.
+Whose words these are is not.
+
+But switching the section off does not by itself restore the old shape,
+because the structural half of the fix lives in `response_format`, a
+separately registered section. A user would have to disable the reply-format
+contract as well — losing the `**<Name>:**` markers that every downstream
+split depends on — just to opt out of pacing. So the closing-narration rule
+renders only when `turn_scope` is enabled in the resolved layout, making the
+toggle mean what it says. The PC boundary is unaffected: it is non-removable
+and does not ride on this gate.
 
 No migration is needed for either: `layout.py`'s upgrade rule already inserts
 a catalog section a stored layout never mentioned *"after its nearest
