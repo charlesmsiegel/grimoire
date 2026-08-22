@@ -757,3 +757,35 @@ def test_cancel_never_waits_for_a_run_while_holding_the_lock_it_needs(
     assert review_runs.cancel(client, cid, sid, generation).status_code == 409
 
     assert depths == [0, 0], f"the lock was still held when the wait began: {depths}"
+
+
+def test_a_replayed_save_does_not_delete_a_newer_review(client, scene):
+    """The commit is idempotent by design (#235), so a duplicate PUT of an
+    already-recorded token arrives long after its first response was lost -- by
+    which time another device may have force-absorbed the scene and stored a
+    NEWER review, whose token carries the epoch that save advanced and is
+    therefore still savable.
+
+    Clearing "whatever is stored" there deletes a whole end-of-scene generation
+    for a save that wrote nothing: the loss this change exists to prevent,
+    arrived at through its own cleanup.
+    """
+    cid, sid = scene
+    _absorb(client, cid, sid)
+    first = _pending(client, cid, sid)["review"]
+    body = {"one_line": first["one_line"], "summary": first["summary"],
+            "keywords": first["keywords"], "timeline_events": [], "edits": [],
+            "commit_token": first["commit_token"]}
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                      json=body).status_code == 200
+
+    # Another device re-absorbs the scene; its review is the current one.
+    again = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb?force=true")
+    review_runs.wait_for_run(client, cid, sid, again.json()["run"]["id"])
+    newer = _pending(client, cid, sid)["review"]
+    assert newer["commit_token"] != first["commit_token"]
+
+    # ...and the first save's lost response is retried.
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                      json=body).status_code == 200
+    assert _pending(client, cid, sid)["review"]["commit_token"] == newer["commit_token"]

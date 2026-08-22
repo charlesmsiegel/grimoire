@@ -246,6 +246,26 @@ def drop_scene(cid: str, sid: str) -> None:
     clear(cid, sid)
 
 
+def clear_destinations(cid: str, sids) -> None:
+    """Drop the reviews sitting on ids that are about to change hands.
+
+    `repoint_scenes` does this too, at the end -- but it runs after the caller
+    has already renamed the transcripts, and it swallows a destination it
+    cannot unlink (it has to: raising there would strand every other store
+    mid-repoint). `repad` renames *every* scene in a campaign and deliberately
+    does not skip a taken id, so a destination orphan there is a scene about to
+    inherit somebody else's end-of-scene review. Clearing first is what turns
+    that into a failed request instead of a wrong review nobody will look for.
+
+    `alternates.clear_destinations`' argument, verbatim, for the second sidecar
+    that shares its hazard -- and this one is worse, because a review carries a
+    commit token that would write the dead scene's summary into the chronicle.
+    """
+    with locks.campaign_lock(cid):
+        for sid in sids:
+            _path(cid, sid).unlink(missing_ok=True)
+
+
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     """Follow renamed scene ids: carry each review to its scene's new id.
 
@@ -301,6 +321,14 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
                 _path(cid, sid).unlink(missing_ok=True)
 
 
+#: The fields a `phases` row carries over from the block that reports that step.
+#: Read by `routes.scenes._phase_report`, which builds the rows, and by
+#: `_phase_row` below, which re-projects one of them after a retry. Shared
+#: because the two have to agree: a key added to the report and not to the
+#: re-projection is a field that silently keeps its first-pass value forever.
+PHASE_KEYS = ("status", "reason", "attempted", "budget_exhausted")
+
+
 def _phase_row(rows: list, name: str, block: dict) -> list:
     """`phases` with one row re-projected from the block that reports it.
 
@@ -308,8 +336,7 @@ def _phase_row(rows: list, name: str, block: dict) -> list:
     has to move with it: left alone, the panel goes on reporting a budget that
     ran out for a step this retry has since run.
     """
-    keys = ("status", "reason", "attempted", "budget_exhausted")
-    return [{**r, **{k: block.get(k) for k in keys}}
+    return [{**r, **{k: block.get(k) for k in PHASE_KEYS}}
             if isinstance(r, dict) and r.get("name") == name else r
             for r in rows]
 

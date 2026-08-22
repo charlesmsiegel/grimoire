@@ -2769,3 +2769,126 @@ test("an adopted absorb whose run was reaped is read off the store", async () =>
   expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
   expect(screen.queryByText(/no such run/)).toBeNull();
 });
+
+test("a superseded absorb's answer does not take Ending… off the one that replaced it", async () => {
+  // Stop, then End scene again. The stopped absorb is still polling on its
+  // 1-5s cadence and its answer arrives minutes later; unguarded, its `finally`
+  // clears the flag the SECOND absorb set — taking "Ending…" and the Stop
+  // button off a run that is still going, unlocking the composer over a scene
+  // the server refuses, and leaving an unbounded absorb with nothing left to
+  // stop it.
+  withScene();
+  let landFirst: (v: unknown) => void = () => {};
+  (api.absorbScene as any)
+    .mockImplementationOnce(
+      async (_c: string, _s: string, _f: boolean, onStarted: (g: string) => void) => {
+        onStarted("gen-A");
+        return new Promise((r) => { landFirst = r; });
+      })
+    .mockImplementation(
+      async (_c: string, _s: string, _f: boolean, onStarted: (g: string) => void) => {
+        onStarted("gen-B");
+        return new Promise(() => { /* B is still running */ });
+      });
+  renderCampaign();
+  await screen.findByText("hi");
+
+  fireEvent.click(screen.getByRole("button", { name: /^End scene$/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Stop$/ }));
+  await waitFor(() => expect(api.discardReview)
+    .toHaveBeenCalledWith("run", "s1", "gen-A"));
+  fireEvent.click(await screen.findByRole("button", { name: /^End scene$/ }));
+  await screen.findByRole("button", { name: /Ending…/ });
+  await waitFor(() => expect(api.absorbScene).toHaveBeenCalledTimes(2));
+
+  // Now the stopped absorb finally answers.
+  await act(async () => {
+    landFirst(reviewResult(STORED_REVIEW, "gen-A"));
+    await Promise.resolve();
+  });
+
+  expect(screen.getByRole("button", { name: /Ending…/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Stop$/ })).toBeInTheDocument();
+});
+
+test("an absorb's own answer does not rebuild a review already open on screen", async () => {
+  // Leaving the scene and coming back while End scene generates starts the
+  // adoption pass on the SAME run, and the two waiters poll on independently
+  // phased cadences. The adoption pass can win and put the panel up, and the
+  // reader can be approving rows for seconds before this answer arrives — and
+  // installing it rebuilds every row with `approvedByDefault`, silently
+  // undoing their verdicts.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Old", model: "", created: "", updated: "" },
+    { id: "s2", title: "Newer", model: "", created: "", updated: "" }]);
+  (api.getScene as any).mockResolvedValue(
+    { meta: {}, messages: [{ role: "user", content: "hi" }] });
+  let land: (v: unknown) => void = () => {};
+  let started = false;
+  (api.absorbScene as any).mockImplementation(
+    async (_c: string, _s: string, _f: boolean, onStarted: (g: string) => void) => {
+      started = true;
+      onStarted("gen-live");
+      return new Promise((r) => { land = r; });
+    });
+  // The store answers with the review that run is producing, but only once it
+  // is running — the adoption pass reads it off disk the moment the reader
+  // comes back, not before End scene was ever pressed.
+  (api.pendingReview as any).mockImplementation(async (_c: string, sid: string) =>
+    (started && sid === "s1"
+      ? { review: STORED_REVIEW, generation: "gen-live", stale: null }
+      : { review: null, generation: null, stale: null }));
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /^End scene$/ }));
+  await waitFor(() => expect(api.absorbScene).toHaveBeenCalled());
+
+  await openScene(/Newer/);
+  await openScene(/Old/);
+  await screen.findByDisplayValue("A stored summary.");
+  // The reader has judged something. Their edit is what the second install
+  // would throw away.
+  fireEvent.change(screen.getByLabelText("Scene summary"),
+                   { target: { value: "Reader's own wording." } });
+
+  await act(async () => {
+    land(reviewResult({ ...STORED_REVIEW, summary: "The absorb's own copy." }, "gen-live"));
+    await Promise.resolve();
+  });
+
+  expect(screen.getByLabelText("Scene summary")).toHaveValue("Reader's own wording.");
+});
+
+test("a Discard settling in one campaign does not lock the same-id scene in another", async () => {
+  // Scene ids repeat across campaigns — a fork has the same ones by
+  // construction — and `holdsScene` compares them bare, so a Discard still in
+  // flight for A would hold B's scene against play for as long as the DELETE
+  // takes to answer. The request is left to finish; only this page's belief
+  // that it is holding something is dropped.
+  withScene();
+  (api.absorbScene as any).mockImplementation(
+    async (_c: string, _s: string, _f: boolean, onStarted: (g: string) => void) => {
+      onStarted("gen-A");
+      return new Promise(() => { /* still absorbing when the Stop lands */ });
+    });
+  (api.discardReview as any).mockReturnValue(
+    new Promise(() => { /* the DELETE never answers */ }));
+  render(
+    <MemoryRouter initialEntries={["/campaigns/run"]}>
+      {withPalette(<>
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
+    </MemoryRouter>,
+  );
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /^End scene$/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Stop$/ }));
+  await waitFor(() => expect(api.discardReview).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByText("switch campaign"));
+  await waitFor(() => expect(api.getCampaign).toHaveBeenCalledWith("other"));
+  await screen.findByText("hi");
+
+  expect(await screen.findByRole("button", { name: "Rename scene" })).toBeEnabled();
+});

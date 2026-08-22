@@ -381,3 +381,43 @@ def test_an_audit_retry_that_ran_and_found_nothing_does_replace_them():
                       "attempted": True, "budget_exhausted": False},
         "edits": []})
     assert [e["id"] for e in merged["edits"]] == ["prose:1", "dossier:mara", "dossier:winifred"]
+
+
+def test_a_repad_does_not_hand_a_scene_somebody_elses_review(home):
+    """`repad` renames every scene in the campaign and deliberately does not
+    skip a taken id, so an orphan on a destination is a scene about to inherit
+    another's end-of-scene review -- complete with a commit token that would
+    write the dead scene's summary into the chronicle under this scene's id.
+
+    Cleared BEFORE the renames, like the alternates sidecar: a destination that
+    will not unlink then costs a request, where the same failure at the end of
+    `repoint_scenes` arrives with every transcript already moved."""
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "The Tearoom")
+    widened = sid.replace("001--", "0001--", 1)
+    store.pending_reviews.publish(cid, widened, "orphan", _review(one_line="not yours"), {})
+
+    store.scenes.repad(cid, 4)
+
+    assert store.scenes.paths._scene_path(cid, widened).is_file(), "the repad did not run"
+    assert store.pending_reviews.read(cid, widened) is None
+
+
+def test_a_phase_row_carries_exactly_what_the_phase_report_puts_in_one():
+    """`_phase_row` re-projects a row that `routes.scenes._phase_report` built,
+    field for field. The two used to spell the tuple out separately, which is a
+    field added to the report and not to the re-projection: the panel would keep
+    showing the first pass's value for it after every retry, forever, and no
+    test would say so. Both now read `PHASE_KEYS`, and this is what fails if one
+    of them stops.
+    """
+    from grimoire.routes import scenes as routes_scenes
+
+    block = {"status": "ok", "reason": None, "attempted": True,
+             "budget_exhausted": False}
+    built = routes_scenes._phase_report(block, block, block)
+
+    assert {r["name"] for r in built} == {"extraction", "dossiers", "voice", "audit"}
+    for row in built:
+        assert set(row) == {"name", *store.pending_reviews.PHASE_KEYS}
