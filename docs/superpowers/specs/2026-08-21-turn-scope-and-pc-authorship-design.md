@@ -271,8 +271,20 @@ reinforce rather than compete.
   Superseded by §2; two statements of one rule drift apart, and this one is in
   the weaker position. `player_names` leaves this template — update
   `templates/README.md:342`, which `test_docs_guard.py` holds to the code.
-- **Add**, gated on `not wrap` **and `not opener`**: *"The last speaker block
-  is a character's, never `**Grimoire:**`."*
+- **Add**, gated on `not wrap`, `not opener`, **and at least one NPC being in
+  the scene**: *"The last speaker block is a character's, never
+  `**Grimoire:**`."*
+
+  **The NPC gate is not defensive, it is a correctness fix.** A non-opener
+  scene may legitimately have zero NPCs — `backend/tests/test_context.py:466`
+  is exactly that shape, and its comment says so ("no NPCs in scene"), while
+  `SceneConfirmForm.test.tsx:215` exercises the empty-cast form. In such a
+  scene the only character present is the player's, whom §2 forbids the model
+  to write. Ungated, the two rules together leave narration as the only
+  possible output *and* forbid it: an unsatisfiable prompt, whose likeliest
+  escapes are inventing an NPC or writing the PC — the second being the exact
+  failure this spec exists to stop. The grader takes the same context and
+  skips the check for a no-NPC turn.
 
   **Scoped to speaker blocks, not to "the reply", and that wording is
   load-bearing** — three instructions in this corpus describe how a reply
@@ -371,7 +383,7 @@ held at `:492`:
 | A send carrying `/end` | set |
 | The wrap reply persists | **left set** |
 | A later send *without* `/end` | cleared |
-| `_take_the_post_back` (turn errored) | cleared |
+| a turn errors (**either branch**) | cleared |
 | `delete_from` (rewind) | cleared |
 
 Leaving it set through the reply is what makes regenerate work — the durability
@@ -381,12 +393,23 @@ and `post_retry` likewise; the still-set flag applies, so both re-roll a
 wrap-up rather than silently reverting to a mid-scene reply. It clears on the
 next ordinary send, which is the player saying they are still playing.
 
-**The clear must also run on the ephemeral path.** An empty "next NPC round"
-send carries no `/end` and so must clear the flag — but it takes the
-`ephemeral` branch, which today performs no scene write of its own. Clearing
-only where a post is appended would leave a wrap-up scene stuck wrapping every
-subsequent NPC round. The clear therefore hangs off the send, not off the
-append, inside the campaign-lock hold at `:492`.
+**The clear must also run on the ephemeral path — twice over, for two
+different reasons.**
+
+*On the send.* An empty "next NPC round" send carries no `/end` and so must
+clear the flag, but it takes the `ephemeral` branch, which today performs no
+scene write of its own. Clearing only where a post is appended would leave a
+wrapped scene wrapping every subsequent NPC round. The clear hangs off the
+send, not off the append, inside the campaign-lock hold at `:492`.
+
+*On failure.* Error cleanup cannot be assigned to `_take_the_post_back`
+alone. That undo is wired only into the persisted-post branch
+(`undo_user_post=` at `:571-574`); the ephemeral branch (`:526-548`) builds
+its stream with no undo hook at all. So a bare `/end` — which scrubs to `""`
+and is therefore *always* ephemeral — and every pcless generation would fail
+with `wrap_next` still set, leaving the indicator claiming a wrap that
+produced nothing. The failure clear is therefore its own small hook, invoked
+from both branches, rather than a line inside the post rollback.
 
 Two accepted losses, both stated rather than solved: a turn that errors clears
 a flag that a *previous* `/end` may have set, and a rewind clears it
@@ -465,15 +488,26 @@ three closing posts with nothing on screen explaining why.
   ordinary post, i.e. to generate a reply they don't want purely to undo a
   flag.
 
-**Cancelling during a live turn does not un-wrap that turn**, and the UI has
-to say so. The prompt was assembled when the run started, so a click mid-
-stream clears the flag for *next* time while the reply now landing still
-closes the scene. Left unexplained that reads as the cancel button not
-working. The indicator therefore addresses the next reply explicitly — *"the
-next reply will close this scene"* — and the control is disabled while a run
-is live on this scene, with the flag still clearing on the send that follows.
-Cheaper than the alternative, which is refusing the route mid-run and leaving
-the player no way to act at all.
+**The flag is snapshotted under the setup lock, and the turn composes from
+the snapshot.** An earlier draft justified leaving cancel unguarded by
+claiming a live turn has already assembled its prompt. That is false for the
+current route ordering: `_chat_run` reserves the run (`:420-426`), *closes*
+the setup lock at `:525`, and only composes afterwards (`:528` ephemeral,
+`:549` ordinary); regenerate has the same shape. A cancel landing in that
+window would clear `wrap_next` before `_assemble` ever read it and silently
+un-wrap the reply already starting.
+
+The fix rides existing machinery rather than adding a guard: read the flag
+inside the hold that already covers setup, and pass it through
+`_turn_override(turn)` — the one-shot, unpersisted per-turn override that
+`_assemble` already accepts and that `response_presets.resolve` already lets
+outrank every stored scope. Composition then reads the snapshot, not the
+file, and the race closes without making the route refuse anything.
+
+With that, cancelling mid-turn cleanly means "not the next one" rather than
+"not this one", which is also the honest thing to show: the indicator names
+the next reply explicitly — *"the next reply will close this scene"* — so a
+click during a live turn is not mistaken for stopping the reply now landing.
 
 **The cancel route is deliberately NOT `scene_busy`-guarded**, and this needs
 recording in `test_scene_freeze.py` as an explicit non-door rather than an
@@ -501,9 +535,20 @@ rather than being answered by them.
 One sentence, static, no detection required:
 
 ```
-Never write dialogue, action, choice or intent for <Name>. Describe the world
-and what it does to them; stop where their answer begins.
+<Name> is the player's. Never write what they say, do, choose, attempt, want,
+intend, realize or conclude, and never presume their answer. You may write
+what the world does to them, and how their body answers on its own. Stop
+where their response begins.
 ```
+
+The wording carries the **whole** distinction, not a shortened gesture at it,
+and both halves matter because this is the only boundary text positioned
+after the card blocks. Dropping conclusions, wants and presumed answers would
+leave a card saying "describe what the player realizes" unrebutted in the one
+slot that can rebut it. And an unqualified ban on "action" would contradict
+§2's explicit permission for involuntary reflexes — a flinch, a caught breath
+— so the ban is on volition (say, do, choose, attempt) with the sensation
+permission restated alongside it.
 
 This is **not** the adaptive corrective ruled out under *Out of scope* — that
 one was rejected because detecting "wrote the PC" in prose is hard. This needs
@@ -525,7 +570,19 @@ dropping a section; it does not stop a user, because `layout.py` makes
 calls absolute must not be switch-off-able from a UI.
 
 `Section` gains `removable: bool = True`; `player_character` sets it `False`
-and `layout.apply` refuses to drop it. This is the same distinction that
+and `layout.apply` refuses to drop it.
+
+**`apply` alone is not enough — the editor would lie.** `layout.describe`
+returns only `{id, label, default_label, tier, enabled}` (`layout.py:165-167`)
+and `PromptLayoutEditor.tsx:61-63` renders the include checkbox
+unconditionally, with no `disabled`. Ignoring a stored omission at render time
+while still offering the checkbox means a user unticks `player_character`,
+saves, sees it reported as off, and gets it anyway — the UI stating the
+opposite of what generation does, which is worse than either behavior alone.
+So `removable` propagates through `describe`, through the API type, and into
+the editor, which disables the checkbox for a non-removable row and says why.
+A frontend test covers it: the row renders, its checkbox is disabled, and the
+label stays editable. This is the same distinction that
 module already draws for the packer tier and `except_opener` — *"the same kind
 of thing rather than a taste"* — and the reasoning transfers exactly: a
 control whose only function is to let the model write someone else's character
