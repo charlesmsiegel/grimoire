@@ -278,6 +278,17 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const anchorLoaded = useRef("");
   const [urlPromptOpen, setUrlPromptOpen] = useState(false);
   const [cropOpen, setCropOpen] = useState(false);
+  /** Whether one of this editor's own dialogs is up.
+   *
+   *  The tagline prompt is QUEUED -- it arrives when an import finishes, which
+   *  can be at any moment, including while the reader has the crop or the URL
+   *  prompt open. All three share a backdrop and a z-index, so the one that
+   *  mounts later takes the keyboard while the one rendered later stays painted
+   *  on top: Escape would skip a prompt nobody could see, and skipping it
+   *  drops that character's turn in the queue. A queued thing waits (PR #400
+   *  review). Nothing is lost -- the queue is untouched, so it gets its turn as
+   *  soon as the screen is clear. */
+  const dialogOpen = urlPromptOpen || cropOpen;
   const [bulkUrl, setBulkUrl] = useState<{ current: number; total: number; name: string; step: string } | null>(null);
   const lockReq = useRef(0);
   const [locked, setLocked] = useState<string | null>(null);       // campaign: locked version id
@@ -1552,7 +1563,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     const rosterPending = !worldScope && appeared === null && !rosterFailed;
     return (
       <div className="character-editor">
-        {taglineQueue.length > 0 && (
+        {taglineQueue.length > 0 && !dialogOpen && (
           <TaglinePrompt key={taglineQueue[0].cid} wid={wid} cid={taglineQueue[0].cid} name={taglineQueue[0].name}
                          onSaved={(t) => { setTagline(t); reload(); }}
                          onClose={() => setTaglineQueue((q) => q.slice(1))} />
@@ -1736,7 +1747,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
             reader would be looking at the crop while Escape skipped a tagline
             prompt they never saw (PR #400 review). The queue is untouched, so
             the prompt gets its turn the moment the crop closes. */}
-        {taglineQueue.length > 0 && !cropOpen && (
+        {taglineQueue.length > 0 && !dialogOpen && (
           <TaglinePrompt key={taglineQueue[0].cid} wid={wid} cid={taglineQueue[0].cid} name={taglineQueue[0].name}
                          onSaved={(t) => { setTagline(t); reload(); }}
                          onClose={() => setTaglineQueue((q) => q.slice(1))} />
@@ -2078,7 +2089,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   // mode === "edit"
   return (
     <div className="character-editor">
-      {taglineQueue.length > 0 && (
+      {taglineQueue.length > 0 && !dialogOpen && (
         <TaglinePrompt key={taglineQueue[0].cid} wid={wid} cid={taglineQueue[0].cid} name={taglineQueue[0].name}
                        onSaved={(t) => { setTagline(t); reload(); }}
                        onClose={() => setTaglineQueue((q) => q.slice(1))} />

@@ -1462,6 +1462,37 @@ test("a tagline prompt queued behind the avatar crop waits for it", async () => 
   expect(await screen.findByRole("dialog", { name: /set tagline/i })).toBeInTheDocument();
 });
 
+// The same overlap one door along: the toolbar button is not disabled while an
+// import runs, so the URL prompt can be reopened over it, and completion mounts
+// the tagline prompt LATER -- taking Escape while the URL prompt is the thing
+// painted on top (PR #400 review).
+test("a tagline prompt queued behind the URL prompt waits for it", async () => {
+  let finishImport: (v: unknown) => void = () => {};
+  (api.importCharacterFromChub as any)
+    .mockImplementationOnce(() => new Promise((res) => { finishImport = res; }))
+    .mockResolvedValue({ character: "two", version: "default", updated: false,
+                         gallery: { attempted: 0, stored: 0 }, lore: { lorebooks_found: 0, created: [] } });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await screen.findByText("Seraphine");
+
+  fireEvent.click(screen.getByRole("button", { name: /^download from url$/i }));
+  fireEvent.change(screen.getByLabelText("Card URLs"), { target: { value: "creator/one\ncreator/two" } });
+  fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+
+  // ...reopened while that import is still running.
+  fireEvent.click(screen.getByRole("button", { name: /^download from url$/i }));
+  await screen.findByLabelText("Card URLs");
+
+  finishImport({ character: "one", version: "default", updated: false,
+                 gallery: { attempted: 0, stored: 0 }, lore: { lorebooks_found: 0, created: [] } });
+  await screen.findByText(/added 2\/2 characters/i);
+
+  expect(screen.queryByRole("dialog", { name: /set tagline/i })).toBeNull();
+  fireEvent.keyDown(window, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByLabelText("Card URLs")).toBeNull());
+  expect(await screen.findByRole("dialog", { name: /set tagline/i })).toBeInTheDocument();
+});
+
 test("stored focus is applied as object-position on detail and grid avatars", async () => {
   (api.listCharacters as any).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "default", has_avatar: true,
