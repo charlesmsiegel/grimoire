@@ -384,6 +384,24 @@ def test_clearing_a_campaign_route_removes_the_key_rather_than_emptying_it(clien
     assert "route_scene" not in meta
 
 
+def test_setting_a_route_to_what_it_already_says_writes_nothing(client):
+    """The store may live in a synced folder, where a no-op write is upload
+    traffic on one machine and a modification to reconcile on the other."""
+    _wid, cid, _sid = _seed(client)
+    routed = _connection(client, "steady")
+    client.put(f"/api/campaigns/{cid}/routing", json={"routes": {"scene": routed}})
+    meta_path = store.campaigns.campaign_meta_path(cid)
+    before = (meta_path.read_bytes(), meta_path.stat().st_mtime_ns)
+
+    r = client.put(f"/api/campaigns/{cid}/routing", json={"routes": {"scene": routed}})
+
+    assert r.status_code == 200
+    assert (meta_path.read_bytes(), meta_path.stat().st_mtime_ns) == before
+    # And clearing something that was never set is equally nothing.
+    client.put(f"/api/campaigns/{cid}/routing", json={"routes": {"summary": ""}})
+    assert (meta_path.read_bytes(), meta_path.stat().st_mtime_ns) == before
+
+
 def test_a_campaign_routing_write_does_not_disturb_the_rest_of_the_frontmatter(client):
     _wid, cid, _sid = _seed(client)
     before = store.campaigns.read_campaign(cid)["meta"]
