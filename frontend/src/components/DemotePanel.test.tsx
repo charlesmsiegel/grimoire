@@ -70,6 +70,18 @@ test("unchecking it changes both the wording and the request", async () => {
     .toHaveBeenCalledWith("w", "locations", "saltmarch", { copy_down: false }));
 });
 
+test("opening it re-reads the dependents rather than trusting the mount", async () => {
+  show();
+  await waitFor(() => expect(api.libraryDependents).toHaveBeenCalledTimes(1));
+  (api.libraryDependents as any).mockResolvedValue(
+    [...DEPS, { id: "new", name: "Started Since", has_copy: false }]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Remove from library…" }));
+
+  expect(await screen.findByText("Started Since")).toBeTruthy();
+});
+
+
 test("a world with no campaigns says so rather than listing nothing", async () => {
   show([]);
   fireEvent.click(await screen.findByRole("button", { name: "Remove from library…" }));
