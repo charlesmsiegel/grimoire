@@ -13,8 +13,8 @@ vi.mock("../api/client", async () => {
 });
 
 const CONNECTIONS = [
-  { id: "big", name: "Big", kind: "openrouter", model: "vendor/opus" },
-  { id: "cheap", name: "Cheap", kind: "openrouter", model: "vendor/haiku" },
+  { id: "big", name: "Big", kind: "openrouter", model: "vendor/opus", usable: true },
+  { id: "cheap", name: "Cheap", kind: "openrouter", model: "vendor/haiku", usable: true },
 ];
 
 const CATALOG = [
@@ -31,6 +31,10 @@ function bundle(over: Partial<any> = {}) {
     routes: { scene: "", dossier: "" },
     effective: { scene: "", dossier: "" },
     provenance: { scene: { scope: "active" }, dossier: { scope: "active" } },
+    // What inherit would get, which for an untouched bundle is the same as what
+    // runs. The tests that care set both.
+    inherited: { scene: "", dossier: "" },
+    inherited_from: { scene: { scope: "active" }, dossier: { scope: "active" } },
     ...over,
   };
 }
@@ -62,6 +66,8 @@ test("names the connection an inherited route currently resolves to", async () =
     scope: "campaign",
     effective: { scene: "cheap", dossier: "" },
     provenance: { scene: { scope: "global" }, dossier: { scope: "active" } },
+    inherited: { scene: "cheap", dossier: "" },
+    inherited_from: { scene: { scope: "global" }, dossier: { scope: "active" } },
   }) as never);
 
   render(<ModelRoutingPicker scope="campaign" cid="c" />);
@@ -70,6 +76,42 @@ test("names the connection an inherited route currently resolves to", async () =
   // choice unless the row says what inheriting gets you.
   expect(await screen.findByText("— inherit (Cheap, from the global default) —"))
     .toBeInTheDocument();
+});
+
+test("inherit names the scope below, not the override this row already has", async () => {
+  // The bug this pins: `effective` includes THIS scope's own opinion, so a row
+  // already set to Cheap offered "inherit (Cheap)" and then routed to Big when
+  // you picked it.
+  vi.mocked(api.getCampaignRouting).mockResolvedValue(bundle({
+    scope: "campaign",
+    routes: { scene: "cheap", dossier: "" },
+    effective: { scene: "cheap", dossier: "" },
+    provenance: { scene: { scope: "campaign" }, dossier: { scope: "active" } },
+    inherited: { scene: "big", dossier: "" },
+    inherited_from: { scene: { scope: "global" }, dossier: { scope: "active" } },
+  }) as never);
+
+  render(<ModelRoutingPicker scope="campaign" cid="c" />);
+
+  expect(await screen.findByText("— inherit (Big, from the global default) —"))
+    .toBeInTheDocument();
+  expect(screen.queryByText("— inherit (Cheap, from this campaign) —")).not.toBeInTheDocument();
+});
+
+test("a connection that cannot send says so in the option itself", async () => {
+  vi.mocked(api.getGlobalRouting).mockResolvedValue(bundle({
+    connections: [...CONNECTIONS,
+                  { id: "keyless", name: "Keyless", kind: "openrouter", model: "vendor/x",
+                    usable: false }],
+  }) as never);
+
+  render(<ModelRoutingPicker scope="global" />);
+
+  // Routing a job at a keyless connection is a 409 on every call of that kind,
+  // and the picker is the cheap place to notice.
+  // One option per row, and every row offers it.
+  expect(await screen.findAllByText(/Keyless — vendor\/x \(no key — cannot send\)/))
+    .toHaveLength(CATALOG.length);
 });
 
 test("choosing a connection writes only that route", async () => {

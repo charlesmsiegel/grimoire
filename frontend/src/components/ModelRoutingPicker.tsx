@@ -93,12 +93,15 @@ export function ModelRoutingPicker({ scope, cid }: { scope: "global" | "campaign
 
   const nameOf = (id: string) => bundle.connections.find((c) => c.id === id)?.name ?? id;
   const inherited = (route: string) => {
-    // `effective` is "" when the cascade reached its base, so the base has to be
-    // named from `active_connection_id` -- "inherit (the active connection)"
-    // answers a different question than the one the row is asking, which is
-    // WHICH model this job runs on.
-    const eff = bundle.effective[route] || bundle.active_connection_id;
-    const from = scopeLabel(bundle.provenance[route]?.scope);
+    // `inherited`, not `effective`: the latter includes this scope's own
+    // override, so a row that already names a connection would offer "inherit
+    // (that same connection)" and then route somewhere else when you picked it.
+    // "" means the cascade reached its base, which has to be named from
+    // `active_connection_id` -- "inherit (the active connection)" answers a
+    // different question than the one the row is asking, which is WHICH model
+    // this job would run on.
+    const eff = bundle.inherited[route] || bundle.active_connection_id;
+    const from = scopeLabel(bundle.inherited_from[route]?.scope);
     return eff ? `— inherit (${nameOf(eff)}, from ${from}) —` : "— inherit —";
   };
 
@@ -132,7 +135,10 @@ export function ModelRoutingPicker({ scope, cid }: { scope: "global" | "campaign
           >
             <option value="">{inherited(route.key)}</option>
             {bundle.connections.map((c) => (
-              <option key={c.id} value={c.id}>{c.model ? `${c.name} — ${c.model}` : c.name}</option>
+              <option key={c.id} value={c.id}>
+                {(c.model ? `${c.name} — ${c.model}` : c.name)
+                  + (c.usable ? "" : " (no key — cannot send)")}
+              </option>
             ))}
             {/* A scope can name a connection this list has not loaded, or one
                 deleted since — show its id rather than falling back to the

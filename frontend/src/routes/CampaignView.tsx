@@ -3658,6 +3658,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // one place decides what a route means. A failed read publishes nothing and
   // the header keeps naming the active connection, which is what it did before.
   const [sceneModel, setSceneModel] = useState<string | null>(null);
+  const [sceneReady, setSceneReady] = useState<boolean | null>(null);
   const [routingRev, setRoutingRev] = useState(0);
   useEffect(() => onConfigChanged(() => setRoutingRev((n) => n + 1)), []);
   useEffect(() => {
@@ -3665,14 +3666,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // Cleared first: switching campaigns must not leave the previous one's
     // model in the header for as long as this read takes.
     setSceneModel(null);
+    setSceneReady(null);
     api.getCampaignRouting(cid).then((r) => {
       if (!live) return;
       const id = r.effective.scene || r.active_connection_id;
-      setSceneModel(r.connections.find((c) => c.id === id)?.model || null);
-    }).catch(() => { if (live) setSceneModel(null); });
+      const conn = r.connections.find((c) => c.id === id);
+      setSceneModel(conn?.model || null);
+      // Only when this campaign routes somewhere OTHER than the active
+      // connection. Otherwise the global read behind the header already
+      // describes the same connection, and publishing a second opinion about
+      // it would just be a slower copy that can disagree while it loads.
+      setSceneReady(id && id !== r.active_connection_id ? !!conn?.usable : null);
+    }).catch(() => { if (live) { setSceneModel(null); setSceneReady(null); } });
     return () => { live = false; };
   }, [cid, routingRev]);
-  usePublishSceneModel(sceneModel);
+  usePublishSceneModel(sceneModel, sceneReady);
 
   // The scene's own keyboard (#193). Every binding here mirrors a control that
   // is on screen, and carries the same condition that control is disabled by —

@@ -623,8 +623,16 @@ export type RoutingBundle = {
   routes: Record<string, string>;
   effective: Record<string, string>;
   provenance: Record<string, { scope: string }>;
+  /** What each route would resolve to if THIS scope said nothing — the only
+   *  honest label for an "inherit" option, since `effective` already includes
+   *  this scope's own override. */
+  inherited: Record<string, string>;
+  inherited_from: Record<string, { scope: string }>;
   catalog: RoutingRoute[];
-  connections: { id: string; name: string; kind: string; model: string }[];
+  /** `usable` is false for a connection that cannot send at all (an OpenRouter
+   *  profile with no key, a custom endpoint with no base URL) — routing a job
+   *  to one is a 409 on every call, so the picker says so before you pick it. */
+  connections: { id: string; name: string; kind: string; model: string; usable: boolean }[];
   active_connection_id: string;
 };
 

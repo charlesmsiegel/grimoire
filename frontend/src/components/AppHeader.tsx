@@ -43,16 +43,23 @@ export default function AppHeader(
 ) {
   const { setOpen } = usePalette();
   const { setFocus } = useFocus();
-  const { context, usage, sceneModel } = useShellStatus();
+  const { context, usage, sceneModel, sceneReady } = useShellStatus();
   // The open campaign's scene model wins over the global one: with per-task
   // routing (#142) the active connection is not necessarily what writes this
   // campaign's prose, and the header exists to name what the next turn costs.
   const shown = sceneModel ?? model;
+  // And the dot goes with it. A campaign whose scene turns are routed at a
+  // keyless connection 409s every send; a green dot beside that is the chrome
+  // reporting on a connection this page is not using.
+  const live = sceneReady ?? ready;
 
   const where = context
     ? (context.scene ? `${context.campaign} / ${context.scene}` : context.campaign)
     : "go anywhere";
-  const status = verdict(connection, ready, health);
+  // `live`, not `ready`: the dot answers for the connection this page's next
+  // turn will actually use (#142), and `verdict` decides its colour from
+  // exactly that plus what the provider last did (#146).
+  const status = verdict(connection, live, health);
 
   return (
     <header className="app-header">

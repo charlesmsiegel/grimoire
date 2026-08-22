@@ -1566,8 +1566,8 @@ def _phase_report(dossiers: dict, voice: dict, mechanics: dict) -> list[dict]:
                                 ("audit", mechanics))]
 
 
-def _phase_connection(task: str, cid: str) -> tuple[dict | None, str]:
-    """The connection a SECONDARY absorb phase runs on, or why it has none (#142).
+def _soft_connection(resolve) -> tuple[dict | None, str]:
+    """A SECONDARY absorb phase's connection, or why it has none (#142).
 
     `(None, reason)` rather than a raised 409, because the three phases below
     each promise never to fail an absorb: a dossier refresh routed at a
@@ -1575,9 +1575,14 @@ def _phase_connection(task: str, cid: str) -> tuple[dict | None, str]:
     inspector shows, not the extraction losing its result over a setting it does
     not use. The extraction itself keeps the 409 -- it is the phase whose failure
     is fatal anyway.
+
+    Takes a THUNK rather than a task name, so the task stays a literal at the
+    call site. `test_routing_guard.py` reads those literals, and a helper that
+    forwarded `task` would hide all three calls from it behind one unroutable
+    one -- which is how a routing map goes stale without anything failing.
     """
     try:
-        return _require_connection(task, cid), ""
+        return resolve(), ""
     except HTTPException as exc:
         detail = exc.detail
         return None, str(detail.get("detail") if isinstance(detail, dict) else detail)
@@ -2157,9 +2162,12 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     # raising: these three promise never to fail an absorb, so a route pointing
     # one of them at a keyless connection has to come back as that phase's
     # status rather than as a 409 that discards the extraction's result too.
-    dossier_conn, dossier_why = _phase_connection("dossier", cid)
-    voice_conn, voice_why = _phase_connection("voice-drift", cid)
-    audit_conn, audit_why = _phase_connection("audit", cid)
+    dossier_conn, dossier_why = _soft_connection(
+        lambda: _require_connection("dossier", cid))
+    voice_conn, voice_why = _soft_connection(
+        lambda: _require_connection("voice-drift", cid))
+    audit_conn, audit_why = _soft_connection(
+        lambda: _require_connection("audit", cid))
     with store.usage.meter("absorb", campaign=cid, scene=sid) as m:
         results = await _gather_phases(
             budget.run(client.complete(messages, conn, m.usage),

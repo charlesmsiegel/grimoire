@@ -170,10 +170,39 @@ def test_the_bundle_reports_own_values_effective_values_and_provenance():
     assert bundle["provenance"]["summary"] == {"scope": "active"}
 
 
+def test_inherit_names_what_this_scope_would_get_by_saying_nothing():
+    """`effective` includes this scope's OWN opinion, so it is the wrong label
+    for an inherit option: a row already naming a connection would offer
+    "inherit (that same one)" and then change the answer when you picked it."""
+    bundle = routing.bundle(campaign_meta={"route_scene": "cheap"},
+                            cfg={"route_scene": "big"},
+                            exists=lambda cid: cid in ("cheap", "big"),
+                            scope="campaign")
+    assert bundle["effective"]["scene"] == "cheap"        # what runs today
+    assert bundle["inherited"]["scene"] == "big"          # what inherit would get
+    assert bundle["inherited_from"]["scene"] == {"scope": "global"}
+
+
+def test_inherit_at_global_scope_falls_all_the_way_to_the_active_connection():
+    bundle = routing.bundle(campaign_meta={}, cfg={"route_scene": "big"},
+                            exists=lambda cid: cid == "big", scope="global")
+    assert bundle["effective"]["scene"] == "big"
+    assert bundle["inherited"]["scene"] == ""
+    assert bundle["inherited_from"]["scene"] == {"scope": "active"}
+
+
+def test_a_campaign_bundle_does_not_silence_the_global_scope_by_mistake():
+    """Only the scope being edited is silenced. Silencing both would report the
+    active connection as what inheriting gets you, which is a scope too far."""
+    bundle = routing.bundle(campaign_meta={}, cfg={"route_absorb": "big"},
+                            exists=lambda cid: cid == "big", scope="campaign")
+    assert bundle["inherited"]["absorb"] == "big"
+
+
 def test_the_campaign_bundle_omits_the_routes_a_campaign_cannot_override():
     bundle = routing.bundle(campaign_meta={}, cfg={}, exists=lambda cid: False,
                             scope="campaign")
-    for key in ("routes", "effective", "provenance"):
+    for key in ("routes", "effective", "provenance", "inherited", "inherited_from"):
         assert "tagline" not in bundle[key], key
         assert "scenario" not in bundle[key], key
         assert "scene" in bundle[key], key

@@ -526,7 +526,17 @@ def _routing_body(scope: str, campaign_meta: dict) -> dict:
                          "tasks": list(r.tasks)}
                         for r in store.routing.routes_for(scope)],
             "connections": [{"id": c["id"], "name": c["name"], "kind": c["kind"],
-                             "model": c.get("model", "")} for c in conns]}
+                             "model": c.get("model", ""),
+                             # Whether it can send AT ALL. Routing a job to a
+                             # keyless connection is a 409 on every call of that
+                             # kind, and the picker is where that is cheap to
+                             # notice. `_connection_problem` is the same rule
+                             # `_require_connection` refuses with, asked of a
+                             # masked record -- which is why `key_set` stands in
+                             # for the key it deliberately does not carry.
+                             "usable": _connection_problem(
+                                 {**c, "api_key": "x" if c.get("key_set") else ""}) is None}
+                            for c in conns]}
 
 
 def _routing_fields(scope: str, body) -> dict:
