@@ -13,12 +13,22 @@ from grimoire.store import (
     sheets,
     worlds,
 )
+from grimoire.store.modules import pack as modules_pack
 
 
 def _campaign(monkeypatch, tmp_path, module="pool-basic"):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Realm")
     cid = campaigns.create_campaign("Run", wid, module=module)
+    return wid, cid
+
+
+def _campaign2(monkeypatch, tmp_path, module="pool-basic"):
+    """A SECOND world and campaign in the same store -- for the tests that
+    compare two casts and must not have the first one's records in scope."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Saltmarch")
+    cid = campaigns.create_campaign("Second Run", wid, module=module)
     return wid, cid
 
 
@@ -1336,8 +1346,10 @@ def test_create_missing_skips_an_ambiguous_kind_out_loud(monkeypatch, tmp_path):
     out = sheets.create_missing(cid)          # no choices at all
     assert out["created"] == []
     skipped = {s["kind"]: s["reason"] for s in out["skipped"]}
-    # pool-basic has `medium` and `shifter` for characters (and pcs share them)
-    assert set(skipped) == {"characters", "pcs"}
+    # pool-basic has `medium` and `shifter` for characters. `pcs` share those
+    # two types but this campaign owns no PCs, so it has no gap and is not
+    # reported -- see test_create_missing_does_not_skip_a_kind_that_has_no_gaps.
+    assert set(skipped) == {"characters"}
     assert "medium" in skipped["characters"] and "shifter" in skipped["characters"]
     assert sheets.read(cid, "characters", "mara") is None
 
@@ -1375,25 +1387,102 @@ def test_create_missing_needs_a_module(monkeypatch, tmp_path):
 
 def test_create_missing_records_a_sheet_that_raced_in_as_a_failure(monkeypatch, tmp_path):
     """Every write asserts creation (`expected=None`), so a sheet appearing
-    between the scan and the write is a recorded failure, never an overwrite.
-    Simulated by writing the file from under the scan -- the campaign lock makes
-    the real race a cross-process one."""
+    between the gap scan and the write is a recorded failure, never an
+    overwrite. Simulated by writing the file from under the scan -- the campaign
+    lock makes the real race a cross-process one, which is exactly why the
+    write's own CAS, and not the hold, is what this depends on."""
     wid, cid = _campaign(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Mara")
-    real_read = sheets.reader.read
+    real_refs = sheets.reader.list_refs
 
-    def read_then_race(c, kind, eid):
-        got = real_read(c, kind, eid)
-        if got is None and kind == "characters":
-            sheets.writer._checked_write(sheets._campaign_path(c, kind, eid),
-                                         "pool-basic", kind, eid, "shifter", None)
+    def refs_then_race(c):
+        got = real_refs(c)
+        sheets.writer._checked_write(sheets._campaign_path(c, "characters", "mara"),
+                                     "pool-basic", "characters", "mara", "shifter", None)
         return got
 
-    monkeypatch.setattr(sheets.tally.sheet_reader, "read", read_then_race)
+    monkeypatch.setattr(sheets.tally.sheet_reader, "list_refs", refs_then_race)
     out = sheets.create_missing(cid, {"characters": "medium", "pcs": "medium"})
     assert out["created"] == []
     assert [(f["kind"], f["id"]) for f in out["failed"]] == [("characters", "mara")]
     assert sheets.read(cid, "characters", "mara")["sheet_type"] == "shifter"
+
+
+def test_create_missing_does_not_skip_a_kind_that_has_no_gaps(monkeypatch, tmp_path):
+    """`pcs` share the `characters` sheet types, so pool-basic offers two for a
+    kind most campaigns own none of. Resolving a type for every sheetable kind
+    rather than every kind with a GAP told those campaigns their PCs had been
+    skipped for want of a choice nobody was ever asked to make -- a report of
+    work that did not exist, in the one place whose job is saying what
+    happened."""
+    wid, cid = _campaign(monkeypatch, tmp_path)          # no PCs at all
+    from grimoire.store import overlay
+    overlay.create_entity(cid, "items", "Moon Disc")
+
+    out = sheets.create_missing(cid)                     # and no choices either
+    assert [(c["kind"], c["id"]) for c in out["created"]] == [("items", "moon-disc")]
+    # characters has two types AND a gap -> a real skip; pcs has two types and
+    # no gap -> silence; locations has one type and no gap -> silence.
+    assert [s["kind"] for s in out["skipped"]] == []
+
+    characters.create_character(worlds.world_root(wid), "Mara")
+    assert [s["kind"] for s in sheets.create_missing(cid)["skipped"]] == ["characters"]
+
+
+def _sweep_pack_loads(monkeypatch, cid, sheeted: list[str], gaps: list[str]) -> int:
+    """How many times `create_missing` parses the module pack for a campaign
+    with these already-sheeted members and these gaps."""
+    for eid in sheeted:
+        sheets.write(cid, "characters", eid, "medium", None, expected=None)
+    loads = []
+    real_load = modules_pack.load_pack
+    with monkeypatch.context() as m:
+        m.setattr(modules_pack, "load_pack",
+                  lambda mid: (loads.append(mid), real_load(mid))[1])
+        out = sheets.create_missing(cid, {"characters": "medium", "pcs": "medium"})
+    assert {c["id"] for c in out["created"]} == set(gaps)
+    return len(loads)
+
+
+def test_create_missing_costs_what_it_creates_not_what_it_reads(monkeypatch, tmp_path):
+    """The gap scan is one directory glob, not a `read` per cast member.
+
+    `read` answers the same boolean by resolving the module and parsing and
+    validating the whole pack from disk -- per SHEETED entity, with no memo on
+    `load_pack` -- and this whole sweep runs under the campaign lock that an
+    in-flight turn's `append_reply` also needs and that gives up after
+    LOCK_TIMEOUT. So the invariant is not a fixed number of loads: it is that
+    adding members who ALREADY have sheets costs nothing."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    for name in ("Mara", "Winifred"):
+        characters.create_character(worlds.world_root(wid), name)
+    lean = _sweep_pack_loads(monkeypatch, cid, sheeted=["mara"], gaps=["winifred"])
+
+    wid2, cid2 = _campaign2(monkeypatch, tmp_path)
+    for name in ("Mara", "Seraphine", "Cressida", "Ilse", "Winifred"):
+        characters.create_character(worlds.world_root(wid2), name)
+    fat = _sweep_pack_loads(monkeypatch, cid2,
+                            sheeted=["mara", "seraphine", "cressida", "ilse"],
+                            gaps=["winifred"])
+    assert fat == lean
+
+
+def test_the_roster_flags_what_a_bulk_create_left_incomplete(monkeypatch, tmp_path):
+    """The loop the whole issue is about, end to end: create the missing
+    sheets, then ask who has one -- and get back that they all do and that
+    every one of them still owes its creation pool."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara")
+    characters.create_character(worlds.world_root(wid), "Winifred")
+
+    out = sheets.create_missing(cid, {"characters": "medium", "pcs": "medium"})
+    assert all(c["unspent"] == {"abilities": 6} for c in out["created"])
+
+    rows = {r["id"]: r for r in sheets.roster(cid)["characters"]}
+    assert all(r["sheeted"] and r["errors"] == [] for r in rows.values())
+    assert rows["mara"]["unspent"] == {"abilities": 6}
+    assert rows["winifred"]["unspent"] == {"abilities": 6}
+    assert sheets.coverage(cid)["characters"]["sheeted"] == 2
 
 
 def test_create_missing_takes_the_campaign_lock_once_for_the_whole_sweep(

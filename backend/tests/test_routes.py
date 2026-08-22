@@ -11513,7 +11513,10 @@ def test_campaign_sheets_create_missing_route(client):
     # the whole sweep over one ambiguous kind.
     out = client.post(url, json={}).json()
     assert [(c["kind"], c["id"]) for c in out["created"]] == [("items", "moon-disc")]
-    assert {s["kind"] for s in out["skipped"]} == {"characters", "pcs"}
+    # characters only: `pcs` share those two types, but this campaign owns no
+    # PCs, so it has no gap and reporting it skipped would be reporting work
+    # that never existed.
+    assert {s["kind"] for s in out["skipped"]} == {"characters"}
     assert client.get(f"/api/campaigns/{cid}/sheets").json()["coverage"]["characters"] \
         == {"total": 1, "sheeted": 0, "invalid": 0}
 

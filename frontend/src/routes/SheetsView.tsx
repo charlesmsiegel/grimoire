@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import {
   api, type ModuleDetail, type SheetBulkResult, type SheetRoster, type SheetRosterRow,
 } from "../api/client";
@@ -58,7 +58,6 @@ function typesFor(module: ModuleDetail | null, kind: string): [string, string][]
  */
 export default function SheetsView() {
   const { cid = "" } = useParams();
-  const navigate = useNavigate();
   const [name, setName] = useState("");
   // Every piece of loaded state is held WITH the campaign it came from: this
   // route is not keyed on `cid`, so a campaign switch keeps the component
@@ -133,11 +132,22 @@ export default function SheetsView() {
 
   const missingTotal = plan.reduce((n, p) => n + p.missing, 0);
 
-  const paletteSource = useCallback((): PaletteItem[] => ([{
-    id: `sheets:${cid}`, group: "IN THIS CAMPAIGN", label: "Sheets",
-    meta: roster ? `${missingTotal} without a sheet` : "sheet coverage",
-    run: () => navigate(`/campaigns/${cid}/sheets`),
-  }]), [cid, navigate, roster, missingTotal]);
+  /** What this page contributes to ⌘K: a jump to each kind's first member
+   *  still without a sheet. `usePaletteSource` only registers while this
+   *  component is mounted, so an entry that merely navigated HERE would be an
+   *  entry you can only reach by already being here — the page's own rows are
+   *  the only thing it can usefully offer. */
+  const paletteSource = useCallback((): PaletteItem[] =>
+    plan.flatMap(({ kind, rows, missing }) => {
+      const first = rows.find(isMissing);
+      if (!first) return [];
+      return [{
+        id: `sheets:${kind}`, group: "IN THIS CAMPAIGN",
+        label: `${sheetKindLabel(kind)} without a sheet`,
+        meta: `sheets · ${missing}`,
+        run: () => setSelected({ kind, id: first.id }),
+      }];
+    }), [plan]);
   usePaletteSource(paletteSource);
 
   async function createMissing() {
@@ -242,7 +252,11 @@ export default function SheetsView() {
                 </div>
               ))}
             </div>
-            <aside className="detail-sidebar">
+            {/* Labelled: the shell's context column is a <complementary> too,
+                so an unnamed second one leaves a screen reader with two
+                identical landmarks on a page whose whole point is telling the
+                cast list apart from the one member. */}
+            <aside className="detail-sidebar" aria-label={`${selectedRow.name}'s sheet`}>
               {/* The single-sheet view, whole: read-only chips here, and its own
                   Open sheet button for the edit step. Keyed so moving between
                   two members refetches instead of showing the previous one's
@@ -250,13 +264,15 @@ export default function SheetsView() {
               <SheetPanel key={`${selected.kind}/${selected.id}`}
                           scope={{ kind: "campaign", id: cid }} module={module}
                           kind={selected.kind} eid={selected.id}
-                          onOpenRef={(kind, id) => setSelected({ kind, id })} />
+                          onOpenRef={(kind, id) => setSelected({ kind, id })}
+                          onChanged={() => { reload(); }} />
             </aside>
           </div>
         )}
 
         {!selectedRow && module && roster !== null && (
           <>
+            <div className="ledger-table-wrap">
             <table className="ledger-table">
               <thead>
                 <tr>
@@ -296,6 +312,7 @@ export default function SheetsView() {
                 ))}
               </tbody>
             </table>
+            </div>
 
             {missingTotal === 0 && plan.length > 0 && (
               <p className="field-hint">Every cast member has a sheet.</p>
