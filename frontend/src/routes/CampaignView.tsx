@@ -980,9 +980,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // shared box arrived staged as a player post — the mode having quietly
   // reverted while the text it labelled did not, which is the sticky rule
   // above broken in the one case that writes it into the transcript.
+  // ...and only while there are WORDS for it to belong to (Codex review). The
+  // stamp exists because the composer's text survives a scene switch and its
+  // mode has to survive with it — so with an empty box it has nothing to
+  // protect, and stamping anyway left an ordinary scene silently in Direct
+  // after a visit to an offscreen one, spending the next line typed as a note
+  // instead of posting it. Keyed on `input` rather than on leaving, because
+  // leaving is when `activePcless` goes FALSE and this would no longer run.
   useEffect(() => {
-    if (activePcless) setDirectMode(true);
-  }, [activePcless]);
+    if (activePcless && input.trim()) setDirectMode(true);
+  }, [activePcless, input]);
 
   // Prompts recovered from a turn that stored nothing, held under the scene
   // they were written for until that scene is on screen.
