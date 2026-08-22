@@ -89,6 +89,19 @@ export function bucketPrice(bucket: UsageBucket): string {
   return n(bucket.unpriced_calls) > 0 ? UNPRICED : money(billed);
 }
 
+/** Whether `bucketPrice` is already showing an estimate as the headline.
+ *
+ *  It does that when nothing was billed and exactly one kind of estimate sits
+ *  under the bucket. A caller that also prints a "+ ≈ $X" line then shows the
+ *  same amount twice, reading as two amounts where the ledger holds one — so
+ *  the supplemental lines ask this first. */
+export function headlineIsEstimate(bucket: UsageBucket): boolean {
+  if (n(bucket.cost_usd) > 0 || n(bucket.priced_calls) > n(bucket.subscription_calls)) {
+    return false;
+  }
+  return [n(bucket.estimated_usd), n(bucket.modelled_usd)].filter((v) => v > 0).length === 1;
+}
+
 /** A turn's price, or what an absent one means. `null` is a provider that
  *  reported nothing, which is not the same as a call that cost nothing — and
  *  once a rate exists for its model, the estimate is shown in its place,
