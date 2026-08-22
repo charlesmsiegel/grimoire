@@ -1307,7 +1307,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   useEffect(() => {
     if (!activeId) { setPostCosts(null); return; }
     let live = true;
-    setPostCosts(null);
+    // NOT cleared here on the way to a refetch. `postChips` below already
+    // refuses to render a bucket whose cid/sid is not the transcript on
+    // screen, so clearing bought nothing -- and it made the chips blink out
+    // and back on every `ctxKey` change, which is a real gap under load: the
+    // suite's own `findByText` for a cost could open and close inside it, and
+    // this test reds CI intermittently (#351's shape).
     const forCid = cid;
     const forSid = activeId;
     api.getSceneUsage(forCid, forSid)
