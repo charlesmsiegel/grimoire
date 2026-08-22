@@ -28,7 +28,7 @@ BROWSABLE_KINDS: tuple[str, ...] = (
 
 
 #: Longest span `line_diff` will hand to difflib in one piece. Past it the span
-#: is split on anchor lines first (see `_anchors`), and only what falls between
+#: is split on anchor runs first (see `_anchors`), and only what falls between
 #: those anchors reaches the quadratic matcher. Chosen by measurement: two
 #: maximally repetitive spans of this length sharing neither end cost ~0.1s.
 EXACT_DIFF_LIMIT = 1000
