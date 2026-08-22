@@ -1396,7 +1396,8 @@ test("an absorb whose 202 never arrived is adopted, not reported as failed", asy
     const fetchMock = vi.fn()
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))        // the lost 202
       .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
-                                             attempt_id: null, next_index: 0,
+                                             kind: "absorb", attempt_id: null,
+                                             next_index: 0,
                                              review_generation: "gen1" } }))
       .mockResolvedValueOnce(runResponse("landed"))
       .mockResolvedValueOnce(jsonOk({ review: { one_line: "They met." },
@@ -1431,6 +1432,25 @@ test("an absorb the server refused in words is not adopted", async () => {
 
   expect((failed as ApiError).kind).toBe("already_absorbed");
   expect(fetchMock).toHaveBeenCalledTimes(1);       // no discovery attempt
+});
+
+test("a live retry of an OLDER review is not adopted as this absorb", async () => {
+  // `review` is the class a whole review's runs share, so a scoped retry of
+  // some earlier review's phase wears it too. Adopted here, it would install
+  // that review's generation and hand its summary back as this End scene's
+  // result -- a stale review presented as the one just asked for.
+  const fetchMock = vi.fn()
+    .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+    .mockResolvedValueOnce(jsonOk({ run: { id: "r9", state: "running", cls: "review",
+                                           kind: "audit", attempt_id: null,
+                                           next_index: 0,
+                                           review_generation: "gen-old" } }));
+  globalThis.fetch = fetchMock;
+
+  const failed = await api.absorbScene("run", "s1").then(
+    () => { throw new Error("resolved"); }, (e: unknown) => e);
+
+  expect(failed).toBeInstanceOf(TypeError);
 });
 
 test("an absorb that failed with no run to find still reports the failure", async () => {

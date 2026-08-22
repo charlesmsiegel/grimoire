@@ -3121,3 +3121,77 @@ test("a delayed Stop the server refused is reported, not swallowed", async () =>
     .toHaveBeenCalledWith("run", "s1", "gen-late"));
   expect(await screen.findByText(/the run would not stop/)).toBeInTheDocument();
 });
+
+test("leaving a campaign mid-absorb does not delete the review it is preparing", async () => {
+  // A campaign switch and a Stop both move the counter, and only one of them
+  // wants the run's review DELETED. Told apart by nothing, `endScene`'s
+  // precancel fired `discardReview` for the campaign just left — unlinking the
+  // whole end-of-scene generation the reset promises to preserve, silently,
+  // because the failure path is campaign-guarded.
+  withScene();
+  let name: ((g: string) => void) | null = null;
+  (api.absorbScene as any).mockImplementation(
+    async (_c: string, _s: string, _f: boolean, onStarted: (g: string) => void) => {
+      name = onStarted;                       // the 202 has not arrived yet
+      return new Promise(() => { /* still absorbing */ });
+    });
+  render(
+    <MemoryRouter initialEntries={["/campaigns/run"]}>
+      {withPalette(<>
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
+    </MemoryRouter>,
+  );
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /^End scene$/ }));
+  await waitFor(() => expect(api.absorbScene).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByText("switch campaign"));
+  await waitFor(() => expect(api.getCampaign).toHaveBeenCalledWith("other"));
+  // ...and NOW the server names the review it started, for the campaign the
+  // reader has left.
+  await act(async () => { name!("gen-A"); });
+
+  expect(api.discardReview).not.toHaveBeenCalled();
+  // ...and the scene of the same id in the new campaign is not locked by a
+  // Discard that was never sent.
+  expect(await screen.findByRole("button", { name: "Rename scene" })).toBeEnabled();
+});
+
+test("End scene in a new campaign does not wait on the old one's Discard", async () => {
+  // `endScene` awaits whatever Discard is still settling before it posts, so
+  // that a fresh absorb cannot race the exclusion key. Carried across a
+  // campaign switch, that becomes a wait on a DELETE for a scene in another
+  // campaign — which itself waits up to the server's cancellation timeout per
+  // flagged run, and never answers at all if the request hangs.
+  withScene();
+  (api.absorbScene as any).mockImplementation(
+    async (_c: string, _s: string, _f: boolean, onStarted: (g: string) => void) => {
+      onStarted("gen-A");
+      return new Promise(() => { /* still absorbing */ });
+    });
+  (api.discardReview as any).mockReturnValue(
+    new Promise(() => { /* the DELETE never answers */ }));
+  render(
+    <MemoryRouter initialEntries={["/campaigns/run"]}>
+      {withPalette(<>
+        <Link to="/campaigns/other">switch campaign</Link>
+        {playRoutes()}
+      </>)}
+    </MemoryRouter>,
+  );
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /^End scene$/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Stop$/ }));
+  await waitFor(() => expect(api.discardReview).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByText("switch campaign"));
+  await waitFor(() => expect(api.getCampaign).toHaveBeenCalledWith("other"));
+  await screen.findByText("hi");
+  (api.absorbScene as any).mockClear();
+  fireEvent.click(await screen.findByRole("button", { name: /^End scene$/ }));
+
+  await waitFor(() => expect(api.absorbScene).toHaveBeenCalledWith(
+    "other", "s1", false, expect.any(Function)));
+});

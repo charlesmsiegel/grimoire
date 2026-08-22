@@ -1727,7 +1727,11 @@ export const api = {
       // and every one of those is the caller's to handle, not a run to adopt.
       if (err instanceof ApiError || isAbortError(err)) throw err;
       const live = await api.liveReview(cid, sid).catch(() => null);
-      if (!live?.review_generation) throw err;
+      // ...and it has to be an ABSORB. `review` is the class a whole review's
+      // runs share, so a scoped retry of some EARLIER review's phase wears it
+      // too -- and adopting one would install that review's generation and
+      // hand its summary back as this End scene's result.
+      if (live?.kind !== "absorb" || !live.review_generation) throw err;
       started = { run: live, generation: live.review_generation };
     }
     onStarted?.(started.generation);
