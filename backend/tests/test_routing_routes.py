@@ -239,6 +239,46 @@ def test_absorbs_phases_each_follow_their_own_route(client):
     assert dossiers in used, "the dossier loop did not use the dossier route"
 
 
+def test_a_misrouted_secondary_phase_reports_itself_and_leaves_absorb_standing(client):
+    """The three phases beside the extraction promise never to fail an absorb.
+
+    Resolving their connections up front made a routing mistake for one of them
+    a 409 that discarded the extraction's result too -- a setting the extraction
+    does not use taking down the phase whose output the reviewer came for.
+    """
+    _wid, cid, sid = _seed(client)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": "mara"})
+    keyless = client.post("/api/llm-connections",
+                          json={"kind": "openrouter", "name": "Keyless"}).json()["id"]
+    client.put("/api/routing", json={"routes": {"dossier": keyless}})
+    _fake(client)
+
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+
+    assert r.status_code == 200, r.text
+    dossiers = r.json()["dossiers"]
+    assert dossiers["status"] == "failed"
+    assert "key" in (dossiers["reason"] or "").lower()
+    # And the absorb itself landed: a 200 carrying an extraction is exactly what
+    # "the dossier route did not take this down with it" looks like.
+    assert r.json()["one_line"] is not None
+
+
+def test_a_misrouted_extraction_still_refuses_the_whole_absorb(client):
+    """The other half of the same rule. The extraction's failure is fatal to an
+    absorb anyway, so its route gets the 409 the secondary phases do not."""
+    _wid, cid, sid = _seed(client)
+    keyless = client.post("/api/llm-connections",
+                          json={"kind": "openrouter", "name": "Keyless"}).json()["id"]
+    client.put("/api/routing", json={"routes": {"absorb": keyless}})
+    _fake(client)
+
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+
+    assert r.status_code == 409 and r.json()["kind"] == "missing_key"
+
+
 def test_a_scene_turn_and_its_retry_share_the_one_route(client):
     """#142 named the scene turn's retries and director turns as part of ONE
     task, so a reader who sets "Scene turns" gets all of them."""

@@ -1566,8 +1566,26 @@ def _phase_report(dossiers: dict, voice: dict, mechanics: dict) -> list[dict]:
                                 ("audit", mechanics))]
 
 
-async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
-                     budget: _Budget, abandoned=None) -> tuple[list[dict], dict]:
+def _phase_connection(task: str, cid: str) -> tuple[dict | None, str]:
+    """The connection a SECONDARY absorb phase runs on, or why it has none (#142).
+
+    `(None, reason)` rather than a raised 409, because the three phases below
+    each promise never to fail an absorb: a dossier refresh routed at a
+    connection with no key is that phase reporting `failed` with a reason the
+    inspector shows, not the extraction losing its result over a setting it does
+    not use. The extraction itself keeps the 409 -- it is the phase whose failure
+    is fatal anyway.
+    """
+    try:
+        return _require_connection(task, cid), ""
+    except HTTPException as exc:
+        detail = exc.detail
+        return None, str(detail.get("detail") if isinstance(detail, dict) else detail)
+
+
+async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict | None,
+                     budget: _Budget, abandoned=None,
+                     unroutable: str = "") -> tuple[list[dict], dict]:
     """(edits, mechanics) for the scene audit. Never raises for absorb; every
     failure is an explicit mechanics status (spec: audit visibility) so absorb
     stays intact even when the audit pipeline blows up.
@@ -1582,6 +1600,10 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
     the never-raises rule above is untouched on that path."""
     mech = {"status": "skipped", "reason": None, "warnings": [], "dropped": [],
             "attempted": False, "budget_exhausted": False}
+    if conn is None:
+        # No usable connection for this phase's route -- reported the way every
+        # other audit failure is, so the absorb around it still lands.
+        return [], {**mech, "status": "failed", "reason": unroutable or "no connection"}
     excluded: list = []
     try:
         if store.modules.resolve(cid) is None:
@@ -1644,8 +1666,9 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
 
 
 async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient,
-                          conn: dict, budget: _Budget,
-                          abandoned=None) -> tuple[list[dict], dict]:
+                          conn: dict | None, budget: _Budget,
+                          abandoned=None,
+                          unroutable: str = "") -> tuple[list[dict], dict]:
     """Propose a refreshed campaign dossier for every present NPC, reporting the
     outcome.
 
@@ -1670,6 +1693,8 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
     out: dict = {"status": "skipped", "reason": None,
                  "proposed": [], "failed": [], "skipped": [],
                  "attempted": False, "budget_exhausted": False}
+    if conn is None:
+        return [], {**out, "status": "failed", "reason": unroutable or "no connection"}
     edits: list[dict] = []
     try:
         cast = store.appearances.scene_cast(cid, sid)
@@ -1796,7 +1821,8 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
 
 
 async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMClient,
-                             conn: dict, budget: _Budget) -> tuple[list[dict], dict]:
+                             conn: dict | None, budget: _Budget,
+                             unroutable: str = "") -> tuple[list[dict], dict]:
     """Judge every present NPC's dialogue in this scene against their voice
     anchor, proposing a drift flag (or a clear) for each.
 
@@ -1816,6 +1842,8 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
     out: dict = {"status": "skipped", "reason": None, "checked": [], "flagged": [],
                  "unjudged": [], "failed": [], "skipped": [],
                  "attempted": False, "budget_exhausted": False}
+    if conn is None:
+        return [], {**out, "status": "failed", "reason": unroutable or "no connection"}
     edits: list[dict] = []
     try:
         cast = store.appearances.scene_cast(cid, sid)
@@ -2122,19 +2150,25 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     #
     # All three resolved HERE, before the meter opens and before a single
     # coroutine is built. Resolved inline in the `_gather_phases(...)` argument
-    # list instead, a 409 from the third would leave the first two coroutines
-    # created and never awaited, and would file a failed absorb row for a call
-    # that was never made.
-    dossier_conn = _require_connection("dossier", cid)
-    voice_conn = _require_connection("voice-drift", cid)
-    audit_conn = _require_connection("audit", cid)
+    # list instead, a failure from the third would leave the first two
+    # coroutines created and never awaited.
+    #
+    # And resolved through `_phase_connection`, which reports instead of
+    # raising: these three promise never to fail an absorb, so a route pointing
+    # one of them at a keyless connection has to come back as that phase's
+    # status rather than as a 409 that discards the extraction's result too.
+    dossier_conn, dossier_why = _phase_connection("dossier", cid)
+    voice_conn, voice_why = _phase_connection("voice-drift", cid)
+    audit_conn, audit_why = _phase_connection("audit", cid)
     with store.usage.meter("absorb", campaign=cid, scene=sid) as m:
         results = await _gather_phases(
             budget.run(client.complete(messages, conn, m.usage),
                        on_timeout=_noting(client, conn, m.usage)),
-            _stage_dossiers(cid, sid, transcript, client, dossier_conn, budget),
-            _stage_voice_drift(cid, sid, transcript, client, voice_conn, budget),
-            _run_audit(cid, sid, client, audit_conn, budget),
+            _stage_dossiers(cid, sid, transcript, client, dossier_conn, budget,
+                            unroutable=dossier_why),
+            _stage_voice_drift(cid, sid, transcript, client, voice_conn, budget,
+                               unroutable=voice_why),
+            _run_audit(cid, sid, client, audit_conn, budget, unroutable=audit_why),
             limit=store.config.absorb_concurrency())
     text, dossier_result, voice_result, audit_result = results
     if isinstance(text, BaseException):
