@@ -1819,6 +1819,65 @@ test("a live comparison marks itself stale while the replacement is in flight", 
     expect(screen.queryByText(/A turn has landed since this was computed/)).toBeNull());
 });
 
+test("moving to another turn with a live comparison selected stays in compare mode", async () => {
+  // The picker keeps saying "The live preview" across the move, so the panel
+  // must not drop to the ordinary breakdown underneath it while the
+  // replacement diff is in flight — two controls contradicting each other, and
+  // indefinitely so if that request never answers.
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockImplementation((_c: string, _s: string, eid: string) =>
+    Promise.resolve({ ...FROZEN, id: eid, task: eid === "000002" ? "regenerate" : "chat" }));
+  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+  fireEvent.change(await screen.findByLabelText("Compare with"), { target: { value: "live" } });
+  await screen.findByText("the pact was signed at dusk");
+
+  let release: (v: any) => void = () => {};
+  (api.getScenePromptDiff as any).mockReturnValue(new Promise((r) => { release = r; }));
+  fireEvent.click(screen.getByRole("button", { name: /^Regenerate/ }));
+
+  await screen.findByText("Comparing…");
+  expect(screen.getByLabelText<HTMLSelectElement>("Compare with").value).toBe("live");
+  // ...and specifically NOT the frozen breakdown the fall-through used to show
+  expect(screen.queryByText("the lore as it stood then")).toBeNull();
+
+  release(DIFF);
+  await screen.findByText("the pact was signed at dusk");
+});
+
+test("the very first comparison also waits rather than showing the breakdown", async () => {
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  let release: (v: any) => void = () => {};
+  (api.getScenePromptDiff as any).mockReturnValue(new Promise((r) => { release = r; }));
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+
+  fireEvent.change(await screen.findByLabelText("Compare with"), { target: { value: "live" } });
+  await screen.findByText("Comparing…");
+  release(DIFF);
+  await screen.findByText("the pact was signed at dusk");
+});
+
+test("a failed comparison falls back to the turn rather than waiting forever", async () => {
+  // The pending state must not outlive the request: the catch clears the
+  // picker, so the panel has a comparison to fall back FROM.
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  (api.getScenePromptDiff as any).mockRejectedValue({ status: 404, detail: "gone" });
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+
+  fireEvent.change(await screen.findByLabelText("Compare with"), { target: { value: "live" } });
+  await screen.findByText(/aged out of the log/);
+  await screen.findByText("the lore as it stood then");
+  expect(screen.queryByText("Comparing…")).toBeNull();
+});
+
 test("an evicted turn on either end says so rather than blanking", async () => {
   (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
   (api.getScenePrompt as any).mockResolvedValue(FROZEN);

@@ -1459,9 +1459,21 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
         )}
         {/* A comparison replaces the breakdown rather than sitting under it.
             Both are long, the rail is one column, and a reader who asked what
-            MOVED is not helped by having to scroll past what did not. */}
+            MOVED is not helped by having to scroll past what did not.
+
+            The middle branch is what a comparison looks like before its answer
+            arrives, and it exists because the fall-through was wrong: with a
+            comparison selected but no diff stamped for THESE two ends -- the
+            first pick, or the moment after clicking another turn while the live
+            comparison stays selected -- the panel dropped to the ordinary
+            breakdown while the picker still read "The live preview". Two
+            controls contradicting each other, and indefinitely so if the
+            request never answers. The stale-diff case above keeps its answer
+            and marks it; this one has no answer to keep, so it says that
+            instead of showing something else. */}
         {shownDiff ? <ContextDiff diff={shownDiff} recomputing={recomputing} />
-                   : shown && <ContextBreakdown ctx={shown} models={models} />}
+         : compare && seen ? <p className="field-hint">Comparing…</p>
+         : shown && <ContextBreakdown ctx={shown} models={models} />}
       </SideSection>
 
       {/* Directly under Context, and that adjacency is the point (#153): the
