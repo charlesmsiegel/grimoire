@@ -38,6 +38,11 @@ function n(value: number | undefined | null): number {
  *  silently stop one of them from recognising the case. */
 export const UNPRICED = "unpriced";
 
+/** `cost_basis` for a call billed against a subscription rather than per token.
+ *  Its `cost_usd` is the provider's own estimate of what it would have cost,
+ *  which is real usage and not money anybody paid. */
+export const EQUIVALENT = "equivalent";
+
 /** A dollar figure at the precision it is actually worth reading at. A cheap
  *  model's turn costs $0.0042, and `toFixed(2)` renders every one of them as
  *  $0.00 — a whole scene of "free" turns adding up to a bill. */
@@ -88,11 +93,20 @@ export function bucketPrice(bucket: UsageBucket): string {
  *  reported nothing, which is not the same as a call that cost nothing — and
  *  once a rate exists for its model, the estimate is shown in its place,
  *  marked. */
-export function turnPrice(turn: Pick<UsageTurn, "cost_usd" | "modelled_usd">): string {
+export function turnPrice(
+  turn: Pick<UsageTurn, "cost_usd" | "modelled_usd" | "cost_basis">,
+): string {
   // `== null` covers both null and the absent field an older response carries,
   // which is the difference between "unpriced" and a `≈ <$0.0001` built out of
   // `undefined`.
-  if (turn.cost_usd != null) return money(turn.cost_usd);
+  if (turn.cost_usd != null) {
+    // A subscription turn's `cost_usd` is what it WOULD have cost, not what
+    // anyone paid — so it is marked here, in the collapsed row. The row's body
+    // says so too, but that is only visible once expanded, and the turn list
+    // is the surface a reader scans. An unmarked `$…` there is non-spend
+    // presented as spend, which is the one thing this module exists to prevent.
+    return turn.cost_basis === EQUIVALENT ? about(turn.cost_usd) : money(turn.cost_usd);
+  }
   return turn.modelled_usd != null ? about(turn.modelled_usd) : UNPRICED;
 }
 

@@ -288,3 +288,16 @@ def test_a_table_over_the_cap_on_disk_is_read_up_to_it(home):
                   for n in range(pricing.MAX_ENTRIES + 5)})
 
     assert len(pricing.read_pricing()) == pricing.MAX_ENTRIES
+
+
+def test_a_rate_that_overflows_a_real_token_count_answers_nothing(home):
+    """`1e308` is finite and the table accepts it, but times a few thousand
+    tokens it is `inf` — a value `json.dumps` cannot write, so one absurd rate
+    would 500 every cost endpoint until the file was edited by hand."""
+    entry = {"prompt_usd_per_1k": 1e308, "completion_usd_per_1k": 1e308}
+
+    assert pricing.estimate(entry, prompt_tokens=5000, completion_tokens=5000) is None
+    # A sane rate beside it still works — the guard is on the result, not the
+    # magnitude of the input.
+    assert pricing.estimate({"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0},
+                            prompt_tokens=5000, completion_tokens=5000) is not None

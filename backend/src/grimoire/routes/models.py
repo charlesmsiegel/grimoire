@@ -169,7 +169,12 @@ class PricingBody(BaseModel):
     hold for a file the user can hand-edit — one implementation, one answer,
     whichever door the table came through.
     """
-    rates: dict = {}
+    #: REQUIRED, with no default. A PUT here replaces the whole table, so a
+    #: body that omits `rates` would otherwise be a successful request that
+    #: deletes every rate the user has -- which is what a version-skewed or
+    #: malformed client sends. Clearing the table on purpose is still available
+    #: and still says so out loud: `{"rates": {}}`.
+    rates: dict
 
 
 class NameBody(BaseModel):
