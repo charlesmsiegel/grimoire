@@ -4918,6 +4918,56 @@ test("a held Speak draft says so too, not only a held note", async () => {
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
 });
 
+test("recovered dialogue restores Speak, not just notes restoring Direct", async () => {
+  // Codex review. The mode restoration was one-sided: dialogue recovered into
+  // a composer left in Direct stayed staged as a note, and the next send spent
+  // it as an ephemeral instruction instead of posting it. The round-two bug
+  // with its mirror still in place.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, total: 0, messages: [] });
+  let fail: () => void = () => {};
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) =>
+      new Promise<void>((resolve) => {
+        fail = () => {
+          onEvent({ error: { detail: "the provider gave up", post_returned: true } });
+          resolve();
+        };
+      }));
+  renderCampaign();
+  const box = await screen.findByPlaceholderText(/speak your intent/i);
+  fireEvent.change(box, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+
+  // switch to Direct, leaving the box EMPTY so the hold rule does not apply
+  await waitFor(() => expect(screen.getByRole("button", { name: "Direct" })).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+  fail();
+
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
+  // the words came back as DIALOGUE, so the box is staged to post them
+  expect(screen.getByRole("button", { name: "Speak" })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("a Direct turn that generated nothing at all hands the note back", async () => {
+  // Codex review. A provider can finish cleanly and write nothing — an empty
+  // safety response is a shape the backend supports, and it still ends the
+  // stream with `done`. The turn then counts as landed, so no failure branch
+  // fires, and the note — already cleared out of the composer — would exist
+  // nowhere, with no reply to show for it either.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, total: 0, messages: [] });
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => { onEvent({ done: true }); });
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Direct" }));
+  fireEvent.change(screen.getByPlaceholderText(/direct the scene/i),
+                   { target: { value: "the storm intensifies" } });
+  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
+
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("the storm intensifies"));
+});
+
 test("a running scene's director note does not show in another scene", async () => {
   // Codex P2. `busy` is global and the note carried no scene, so a Direct turn
   // left running in one scene rendered its note inside whatever transcript the

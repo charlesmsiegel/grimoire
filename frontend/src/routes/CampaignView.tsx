@@ -1064,7 +1064,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // been writing something of their own in another scene in the meantime,
     // and flipping the shared composer's mode under that draft would mis-stage
     // it. The mode arrives with the words it belongs to.
-    if (held.director) setDirectMode(true);
+    setDirectMode(held.director);   // both directions, as above
   }, [cid, activeId, parkedTick, giveBackPrompt, input, directing]);
 
   // Where a recovered prompt goes: the composer if the player is still on the
@@ -1085,7 +1085,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (activeCidRef.current === pcid && activeIdRef.current === sid
         && (!inputRef.current.trim() || director === directingRef.current)) {
       giveBackPrompt(text);
-      if (director) setDirectMode(true);
+      // BOTH directions (Codex review). One-sided, this restored dialogue into
+      // a composer left in Direct, and the next send spent it as an ephemeral
+      // note instead of posting it — the round-two bug with its mirror still
+      // in place. The recovered kind decides the mode, whichever kind it is.
+      setDirectMode(director);
       return;
     }
     parkedPrompts.current.set(parkKey(pcid, sid), { text, director });
@@ -2298,7 +2302,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // Whether this turn persists a post of its own. An ephemeral one does not,
     // which changes what evidence the recovery below can use — see there.
     ephemeral = false,
+    // The 🎬 note this generation is steering, or null for the generations that
+    // steer with nothing — an ordinary post, a reroll, a resolved proposal.
+    // Owned HERE rather than at the call sites (Codex review): every stream
+    // enters by this function, and `send` was only one of five ways in, so a
+    // note left over from a previous turn rendered beside a reroll or a
+    // proposal continuation as though it had steered them.
+    note: { cid: string; sid: string; text: string } | null = null,
   ) {
+    setDirectorNote(note);
     // The authoritative rename guard, not the ones in `send`/`retry`/`reroll`.
     // Those stop the optimistic UI work before it happens, but they are a list
     // of call sites — and review found the one that was missing: resolving a
@@ -2366,6 +2378,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // to count as a landed turn while the reply was still in the flush.
     let finished = false;
     let errored = false;
+    // Whether this stream answered with a roll proposal rather than narration.
+    // A director turn that did is a turn whose note was SPENT, even though the
+    // transcript did not grow -- see the recovery condition below.
+    let proposed = false;
     let unreached = false;  // the request never reached the server
     // The server answered with a status instead of a stream. A fourth question,
     // because it is the one outcome that is *complete* on arrival: `streamPost`
@@ -2392,6 +2408,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           // prompt of its own and 400s on a scene with nothing else in it (#95).
           if (e.error.post_returned) onPromptUnstored?.();        } else if (e.proposal) {
           // Live from the stream, so it outranks any read still in flight.
+          proposed = true;
           setProposalNow({ id: e.proposal.id, status: "pending", payload: e.proposal, resolution: null });
         } else if (e.done) {
           finished = true;
@@ -2665,8 +2682,22 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         // `post_returned` unreachable for these turns, this cannot double up
         // with the in-stream recovery.
         const diedWithNothing = ephemeral && errored && nothingLanded;
+        // A provider can finish CLEANLY and write nothing: an empty safety
+        // response is a shape the backend supports, and it still ends the
+        // stream with `done` (Codex review). `landed` is then true, so none of
+        // the branches above fires and an ephemeral turn's note -- already
+        // cleared out of the composer -- would exist nowhere at all, with no
+        // reply to show for it either.
+        //
+        // `!proposed` is the exception that keeps this honest: a director turn
+        // that answered with a roll proposal instead of narration DID produce
+        // something, and its note was spent doing so. The transcript not
+        // growing is not "nothing happened" in that case.
+        const finishedWithNothing = ephemeral && finished && !errored
+          && nothingLanded && !proposed;
         if (((unreached || refused) && (unverifiable || nothingLanded))
-            || (interrupted && nothingLanded) || diedWithNothing) {
+            || (interrupted && nothingLanded) || diedWithNothing
+            || finishedWithNothing) {
           onPromptUnstored?.();
         }
         // Nothing to wait for when nothing on the server can produce a partial: a
@@ -2802,7 +2833,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // have steered something it never saw. Every send now states what note is
     // in force, and for a Speak post that statement is "none".
     const note = directing && content ? { cid, sid: id, text: content } : null;
-    setDirectorNote(note);
     if (directing || !content) {
       try {
         const landed = await runStream(id,
@@ -2812,7 +2842,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           // An empty send has nothing to give back — it is the "next NPC round"
           // fast path, not words anyone typed.
           content ? () => recoverPrompt(cid, id, content, true) : undefined,
-          false, "", true);
+          false, "", true, note);
         if (landed) setPendingResponse(null);
       } finally {
         setDirectorNote((cur) => (cur === note ? null : cur));
