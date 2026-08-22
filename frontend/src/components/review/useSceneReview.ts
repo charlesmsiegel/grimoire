@@ -19,6 +19,9 @@ import {
 
 export type SceneReview = ReturnType<typeof useSceneReview>;
 
+/** How far a scene has moved since its stored review was prepared. */
+type StaleReview = { prepared_posts: number; current_posts: number };
+
 export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismissError,
                                  onSaved }: {
   cid: string;
@@ -57,8 +60,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   // summarises posts that are no longer there. Surfaced beside End scene so
   // the reviewer is told to re-run rather than shown a panel whose save is
   // going to be refused.
-  const [staleReview, setStaleReview] =
-    useState<{ prepared_posts: number; current_posts: number } | null>(null);
+  const [staleReview, setStaleReview] = useState<StaleReview | null>(null);
   // Which review is open, readable AFTER an await. A scoped retry (audit or
   // dossiers) gets a budget of its own, so it can still be in flight minutes
   // later -- long enough for the reviewer to Discard, absorb another scene, and
@@ -105,6 +107,12 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   // still holding the scene, so a composer unlocked in the meantime offers a
   // send the server refuses.
   const [settlingSid, setSettlingSid] = useState<string | null>(null);
+  // Which scene the stale notice above belongs to. Read rather than cleared on
+  // a scene change: the adoption effect re-runs for the new scene, but nothing
+  // in it clears a notice when that scene has neither a pending nor a live
+  // review -- so scene A's "the transcript changed" sat beside B's End scene
+  // claiming B had moved, which invites an absorb nobody needed.
+  const [staleSid, setStaleSid] = useState<string | null>(null);
 
   function noteDiscard(p: Promise<unknown>, sid: string | null) {
     discardRef.current = p;
@@ -115,6 +123,14 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
         setSettlingSid((s) => (s === sid ? null : s));
       }
     });
+  }
+
+  /** Raise or drop the stale-review notice, always with the scene it is about.
+   *  One setter for the pair so they cannot come apart -- a notice whose sid is
+   *  stale is a notice shown beside the wrong scene. */
+  function setStale(stale: StaleReview | null, sid: string | null) {
+    setStaleReview(stale);
+    setStaleSid(stale ? sid : null);
   }
 
   /** Whether a review run is holding this scene against play.
@@ -259,10 +275,24 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     // alike, would then be posted to B. Scene ids repeat across campaigns, so
     // those requests succeed rather than 404.
     releaseRetries();
+    // ...and the ABSORB, which `releaseRetries` does not cover. A campaign
+    // switch mid-absorb left `absorbing` set, and `endScene` refuses every call
+    // while it is -- so B could not end any scene until A's poll settled, which
+    // for an unbounded or wedged absorb is never. Bumped as well as cleared, so
+    // the old continuation is inert in both directions: its guarded `finally`
+    // cannot take "Ending…" off a fresh absorb here, and coming BACK to A does
+    // not let its answer install into a mount that has since been reset.
+    // The run itself is left alone deliberately -- it is still preparing A's
+    // review and that review is still wanted, on disk, where A's next mount
+    // adopts it.
+    absorbStopRef.current++;
+    setAbsorbing(false);
+    setAdopting(false);
     setAbsorb(null);
     setAbsorbSid(null);
     setGeneration(null);
     setStaleReview(null);
+    setStaleSid(null);
     // Scene ids repeat across campaigns -- a fork has the same ones by
     // construction -- and `holdsScene` compares them bare, so a Discard still
     // in flight for campaign A would lock the same-id scene in B for as long
@@ -284,7 +314,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     setAbsorb(review);
     setAbsorbSid(sid);
     setGeneration(gen);
-    setStaleReview(null);
+    setStale(null, null);
     setEditRows(review.edits.map((e) => ({ ...e, approved: approvedByDefault(e) })));
     // A fresh review opens on whichever drawer needs a person, which
     // `openSection` works out — but the *stored* choice has to be reset, or
@@ -331,7 +361,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
         // is no panel here, so no Cancel to name it with, and End scene does
         // not delete on the way in -- a fresh absorb replaces the record. What
         // the reader needs is the notice, which is what this is.
-        setStaleReview(pending.stale);
+        setStale(pending.stale, sid);
         return;
       }
       let live;
@@ -340,7 +370,22 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       } catch {
         return;
       }
-      if (dropped || campaignRef.current !== cid || hasReviewRef.current || !live) return;
+      if (dropped || campaignRef.current !== cid || hasReviewRef.current) return;
+      if (!live) {
+        // "No live run" is not "no review". The absorb can LAND between the two
+        // reads above -- the store said nothing was ready, and by the time this
+        // asked, the run had finished and `liveReview` filtered it out for
+        // being terminal. Returning there left a completed review invisible for
+        // as long as the scene stayed selected (this effect is keyed on it),
+        // with End scene enabled to run the whole absorb again and replace it.
+        // One more read closes the window rather than narrowing it: whatever
+        // the run did, the store now has the answer.
+        const settled = await api.pendingReview(cid, sid).catch(() => null);
+        if (dropped || campaignRef.current !== cid || hasReviewRef.current) return;
+        if (settled?.review) openReview(settled.review, sid, settled.generation);
+        else if (settled?.stale) setStale(settled.stale, sid);
+        return;
+      }
       // Still generating. Show the panel as busy and wait it out -- the run is
       // the server's, and this client is a subscriber that can come and go.
       // Captured, not bumped: this wait does not supersede anything, it just
@@ -359,7 +404,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
         if (dropped || campaignRef.current !== cid || hasReviewRef.current
             || absorbStopRef.current !== stopGen) return;
         if (landed.review) openReview(landed.review, sid, landed.generation);
-        else setStaleReview(landed.stale);
+        else setStale(landed.stale, sid);
       } catch (err: unknown) {
         if (dropped || campaignRef.current !== cid
             || absorbStopRef.current !== stopGen) return;
@@ -422,7 +467,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     // whole of an absorb, which is the one window it exists to cover.
     setAbsorbSid(activeId);
     clearError();
-    setStaleReview(null);
+    setStale(null, null);
     setEditFailures([]);
     setConflicts([]);
     try {
@@ -460,7 +505,17 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
           setGeneration(g);
           return;
         }
-        noteDiscard(api.discardReview(cid, activeId, g).catch(() => {}), activeId);
+        // Reported, not swallowed. `stopAbsorb` had no generation to name when
+        // the reader pressed Stop, so this is the ONLY cancellation this Stop
+        // ever gets: a network or busy failure here leaves an unbounded run
+        // holding the scene with nothing left to stop it, and the reader
+        // believing they stopped it. Same reasoning `stopAbsorb` carries for
+        // its own DELETE, one step earlier.
+        const stopping = api.discardReview(cid, activeId, g);
+        noteDiscard(stopping.catch(() => {}), activeId);
+        void stopping.catch((err: unknown) => {
+          if (campaignRef.current === cid) fail(err, false);
+        });
       };
       let a;
       try {
@@ -665,7 +720,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     setAbsorb(null);
     setAbsorbSid(null);
     setGeneration(null);
-    setStaleReview(null);
+    setStale(null, null);
     setEditRows([]);
     setEditFailures([]);
     setSaveError(null);
@@ -1008,7 +1063,10 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   const openDrawer = (key: string) => setReviewSection(key);
 
   return {
-    absorb, absorbSid, generation, staleReview, holdsScene,
+    absorb, absorbSid, generation, holdsScene,
+    /** The "this scene moved after its review was prepared" notice — and only
+     *  when the scene it was raised for is the one on screen. */
+    staleReview: staleSid !== null && staleSid === activeId ? staleReview : null,
     /** Whether THIS scene is the one a Discard is still settling for. The play
      *  controls treat that as the scene being held, because it is; End scene
      *  does not, because End scene is the one operation that WAITS for it
@@ -1021,7 +1079,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
      *  B's lock -- which on B is not this Discard at all but the shielded-abort
      *  window (#95) that End scene must never be pressed inside. */
     settlesScene: (sid: string | null) => !!sid && settlingSid === sid,
-    dismissStale: () => setStaleReview(null),
+    dismissStale: () => setStale(null, null),
     editRows, reviewQuote, setReviewQuote,
     editChronicle, openSection, openDrawer,
     editFailures, dismissFailures: () => setEditFailures([]),

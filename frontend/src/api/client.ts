@@ -243,6 +243,34 @@ async function awaitRun(cid: string, sid: string, started: RunHandle,
                      error?.kind ?? run.state, error);
 }
 
+/** The stored review a scoped retry folded itself into, when its run is gone.
+ *
+ *  A retry is a detached run like the absorb, and it merges its phase into the
+ *  durable record before its own run record is anything but a receipt. Runs
+ *  stop being discoverable after the retention window, and a suspended tab --
+ *  a locked phone, the case this whole feature exists for -- is away longer
+ *  than that routinely. The poll then 404s on a retry that landed perfectly
+ *  well, the panel keeps showing the phase it was retrying, and saving commits
+ *  those stale rows and clears the record: the completed retry is gone, and
+ *  nothing ever said so.
+ *
+ *  ONLY for `run_gone`, and that narrowness is the point. A run that ended
+ *  `failed` never merged anything, so reading the record back would hand the
+ *  panel the PRE-retry phase and present it as this retry's result -- a wrong
+ *  answer dressed as a right one. A phase that ran and found nothing reports
+ *  that as a status on a landed run and never reaches here at all.
+ *
+ *  Matched on the generation, for `absorbScene`'s reason: a scene can be
+ *  holding a review this retry has nothing to do with.
+ */
+async function reapedPhase(cid: string, sid: string, generation: string,
+                           err: unknown): Promise<SceneAbsorb> {
+  if (!(err instanceof ApiError) || err.kind !== "run_gone") throw err;
+  const stored = await api.pendingReview(cid, sid).catch(() => null);
+  if (!stored?.review || stored.generation !== generation) throw err;
+  return stored.review;
+}
+
 function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -1681,8 +1709,27 @@ export const api = {
   // panel with no generation to name has no way to stop what it started.
   absorbScene: async (cid: string, sid: string, force = false,
                       onStarted?: (generation: string) => void) => {
-    const started = await request<{ run: RunHandle; generation: string }>(
-      "POST", `/api/campaigns/${cid}/scenes/${sid}/absorb${force ? "?force=true" : ""}`);
+    let started: { run: RunHandle; generation: string };
+    try {
+      started = await request<{ run: RunHandle; generation: string }>(
+        "POST", `/api/campaigns/${cid}/scenes/${sid}/absorb${force ? "?force=true" : ""}`);
+    } catch (err) {
+      // A POST WITH NO RESPONSE IS AMBIGUOUS. The server can have accepted it,
+      // reserved the run and started generating, and the 202 be lost on the way
+      // back -- a dropped link, a WebView backgrounded in the same second. The
+      // caller then clears its latch for an absorb that is running: the scene
+      // is held against play for as long as it takes, End scene answers
+      // `run_in_flight`, and there is no generation to offer a Stop with,
+      // because `onStarted` never fired.
+      //
+      // Only for a failure that carried NO reply. An `ApiError` means the
+      // server answered -- `already_absorbed`, a missing key, a busy scene --
+      // and every one of those is the caller's to handle, not a run to adopt.
+      if (err instanceof ApiError || isAbortError(err)) throw err;
+      const live = await api.liveReview(cid, sid).catch(() => null);
+      if (!live?.review_generation) throw err;
+      started = { run: live, generation: live.review_generation };
+    }
     onStarted?.(started.generation);
     try {
       await awaitRun(cid, sid, started.run);
@@ -1740,16 +1787,35 @@ export const api = {
   retryAudit: async (cid: string, sid: string, signal?: AbortSignal) => {
     const started = await request<{ run: RunHandle; generation: string }>(
       "POST", `/api/campaigns/${cid}/scenes/${sid}/audit`, undefined, { signal });
-    const run = await awaitRun(cid, sid, started.run, signal);
-    return (run.result ?? {}) as unknown as { mechanics: Mechanics; edits: StagedEdit[] };
+    try {
+      const run = await awaitRun(cid, sid, started.run, signal);
+      return (run.result ?? {}) as unknown as { mechanics: Mechanics; edits: StagedEdit[] };
+    } catch (err) {
+      // The server folded this retry into the stored review before the run
+      // record was reaped, so the phase is on disk even though the run is not.
+      const stored = await reapedPhase(cid, sid, started.generation, err);
+      return { mechanics: stored.mechanics,
+               edits: stored.edits.filter((e) => e.kind === "sheet") };
+    }
   },
   // The dossier phase's sibling to retryAudit (#286): re-runs that phase alone,
   // on a fresh budget, without disturbing the rest of the open review.
   retryDossiers: async (cid: string, sid: string, signal?: AbortSignal) => {
     const started = await request<{ run: RunHandle; generation: string }>(
       "POST", `/api/campaigns/${cid}/scenes/${sid}/dossiers`, undefined, { signal });
-    const run = await awaitRun(cid, sid, started.run, signal);
-    return (run.result ?? {}) as unknown as { dossiers: Dossiers; edits: StagedEdit[] };
+    try {
+      const run = await awaitRun(cid, sid, started.run, signal);
+      return (run.result ?? {}) as unknown as { dossiers: Dossiers; edits: StagedEdit[] };
+    } catch (err) {
+      const stored = await reapedPhase(cid, sid, started.generation, err);
+      // `proposed` is the phase's own list of who it prepared a dossier for --
+      // the same projection `pending_reviews.merge_dossiers` kept the rows by,
+      // so this reads back exactly the rows that retry contributed.
+      const proposed = new Set(stored.dossiers?.proposed ?? []);
+      return { dossiers: stored.dossiers,
+               edits: stored.edits.filter(
+                 (e) => e.kind === "dossier" && proposed.has(e.target?.id)) };
+    }
   },
   opener: (cid: string, sid: string, prompt: string, onEvent: (e: ChatEvent) => void) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/opener`, { prompt }, onEvent),
