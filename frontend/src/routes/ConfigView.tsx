@@ -7,6 +7,7 @@ import {
 import { BackupsPanel } from "../components/BackupsPanel";
 import { ContextBudgetBar } from "../components/ContextBudgetBar";
 import { ColumnSection, PageShell } from "../components/PageShell";
+import PricingEditor from "../components/PricingEditor";
 import { PromptLayoutEditor } from "../components/PromptLayoutEditor";
 import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
 import { StorageLocation } from "../components/StorageLocation";
@@ -54,7 +55,7 @@ function draftOf(c: Config): Draft {
 }
 
 type SectionId =
-  | "storage" | "backups" | "connection" | "timeouts"
+  | "storage" | "backups" | "connection" | "timeouts" | "pricing"
   | "context" | "layout" | "transient" | "semantic" | "system-prompt" | "response"
   | "transcript" | "playing" | "appearance";
 
@@ -71,6 +72,9 @@ const SECTIONS: SectionDef[] = [
     fields: ["active_connection_id", "fallback_connection_id", "llm_retries"] },
   { id: "timeouts", group: "The install", label: "Timeouts",
     fields: ["llm_timeout", "absorb_budget", "llm_call_budget"] },
+  // No draft fields: the rate table is a file of its own behind its own route,
+  // so it saves itself rather than through this page's Save (#158).
+  { id: "pricing", group: "The install", label: "Token rates", fields: [] },
   { id: "context", group: "What the model sees", label: "Context",
     fields: ["context_budget", "context_scan_depth", "archive_depth", "prompt_log_depth",
              "offscene_known_limit", "speaker_turn_taking"] },
@@ -557,6 +561,34 @@ export default function ConfigView() {
                         placeholder="300" value={draft.llm_call_budget}
                         onChange={(v) => edit("llm_call_budget", v)} />
             </div>
+          </>
+        )}
+
+        {draft && section === "pricing" && (
+          <>
+            <p className="config-copy">
+              Grimoire records what each provider says a call cost. OpenRouter
+              says; an OpenAI-compatible endpoint you host yourself says nothing
+              at all, and those calls read as <em>unpriced</em> everywhere costs
+              are shown — which is honest, and no use for answering what a
+              campaign has cost. Rates here fill that gap.
+            </p>
+            <p className="config-copy">
+              What comes out of them is an <strong>estimate, and is labelled as
+              one</strong>: a modelled figure is reported in its own column, is
+              never added to what a provider actually charged, and is never
+              charged against a campaign's budget. A model with no entry of its
+              own falls back to a <code>provider/*</code> wildcard, then to the
+              catch-all. Rates are dollars per 1,000 tokens; the per-million
+              figure most price sheets quote is shown under each box.
+            </p>
+            <p className="config-copy">
+              Leaving the two cache boxes empty is not the same as setting them
+              to zero: cached tokens are part of the prompt the provider counted,
+              so an empty box prices them at the input rate. Fill them in only
+              for a provider that discounts them.
+            </p>
+            <PricingEditor />
           </>
         )}
 
