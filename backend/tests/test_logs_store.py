@@ -284,6 +284,33 @@ def test_the_reentrancy_latch_is_per_thread_not_global(home):
     assert {r["message"] for r in _rows(home)} == {"from A", "from B"}
 
 
+def test_a_crafted_message_cannot_forge_a_second_row(home):
+    """One row is one line, and `json.dumps` escapes the newlines that would
+    otherwise end it early -- so a scene title (or a provider's error text)
+    carrying a newline and a JSON object cannot write a row of its own
+    invention into the file."""
+    logs.record("info", "runner",
+                'x"}\n{"ts":"2026-01-01T00:00:00.000Z","level":"error",'
+                '"module":"forged","message":"pwned')
+
+    lines = (home / "logs" / f"{logs._now()[:7]}.jsonl").read_text(
+        encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    assert [r["module"] for r in _rows(home)] == ["runner"]
+
+
+def test_no_third_party_logger_reaches_the_file_however_it_is_named(home):
+    """The privacy rule, stated as a property rather than one example: nothing
+    outside the package's own logger tree is recorded, because that is where
+    request URLs -- and, for some providers, the key inside one -- get logged."""
+    logs.install()
+    for name in ("httpx", "httpcore", "urllib3", "openai", "uvicorn.access",
+                 "root", "grimoirefoo"):
+        logging.getLogger(name).error("GET https://api.example/v1?key=sk-secret")
+
+    assert _rows(home) == []
+
+
 # ---- the size backstop ----
 def test_past_the_cap_only_errors_are_recorded_and_the_cap_says_so(home, monkeypatch):
     monkeypatch.setattr(logs, "MAX_MONTH_BYTES", 400)
