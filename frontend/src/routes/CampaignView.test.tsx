@@ -4968,6 +4968,28 @@ test("a Direct turn that generated nothing at all hands the note back", async ()
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("the storm intensifies"));
 });
 
+test("merely visiting an offscreen scene does not leave the next scene in Direct", async () => {
+  // Codex review, against a call made in this change's own first review round.
+  // The stamp is justified by words needing to keep their kind across a scene
+  // switch; with an empty box there are none, and stamping anyway left an
+  // ordinary scene staged to spend the next line typed as a note.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Cabal", model: "", created: "", updated: "2", pcless: true },
+    { id: "s2", title: "The Saltmarch Gate", model: "", created: "", updated: "1" },
+  ]);
+  transcriptsPerScene();
+  renderCampaign();
+  await screen.findByText("transcript of s1");
+  expect(screen.getByRole("button", { name: "Direct" })).toHaveAttribute("aria-pressed", "true");
+
+  // leave without typing anything
+  await openScene(/The Saltmarch Gate/);
+
+  await screen.findByText("transcript of s2");
+  expect(screen.getByRole("button", { name: "Speak" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByPlaceholderText(/speak your intent/i)).toBeInTheDocument();
+});
+
 test("a running scene's director note does not show in another scene", async () => {
   // Codex P2. `busy` is global and the note carried no scene, so a Direct turn
   // left running in one scene rendered its note inside whatever transcript the
