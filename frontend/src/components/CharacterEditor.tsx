@@ -1729,7 +1729,14 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
 
     return (
       <div className="character-editor">
-        {taglineQueue.length > 0 && (
+        {/* Not while the crop is open. These two are siblings with the same
+            backdrop and the same z-index, so the crop -- rendered second --
+            stays painted on top; but an import finishing behind it mounts this
+            LATER, which is what the shortcut registry reads as "on top". The
+            reader would be looking at the crop while Escape skipped a tagline
+            prompt they never saw (PR #400 review). The queue is untouched, so
+            the prompt gets its turn the moment the crop closes. */}
+        {taglineQueue.length > 0 && !cropOpen && (
           <TaglinePrompt key={taglineQueue[0].cid} wid={wid} cid={taglineQueue[0].cid} name={taglineQueue[0].name}
                          onSaved={(t) => { setTagline(t); reload(); }}
                          onClose={() => setTaglineQueue((q) => q.slice(1))} />
