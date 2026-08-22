@@ -246,10 +246,13 @@ export type Scene = { meta: { id: string; title: string; response_preset?: strin
 // clipped server-side, and `guidance` is the reroll hint that produced it.
 // `id` is derived from the variant's content, not its position: retention drops
 // the oldest take when a full set grows, and every index below it shifts.
-// `model` is the route this variant was generated on, when it was archived by
-// a reroll that overrode one (#77) — "" for every variant that predates the
-// override and for every one reconciled out of the transcript rather than
-// archived, which reads as "the scene's own model".
+// `model` is the route this variant was generated on (#77). The regenerate
+// route stamps every reroll it archives, so "" means **no record** rather than
+// "the scene's model" — it is what a variant written before the override
+// existed carries, and what one reconciled out of the transcript rather than
+// archived (a plain turn's reply, a hand edit) carries. A reader shows nothing
+// for those instead of naming a model it would only be guessing at. Kept in
+// step with `store.alternates`' module docstring, which says the same.
 export type SceneAlternate = {
   id: string; created: string; guidance: string; model: string;
   posts: number; preview: string;
