@@ -4580,7 +4580,10 @@ test("offscreen scene: typed note shows transiently, never lands in messages", a
   fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
   await screen.findByText(/🎬 the guard grows suspicious/);
   release();
-  await waitFor(() => expect(screen.queryByText(/🎬/)).toBeNull());
+  // Scoped to the note, not to the glyph: since #83 the send button itself can
+  // read "Direct 🎬", so a bare /🎬/ would be answered by a control rather than
+  // by the chip this is about.
+  await waitFor(() => expect(screen.queryByText(/🎬 the guard grows suspicious/)).toBeNull());
 });
 
 test("normal scene: plain placeholder, Continue on empty input, Send once typed", async () => {
@@ -4630,7 +4633,7 @@ test("normal scene: Direct sends a director note, not a player post", async () =
   // shown transiently as a note, never appended as the player's own words
   await screen.findByText(/🎬 the storm intensifies/);
   release();
-  await waitFor(() => expect(screen.queryByText(/🎬/)).toBeNull());
+  await waitFor(() => expect(screen.queryByText(/🎬 the storm intensifies/)).toBeNull());
 });
 
 test("normal scene: Speak is unchanged — a player post, and no director flag", async () => {
