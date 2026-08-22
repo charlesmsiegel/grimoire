@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ClockPanel } from "./ClockPanel";
-import { api, type AdvanceDigest, type ForkReport } from "../api/client";
+import { api, type AdvanceDigest, type CampaignClock,
+         type ForkReport } from "../api/client";
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
@@ -380,6 +381,22 @@ test("a pricing reply for the campaign you left cannot open a question here", as
   expect(screen.queryByText(/large time skip/)).not.toBeInTheDocument();
   expect(api.forkCampaign).not.toHaveBeenCalled();
   expect(api.advanceTime).not.toHaveBeenCalled();
+});
+
+test("a clock read for the campaign you left cannot become the new one's present", async () => {
+  // The clock is the moment every span is measured FROM. B displaying A's
+  // present would misprice the next skip and mislabel the header while doing it.
+  let release: (c: CampaignClock) => void = () => { /* replaced */ };
+  vi.mocked(api.getCampaignClock).mockReturnValueOnce(new Promise((res) => { release = res; }));
+  vi.mocked(api.getCampaignClock).mockResolvedValue(
+    { now: "2030-01-01", friendly: "1 January 2030", log: [] });
+  const { rerender } = render(<ClockPanel cid="a" />);
+  rerender(<ClockPanel cid="b" />);
+  await screen.findByText(/Now: 1 January 2030/);
+  release(CLOCK);                       // campaign A's clock, arriving late
+  await waitFor(() => expect(api.getCampaignClock).toHaveBeenCalledWith("b"));
+  expect(screen.queryByText(/24 December 2026/)).not.toBeInTheDocument();
+  expect(screen.getByText(/Now: 1 January 2030/)).toBeInTheDocument();
 });
 
 test("...and cannot leave a stale preview on the new campaign either", async () => {

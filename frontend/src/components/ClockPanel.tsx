@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { agingLabel } from "../aging";
 import { api, type AdvanceDigest, type CalendarConfig, type CampaignClock,
          type ClockLogEntry } from "../api/client";
@@ -108,13 +108,28 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   // on the strength of a span measured in A. The reset effect below does not
   // help: it runs when `cid` changes, which is BEFORE the late reply arrives.
   const showing = useRef(cid);
-  showing.current = cid;
+  // `useLayoutEffect` rather than a write during render, and declared above
+  // every effect that starts a request: layout effects run first, so the ref is
+  // already current by the time anything below can fire. Same shape and same
+  // reason as `SuggestedCast`'s `live` ref.
+  useLayoutEffect(() => { showing.current = cid; }, [cid]);
 
+  // Every read here is guarded the same way, not just the pricing calls. A
+  // reply that lands after the reader has moved on belongs to a campaign this
+  // panel is no longer showing, and the clock is the worst one to get wrong: it
+  // is the moment every span is measured FROM, so B displaying A's present
+  // would misprice the next skip and mislabel the header line while doing it.
   const reload = useCallback(
-    () => api.getCampaignClock(cid).then(setClock).catch(() => setClock(null)),
+    () => api.getCampaignClock(cid)
+      .then((c) => { if (showing.current === cid) setClock(c); })
+      .catch(() => { if (showing.current === cid) setClock(null); }),
     [cid]);
   useEffect(() => { reload(); }, [reload, refreshKey]);
-  useEffect(() => { api.getCalendarConfig({ kind: "campaign", id: cid }).then(setCfg).catch(() => setCfg(null)); }, [cid]);
+  useEffect(() => {
+    api.getCalendarConfig({ kind: "campaign", id: cid })
+      .then((c) => { if (showing.current === cid) setCfg(c); })
+      .catch(() => { if (showing.current === cid) setCfg(null); });
+  }, [cid]);
 
   // A digest belongs to the request that produced it. Changing the target (or
   // the campaign) invalidates it, and showing a stale one next to new inputs is
