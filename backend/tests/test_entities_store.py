@@ -342,11 +342,15 @@ def test_the_frontend_ships_the_same_kind_list():
     table are written against, and the fallback the import dialogs' Category
     dropdown shows when `GET /api/entity-kinds` does not answer (#138).
 
-    Both jobs rot silently. A kind added here and forgotten there gets no tab
-    and no label -- so a row imported into it, through the dropdown the
-    endpoint correctly widened, lands somewhere this build cannot show. That
-    is a worse failure than the drift the endpoint fixed, and nothing else in
-    either suite notices it.
+    Both jobs rot silently, and nothing else in either suite notices: a kind
+    added here and forgotten there leaves the fallback list short, and leaves
+    the record it imports without a label or per-kind fields (both keyed by the
+    union this pins, so tsc catches those once the kind IS added here).
+
+    What this does NOT reach: `WorldView`'s own `IndexKey` union and `INDEX`
+    array are hand-written and tied to nothing, so a kind can satisfy this
+    guard and still have no browsable tab. Keying those off `EntityKind` would
+    close it and is not this change's job.
     """
     src = (REPO / "frontend" / "src" / "api" / "types.ts").read_text(encoding="utf-8")
     m = re.search(r"export const ENTITY_KINDS = \[(.*?)\] as const;", src, re.DOTALL)
