@@ -108,6 +108,12 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   const [retryingAudit, setRetryingAudit] = useState(false);
   const [retryingDossiers, setRetryingDossiers] = useState(false);
   const [absorbing, setAbsorbing] = useState(false);
+  // Waiting on a run this browser did not start -- the adoption pass below.
+  // Its OWN flag rather than `absorbing`, because the two are released by
+  // different things: this one is released by the effect's cleanup when the
+  // scene changes under it, and folding them into one leaves "Ending…" latched
+  // over every scene in the campaign when a reader switches away mid-wait.
+  const [adopting, setAdopting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editRows, setEditRows] = useState<EditRow[]>([]);
   /** Which drawer of the review is open: a group key, "uncited", or
@@ -253,9 +259,8 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       }
       if (pending.stale) {
         // A review that is there and unusable. Its GENERATION is still worth
-        // holding: the record is on disk, and End scene below deletes it by
-        // name before replacing it -- which is also what frees the scene if
-        // anything is still holding it for that review.
+        // holding: the record is on disk, and Discard is how the reader gets
+        // rid of it without spending another absorb.
         setStaleReview(pending.stale);
         setAbsorbSid(sid);
         setGeneration(pending.generation);
@@ -270,7 +275,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       if (dropped || campaignRef.current !== cid || hasReviewRef.current || !live) return;
       // Still generating. Show the panel as busy and wait it out -- the run is
       // the server's, and this client is a subscriber that can come and go.
-      setAbsorbing(true);
+      setAdopting(true);
       setAbsorbSid(sid);
       setGeneration(live.review_generation ?? null);
       try {
@@ -286,10 +291,16 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
         // generating one more reply into the scene being finished.
         fail(err, false);
       } finally {
-        if (!dropped) setAbsorbing(false);
+        // Only for a wait that is still THIS effect's. A wait that has been
+        // dropped can settle long after the next scene's adoption has set the
+        // flag for itself, and clearing it there would take "Ending…" off a
+        // scene that is still being absorbed. The dropped case is released by
+        // the cleanup below instead, which runs before the next effect body
+        // and so cannot clobber it.
+        if (!dropped) setAdopting(false);
       }
     })();
-    return () => { dropped = true; };
+    return () => { dropped = true; setAdopting(false); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid, activeId]);
 
@@ -781,7 +792,10 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     editChronicle, openSection, openDrawer,
     editFailures, dismissFailures: () => setEditFailures([]),
     conflictByRow, contradictionById, saveError,
-    absorbing, saving, reviewBusy, retryingAudit, retryingDossiers,
+    // One flag to the panel: "a review is being made for this scene", however
+    // it started. The reader does not care whether this browser asked for it.
+    absorbing: absorbing || adopting,
+    saving, reviewBusy, retryingAudit, retryingDossiers,
     endScene, saveAbsorb, discard, decide, editRow, editPayload, resolveConflict,
     approveAllCited, retryAudit, retryDossiers, sceneRenamed,
     budgetCutPhases, approvedCount, rejectedCount, undecidedCount,

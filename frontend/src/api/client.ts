@@ -1643,7 +1643,19 @@ export const api = {
   absorbScene: async (cid: string, sid: string, force = false) => {
     const started = await request<{ run: RunHandle; generation: string }>(
       "POST", `/api/campaigns/${cid}/scenes/${sid}/absorb${force ? "?force=true" : ""}`);
-    await awaitRun(cid, sid, started.run);
+    try {
+      await awaitRun(cid, sid, started.run);
+    } catch (err) {
+      // THE STORE IS THE ANSWER, not the run record. A run stops being
+      // discoverable after `REAP_SECONDS`, and a suspended tab -- a locked
+      // phone, exactly the case this feature is for -- can easily be away
+      // longer than that: the poll then 404s on a run whose review landed
+      // perfectly well and is sitting on disk. Failing there would report the
+      // one loss this whole change exists to prevent.
+      const recovered = await api.pendingReview(cid, sid).catch(() => null);
+      if (!recovered?.review) throw err;
+      return { review: recovered.review, generation: recovered.generation ?? "" };
+    }
     const pending = await api.pendingReview(cid, sid);
     if (!pending.review) {
       // The run landed and the record is not there. The scene moved on between
