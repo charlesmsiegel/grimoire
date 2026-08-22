@@ -473,6 +473,34 @@ test("an advance that landed in the campaign you left is not reported here", asy
   expect(screen.getByLabelText("Reason")).toHaveValue("a day");
 });
 
+test("a copy taken across a change counts as a copy, not as a checkpoint", async () => {
+  // A turn landing while `copytree` runs is on one side of it or the other and
+  // nothing here can see which. Reusing that copy on a retry would hand back a
+  // restore point quietly missing a turn, so the marker stays clear and the
+  // reader is told what the copy might not hold.
+  let release: (r: ForkReport) => void = () => { /* replaced */ };
+  vi.mocked(api.previewAdvance).mockResolvedValue({ digest: BIG });
+  vi.mocked(api.forkCampaign).mockReturnValue(new Promise((res) => { release = res; }));
+  vi.mocked(api.advanceTime).mockRejectedValue({ detail: "campaign is busy" });
+
+  const { rerender } = render(<ClockPanel cid="c" refreshKey={0} />);
+  await screen.findByText(/Now: 24 December 2026/);
+  fireEvent.change(screen.getByLabelText("Days"), { target: { value: "90" } });
+  fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "a season passes" } });
+  fireEvent.click(screen.getByText("Advance time"));
+  await screen.findByText(/large time skip/);
+  fireEvent.click(screen.getByText("Checkpoint, then advance"));
+
+  rerender(<ClockPanel cid="c" refreshKey={1} />);   // a turn lands mid-copytree
+  release(FORK_REPORT);
+  await screen.findByText(/campaign is busy/);
+
+  expect(screen.getByText(/may not hold the latest turn/)).toBeInTheDocument();
+  // ...so the retry takes a fresh copy rather than reusing that one.
+  expect(screen.getByText("Checkpoint, then advance")).toBeInTheDocument();
+  expect(screen.queryByText("Retry the skip")).not.toBeInTheDocument();
+});
+
 test("a checkpoint of the campaign you left is never recorded against the new one", async () => {
   // The worst shape this class takes. A copy of A marked as B's means a large
   // skip in B offers "Retry the skip", takes no copy at all, and advances
