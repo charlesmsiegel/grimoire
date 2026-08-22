@@ -2514,3 +2514,63 @@ test("End scene over a stale review replaces it, without deleting it first", asy
   expect(screen.queryByText(/The scene changed after its review was prepared/)).toBeNull();
   expect(api.discardReview).not.toHaveBeenCalled();
 });
+
+test("switching scenes mid-wait does not latch the panel on Ending…", async () => {
+  // The adoption pass waits on a run this browser did not start, and the
+  // reader is free to walk away while it does. Left to the wait's own `finally`
+  // -- which is skipped once the effect has been dropped -- the flag stays set
+  // and End scene is disabled for every scene in the campaign until a remount.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Old", model: "", created: "", updated: "" },
+    { id: "s2", title: "Newer", model: "", created: "", updated: "" }]);
+  (api.getScene as any).mockResolvedValue(
+    { meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.pendingReview as any).mockResolvedValue(
+    { review: null, generation: null, stale: null });
+  // Only the first scene is mid-absorb. The second is an ordinary scene, and
+  // the point of the test is that it behaves like one.
+  (api.liveReview as any).mockImplementation(async (_cid: string, sid: string) =>
+    (sid === "s1"
+      ? { id: "r9", attempt_id: null, state: "running", next_index: 0,
+          cls: "review", review_generation: "gen-live" }
+      : null));
+  (api.awaitRun as any).mockReturnValue(new Promise(() => { /* never lands */ }));
+  renderCampaign();
+
+  await screen.findByRole("button", { name: /Ending…/ });
+  await openScene(/Newer/);
+
+  expect(await screen.findByRole("button", { name: /^End scene$/ })).toBeEnabled();
+});
+
+test("an abandoned wait does not clear the next scene's own", async () => {
+  // The other half of the flag's release, and the reason the `finally` is
+  // guarded while the cleanup is not: a dropped wait can settle long after the
+  // next scene's adoption has set the flag for itself, and clearing it there
+  // takes "Ending…" off a scene that is still being absorbed.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Old", model: "", created: "", updated: "" },
+    { id: "s2", title: "Newer", model: "", created: "", updated: "" }]);
+  (api.getScene as any).mockResolvedValue(
+    { meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.pendingReview as any).mockResolvedValue(
+    { review: null, generation: null, stale: null });
+  (api.liveReview as any).mockResolvedValue(
+    { id: "r9", attempt_id: null, state: "running", next_index: 0,
+      cls: "review", review_generation: "gen-live" });
+  let settleFirst: (v: unknown) => void = () => {};
+  (api.awaitRun as any)
+    .mockReturnValueOnce(new Promise((r) => { settleFirst = r; }))
+    .mockReturnValue(new Promise(() => { /* the second scene keeps waiting */ }));
+  renderCampaign();
+
+  await screen.findByRole("button", { name: /Ending…/ });
+  await openScene(/Newer/);
+  await screen.findByRole("button", { name: /Ending…/ });
+
+  await act(async () => {
+    settleFirst({ id: "r9", state: "landed" });
+    await Promise.resolve();
+  });
+  expect(screen.getByRole("button", { name: /Ending…/ })).toBeInTheDocument();
+});

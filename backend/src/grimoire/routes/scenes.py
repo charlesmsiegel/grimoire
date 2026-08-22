@@ -2433,7 +2433,7 @@ async def _persist_review(cid: str, sid: str, run, generation: str, write,
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/pending-review")
-def get_pending_review(cid: str, sid: str, request: Request) -> dict:
+def get_pending_review(cid: str, sid: str) -> dict:
     """The review waiting to be saved for this scene, if there is one.
 
     `{"review": None}` rather than a 404 for a scene with none: that is the

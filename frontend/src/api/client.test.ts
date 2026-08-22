@@ -1243,3 +1243,51 @@ test("liveReview answers with a review still being prepared", async () => {
   globalThis.fetch = fetchMock;
   expect((await api.liveReview("run", "s1"))?.review_generation).toBe("gen1");
 });
+
+test("an absorb whose run was reaped is recovered from the store", async () => {
+  // The case this whole feature exists for, from the client's side: the tab was
+  // suspended for longer than the run record lives, so the poll 404s on a run
+  // whose review landed and is on disk. Failing there would report exactly the
+  // loss the durable review was built to prevent.
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
+                                             attempt_id: null, next_index: 0 },
+                                      generation: "gen1" }))
+      .mockResolvedValueOnce({ ok: false, status: 404,
+                               json: async () => ({ detail: "no such run",
+                                                    kind: "run_gone" }) })
+      .mockResolvedValueOnce(jsonOk({ review: { one_line: "They met." },
+                                      generation: "gen1", stale: null }));
+    globalThis.fetch = fetchMock;
+    const pending = api.absorbScene("run", "s1");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect((await pending).review.one_line).toBe("They met.");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a reaped run with nothing on disk still reports the failure", async () => {
+  // The counterweight: the fallback must not swallow a real failure into
+  // silence. Nothing stored means the absorb really is gone.
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
+                                             attempt_id: null, next_index: 0 },
+                                      generation: "gen1" }))
+      .mockResolvedValueOnce({ ok: false, status: 404,
+                               json: async () => ({ detail: "no such run",
+                                                    kind: "run_gone" }) })
+      .mockResolvedValueOnce(jsonOk({ review: null, generation: null, stale: null }));
+    globalThis.fetch = fetchMock;
+    const failed = api.absorbScene("run", "s1").then(
+      () => { throw new Error("resolved"); }, (e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect((await failed as ApiError).kind).toBe("run_gone");
+  } finally {
+    vi.useRealTimers();
+  }
+});
