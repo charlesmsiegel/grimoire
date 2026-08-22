@@ -12266,27 +12266,60 @@ def test_manual_roll_in_crash_window_survives_trim(client, monkeypatch):
 
 
 def test_concurrent_accept_vs_manual_check_distinct_entries(client):
+    """A manual check racing an accepted proposal never collapses into the
+    proposal's roll entry.
+
+    Two outcomes are legal and which one lands is a race, so the test asserts
+    the pair rather than one of them. Accepting a proposal starts a DETACHED run
+    and `post_scene_check` appends a line to the transcript, so it takes
+    `runs.require_scene_free` inside the campaign lock: reach it while the run
+    holds the scene and the check is refused with `scene_busy` and logs nothing.
+    That refusal is the fence working, not a lost roll.
+
+    What is asserted either way is the thing the name is about: no entry is ever
+    shared between the two. `rolls.find_or_append_by_proposal` dedups by
+    proposal id, and a manual check carrying no proposal must not be answered
+    with the accepted one's entry.
+
+    Asserting only "two distinct entries" made this fail roughly two runs in
+    three on a loaded machine, and only in the full suite -- the interleaving
+    that refuses needs the accept to win, which an idle machine rarely lets it
+    do.
+    """
     import threading
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["cont"])
     barrier = threading.Barrier(2)
+    got: dict[str, object] = {}
     def accept():
         barrier.wait()
-        client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+        got["accept"] = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal",
+                                    json=_accept_body(rec))
     def manual():
         barrier.wait()
-        client.post(f"/api/campaigns/{cid}/scenes/{sid}/check",
-                    json={"check": "perception", "actor": "characters:mara"})
+        got["manual"] = client.post(f"/api/campaigns/{cid}/scenes/{sid}/check",
+                                    json={"check": "perception", "actor": "characters:mara"})
     threads = [threading.Thread(target=accept), threading.Thread(target=manual)]
     [t.start() for t in threads]
     [t.join() for t in threads]
 
+    accepted, manual_resp = got["accept"], got["manual"]
+    assert accepted.status_code == 200, accepted.text
     entries = client.get(f"/api/campaigns/{cid}/rolls").json()
     ids = [e["id"] for e in entries]
-    assert len(entries) == 2 and len(set(ids)) == 2
+    assert len(ids) == len(set(ids)), entries
     assert sum(1 for e in entries if e.get("proposal") == rec["id"]) == 1
-    assert sum(1 for e in entries if e.get("proposal") is None) == 1
+    if manual_resp.status_code == 200:
+        assert len(entries) == 2
+        assert sum(1 for e in entries if e.get("proposal") is None) == 1
+    else:
+        # Refused by the scene fence, so it logged nothing -- and refused for
+        # THAT reason, not by some other failure that would leave this test
+        # green over a real bug.
+        assert manual_resp.status_code == 409, manual_resp.text
+        assert manual_resp.json().get("kind") == "scene_busy", manual_resp.text
+        assert len(entries) == 1
 
 
 def test_valid_json_fence_missing_check_flags_problem(client):
