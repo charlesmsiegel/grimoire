@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import SheetsView from "./SheetsView";
 import CommandPalette, { usePaletteHotkey } from "../components/CommandPalette";
 import { PaletteProvider } from "../components/palette";
@@ -59,6 +59,7 @@ function renderSheets() {
       <PaletteProvider>
         <Hotkey />
         <CommandPalette />
+        <SwitchCampaign />
         <Routes>
           <Route path="/campaigns/:cid/sheets" element={<SheetsView />} />
           <Route path="/campaigns/:cid" element={<div>the play view</div>} />
@@ -69,6 +70,24 @@ function renderSheets() {
 }
 
 function Hotkey() { usePaletteHotkey(); return null; }
+
+/** Changes the `:cid` segment in place, which is the transition every
+ *  cross-campaign guard on this page exists for: the route matches both, so
+ *  React keeps ONE `SheetsView` mounted and its effects re-run against a
+ *  different campaign while the previous one's requests are still in flight.
+ *
+ *  A `rerender` with different `initialEntries` does not do this — MemoryRouter
+ *  reads them once, at mount — so a test written that way stays on the first
+ *  campaign and asserts nothing. */
+function SwitchCampaign() {
+  const navigate = useNavigate();
+  return (
+    <button onClick={() => navigate("/campaigns/other/sheets")}>go to other</button>
+  );
+}
+
+const switchCampaign = () =>
+  fireEvent.click(screen.getByRole("button", { name: "go to other" }));
 
 // Named, not just by role: the detail pane's sidebar is a <complementary>
 // too, so a bare role query goes ambiguous the moment a member is selected.
@@ -365,39 +384,51 @@ test("a failed press does not leave the previous press's report up", async () =>
   expect(screen.queryByText("1 sheet created.")).toBeNull();
 });
 
-test("a report and a roster read from another campaign never land on this one", async () => {
-  // Both settle after the switch. `result` is cid-tagged for the same reason
-  // `loaded` is, and every reload supersedes the one before it -- without that
-  // a late `{cid: A}` roster leaves this page stuck on "Reading the cast…".
+test("nothing from the campaign you left lands on the one you moved to", async () => {
+  // All three settle after an in-place :cid change, with one SheetsView still
+  // mounted throughout. Before the fix the create's `finally` ran a `reload`
+  // bound to the campaign at click time, which CANCELLED the new campaign's
+  // roster read and then committed the old campaign's — leaving the page stuck
+  // on "Reading the cast…" with nothing left to re-fetch it.
   let releaseCreate: (r: unknown) => void = () => {};
-  let releaseRoster: (r: unknown) => void = () => {};
+  let releaseFirstRoster: (r: unknown) => void = () => {};
   (api.createMissingSheets as any).mockReturnValue(
     new Promise((resolve) => { releaseCreate = resolve; }));
-  const { rerender } = renderSheets();
+  renderSheets();
   await screen.findByText("Sheet coverage");
   fireEvent.click(screen.getByRole("button", { name: /Create missing sheets/ }));
 
-  (api.getCampaignSheetRoster as any).mockReturnValue(
-    new Promise((resolve) => { releaseRoster = resolve; }));
-  rerender(
-    <MemoryRouter initialEntries={["/campaigns/other/sheets"]}>
-      <PaletteProvider>
-        <Routes>
-          <Route path="/campaigns/:cid/sheets" element={<SheetsView />} />
-        </Routes>
-      </PaletteProvider>
-    </MemoryRouter>,
-  );
+  // The campaign we are leaving still owes us a roster read, and it will land
+  // after the switch.
+  (api.getCampaignSheetRoster as any).mockReturnValueOnce(
+    new Promise((resolve) => { releaseFirstRoster = resolve; }));
+  switchCampaign();
   await screen.findByText("Sheet coverage");
+  expect(api.getCampaignSheetRoster).toHaveBeenLastCalledWith("other");
 
-  releaseCreate({ created: [], skipped: [{ kind: "characters", reason: "stale" }],
-                  failed: [] });
-  releaseRoster({ roster: ROSTER });
+  releaseCreate({ created: [], failed: [],
+                  skipped: [{ kind: "characters", reason: "stale" }] });
+  releaseFirstRoster({ roster: {} });
   await screen.findByRole("table");
-  // campaign A's report must not be on campaign B's page...
+
+  // the report belonged to the campaign we left
   expect(screen.queryByText("Last create")).toBeNull();
-  // ...and B's own roster still landed, rather than being stranded by A's
+  // ...and the campaign we are on still has its cast, rather than the empty
+  // roster the previous one's late read carried
   expect(screen.queryByText("Reading the cast…")).toBeNull();
+  expect(railRow("Winifred")).toHaveTextContent("Missing");
+});
+
+test("a create that fails for the campaign you left does not banner on this one", async () => {
+  (api.createMissingSheets as any).mockRejectedValue(new Error("no module resolved"));
+  renderSheets();
+  await screen.findByText("Sheet coverage");
+  fireEvent.click(screen.getByRole("button", { name: /Create missing sheets/ }));
+  await screen.findByText("no module resolved");
+
+  switchCampaign();
+  await screen.findByRole("table");
+  expect(screen.queryByText("no module resolved")).toBeNull();
 });
 
 test("a failed create surfaces the reason rather than a silent no-op", async () => {
