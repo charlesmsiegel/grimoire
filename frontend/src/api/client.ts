@@ -16,6 +16,7 @@ import {
   type CalendarScope, type CampaignClock, type CampaignImage, type CampaignMeta,
   type CampaignModule, type Card,
   type CampaignBudget,
+  type CampaignSceneCosts,
   type CardFormat, type CascadeReport, type Casefile, type CastChanges, type CastDetail,
   type ForkReport,
   type CharacterDetail,
@@ -28,7 +29,8 @@ import {
   type LoreEntryDraft, type Mechanics, type Message, type ModelsRefreshResult,
   type ModuleContentEntry,
   type ModuleDetail, type ModuleEditResult, type ModuleRenameKind, type ModuleSummary,
-  type PCDetail, type PCSummary, type Persona, type PinRule, type PromptEntry,
+  type PCDetail, type PCSummary, type Persona, type PinRule, type PricingEntry,
+  type PricingTable, type PromptEntry,
   type PromptLayout, type PromptSnapshot, type ProposalRecord, type Provenance,
   type RecordChange, type ReplayPreview, type ReplaySession, type ResponseBundle, type ResponseFields, type ResponseOverride,
   type ResponsePresetDetail, type ResponsePresetDraft, type ResponsePresetSummary,
@@ -1168,6 +1170,19 @@ export const api = {
   getSceneUsage: (cid: string, sid: string) =>
     request<SceneUsage>("GET", `/api/campaigns/${cid}/scenes/${sid}/usage`,
                         undefined, { fresh: true }),
+  // All-time, and deliberately not `fresh`: this is a report opened on purpose
+  // rather than a figure read mid-turn, and it scans the whole ledger.
+  // `order` goes to the server because the list is capped there, after the
+  // sort: re-ordering the response here would make every ordering but the
+  // default mean "…of the most expensive N".
+  getCampaignSceneCosts: (cid: string, order = "cost") =>
+    request<CampaignSceneCosts>(
+      "GET", `/api/campaigns/${cid}/usage/scenes?order=${encodeURIComponent(order)}`),
+  // The per-model rate table (#158). `fresh` on the read, because saving a rate
+  // and seeing the old table is the one thing an editor must not do.
+  getPricing: () => request<PricingTable>("GET", "/api/pricing", undefined, { fresh: true }),
+  setPricing: (rates: Record<string, PricingEntry>) =>
+    request<{ rates: Record<string, PricingEntry> }>("PUT", "/api/pricing", { rates }),
   getCampaignBudget: (cid: string) =>
     request<CampaignBudget>("GET", `/api/campaigns/${cid}/budget`, undefined, { fresh: true }),
   setCampaignBudget: (cid: string, body: { budget_usd: number | null; budget_period?: string }) =>

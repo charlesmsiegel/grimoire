@@ -177,12 +177,18 @@ export function installCampaignMocks() {
   (api.getCampaignBudget as any).mockResolvedValue(
     { limit_usd: 0, period: "monthly", level: "off", warn_fraction: 0.8 });
   (api.getSceneUsage as any).mockResolvedValue({
-    campaign: "run", scene: "s1", since: "", until: "", generated_at: "",
+    campaign: "run", scene: "s1", since: "", until: "", clamped: false,
+    generated_at: "",
     totals: { calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0,
               total_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
-              cost_usd: 0, estimated_usd: 0, priced_calls: 0, unpriced_calls: 0,
-              duration_ms: 0 },
-    by_task: [], turns: [], listed: 0, truncated: false });
+              cost_usd: 0, estimated_usd: 0, modelled_usd: 0, priced_calls: 0,
+              unpriced_calls: 0, subscription_calls: 0, modelled_calls: 0,
+              unmetered_calls: 0, duration_ms: 0 },
+    // No per-post spend either, for the reason the budget above is off: these
+    // suites assert on the transcript they were written against, and a cost
+    // chip on every player post is a string in it. The tests that want one set
+    // it themselves.
+    by_task: [], by_post: [], turns: [], listed: 0, truncated: false });
   (getModels as any).mockResolvedValue([]);
   (api.absorbScene as any).mockResolvedValue({
     one_line: "They met.", summary: "A met B.", keywords: ["salt"],

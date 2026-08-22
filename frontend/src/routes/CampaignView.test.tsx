@@ -85,6 +85,119 @@ test("the scene heading counts the scene and its turns", async () => {
   expect(await screen.findByText(/SCENE 1 · 2 TURNS/i)).toBeInTheDocument();
 });
 
+// ---- what each player post cost to answer (#153) ----
+/** One `by_post` bucket, complete. Written out rather than spread from a
+ *  helper: this is a payload shape the transcript reads, and a fixture that
+ *  quietly omits a column is how a NaN reaches a price. */
+function postBucket(post: number, over: Record<string, number> = {}) {
+  return { post, rerolls: 0, calls: 1, errors: 0, prompt_tokens: 0, completion_tokens: 0,
+           total_tokens: 900, cache_read_tokens: 0, cache_write_tokens: 0,
+           cost_usd: 0.02, estimated_usd: 0, modelled_usd: 0, priced_calls: 1,
+           unpriced_calls: 0, subscription_calls: 0, modelled_calls: 0,
+           unmetered_calls: 0, duration_ms: 0, ...over };
+}
+
+function withPostCosts(buckets: ReturnType<typeof postBucket>[]) {
+  (api.getSceneUsage as any).mockResolvedValue({
+    campaign: "run", scene: "s1", since: "", until: "", clamped: false,
+    generated_at: "",
+    totals: { calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0,
+              total_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
+              cost_usd: 0, estimated_usd: 0, modelled_usd: 0, priced_calls: 0,
+              unpriced_calls: 0, subscription_calls: 0, modelled_calls: 0,
+              unmetered_calls: 0, duration_ms: 0 },
+    by_task: [], by_post: buckets, turns: [], listed: 0, truncated: false });
+}
+
+test("a player post says what answering it cost, over every reroll", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  // Three generations answering post 0: the reply on screen, and two takes that
+  // were paid for and thrown away — which is the number the transcript itself
+  // cannot show.
+  withPostCosts([postBucket(0, { calls: 3, rerolls: 2, priced_calls: 3, cost_usd: 0.06 })]);
+  renderCampaign();
+
+  expect(await screen.findByText(/\$0\.06/)).toBeInTheDocument();
+  expect(screen.getByText(/2 rerolls/)).toBeInTheDocument();
+});
+
+test("the chip is on the player's post, not on the reply it paid for", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  // A bucket at index 1 as well: the reply's own index. Chipping both would
+  // print the same spend twice, once under the text that paid for it.
+  withPostCosts([postBucket(0), postBucket(1, { cost_usd: 0.99 })]);
+  renderCampaign();
+
+  await screen.findByText("$0.02");
+  expect(screen.queryByText("$0.99")).toBeNull();
+});
+
+test("a post nothing could price carries no chip rather than a $0.00 one", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  withPostCosts([postBucket(0, { priced_calls: 0, unpriced_calls: 1, cost_usd: 0 })]);
+  renderCampaign();
+
+  await screen.findByRole("heading", { name: /^Old$/ });
+  expect(screen.queryByText("$0.00")).toBeNull();
+  expect(screen.queryByText("unpriced")).toBeNull();
+});
+
+test("cost chips never land on the transcript they were not read for", async () => {
+  // The race: this view keeps scene A's messages on screen until B's
+  // transcript read lands, and the usage read is a separate request that can
+  // land first. Index-keyed alone, B's costs appeared beside A's posts — and
+  // stayed there if B's transcript read never landed at all.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "First", model: "", created: "", updated: "2026-01-02" },
+    { id: "s2", title: "Second", model: "", created: "", updated: "2026-01-01" },
+  ]);
+  (api.getScene as any).mockImplementation(async (_cid: string, sid: string) => {
+    if (sid === "s1") {
+      return { meta: { id: "s1", title: "First" },
+               messages: [{ role: "user", content: "the first scene" }] };
+    }
+    return new Promise(() => {});          // B's transcript never arrives
+  });
+  (api.getSceneUsage as any).mockImplementation(async (_cid: string, sid: string) => {
+    const empty = { campaign: "run", scene: sid, since: "", until: "", clamped: false,
+      generated_at: "",
+      totals: { calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0,
+                total_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
+                cost_usd: 0, estimated_usd: 0, modelled_usd: 0, priced_calls: 0,
+                unpriced_calls: 0, subscription_calls: 0, modelled_calls: 0,
+                unmetered_calls: 0, duration_ms: 0 },
+      by_task: [], by_post: [] as any[], turns: [], listed: 0, truncated: false };
+    // Only the SECOND scene has spend, and its read resolves at once.
+    return sid === "s2"
+      ? { ...empty, by_post: [postBucket(0, { cost_usd: 9.99, priced_calls: 1 })] }
+      : empty;
+  });
+  renderCampaign();
+  await screen.findByText("the first scene");
+
+  await openScene(/Second/);
+
+  // A's message is still what is rendered, and B's figure is not beside it.
+  expect(screen.getByText("the first scene")).toBeInTheDocument();
+  expect(screen.queryByText(/\$9\.99/)).toBeNull();
+});
+
+test("a failed cost read leaves the transcript alone", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }] });
+  (api.getSceneUsage as any).mockRejectedValue(new Error("no"));
+  renderCampaign();
+
+  expect(await screen.findByText("hi")).toBeInTheDocument();
+});
+
 test("⌘K numbers a scene by its id's own number, not by list position", async () => {
   // listScenes is sorted by `updated` descending — an earlier scene edited
   // most recently sorts first, which must not desync the displayed number

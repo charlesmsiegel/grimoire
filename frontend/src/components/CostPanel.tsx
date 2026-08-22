@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type CampaignBudget, type SceneUsage, type UsageTurn } from "../api/client";
+import { Footnotes, about, bound, bucketPrice, money, turnPrice } from "./cost";
 
 /** What this scene's turns cost, and where the campaign stands against its
  *  budget (#153).
@@ -97,18 +98,18 @@ export function CostPanel({ cid, sid, refreshKey }: {
             {bucketPrice(totals)} · {totals.calls} {totals.calls === 1 ? "turn" : "turns"}
             {" · "}{totals.total_tokens.toLocaleString()} tok
           </div>
-          {/* Both of these are the same warning in different words: the number
-              above is not the whole bill. Shown separately because the reasons
-              differ, and so does what a reader can do about them. */}
-          {totals.unpriced_calls > 0 && (
+          {/* Everything the figure above is not covering, one line per reason
+              — see `cost.Footnotes` for why they are not collapsed into one. */}
+          <Footnotes bucket={totals} />
+          {/* The window, when it is not the scene's whole life. Said here
+              rather than left to the absent chips in the transcript, where a
+              post with no cost recorded looks exactly like a post that cost
+              nothing. */}
+          {usage?.clamped && (
             <div className="field-hint">
-              At least: {totals.unpriced_calls}{" "}
-              {totals.unpriced_calls === 1 ? "call" : "calls"} came back with no price.
-            </div>
-          )}
-          {totals.estimated_usd > 0 && (
-            <div className="field-hint">
-              Plus {money(totals.estimated_usd)} billed to a subscription, not charged.
+              Only turns since {bound(usage.since)} were scanned — this scene is older
+              than the ledger's scan window, so these totals and the per-post
+              costs in the transcript are a floor.
             </div>
           )}
         </>
@@ -225,7 +226,7 @@ function TurnRow({ turn }: { turn: UsageTurn }) {
         <span className="ctx-label">{turn.task}</span>
         {turn.status === "error" && <span className="ctx-drop">{turn.error || "failed"}</span>}
         <span className="ctx-meta">{clock(turn.ts)}</span>
-        <span className="ctx-meta">{price(turn.cost_usd)}</span>
+        <span className="ctx-meta">{turnPrice(turn)}</span>
       </summary>
       <div className="cost-turn-body">
         <div className="field-hint">{turn.model}</div>
@@ -237,43 +238,17 @@ function TurnRow({ turn }: { turn: UsageTurn }) {
         <div className="field-hint">
           {(turn.duration_ms / 1000).toFixed(1)}s
           {turn.attempts > 1 && ` · ${turn.attempts} attempts`}
-          {turn.cost_basis === "equivalent" && " · billed to a subscription"}
+          {/* The parenthetical this whole column exists for: the figure beside
+              a subscription turn is what it WOULD have cost per token, and the
+              turn itself cost nothing extra. */}
+          {turn.cost_basis === "equivalent" && turn.cost_usd !== null
+            && ` · billed to a subscription (${about(turn.cost_usd)} per-token equivalent)`}
+          {turn.cost_usd === null && turn.modelled_usd !== null
+            && " · estimated from your rates"}
         </div>
       </div>
     </details>
   );
-}
-
-/** What a bucket of calls cost, or that nobody priced them.
- *
- *  A bucket whose calls were ALL unpriced sums to 0.0, and rendering that as
- *  `$0.00` is the one claim this panel exists not to make — every
- *  OpenAI-compatible endpoint reports no price today, so a whole scene of them
- *  would read as free. A bucket with even one priced call keeps its figure; the
- *  note under the totals is what says the figure is a floor. */
-function bucketPrice(bucket: { cost_usd: number; priced_calls: number;
-                               unpriced_calls: number }): string {
-  return bucket.priced_calls === 0 && bucket.unpriced_calls > 0
-    ? "unpriced" : money(bucket.cost_usd);
-}
-
-/** A dollar figure at the precision it is actually worth reading at. A cheap
- *  model's turn costs $0.0042, and `toFixed(2)` renders every one of them as
- *  $0.00 — a whole scene of "free" turns adding up to a bill. */
-export function money(usd: number): string {
-  // Grouped, like the token counts beside it: an ungrouped $1000.00 next to a
-  // 1,880 tok is two number systems in one line.
-  if (usd >= 0.01 || usd === 0) {
-    return `$${usd.toLocaleString(undefined, { minimumFractionDigits: 2,
-                                               maximumFractionDigits: 2 })}`;
-  }
-  return usd >= 0.0001 ? `$${usd.toFixed(4)}` : "<$0.0001";
-}
-
-/** A turn's price, or what an absent one means. `null` is a provider that
- *  reported nothing, which is not the same as a call that cost nothing. */
-function price(usd: number | null): string {
-  return usd === null ? "unpriced" : money(usd);
 }
 
 /** The stamp is UTC (`…Z`, written by the store); a turn list is read against
