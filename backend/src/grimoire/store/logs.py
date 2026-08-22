@@ -358,6 +358,20 @@ def _room_for(path: Path, size: int, level_: str) -> bool:
     key = str(path)
     with _size_guard:
         if key in _capped:
+            # Re-stat before honouring a cap set earlier. Deleting or
+            # truncating the month file is exactly what a user does to reclaim
+            # the space the cap is complaining about, and a cap remembered for
+            # the life of the process left ordinary logging switched off after
+            # they had -- until a restart or the month rolled over, with
+            # nothing on screen to say why.
+            try:
+                if path.stat().st_size < MAX_MONTH_BYTES:
+                    _capped.discard(key)
+                    _written.pop(key, None)
+            except OSError:
+                _capped.discard(key)         # gone entirely; start again
+                _written.pop(key, None)
+        if key in _capped:
             return _RANK[level_] >= _RANK["error"]
         counted = _written.get(key)
         if counted is None or counted >= _STAT_EVERY:
@@ -543,14 +557,30 @@ def span(since: object, until: object, days: int) -> tuple[str, str]:
     if start and start > end:
         start, end = end, start
     span = max(1, min(int(days or DEFAULT_DAYS), MAX_DAYS))
-    floor_day = (date.fromisoformat(end) - timedelta(days=MAX_DAYS - 1)).isoformat()
+    floor_day = _back(end, MAX_DAYS - 1)
     if not start:
-        start = (date.fromisoformat(end) - timedelta(days=span - 1)).isoformat()
+        start = _back(end, span - 1)
     # The ceiling applies to a NAMED `since` as well. Clamping only the derived
     # one left `?since=1970-01-01` reading every month file the install ever
     # wrote -- exactly the unbounded scan `DEFAULT_DAYS` was added to remove,
     # reachable by typing a date.
     return max(start, floor_day), end
+
+
+def _back(day: str, days: int) -> str:
+    """``days`` before ``day``, stopping at the earliest date there is.
+
+    `_valid_day` accepts anything `date.fromisoformat` parses, and
+    `until=0001-01-01` is a perfectly valid date -- so subtracting a window
+    from it crossed `date.min` and raised `OverflowError`, which reached the
+    caller as a 500 rather than as the bounded, empty report these endpoints
+    promise. Clamping is the answer that keeps the promise: there is no
+    history before the first day, so the window simply starts there.
+    """
+    try:
+        return (date.fromisoformat(day) - timedelta(days=days)).isoformat()
+    except (OverflowError, ValueError):
+        return date.min.isoformat()
 
 
 def _window_files(since: str, until: str) -> list[Path]:
