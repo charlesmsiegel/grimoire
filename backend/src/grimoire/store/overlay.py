@@ -669,12 +669,25 @@ def reclassify_entity(cid: str, kind: str, eid: str, new_kind: str,
     campaign cannot see at all, tombstoned ones included, exactly as a read of
     it would raise.
 
+    An unknown `new_kind` and a `new_kind` equal to `kind` are both refused
+    here rather than one call later, so neither leaves a materialized copy
+    behind -- see the comment on the checks.
+
     `prefer` is the id the caller needs this copy to land on, and it is passed
     straight through: a world-side reclassify has already moved the world
     record, and a campaign copy that took a different id would stop being a copy
     *of* it. Occupied campaign-side, the copy lands elsewhere and the caller is
     told by the id it gets back rather than being handed a silently forked pair.
     """
+    # Both refusals BEFORE the materialization, not inside the move that
+    # follows it. `entities.reclassify` raises these too, but by then this has
+    # already copied a world record into the campaign -- so a request that
+    # cannot be satisfied would fork the record off its world as a parting gift
+    # and then report failure. Validate, then mutate.
+    if new_kind not in entities.ENTITY_KINDS:
+        raise entities.UnknownKind(new_kind)
+    if kind == new_kind:
+        raise entities.SameKindError(_flat_ref(kind, eid))
     croot, wroot = croot_of(cid), wroot_of(cid)
     materialize_entity(cid, kind, eid)
 

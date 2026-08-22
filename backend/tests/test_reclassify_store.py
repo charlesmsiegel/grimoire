@@ -466,3 +466,17 @@ def test_a_sheet_ref_that_is_not_a_safe_id_moves_nothing(monkeypatch, tmp_path):
     sheets.repoint_records(cid, {"lore/tidewatch": "locations/../../escape"})
     assert (sheet_dir / "lore--tidewatch.json").exists()
     assert sorted(p.name for p in sheet_dir.iterdir()) == ["lore--tidewatch.json"]
+
+
+def test_a_refused_campaign_move_does_not_materialize_the_record(monkeypatch, tmp_path):
+    # Validate, then mutate. Both refusals live one call later in
+    # `entities.reclassify`, by which point the copy has been made -- so a
+    # request that cannot be satisfied would fork the record off its world and
+    # then report failure.
+    _wid, _wroot, cid = _world_and_campaign(monkeypatch, tmp_path)
+    croot = overlay.croot_of(cid)
+    for bad_kind, exc in (("lore", entities.SameKindError), ("characters", entities.UnknownKind)):
+        with pytest.raises(exc):
+            reclassify.campaign_entity(cid, "lore", "tidewatch", bad_kind)
+        assert not (croot / "lore" / "tidewatch.md").exists()
+    assert campaigns.read_manifest(cid) == {}
