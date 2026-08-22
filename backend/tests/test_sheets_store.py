@@ -1237,9 +1237,12 @@ def test_unspent_pools_reports_an_overspend_as_a_negative():
 
 def test_unspent_pools_skips_a_pool_it_cannot_price():
     """A budget expression that does not evaluate, a cost that is not an int, a
-    stored value that is not an int: each is unjudgeable, and pack validation
-    already reports the first two. A guess here would be a number on screen
-    that no rule produced."""
+    stored value that is not an int: each makes the whole POOL unjudgeable, and
+    the pool is dropped rather than totalled from the terms that did price.
+
+    A pool is a sum. Pricing three of its four fields and reporting the
+    remainder is a number no rule produced -- and it is wrong in the
+    flattering direction, since a skipped term reads as unspent budget."""
     broken = {"groups": {"attributes": {"fields": [{"key": "vigor", "type": "dots"}]}},
               "sheet_types": {"mortal": {"kind": "characters", "groups": ["attributes"],
                                          "creation": {"pools": {
@@ -1250,8 +1253,23 @@ def test_unspent_pools_skips_a_pool_it_cannot_price():
     text_cost["sheet_types"] = {"mortal": {
         **_OVERSPENT_DEF["sheet_types"]["mortal"],
         "creation": {"pools": {"attributes": {"budget": 2, "costs": {"vigor": "two"}}}}}}
-    assert sheets.unspent_pools(text_cost, "mortal", {"vigor": 3}) == {"attributes": 2}
-    assert sheets.unspent_pools(_OVERSPENT_DEF, "mortal", {"vigor": "three"}) == {"attributes": 2}
+    # Both of these used to price as "2 left to spend" by dropping the one term
+    # they could not read -- for a sheet whose only costed field is garbage.
+    assert sheets.unspent_pools(text_cost, "mortal", {"vigor": 3}) == {}
+    assert sheets.unspent_pools(_OVERSPENT_DEF, "mortal", {"vigor": "three"}) == {}
+    # A pool that prices completely is still reported next to one that cannot
+    two_pools = {
+        "groups": {
+            "attributes": {"fields": [{"key": "vigor", "type": "dots", "default": 3}]},
+            "abilities": {"fields": [{"key": "brawl", "type": "dots", "default": 0}]},
+        },
+        "sheet_types": {"mortal": {"kind": "characters",
+                                   "groups": ["attributes", "abilities"],
+                                   "creation": {"pools": {
+                                       "attributes": {"budget": 2, "costs": {"vigor": "two"}},
+                                       "abilities": {"budget": 4, "costs": {"brawl": 1}}}}}},
+    }
+    assert sheets.unspent_pools(two_pools, "mortal", {}) == {"abilities": 4}
 
 
 def test_unspent_pools_is_empty_for_a_type_with_no_creation_block():
