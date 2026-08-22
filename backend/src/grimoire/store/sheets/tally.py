@@ -221,10 +221,11 @@ def create_missing(cid: str, types: dict[str, str] | None = None) -> dict:
     sheet that appears from another process is a recorded failure rather than
     an overwrite.
 
-    Returns ``{"created", "skipped", "failed"}``, and every cast member ends up
-    in exactly one of them or already had a sheet. That is the point: a bulk
-    create that quietly did less than it claimed is the one outcome this must
-    not have.
+    Returns ``{"created", "skipped", "failed"}``. Every cast member without a
+    sheet is accounted for: in ``created``, in ``failed``, or under a kind
+    named in ``skipped`` -- the members of a skipped kind are not listed
+    individually, the kind is. That accounting is the point: a bulk create that
+    quietly did less than it claimed is the one outcome this must not have.
 
     - ``created``: ``{kind, id, name, sheet_type, unspent}``. ``unspent`` is
       non-empty for a type whose ``creation`` block the schema defaults do not
