@@ -3515,11 +3515,21 @@ def _require_unmoved_review(cid: str, sid: str, token: str) -> None:
     MUST be called inside the campaign-lock hold that covers the writes: read
     outside one, it answers a question that was true a moment ago.
 
-    A scene with NO stored review falls through to the epoch check alone. That
-    is where the watermark's reach ends, and saying so is better than implying
-    more: a client holding a review whose record has since been discarded can
-    still save it, and a caller-minted token -- which is a supported thing to
-    send -- is unaffected on a scene nobody is reviewing.
+    A scene with NO stored review is where the watermark's reach ends, and what
+    happens there depends on who minted the token:
+
+    * **Server-minted** (`commits.token_epoch` can read an epoch out of it):
+      refused. The record is where that review's watermark lives, so a missing
+      one is not "nothing to check against" but "the only evidence about this
+      save is gone" -- and it goes missing for a reason. One tab discarding a
+      review while another still has it open is the panel doing it, not a
+      hand-made request: play then continues, which advances no epoch, and the
+      old token sails through to commit a summary of posts nobody reviewed over
+      a transcript that has moved.
+    * **Anything else** -- a caller-minted key, an older build's token, no token
+      at all -- falls through, exactly as before. Those were never stamped, so
+      they keep the weaker pre-#271 guarantee rather than being refused for a
+      stamp nobody asked them to carry.
 
     A save with **no token at all** falls through too. That is the documented
     opt-out from idempotency (`models.ChronicleSave`), not a claim about any
@@ -3562,8 +3572,16 @@ def _require_unmoved_review(cid: str, sid: str, token: str) -> None:
             detail={"kind": "review_unreadable",
                     "detail": "this scene's stored review is unreadable, so this save "
                               "cannot be checked against it — re-run End Scene"}) from exc
-    if record is None or not token:
+    if not token:
         return
+    if record is None:
+        if store.commits.token_epoch(token) is None:
+            return
+        raise HTTPException(
+            status_code=409,
+            detail={"kind": "review_discarded",
+                    "detail": "this scene's review is no longer stored, so this save "
+                              "cannot be checked against it — re-run End Scene"})
     if record["review"].get("commit_token") != token:
         raise HTTPException(
             status_code=409,
