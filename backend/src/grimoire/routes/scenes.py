@@ -2224,7 +2224,14 @@ def _under_review_lock(cid: str, sid: str, run, write) -> None:
     a busy campaign with a 409 the caller can repeat, and this caller cannot --
     the payload exists nowhere else.
     """
-    for attempt in range(_PERSIST_ATTEMPTS):
+    # `while` rather than `for`, so there is no falling out of it. A loop that
+    # can end without either writing or raising would return `None` for a
+    # review nobody wrote and nobody was told about, which is the worst outcome
+    # this function has -- and a shape that cannot express it beats a comment
+    # promising it will not happen.
+    left = _PERSIST_ATTEMPTS
+    while True:
+        left -= 1
         try:
             with store.locks.campaign_lock(cid):
                 # BOTH flags, exactly as `_review_abandoned` reads both. They
@@ -2241,7 +2248,7 @@ def _under_review_lock(cid: str, sid: str, run, write) -> None:
                 write()
                 return
         except store.locks.StoreBusy:
-            if attempt == _PERSIST_ATTEMPTS - 1:
+            if left <= 0:
                 raise
             time.sleep(_PERSIST_BACKOFF)
 

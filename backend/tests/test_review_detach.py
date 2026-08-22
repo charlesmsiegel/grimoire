@@ -17,6 +17,7 @@ Four properties, and each is a way the old shape lost work:
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import time
 
@@ -529,7 +530,7 @@ def _wedged_retry(client, scene, monkeypatch, route="dossiers"):
     started = client.post(f"/api/campaigns/{cid}/scenes/{sid}/{route}")
     assert started.status_code == 202, started.json()
     _wait_for(held.frames_seen)          # the call is really in flight
-    return started, held
+    return started
 
 
 def test_a_retry_whose_review_was_cleared_reports_that_it_had_nowhere_to_land(
@@ -538,7 +539,7 @@ def test_a_retry_whose_review_was_cleared_reports_that_it_had_nowhere_to_land(
     has nothing to fold into. Inventing one would put a phase report and a set
     of staged edits on a scene with no review behind them."""
     cid, sid = scene
-    started, held = _wedged_retry(client, scene, monkeypatch)
+    started = _wedged_retry(client, scene, monkeypatch)
 
     store.pending_reviews.clear(cid, sid)
     # `_Wedged` runs itself out in about two seconds, so the merge below is
@@ -560,7 +561,7 @@ def test_a_retry_whose_review_was_replaced_does_not_fold_into_the_new_one(
     write. Driven here at the seam where that would show up.
     """
     cid, sid = scene
-    started, held = _wedged_retry(client, scene, monkeypatch)
+    started = _wedged_retry(client, scene, monkeypatch)
 
     store.pending_reviews.publish(cid, sid, "somebody-elses-generation",
                                   {"one_line": "fresh", "edits": []}, {})
@@ -612,3 +613,96 @@ def test_a_save_is_not_wedged_by_a_review_it_cannot_read(client, scene):
                          "keywords": [], "timeline_events": [], "edits": [],
                          "commit_token": review["commit_token"]})
     assert r.status_code == 200, r.json()
+
+
+# ---- what the terminal write turns each failure into ------------------------
+#
+# `_persist_review` is a mapping and nothing else: every way the write can go
+# wrong becomes a `state` and an `error` a polling client renders. Driven
+# directly, because several of these arms are reachable only from a second
+# writer or a filesystem that refuses -- and a mapping nobody has exercised is
+# a client showing "undefined" at the moment it most needs words.
+
+class _FakeRun:
+    review_cancelled = False
+    cancel_requested = False
+
+    def __init__(self, identity):
+        self.scene_identity = identity
+
+
+def _persisted(cid, sid, run, write):
+    return asyncio.run(routes.scenes._persist_review(cid, sid, run, "gen1", write))
+
+
+def test_the_terminal_write_names_what_stopped_it(client, scene):
+    cid, sid = scene
+    identity = store.scenes.scene_identity(cid, sid)
+
+    def boom(exc):
+        def write():
+            raise exc
+        return write
+
+    cancelled = _FakeRun(identity)
+    cancelled.review_cancelled = True
+    assert _persisted(cid, sid, cancelled, lambda: None)["state"] == "cancelled"
+
+    moved = _FakeRun("0" * 32)
+    assert _persisted(cid, sid, moved, lambda: None) == {
+        "state": "failed", "error": {
+            "kind": "scene_gone", "status": 404,
+            "detail": "the scene this review was prepared for is gone"}}
+
+    for exc, kind in ((store.pending_reviews.NoPendingReviewError(sid), "review_missing"),
+                      (store.pending_reviews.ReviewReplacedError(sid), "review_replaced"),
+                      (OSError("disk went away"), "busy"),
+                      (store.pending_reviews.CorruptReviewError("garbled"), "busy")):
+        out = _persisted(cid, sid, _FakeRun(identity), boom(exc))
+        assert out["state"] == "failed" and out["error"]["kind"] == kind, exc
+
+    landed = _persisted(cid, sid, _FakeRun(identity), lambda: None)
+    assert landed == {"state": "landed", "result": {"generation": "gen1", "sid": sid}}
+
+
+def test_a_contended_campaign_is_waited_out_rather_than_costing_the_review(
+        client, scene, monkeypatch):
+    """The one place in this file that retries a busy campaign, and the reason
+    is that this caller cannot be told to try again: what it is writing is ten
+    minutes of generation and there is no copy of it anywhere."""
+    cid, sid = scene
+    run = _FakeRun(store.scenes.scene_identity(cid, sid))
+    real = store.locks.campaign_lock
+    tries = []
+
+    def contended(target):
+        def lock(c):
+            tries.append(c)
+            if len(tries) <= target:
+                raise store.locks.CampaignBusy(c)
+            return real(c)
+        return lock
+
+    monkeypatch.setattr(routes.scenes, "_PERSIST_BACKOFF", 0)
+    written = []
+    monkeypatch.setattr(store.locks, "campaign_lock", contended(2))
+    routes.scenes._under_review_lock(cid, sid, run, lambda: written.append(1))
+    assert written == [1] and len(tries) == 3
+
+    # ...and it gives up rather than retrying forever, because a campaign held
+    # for three full `LOCK_TIMEOUT` waits is not going to free up on a fourth.
+    tries.clear()
+    monkeypatch.setattr(store.locks, "campaign_lock", contended(99))
+    with pytest.raises(store.locks.StoreBusy):
+        routes.scenes._under_review_lock(cid, sid, run, lambda: written.append(2))
+    assert len(tries) == routes.scenes._PERSIST_ATTEMPTS
+    assert written == [1]
+
+
+def test_a_refusal_with_no_kind_still_reaches_the_client_as_words(client, scene):
+    """`HTTPException` carries either a dict or a bare string in this tree, and
+    a run error built from the second shape must still say something: a client
+    reads `detail` straight onto the banner."""
+    assert routes.scenes._run_error(
+        routes.scenes.HTTPException(status_code=400, detail="nothing to absorb")) == {
+            "kind": "refused", "detail": "nothing to absorb", "status": 400}
