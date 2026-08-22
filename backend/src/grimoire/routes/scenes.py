@@ -504,11 +504,12 @@ def _disown_dead_pending(cid: str, sid: str) -> None:
     player message — sent neither the hint nor the route, so the take they
     produce must not be labelled with either.
 
-    Both halves, and named for both since #77 gave the pair a second field:
-    this reaches the model through `archive`'s `model=""` default rather than
-    by saying so, which is exactly the silence `store.alternates
-    .disown_guidance` was renamed `disown_pending` to stop. Re-aiming only the
-    hint would credit the take that lands with a route it was not generated on.
+    Both halves, and named for both since #77 gave the pair a second field.
+    The call below passes them both explicitly rather than leaning on
+    `archive`'s defaults, which is the same visibility the `disown_guidance` ->
+    `disown_pending` rename was made for: re-aiming only the hint would credit
+    the take that lands with a route it was not generated on, and a signature
+    default is not where a reader looks to find that out.
 
     Only over an *empty* slot. Above a live reply these paths append a
     consecutive generation rather than replacing one, which moves the slot and
@@ -850,11 +851,16 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
     # connection with none configured reports the one the dispatcher
     # substitutes rather than the empty string it stores.
     ran_on = effective_model(conn)
-    # `routed` is whether the caller asked for a route at all, decided once by
-    # `_override_connection` and passed in rather than re-read off the body: two
-    # readings of the same two fields is two places for the rule to drift. The
-    # two stamps below answer to it differently -- and deliberately, because
-    # they are answering different questions:
+    # `routed` is whether this turn ran somewhere it would NOT have gone
+    # anyway -- not merely whether the caller typed something. A body naming
+    # the active connection at its own model is not an override, and review
+    # caught the earlier reading of this flag turning such a request into one
+    # that displaced the snapshot stamp below. Decided once, by
+    # `_override_connection`, which compares the resolved route against the
+    # standing one on the EFFECTIVE model; re-deriving it here off `body` would
+    # be a second place for that rule to drift. The two stamps below answer to
+    # it differently -- and deliberately, because they answer different
+    # questions:
     #
     # - The ALTERNATE is stamped on every reroll. It is the only record a
     #   variant has of the generation that produced it, and the whole point of

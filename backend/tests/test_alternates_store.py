@@ -1122,11 +1122,12 @@ def test_a_take_matched_with_nothing_pending_keeps_the_route_it_was_stamped_with
         monkeypatch, tmp_path):
     """The limit of the stamp, stated rather than discovered.
 
-    A generation that records NO pending pair — Retry and the empty send, which
-    re-aim a dead reroll's pair to nothing before streaming (`routes.scenes
-    ._disown_dead_pending`) — cannot re-stamp the variant it lands on, because
-    `_resolve` is a pure read and an empty pending record is indistinguishable
-    from no reroll at all. Closing that needs the "a replacement is expected"
+    A generation that records an EMPTY pending pair cannot re-stamp the variant
+    it lands on, because `_resolve` is a pure read and an empty pending record
+    is indistinguishable from no reroll at all. Three reach this: Retry and the
+    empty send, which re-aim a dead reroll's pair to nothing before streaming
+    (`routes.scenes._disown_dead_pending`), and a reroll onto a connection with
+    no model configured, whose effective model is "". Closing that needs the "a replacement is expected"
     flag this module's docstring rejects by name, and which a read could not
     clear.
 
@@ -1140,7 +1141,8 @@ def test_a_take_matched_with_nothing_pending_keeps_the_route_it_was_stamped_with
     _reroll(cid, sid, [_seg("Gulls over the pilings.")], model="local/llama3")
     _reroll(cid, sid, [_seg("Fog over the pilings.")], model="other/model")
 
-    # what Retry does: re-aim the dead pair to nothing, then stream
+    # what Retry does — and equally what a reroll onto a connection with no
+    # model configured does, since its effective model is "" too
     alternates.archive(cid, sid, guidance="", model="")
     scenes.remove_trailing_assistant_run(cid, sid)
     scenes.append_reply(cid, sid, [_seg("Gulls over the pilings.")])

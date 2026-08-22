@@ -862,11 +862,28 @@ def _override_connection(body) -> tuple[dict, bool]:
         raise HTTPException(
             status_code=400,
             detail="That is too long to be a model id — check it and try again.")
-    # Read ONCE and reused for both roles below: resolving a `model`-only
-    # override, and deciding whether the result differs from it.
+    # Read ONCE and used for both roles below: resolving a `model`-only
+    # override, and deciding whether the result differs from the standing
+    # route. Review caught the first draft of this claiming exactly that while
+    # the `model`-only branch went through `_require_connection()`, which reads
+    # again — the same two-read window the tuple return was introduced to
+    # close, left open in the one branch the fix did not reach. A repoint
+    # landing between the two sent "the same provider, its bigger model" to a
+    # different provider entirely, and computed `routed` against a connection
+    # that never served the turn.
     active = store.llm_connections.get_active()
     if not conn_id:
-        conn = _require_connection()
+        # `_require_connection`'s two refusals, raised against the connection
+        # already in hand rather than by reading it a second time.
+        if active is None:
+            raise HTTPException(
+                status_code=409,
+                detail={"detail": "No LLM connection selected", "kind": "missing_key"})
+        problem = _connection_problem(active)
+        if problem is not None:
+            raise HTTPException(status_code=409,
+                                detail={"detail": problem, "kind": "missing_key"})
+        conn = active
     else:
         try:
             conn = store.llm_connections.read_connection_raw(conn_id)

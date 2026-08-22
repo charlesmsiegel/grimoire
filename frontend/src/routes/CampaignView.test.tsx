@@ -3001,7 +3001,7 @@ test.each(["Reroll guidance", "Reroll connection", "Reroll model"])(
  *  the picker has something to choose that a bare model id could not name. */
 const LOCAL_CONN = {
   id: "local", kind: "openai_compatible", name: "Local", base_url: "http://localhost:11434/v1",
-  model: "llama3", post_process: "none", key_set: false, rev: "r2",
+  model: "llama3", effective_model: "llama3", post_process: "none", key_set: false, rev: "r2",
 };
 
 function rerollableScene() {
@@ -3010,7 +3010,7 @@ function rerollableScene() {
     { role: "user", content: "hi" }, { role: "assistant", content: "old reply" }] });
   (api.listConnections as any).mockResolvedValue([
     { id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "",
-      model: "campaign/model", post_process: "none", key_set: true, rev: "r1" },
+      model: "campaign/model", effective_model: "campaign/model", post_process: "none", key_set: true, rev: "r1" },
     LOCAL_CONN,
   ]);
   (api.readConnection as any).mockResolvedValue({ ...LOCAL_CONN, models: [], fetched_at: "" });
@@ -3090,6 +3090,37 @@ test("Retry after a failed reroll repeats its route, not just its guidance", asy
   // the player chose would answer from the campaign's model while looking like
   // a repeat.
   expect((api.regenerate as any).mock.calls[1][3].connection_id).toBe("local");
+});
+
+test("switching scenes closes the reroll popover and drops its route", async () => {
+  // Codex review: the popover is anchored to "the post a reroll would replace",
+  // which is a different post in every scene. Left open across a switch it
+  // reappears over B's trailing reply still holding the connection chosen for
+  // A's, and the next click sends B's reply to a model picked for another
+  // scene.
+  rerollableScene();
+  (api.listScenes as any).mockResolvedValue(TWO_SCENES);
+  (api.getScene as any).mockImplementation(async (_c: string, sid: string) => ({
+    meta: { id: sid }, messages: [{ role: "user", content: `hi from ${sid}` },
+                                  { role: "assistant", content: `a reply in ${sid}` }],
+  }));
+  renderCampaign();
+  await screen.findByText("a reply in s1");
+  fireEvent.click(await screen.findByTitle("Reroll"));
+  await screen.findByRole("option", { name: "Local" });
+  fireEvent.change(screen.getByLabelText("Reroll connection"), { target: { value: "local" } });
+
+  await openScene(/The Saltmarch Gate/);
+  await screen.findByText("a reply in s2");
+
+  // gone, not merely re-rendered over the new scene's trailing post
+  expect(screen.queryByPlaceholderText(/guide the reroll/i)).toBeNull();
+  // and reopening starts from the campaign's own route, not the one chosen in s1
+  fireEvent.click(await screen.findByTitle("Reroll"));
+  fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
+    "run", "s2", expect.any(Function), { guidance: "", connection_id: "", model: "" },
+    expect.any(AbortSignal), expect.any(String), expect.any(Function)));
 });
 
 test("Enter commits the reroll from the model box, not just the guidance", async () => {

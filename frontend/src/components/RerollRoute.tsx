@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import { getModels, type Model } from "../api/models";
 import type { ActiveConnection, LLMConnection, LLMConnectionKind } from "../api/types";
 import ModelCombobox from "../routes/ModelCombobox";
-import { CLAUDE_FALLBACK_MODEL, CLAUDE_MODEL_OPTIONS } from "./ConnectionForm";
+import { CLAUDE_MODEL_OPTIONS } from "./ConnectionForm";
 
 /** One reroll's route override (#77): which connection to send it to, and
  *  which model to drive that connection at. Both empty is the standing
@@ -29,12 +29,20 @@ export const NO_REROLL_ROUTE: RerollRoute = { connection_id: "", model: "" };
  *  one download.
  */
 export default function RerollRoutePicker({
-  value, onChange, active,
+  value, onChange,
 }: {
   value: RerollRoute;
   onChange: (route: RerollRoute) => void;
-  active: ActiveConnection | null;
 }) {
+  // Which connection is active is READ HERE, on mount, rather than handed down
+  // from the play view. Codex review caught the prop going stale: the view held
+  // it from a `[cid]`-keyed effect, so another tab repointing the active
+  // connection left the header (which `App` refreshes on navigation) and this
+  // picker disagreeing — Default named the old connection's model, the old one
+  // was filtered out of the list, and the real active one was offered as a
+  // redundant row. This mounts only when the popover opens, which is exactly
+  // when the answer is needed, so there is no window in which it can be wrong.
+  const [active, setActive] = useState<ActiveConnection | null>(null);
   const [connections, setConnections] = useState<LLMConnection[]>([]);
   const [orModels, setOrModels] = useState<Model[]>([]);
   const [orError, setOrError] = useState(false);
@@ -45,6 +53,9 @@ export default function RerollRoutePicker({
     api.listConnections()
       .then((list) => { if (live) setConnections(list); })
       .catch(() => { if (live) setConnections([]); });
+    api.getConfig()
+      .then((c) => { if (live) setActive(c.active_connection); })
+      .catch(() => { if (live) setActive(null); });
     return () => { live = false; };
   }, []);
 
@@ -86,12 +97,6 @@ export default function RerollRoutePicker({
     return () => { live = false; };
   }, [kind, chosenId]);
 
-  /** `llm.effective_model`'s rule, on the client. Only `claude` substitutes. */
-  function effectiveModel(c: { kind?: string; model?: string } | null): string {
-    if (!c) return "";
-    return c.kind === "claude" ? (c.model || CLAUDE_FALLBACK_MODEL) : (c.model ?? "");
-  }
-
   const models =
     kind === "openrouter" ? orModels
     : kind === "claude" ? CLAUDE_MODEL_OPTIONS
@@ -131,12 +136,13 @@ export default function RerollRoutePicker({
       <ModelCombobox
         ariaLabel="Reroll model"
         // What leaving it blank means, spelled out rather than implied: the
-        // model the chosen route will actually run. The two sources disagree
-        // about that for one kind and review caught it: `/config` reports the
-        // active connection's EFFECTIVE model, while `/llm-connections` reports
-        // the raw stored one — so a Claude connection with none configured
-        // showed an empty box for a reroll that would run `opus`.
-        placeholder={effectiveModel(value.connection_id ? chosen : active) || "model"}
+        // model the chosen route will actually run. Both sources now report
+        // that directly — `/config`'s `active_connection.model` always did,
+        // and `/llm-connections` gained `effective_model` for this — so the
+        // rule that a `claude` connection with no model still runs one lives
+        // in `llm.effective_model` and nowhere else.
+        placeholder={(value.connection_id ? chosen?.effective_model
+                                          : active?.model) || "model"}
         value={value.model}
         onChange={(model) => onChange({ ...value, model })}
         models={models}

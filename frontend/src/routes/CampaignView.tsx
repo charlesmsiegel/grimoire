@@ -9,7 +9,7 @@ import {
   type SceneDatetime, type ProposalRecord, type SceneCheckActor,
   type ResponsePresetSummary, type ResponseOverride, type ResponseBundle,
   type Briefing, type Casefile, type Provenance, type SceneLocation, type SceneWeather,
-  type ActiveConnection, type CampaignBudget,
+  type CampaignBudget,
   type UsagePostBucket,
 } from "../api/client";
 import { isAbortError, newAttemptId, type ChatEvent } from "../api/stream";
@@ -448,11 +448,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // guidance beside it and like `pendingResponse`: reset whenever the popover
   // opens, so a route chosen for one reroll cannot silently steer the next.
   const [rerollRoute, setRerollRoute] = useState<RerollRoute>(NO_REROLL_ROUTE);
-  // The active connection, for naming the picker's default. From `/config`
-  // rather than `/llm-connections`, which is where the status bar reads it too:
-  // the model there is the EFFECTIVE one, so a Claude connection with none
-  // configured names the model it will actually run.
-  const [activeConn, setActiveConn] = useState<ActiveConnection | null>(null);
   // Every variant of the generation reroll targets, refreshed by selectScene
   // (which every mutating path already funnels through). `active` is null when
   // the slot is empty — a reroll whose stream died — and picking a variant
@@ -665,7 +660,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     api.getConfig().then((c) => {
       setColorQuotes(c.quote_color === "on");
       setLabels({ user: c.user_label || "You", assistant: c.assistant_label || "Grimoire" });
-      setActiveConn(c.active_connection);
     }).catch(() => {});
     api.listResponsePresets().then(setResponsePresets).catch(() => setResponsePresets([]));
     readModuleBound(true);   // new campaign: nothing known about it yet
@@ -1125,6 +1119,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // whatever post happens to sit there. Same reasoning as the one-shot
       // response override two blocks up.
       setReplayAt(null);
+      // The reroll popover and the route in it, for the same reason and with
+      // more at stake than the rest of this block. It is anchored to "the post
+      // a reroll would replace", which is a different post in every scene — so
+      // left open across a switch it reappears over the new scene's trailing
+      // reply carrying the connection and model chosen for the old one's, and
+      // the next click sends B's reply to a model picked for A (Codex review,
+      // #77). The hint had the same hole before the route joined it; a wrong
+      // model is the version of it that costs a generation.
+      setRerollPrompt(null);
+      setRerollRoute(NO_REROLL_ROUTE);
       // a new scene opens at its most recent page, at the bottom
       windowSizeRef.current = PAGE_SIZE;
       atBottomRef.current = true;
@@ -3891,8 +3895,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                               the reroll goes, and the hint is what it says once
                               it gets there. Untouched, both halves are the
                               campaign's standing configuration. */}
-                          <RerollRoutePicker value={rerollRoute} onChange={setRerollRoute}
-                                             active={activeConn} />
+                          <RerollRoutePicker value={rerollRoute} onChange={setRerollRoute} />
                           <span className="reroll-guide">
                             <input
                               autoFocus
