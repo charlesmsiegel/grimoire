@@ -687,6 +687,52 @@ def test_available_greetings_skips_the_location_sweep_when_nothing_names_one(
     assert "locations" not in calls
 
 
+def test_starting_a_scene_does_not_sweep_locations_it_will_not_use(monkeypatch, tmp_path):
+    """`start_from_greeting`'s availability guard reads the verdict only. The
+    location sweep costs one file read per location in the campaign, and paying
+    it here would be paying it to throw the answer away."""
+    wid, wroot, loc = _world_with_location(monkeypatch, tmp_path)
+    g = greetings.create_greeting(wroot, "At the Ledger", "seraphine", "default",
+                                  body="She looks up.", location=loc)
+    cid, sid = _campaign_after_seed(wid)
+    calls: list[str] = []
+    real = overlay.list_entities
+
+    def spy(c, kind):
+        calls.append(kind)
+        return real(c, kind)
+
+    monkeypatch.setattr(overlay, "list_entities", spy)
+    playing.start_from_greeting(cid, sid, g)
+    assert "locations" not in calls
+
+
+def test_greeting_ideas_sweeps_locations_once_for_both_batches(monkeypatch, tmp_path):
+    """Startable and skipped rows are resolved together: the sweep reads every
+    location in the campaign, so twice per request is once too many."""
+    wid, wroot, loc = _world_with_location(monkeypatch, tmp_path)
+    live = greetings.create_greeting(wroot, "At the Ledger", "seraphine", "default",
+                                     location=loc)
+    dead = greetings.create_greeting(wroot, "Elsewhere", "seraphine", "default", location=loc)
+    cid, _sid = _campaign_after_seed(wid)
+    playing.mark_greeting(cid, dead, "skipped")
+    calls: list[str] = []
+    real = overlay.list_entities
+
+    def spy(c, kind):
+        calls.append(kind)
+        return real(c, kind)
+
+    monkeypatch.setattr(overlay, "list_entities", spy)
+    ideas = playing.greeting_ideas(cid)
+    assert calls.count("locations") == 1
+    # and both batches still came back resolved
+    by_title = {i["title"]: i["location"] for i in ideas}
+    assert by_title["At the Ledger"] == loc
+    assert by_title["Elsewhere"] == loc
+    assert live and dead
+
+
 def test_start_from_greeting_can_be_told_not_to_seed(monkeypatch, tmp_path):
     """The confirm pane pre-fills its picker from the greeting, so an empty
     location there means the reader CLEARED it -- indistinguishable, from the

@@ -72,6 +72,9 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
   // the picker unable to show anything, but only the failure is terminal.
   const [locationsOk, setLocationsOk] = useState(false);
   const [locationsNotice, setLocationsNotice] = useState<string | null>(null);
+  // The read failed AND a location had been pre-filled. Held as a fact rather
+  // than a sentence, because what it means depends on state that outlives it.
+  const [locationsFailed, setLocationsFailed] = useState(false);
   // Fixed for the life of this pane: a draft never changes source under it.
   const seedsFromGreeting = draft.source === "greeting";
   const [chars, setChars] = useState<CharacterSummary[]>([]);
@@ -97,6 +100,8 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
   useEffect(() => {
     setLocationsLoading(true);
     setLocationsNotice(null);
+    setLocationsOk(false);      // reset with the rest: a re-run has not succeeded yet
+    setLocationsFailed(false);
     api.listEntities({ kind: "campaign", id: cid }, "locations")
       .then((ls) => {
         setLocations(ls);
@@ -126,15 +131,12 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
         setLocations([]);
         setLocationsLoading(false);
         setLocation((prev) => {
-          if (prev) {
-            setLocationsNotice(seedsFromGreeting
-              // The greeting's location is not lost when this read fails: the
-              // pane simply stops owning the decision, and the server seeds
-              // the greeting's own (see `create`). Saying "cleared" here would
-              // describe an outcome that does not happen.
-              ? "Locations couldn't be loaded — the scene will open at the greeting's own location."
-              : "Locations failed to load — the pre-filled location was cleared.");
-          }
+          // Recorded as a fact, rendered as a sentence further down. What this
+          // failure MEANS for the scene depends on `firstPost`, which the
+          // reader can still change: declining the greeting skips
+          // `startFromGreeting` altogether, and a banner frozen here would go
+          // on promising to open at a location nothing will apply.
+          if (prev) setLocationsFailed(true);
           return "";
         });
       });
@@ -358,7 +360,19 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
 
   return (
     <>
-      {(error ?? notice ?? locationsNotice) && <div className="banner">{error ?? notice ?? locationsNotice}</div>}
+      {/* Rendered, not stored: whether a failed locations read costs the scene
+          its setting depends on `firstPost`, which the reader can still change
+          after the read failed. Only a greeting that is actually going to be
+          the first post reaches `startFromGreeting`, which is what seeds. */}
+      {(() => {
+        const failed = locationsFailed
+          ? (seedsFromGreeting && firstPost === "greeting"
+              ? "Locations couldn't be loaded — the scene will open at the greeting's own location."
+              : "Locations failed to load — the pre-filled location was cleared.")
+          : null;
+        const message = error ?? notice ?? locationsNotice ?? failed;
+        return message ? <div className="banner">{message}</div> : null;
+      })()}
 
       <label className="role" htmlFor="confirm-title">Title</label>
       <input id="confirm-title" aria-label="Title" type="text" value={title} disabled={locked}
