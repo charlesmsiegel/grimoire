@@ -102,6 +102,9 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   // left, unlinking the whole end-of-scene generation the reset exists to
   // preserve, silently, because the failure path is campaign-guarded.
   const stoppedGenRef = useRef<number | null>(null);
+  // Resolves the placeholder hold below, once the Stop that had nothing to name
+  // has either been sent or become impossible.
+  const stopWaitRef = useRef<(() => void) | null>(null);
   // A Discard still on its way to the server. `DELETE .../pending-review`
   // answers only once the runs it flagged have really stopped, and until it
   // does they are still holding the scene's exclusion key -- so an End scene
@@ -313,6 +316,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     // itself waits up to the server's cancellation timeout per flagged run --
     // and never posts at all if that request hangs.
     discardRef.current = null;
+    releaseStopWait();
     setEditRows([]);
     setConflicts([]);
     setSaveError(null);
@@ -531,7 +535,10 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
         // believing they stopped it. Same reasoning `stopAbsorb` carries for
         // its own DELETE, one step earlier.
         const stopping = api.discardReview(cid, activeId, g);
+        // Installed BEFORE the placeholder is released, so the hold passes from
+        // one to the other without a gap for a second End scene to slip into.
         noteDiscard(stopping.catch(() => {}), activeId);
+        releaseStopWait();
         void stopping.catch((err: unknown) => {
           if (campaignRef.current === cid) fail(err, false);
         });
@@ -591,7 +598,19 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       // absorb with nothing left to stop it. Every other latch in this file
       // guards its `finally` the same way.
       if (absorbStopRef.current === stopGen) setAbsorbing(false);
+      // Whatever happened, this absorb will not be naming a review any more, so
+      // a Stop still waiting on one is waiting on nothing. The precancel runs
+      // on the way IN to this block, so by here the ordinary case has already
+      // handed the hold over and this covers only the paths where no name ever
+      // arrived.
+      releaseStopWait();
     }
+  }
+
+  /** Let go of the hold a Stop with nothing to name is keeping. */
+  function releaseStopWait() {
+    stopWaitRef.current?.();
+    stopWaitRef.current = null;
   }
 
   // Commit is replayable server-side and plot movements append a beat per apply,
@@ -687,7 +706,19 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     setAbsorbing(false);
     setAdopting(false);
     setGeneration(null);
-    if (!sid || !gen) return;
+    if (!gen) {
+      // Stopped before the 202 named the review, so there is nothing to send
+      // yet -- `endScene`'s precancel sends it the moment there is. The scene
+      // is still HELD in the meantime, and saying otherwise is what let a
+      // second End scene in this window skip the wait `endScene` takes for
+      // exactly this and be refused `run_in_flight` instead. Held on a
+      // placeholder the precancel resolves, and that `endScene`'s `finally`
+      // resolves too, so an absorb that never answers cannot leave the scene
+      // locked for the rest of the session.
+      if (sid) noteDiscard(new Promise<void>((r) => { stopWaitRef.current = r; }), sid);
+      return;
+    }
+    if (!sid) return;
     const stopping = api.discardReview(cid, sid, gen);
     noteDiscard(stopping, sid);
     try {

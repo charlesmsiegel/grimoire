@@ -13324,6 +13324,15 @@ def test_a_rival_review_cannot_save_while_a_commit_is_unfinished(client):
         ' "plot_movements": [{"title": "The Tea", "beat": "poured", "status": "open"}]}')
     mine = review_runs.absorb(client, cid, sid).json()
     rival = review_runs.absorb(client, cid, sid, force=True).json()
+    # Both reviews are in hand and the reviewer dismisses the record, which is
+    # what leaves the LEDGER as the only thing standing between two saves --
+    # the question this test is asking. Left there, the sidecar answers first:
+    # a fresh absorb replaces the record, so `mine` is a review the store has
+    # since superseded and `_require_unmoved_review` refuses it before it can
+    # claim anything, and the half-finished commit below never happens.
+    generation = client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}/pending-review").json()["generation"]
+    assert review_runs.cancel(client, cid, sid, generation).status_code == 200
 
     def _save(body):
         return {"one_line": "o", "summary": "s", "keywords": [],

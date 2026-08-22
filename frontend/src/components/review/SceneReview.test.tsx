@@ -3195,3 +3195,63 @@ test("End scene in a new campaign does not wait on the old one's Discard", async
   await waitFor(() => expect(api.absorbScene).toHaveBeenCalledWith(
     "other", "s1", false, expect.any(Function)));
 });
+
+test("a Stop with nothing to name still holds the scene until it is sent", async () => {
+  // The 202 has not arrived, so `stopAbsorb` has no generation and sends
+  // nothing — `endScene`'s precancel sends it the moment there is one. The
+  // scene is HELD for that whole window, and saying otherwise let a second End
+  // scene pressed inside it skip the wait `endScene` takes for exactly this
+  // and be refused `run_in_flight` by the run that is still going.
+  withScene();
+  let name: ((g: string) => void) | null = null;
+  (api.absorbScene as any).mockImplementation(
+    async (_c: string, _s: string, _f: boolean, onStarted: (g: string) => void) => {
+      name = onStarted;
+      return new Promise(() => { /* answers long after the Stop */ });
+    });
+  let stopped: (v: unknown) => void = () => {};
+  (api.discardReview as any).mockReturnValue(new Promise((r) => { stopped = r; }));
+  renderCampaign();
+  await screen.findByText("hi");
+
+  fireEvent.click(screen.getByRole("button", { name: /^End scene$/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Stop$/ }));
+  (api.absorbScene as any).mockClear();
+
+  // A second End scene, inside the window. It must WAIT rather than post.
+  fireEvent.click(await screen.findByRole("button", { name: /^End scene$/ }));
+  await act(async () => { await Promise.resolve(); });
+  expect(api.absorbScene).not.toHaveBeenCalled();
+
+  // The first absorb finally names its review, the precancel goes out...
+  await act(async () => { name!("gen-late"); });
+  await waitFor(() => expect(api.discardReview)
+    .toHaveBeenCalledWith("run", "s1", "gen-late"));
+  // ...and only once it answers does the second End scene post.
+  await act(async () => { stopped({ removed: true, stopped: 1 }); });
+  await waitFor(() => expect(api.absorbScene).toHaveBeenCalled());
+});
+
+test("an absorb that never names a review does not hold the scene forever", async () => {
+  // The other end of that placeholder. A POST that fails outright never calls
+  // the precancel, so nothing would release the hold — and the scene would be
+  // locked against play for the rest of the session over a Stop for a run that
+  // does not exist.
+  withScene();
+  let die: (e: unknown) => void = () => {};
+  (api.absorbScene as any).mockImplementation(
+    () => new Promise((_res, rej) => { die = rej; }));
+  renderCampaign();
+  await screen.findByText("hi");
+
+  fireEvent.click(screen.getByRole("button", { name: /^End scene$/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Stop$/ }));
+  // Held, because the review might still be named a moment from now...
+  expect(screen.getByRole("button", { name: "Rename scene" })).toBeDisabled();
+
+  // ...and then the POST comes back a failure, so it never will be.
+  await act(async () => { die(new Error("the absorb never started")); });
+
+  expect(api.discardReview).not.toHaveBeenCalled();
+  expect(await screen.findByRole("button", { name: "Rename scene" })).toBeEnabled();
+});
