@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { vi, test, expect, beforeEach } from "vitest";
 import { TaglinePrompt } from "./TaglinePrompt";
+import { useHotkeys } from "../shortcuts/useHotkeys";
 import { api, ApiError } from "../api/client";
 
 // `ApiError` is the real class: `isOffline` reads `kind` off the rejection,
@@ -80,4 +81,35 @@ test("Escape skips while idle", () => {
   render(<TaglinePrompt wid="w" cid="mara" name="Mara" onClose={onClose} />);
   fireEvent.keyDown(window, { key: "Escape" });
   expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+// The case the parent could not cover: a sheet takeover keeps its open state
+// inside `SheetPanel`, so `CharacterEditor` cannot know to hold this back. The
+// prompt asks the registry instead, which does know (PR #400 review).
+test("it waits for an overlay it cannot see, and takes its turn when that closes", () => {
+  function Overlay({ up }: { up: boolean }) {
+    useHotkeys([{ keys: "escape", enabled: up, run: () => {} }], { modal: up });
+    return null;
+  }
+  const prompt = <TaglinePrompt wid="w" cid="mara" name="Mara" onClose={() => {}} />;
+  const { rerender } = render(<><Overlay up />{prompt}</>);
+  expect(screen.queryByRole("dialog", { name: /set tagline/i })).toBeNull();
+
+  rerender(<><Overlay up={false} />{prompt}</>);
+  expect(screen.getByRole("dialog", { name: /set tagline/i })).toBeInTheDocument();
+});
+
+// ...and while it waits it must not hold the keyboard either: a dialog that
+// renders nothing and still answers Escape is the same bug wearing a disguise.
+test("while waiting it does not answer Escape", () => {
+  const onClose = vi.fn();
+  const below = vi.fn();
+  function Overlay() {
+    useHotkeys([{ keys: "escape", run: below }], { modal: true });
+    return null;
+  }
+  render(<><Overlay /><TaglinePrompt wid="w" cid="mara" name="Mara" onClose={onClose} /></>);
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(onClose).not.toHaveBeenCalled();
+  expect(below).toHaveBeenCalledTimes(1);
 });

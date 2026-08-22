@@ -1,5 +1,8 @@
-import { useEffect, useRef } from "react";
-import { registerScope, scopeChanged, scopeSeq, type Hotkey, type Scope } from "./registry";
+import { useEffect, useRef, useState } from "react";
+import {
+  otherModalOpen, registerScope, scopeChanged, scopeSeq, watchHotkeys,
+  type Hotkey, type Scope,
+} from "./registry";
 
 export type { Hotkey, Scope };
 
@@ -32,4 +35,18 @@ export function useHotkeys(keys: Hotkey[], opts: { modal?: boolean } = {}): Scop
   // watching, which is every moment the shortcuts sheet is closed.
   useEffect(() => scopeChanged(scope));
   return scope;
+}
+
+/** Whether an overlay other than `self` is up, kept current.
+ *
+ *  For a component that must wait for the screen to be clear rather than
+ *  arrive on top of it -- see `otherModalOpen`. `self` is the scope its caller
+ *  got from `useHotkeys`, so its own modality never counts against it. */
+export function useOtherModalOpen(self?: Scope): boolean {
+  const [open, setOpen] = useState(() => otherModalOpen(self));
+  useEffect(() => {
+    setOpen(otherModalOpen(self));
+    return watchHotkeys(() => setOpen(otherModalOpen(self)));
+  }, [self]);
+  return open;
 }
