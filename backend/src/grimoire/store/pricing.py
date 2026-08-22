@@ -27,6 +27,13 @@ per-token rates the user maintains, `<home>/pricing.json`::
 A sibling file rather than a `config.md` key, for the reason #158 gives: config
 frontmatter is flat string-scalar, and a per-model map is not.
 
+**Both base rates are required.** An entry carrying only one is dropped, not
+half-applied: pricing a call's prompt at a rate and its completion at nothing
+produces a figure that is confidently wrong, and on a call that generated
+nothing it produces `$0.00` — the one thing this whole feature exists not to
+say. The cache pair stays optional for the opposite reason: those tokens have
+a rate either way (see below).
+
 **What comes out of here is never spend.** An estimate is arithmetic over rates
 somebody typed, against token counts a provider reported; it belongs in its own
 column (`modelled_usd`) beside `cost_usd`, never summed into it, and never
@@ -102,10 +109,11 @@ def _rate(value: object) -> float | None:
 def _entry(value: object) -> dict | None:
     """One table entry, keeping only the fields that are usable rates.
 
-    An entry with neither a prompt nor a completion rate is dropped rather than
-    kept empty: the pair is what makes an entry able to price anything, and a
-    surviving `{}` would shadow the `""` default for that model — an entry that
-    silently turns pricing OFF for exactly the model somebody tried to price.
+    An entry without BOTH base rates is dropped rather than kept partial: the
+    pair is what makes an entry able to price a call, and a surviving one would
+    shadow the `""` default for that model — an entry that silently turns
+    pricing OFF, or worse prices half a call at nothing, for exactly the model
+    somebody tried to price.
     """
     if not isinstance(value, dict):
         return None
@@ -114,7 +122,14 @@ def _entry(value: object) -> dict | None:
         rate = _rate(value.get(field))
         if rate is not None:
             kept[field] = rate
-    return kept if PROMPT in kept or COMPLETION in kept else None
+    # BOTH base rates, not either. A completion-only entry would price every
+    # prompt token at zero -- and, on a call that generated nothing, would
+    # report `$0.00` for a call nobody priced, which is exactly the claim this
+    # feature exists not to make. An entry that cannot price both halves of a
+    # call cannot price the call, so it is dropped like any other unusable one.
+    # The cache pair stays optional: those tokens have a rate either way, the
+    # prompt rate, which is what a table naming no cache rate is saying.
+    return kept if PROMPT in kept and COMPLETION in kept else None
 
 
 def read_pricing() -> dict[str, dict]:
@@ -167,6 +182,13 @@ def write_pricing(table: object) -> dict[str, dict]:
         entry = _entry(value)
         if entry is not None:
             kept[key] = entry
+    # `ensure_home`, like every other first-write path (`config.write_config`,
+    # `fork`): `atomic.write_text` creates its temp file BESIDE the target, so a
+    # store root that does not exist yet is a `FileNotFoundError` rather than a
+    # created directory. This endpoint stands alone -- it is reachable as the
+    # very first call a fresh install makes -- so it cannot assume something
+    # else has been there first.
+    paths.ensure_home()
     atomic.write_text(pricing_path(),
                       json.dumps(kept, indent=2, sort_keys=True) + "\n")
     return kept
@@ -229,6 +251,11 @@ def estimate(entry: dict | None, *, prompt_tokens: int | None,
         return None
     if prompt_tokens is None and completion_tokens is None:
         return None
+    # Belt and braces with `_entry`'s rule, because `_entry` is not the only
+    # door in: this is a public function, and a caller handing it a half-entry
+    # would otherwise have its unpriced half silently valued at zero.
+    if entry.get(PROMPT) is None or entry.get(COMPLETION) is None:
+        return None
     prompt = max(0, int(prompt_tokens or 0))
     completion = max(0, int(completion_tokens or 0))
     total = 0.0
@@ -244,6 +271,6 @@ def estimate(entry: dict | None, *, prompt_tokens: int | None,
         taken = min(max(0, int(count or 0)), prompt)
         prompt -= taken
         total += taken * rate
-    total += prompt * entry.get(PROMPT, 0.0)
-    total += completion * entry.get(COMPLETION, 0.0)
+    total += prompt * entry[PROMPT]
+    total += completion * entry[COMPLETION]
     return total / 1000.0

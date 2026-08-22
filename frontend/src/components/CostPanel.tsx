@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type CampaignBudget, type SceneUsage, type UsageTurn } from "../api/client";
-import { Footnotes, about, bucketPrice, money, turnPrice } from "./cost";
+import { Footnotes, about, bound, bucketPrice, money, turnPrice } from "./cost";
 
 /** What this scene's turns cost, and where the campaign stands against its
  *  budget (#153).
@@ -101,6 +101,17 @@ export function CostPanel({ cid, sid, refreshKey }: {
           {/* Everything the figure above is not covering, one line per reason
               — see `cost.Footnotes` for why they are not collapsed into one. */}
           <Footnotes bucket={totals} />
+          {/* The window, when it is not the scene's whole life. Said here
+              rather than left to the absent chips in the transcript, where a
+              post with no cost recorded looks exactly like a post that cost
+              nothing. */}
+          {usage?.clamped && (
+            <div className="field-hint">
+              Only turns since {bound(usage.since)} were scanned — this scene is older
+              than the ledger's scan window, so these totals and the per-post
+              costs in the transcript are a floor.
+            </div>
+          )}
         </>
       )}
 

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import CostsView from "./CostsView";
 import { PaletteProvider } from "../components/palette";
@@ -27,7 +27,7 @@ const row = (scene: string, title: string, over: Partial<typeof ZERO> & {
 
 const REPORT = {
   campaign: "run", since: "2026-06-01", until: "2026-08-14",
-  generated_at: "2026-08-14T12:00:00Z",
+  generated_at: "2026-08-14T12:00:00Z", order: "cost",
   totals: { ...ZERO, calls: 9, priced_calls: 9, cost_usd: 1.5, total_tokens: 90000 },
   scenes: [
     row("002--market", "The Market", { calls: 6, priced_calls: 6, cost_usd: 1.2,
@@ -87,11 +87,19 @@ test("a scene row links into the scene it names", async () => {
     .toHaveAttribute("href", "/campaigns/run/scenes/002--market");
 });
 
-test("re-ordering by most recent puts the last-played scene first", async () => {
+test("re-ordering asks the SERVER, because the list is capped there", async () => {
+  // Sorting the response here would make every ordering but the default mean
+  // "…of the most expensive N", so a campaign past the cap would be missing a
+  // recent cheap scene from a list headed "most recent".
   renderCosts();
-  fireEvent.click(await column().findByRole("button", { name: /most recent/i }));
+  await column().findByText("$1.50");
+  (api.getCampaignSceneCosts as any).mockResolvedValue({
+    ...REPORT, order: "recent", scenes: [...REPORT.scenes].reverse(),
+  });
+  fireEvent.click(column().getByRole("button", { name: /most recent/i }));
 
-  // The Priory Door was played later even though it cost less.
+  await waitFor(() => expect(api.getCampaignSceneCosts)
+    .toHaveBeenCalledWith("run", "recent"));
   expect(within(bodyRows()[0]).getByText("The Priory Door")).toBeInTheDocument();
 });
 
@@ -130,6 +138,14 @@ test("a scene nobody priced does not total to $0.00", async () => {
   const [only] = await screen.findAllByRole("row").then((r) => r.slice(1));
   expect(within(only).getByText("unpriced")).toBeInTheDocument();
   expect(screen.queryByText("$0.00")).toBeNull();
+});
+
+test("the scanned window is reported in the reader's own calendar", async () => {
+  renderCosts();
+
+  expect(await column().findByText(
+    new RegExp(`Ledger scanned from ${new Date(2026, 5, 1, 12).toLocaleDateString()}`)))
+    .toBeInTheDocument();
 });
 
 test("subscription and modelled spend are reported apart from the bill", async () => {

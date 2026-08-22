@@ -406,6 +406,35 @@ lock indefinitely.
 DIRECTOR = "director"
 
 
+def _continuation_post(cid: str, sid: str, pid: str) -> int | None:
+    """Which player post a continuation of proposal `pid` is answering.
+
+    Read off the proposal record rather than re-derived from the transcript,
+    and the difference is not academic: a continuation is the second half of a
+    turn that already decided this question, and asking it again from here gets
+    a DIFFERENT answer for the case the first half got right. A director turn
+    is recorded against no post -- its note is ephemeral and never reaches the
+    transcript -- but by the time its roll is accepted the last user message is
+    some earlier, visible post, which a fresh derivation would charge for
+    narration the player never asked for.
+
+    A record that names no post therefore answers None, and so does a record
+    that is gone or belongs to a different proposal. That is the honest
+    fallback: the cost stays in the scene's totals either way, and a missing
+    attribution is a smaller error than a wrong one.
+    """
+    try:
+        rec = store.proposals.get(cid, sid)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(rec, dict) or rec.get("id") != pid:
+        return None
+    post = rec.get("post")
+    if isinstance(post, bool) or not isinstance(post, int) or post < 0:
+        return None
+    return post
+
+
 def _answering_post(messages: list[dict]) -> int | None:
     """The index of the player post a turn generated against this transcript is
     answering, or None when there is not one.
@@ -712,7 +741,11 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         if watcher.complete or watcher.truncated:
             with store.locks.campaign_lock(cid):
                 payload = _make_proposal(cid, sid, watcher)
-                rec = store.proposals.new(cid, sid, payload)  # heals before replacing
+                # `post` travels onto the record so the continuation that
+                # resolves this roll is charged where this turn was -- see
+                # `store.proposals.new`. A director turn passes None, and the
+                # continuation inherits that rather than inventing one.
+                rec = store.proposals.new(cid, sid, payload, post)  # heals before replacing
             _persist_reply(cid, sid, watcher.narration)
             frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
         elif _persist_reply(cid, sid, watcher.narration):
@@ -896,17 +929,8 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
     too, so an adjudicated roll survives a locked phone -- which is exactly
     when a player looks away."""
     box = outcome if outcome is not None else StreamOutcome()
-    # Read here, synchronously, for the reason `_fence_stream` gives about
-    # deriving it inside the generator. Unlocked, unlike `_chat_stream`'s, which
-    # reads it inside a hold it was taking anyway: this is one read of a file
-    # `store.atomic` publishes whole, and a continuation resumes a turn whose
-    # post is already in the transcript and is not about to move. Best-effort --
-    # a store that cannot be read here costs the attribution, and
-    # `commit_narration` is what actually guards the write.
-    try:
-        post = _answering_post(store.scenes.read_scene(cid, sid)["messages"])
-    except (OSError, KeyError, TypeError):
-        post = None
+    # Inherited from the proposal, never re-derived -- see `_continuation_post`.
+    post = _continuation_post(cid, sid, pid)
 
     def finalize(watcher) -> list[str]:
         # Under one acquisition with the fence, like `_chat_stream`'s: the
@@ -943,8 +967,12 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
                 if store.proposals.commit_narration(cid, sid, pid, persist):
                     payload = _make_proposal(cid, sid, watcher)
                     # new() heals the record it is about to erase; the lock is
-                    # reentrant, so that projection is safe under ours
-                    rec = store.proposals.new(cid, sid, payload)
+                    # reentrant, so that projection is safe under ours.
+                    # `post` carries forward: a follow-up roll inside the same
+                    # turn is still answering whatever the first half was, and
+                    # re-deriving it here has the failure `_continuation_post`
+                    # exists to prevent, one hop further along.
+                    rec = store.proposals.new(cid, sid, payload, post)
                     frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
         else:
             store.proposals.commit_narration(cid, sid, pid, persist)

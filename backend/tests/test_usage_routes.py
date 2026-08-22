@@ -666,17 +666,23 @@ def test_a_rate_table_round_trips(client):
 
 
 def test_a_put_replaces_the_table_rather_than_merging_into_it(client):
-    client.put("/api/pricing", json={"rates": {"a": {"prompt_usd_per_1k": 1}}})
-    client.put("/api/pricing", json={"rates": {"b": {"prompt_usd_per_1k": 2}}})
+    client.put("/api/pricing", json={"rates": {
+        "a": {"prompt_usd_per_1k": 1, "completion_usd_per_1k": 1}}})
+    client.put("/api/pricing", json={"rates": {
+        "b": {"prompt_usd_per_1k": 2, "completion_usd_per_1k": 2}}})
 
     assert list(client.get("/api/pricing").json()["rates"]) == ["b"]
 
 
 def test_an_entry_naming_no_usable_rate_comes_back_dropped(client):
+    """Both base rates are required: half an entry prices half a call, which is
+    a figure that is confidently wrong."""
     body = client.put("/api/pricing", json={"rates": {
-        "a": {"prompt_usd_per_1k": "free"}, "b": {"prompt_usd_per_1k": 1}}}).json()
+        "a": {"prompt_usd_per_1k": "free", "completion_usd_per_1k": 1},
+        "b": {"prompt_usd_per_1k": 1},
+        "c": {"prompt_usd_per_1k": 1, "completion_usd_per_1k": 2}}}).json()
 
-    assert list(body["rates"]) == ["b"]
+    assert list(body["rates"]) == ["c"]
 
 
 def test_a_rate_prices_a_turn_the_provider_would_not(client, home):
@@ -710,7 +716,8 @@ def test_a_modelled_figure_never_reaches_the_budget(client, home):
     _, cid = _campaign(client)
     sid = _scene(client, cid)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
-    client.put("/api/pricing", json={"rates": {"": {"prompt_usd_per_1k": 100.0}}})
+    client.put("/api/pricing", json={"rates": {
+        "": {"prompt_usd_per_1k": 100.0, "completion_usd_per_1k": 100.0}}})
     client.put(f"/api/campaigns/{cid}/budget",
                json={"budget_usd": 1, "budget_period": "monthly"})
 

@@ -24,9 +24,9 @@ import { ApiError, api, type PricingEntry } from "../api/client";
  *  cache pair is optional, and its absence is NOT zero: cache counts are slices
  *  of the prompt, so a row naming no cache rate has already priced them at the
  *  prompt rate — which is right for a provider that does not discount them. */
-const FIELDS: { key: keyof PricingEntry; label: string }[] = [
-  { key: "prompt_usd_per_1k", label: "Input" },
-  { key: "completion_usd_per_1k", label: "Output" },
+const FIELDS: { key: keyof PricingEntry; label: string; required?: boolean }[] = [
+  { key: "prompt_usd_per_1k", label: "Input", required: true },
+  { key: "completion_usd_per_1k", label: "Output", required: true },
   { key: "cache_read_usd_per_1k", label: "Cache read" },
   { key: "cache_write_usd_per_1k", label: "Cache write" },
 ];
@@ -82,14 +82,24 @@ function toTable(rows: Row[]): Record<string, PricingEntry> {
       // for reasons the form never explained.
       if (Number.isFinite(value) && value >= 0) entry[field.key] = value;
     }
-    // An entry with neither an input nor an output rate cannot price anything,
-    // and the server drops it — mirrored here so a row that is only half typed
-    // does not silently vanish on save without the count changing.
-    if (entry.prompt_usd_per_1k !== undefined || entry.completion_usd_per_1k !== undefined) {
+    // BOTH base rates, mirroring the store: an entry with one prices half a
+    // call and values the other half at nothing, which on a reply that
+    // generated nothing renders `$0.00` for a call nobody priced at all. The
+    // server drops such a row, and mirroring it here is what keeps the form
+    // from appearing to have saved something it did not.
+    if (entry.prompt_usd_per_1k !== undefined && entry.completion_usd_per_1k !== undefined) {
       table[key] = entry;
     }
   }
   return table;
+}
+
+/** Whether this row will survive a save. Both base rates, per `toTable`. */
+function complete(row: Row): boolean {
+  return ["prompt_usd_per_1k", "completion_usd_per_1k"].every((key) => {
+    const value = Number((row.rates[key] ?? "").trim());
+    return (row.rates[key] ?? "").trim() !== "" && Number.isFinite(value) && value >= 0;
+  });
 }
 
 /** The same rate as providers publish it. Every price sheet quotes dollars per
@@ -106,14 +116,24 @@ export function PricingEditor() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  /** The read failed, so what is on screen is not the stored table.
+   *
+   *  Held as its own state rather than degraded to an empty form, which is the
+   *  policy everywhere else here and is wrong for exactly this panel: a
+   *  transient GET failure would leave an editable blank table, and one click
+   *  of Save would then send `{}` and delete every rate the user has — rates
+   *  they never loaded, never saw and never removed. A read that failed has to
+   *  say so and refuse to write over what it could not read. */
+  const [unread, setUnread] = useState(false);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     let live = true;
     api.getPricing()
-      .then((t) => { if (live) setRows(toRows(t.rates)); })
-      .catch(() => { if (live) setRows([]); });
+      .then((t) => { if (!live) return; setRows(toRows(t.rates)); setUnread(false); })
+      .catch(() => { if (!live) return; setRows([]); setUnread(true); });
     return () => { live = false; };
-  }, []);
+  }, [reload]);
 
   function edit(index: number, key: string, value: string) {
     setSaved(false);
@@ -141,6 +161,23 @@ export function PricingEditor() {
   }
 
   if (rows === null) return <p className="field-hint">Reading rates…</p>;
+
+  if (unread) {
+    return (
+      <div className="pricing-editor">
+        <div className="field-hint error">
+          Could not read the rate table. Nothing is shown and nothing can be
+          saved from here — an empty form saved over rates that failed to load
+          would delete them.
+        </div>
+        <div className="picker">
+          <button onClick={() => { setRows(null); setReload((n) => n + 1); }}>
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="pricing-editor">
@@ -172,10 +209,18 @@ export function PricingEditor() {
               ✕
             </button>
           </div>
+          {!complete(row) && (
+            <div className="field-hint">
+              Input and output are both needed — a rate for one prices the other
+              half of every call at nothing. This row will not be saved.
+            </div>
+          )}
           <div className="pricing-rates">
             {FIELDS.map((field) => (
               <label className="pricing-rate" key={field.key}>
-                <span className="pricing-rate-label">{field.label}</span>
+                <span className="pricing-rate-label">
+                  {field.label}{field.required ? " *" : ""}
+                </span>
                 <input type="number" step="0.0001" min="0" inputMode="decimal"
                        aria-label={`${field.label} rate for ${row.isDefault ? "every other model" : row.id || "a new model"}`}
                        value={row.rates[field.key] ?? ""}

@@ -99,7 +99,8 @@ function postBucket(post: number, over: Record<string, number> = {}) {
 
 function withPostCosts(buckets: ReturnType<typeof postBucket>[]) {
   (api.getSceneUsage as any).mockResolvedValue({
-    campaign: "run", scene: "s1", since: "", until: "", generated_at: "",
+    campaign: "run", scene: "s1", since: "", until: "", clamped: false,
+    generated_at: "",
     totals: { calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0,
               total_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
               cost_usd: 0, estimated_usd: 0, modelled_usd: 0, priced_calls: 0,

@@ -742,6 +742,9 @@ export type SceneCostRow = UsageBucket & {
  *  whose oldest month file was deleted by hand cannot reach past what is left. */
 export type CampaignSceneCosts = {
   campaign: string; since: string; until: string; generated_at: string;
+  /** The order the server applied before capping the list — echoed back, so a
+   *  view can tell an answer to the sort it asked for from a stale one. */
+  order: string;
   totals: UsageBucket; scenes: SceneCostRow[];
   listed: number; truncated: boolean;
 };
@@ -762,6 +765,11 @@ export type PricingTable = {
  *  `turns` list was cut, which never moves `totals`. */
 export type SceneUsage = {
   campaign: string; scene: string; since: string; until: string; generated_at: string;
+  /** The scan could not reach back to the scene's start — a scene played over
+   *  more than a year. Every figure is a floor, and `by_post` is missing
+   *  buckets entirely for the older posts, which in a transcript is
+   *  indistinguishable from a post that cost nothing. */
+  clamped: boolean;
   totals: UsageBucket; by_task: UsageBreakdown[]; by_post: UsagePostBucket[];
   turns: UsageTurn[]; listed: number; truncated: boolean;
 };

@@ -94,6 +94,8 @@ test("a row nobody has named is not sent under the catch-all key", async () => {
   fireEvent.click(await screen.findByText("+ Add a model"));
   fireEvent.change(screen.getByLabelText(/Input rate for a new model/),
                    { target: { value: "9" } });
+  fireEvent.change(screen.getByLabelText(/Output rate for a new model/),
+                   { target: { value: "9" } });
   fireEvent.click(screen.getByText("Save rates"));
 
   await waitFor(() => expect(api.setPricing).toHaveBeenCalledWith({
@@ -136,10 +138,40 @@ test("a failed save is reported without losing what was typed", async () => {
   expect(screen.getByLabelText(/Input rate for local\/glm/)).toHaveValue(0.25);
 });
 
-test("a failed read degrades to an empty table rather than a stuck spinner", async () => {
+test("a failed read refuses to offer a form that could wipe the table", async () => {
+  // The failure mode this replaced: a transient GET degraded to an editable
+  // empty table, and one click of Save then sent `{}` and deleted every rate
+  // the user had — rates they never loaded, saw or removed.
   vi.mocked(api.getPricing).mockRejectedValue(new Error("no"));
   render(<PricingEditor />);
 
-  expect(await screen.findByText(/stay "unpriced" in every cost view/))
-    .toBeInTheDocument();
+  expect(await screen.findByText(/Could not read the rate table/)).toBeInTheDocument();
+  expect(screen.queryByText("Save rates")).toBeNull();
+});
+
+test("a failed read can be retried", async () => {
+  vi.mocked(api.getPricing).mockRejectedValueOnce(new Error("no"))
+    .mockResolvedValue(TABLE);
+  render(<PricingEditor />);
+
+  fireEvent.click(await screen.findByText("Try again"));
+
+  expect(await screen.findByDisplayValue("local/glm")).toBeInTheDocument();
+});
+
+test("a row missing a base rate says it will not be saved, and is not", async () => {
+  // Half an entry prices half a call and values the other half at nothing.
+  vi.mocked(api.getPricing).mockResolvedValue({ ...TABLE, rates: {} });
+  vi.mocked(api.setPricing).mockResolvedValue({ rates: {} });
+  render(<PricingEditor />);
+
+  fireEvent.click(await screen.findByText("+ Add a model"));
+  fireEvent.change(screen.getByLabelText(/Model id for row 1/),
+                   { target: { value: "local/x" } });
+  fireEvent.change(screen.getByLabelText(/Input rate for local\/x/),
+                   { target: { value: "1" } });
+
+  expect(screen.getByText(/This row will not be saved/)).toBeInTheDocument();
+  fireEvent.click(screen.getByText("Save rates"));
+  await waitFor(() => expect(api.setPricing).toHaveBeenCalledWith({}));
 });

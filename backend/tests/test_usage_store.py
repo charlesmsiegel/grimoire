@@ -890,7 +890,7 @@ def test_a_modelled_figure_is_never_added_to_what_was_billed(home, monkeypatch):
     """Three money columns, no two of which may be summed — the rule the whole
     ledger rests on, checked where the third one enters."""
     monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
-    _rates(home, {"": {"prompt_usd_per_1k": 1.0}})
+    _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}})
     _seed("2026-08-14", model="realm/opus", prompt_tokens=1000, cost_usd=0.5)
     _seed("2026-08-14", model="claude/agent", prompt_tokens=1000, cost_usd=0.25,
           cost_basis="equivalent")
@@ -908,7 +908,7 @@ def test_a_modelled_figure_is_never_added_to_what_was_billed(home, monkeypatch):
 def test_a_priced_call_is_never_re_priced_by_the_table(home, monkeypatch):
     """The table fills gaps. A provider that said what it charged has said it."""
     monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
-    _rates(home, {"": {"prompt_usd_per_1k": 99.0}})
+    _rates(home, {"": {"prompt_usd_per_1k": 99.0, "completion_usd_per_1k": 99.0}})
     _seed("2026-08-14", model="realm/opus", prompt_tokens=1000, cost_usd=0.01)
 
     totals = usage.summary(days=30)["totals"]
@@ -932,7 +932,7 @@ def test_a_budget_is_never_charged_for_a_modelled_figure(home, monkeypatch):
     """A cap measures money owed. Hitting it on arithmetic nobody was invoiced
     for would be the feature warning about its own guess."""
     monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
-    _rates(home, {"": {"prompt_usd_per_1k": 100.0}})
+    _rates(home, {"": {"prompt_usd_per_1k": 100.0, "completion_usd_per_1k": 100.0}})
     _seed("2026-08-14", campaign="saltmarch", model="local/glm", prompt_tokens=1000)
 
     out = usage.budget("saltmarch", 1.0, "monthly")
@@ -943,7 +943,7 @@ def test_a_budget_is_never_charged_for_a_modelled_figure(home, monkeypatch):
 
 def test_a_turn_carries_the_modelled_figure_beside_its_absent_price(home, monkeypatch):
     monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
-    _rates(home, {"": {"prompt_usd_per_1k": 1.0}})
+    _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}})
     _seed("2026-08-14", campaign="saltmarch", scene="001-arrival",
           model="local/glm", prompt_tokens=2000)
 
@@ -954,7 +954,7 @@ def test_a_turn_carries_the_modelled_figure_beside_its_absent_price(home, monkey
 
 def test_a_priced_turn_reports_no_modelled_figure(home, monkeypatch):
     monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
-    _rates(home, {"": {"prompt_usd_per_1k": 1.0}})
+    _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}})
     _seed("2026-08-14", campaign="saltmarch", scene="001-arrival",
           model="realm/opus", prompt_tokens=2000, cost_usd=0.02)
 
@@ -1132,3 +1132,37 @@ def test_rerolls_counts_the_calls_that_re_answered_the_post(home, monkeypatch):
     bucket, = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")["by_post"]
     assert bucket["calls"] == 4
     assert bucket["rerolls"] == 2
+
+
+def test_a_filename_that_is_not_a_month_cannot_break_the_all_time_window(home, monkeypatch):
+    """`_MONTH` accepts `2026-00`, which sorts before every real month and
+    which `_window_files` then raises on — one stray filename turning the
+    campaign cost endpoint into a 500 on every request."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", campaign="saltmarch", scene="001-arrival", cost_usd=0.10)
+    (home / "usage" / "2026-00.jsonl").write_text("", encoding="utf-8")
+
+    out = usage.campaign_scenes("saltmarch")
+    assert out["since"] == "2026-08-01"
+    assert out["totals"]["cost_usd"] == pytest.approx(0.10)
+
+
+def test_a_scene_older_than_the_scan_window_says_its_breakdown_is_short(home, monkeypatch):
+    """A post with no bucket looks exactly like a post that cost nothing, so
+    the payload has to say the scan never reached that far back."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+
+    reachable = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")
+    assert reachable["clamped"] is False
+
+    ancient = usage.scene_usage("saltmarch", "001-arrival", since="2019-01-01")
+    assert ancient["clamped"] is True
+    assert ancient["since"] > "2019-01-01"
+
+
+def test_a_scene_with_no_usable_start_date_is_not_reported_as_clamped(home, monkeypatch):
+    """`clamped` means "your window was cut short", not "we defaulted": nobody
+    asked for a start, so nothing was taken away from them."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+
+    assert usage.scene_usage("saltmarch", "001-arrival", since="")["clamped"] is False

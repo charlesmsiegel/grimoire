@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, type CampaignSceneCosts, type SceneCostRow } from "../api/client";
-import { Footnotes, about, bucketPrice, money } from "../components/cost";
+import { Footnotes, about, bound, bucketPrice, money } from "../components/cost";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { usePublishShellContext } from "../components/ShellStatus";
@@ -37,7 +37,7 @@ const SORTS: { key: Sort; label: string; hint: string }[] = [
  *  "Loading…", the policy `LedgerView` runs on. `since`/`until` stay empty so
  *  the footer says nothing about a window nothing was read from. */
 const EMPTY: CampaignSceneCosts = {
-  campaign: "", since: "", until: "", generated_at: "",
+  campaign: "", since: "", until: "", generated_at: "", order: "cost",
   totals: {
     calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0,
     cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: 0, estimated_usd: 0,
@@ -56,16 +56,8 @@ function sceneName(row: SceneCostRow): string {
   return row.title || row.scene;
 }
 
-function sortRows(rows: SceneCostRow[], by: Sort): SceneCostRow[] {
-  const out = [...rows];
-  if (by === "recent") out.sort((a, b) => b.last_ts.localeCompare(a.last_ts));
-  else if (by === "turns") out.sort((a, b) => b.calls - a.calls);
-  // "cost" is the server's own order, which already breaks ties deterministically.
-  return out;
-}
-
 /** The stamp is UTC (`…Z`, written by the store); a date column is read against
- *  the reader's own calendar. */
+ *  the reader's own calendar, so an instant is localized. */
 function day(ts: string): string {
   const d = new Date(ts);
   return isNaN(d.getTime()) ? ts.slice(0, 10) : d.toLocaleDateString();
@@ -73,7 +65,16 @@ function day(ts: string): string {
 
 export function CostsView() {
   const { cid = "" } = useParams();
-  const [name, setName] = useState("");
+  // Held WITH its cid, like the report below: this route is not keyed on `cid`,
+  // so a campaign switch keeps the component mounted, and a name read whose
+  // response settles after the new one's would label this campaign's spend --
+  // and the shell's status context -- with the other's, permanently.
+  const [named, setNamed] = useState<{ cid: string; name: string } | null>(null);
+  // Sent to the SERVER rather than applied here. The list is capped, and the
+  // cap is applied after the order: re-sorting the response on the client would
+  // make every ordering but the default mean "…of the most expensive N", so a
+  // campaign past the cap would be missing a recent cheap scene from a list
+  // headed "most recent".
   const [sort, setSort] = useState<Sort>("cost");
   // Held WITH the campaign the rows came from, the way `LedgerView` holds its
   // ledger: this route is not keyed on `cid`, so a campaign switch keeps the
@@ -81,22 +82,27 @@ export function CostsView() {
   // game's spend under the other's name until the new read settled.
   const [loaded, setLoaded] = useState<{ cid: string; data: CampaignSceneCosts } | null>(null);
 
+  const name = named && named.cid === cid ? named.name : "";
   usePublishShellContext(name ? { campaign: name, scene: "" } : null);
 
   useEffect(() => {
-    api.getCampaign(cid).then((c) => setName(c.meta.name)).catch(() => setName(cid));
+    let live = true;
+    api.getCampaign(cid)
+      .then((c) => { if (live) setNamed({ cid, name: c.meta.name }); })
+      .catch(() => { if (live) setNamed({ cid, name: cid }); });
+    return () => { live = false; };
   }, [cid]);
 
   useEffect(() => {
     let live = true;
-    api.getCampaignSceneCosts(cid)
+    api.getCampaignSceneCosts(cid, sort)
       .then((d) => { if (live) setLoaded({ cid, data: d }); })
       .catch(() => { if (live) setLoaded({ cid, data: EMPTY }); });
     return () => { live = false; };
-  }, [cid]);
+  }, [cid, sort]);
 
   const report = loaded && loaded.cid === cid ? loaded.data : null;
-  const rows = useMemo(() => sortRows(report?.scenes ?? [], sort), [report, sort]);
+  const rows = report?.scenes ?? [];
 
   const paletteSource = useCallback((): PaletteItem[] =>
     SORTS.map((s) => ({
@@ -145,7 +151,7 @@ export function CostsView() {
   const footer = (
     <div className="field-hint">
       {report && report.since
-        ? <>Ledger scanned from {day(report.since)} to {day(report.until)}.</>
+        ? <>Ledger scanned from {bound(report.since)} to {bound(report.until)}.</>
         : <>Costs come from what each provider reported, per call.</>}
     </div>
   );
