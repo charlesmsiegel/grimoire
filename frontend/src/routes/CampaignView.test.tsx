@@ -119,7 +119,15 @@ test("a player post says what answering it cost, over every reroll", async () =>
   withPostCosts([postBucket(0, { calls: 3, rerolls: 2, priced_calls: 3, cost_usd: 0.06 })]);
   renderCampaign();
 
-  expect(await screen.findByText(/\$0\.06/)).toBeInTheDocument();
+  // An explicit timeout, as the rename assertion further down this file already
+  // takes: the chip is the end of a multi-hop chain — the route loads, the scene
+  // loads, the inspector mounts, `getSceneUsage` resolves, and only then do the
+  // per-post chips render — and `findBy`'s default second is not always enough
+  // for that on a loaded runner with 109 files under istanbul instrumentation.
+  // This failed twice on CI while passing locally, including a local run with
+  // coverage; the assertion is right and the budget was wrong.
+  expect(await screen.findByText(/\$0\.06/, undefined, { timeout: 15000 }))
+    .toBeInTheDocument();
   expect(screen.getByText(/2 rerolls/)).toBeInTheDocument();
 });
 
