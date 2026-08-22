@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from ..campaigns import read as campaigns_read
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import ensure_home, now_iso, slugify, uniquify
 from . import paths, staging
+
+log = logging.getLogger(__name__)
 
 
 class WorldInUse(Exception):
@@ -191,10 +194,22 @@ def _restamp(wid: str, *, name: str | None = None) -> None:
     mp = paths.world_meta_path(wid)
     if not mp.exists():
         raise paths.WorldNotFound(wid)
-    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    before = mp.read_text(encoding="utf-8")
+    meta, body = parse_frontmatter(before)
     if name is not None:
         meta["name"] = name
     meta["updated"] = now_iso()
+    if name is None and mp.read_text(encoding="utf-8") != before:
+        # Somebody rewrote world.md between the read and here -- a rename, most
+        # likely. Writing now would carry the pre-rename `name` back over it,
+        # so a promote or a push would silently undo a rename that succeeded
+        # (Codex review). There is no world-level lock to hold, and this is
+        # only a sort key, so losing the stamp is the cheap side of the trade:
+        # the next library edit takes it. A rename is not given the same
+        # treatment, because its caller asked for that name and expects it.
+        log.warning("world %s changed while stamping it as updated -- leaving the "
+                    "newer file alone; the stamp is skipped, not forced", wid)
+        return
     atomic.write_text(mp, dump_frontmatter(meta, body))
 
 

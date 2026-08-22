@@ -25,6 +25,11 @@ export function DemotePanel({ wid, kind, id, onDemoted }: {
 
   const load = useCallback(() => {
     setError(null);
+    // Cleared first, so a refresh in flight cannot leave the confirmation
+    // showing the PREVIOUS answer: the list is the whole reason this step
+    // exists, and a stale one with the button live lets the user confirm
+    // without ever seeing the campaign they are about to affect (Codex review).
+    setDeps(null);
     api.libraryDependents(wid, kind, id).then(setDeps).catch(() => setDeps(null));
   }, [wid, kind, id]);
 
@@ -43,7 +48,17 @@ export function DemotePanel({ wid, kind, id, onDemoted }: {
     }
   }
 
-  if (deps === null) return null;
+  // Before the first answer there is nothing to offer; once open, a pending
+  // refresh says so rather than showing the previous answer with a live button.
+  if (deps === null && !open) return null;
+  if (deps === null) {
+    return (
+      <div className="side-section">
+        <h4>Library</h4>
+        <div className="field-hint">checking which campaigns use this record…</div>
+      </div>
+    );
+  }
 
   return (
     <div className="side-section">

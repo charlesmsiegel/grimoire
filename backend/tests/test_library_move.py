@@ -174,6 +174,46 @@ def test_no_move_builds_a_world_path_out_of_an_unsafe_id(monkeypatch, tmp_path):
     assert outside.read_text(encoding="utf-8") == "not ours"
 
 
+def test_an_interrupted_actor_promotion_retries_instead_of_conflicting(monkeypatch, tmp_path):
+    """The directory is made before the version files and the meta lands last,
+    so a kill in between leaves a directory holding no actor. Keying the
+    collision check on `is_dir()` would call that an existing library actor and
+    refuse every retry, forever -- the stuck state the ordering exists to avoid."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    aid, _vid = overlay.create_character(cid, "Winifred")
+    residue = worlds.world_root(wid) / "characters" / aid
+    residue.mkdir(parents=True)
+    (residue / "stale.json").write_text("{}", encoding="utf-8")   # an aborted attempt
+
+    sync.promote(cid, "characters", aid)
+
+    assert characters.read_character(worlds.world_root(wid), aid)["meta"]["name"] == "Winifred"
+    assert not (residue / "stale.json").exists()   # and its residue did not survive
+    assert sync.incoming(cid) == []
+
+
+def test_a_failed_promotion_leaves_a_detached_record_detached(monkeypatch, tmp_path):
+    """Undetaching has to come off before the copy, but an exception can unwind
+    where a crash cannot: left attached to a world record that was never
+    written, the campaign inherits from whatever claims that slug next (#225)."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    entities.create_entity(wroot, "locations", "Saltmarch", "v1")
+    overlay.update_entity(cid, "locations", "saltmarch", body="mine")
+    entities.delete_entity(wroot, "locations", "saltmarch")
+    overlay.forget_world_record(wroot, "locations", "saltmarch")
+    assert "locations/saltmarch" in overlay.detached(cid)
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(sync.atomic, "write_text", boom)
+
+    with pytest.raises(OSError):
+        sync.promote(cid, "locations", "saltmarch")
+
+    assert "locations/saltmarch" in overlay.detached(cid)
+
+
 # ---- promote: greetings name a character, so the world needs that too ------
 
 def test_promote_refuses_a_greeting_whose_character_is_campaign_local(monkeypatch, tmp_path):
@@ -201,6 +241,25 @@ def test_promote_refuses_a_greeting_whose_character_is_detached(monkeypatch, tmp
 
     with pytest.raises(sync.DanglingReferenceError):
         sync.promote(cid, "greetings", gid)
+
+
+def test_promote_refuses_a_greeting_whose_present_cast_is_campaign_local(monkeypatch, tmp_path):
+    """`present` names the rest of the opening cast, and
+    `playing.start_from_greeting` reads every one of them — so a campaign-local
+    name there publishes a greeting that raises the moment a sibling campaign
+    starts it, where nothing explains why."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Winifred")     # the owner is in the library
+    local, _ = overlay.create_character(cid, "Mara")              # her co-star is not
+    gid = overlay.create_greeting(cid, "At the gate", aid, vid, "They wait.", present=[local])
+
+    with pytest.raises(sync.DanglingReferenceError):
+        sync.promote(cid, "greetings", gid)
+
+    sync.promote(cid, "characters", local)
+    sync.promote(cid, "greetings", gid)                            # and it goes once she is
+    assert greetings.read_greeting(worlds.world_root(wid), gid)["body"].strip() == "They wait."
 
 
 def test_promote_allows_a_greeting_once_its_character_is_in_the_world(monkeypatch, tmp_path):

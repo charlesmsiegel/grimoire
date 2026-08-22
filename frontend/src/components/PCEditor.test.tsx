@@ -6,6 +6,12 @@ vi.mock("../api/client", async () => {
   return {
     ...actual,
     api: {
+      // The campaign-scope sidebar's LibraryPanel (#60). "already library
+      // content, unedited" renders no button, so this suite is unchanged;
+      // LibraryPanel.test.tsx owns the panel's own behaviour.
+      libraryStatus: vi.fn().mockResolvedValue(
+        { in_library: true, diverged: false, can_promote: false, can_push: false }),
+      promoteToLibrary: vi.fn(), pushToLibrary: vi.fn(),
       listAppearances: vi.fn(), pickVersion: vi.fn(), importVersion: vi.fn(), createCampaignPC: vi.fn(),
       listPCs: vi.fn(), listTags: vi.fn(), readPC: vi.fn(), createPC: vi.fn(),
       updatePC: vi.fn(), deletePC: vi.fn(), createPCVersion: vi.fn(), updatePCVersion: vi.fn(),

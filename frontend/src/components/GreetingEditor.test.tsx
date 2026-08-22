@@ -825,3 +825,27 @@ test("a failed locations read shows the stored id without calling it missing", a
   expect(within(select).getByText("counting-house")).toBeInTheDocument();
   expect(within(select).queryByText(/missing/)).toBeNull();
 });
+
+test("a demoted world greeting is cleared, not left as a pre-filled new draft", async () => {
+  // clearing only the id leaves `mode` on "view" with the deleted greeting still
+  // in `form`, so the editor falls through to the NEW-greeting form holding it
+  // -- and Save then recreates the world greeting the demote just removed
+  (api.listGreetings as any).mockResolvedValue(RAIL);
+  (api.listCharacters as any).mockResolvedValue(CAST);
+  (api.libraryDependents as any).mockResolvedValue([]);
+  (api.demoteFromLibrary as any).mockResolvedValue({ copied_down: [], dependents: [] });
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const rail = await waitFor(() => railOf(container));
+  fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));
+  await screen.findByRole("button", { name: "Remove from library…" });
+
+  fireEvent.click(screen.getByRole("button", { name: "Remove from library…" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Remove and copy down" }));
+
+  await waitFor(() => expect(api.demoteFromLibrary).toHaveBeenCalled());
+  // the blank create form, with nothing of the deleted greeting left in it --
+  // pressing Save here must not be able to put the world greeting back
+  await screen.findByRole("button", { name: "Create greeting" });
+  expect(container.querySelector("textarea")).toHaveValue("");
+  expect(screen.getByLabelText("Name")).toHaveValue("");
+});

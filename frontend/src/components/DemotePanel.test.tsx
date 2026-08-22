@@ -74,11 +74,29 @@ test("opening it re-reads the dependents rather than trusting the mount", async 
   show();
   await waitFor(() => expect(api.libraryDependents).toHaveBeenCalledTimes(1));
   (api.libraryDependents as any).mockResolvedValue(
-    [...DEPS, { id: "new", name: "Started Since", has_copy: false }]);
+    [...DEPS, { id: "new", name: "Saltmarch Run", has_copy: false }]);
 
   fireEvent.click(screen.getByRole("button", { name: "Remove from library…" }));
 
-  expect(await screen.findByText("Started Since")).toBeTruthy();
+  expect(await screen.findByText("Saltmarch Run")).toBeTruthy();
+});
+
+test("the destructive button is not live while that re-read is in flight", async () => {
+  // otherwise the user can confirm against the PREVIOUS list and never see the
+  // campaign they are about to take the record away from
+  show();
+  await waitFor(() => expect(api.libraryDependents).toHaveBeenCalledTimes(1));
+  let settle: (v: unknown) => void = () => {};
+  (api.libraryDependents as any).mockReturnValue(new Promise((r) => { settle = r; }));
+
+  fireEvent.click(screen.getByRole("button", { name: "Remove from library…" }));
+
+  expect(screen.getByText("checking which campaigns use this record…")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Remove and copy down/ })).toBeNull();
+  expect(screen.queryByText("The Long Run")).toBeNull();
+
+  settle(DEPS);
+  expect(await screen.findByRole("button", { name: "Remove and copy down" })).toBeTruthy();
 });
 
 

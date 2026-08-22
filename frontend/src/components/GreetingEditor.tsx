@@ -377,7 +377,13 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, fo
               {gid && (worldScope ? (
                 <DemotePanel key={`${scope.id}:greetings:${gid}`}
                              wid={scope.id} kind="greetings" id={gid}
-                             onDemoted={() => { void reload(); setGid(null); }} />
+                             // resetForm, not setGid(null): clearing the id alone
+                             // leaves `mode` on "view" and `form` full of the
+                             // deleted greeting, so the editor falls through to
+                             // the NEW-greeting form pre-filled with it — and
+                             // Save then recreates the world greeting the demote
+                             // just removed (Codex review).
+                             onDemoted={() => { void reload(); resetForm(); }} />
               ) : (
                 <LibraryPanel key={`${scope.id}:greetings:${gid}`}
                               cid={scope.id} kind="greetings" id={gid}

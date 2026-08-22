@@ -19,9 +19,10 @@ Design: docs/superpowers/specs/2026-08-21-library-promote-demote-design.md
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from pathlib import Path
 
-from . import atomic, characters, entities, greetings, overlay, pcs
+from . import atomic, characters, entities, greetings, locks, overlay, pcs
 from .appearances import paths as appearances_paths
 from .appearances import versions as appearances_versions
 from .campaigns import lifecycle as campaigns_lifecycle
@@ -354,8 +355,55 @@ def _world_holds_flat(wroot: Path, kind: str, eid: str) -> bool:
     return _world_file(wroot, kind, eid).exists() or (wroot / kind / eid).is_dir()
 
 
+def _actor_meta_name(kind: str) -> str:
+    return "character.md" if kind == "characters" else "pc.md"
+
+
 def _world_holds_actor(wroot: Path, kind: str, aid: str) -> bool:
-    return (wroot / kind / aid).is_dir()
+    """Is there an ACTOR under that id in the world?
+
+    Keyed on the meta file rather than on the directory, and that is the whole
+    of an interrupted promotion's retry. The directory is created before the
+    version files and the meta is written last, so a kill in between leaves a
+    directory holding no actor -- `overlay.actor_root`, `_record_present` and
+    every reader agree that is not one. Asking `is_dir()` here would call that
+    residue an existing library actor and refuse every retry with
+    `PromoteConflictError`, permanently, which is exactly the stuck state the
+    base-first ordering exists to avoid (Codex review).
+    """
+    return (wroot / kind / aid / _actor_meta_name(kind)).exists()
+
+
+@contextmanager
+def _reattaching_on_failure(cid: str, ref: str):
+    """Undetach `ref`, and put the detachment back if the promotion does not land.
+
+    Detaching has to come off BEFORE the copy — while it is on, the sync engine
+    skips the ref, so a crash between the two writes would leave a promoted
+    record that never syncs again, silently.
+
+    But an *exception* can unwind where a crash cannot, and leaving the
+    detachment off after a failed promotion is the #225 bug through its own
+    door: the campaign is attached to a world record that was never written, so
+    whatever claims that slug next supplies this campaign's record with its
+    updates, its images and its sidecars by coincidence of id (Codex review).
+
+    Only on the way out through an exception. A kill still lands on the
+    documented residue, which is the harmless one and self-heals on retry.
+    """
+    was_detached = ref in overlay.detached(cid)
+    overlay.undetach(cid, ref)
+    try:
+        yield
+    except BaseException:
+        if was_detached:
+            try:
+                overlay.add_detached(cid, ref)
+            except Exception:  # noqa: BLE001 - the copy's failure is the one worth raising
+                log.warning("could not restore the detachment on %s after a failed "
+                            "promotion; a world record reusing that id would be "
+                            "inherited by campaign %s", ref, cid)
+        raise
 
 
 def _copy_extras(what: str, copy) -> None:
@@ -458,18 +506,16 @@ def _promote_flat(cid: str, kind: str, eid: str, wroot: Path) -> None:
     if kind == "greetings":
         _require_world_character(cid, wroot, text, eid)
     ref = _ref_str(kind, eid)
-    # Before the copy, not after: while the ref is detached the sync engine
-    # skips it, so a crash between the two writes would leave a promoted record
-    # that never syncs again -- silently. Undetaching first fails the other way,
-    # onto a record whose world original simply is not there yet (#225, #247).
-    overlay.undetach(cid, ref)
     dst = _world_file(wroot, kind, eid)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    # hashed from the bytes we are writing, never re-read from the destination:
-    # the base has to describe the content that actually moved, even if another
-    # writer touches that path in between (the argument `_materialize_flat`
-    # makes in the opposite direction)
-    with overlay.recorded_base(cid, ref, entities.content_hash(text), dst):
+    # Detaching comes off before the copy and goes back on if the copy fails --
+    # see `_reattaching_on_failure` for both halves of why (#225, #247).
+    # The base is hashed from the bytes we are writing, never re-read from the
+    # destination: it has to describe the content that actually moved, even if
+    # another writer touches that path in between (the argument
+    # `_materialize_flat` makes in the opposite direction).
+    with (_reattaching_on_failure(cid, ref),
+          overlay.recorded_base(cid, ref, entities.content_hash(text), dst)):
         atomic.write_text(dst, text)
     # Assets only. The rest of a record directory (a group's state.md) is
     # campaign-local state that has no business in the library.
@@ -488,15 +534,29 @@ def _require_world_character(cid: str, wroot: Path, text: str, gid: str) -> None
     greeting would file it against that stranger -- which is worse than a
     dangling reference, because it reads as working."""
     meta, _ = parse_frontmatter(text)
+    detached_here = overlay.detached(cid)
     char = str(meta.get("character", "")).strip()
-    if not char or not safe_id(char):
-        return   # pcless or hand-edited: nothing this check can say about it
+    if char:
+        _require_world_actor(wroot, detached_here, char, gid, "belongs to")
+    # `present` names the rest of the cast the greeting opens with, and
+    # `playing.start_from_greeting` reads every one of them. A campaign-local
+    # name there publishes a greeting that raises the moment anyone starts it
+    # -- in a sibling campaign, where nothing explains why (Codex review).
+    for name in str(meta.get("present", "")).split(","):
+        if name.strip():
+            _require_world_actor(wroot, detached_here, name.strip(), gid, "opens with")
+
+
+def _require_world_actor(wroot: Path, detached_here: set[str], char: str,
+                         gid: str, role: str) -> None:
+    if not safe_id(char):
+        return   # hand-edited: nothing this check can say about it
     if not (wroot / "characters" / char / "character.md").exists():
         raise DanglingReferenceError(
-            f"{gid} belongs to {char}, which is not in the library yet — promote it first")
-    if _ref_str("characters", char) in overlay.detached(cid):
+            f"{gid} {role} {char}, which is not in the library yet — promote it first")
+    if _ref_str("characters", char) in detached_here:
         raise DanglingReferenceError(
-            f"{gid} belongs to this campaign's own {char}, which is not the "
+            f"{gid} {role} this campaign's own {char}, which is not the "
             f"library's {char} — promoting it would file the greeting against a stranger")
 
 
@@ -507,15 +567,24 @@ def _promote_actor(cid: str, kind: str, aid: str, wroot: Path) -> None:
     if taken is None:
         raise _actor_missing(kind, aid)
     base, files = taken
-    meta_name = "character.md" if kind == "characters" else "pc.md"
+    meta_name = _actor_meta_name(kind)
     ref = _ref_str(kind, aid)
-    overlay.undetach(cid, ref)      # see `_promote_flat`
     dst = wroot / kind / aid
     dst.mkdir(parents=True, exist_ok=True)
+    # No meta means no actor, so any version file here is residue from an
+    # interrupted attempt. Drop it: overwriting only what our snapshot holds
+    # would publish a version the earlier attempt copied and this one does not,
+    # which the base we are about to record does not cover. The same argument
+    # `overlay.materialize_actor` makes on the campaign side.
+    ext = "json" if kind == "characters" else "md"
+    for p in dst.glob(f"*.{ext}"):
+        if p.name != meta_name:
+            p.unlink()
     # The meta file is the commit point every reader keys an actor on, so it is
     # written last and is what `recorded_base` watches: version files landing
-    # without it leave no actor at all, which is the harmless residue.
-    with overlay.recorded_base(cid, ref, base, dst / meta_name):
+    # without it leave no actor at all — the harmless residue.
+    with (_reattaching_on_failure(cid, ref),
+          overlay.recorded_base(cid, ref, base, dst / meta_name)):
         for name, text in files:
             if name != meta_name:
                 atomic.write_text(dst / name, text)
@@ -740,34 +809,42 @@ def demote(wid: str, kind: str, eid: str, *, copy_down: bool = True,
     to every dependent.
     """
     wroot = _require_world_record(wid, kind, eid)
-    deps = dependents(wid, kind, eid)
+    every = dependents(wid, kind, eid)
+    deps = every
     if target is not None:
         # Refused, not filtered to nothing. The delete below runs whatever
         # `target` matched, so a typo used to mean "copy this down nowhere,
         # then take it away from every campaign" -- the most destructive
         # reading of the request, chosen silently.
-        if not any(d["id"] == target for d in deps):
+        if not any(d["id"] == target for d in every):
             raise UnknownTargetError(
                 f"{target} is not a campaign that depends on {kind}/{eid}")
-        deps = [d for d in deps if d["id"] == target]
+        deps = [d for d in every if d["id"] == target]
     copied: list[str] = []
-    if copy_down:
-        for dep in deps:
-            # The art goes down for EVERY dependent, including the ones that
-            # already hold their own text. Assets overlay per file, so a
-            # campaign that diverged on wording is still reading the world's
-            # pictures -- and the delete below takes the world's record
-            # directory with it (`overlay.forget_world_record`).
-            overlay.copy_record_dir_down(dep["id"], kind, eid)
-            if dep["has_copy"]:
-                continue     # already its own; materializing is a no-op anyway
-            overlay.materialize_entity(dep["id"], kind, eid)
-            copied.append(dep["id"])
-    if kind == "greetings":
-        greetings.delete_greeting(wroot, eid)     # also unwires the world's plot map
-    else:
-        entities.delete_entity(wroot, kind, eid)
-    overlay.forget_world_record(wroot, kind, eid)
+    # `every`, not `deps`: the copy-down may be narrowed to one campaign, but
+    # the sweep below rewrites sync.md and detached.json in ALL of them, and a
+    # lock has to cover every file this call touches. One demotion mutating
+    # several campaigns is exactly the shape `hold_all` exists for -- it is the
+    # only sanctioned way to hold more than one campaign lock, and it sorts, so
+    # this cannot be the holder that wedges against another (#267, Codex review).
+    with locks.hold_all([d["id"] for d in every]):
+        if copy_down:
+            for dep in deps:
+                # The art goes down for EVERY dependent in scope, including the
+                # ones that already hold their own text. Assets overlay per
+                # file, so a campaign that diverged on wording is still reading
+                # the world's pictures -- and the delete below takes the world's
+                # record directory with it (`overlay.forget_world_record`).
+                overlay.copy_record_dir_down(dep["id"], kind, eid)
+                if dep["has_copy"]:
+                    continue     # already its own; materializing is a no-op anyway
+                overlay.materialize_entity(dep["id"], kind, eid)
+                copied.append(dep["id"])
+        if kind == "greetings":
+            greetings.delete_greeting(wroot, eid)   # also unwires the world's plot map
+        else:
+            entities.delete_entity(wroot, kind, eid)
+        overlay.forget_world_record(wroot, kind, eid)
     _touch_world(wroot)
     return {"copied_down": sorted(copied),
             "dependents": [d["id"] for d in deps]}
