@@ -4856,6 +4856,34 @@ test("a recovered note waits for a Speak draft rather than merging into it", asy
   expect(screen.queryByText(/note held/i)).toBeNull();
 });
 
+test("a Speak turn does not inherit the previous turn's director note", async () => {
+  // Codex round 4. `busy` drops before `runStream` returns, so a second turn
+  // can begin while the first still owns the note — and once the clear became
+  // ownership-guarded, the stale note rendered beside the new reply as though
+  // it had steered it. Every send states what note is in force; for a Speak
+  // post that is "none".
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, total: 0, messages: [] });
+  let settle: () => void = () => {};
+  (api.chat as any).mockReturnValue(new Promise<void>((r) => { settle = () => r(); }));
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Direct" }));
+  fireEvent.change(screen.getByPlaceholderText(/direct the scene/i),
+                   { target: { value: "the storm intensifies" } });
+  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
+  await screen.findByText(/🎬 the storm intensifies/);
+  settle();
+
+  // a Speak post follows, and must not be labelled by the previous note
+  await waitFor(() => expect(screen.getByRole("button", { name: "Direct" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Speak" }));
+  (api.chat as any).mockReturnValue(new Promise<void>(() => {}));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+
+  await waitFor(() => expect(screen.queryByText(/🎬 the storm intensifies/)).toBeNull());
+});
+
 test("a running scene's director note does not show in another scene", async () => {
   // Codex P2. `busy` is global and the note carried no scene, so a Direct turn
   // left running in one scene rendered its note inside whatever transcript the
