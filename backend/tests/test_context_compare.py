@@ -352,3 +352,25 @@ def test_a_newline_that_moves_the_token_count_still_reports_the_change():
         _bd(_row("lore", "a\nb\n", tokens=5))))["lore"]
     assert row["status"] == "changed"
     assert (row["base"]["tokens"], row["head"]["tokens"]) == (4, 5)
+
+
+def test_a_re_tiered_section_is_not_reported_as_unchanged():
+    """`tier` is the packer's drop order, so it is the section's PRIORITY. A
+    release that re-tiers a catalog section changes what gets cut first, and
+    every other fact can match across that change -- same words, same count,
+    retained on both sides -- so discarding it called two differently-packed
+    prompts identical (raised in review).
+    """
+    before = _bd(_row("lore", "the marsh floods", tier="spotlight"))
+    after = _bd(_row("lore", "the marsh floods", tier="background"))
+    row = _by_id(context.compare_breakdowns(before, after))["lore"]
+    assert row["status"] == "changed"
+    assert (row["base"]["tier"], row["head"]["tier"]) == ("spotlight", "background")
+    assert row["diff"] == []          # nothing moved; the priority did
+
+
+def test_a_snapshot_with_no_tier_is_described_rather_than_raised_on():
+    """Same promise as every other field here."""
+    junk = {"sections": [{"id": "lore", "label": "Lore", "text": "x"}]}
+    row = _by_id(context.compare_breakdowns(junk, _bd(_row("lore", "x"))))["lore"]
+    assert row["base"]["tier"] == ""

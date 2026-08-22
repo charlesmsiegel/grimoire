@@ -9,7 +9,7 @@ function side(over: Partial<PromptDiff["base"]> = {}): PromptDiff["base"] {
 
 function facts(over: Partial<NonNullable<PromptDiffSection["base"]>> = {}) {
   return { label: "World info", tokens: 10, dropped: false, trimmed: 0,
-           pinned: false, ...over };
+           pinned: false, tier: "spotlight", ...over };
 }
 
 function section(over: Partial<PromptDiffSection> = {}): PromptDiffSection {
@@ -342,4 +342,32 @@ test("with nothing differing at all the verdict says so unreservedly", () => {
   render(<ContextDiff diff={diff({ sections: [section()] })} />);
   screen.getByText(/Nothing changed/);
   screen.getByText(/both were packed the same way/);
+});
+
+test("a re-tiered section is a change, and says what moved", () => {
+  // The packer drops from the bottom of a tier, so tier IS priority. A release
+  // that re-tiers a catalog section changes what gets cut first while the
+  // words, the count and the flags all stay identical.
+  render(<ContextDiff diff={diff({
+    sections: [section({ status: "changed",
+                         base: facts({ tier: "spotlight" }),
+                         head: facts({ tier: "background" }), diff: [] })],
+  })} />);
+  screen.getByText(/Packing tier: spotlight → background/);
+  screen.getByText(/priority moved/);
+});
+
+test("a total-token delta is not contradicted by the verdict beneath it", () => {
+  // Reachable on the character-count fallback: a non-final section gains a
+  // trailing newline, `splitlines` sees no change and the per-section rounded
+  // count holds, while the separately measured composed prompt crosses a
+  // rounding boundary.
+  render(<ContextDiff diff={diff({
+    base: side({ total_tokens: 1000 }),
+    head: side({ id: "live", total_tokens: 1004 }),
+    sections: [section()],
+  })} />);
+  screen.getByText("+4");
+  screen.getByText(/No section differs — what changed is above/);
+  expect(screen.queryByText(/Nothing changed/)).toBeNull();
 });

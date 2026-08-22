@@ -97,6 +97,14 @@ def _side(row: dict) -> dict:
     """
     return {"label": str(row.get("label", "")),
             "tokens": _int(row.get("tokens")),
+            # The packer drops from the bottom of a tier, so a section's tier IS
+            # its priority. A release that re-tiers a catalog section changes
+            # what gets cut first, and every other fact can match across that
+            # change -- same words, same count, retained on both sides -- so
+            # discarding it let the panel call two differently-packed prompts
+            # identical. `_breakdown` records it and `prompt_log` validates it;
+            # this was the only reader throwing it away.
+            "tier": str(row.get("tier", "")),
             "dropped": bool(row.get("dropped")),
             "trimmed": _int(row.get("trimmed")),
             "pinned": bool(row.get("pinned"))}

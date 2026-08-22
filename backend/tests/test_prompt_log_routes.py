@@ -333,7 +333,8 @@ def test_every_section_row_carries_the_shape_the_panel_types_declare(client):
         assert isinstance(row["moved"], bool)
         for side in (row["base"], row["head"]):
             if side is not None:
-                assert set(side) == {"label", "tokens", "dropped", "trimmed", "pinned"}
+                assert set(side) == {"label", "tokens", "tier", "dropped",
+                                     "trimmed", "pinned"}
         for line in row["diff"]:
             assert line["op"] in {"equal", "insert", "delete", "skip"}
             # `text` on every row including `skip`, so a reader written against
