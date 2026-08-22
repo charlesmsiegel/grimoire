@@ -178,10 +178,10 @@ test("forking prompts for a name, posts it, and refreshes the grid", async () =>
   // the fork stamps its own, so the copy lands at the front of the grid the
   // user is already looking at.
   (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
-  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Saltmarch (fork)");
+  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
   renderView();
   fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
-  await waitFor(() => expect(api.forkWorld).toHaveBeenCalledWith("w1", "Saltmarch (fork)"));
+  await waitFor(() => expect(api.forkWorld).toHaveBeenCalledWith("w1", "Winifred"));
   await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE + 1));
   expect(navigate).not.toHaveBeenCalled();
   expect(prompt).toHaveBeenCalledWith("Fork 'Saltmarch' as?", "Saltmarch (fork)");
@@ -203,7 +203,7 @@ test("a dismissed or blank fork prompt copies nothing", async () => {
 test("a failed fork names the world and the reason, and refreshes nothing", async () => {
   (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
   (api.forkWorld as any).mockRejectedValue({ detail: "could not claim a world id" });
-  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Copy");
+  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
   renderView();
   fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
   expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -221,7 +221,7 @@ test("a fork in flight cannot be started twice", async () => {
   ]);
   let release: (v: unknown) => void = () => {};
   (api.forkWorld as any).mockReturnValue(new Promise((r) => { release = r; }));
-  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Copy");
+  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
   renderView();
   fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
   await waitFor(() => expect(screen.getByLabelText("Fork Saltmarch")).toBeDisabled());
@@ -231,6 +231,41 @@ test("a fork in flight cannot be started twice", async () => {
 
   release({ id: "copy" });
   await waitFor(() => expect(screen.getByLabelText("Fork Saltmarch")).toBeEnabled());
+  prompt.mockRestore();
+});
+
+test("deleting a world is blocked while a fork is copying it", async () => {
+  // The copy walks the SOURCE for as long as it runs, so deleting that world
+  // mid-walk fails the fork and leaves neither the copy nor the original.
+  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  let release: (v: unknown) => void = () => {};
+  (api.forkWorld as any).mockReturnValue(new Promise((r) => { release = r; }));
+  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderView();
+
+  expect(await screen.findByLabelText("Delete Saltmarch")).toBeEnabled();
+  fireEvent.click(screen.getByLabelText("Fork Saltmarch"));
+  await waitFor(() => expect(screen.getByLabelText("Delete Saltmarch")).toBeDisabled());
+  fireEvent.click(screen.getByLabelText("Delete Saltmarch"));
+  expect(api.deleteWorld).not.toHaveBeenCalled();
+
+  release({ id: "copy" });
+  await waitFor(() => expect(screen.getByLabelText("Delete Saltmarch")).toBeEnabled());
+  prompt.mockRestore();
+  confirm.mockRestore();
+});
+
+test("the post-fork refresh does not join a read started before it published", async () => {
+  // `request()` shares in-flight GETs by path, so a world-list read issued
+  // while the copy was running would answer with a list the fork is not in --
+  // no error, button re-enabled, and the obvious retry makes a second copy.
+  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
+  renderView();
+  fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
+  await waitFor(() => expect(api.forkWorld).toHaveBeenCalled());
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledWith(true));
   prompt.mockRestore();
 });
 
@@ -244,11 +279,11 @@ test("a failed refresh after a successful fork says the copy exists", async () =
     .mockResolvedValueOnce(ONE_WORLD)
     .mockResolvedValueOnce(ONE_WORLD)
     .mockRejectedValueOnce(new Error("network"));
-  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Saltmarch (fork)");
+  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
   renderView();
   fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
   const alert = await screen.findByRole("alert");
-  expect(alert).toHaveTextContent(/'Saltmarch \(fork\)' was created/i);
+  expect(alert).toHaveTextContent(/'Winifred' was created/i);
   expect(alert).not.toHaveTextContent(/could not be forked/i);
   // And the button comes back, rather than being stuck disabled by the throw.
   await waitFor(() => expect(screen.getByLabelText("Fork Saltmarch")).toBeEnabled());

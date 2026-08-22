@@ -434,8 +434,8 @@ def test_world_crud(client):
     wid = _world(client, "Drowned Realm")
     assert wid == "drowned-realm"
     assert [w["id"] for w in client.get("/api/worlds").json()] == [wid]
-    client.put(f"/api/worlds/{wid}", json={"name": "Renamed"})
-    assert client.get(f"/api/worlds/{wid}").json()["meta"]["name"] == "Renamed"
+    client.put(f"/api/worlds/{wid}", json={"name": "Winifred"})
+    assert client.get(f"/api/worlds/{wid}").json()["meta"]["name"] == "Winifred"
     assert client.delete(f"/api/worlds/{wid}").status_code == 200
     assert client.get("/api/worlds").json() == []
 
@@ -9190,7 +9190,7 @@ def test_activity_covers_greeting_deletion_and_edge_edits(client, monkeypatch):
     first = client.post(f"/api/campaigns/{cid}/greetings",
                         json={"name": "Opener", "character": chid, "version": "default"}).json()["id"]
     second = client.post(f"/api/campaigns/{cid}/greetings",
-                         json={"name": "Second", "character": chid, "version": "default"}).json()["id"]
+                         json={"name": "Winifred", "character": chid, "version": "default"}).json()["id"]
 
     ticks = iter(range(1, 60))
     monkeypatch.setattr("grimoire.store.campaigns.read.now_iso",
@@ -13119,8 +13119,8 @@ def test_two_campaigns_do_not_serialize_on_each_other_s_activity_stamp(client):
     so a shared lock would make one campaign's slow write -- an atomic replace
     plus fsync on a synced or removable store -- delay every other campaign's
     mutation for work it has nothing to do with. Separate files cannot race."""
-    _, a = _campaign(client, name="First")
-    _, b = _campaign(client, name="Second")
+    _, a = _campaign(client, name="Mara")
+    _, b = _campaign(client, name="Winifred")
 
     assert store.campaigns.read._stamp_lock(a) is not store.campaigns.read._stamp_lock(b)
     assert store.campaigns.read._stamp_lock(a) is store.campaigns.read._stamp_lock(a), (
@@ -13588,12 +13588,12 @@ def test_world_fork_route_copies_the_world(client):
     wid = _world(client, "Saltmarch")
     client.post(f"/api/worlds/{wid}/locations", json={"name": "The Drowned Library"})
 
-    r = client.post(f"/api/worlds/{wid}/fork", json={"name": "Saltmarch (fork)"})
+    r = client.post(f"/api/worlds/{wid}/fork", json={"name": "Winifred"})
     assert r.status_code == 200
     new = r.json()["id"]
     assert new != wid
     assert {w["id"] for w in client.get("/api/worlds").json()} == {wid, new}
-    assert client.get(f"/api/worlds/{new}").json()["meta"]["name"] == "Saltmarch (fork)"
+    assert client.get(f"/api/worlds/{new}").json()["meta"]["name"] == "Winifred"
     assert len(client.get(f"/api/worlds/{new}/locations").json()) == 1
     # The source is untouched, and still has exactly what it had.
     assert client.get(f"/api/worlds/{wid}").json()["meta"]["name"] == "Saltmarch"
@@ -13620,7 +13620,7 @@ def test_forked_localized_image_urls_actually_serve(client):
     assert client.put(f"/api/worlds/{wid}/characters/{cid}/versions/main",
                       json={"card": card}).status_code == 200
 
-    new = client.post(f"/api/worlds/{wid}/fork", json={"name": "Copy"}).json()["id"]
+    new = client.post(f"/api/worlds/{wid}/fork", json={"name": "Winifred"}).json()["id"]
     new_url = _card(new)["data"]["description"].split("](")[1].split(")")[0]
     assert new_url == f"/api/worlds/{new}/characters/{cid}/versions/main/images/{name}"
     served = client.get(new_url)
@@ -13638,8 +13638,8 @@ def test_world_fork_is_not_read_as_an_entity_kind(client):
     And the reverse, which is the risk of declaring a literal segment before a
     catch-all: a real kind must still reach the catch-all afterwards."""
     wid = _world(client, "Saltmarch")
-    new = client.post(f"/api/worlds/{wid}/fork", json={"name": "Copy"}).json()["id"]
-    assert client.get(f"/api/worlds/{new}").json()["meta"]["name"] == "Copy"
+    new = client.post(f"/api/worlds/{wid}/fork", json={"name": "Winifred"}).json()["id"]
+    assert client.get(f"/api/worlds/{new}").json()["meta"]["name"] == "Winifred"
     assert client.post(f"/api/worlds/{wid}/lore",
                        json={"name": "The Tide Accord"}).status_code == 200
     assert [e["name"] for e in client.get(f"/api/worlds/{wid}/lore").json()] \
@@ -13647,7 +13647,7 @@ def test_world_fork_is_not_read_as_an_entity_kind(client):
 
 
 def test_world_fork_unknown_world_404(client):
-    r = client.post("/api/worlds/nope/fork", json={"name": "Copy"})
+    r = client.post("/api/worlds/nope/fork", json={"name": "Winifred"})
     assert r.status_code == 404
     assert client.get("/api/worlds").json() == []
 

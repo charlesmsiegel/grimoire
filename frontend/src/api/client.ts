@@ -326,7 +326,13 @@ export const api = {
       }),
 
   // worlds
-  listWorlds: () => request<WorldMeta[]>("GET", "/api/worlds"),
+  /** `fresh` for the caller refetching *because* a world just changed — the
+   *  in-flight share would hand it a read issued before that mutation, which
+   *  is precisely the answer it is trying to replace. Same trade
+   *  `listCampaigns` makes; a fork can run for a minute, so the read it is
+   *  racing is not hypothetical (Codex review). */
+  listWorlds: (fresh = false) =>
+    request<WorldMeta[]>("GET", "/api/worlds", undefined, { fresh }),
   // The config carries `first_run`, which is partly a statement about whether
   // the store holds anything — so creating the first world changes the config
   // response even though nothing wrote to config.md through this client (#194).

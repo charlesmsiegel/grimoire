@@ -65,6 +65,14 @@ _NAME_RE = re.compile(r"^grimoire-(\d{8}T\d{6}Z)(?:-(\d+))?\.zip$")
 
 #: Rebuildable derived data, relative to the store root.
 _DERIVED = ".cache"
+#: Where a whole world is assembled before it is published (`worlds.staging`,
+#: `module_edit.staging`). Disposable by construction and potentially the size
+#: of the library itself: a backup taken while a gigabyte-scale fork or import
+#: is copying would otherwise archive the half-made tree ALONGSIDE the world it
+#: is a copy of, and restore partial data nothing will ever finish making
+#: (Codex review). Named here rather than imported, for the reason `_DERIVED`
+#: is: this module must not depend on every module that keeps scratch space.
+_STAGING = (".world-staging", ".module-staging")
 
 _log = logging.getLogger(__name__)
 
@@ -96,6 +104,10 @@ def _norm(path: Path) -> Path:
 def _skips(root: Path, directory: Path) -> tuple[Path, ...]:
     """Directories the archive never descends into — see the module docstring.
 
+    Derived data (`.cache`) and in-progress world/module copies (`_STAGING`)
+    are excluded unconditionally: both sit inside the store by construction and
+    neither is content a restore should bring back.
+
     The backup directory is excluded **only when it is inside the store**, and
     that condition is load-bearing rather than an optimization. Skipping it
     unconditionally would mean that pointing it at an *ancestor* of the store
@@ -105,7 +117,7 @@ def _skips(root: Path, directory: Path) -> tuple[Path, ...]:
     archived in the first place.
     """
     nroot = _norm(root)
-    skips = [_norm(root / _DERIVED)]
+    skips = [_norm(root / _DERIVED), *(_norm(root / d) for d in _STAGING)]
     target = _norm(directory)
     if nroot in target.parents:
         skips.append(target)

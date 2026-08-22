@@ -39,7 +39,22 @@ def list_worlds() -> list[dict]:
                 "counts": {**entities.entity_counts(d), "characters": characters.character_count(d),
                            "pcs": pcs.pc_count(d), "greetings": greetings.greeting_count(d)},
             })
-    out.sort(key=lambda m: m["updated"], reverse=True)
+    # `created` breaks a tie on `updated`, newest first. `now_iso()` has
+    # one-second resolution, so a world forked (or created) in the same second
+    # as an edit to its source ties -- and a plain single-key sort then falls
+    # back to the directory order underneath it, which is alphabetical and says
+    # nothing about recency. The fork would sit wherever its slug happened to
+    # land, while the UI that refreshes instead of navigating promises it is at
+    # the front (Codex review). `created` separates them because a copy is new
+    # and the thing it was copied from is not.
+    #
+    # It is a tie-breaker, not a clock. Two worlds CREATED in the same second
+    # -- a brand-new world forked immediately -- tie on both keys and fall back
+    # to directory order, and closing that would mean giving `now_iso()`
+    # sub-second precision, which every stamp in the store and the frozen
+    # campaign's snapshot are written against. Not worth it for two adjacent
+    # rows that are both seconds old.
+    out.sort(key=lambda m: (m["updated"], m["created"]), reverse=True)
     return out
 
 
