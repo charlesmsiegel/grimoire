@@ -365,6 +365,31 @@ test("a location the read does not offer is cleared rather than sent unseen", as
   expect(api.setSceneLocation).not.toHaveBeenCalled();
 });
 
+test("a failed locations read lets the server seed the greeting's own location", async () => {
+  // The pane may only claim to own the location when its picker actually
+  // worked. A read that failed leaves nothing for the reader to have answered
+  // with, so discarding the greeting's location would lose it to an
+  // infrastructure fault they had no say in (#412 review).
+  (api.listEntities as any).mockRejectedValue({ detail: "boom" });
+  const onCreated = renderForm(GRT);
+  await screen.findByDisplayValue("Reckoning");
+  expect(screen.getByText(/open at the greeting's own location/i)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalled());
+  expect(api.setSceneLocation).not.toHaveBeenCalled();
+  expect(api.startFromGreeting).toHaveBeenCalledWith("c", "s9-dated", "reck", true);
+});
+
+test("the location picker is not editable before it can show what is selected", async () => {
+  // No <option> matches a pre-filled id until the list lands, so the browser
+  // shows index 0 and picking it fires no change event -- the value the reader
+  // believes they cleared would reappear (#412 review).
+  (api.listEntities as any).mockReturnValue(new Promise(() => {}));   // never resolves
+  renderForm(GRT);
+  await screen.findByDisplayValue("Reckoning");
+  expect(screen.getByLabelText("Location")).toBeDisabled();
+});
+
 test("a failed locations read clears an unresolved location rather than sending it unseen", async () => {
   (api.listEntities as any).mockRejectedValue({ detail: "boom" });
   const onCreated = renderForm(GEN);   // GEN.location = "saltmarch"
