@@ -386,7 +386,12 @@ def get_scene_ideas(cid: str, greetings: bool = True):
     loc_names = {e["id"]: e.get("name", e["id"]) for e in store.overlay.list_entities(cid, "locations")}
     cast_names: dict[str, str] = {}
     saved = _tolerant(lambda: store.suggest.validate_ideas(cid, store.scene_ideas.records(cid)))
-    composed = _tolerant(lambda: store.playing.greeting_ideas(cid)) if greetings else []
+    # `loc_names` is the campaign's whole location list, already read a line
+    # above to caption these very cards -- handing the ids over keeps
+    # `greeting_ideas` from reading every location file a second time to answer
+    # one request.
+    composed = (_tolerant(lambda: store.playing.greeting_ideas(cid, known_locations=set(loc_names)))
+                if greetings else [])
     return [_idea_card(cid, i, loc_names, cast_names) for i in saved + composed]
 
 

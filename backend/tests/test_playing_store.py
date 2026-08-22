@@ -733,6 +733,49 @@ def test_greeting_ideas_sweeps_locations_once_for_both_batches(monkeypatch, tmp_
     assert live and dead
 
 
+def test_seeding_decides_emptiness_under_the_lock(monkeypatch, tmp_path):
+    """The "is this scene location-less" check and the write are ONE critical
+    section. Check first and lock after, and a concurrent `set_location` fits in
+    the window: it gives the scene a location, and the seed's own
+    `set_location` then finds a non-empty history, takes its `moved` branch, and
+    writes "the scene moves to X" -- a transition recording a move nobody made,
+    into the one artifact this app cannot regenerate.
+
+    Driven at `_seed_location` directly, because through `start_from_greeting`
+    an earlier unlocked reader would catch the racer instead and prove nothing.
+    A second thread tries to move the scene at exactly the moment the seed
+    inspects the history: holding the lock across the check parks it until the
+    seed is done, so the seed's location is the one that lands first.
+    """
+    wid, wroot, loc = _world_with_location(monkeypatch, tmp_path)
+    other = entities.create_entity(wroot, "locations", "The Quay")
+    cid, sid = _campaign_after_seed(wid)
+
+    real_history = playing.scenes_read.get_location_history
+    racer: list[threading.Thread] = []
+
+    def racing_history(c, s_):
+        if not racer:
+            t = threading.Thread(target=scenes.set_location, args=(cid, sid, other))
+            racer.append(t)
+            t.start()
+            # Ample for an UNLOCKED racer to land and change the answer; a
+            # blocked one is still parked on the campaign lock when this returns.
+            t.join(timeout=2.0)
+        return real_history(c, s_)
+
+    monkeypatch.setattr(playing.scenes_read, "get_location_history", racing_history)
+    try:
+        playing._seed_location(cid, sid, loc, seed=True)
+    finally:
+        if racer:
+            racer[0].join(timeout=10)
+    # The seed got there first. The racer's move is real and lands after it --
+    # what must not happen is the seed writing a move over a scene someone else
+    # had already placed.
+    assert scenes.get_location_history(cid, sid)[0] == loc
+
+
 def test_start_from_greeting_can_be_told_not_to_seed(monkeypatch, tmp_path):
     """The confirm pane pre-fills its picker from the greeting, so an empty
     location there means the reader CLEARED it -- indistinguishable, from the
