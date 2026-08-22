@@ -176,6 +176,11 @@ function keyed(rows: LogRow[]): { row: LogRow; key: string }[] {
   });
 }
 
+/** ``options`` with ``chosen`` guaranteed present, order otherwise kept. */
+function _withChosen(options: string[], chosen: string): string[] {
+  return !chosen || options.includes(chosen) ? options : [chosen, ...options];
+}
+
 function LogRows({ rows, empty }: { rows: LogRow[]; empty: string }) {
   if (rows.length === 0) return <p className="empty-state"><span className="empty-what">{empty}</span></p>;
   return (
@@ -272,6 +277,13 @@ export default function StatsView() {
     return () => { alive = false; };
   }, [section, days, errorModule]);
 
+  // The WINDOW changing drops the page; a filter changing does not. Rows from
+  // the old window under the new window's heading is the page describing
+  // something it no longer is — but blanking on every filter change would take
+  // `modules` with it, and the module dropdown would empty itself on each
+  // keystroke, which is how the control loses the option you are choosing.
+  useEffect(() => { setPage(null); }, [days]);
+
   // `query` settled. The page read alone would not need this -- it is a local
   // file behind a local server, and 200 rows cost nothing -- but the live tail
   // is keyed on the same filters, and an SSE stream torn down and reopened on
@@ -319,8 +331,11 @@ export default function StatsView() {
         setFailed(event.error.detail);
         return;
       }
-      if (!event.rows?.length) return;
+      // Any frame that is not an error means the read is working again --
+      // including the bare cursor frame the server sends on recovery, which is
+      // the only thing a quiet log emits once it comes back.
       setFailed("");
+      if (!event.rows?.length) return;
       // Newest first, matching the page above it -- the two lists are read as
       // one, and a live half that grew downward while the page grew upward
       // would be two lists pretending to be one.
@@ -355,7 +370,11 @@ export default function StatsView() {
   // total is a number that does not say what it is counting.
   // Built from the unfiltered copy, so picking a module cannot remove every
   // other option from the control you picked it with.
-  const errorModules = stats?.errors.modules.map((m) => m.module) ?? [];
+  // The chosen module is always an option, even when the current window holds
+  // nothing for it -- otherwise the select falls back to rendering "every
+  // module" while it is still filtering by one, or loses the row entirely.
+  const errorModules = _withChosen(stats?.errors.modules.map((m) => m.module) ?? [],
+                                   errorModule);
 
   // `null` is "still reading" and renders as a dash; `undefined` is "nobody
   // has asked yet" and renders as nothing. The log is only read when its
@@ -551,7 +570,8 @@ export default function StatsView() {
                 <select value={module} onChange={(e) => setModule(e.target.value)}
                         aria-label="Module to show">
                   <option value="">every module</option>
-                  {(page?.modules ?? []).map((m) => <option key={m} value={m}>{m}</option>)}
+                  {_withChosen(page?.modules ?? [], module).map(
+                    (m) => <option key={m} value={m}>{m}</option>)}
                 </select>
               </label>
               <label className="stats-search">

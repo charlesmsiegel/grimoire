@@ -224,19 +224,22 @@ def apply_level(name: str = "") -> str:
     _floor["rank"] = min(_RANK[level], _RANK["error"])
     level = LEVELS[_floor["rank"]]
     logger = logging.getLogger(ROOT_LOGGER)
-    # Two different levels, deliberately.
+    # The logger's level, and the handler's, are set to the same floor.
     #
-    # The LOGGER's level decides what is emitted at all, and lowering it is the
-    # only way DEBUG and INFO ever reach a handler -- `logging`'s root defaults
-    # to WARNING. But raising it past WARNING would make a *storage* setting
-    # silently take grimoire's warnings off a developer's terminal, which
-    # `logging.lastResort` has always printed there and which has nothing to do
-    # with what this file keeps. So the logger never goes quieter than WARNING.
+    # An earlier version clamped the LOGGER at WARNING, meaning to keep
+    # grimoire's warnings on a developer's terminal (`logging.lastResort`
+    # prints WARNING and above to stderr) while a quieter floor governed the
+    # file. That does not work and never did: `lastResort` fires only when a
+    # record finds NO handler at all, and `install` gives every grimoire record
+    # one. Attaching the file handler is itself what takes those lines off
+    # stderr, and no arrangement of levels here changes that.
     #
-    # The HANDLER's level is the floor for the file, and it is the one that
-    # actually enforces the setting. `record` checks `_floor` for the same
-    # reason, since a direct call never passes through a handler at all.
-    logger.setLevel(min(getattr(logging, level.upper()), logging.WARNING))
+    # So the floor governs both, honestly. A developer who wants grimoire's
+    # output in a terminal configures `logging` for it the way uvicorn does;
+    # what this module promises is the file, and `/stats` is where it is read.
+    # Lowering the logger is still required for DEBUG and INFO to reach a
+    # handler at all -- `logging`'s default is WARNING.
+    logger.setLevel(getattr(logging, level.upper()))
     for handler in logger.handlers:
         if isinstance(handler, Handler):
             handler.setLevel(getattr(logging, level.upper()))
@@ -804,15 +807,17 @@ def tail(from_cursor: str = "", budget: int = MAX_TAIL_BYTES, **filters) -> dict
         more = filled or left <= 0
         if left <= 0:
             break                          # budget spent; the rest waits a poll
-        # Move on once this file has no more COMPLETE ROWS to give -- which is
-        # `used == 0`, not "the cursor reached the last byte". A newer month
-        # existing means this one is finished: nothing is ever appended to a
-        # past month, so trailing bytes that are not yet a row there will never
-        # become one. Waiting for the end of the file parked the tail in a dead
-        # month forever on a torn final line, and the rollover this exists for
-        # never happened. Advancing only on `used == 0` still reads every whole
-        # row first, so nothing is lost on the way past.
-        if index + 1 < len(files) and (used == 0 or _at_end(files[index], offset)):
+        if used > 0:
+            continue                       # keep draining this file
+        # Nothing complete left here. A newer month existing means this one is
+        # FINISHED -- nothing is ever appended to a past month, so trailing
+        # bytes that are not yet a row there never will be. Waiting for the
+        # cursor to reach the last byte instead parked the tail in a dead month
+        # forever on a torn final line, and the rollover this exists for never
+        # happened. Draining first (above) is what keeps that from costing a
+        # row, and re-reading rather than breaking is what keeps it from
+        # costing a whole poll interval.
+        if index + 1 < len(files):
             index, offset = index + 1, 0   # month rolled over
             continue
         break

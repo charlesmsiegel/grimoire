@@ -222,17 +222,24 @@ def test_installing_the_bridge_does_not_create_the_store(monkeypatch, tmp_path):
     assert not root.exists()
 
 
-def test_a_quiet_floor_does_not_take_warnings_off_the_terminal(home):
-    """The floor is a setting about a FILE. Raising the logger's own level with
-    it would silently stop `logging.lastResort` printing grimoire's warnings to
-    stderr, which it has always done and which has nothing to do with what this
-    module keeps."""
+def test_the_floor_governs_the_file_and_the_logger_alike(home):
+    """This test used to claim the floor never took grimoire's warnings off a
+    developer's terminal, and asserted `isEnabledFor` -- which is true and
+    proves nothing. `logging.lastResort` fires only when a record finds NO
+    handler, so attaching the file handler is itself what takes those lines off
+    stderr; no arrangement of levels changes it. The honest property is that
+    one floor governs, and that is what is checked here."""
     logs.install()
     logs.apply_level("error")
 
-    assert logging.getLogger("grimoire").isEnabledFor(logging.WARNING)
-    logging.getLogger("grimoire.runner").warning("still reaches stderr")
-    assert _rows(home) == []            # ...but not the file
+    assert logging.getLogger("grimoire").level == logging.ERROR
+    handler, = [h for h in logging.getLogger("grimoire").handlers
+                if isinstance(h, logs.Handler)]
+    assert handler.level == logging.ERROR
+
+    logging.getLogger("grimoire.runner").warning("below the floor")
+    logging.getLogger("grimoire.runner").error("at the floor")
+    assert [r["message"] for r in _rows(home)] == ["at the floor"]
 
 
 def test_two_threads_recording_at_once_lose_no_rows_and_tear_no_lines(home):

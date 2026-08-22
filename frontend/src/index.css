@@ -3319,6 +3319,10 @@ a.column-back { text-decoration: none; }
   cursor: pointer; color: var(--muted); font-size: 10px; letter-spacing: 0.1em;
   text-transform: uppercase;
 }
+/* The captured stack, collapsed. `pre` scrolls in its own box rather than
+   widening the page — a traceback holds absolute paths that are wider than any
+   column, and the rule everywhere else here is that wide content scrolls
+   itself. */
 .stats-log-trace pre {
   margin: 6px 0 0; padding: 8px 10px; background: var(--track);
   overflow-x: auto; font-size: 11px; line-height: 1.5; color: var(--ink);

@@ -454,6 +454,43 @@ it("reports a tail that cannot read the log without tearing it down", async () =
   expect(screen.queryByText("the log went away")).not.toBeInTheDocument();
 });
 
+it("takes the failure banner down when the log comes back, even if it is quiet", async () => {
+  // Rows only arrive when there are rows, so a recovered-but-silent log used
+  // to leave the banner standing until something happened to log.
+  vi.mocked(api.streamLogTail).mockImplementation(((_o: unknown,
+                                                    onEvent: (e: unknown) => void) => {
+    onEvent({ cursor: "c", error: { detail: "the log went away", kind: "log_unreadable" } });
+    onEvent({ cursor: "c2" });                       // recovery: a bare cursor
+    return new Promise(() => {});
+  }) as never);
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+  await screen.findByLabelText("Module to show");
+
+  fireEvent.click(screen.getByRole("checkbox", { name: "Live" }));
+
+  await waitFor(() =>
+    expect(screen.queryByText("the log went away")).not.toBeInTheDocument());
+});
+
+it("keeps a chosen module selectable when the window holds nothing for it", async () => {
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+  fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
+  await screen.findByLabelText("Module to report on");
+  vi.mocked(api.getErrorSummary).mockResolvedValue(
+    { ...ERRORS, total: 0, modules: [], kinds: [], daily: [], rows: [] });
+
+  fireEvent.change(screen.getByLabelText("Module to report on"),
+                   { target: { value: "dossier" } });
+
+  // Without this the select falls back to showing "every module" while it is
+  // still filtering by one.
+  const picker = await screen.findByLabelText("Module to report on");
+  expect(picker).toHaveValue("dossier");
+});
+
 it("reopens the tail against the new filter rather than keeping the old one", async () => {
   view();
   await screen.findByRole("heading", { name: "Performance" });
