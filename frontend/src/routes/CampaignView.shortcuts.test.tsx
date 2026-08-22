@@ -185,6 +185,21 @@ describe("the help sheet, in a scene", () => {
     expect(screen.queryByRole("dialog", { name: /keyboard/i })).toBeNull();
   });
 
+  // Yielding to the palette must not also drag focus back to wherever the
+  // sheet found it: the palette would be up and typing would go to a control
+  // behind it (PR #400 review). Only reachable when something WAS focused --
+  // with focus on `<body>`, restoring it is a no-op and the bug hides.
+  test("yielding to ⌘K leaves focus in the palette, not where the sheet found it", async () => {
+    (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+    renderCampaign();
+    await screen.findByRole("heading", { name: /^Old$/ });
+    screen.getByRole("button", { name: /\+ new scene/i }).focus();
+    press("?");
+    press("k", { metaKey: true });
+    const input = await screen.findByRole("combobox", { name: /search/i });
+    expect(document.activeElement).toBe(input);
+  });
+
   // The sheet is read to find out what a key IS; a row that vanished whenever
   // its control was disabled would answer "there is no such key".
   test("dims the rows whose control is disabled right now", async () => {
