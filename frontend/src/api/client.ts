@@ -189,6 +189,10 @@ export const RUN_POLL_SLOW_MS = 5000;
  *  about, and cheap, because a run that is really gone answers the same 404
  *  each time and the store is asked next. */
 export const RUN_POLL_MISSES = 5;
+/** How many times a durable READ is retried before its failure is reported.
+ *  The store is where a detached run's answer lives, so a dropped fetch on the
+ *  way to it is the same class of nothing-happened as a dropped poll. */
+export const READ_RETRIES = 3;
 
 /** Wait for a detached run to stop running, and answer with what it became.
  *
@@ -232,8 +236,22 @@ async function awaitRun(cid: string, sid: string, started: RunHandle,
       // scene's -- which is decisive and sends the caller to the store, where
       // the answer actually lives), and running out of patience. Everything
       // else is asked again.
-      if (isAbortError(err) || (err instanceof ApiError && err.status === 404)
-          || ++missed > RUN_POLL_MISSES) throw err;
+      if (isAbortError(err) || (err instanceof ApiError && err.status === 404)) throw err;
+      if (++missed <= RUN_POLL_MISSES) continue;
+      // OUT OF PATIENCE IS NOT A TERMINAL STATE EITHER. Nothing here has
+      // observed the run stop; all that is known is that this one URL has not
+      // answered six times running. Reported as a failure, the caller clears
+      // its latch and its Stop goes with it, over a run the server may hold
+      // for as long as an unbounded budget allows.
+      //
+      // So the last word goes to a different question, asked of a different
+      // path: is this scene still running a review at all? A "yes" resets the
+      // patience and the wait goes on; anything else -- including this ask
+      // failing too, which is the network really being gone -- lets the
+      // original failure stand.
+      const still = await api.findRun(cid, sid).then((r) => r.run, () => null);
+      if (still?.id !== run.id || still.state !== "running") throw err;
+      missed = 0;
     }
   }
   if (run.state === "landed") return run;
@@ -263,6 +281,35 @@ async function awaitRun(cid: string, sid: string, started: RunHandle,
  *  Matched on the generation, for `absorbScene`'s reason: a scene can be
  *  holding a review this retry has nothing to do with.
  */
+/** The run a POST may have started, when its reply never arrived.
+ *
+ *  A POST WITH NO RESPONSE IS AMBIGUOUS. The server can have accepted it,
+ *  reserved the run and started generating, and the 202 be lost on the way back
+ *  -- a dropped link, a WebView backgrounded in the same second. Reported as a
+ *  failure, the caller clears its latch for work that is running: the scene is
+ *  held against play for as long as it takes, the next request is refused
+ *  `run_in_flight`, and for an absorb there is not even a generation to offer a
+ *  Stop with. For a scoped retry it is worse than that -- the run merges into
+ *  the durable review while the panel keeps the phase it was retrying, and
+ *  saving then commits those stale rows over the completed retry.
+ *
+ *  Only for a failure that carried NO reply. An `ApiError` means the server
+ *  answered -- `already_absorbed`, a missing key, a busy scene -- and every one
+ *  of those is the caller's to handle, not a run to adopt.
+ *
+ *  `kind` is what tells one review run from another: they all share the
+ *  `review` class, so an absorb must not adopt a retry and a retry must not
+ *  adopt an absorb.
+ */
+async function adoptLostStart(cid: string, sid: string, kind: string,
+                              err: unknown): Promise<{ run: RunHandle;
+                                                       generation: string }> {
+  if (err instanceof ApiError || isAbortError(err)) throw err;
+  const live = await api.liveReview(cid, sid).catch(() => null);
+  if (live?.kind !== kind || !live.review_generation) throw err;
+  return { run: live, generation: live.review_generation };
+}
+
 async function reapedPhase(cid: string, sid: string, generation: string,
                            err: unknown): Promise<SceneAbsorb> {
   if (!(err instanceof ApiError) || err.kind !== "run_gone") throw err;
@@ -1675,11 +1722,32 @@ export const api = {
    *  the review was prepared -- the reviewer is told to re-run rather than
    *  shown a summary of posts that are no longer there. Both null means there
    *  is simply no review, which is the ordinary case on every mount. */
-  pendingReview: (cid: string, sid: string) =>
-    request<{ review: SceneAbsorb | null; generation: string | null;
-              stale: { prepared_posts: number; current_posts: number } | null }>(
-      "GET", `/api/campaigns/${cid}/scenes/${sid}/pending-review`,
-      undefined, { fresh: true }),
+  pendingReview: async (cid: string, sid: string) => {
+    // RETRIED, for `awaitRun`'s reason and in the place it matters most. This
+    // read is the answer to "did the absorb land", and every caller treats a
+    // rejection as "it did not": the latch clears, the panel never opens, and
+    // the adoption effect that would have asked again does not re-run while
+    // the same scene stays selected. So a dropped fetch on the one read that
+    // happens right after a locked phone comes back loses a review that is
+    // sitting on disk -- the loss this whole feature exists to prevent, in the
+    // last two lines of it.
+    //
+    // Transient failures only. A `busy` 409 is the sidecar held for a moment
+    // by a sync client and clears on its own; `review_unreadable` and a 404
+    // are answers, and asking again just spends time before reporting them.
+    for (let asked = 0; ; asked++) {
+      try {
+        return await request<{ review: SceneAbsorb | null; generation: string | null;
+                               stale: { prepared_posts: number; current_posts: number } | null }>(
+          "GET", `/api/campaigns/${cid}/scenes/${sid}/pending-review`,
+          undefined, { fresh: true });
+      } catch (err) {
+        const transient = !(err instanceof ApiError) || err.kind === "busy";
+        if (!transient || isAbortError(err) || asked >= READ_RETRIES) throw err;
+        await sleepUnlessAborted(RUN_POLL_MS);
+      }
+    }
+  },
 
   /** Throw the stored review away, and stop whatever is still making it.
    *
@@ -1725,14 +1793,11 @@ export const api = {
       // Only for a failure that carried NO reply. An `ApiError` means the
       // server answered -- `already_absorbed`, a missing key, a busy scene --
       // and every one of those is the caller's to handle, not a run to adopt.
-      if (err instanceof ApiError || isAbortError(err)) throw err;
-      const live = await api.liveReview(cid, sid).catch(() => null);
       // ...and it has to be an ABSORB. `review` is the class a whole review's
       // runs share, so a scoped retry of some EARLIER review's phase wears it
       // too -- and adopting one would install that review's generation and
       // hand its summary back as this End scene's result.
-      if (live?.kind !== "absorb" || !live.review_generation) throw err;
-      started = { run: live, generation: live.review_generation };
+      started = await adoptLostStart(cid, sid, "absorb", err);
     }
     onStarted?.(started.generation);
     try {
@@ -1789,8 +1854,13 @@ export const api = {
   // on screen has to be the local one and the stored merge is what a client
   // coming back later reads.
   retryAudit: async (cid: string, sid: string, signal?: AbortSignal) => {
-    const started = await request<{ run: RunHandle; generation: string }>(
-      "POST", `/api/campaigns/${cid}/scenes/${sid}/audit`, undefined, { signal });
+    let started: { run: RunHandle; generation: string };
+    try {
+      started = await request<{ run: RunHandle; generation: string }>(
+        "POST", `/api/campaigns/${cid}/scenes/${sid}/audit`, undefined, { signal });
+    } catch (err) {
+      started = await adoptLostStart(cid, sid, "audit", err);
+    }
     try {
       const run = await awaitRun(cid, sid, started.run, signal);
       return (run.result ?? {}) as unknown as { mechanics: Mechanics; edits: StagedEdit[] };
@@ -1805,8 +1875,13 @@ export const api = {
   // The dossier phase's sibling to retryAudit (#286): re-runs that phase alone,
   // on a fresh budget, without disturbing the rest of the open review.
   retryDossiers: async (cid: string, sid: string, signal?: AbortSignal) => {
-    const started = await request<{ run: RunHandle; generation: string }>(
-      "POST", `/api/campaigns/${cid}/scenes/${sid}/dossiers`, undefined, { signal });
+    let started: { run: RunHandle; generation: string };
+    try {
+      started = await request<{ run: RunHandle; generation: string }>(
+        "POST", `/api/campaigns/${cid}/scenes/${sid}/dossiers`, undefined, { signal });
+    } catch (err) {
+      started = await adoptLostStart(cid, sid, "dossiers", err);
+    }
     try {
       const run = await awaitRun(cid, sid, started.run, signal);
       return (run.result ?? {}) as unknown as { dossiers: Dossiers; edits: StagedEdit[] };
