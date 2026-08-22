@@ -4778,6 +4778,46 @@ test("a note recovered into a composer switched to Speak comes back as a note", 
     .toHaveAttribute("aria-pressed", "true");
 });
 
+test("a failed Direct turn offers no Retry, because Retry cannot resend a note", async () => {
+  // Codex round 3. The banner's Retry GENERATES, down `/retry`, which
+  // regenerates from the stored transcript — and a director note is in no
+  // transcript. Offering it produces an undirected continuation in a scene
+  // with history, or "nothing to retry" in one without. The note is back in
+  // the composer by then, so Send is its retry.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, total: 0, messages: [] });
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => {
+      onEvent({ error: { detail: "the provider gave up" } });
+    });
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Direct" }));
+  fireEvent.change(screen.getByPlaceholderText(/direct the scene/i),
+                   { target: { value: "the storm intensifies" } });
+  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
+  await screen.findByText(/the provider gave up/);
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  // the words are back where Send can resend them
+  expect(screen.getByRole("textbox")).toHaveValue("the storm intensifies");
+});
+
+test("a Speak send still offers Retry", async () => {
+  // The counterpart, so the suppression above is pinned to ephemeral turns
+  // rather than to failure in general.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, total: 0, messages: [] });
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => {
+      onEvent({ error: { detail: "the provider gave up" } });
+    });
+  renderCampaign();
+  const box = await screen.findByPlaceholderText(/speak your intent/i);
+  fireEvent.change(box, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByText(/the provider gave up/);
+  expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+});
+
 test("a running scene's director note does not show in another scene", async () => {
   // Codex P2. `busy` is global and the note carried no scene, so a Direct turn
   // left running in one scene rendered its note inside whatever transcript the
