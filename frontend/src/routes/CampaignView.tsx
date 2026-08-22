@@ -998,7 +998,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // machinery exists to prevent: the prompt is nowhere else. A map, not one
   // slot, so a second scene failing does not evict the first — both are the
   // player's and neither can be retyped from anywhere.
-  const parkedPrompts = useRef<Map<string, string>>(new Map());
+  // Codex review (round 2, P2): the KIND travels with the words, not just the
+  // words. The mode buttons stay live while a turn runs — the composer is
+  // deliberately editable — so a player can be in Speak by the time a Direct
+  // turn fails, and text handed back into a Speak composer is posted as
+  // dialogue by the next Send. That is the "never posted" contract broken by
+  // the recovery meant to protect it.
+  const parkedPrompts = useRef<Map<string, { text: string; director: boolean }>>(new Map());
   const [parkedTick, setParkedTick] = useState(0);
 
   // Appending, not replacing: the composer stays editable while a turn runs,
@@ -1018,7 +1024,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     const held = parkedPrompts.current.get(activeId);
     if (held === undefined) return;
     parkedPrompts.current.delete(activeId);
-    giveBackPrompt(held);
+    giveBackPrompt(held.text);
+    // Restored HERE rather than when the note was parked: the player may have
+    // been writing something of their own in another scene in the meantime,
+    // and flipping the shared composer's mode under that draft would mis-stage
+    // it. The mode arrives with the words it belongs to.
+    if (held.director) setDirectMode(true);
   }, [activeId, parkedTick, giveBackPrompt]);
 
   // Where a recovered prompt goes: the composer if the player is still on the
@@ -1026,12 +1037,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // `activeId` — this runs from a callback that outlives the render it started
   // in, and a captured `activeId` would be the scene the turn began on, which
   // is exactly the stale answer this exists to avoid.
-  const recoverPrompt = useCallback((sid: string, text: string) => {
+  const recoverPrompt = useCallback((sid: string, text: string, director = false) => {
     if (activeIdRef.current === sid) {
       giveBackPrompt(text);
+      if (director) setDirectMode(true);
       return;
     }
-    parkedPrompts.current.set(sid, text);
+    parkedPrompts.current.set(sid, { text, director });
     setParkedTick((n) => n + 1);
   }, [giveBackPrompt]);
   // Words the registry is still holding for a resolved-but-undurable send, put
@@ -2234,6 +2246,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // outcome proves it durable. Empty for the turns that submit no text of
     // their own -- a reroll, a retry -- which have nothing to give back.
     recoverableText = "",
+    // Whether this turn persists a post of its own. An ephemeral one does not,
+    // which changes what evidence the recovery below can use — see there.
+    ephemeral = false,
   ) {
     // The authoritative rename guard, not the ones in `send`/`retry`/`reroll`.
     // Those stop the optimistic UI work before it happens, but they are a list
@@ -2583,8 +2598,20 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         // and restoring on a guess would duplicate it. `nothingLanded` is the
         // transcript saying the rollback ran.
         const interrupted = !finished && !errored && !unreached && !refused;
+        // Codex review (round 2, P1). `errored` is excluded above, because for
+        // an ordinary post the error frame already recovers — the backend sets
+        // `post_returned` and the handler acts on it mid-stream. An ephemeral
+        // turn has no post to return, so that flag is NEVER set for one and
+        // the error frame recovers nothing; a provider that dies before any
+        // narration therefore destroyed the note. The transcript is the only
+        // witness left, and for an ephemeral turn it is a clean one:
+        // `nothingLanded` means the generation left no reply, with no post of
+        // its own to confuse the count. Safe to add only here — with
+        // `post_returned` unreachable for these turns, this cannot double up
+        // with the in-stream recovery.
+        const diedWithNothing = ephemeral && errored && nothingLanded;
         if (((unreached || refused) && (unverifiable || nothingLanded))
-            || (interrupted && nothingLanded)) {
+            || (interrupted && nothingLanded) || diedWithNothing) {
           onPromptUnstored?.();
         }
         // Nothing to wait for when nothing on the server can produce a partial: a
@@ -2716,7 +2743,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                      signal, attempt, onIndex, directing),
           // An empty send has nothing to give back — it is the "next NPC round"
           // fast path, not words anyone typed.
-          content ? () => recoverPrompt(id, content) : undefined);
+          content ? () => recoverPrompt(id, content, true) : undefined,
+          false, "", true);
         if (landed) setPendingResponse(null);
       } finally {
         setDirectorNote(null);
