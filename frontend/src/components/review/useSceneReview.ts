@@ -410,11 +410,23 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
         setAdopting(true);
         setAbsorbSid(sid);
         setGeneration(live.review_generation ?? null);
+        // What is on disk is only this run's answer if it SAYS it is. A scene
+        // can be holding an older review nobody saved -- a stale one, or one
+        // this absorb is replacing -- and every read below can come back with
+        // it: on the failure path because the new run never published, and on
+        // the success path because its publish was refused. Opening it then
+        // presents last time's summary as this run's result, and its watermark
+        // can still match, so the reader can go on to save the very review
+        // they were replacing. `absorbScene` matches on the generation for
+        // exactly this; so does this.
+        const ours = (r: { generation: string | null } | null | undefined) =>
+          !!r && r.generation === live.review_generation;
         try {
           await api.awaitRun(cid, sid, live);
           const landed = await api.pendingReview(cid, sid);
           if (dropped || campaignRef.current !== cid || hasReviewRef.current
               || absorbStopRef.current !== stopGen) return;
+          if (!ours(landed)) return;      // somebody else's record; not ours to show
           if (landed.review) openReview(landed.review, sid, landed.generation);
           else setStale(landed.stale, sid);
         } catch (err: unknown) {
@@ -429,7 +441,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
           const landed = await api.pendingReview(cid, sid).catch(() => null);
           if (dropped || campaignRef.current !== cid || hasReviewRef.current
               || absorbStopRef.current !== stopGen) return;
-          if (landed?.review) {
+          if (ours(landed) && landed?.review) {
             openReview(landed.review, sid, landed.generation);
             return;
           }
