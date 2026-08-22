@@ -272,7 +272,9 @@ def test_the_library_status_route_drives_the_editors_button(client):
 
     assert client.get(f"/api/campaigns/{cid}/locations/{eid}/library").json() == {
         "in_library": True, "diverged": True, "can_promote": False, "can_push": True}
-    assert wid  # the world is the library these flags are about
+    # and the library really did take the promoted text, which is what makes
+    # "diverged" above a statement about two real records rather than a flag
+    assert client.get(f"/api/worlds/{wid}/locations/{eid}").json()["body"].strip() == "mine"
 
 
 def test_library_status_offers_nothing_for_an_inherited_record(client):
@@ -284,13 +286,16 @@ def test_library_status_offers_nothing_for_an_inherited_record(client):
 
 
 def test_library_status_offers_nothing_for_an_actor_it_cannot_push(client):
-    wid, cid = _world_and_campaign(client)
-    client.post(f"/api/worlds/{wid}/characters", json={"name": "Winifred"})
+    # actors are absent from push by design (#53 option B), so the editor must
+    # not be told it can offer one
+    _wid, cid = _world_and_campaign(client)
+    client.post(f"/api/campaigns/{cid}/characters", json={"name": "Winifred"})
+    client.post(f"/api/campaigns/{cid}/characters/winifred/promote")
 
     status = client.get(f"/api/campaigns/{cid}/characters/winifred/library").json()
 
-    assert status["can_push"] is False and status["can_promote"] is False
-    assert wid
+    assert status == {"in_library": True, "diverged": False,
+                      "can_promote": False, "can_push": False}
 
 
 def test_demoting_an_actor_is_refused(client):
