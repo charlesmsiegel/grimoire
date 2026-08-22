@@ -350,6 +350,21 @@ test("a pending locations read blocks Create scene", async () => {
   expect(screen.getByRole("button", { name: /create scene/i })).toBeDisabled();
 });
 
+test("a location the read does not offer is cleared rather than sent unseen", async () => {
+  // The read SUCCEEDS and simply does not contain the pre-filled id -- deleted
+  // between the draft being composed and this pane opening. The <select>
+  // renders an unmatched value as "— no location —", so leaving it in state
+  // would send Create a location the reader was never shown (#412 review).
+  (api.listEntities as any).mockResolvedValue([{ id: "harrow", name: "Harrow" }]);
+  const onCreated = renderForm(GEN);   // GEN.location = "saltmarch"
+  await screen.findByDisplayValue("The creditor");
+  expect(screen.getByText(/no longer in this campaign/i)).toBeInTheDocument();
+  expect((screen.getByLabelText("Location") as HTMLSelectElement).value).toBe("");
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalled());
+  expect(api.setSceneLocation).not.toHaveBeenCalled();
+});
+
 test("a failed locations read clears an unresolved location rather than sending it unseen", async () => {
   (api.listEntities as any).mockRejectedValue({ detail: "boom" });
   const onCreated = renderForm(GEN);   // GEN.location = "saltmarch"
