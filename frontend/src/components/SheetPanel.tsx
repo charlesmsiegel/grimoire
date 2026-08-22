@@ -4,9 +4,18 @@ import SheetEditor, { typeKind } from "./SheetEditor";
 import { assembledDefs } from "./SheetLayout";
 import { isResource } from "./SheetWidgets";
 
-export default function SheetPanel({ scope, module, kind, eid, onOpenRef }:
+export default function SheetPanel({ scope, module, kind, eid, onOpenRef, onChanged }:
   { scope: EntityScope; module: ModuleDetail | null; kind: string; eid: string;
-    onOpenRef?: (kind: string, id: string) => void }) {
+    onOpenRef?: (kind: string, id: string) => void;
+    /** Fired once a create, save or delete has landed AND been re-read, for a
+     *  host that renders something else about this sheet's existence.
+     *
+     *  The sheets room is why it exists: it shows the whole cast beside this
+     *  panel with a has-sheet badge per member, so creating a sheet here left
+     *  the rail one metre away still saying "Missing" until the page was
+     *  navigated off and back. Optional -- every other caller predates it and
+     *  displays nothing that a sheet write can falsify. */
+    onChanged?: () => void }) {
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +47,9 @@ export default function SheetPanel({ scope, module, kind, eid, onOpenRef }:
     try {
       const { sheet: fresh } = await api.getSheet(scope, module!.id, kind, eid);
       setSheet(fresh);
+      // After the re-read, not before: a host that reacts by re-reading its own
+      // view of this sheet would otherwise race the read we are already making.
+      onChanged?.();
       return fresh;
     } catch (err: any) {
       setError(err?.detail ?? String(err));

@@ -209,7 +209,8 @@ def create_missing(cid: str, types: dict[str, str] | None = None) -> dict:
       roster then flags. Skipping those entities silently was the alternative,
       and it is the one option #201 rules out.
     - ``skipped``: ``{kind, reason}`` -- a whole kind, because the only reason
-      to skip one is that no sheet type could be chosen for it.
+      to skip one is that no sheet type could be chosen for it. A kind with no
+      gaps is never listed: there was nothing to choose a type FOR.
     - ``failed``: ``{kind, id, detail}`` -- one entity whose write was rejected
       (a sheet raced in, or the module refused the values).
     """
@@ -224,6 +225,13 @@ def create_missing(cid: str, types: dict[str, str] | None = None) -> dict:
         pack = modules_pack.load_pack(mid)
         sheets_def = pack["sheets"] if isinstance(pack.get("sheets"), dict) else {}
         kinds = _sheetable_kinds(pack)
+        # ONE glob for the whole sweep, not `reader.read` per entity. `read`
+        # would answer the same question -- but by resolving the module and
+        # parsing and validating the entire pack from disk, per sheeted member,
+        # to return a boolean. `load_pack` is not memoized, and this runs under
+        # the campaign lock, which an in-flight turn's `append_reply` also
+        # needs and which gives up after LOCK_TIMEOUT.
+        have = set(sheet_reader.list_refs(cid))
         # Reported, not ignored: a choice naming a kind this module does not
         # sheet means the client is working from a roster the module has moved
         # on from, and answering "created 0" without saying so would read as
@@ -232,6 +240,14 @@ def create_missing(cid: str, types: dict[str, str] | None = None) -> dict:
                         "reason": "this module has no sheet type for this kind"}
                        for kind in sorted(set(chosen) - set(kinds)))
         for kind in kinds:
+            gaps = [m for m in _cast(cid, kind) if (kind, m["id"]) not in have]
+            # A kind with nothing missing is not skipped, whatever its sheet
+            # types look like: `pcs` share the `characters` types, so a module
+            # with two of them would otherwise have every campaign that owns no
+            # PCs told its PCs were skipped for want of a choice it was never
+            # asked to make. Nothing was skipped. There were no PCs.
+            if not gaps:
+                continue
             sheet_type, reason = _bulk_type(sheets_def, kind, chosen.get(kind))
             if sheet_type is None:
                 skipped.append({"kind": kind, "reason": reason})
@@ -240,11 +256,15 @@ def create_missing(cid: str, types: dict[str, str] | None = None) -> dict:
             # kind is written from the same schema defaults.
             unspent = schema.unspent_pools(
                 sheets_def, sheet_type, schema.default_fields(sheets_def, sheet_type))
-            for member in _cast(cid, kind):
+            for member in gaps:
                 eid = member["id"]
-                if sheet_reader.read(cid, kind, eid) is not None:
-                    continue
                 try:
+                    # Through the reviewed writer, not a private shortcut: it
+                    # re-resolves and re-validates per sheet (the lock is
+                    # reentrant, so the acquisition is free) and its
+                    # `expected=None` is what makes correctness independent of
+                    # the hold -- a sheet that appears from another process is
+                    # a recorded failure, never an overwrite.
                     writer.write(cid, kind, eid, sheet_type, None, expected=None)
                 except SheetError as exc:
                     failed.append({"kind": kind, "id": eid, "detail": str(exc)})

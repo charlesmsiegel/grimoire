@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import SheetsView from "./SheetsView";
+import CommandPalette, { usePaletteHotkey } from "../components/CommandPalette";
 import { PaletteProvider } from "../components/palette";
 
 vi.mock("../api/client", () => ({
@@ -56,6 +57,8 @@ function renderSheets() {
   return render(
     <MemoryRouter initialEntries={["/campaigns/run/sheets"]}>
       <PaletteProvider>
+        <Hotkey />
+        <CommandPalette />
         <Routes>
           <Route path="/campaigns/:cid/sheets" element={<SheetsView />} />
           <Route path="/campaigns/:cid" element={<div>the play view</div>} />
@@ -65,7 +68,11 @@ function renderSheets() {
   );
 }
 
-const column = () => within(screen.getByRole("complementary"));
+function Hotkey() { usePaletteHotkey(); return null; }
+
+// Named, not just by role: the detail pane's sidebar is a <complementary>
+// too, so a bare role query goes ambiguous the moment a member is selected.
+const column = () => within(screen.getByRole("complementary", { name: "The cast" }));
 const railRow = (name: string) =>
   column().getByRole("button", { name: new RegExp(name) });
 
@@ -126,6 +133,16 @@ test("create missing sends the chosen type per kind and reports what it did", as
   expect(api.getCampaignSheetRoster).toHaveBeenCalledTimes(2);
 });
 
+test("the palette offers the members still missing a sheet, not this page", async () => {
+  // `usePaletteSource` only registers while this page is mounted, so an entry
+  // that merely navigated here would be reachable only by already being here.
+  renderSheets();
+  await screen.findByText("Sheet coverage");
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  fireEvent.click(await screen.findByText("Characters without a sheet"));
+  await screen.findByRole("heading", { name: "Winifred" });
+});
+
 test("a kind with more than one sheet type says so until one is chosen", async () => {
   renderSheets();
   await screen.findByText("Sheet coverage");
@@ -174,6 +191,36 @@ test("a campaign with no module bound says so instead of an empty cast", async (
   // and the rail says the same thing where the cast would be
   expect(column().getByText("No mechanics bound.")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /Create missing sheets/ })).toBeDisabled();
+});
+
+test("creating one sheet in the detail pane refreshes the rail beside it", async () => {
+  // The bug this covers: `SheetPanel` refetched its own state and told nobody,
+  // so the rail one metre away went on saying "Missing" about a sheet that had
+  // just been created -- on the one screen whose entire job is who has a sheet.
+  (api.getSheet as any).mockResolvedValue({ sheet: null });
+  (api.putSheet as any).mockResolvedValue({ ok: true });
+  renderSheets();
+  await screen.findByText("Sheet coverage");
+  fireEvent.click(railRow("Winifred"));
+  await screen.findByRole("heading", { name: "Winifred" });
+
+  // SheetPanel's own single-sheet create, and the roster it now invalidates
+  (api.getCampaignSheetRoster as any).mockResolvedValue({
+    roster: {
+      ...ROSTER,
+      characters: [
+        ROSTER.characters[0],
+        row({ id: "winifred", name: "Winifred", sheeted: true, sheet_type: "medium" }),
+      ],
+    },
+  });
+  (api.getSheet as any).mockResolvedValue({
+    sheet: { sheet_type: "medium", fields: {}, derived: {}, errors: [], gen: "g2" },
+  });
+  fireEvent.change(screen.getByLabelText("Sheet type"), { target: { value: "medium" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+  await waitFor(() => expect(railRow("Winifred")).toHaveTextContent("Sheet"));
 });
 
 test("a failed create surfaces the reason rather than a silent no-op", async () => {
