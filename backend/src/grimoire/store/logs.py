@@ -950,15 +950,6 @@ def tail(from_cursor: str = "", budget: int = MAX_TAIL_BYTES, **filters) -> dict
     return {"rows": rows, "cursor": f"{files[index].name}:{offset}", "more": more}
 
 
-def _at_end(path: Path, offset: int) -> bool:
-    """Is ``offset`` at (or past) the end of ``path``? An unreadable file is
-    treated as exhausted -- there is nothing more to take from it."""
-    try:
-        return offset >= path.stat().st_size
-    except OSError:
-        return True
-
-
 def _tail_matches(row: dict, filters: dict) -> bool:
     """`_matches` with the tail's defaults: no window, since a tail is by
     definition about now."""
