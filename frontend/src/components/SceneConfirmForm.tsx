@@ -91,7 +91,23 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
     setLocationsLoading(true);
     setLocationsNotice(null);
     api.listEntities({ kind: "campaign", id: cid }, "locations")
-      .then((ls) => { setLocations(ls); setLocationsLoading(false); })
+      .then((ls) => {
+        setLocations(ls);
+        setLocationsLoading(false);
+        // The same guarantee the catch below makes, for the case where the read
+        // SUCCEEDS and simply does not contain the pre-filled id -- deleted
+        // between the draft being composed and this pane opening. The <select>
+        // renders an unmatched value as "— no location —" while the state still
+        // holds it, so without this Create sends a location the reader was
+        // never shown and did not choose. Functional updater for the same
+        // reason the catch uses one: `location` in this closure is the draft's,
+        // and nothing re-runs this effect when the reader edits the field.
+        setLocation((prev) => {
+          if (!prev || ls.some((l) => l.id === prev)) return prev;
+          setLocationsNotice("The pre-filled location is no longer in this campaign — it was cleared.");
+          return "";
+        });
+      })
       .catch(() => {
         // Two choices here: leave Create disabled forever (locationsLoading
         // never settling) or drop the unresolved location and say why. The
