@@ -3443,17 +3443,23 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // it, and prevents the default, so this cannot send the same keystroke
       // twice.)
       whileTyping: true,
-      // ...and off while an inline action owns Enter. The reroll box and the
-      // dice inputs answer Enter without preventing the default and without
-      // looking at modifiers, so a send chord typed into one reached both --
-      // `reroll()` from the input and `send()` from here, each reading the
-      // same render's `busy === false`, each entering `runStream`. Two turns
-      // racing one scene (PR #400 review). Guarded here rather than by
-      // teaching four inline handlers about modifiers: while one of those is
-      // open it owns the keyboard, which is what the composer's disabled Send
-      // would say if these were buttons.
+      // ...and off while an inline action owns Enter. The reroll box, the dice
+      // inputs and the scene-rename box all answer Enter without preventing
+      // the default and without looking at modifiers, so a send chord typed
+      // into one reached both -- their handler AND `send()` from here, each
+      // reading the same render's `busy` (or `renamesInFlight`) as clear, each
+      // going ahead. Two turns racing one scene, or a send racing the rename
+      // that counter exists to stop (PR #400 review). Guarded here rather than
+      // by teaching four inline handlers about modifiers: while one of them is
+      // open it owns the keyboard.
+      //
+      // An open EDIT form is deliberately not on this list. That textarea
+      // answers no key at all, so there is nothing to double-fire, and
+      // refusing the chord there would make it stricter than the Send button
+      // beside it -- which is the fault this same review found twice in my
+      // Escape guards.
       enabled: !absorb && !busy && !rolling && !renamesInFlight
-               && !editing && rerollPrompt === null && !rollForm,
+               && rerollPrompt === null && !rollForm && !renamingScene,
       run: () => void send(),
     },
     {
