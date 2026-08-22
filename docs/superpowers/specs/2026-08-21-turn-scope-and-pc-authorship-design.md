@@ -308,8 +308,17 @@ Keep it to the reflex and the recognition, never the conclusion. "The voice is
 one you know" is the world acting. "You realize she has been lying to you all
 along" is a judgment, and judgments are theirs.
 
+**An attempt they already authorized is theirs, not yours to invent — so
+resolve it.** When the player has written an action, or accepted a check on
+their character's behalf, that choice is an established fact and the reply
+must carry it through to its outcome. What stays forbidden is a *new* choice:
+what they do next, what they conclude from the result, what they say about
+it.
+
 This holds in every block, **Grimoire:** included, and no prose style or
-character instruction relaxes it. The line is volition: sensation is the
+character instruction relaxes it. It is a rule about *originating* volition,
+not about narrating its consequences: a roll continuation exists precisely to
+resolve an attempt the player authorized, and the boundary never blocks that. The line is volition: sensation is the
 world's, what they make of it is theirs. End the reply where their answer
 begins.
 ```
@@ -550,8 +559,18 @@ selected in place of `director_note.j2` when `wrap_next` is set and the note
 would otherwise be the default. A send that carries `/end` *and* prose keeps
 the prose as its note, unchanged; only the defaulted case swaps.
 
-**Effect is prompt-only.** `scene_break`, its watermark, and the review flow
-are untouched. A player typing `/end` has authoritatively answered the question
+**One refusal is required, and it is not about pacing.** While a replay's next
+pending step is an unstaged verbatim player post, ordinary chat — `/end`
+included — must be refused rather than allowed to append a generation.
+`replay.accept()` reads a reply beyond `mark` with `staged == 0` as that
+step's replacement, so a `/end` sent in that window would permanently consume
+the pending step and skip the player's original post. `post_chat` has no
+replay guard today, so this is new: either stage the step first, or refuse the
+send. This is a data-integrity rule, not a prompt one, and it is the one place
+`/end` needs a door rather than a flag.
+
+**Otherwise the effect is prompt-only.** `scene_break`, its watermark, and the
+review flow are untouched. A player typing `/end` has authoritatively answered the question
 the confirming call spends an LLM call to ask, and pre-answering it would save
 that call — but it would couple the prompt flag to the break watermark, which
 is the coupling "prompt-only" was chosen to avoid. Left on the table
@@ -998,6 +1017,11 @@ faster than another round of prose. Listed so none is lost:
 - **`wrap_note.j2` must be selected from the captured snapshot**, not a fresh
   read — otherwise a cancel between snapshot and note selection restores the
   "Continue the scene." contradiction the note exists to remove.
+- **An empty completion must not consume the wrap.** A provider can return
+  cleanly with nothing usable — an empty response, or text that is only a
+  stripped tracker block — and `_persist_reply` then reports false, so no
+  closing reply lands. The transition needs a positive persistence result,
+  not just "completed without a fence", on continuation paths too.
 - **A stopped wrap should stay `pending`.** `_chat_stream.on_abort` persists
   the partial through the same `finalize` path as a completed reply, so a
   player pressing Stop mid-wrap would flip the state to `consumed` and be told
