@@ -136,8 +136,22 @@ always-on blocks with no ordering between them would be that finding, tripled.
    "describe how {{user}} reacts" would win on position against a rule a
    thousand tokens upstream.
 
-   So the boundary gets a presence in that slot too — see §6 — and is made
-   non-removable in the layout editor. Both are below.
+   **And `post_history` is not the last word either.** `compose_turn` appends
+   its `appended` messages *after* it (`assemble.py:667`) — the roll-result
+   block, regenerate guidance, and the user-authored on-roll and check rule
+   documents those blocks carry. On the roll-continuation and regenerate
+   paths, all of that sits closer to generation than a boundary placed in
+   `post_history`, so the positional argument this spec made for that slot
+   does not hold there. An earlier draft asserted otherwise from reading only
+   the first half of that function.
+
+   So the requirement is stated by position, not by slot: **the PC boundary is
+   the final system instruction on every composition path**, emitted after
+   `appended` rather than before it. `post_history` remains where it renders
+   for the ordinary chat turn, which has no appended messages; the paths that
+   do get it last.
+
+   It is also made non-removable in the layout editor — see §6.
 3. **`turn_scope` outranks the prose style.** This is the one place the
    hierarchy differs from `natural_prose.j2`, which yields its rhythm guidance
    to a set style. Pacing is not rhythm: a style describes how prose *sounds*,
@@ -450,10 +464,11 @@ both places — the outer route span for composition and claim failures, and
 both streams' error paths for the asynchronous ones. The tests cover a
 composition failure, a claim failure and a streaming failure.
 
-Two accepted losses, both stated rather than solved: a turn that errors clears
-a flag that a *previous* `/end` may have set, and a rewind clears it
-unconditionally. Both fail toward not-wrapping, which is the recoverable
-direction — the player retypes three characters.
+One accepted loss, stated rather than solved: a rewind clears the state
+unconditionally. That fails toward not-wrapping, which is the recoverable
+direction — the player retypes three characters. A turn that errors does
+**not** clear it; see the failure rule above, which the retry promise depends
+on.
 
 **Reading** — through a **public** accessor on `scenes/read.py`, following
 `get_rolling_summary` / `scene_break_fields`:
@@ -795,8 +810,9 @@ top of an unvalidated assumption.
   finding that killed the index design; without them the next refactor
   reintroduces it.
 - **Durability** — `/end`, then regenerate, still wraps.
-- **Clearing** — an ordinary send clears it; an errored turn clears it; a
-  rewind clears it.
+- **Clearing** — an ordinary send clears it and a rewind clears it. An
+  errored turn does **not**: the state stays `pending` so `post_retry` can
+  reproduce the wrap, and a test asserts exactly that.
 - **Rendering** — each section renders; `player_character` renders empty
   pcless and renders plural with two seated players; `turn_scope` is absent
   from an opener; `response_format` omits the closing-narration rule both
@@ -891,10 +907,13 @@ be measured. Whether "advance one beat" is obeyed remains a question only
   the pcless pass, and `turn_scope`'s `wrap` variant never renders at all
   unless the fixture sets the flag. Each needs a positive assertion in the
   same idiom, or the mirror will pass while covering nothing.
-- **`store/locks.py`** — the new `store/commands.py` needs a classification or
-  `test_lock_domain_guard` fails naming it. It is pure parsing with no state,
-  so `OUTSIDE_DOMAIN` with that as the reason; `UNREVIEWED` is a frozen
-  backlog *"not open for new entries"*. The set/clear mutator lands in
+- **`store/locks.py`** — `store/commands.py` is deliberately **not**
+  classified. An earlier draft required an `OUTSIDE_DOMAIN` entry; that would
+  have broken the build. `test_modules_declared_outside_are_really_outside`
+  flags any declared module whose public mutators all serialize, and a pure
+  parser has no mutators at all, so it reports as stale. The registry is for
+  campaign-scoped mutators, not for every new module under `store/`. The
+  set/clear mutator lands in
   `scenes/write.py`, a `DOMAIN_MODULES` module, so it takes
   `locks.campaign_lock(cid)` — reentrant, therefore free under the route's
   existing hold — rather than a marker.
@@ -931,6 +950,11 @@ faster than another round of prose. Listed so none is lost:
 - **`wrap_note.j2` must be selected from the captured snapshot**, not a fresh
   read — otherwise a cancel between snapshot and note selection restores the
   "Continue the scene." contradiction the note exists to remove.
+- **A wrap must stay `pending` across *chained* roll proposals.**
+  `_continuation_stream` supports a continuation that itself ends in another
+  fence (`streaming.py:879-886`), so consuming after the first continuation
+  announces a closed scene while a second check is still pending. Every
+  continuation needs the same fence test.
 - **`/end` alongside prose is inert when `turn_scope` is disabled**: the wrap
   variant is gone, the closing rule is gated off with it, and the prose
   suppresses `wrap_note.j2`. The wrap instruction probably needs to be
