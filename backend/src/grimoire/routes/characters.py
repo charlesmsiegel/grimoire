@@ -255,6 +255,69 @@ async def post_character_tagline_generate(wid: str, cid: str,
     return {"tagline": store.taglines.parse_output(text)}
 
 
+def _tagline_target(root, cid: str) -> tuple[dict | None, str, str]:
+    """The card to derive `cid`'s tagline from, or `(None, "", reason)` when
+    there is nothing to derive (#57).
+
+    Read now rather than taken from the roster scan, because a run walks that
+    scan for as long as a provider call per character takes, and everything it
+    recorded can move. The default version most of all: changing it leaves the
+    old card in place, so a stale id still READS -- it just answers with the
+    wrong card, and the tagline written from it is no longer blank for a later
+    run to correct.
+
+    The blank is checked here, before the call and not only after it: a target
+    somebody else filled in the meantime is a generation whose answer this route
+    would throw away, and it is billed either way.
+    """
+    try:
+        ch = store.characters.read_character(root, cid)
+        vid = ch["meta"]["default_version"]
+        card = store.characters.read_card(root, cid, vid)
+    except (store.characters.CharacterNotFound, store.characters.VersionNotFound):
+        # Deleted or unreadable since the scan. One unusable card is not a
+        # reason to abandon the rest of the roster.
+        return None, "", "unreadable card"
+    if store.taglines.read(root, cid):
+        return None, "", "already set"
+    return card, vid, ""
+
+
+def _commit_tagline(root, cid: str, vid: str, card: dict, tagline: str) -> str:
+    """Write the derived sentence, or say why it was not written (#57).
+
+    Fenced on the card it was derived from being still on disk and still the
+    same bytes -- one check rather than a list of the ways the character could
+    have moved while the model was answering, because it covers all of them:
+
+    - **Deleted.** `taglines.write` creates the parent directory, so writing to
+      a character who is gone rebuilds `characters/<cid>/` holding nothing but
+      tagline.md -- invisible to every listing (they need character.md) and
+      still enough to make `create_character` suffix the id of the next
+      character given that name.
+    - **Deleted and recreated under the same name.** The slug is free again the
+      moment the directory goes, so the replacement takes it, and no existence
+      check can tell the two apart. Its card can -- unless it is byte-identical,
+      which is deliberately not distinguished: a sentence derived from exactly
+      the text the new card holds describes it exactly as well.
+    - **Edited, or re-pointed to another default version.** The sentence
+      describes text that is no longer there. Leaving it blank is what lets a
+      re-run derive it from what the card says now.
+
+    And the blank once more, for the same reason it is checked before the call:
+    a sentence saved by hand during the generation is not this run's to replace.
+    """
+    try:
+        if store.characters.read_card(root, cid, vid) != card:
+            return "changed"
+    except (store.characters.CharacterNotFound, store.characters.VersionNotFound):
+        return "gone"
+    if store.taglines.read(root, cid):
+        return "already set"
+    store.taglines.write(root, cid, tagline)
+    return ""
+
+
 @router.post("/worlds/{wid}/characters/taglines/generate")
 async def post_world_taglines_generate(wid: str, client: LLMClient = Depends(get_llm)):
     """Derive a tagline for every character in this world that has none (#57).
@@ -325,29 +388,10 @@ async def post_world_taglines_generate(wid: str, client: LLMClient = Depends(get
             for done, c in enumerate(targets, start=1):
                 cid = c["id"]
                 frame = {"done": done, "character": cid, "name": c["name"]}
-                # The scan is a snapshot, and a roster's worth of calls can take
-                # a very long time to walk. Everything below re-reads rather
-                # than trusting it, because each thing it recorded can move.
-                #
-                # The default version most of all: changing it leaves the old
-                # card in place, so a stale id still READS -- it just answers
-                # with the wrong card, and the tagline derived from it is not
-                # blank any more for a later run to correct.
-                try:
-                    ch = store.characters.read_character(root, cid)
-                    card = store.characters.read_card(root, cid, ch["meta"]["default_version"])
-                except (store.characters.CharacterNotFound, store.characters.VersionNotFound):
-                    # Deleted or unreadable since the scan. One unusable card is
-                    # not a reason to abandon the rest of the roster.
+                card, vid, skip = _tagline_target(root, cid)
+                if card is None:
                     skipped += 1
-                    yield _sse({**frame, "skipped": "unreadable card"})
-                    continue
-                if store.taglines.read(root, cid):
-                    # Before the call, not only after it: a target somebody else
-                    # filled in the meantime is a call whose answer this route
-                    # would throw away, and it is billed either way.
-                    skipped += 1
-                    yield _sse({**frame, "skipped": "already set"})
+                    yield _sse({**frame, "skipped": skip})
                     continue
                 messages = store.taglines.build_prompt(_card_data(card))
                 try:
@@ -362,24 +406,11 @@ async def post_world_taglines_generate(wid: str, client: LLMClient = Depends(get
                     skipped += 1
                     yield _sse({**frame, "skipped": "blank"})
                     continue
-                # Both checks again, because a generation takes seconds and the
-                # grid stays live throughout. A delete landing inside that
-                # window matters more than it looks: `taglines.write` creates
-                # the parent directory, so writing to a character who is gone
-                # rebuilds `characters/<cid>/` holding nothing but tagline.md --
-                # invisible to every listing (they need character.md) and still
-                # enough to make `create_character` suffix the id of the next
-                # character to be given that name.
-                if not store.characters.character_exists(root, cid):
+                skip = _commit_tagline(root, cid, vid, card, tagline)
+                if skip:
                     skipped += 1
-                    yield _sse({**frame, "skipped": "gone"})
+                    yield _sse({**frame, "skipped": skip})
                     continue
-                if store.taglines.read(root, cid):
-                    # Written during the call -- by hand, or by another run. Theirs wins.
-                    skipped += 1
-                    yield _sse({**frame, "skipped": "already set"})
-                    continue
-                store.taglines.write(root, cid, tagline)
                 written += 1
                 yield _sse({**frame, "tagline": tagline})
         except Exception as exc:  # noqa: BLE001 — surface a stream error like the localize route

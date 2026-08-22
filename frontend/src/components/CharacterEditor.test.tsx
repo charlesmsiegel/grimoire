@@ -806,6 +806,36 @@ test("a run whose editor has moved on reports nothing into the new world", async
   expect(screen.queryByText(/Derived 1 tagline/)).toBeNull();
 });
 
+test("a roster read that lands after the editor moved on is discarded", async () => {
+  // The guard is on the READ, not the caller: a `listCharacters` that resolves
+  // after the scope changed would otherwise paint world A's cards under world
+  // B's handlers, where Delete on a shared slug hits B while showing A.
+  // One resolver per read, kept in order: the scope change starts a SECOND
+  // read, and resolving that one would prove nothing — it is w2's own.
+  const reads: ((rows: any[]) => void)[] = [];
+  (api.listCharacters as any).mockImplementation(() => new Promise((ok) => { reads.push(ok); }));
+  const view = render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  view.rerender(<CharacterEditor scope={{ kind: "world", id: "w2" }} wid="w2" />);
+  await act(async () => { reads[0](roster(["mara"])); });   // w's read, landing late
+  expect(screen.queryByText("mara")).toBeNull();
+});
+
+test("a failed roster reload still reports what the run wrote", async () => {
+  // The taglines are already on disk. Letting the reload's rejection out of
+  // `finally` would take the report with it — and escape the click handler as
+  // an unhandled rejection.
+  (api.listCharacters as any).mockResolvedValueOnce(roster(["mara"]))
+    .mockRejectedValue(new ApiError(503, "roster unavailable"));
+  derives([
+    { total: 1 },
+    { done: 1, character: "mara", name: "Mara", tagline: "A courier with cold hands." },
+    { summary: { total: 1, written: 1, skipped: 0, stopped: false } },
+  ]);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Derive taglines \(1\)/ }));
+  await screen.findByText(/Derived 1 tagline/);
+});
+
 test("a refusal before the stream starts is an error banner, not a report", async () => {
   (api.listCharacters as any).mockResolvedValue(roster(["mara"]));
   (api.generateWorldTaglines as any).mockRejectedValue(new ApiError(409, "no connection configured"));

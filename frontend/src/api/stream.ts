@@ -68,9 +68,10 @@ export type LocalizeEvent = {
  *  lands — so a frame carrying `tagline` is a fact about the store, not a
  *  draft awaiting a save. `skipped` says why nothing was written for that
  *  character — a "blank" reply, a tagline "already set" by someone else, an
- *  "unreadable card", or one "gone" (deleted while its own call was in
- *  flight); `error` is the provider failure that stopped the run, and no
- *  character after it was attempted. */
+ *  "unreadable card", one "gone" (deleted while its own call was in flight),
+ *  or one "changed" (its card edited or replaced under it, so the sentence
+ *  describes text that is no longer there); `error` is the provider failure
+ *  that stopped the run, and no character after it was attempted. */
 export type TaglineBatchSummary = {
   total: number;
   written: number;
