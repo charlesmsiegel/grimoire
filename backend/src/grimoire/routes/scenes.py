@@ -2501,8 +2501,23 @@ def delete_pending_review(cid: str, sid: str, request: Request,
     """
     _require_scene(cid, sid)
     with store.locks.campaign_lock(cid):
+        # The flag lands FIRST and stays landed even if the removal below
+        # refuses: stopping the work is the half of Cancel that cannot be
+        # retried into existence later, and a record that outlives its runs is
+        # refused by its own watermark at save.
         flagged = runs.cancel_review(request.app, cid, sid, generation)
-        removed = store.pending_reviews.clear(cid, sid, generation)
+        try:
+            removed = store.pending_reviews.clear(cid, sid, generation)
+        except OSError as exc:
+            # A sidecar that would not open. Not a 500: `clear` declines to
+            # remove a record it could not identify (the safe direction), and
+            # the condition is transient -- a sync client holding the file, a
+            # sharing violation -- so the client is told to retry rather than
+            # shown a crash for a button that half worked.
+            runs.await_reviews_stopped(flagged)
+            raise HTTPException(status_code=409, detail={
+                "kind": "busy",
+                "detail": f"the review could not be removed: {exc}"}) from exc
     return {"removed": removed, "stopped": runs.await_reviews_stopped(flagged)}
 
 

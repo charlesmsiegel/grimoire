@@ -451,3 +451,32 @@ def test_cancel_answers_only_once_the_run_it_stopped_has_stopped(client, scene,
     assert again.status_code == 202, again.json()
     review_runs.wait_for_run(client, cid, sid, again.json()["run"]["id"])
     assert _pending(client, cid, sid)["review"]["one_line"] == "They met."
+
+
+def test_a_cancel_over_an_unreadable_record_still_stops_the_work(client, scene,
+                                                                 monkeypatch):
+    """Half of Cancel cannot be retried into existence later.
+
+    Stopping the run is that half: a record that outlives its runs is refused
+    by its own watermark at save, but a provider left generating for a review
+    nobody wants goes on spending until it finishes on its own. So the flag
+    lands first and stays landed, and the refusal is reported as the transient
+    thing it is rather than as a crash for a button that half worked.
+    """
+    cid, sid = scene
+    monkeypatch.setattr(routes.scenes, "ABANDON_POLL", 0.02)
+    held = _Wedged()
+    client.app.dependency_overrides[routes.get_llm] = lambda: _facade(held)
+    started = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    generation = started.json()["generation"]
+    _wait_for(held.frames_seen)
+
+    # A directory where the sidecar goes: the portable way to make the read
+    # fail without depending on what the process may do as its own owner.
+    store.scenes._review_path(cid, sid).mkdir()
+
+    refused = review_runs.cancel(client, cid, sid, generation)
+    assert refused.status_code == 409 and refused.json()["kind"] == "busy"
+    run = client.get(f"/api/campaigns/{cid}/scenes/{sid}/runs/"
+                     f"{started.json()['run']['id']}").json()["run"]
+    assert run["state"] == "cancelled", run
