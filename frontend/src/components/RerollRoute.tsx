@@ -53,7 +53,12 @@ export default function RerollRoutePicker({
     api.listConnections()
       .then((list) => { if (live) setConnections(list); })
       .catch(() => { if (live) setConnections([]); });
-    api.getConfig()
+    // `{ fresh: true }`, which Codex caught the first version of this missing:
+    // `getConfig` answers from a module cache "keyed to nothing but this tab's
+    // own writes", so relocating the read into this component fixed nothing at
+    // all for the cross-tab repoint it was moved here to handle. The popover
+    // opens rarely and this is the one moment the answer has to be current.
+    api.getConfig({ fresh: true })
       .then((c) => { if (live) setActive(c.active_connection); })
       .catch(() => { if (live) setActive(null); });
     return () => { live = false; };
@@ -121,16 +126,25 @@ export default function RerollRoutePicker({
             and it is the one thing here that is already said twice over: the
             status bar names the active connection, and the model box beside
             this shows the model leaving it alone would run. */}
-        <option value="" title={active ? `Default: ${active.name}` : undefined}>
+        <option value=""
+                title={active
+                  ? `Whichever connection is active when the reroll is sent — ${active.name} now`
+                  : undefined}>
           Default
         </option>
-        {/* The active connection is not offered again below: "Default" already
-            IS it, and for a call that runs immediately there is no difference
-            between naming it and letting it be resolved. Two rows reading
-            "OpenRouter" would only ask the reader to tell apart a distinction
-            that does not exist. */}
-        {connections.filter((c) => c.id !== active?.id).map((c) => (
-          <option key={c.id} value={c.id}>{c.name}</option>
+        {/* The active connection IS offered again below, which an earlier
+            round removed as a duplicate and Codex caught as the removal of the
+            only way to pin a provider. The distinction is real: "Default" is
+            whichever connection is active when the reroll is sent, and the
+            named row is that connection specifically. The titles say so, since
+            the difference only shows itself when the two diverge. */}
+        {connections.map((c) => (
+          <option key={c.id} value={c.id}
+                  title={c.id === active?.id
+                    ? `${c.name} — pinned, even if the active connection changes`
+                    : c.name}>
+            {c.name}
+          </option>
         ))}
       </select>
       <ModelCombobox
@@ -144,7 +158,22 @@ export default function RerollRoutePicker({
         placeholder={(value.connection_id ? chosen?.effective_model
                                           : active?.model) || "model"}
         value={value.model}
-        onChange={(model) => onChange({ ...value, model })}
+        // Choosing a model under "Default" PINS the connection the box is
+        // describing. Codex caught the gap: the placeholder and the catalog
+        // both come from whichever connection is active right now, so a route
+        // left dynamic would apply a model chosen against A to whatever B
+        // happens to be active by the time Reroll is clicked.
+        //
+        // The pin STAYS once set, including when the model is cleared again:
+        // an implicit pin and an explicit one are the same value and nothing
+        // here distinguishes them, and the `<select>` shows the connection by
+        // name from that moment on — so the route on screen is the route that
+        // will run, and Default is one click away for a reader who wants it
+        // dynamic again.
+        onChange={(model) => onChange({
+          connection_id: value.connection_id || (model ? active?.id ?? "" : ""),
+          model,
+        })}
         models={models}
         error={kind === "openrouter" && orError}
       />
