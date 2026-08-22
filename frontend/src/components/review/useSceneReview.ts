@@ -329,6 +329,12 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
 
   /** Install a review that came off the store, wherever it came from. */
   function openReview(review: SceneAbsorb, sid: string, gen: string | null) {
+    // The ref eagerly, not only through its effect. Everything that names this
+    // review -- Stop, Cancel, and the wait for a retry already running under it
+    // -- reads the ref, and an effect does not run until React has re-rendered:
+    // an `await` in the same continuation as this call sees the PREVIOUS
+    // review's generation, or none at all.
+    generationRef.current = gen;
     setAbsorb(review);
     setAbsorbSid(sid);
     setGeneration(gen);
@@ -339,6 +345,43 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     // the drawer the last review left open is the one this one lands in.
     setReviewSection("uncited");
     setReviewQuote("");
+  }
+
+  /** Wait out a scoped retry that is already running for the review just
+   *  opened, and take its result off the store when it lands.
+   *
+   *  Only for a retry of THIS review -- matched on the generation, which every
+   *  run belonging to one review carries -- and only while the panel is still
+   *  showing it. The re-open rebuilds the rows, which is what a retry does on
+   *  screen anyway; the alternative is a panel that silently disagrees with the
+   *  record it is about to save over.
+   */
+  async function adoptLiveRetry(sid: string, generation: string | null,
+                                dropped: () => boolean) {
+    if (!generation) return;
+    const live = await api.liveReview(cid, sid).catch(() => null);
+    if (live?.review_generation !== generation || live.kind === "absorb") return;
+    if (dropped() || campaignRef.current !== cid) return;
+    const stopGen = absorbStopRef.current;
+    setRetryingAudit(live.kind === "audit");
+    setRetryingDossiers(live.kind === "dossiers");
+    try {
+      await api.awaitRun(cid, sid, live);
+      const merged = await api.pendingReview(cid, sid);
+      if (dropped() || campaignRef.current !== cid
+          || absorbStopRef.current !== stopGen
+          || generationRef.current !== generation) return;
+      if (merged.review) openReview(merged.review, sid, merged.generation);
+    } catch {
+      // The retry's own failure is the retry's to report, and this browser did
+      // not ask for it. What is on screen is the review the store had, which is
+      // exactly what it would have been without this.
+    } finally {
+      if (!dropped()) {
+        setRetryingAudit(false);
+        setRetryingDossiers(false);
+      }
+    }
   }
 
   // Adopt whatever this scene already has (#396). The review is durable now, so
@@ -371,6 +414,14 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       if (dropped || campaignRef.current !== cid || hasReviewRef.current) return;
       if (pending.review) {
         openReview(pending.review, sid, pending.generation);
+        // A stored review is not necessarily a SETTLED one. A scoped retry
+        // merges into this same record, and its pre-retry payload is
+        // necessarily already on disk -- so mounting while one runs opens the
+        // phase it is replacing and then has nobody waiting to refresh it.
+        // Once the run releases the scene, saving commits those stale rows and
+        // clears the record the retry landed in: the completed retry is gone,
+        // and nothing said so.
+        await adoptLiveRetry(sid, pending.generation, () => dropped);
         return;
       }
       if (pending.stale) {

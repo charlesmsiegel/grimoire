@@ -3255,3 +3255,40 @@ test("an absorb that never names a review does not hold the scene forever", asyn
   expect(api.discardReview).not.toHaveBeenCalled();
   expect(await screen.findByRole("button", { name: "Rename scene" })).toBeEnabled();
 });
+
+test("a retry already running when the panel opens is waited out, not ignored", async () => {
+  // A stored review is not necessarily a settled one. A scoped retry merges
+  // into this same record, and its pre-retry payload is necessarily already on
+  // disk — so mounting while one runs opens the phase it is replacing and has
+  // nobody waiting to refresh it. Once the run releases the scene, saving
+  // commits those stale rows and clears the record the retry landed in.
+  withScene();
+  (api.pendingReview as any)
+    .mockResolvedValueOnce({ review: STORED_REVIEW, generation: "gen1", stale: null })
+    .mockResolvedValue({ review: { ...STORED_REVIEW, summary: "What the retry made." },
+                         generation: "gen1", stale: null });
+  (api.liveReview as any).mockResolvedValue(
+    { id: "r2", attempt_id: null, state: "running", next_index: 0,
+      cls: "review", kind: "audit", review_generation: "gen1" });
+  (api.awaitRun as any).mockResolvedValue({ id: "r2", state: "landed" });
+  renderCampaign();
+
+  expect(await screen.findByDisplayValue("What the retry made.")).toBeInTheDocument();
+});
+
+test("a live ABSORB under a stored review is not mistaken for a retry", async () => {
+  // The two share the `review` class. An absorb running while a review is
+  // stored is a FRESH one replacing it, and waiting it out here would rebuild
+  // the panel from a record that belongs to a different generation.
+  withScene();
+  (api.pendingReview as any).mockResolvedValue(
+    { review: STORED_REVIEW, generation: "gen1", stale: null });
+  (api.liveReview as any).mockResolvedValue(
+    { id: "r3", attempt_id: null, state: "running", next_index: 0,
+      cls: "review", kind: "absorb", review_generation: "gen2" });
+  renderCampaign();
+
+  await screen.findByDisplayValue("A stored summary.");
+  await act(async () => { await Promise.resolve(); });
+  expect(api.awaitRun).not.toHaveBeenCalled();
+});
