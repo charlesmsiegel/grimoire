@@ -33,6 +33,12 @@ export function ContextDiff({ diff, recomputing = false }:
   // total. Ignoring it let the panel say every section was identical when the
   // packer had demonstrably done different work.
   const cutDiffers = diff.base.dropped_tokens !== diff.head.dropped_tokens;
+  // Everything the panel reports ABOVE the section list. "Nothing changed" has
+  // to answer for these too, or it contradicts the model/budget warning printed
+  // three lines earlier — a model switch can by itself explain a different
+  // reply, which is the question this panel is opened to answer.
+  const metaDiffers = cutDiffers || diff.base.model !== diff.head.model
+                      || diff.base.budget_tokens !== diff.head.budget_tokens;
 
   return (
     <>
@@ -98,8 +104,10 @@ export function ContextDiff({ diff, recomputing = false }:
             ? "No section differs, but the two turns dropped different amounts to"
               + " fit the budget — history cut from the front leaves no section"
               + " behind to show it."
-            : "Nothing changed — every section is identical, and the same weight"
-              + " was cut to fit."}
+            : metaDiffers
+              ? "No section differs — what changed is above."
+              : "Nothing changed — every section is identical, the same weight was"
+                + " cut to fit, and both were packed the same way."}
         </p>
       ) : (
         <div className="ctx-caption">
@@ -189,8 +197,20 @@ const DROPPED = "Dropped by the budget packer — the model did not see this.";
 function flagNotes(section: PromptDiffSection): string[] {
   const { base, head } = section;
   const only = head ?? base;
-  if (!base || !head)
-    return only?.dropped ? [DROPPED] : [];
+  if (!base || !head) {
+    // A section only one side has still carries facts, and the early return
+    // used to keep just one of them. History present on one side alone — an
+    // opener against a later turn — can have been TRIMMED on that side, and
+    // its inserted lines then read as the whole of the conversation when
+    // earlier messages were cut from the front. The side-level dropped-token
+    // total cannot stand in for that: it is a weight, not a message count.
+    const solo: string[] = [];
+    if (only?.dropped) solo.push(DROPPED);
+    if (only?.trimmed)
+      solo.push(`History trimmed: ${only.trimmed} messages cut from the front,`
+                + " so these lines are not the whole of it.");
+    return solo;
+  }
   const notes: string[] = [];
   if (section.moved)
     // Order is not decoration: the packer drops from the bottom of a tier and

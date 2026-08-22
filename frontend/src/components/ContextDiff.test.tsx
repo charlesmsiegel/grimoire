@@ -301,3 +301,45 @@ test("a non-history section is not told a story about the transcript", () => {
   screen.getByText(/what moved is the measurement, not the words/);
   expect(screen.queryByText(/grouped into a different number of messages/)).toBeNull();
 });
+
+test("a one-sided history section still reports its trimming", () => {
+  // An opener against a later turn: history exists on one side only, and its
+  // inserted lines read as the whole conversation unless the cut is named. The
+  // side-level dropped total cannot stand in — that is a weight, not a count.
+  render(<ContextDiff diff={diff({
+    sections: [section({ id: "history", label: "Conversation history", status: "added",
+                         base: null, head: facts({ trimmed: 12 }),
+                         diff: [{ op: "insert", text: "**Mara:** we make for the harbor" }] })],
+  })} />);
+  screen.getByText(/12 messages cut from the front/);
+  screen.getByText(/not the whole of it/);
+});
+
+test("a model change is not contradicted by the verdict beneath it", () => {
+  // "Nothing changed" printed three lines under a model warning was the panel
+  // arguing with itself, and a model switch can by itself explain a different
+  // reply — which is the question this panel gets opened to answer.
+  render(<ContextDiff diff={diff({
+    base: side({ model: "old-model" }),
+    head: side({ id: "live", model: "new-model" }),
+    sections: [section()],
+  })} />);
+  screen.getByText(/Different models/);
+  screen.getByText(/No section differs — what changed is above/);
+  expect(screen.queryByText(/Nothing changed/)).toBeNull();
+});
+
+test("a budget change counts the same way", () => {
+  render(<ContextDiff diff={diff({
+    base: side({ budget_tokens: 4000 }),
+    head: side({ id: "live", budget_tokens: 8000 }),
+    sections: [section()],
+  })} />);
+  screen.getByText(/No section differs — what changed is above/);
+});
+
+test("with nothing differing at all the verdict says so unreservedly", () => {
+  render(<ContextDiff diff={diff({ sections: [section()] })} />);
+  screen.getByText(/Nothing changed/);
+  screen.getByText(/both were packed the same way/);
+});

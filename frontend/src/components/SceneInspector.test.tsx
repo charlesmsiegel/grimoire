@@ -1931,6 +1931,34 @@ test("a diff arriving after the reader moved on is dropped, not shown", async ()
   expect(screen.queryByText("the pact was signed at dusk")).toBeNull();
 });
 
+test("a turn that fails to load ends the comparison rather than hiding it", async () => {
+  // Clearing `frozen` returns the panel to live context, which is where "Back
+  // to live context" lands — and that clears `compare`. Leaving it set made the
+  // two exits differ: the choice would be invisible, and the NEXT turn clicked
+  // would open straight into a comparison the reader never saw themselves ask
+  // for. Sticky across turns, not across leaving.
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+  fireEvent.change(await screen.findByLabelText("Compare with"), { target: { value: "live" } });
+  await screen.findByText("the pact was signed at dusk");
+
+  // the next turn clicked has aged out
+  (api.getScenePrompt as any).mockRejectedValue({ status: 404, detail: "gone" });
+  fireEvent.click(screen.getByRole("button", { name: /^Regenerate/ }));
+  await screen.findByText(/aged out of the log/);
+
+  // ...and a later turn that DOES load opens as itself, not as a comparison
+  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  fireEvent.click(screen.getByRole("button", { name: /^Send/ }));
+  await screen.findByText("the lore as it stood then");
+  expect(screen.getByLabelText<HTMLSelectElement>("Compare with").value).toBe("");
+  expect(screen.queryByText("the pact was signed at dusk")).toBeNull();
+});
+
 test("a comparison whose turn ages out keeps its option in the picker", async () => {
   // A turn-against-turn diff is frozen at both ends and so is not re-read, but
   // retention can still evict the entry it names. Without an option the browser

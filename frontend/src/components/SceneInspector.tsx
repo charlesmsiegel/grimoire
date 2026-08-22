@@ -641,6 +641,14 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       // The likeliest failure is the retention window having evicted it while
       // the list was on screen, which is a 404 and not worth a scary banner.
       setFrozen(null);
+      // ...and the comparison ends with it. Clearing `frozen` returns the panel
+      // to live context, which is the same place "← Back to live context"
+      // lands — and that clears `compare`. Leaving it set here made the two
+      // exits behave differently: the choice would be invisible (no turn
+      // selected, so no picker) and then the NEXT turn clicked would open
+      // straight into a comparison the reader could not see themselves asking
+      // for. Sticky across turns, not across leaving.
+      setCompare("");
       setError(err?.status === 404
         ? "That turn's prompt has aged out of the log."
         : (err?.detail ?? String(err)));
