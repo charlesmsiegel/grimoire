@@ -712,15 +712,17 @@ This is **not** the adaptive corrective ruled out under *Out of scope* — that
 one was rejected because detecting "wrote the PC" in prose is hard. This needs
 no detection at all; it is a constant.
 
-`post_history.j2` gains `player_names` as a var — it currently takes only
-`npc_cards`, `voice_correction` and `length_correction` — and `_assemble`
-already has the list to hand.
+The new template takes `player_names`, which `_assemble` already has to hand.
+`post_history.j2` is untouched — it keeps its three existing vars
+(`npc_cards`, `voice_correction`, `length_correction`) and its documented
+ordering.
 
-Consequence to state: the template is *"omitted entirely when all are empty"*,
-so a permanent line makes it always present in any scene with a seated player,
-and a scene whose cards carry no post-history instructions now sends a system
-message where it previously sent none. It stays omissible in a pcless scene,
-where the line renders nothing.
+Consequence to state: the boundary message follows the same omit-when-empty
+rule as `post_history.j2`, so it renders nothing in a pcless scene. In any
+scene with a seated player it is always present, which means such a scene now
+carries one more system message than before — and, where the cards supply no
+post-history instructions, a trailing system message where it previously sent
+none.
 
 **Non-removable in the layout editor.** `pack.LOCK_IN` stops the *packer* from
 dropping a section; it does not stop a user, because `layout.py` makes
