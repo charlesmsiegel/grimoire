@@ -384,6 +384,12 @@ def _copy_tree(src: Path, dst: Path) -> None:
         shutil.copytree(src, dst, dirs_exist_ok=True)
 
 
+def _put_base(cid: str, ref: str, base: str) -> None:
+    manifest = campaigns_paths.read_manifest(cid)
+    manifest[ref] = base
+    campaigns_paths.write_manifest(cid, manifest)
+
+
 def _touch_world(wroot: Path) -> None:
     """Stamp the world as edited, without letting the stamp fail the edit.
 
@@ -627,13 +633,23 @@ def push(cid: str, kind: str, eid: str, *, force: bool = False) -> None:
             f"{ref} no longer belongs to the library record of that name")
     base = campaigns_paths.read_manifest(cid).get(ref)
     world_h = entities.entity_hash(wroot, kind, eid)
+    mine = entities.content_hash(text)
+    if mine == world_h:
+        # The two sides already agree, so there is nothing to write and nothing
+        # to conflict over -- whatever the base says. Checked BEFORE the
+        # conflict tests on purpose: this is exactly the residue push's own
+        # write ordering chooses (world written, base not), and answering a
+        # retry of it with "changed in the library" would be a conflict message
+        # about two identical files, with no way out but a force that overwrites
+        # the world with what it already holds.
+        if base == mine:
+            raise NotDivergedError(f"{ref} already matches the library")
+        _put_base(cid, ref, mine)    # clearing the override IS the whole ask
+        return
     if base is None and not force:
         # A copy with no base: nothing proves the two share an ancestor, so
         # this is a conflict rather than a clean save.
         raise PushConflictError(f"{ref} has no recorded common version with the library")
-    mine = entities.content_hash(text)
-    if base is not None and mine == base and world_h == base:
-        raise NotDivergedError(f"{ref} already matches the library")
     if base is not None and world_h != base and not force:
         raise PushConflictError(f"{ref} changed in the library since this campaign copied it")
     # World first, base second. The residue of a crash between them is a
@@ -642,9 +658,7 @@ def push(cid: str, kind: str, eid: str, *, force: bool = False) -> None:
     # content the world does not have, and sync then offers to overwrite this
     # campaign's edit with the library's older text.
     atomic.write_text(_world_file(wroot, kind, eid), text)
-    manifest = campaigns_paths.read_manifest(cid)
-    manifest[ref] = mine     # the bytes we wrote, not a re-read of where they went
-    campaigns_paths.write_manifest(cid, manifest)
+    _put_base(cid, ref, mine)   # the bytes we wrote, not a re-read of where they went
     _touch_world(wroot)
 
 
