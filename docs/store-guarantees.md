@@ -334,8 +334,11 @@ or clobbered without leaving a copy, leave nothing on disk to find at all.
 
 **Two processes on one machine, one user:** yes — but "yes" means exactly the
 lock domain and nothing wider. A mutator in `DOMAIN_MODULES` is excluded across
-processes; one listed in `OUTSIDE_DOMAIN` or `UNREVIEWED` is not excluded at
-all, and both lists are real. So the honest summary is that the failure this
+processes; one in a module listed under `OUTSIDE_DOMAIN` or `UNREVIEWED` has no
+such promise, and both lists are real. Read that as a floor rather than a
+ceiling: the lists classify MODULES, so a single mutator in one of them may
+still take the lock on its own account — `set_campaign_routing` does — and the
+module stays out there for the neighbours that do not. So the honest summary is that the failure this
 protects against — two processes interleaving a read-modify-write of the same
 transcript — is closed, while a rename racing a `touch` is still open and
 documented as such in `store/locks.py`.

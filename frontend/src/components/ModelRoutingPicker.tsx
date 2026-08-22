@@ -95,11 +95,16 @@ export function ModelRoutingPicker({ scope, cid }: { scope: "global" | "campaign
   return (
     <div className="model-routing">
       {error && <div className="banner">{error}</div>}
-      <div className="field-hint">
-        {scope === "global"
-          ? "Each kind of generation can run on its own connection. Anything left on inherit uses the active connection."
-          : "Overrides for this campaign only. Anything left on inherit follows the global routing."}
-      </div>
+      {/* Only at campaign scope. The Configuration page introduces its own
+          section in full, so a second copy of the same sentence renders
+          directly under it; the scene inspector has no such copy and needs
+          one line saying what this list overrides. */}
+      {scope === "campaign" && (
+        <div className="field-hint">
+          Overrides for this campaign only. Anything left on inherit follows the
+          global routing.
+        </div>
+      )}
       {bundle.catalog.map((route) => (
         // `htmlFor`/`id` rather than a wrapping label, matching the config
         // fields: a hint nested inside the label is read out as part of the
