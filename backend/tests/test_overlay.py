@@ -1,4 +1,5 @@
 import logging
+import threading
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from grimoire.store import (
     failsoft,
     greetings,
     groupstate,
+    locks,
     overlay,
     pcs,
     playstate,
@@ -1607,3 +1609,73 @@ def test_a_campaign_deleted_mid_sweep_is_skipped_not_raised(monkeypatch, tmp_pat
     entities.delete_entity(wroot, "groups", gid)
     overlay.forget_world_record(wroot, "groups", gid)       # does not raise
     assert groupstate.read_state(croot, gid) is None        # the survivor was still swept
+
+
+# ---- the detached ledger is serialized (#225, Codex review) ----
+
+def _hold_campaign(cid):
+    """Hold `cid`'s campaign lock on another thread; yields a release callable.
+
+    Another thread because the lock is reentrant: acquiring it on the test's own
+    thread would sail straight past whatever is being checked for taking it."""
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with locks.campaign_lock(cid):
+            held.set()
+            release.wait(10)
+
+    t = threading.Thread(target=holder, daemon=True)
+    t.start()
+    assert held.wait(10), "holder thread never took the lock"
+    return release, t
+
+
+def test_writing_the_detached_ledger_takes_the_campaign_lock(monkeypatch, tmp_path):
+    """Both directions. `add_detached` rewrites the whole file to add one ref
+    and `_undetach` rewrites it to remove one, so serializing only the adding
+    half would leave the file racing the subtracting half -- an entity delete
+    dropping an actor's marker it has nothing to do with."""
+    _wroot, cid, _croot = _dependent(monkeypatch, tmp_path)
+    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.2)
+    release, t = _hold_campaign(cid)
+    try:
+        with pytest.raises(locks.CampaignBusy):
+            overlay.add_detached(cid, "characters/winifred")
+        with pytest.raises(locks.CampaignBusy):
+            overlay._undetach(cid, "characters/winifred")
+    finally:
+        release.set()
+        t.join(10)
+    overlay.add_detached(cid, "characters/winifred")      # and it works once free
+    assert "characters/winifred" in overlay.detached(cid)
+
+
+def test_a_busy_campaign_does_not_cost_the_other_dependents_their_sweep(monkeypatch, tmp_path):
+    """The lock gave the sweep a new way to raise mid-loop, which is exactly the
+    failure `forget_world_record`'s own comment records having already fixed
+    once for unreadable files: one bad campaign must not abort the sweep for
+    every campaign after it, nor 500 a delete that has already happened."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    aid, _vid = characters.create_character(wroot, "Winifred")
+    first_cid = campaigns.create_campaign("One", wid)
+    second_cid = campaigns.create_campaign("Two", wid)
+    for cid in (first_cid, second_cid):
+        overlay.materialize_actor(cid, "characters", aid)
+    # Lock whichever the sweep reaches first, so "the ones after it" is real.
+    busy = overlay._dependent_campaigns(wroot)[0]
+    other = second_cid if busy == first_cid else first_cid
+
+    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.2)
+    characters.delete_character(wroot, aid)
+    release, t = _hold_campaign(busy)
+    try:
+        overlay.forget_world_record(wroot, "characters", aid)   # must not raise
+    finally:
+        release.set()
+        t.join(10)
+
+    assert f"characters/{aid}" in overlay.detached(other)       # swept anyway
+    assert f"characters/{aid}" not in overlay.detached(busy)    # skipped, not corrupted
