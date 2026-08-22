@@ -423,6 +423,7 @@ def set_campaign_routing(cid: str, fields: dict) -> None:
         if not mp.exists():
             raise paths.CampaignNotFound(cid)
         meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+        before = dict(meta)
         for key, value in fields.items():
             if key not in allowed:
                 continue
@@ -431,6 +432,13 @@ def set_campaign_routing(cid: str, fields: dict) -> None:
                 meta[key] = text
             else:
                 meta.pop(key, None)
+        if meta == before:
+            # A write that changes nothing must not move `updated` -- and must
+            # not touch the file at all. The store is explicitly allowed to live
+            # in a synced folder (CLAUDE.md), where rewriting campaign.md for a
+            # picker that re-selected what was already selected is upload traffic
+            # and, on the other device, a modification to reconcile.
+            return
         meta["updated"] = now_iso()
         atomic.write_text(mp, dump_frontmatter(meta, body))
 
