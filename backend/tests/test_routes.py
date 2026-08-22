@@ -5105,14 +5105,16 @@ def test_every_offered_kind_is_a_category_both_imports_accept(client):
     # paths, because both review tables read the same endpoint and they commit
     # through different validators -- `lorebook.commit` and `scenario.apply`.
     kinds = client.get("/api/entity-kinds").json()["kinds"]
-    entries = [{"name": f"Entry {k}", "keys": [], "body": "body", "category": k} for k in kinds]
+    # One name across all of them: the dedup is per category, so the same name
+    # under five kinds is five records, and the assertion is about the kinds.
+    entries = [{"name": "Saltmarch", "keys": [], "body": "body", "category": k} for k in kinds]
 
-    book = _world(client, "Book")
+    book = _world(client, "Realm")
     r = client.post(f"/api/worlds/{book}/lorebook/import", json={"entries": entries})
     assert r.status_code == 200
     assert [c["kind"] for c in r.json()["created"]] == kinds
 
-    card = _world(client, "Card")
+    card = _world(client, "Saltmarch")
     r = client.post(f"/api/worlds/{card}/scenario/import",
                     json={"characters": [], "entries": entries, "greetings": [], "art": False})
     assert r.status_code == 200
@@ -5170,9 +5172,9 @@ def test_a_refused_category_leaves_nothing_behind(client):
     # (#138).
     wid = _world(client)
     r = client.post(f"/api/worlds/{wid}/lorebook/import", json={"entries": [
-        {"name": "Kept", "keys": [], "body": "a", "category": "lore"},
-        {"name": "Also kept", "keys": [], "body": "b", "category": "locations"},
-        {"name": "Refused", "keys": [], "body": "c", "category": "vehicles"},
+        {"name": "Mara", "keys": [], "body": "a", "category": "lore"},        # would land
+        {"name": "Winifred", "keys": [], "body": "b", "category": "locations"},  # would land
+        {"name": "Seraphine", "keys": [], "body": "c", "category": "vehicles"},  # refuses the batch
     ]})
     assert r.status_code == 400
     assert client.get(f"/api/worlds/{wid}/lore").json() == []
