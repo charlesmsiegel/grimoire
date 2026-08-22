@@ -62,7 +62,7 @@ let born = 0;
  *  it is open: what it lists is "what you can press right now", and a turn
  *  finishing or a panel opening underneath moves that while the sheet is up.
  *  Closed, this set is empty and announcing costs a loop over nothing. */
-type Watcher = (changed: Scope) => void;
+type Watcher = (changed: Scope, kind: "registered" | "updated") => void;
 const watchers = new Set<Watcher>();
 
 export function watchHotkeys(fn: Watcher): () => void {
@@ -72,9 +72,24 @@ export function watchHotkeys(fn: Watcher): () => void {
 
 /** Announce `scope`. Carries which scope moved so a subscriber can ignore its
  *  own -- the sheet announces on its own render like everyone else, and acting
- *  on that would be a render loop. */
-export function scopeChanged(scope: Scope): void {
-  for (const fn of [...watchers]) fn(scope);
+ *  on that would be a render loop -- and whether it just joined the list,
+ *  which is the only announcement a surface that must stay on top has to act
+ *  on. */
+export function scopeChanged(scope: Scope, kind: "registered" | "updated" = "updated"): void {
+  for (const fn of [...watchers]) fn(scope, kind);
+}
+
+/** Move `scope` back to the top of the z-order.
+ *
+ *  For the one surface that draws above every other overlay: an overlay that
+ *  mounts while it is up -- an import finishing behind it -- would otherwise
+ *  be the newest registration and take an Escape the reader aimed at the thing
+ *  they can actually see (PR #400 review). */
+export function promoteScope(scope: Scope): void {
+  const at = scopes.indexOf(scope);
+  if (at < 0 || at === scopes.length - 1) return;
+  scopes.splice(at, 1);
+  scopes.push(scope);
 }
 
 /** The next birth number. Taken once, when a component first builds its scope. */
@@ -142,7 +157,7 @@ function topModal(list: Scope[]): number {
 export function registerScope(scope: Scope): () => void {
   if (!scopes.length) window.addEventListener("keydown", onKeyDown);
   scopes.push(scope);
-  scopeChanged(scope);
+  scopeChanged(scope, "registered");
   return () => {
     const at = scopes.indexOf(scope);
     if (at >= 0) scopes.splice(at, 1);

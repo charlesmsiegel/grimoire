@@ -113,6 +113,23 @@ test("R is inert while an edit form is open", async () => {
   expect(api.regenerate).not.toHaveBeenCalled();
 });
 
+// The reroll box answers plain Enter without preventing the default, so a
+// send chord typed into it used to reach BOTH: `reroll()` from the input and
+// `send()` from the window, each reading the same render's `busy === false`,
+// each entering `runStream`. Two turns racing one scene (PR #400 review).
+test("the send chord does not fire alongside an inline action that owns Enter", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue(ONE_EXCHANGE);
+  renderCampaign();
+  await screen.findByText("old reply");
+  press("r");
+  const box = await screen.findByLabelText("Reroll guidance");
+  box.focus();
+  press("Enter", { metaKey: true }, box);
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalledTimes(1));
+  expect(api.chat).not.toHaveBeenCalled();
+});
+
 test("R is inert when there is no reply to reroll", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();

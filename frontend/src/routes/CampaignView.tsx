@@ -3443,7 +3443,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // it, and prevents the default, so this cannot send the same keystroke
       // twice.)
       whileTyping: true,
-      enabled: !absorb && !busy && !rolling && !renamesInFlight,
+      // ...and off while an inline action owns Enter. The reroll box and the
+      // dice inputs answer Enter without preventing the default and without
+      // looking at modifiers, so a send chord typed into one reached both --
+      // `reroll()` from the input and `send()` from here, each reading the
+      // same render's `busy === false`, each entering `runStream`. Two turns
+      // racing one scene (PR #400 review). Guarded here rather than by
+      // teaching four inline handlers about modifiers: while one of those is
+      // open it owns the keyboard, which is what the composer's disabled Send
+      // would say if these were buttons.
+      enabled: !absorb && !busy && !rolling && !renamesInFlight
+               && !editing && rerollPrompt === null && !rollForm,
       run: () => void send(),
     },
     {
