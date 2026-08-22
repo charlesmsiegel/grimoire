@@ -3,25 +3,27 @@ import { api } from "../api/client";
 // From `types` and not through `client`: the suites that render an import
 // dialog mock `../api/client` wholesale, so a fallback list reached through
 // that mock would be whatever the mock declared rather than what ships.
-import { ENTITY_KINDS } from "../api/types";
+import { ENTITY_KINDS, type EntityKind } from "../api/types";
 
 /** The categories an import review row may be reclassified to (#138).
  *
- *  Server-first, built-in as the floor. `GET /api/entity-kinds` is
- *  `store.entities.ENTITY_KINDS` itself, and `lorebook.commit` /
- *  `scenario.apply` validate against that same tuple — so every option this
- *  offers is one they accept (`kindOptions` below is the one deliberate
- *  exception, for the reason given there), and a kind added to it reaches the
- *  dropdown without either dialog being edited. (The frontend's own
- *  `ENTITY_KINDS` still has to learn it — see the guard named at the bottom of
- *  this note.)
+ *  The INTERSECTION of what the server files entities under and what this
+ *  build can show — never a copy of either, and never a union. `GET
+ *  /api/entity-kinds` is `store.entities.ENTITY_KINDS` itself, so the server
+ *  half means the dropdown cannot offer a category `lorebook.commit` or
+ *  `scenario.apply` would refuse; `ENTITY_KINDS` is this bundle's own, so the
+ *  build half means it cannot offer one with no tab, no label and no per-kind
+ *  fields to reach the record afterwards. Both halves only bite when a bundle
+ *  and the backend serving it disagree — in-tree they are held equal by
+ *  `test_entities_store.py::test_the_frontend_ships_the_same_kind_list`, so a
+ *  kind added to the tuple still reaches the dropdown with neither dialog
+ *  edited, which is what this exists for.
  *
- *  The list starts on this build's own kinds so the table is usable on the
- *  first frame, and a failed read keeps them: an auxiliary GET
- *  must not take the Category column down beside an import the user has
- *  already parsed and is about to commit. `string[]` rather than
- *  `EntityKind[]`, because the server is allowed to know a kind this build does
- *  not — which is the one case the endpoint exists for.
+ *  Deliberately not a union, though the endpoint could support one: a kind
+ *  this build has never heard of can be *committed* correctly and then has
+ *  nowhere to be viewed, edited or deleted from, which is a silently lost
+ *  record rather than a feature (Codex P2 on #418). A row that ARRIVES under
+ *  such a kind is the other case and is kept — see `kindOptions`.
  *
  *  `enabled` means "there are rows on screen to file". Both dialogs sit inside
  *  a collapsed `<details>` that React mounts with the page, so an
@@ -32,14 +34,15 @@ import { ENTITY_KINDS } from "../api/types";
  *  is up, and a module-level promise would outlive the tests that set what it
  *  resolves to.
  *
- *  A build whose own list has fallen behind the server's is a separate failure
- *  with its own guard (`test_entities_store.py::
- *  test_the_frontend_ships_the_same_kind_list`): the dropdown would be right to
- *  offer that kind, and this build would still have no tab or label to show the
- *  record it created.
+ *  A failed read keeps the built-ins rather than emptying the dropdown: an
+ *  auxiliary GET must not take the Category column down beside an import the
+ *  user has already parsed and is about to commit. An intersection that comes
+ *  out empty is treated the same way — two lists with nothing in common is a
+ *  disagreement this cannot adjudicate, and an empty dropdown makes every row
+ *  uncommittable, which is strictly worse than a list that is merely stale.
  */
-export function useEntityKinds(enabled: boolean): string[] {
-  const [kinds, setKinds] = useState<string[]>(() => [...ENTITY_KINDS]);
+export function useEntityKinds(enabled: boolean): EntityKind[] {
+  const [kinds, setKinds] = useState<EntityKind[]>(() => [...ENTITY_KINDS]);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -49,16 +52,11 @@ export function useEntityKinds(enabled: boolean): string[] {
     void (async () => {
       try {
         const fresh = (await api.entityKinds()).kinds;
-        // A malformed or empty answer is treated as no answer: an empty
-        // dropdown makes every row uncommittable, which is strictly worse than
-        // a list that is merely out of date.
-        if (live && Array.isArray(fresh) && fresh.length > 0) setKinds(fresh);
-      } catch (err) {
-        // Keep the built-ins — but say so. Offline this is expected and
-        // harmless; a renamed or removed `api.entityKinds` lands here too, and
-        // a silent catch would leave that shipping as a permanently stale
-        // dropdown with nothing anywhere to notice it.
-        console.warn("entity kinds unavailable; using this build's own list", err);
+        if (!live || !Array.isArray(fresh)) return;
+        const shared = ENTITY_KINDS.filter((k) => fresh.includes(k));
+        if (shared.length > 0) setKinds(shared);
+      } catch {
+        // Keep the built-ins. See above.
       }
     })();
     return () => { live = false; };
@@ -67,17 +65,19 @@ export function useEntityKinds(enabled: boolean): string[] {
   return kinds;
 }
 
-/** The options one review row may show: the server's kinds, plus the row's own
- *  category when that list does not contain it.
+/** The options one review row may show: the kinds above, plus the row's own
+ *  category when they do not contain it.
  *
  *  A `<select>` whose `value` matches no `<option>` renders as its FIRST option
- *  — so a row filed under a kind this list is missing would *display* as
+ *  — so a row filed under a kind the list is missing would *display* as
  *  `locations` and import as whatever it actually holds, with nothing on screen
- *  saying so. Reachable in one real case: the read failed, the fallback is this
- *  build's own list, and the entry came back under a kind added after this
- *  build shipped. Showing the row's own category is both the honest render and
- *  the only one that lets the user keep it.
+ *  saying so. That row exists whenever a bundle meets a backend that knows a
+ *  kind it does not: the server parsed the file and filed the entry under a
+ *  category of its own. Keeping it is both the honest render and the only
+ *  thing that lets the user keep an entry the server made — which is a
+ *  different act from letting them newly assign a kind this build cannot show,
+ *  and that one `useEntityKinds` refuses.
  */
-export function kindOptions(kinds: string[], current: string): string[] {
-  return kinds.includes(current) ? kinds : [...kinds, current];
+export function kindOptions(kinds: readonly string[], current: string): string[] {
+  return kinds.includes(current) ? [...kinds] : [...kinds, current];
 }

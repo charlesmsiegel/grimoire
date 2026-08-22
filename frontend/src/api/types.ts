@@ -250,14 +250,14 @@ export type ScenePage = Scene & {
 
 // entities
 // The kinds THIS BUILD knows about, and the union everything else types
-// against. At runtime the authority is the server -- `GET /api/entity-kinds`
-// (see `components/useEntityKinds.ts`), which is what lets a kind added to
-// `store.entities.ENTITY_KINDS` reach the import dialogs' Category dropdown
-// without either dialog being edited (#138). This list still has to learn the
-// kind — `test_the_frontend_ships_the_same_kind_list` requires it — and it is
-// what those dropdowns fall back to when the read fails. It stays the
-// compile-time union because the tabs, labels and per-kind field table are all
-// written against named kinds.
+// against. The import dialogs' Category dropdown is this list intersected with
+// `GET /api/entity-kinds` (see `components/useEntityKinds.ts`), so a kind
+// added to `store.entities.ENTITY_KINDS` reaches it without either dialog
+// being edited (#138) — once this list learns the kind, which
+// `test_the_frontend_ships_the_same_kind_list` requires. It has to stay the
+// compile-time union anyway: the tabs, labels and per-kind field table are all
+// written against named kinds, which is the same reason the dropdown will not
+// offer a kind that is missing from it.
 // Import it from `../api/types` and not through `../api/client`: a component
 // that reads it at module scope would otherwise crash every suite that mocks
 // the client wholesale, including suites that only import a helper out of it.

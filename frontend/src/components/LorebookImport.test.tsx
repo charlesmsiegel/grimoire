@@ -62,18 +62,29 @@ test("parse failure shows the error banner", async () => {
   await screen.findByText(/could not parse: bad/i);
 });
 
-test("the category options are the server's kinds, one of which this build has never heard of", async () => {
-  // The point of asking the server (#138): a kind added to `ENTITY_KINDS`
-  // reaches the review table without a frontend release, and commits as itself.
+test("the options are what the server files under, narrowed to what it can show", async () => {
+  // The point of asking the server (#138), and both halves of the answer: the
+  // server's list drops a kind it would refuse on commit, and this build's own
+  // drops one it has no tab, label or editor for.
   (api.entityKinds as any).mockResolvedValue({ kinds: ["lore", "locations", "vehicles"] });
   await parsed();
-  expect(options("category 0")).toEqual(["lore", "locations", "vehicles"]);
+  expect(options("category 0")).toEqual(["locations", "lore"]);   // no `vehicles`
+  expect(options("category 0")).not.toContain("items");           // server did not offer it
 
-  fireEvent.change(screen.getByLabelText("category 1"), { target: { value: "vehicles" } });
+  fireEvent.change(screen.getByLabelText("category 1"), { target: { value: "locations" } });
   fireEvent.click(screen.getByRole("button", { name: /import 2 entries/i }));
   await waitFor(() => {
-    expect((api.lorebookImport as any).mock.calls[0][1][1].category).toBe("vehicles");
+    expect((api.lorebookImport as any).mock.calls[0][1][1].category).toBe("locations");
   });
+});
+
+test("two lists with nothing in common fall back rather than emptying the dropdown", async () => {
+  // An intersection this cannot adjudicate is treated like no answer: an empty
+  // dropdown would make every row uncommittable.
+  (api.entityKinds as any).mockResolvedValue({ kinds: ["vehicles", "vessels"] });
+  await parsed();
+  expect(api.entityKinds).toHaveBeenCalled();
+  expect(options("category 0")).toEqual([...ENTITY_KINDS]);
 });
 
 test("a kinds read that fails leaves the dropdown on the build's own kinds", async () => {
@@ -101,12 +112,15 @@ test("an empty or malformed kind list is treated as no answer", async () => {
 test("a row whose kind the list is missing keeps it, rather than displaying another one", async () => {
   // The failure this guards: a `<select>` with no matching option renders as
   // its first, so the row would read `locations` and import as `vehicles`.
+  // Distinct from the narrowing above — the server PARSED this row as
+  // `vehicles`, and keeping what it made is not the same as letting the user
+  // newly assign a kind this build cannot show.
   (api.entityKinds as any).mockResolvedValue({ kinds: ["lore", "locations"] });
   (api.lorebookParse as any).mockResolvedValue({
     entries: [{ name: "Salt Pact", keys: ["pact"], body: "binds", category: "vehicles" }],
   });
   await parsed();
-  expect(options("category 0")).toEqual(["lore", "locations", "vehicles"]);
+  expect(options("category 0")).toEqual(["locations", "lore", "vehicles"]);
   expect(screen.getByLabelText<HTMLSelectElement>("category 0").value).toBe("vehicles");
 
   fireEvent.click(screen.getByRole("button", { name: /import 1 entry/i }));

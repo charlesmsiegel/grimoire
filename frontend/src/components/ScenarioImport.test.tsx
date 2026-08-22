@@ -230,18 +230,19 @@ test("a card the model could not be read for offers the local-model recovery", a
   expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
 });
 
-test("the entry category options are the server's kinds, and an unknown one commits as itself", async () => {
+test("the entry category options are narrowed the same way the lorebook dialog's are", async () => {
   // Same contract as the lorebook dialog (#138): both review tables ask the
-  // server what a row may be filed under instead of shipping their own list.
+  // server what a row may be filed under, and neither offers a kind this build
+  // could not show afterwards.
   (api.entityKinds as any).mockResolvedValue({ kinds: ["lore", "locations", "vehicles"] });
   await readCard();
   const select = screen.getByLabelText<HTMLSelectElement>("entry category 0");
-  expect([...select.options].map((o) => o.value)).toEqual(["lore", "locations", "vehicles"]);
+  expect([...select.options].map((o) => o.value)).toEqual(["locations", "lore"]);
 
-  fireEvent.change(select, { target: { value: "vehicles" } });
+  fireEvent.change(select, { target: { value: "lore" } });
   fireEvent.click(screen.getByRole("button", { name: /import 5 records/i }));
   await waitFor(() => {
-    expect((api.scenarioImport as any).mock.calls[0][1].entries[0].category).toBe("vehicles");
+    expect((api.scenarioImport as any).mock.calls[0][1].entries[0].category).toBe("lore");
   });
 });
 
