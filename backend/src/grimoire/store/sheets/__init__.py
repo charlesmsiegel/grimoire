@@ -83,5 +83,6 @@ from .writer import (  # noqa: F401
                set_field,
                set_field_locked,
                write,
+               write_locked,
                write_world,
 )

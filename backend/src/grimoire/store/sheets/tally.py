@@ -287,13 +287,15 @@ def create_missing(cid: str, types: dict[str, str] | None = None) -> dict:
             for member in gaps:
                 eid = member["id"]
                 try:
-                    # Through the reviewed writer, not a private shortcut: it
-                    # re-resolves and re-validates per sheet (the lock is
-                    # reentrant, so the acquisition is free) and its
-                    # `expected=None` is what makes correctness independent of
-                    # the hold -- a sheet that appears from another process is
-                    # a recorded failure, never an overwrite.
-                    writer.write(cid, kind, eid, sheet_type, None, expected=None)
+                    # `write_locked`, not `write`: the module is resolved and
+                    # the pack loaded once above, and `write` would redo both
+                    # per sheet -- two full pack parses each, inside the hold an
+                    # in-flight turn's `append_reply` is waiting on. Same CAS
+                    # either way, and `expected=None` is what makes correctness
+                    # independent of the hold: a sheet that appears from another
+                    # process is a recorded failure, never an overwrite.
+                    writer.write_locked(mid, cid, kind, eid, sheet_type, None,
+                                        expected=None, pack=pack)
                 except SheetError as exc:
                     failed.append({"kind": kind, "id": eid, "detail": str(exc)})
                     continue
