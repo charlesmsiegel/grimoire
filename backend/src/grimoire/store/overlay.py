@@ -1012,6 +1012,42 @@ def create_character(cid: str, name: str, version_name: str = "default",
     return made
 
 
+def delete_actor(cid: str, kind: str, aid: str) -> None:
+    """Delete an actor campaign-side — the actor twin of `delete_entity`.
+
+    The campaign-scoped create routes have existed for PCs for a while and for
+    characters since #60, and neither had a delete: `deleteCharacter` targets
+    the world, and version-delete refuses the last one, so an NPC invented by
+    mistake could not be removed at all (Codex review).
+
+    Same three cases `delete_entity` distinguishes, for the same reasons:
+
+    - **Inherited from the world** — nothing to unlink, so the tombstone IS the
+      delete; it keeps the world's actor from showing back through.
+    - **A campaign copy of a world actor** — the copy goes and the tombstone
+      goes on, so the world's does not resurface.
+    - **Campaign-local** (the emergent NPC this exists for) — the directory
+      goes and no tombstone is written, because there is nothing to hide.
+
+    The appearance record goes with it either way. It holds a version lock and
+    a per-version sync base for an actor that no longer exists here, and
+    `_actor_incoming` reads that record in preference to sync.md -- left
+    behind, it offers updates for a deleted actor forever.
+    """
+    ref = _flat_ref(kind, aid)
+    in_world = _inherits_world(cid, ref) and _record_present(wroot_of(cid), kind, aid)
+    mine = _record_dir(croot_of(cid), kind, aid)
+    if not _record_present(croot_of(cid), kind, aid) and not in_world:
+        raise _actor_not_found(kind, aid)
+    if mine.is_dir():
+        shutil.rmtree(mine, ignore_errors=True)
+    _drop_manifest_ref(cid, ref)
+    appearances_paths.forget(cid, kind, aid)
+    if in_world:
+        add_deleted(cid, ref)
+    _undetach(cid, ref)
+
+
 def create_pc(cid: str, name: str, tags: list[str], version_name: str = "default",
               persona: dict | None = None) -> tuple[str, str]:
     """The PC counterpart of `create_character`, lock and all."""

@@ -11,6 +11,7 @@ import shutil
 import pytest
 
 from grimoire.store import (
+    appearances,
     assets,
     campaigns,
     characters,
@@ -328,6 +329,38 @@ def test_promote_carries_an_emergent_character_into_the_library(monkeypatch, tmp
 def test_a_promoted_character_then_syncs_like_any_other(monkeypatch, tmp_path):
     wid, cid = _world_and_campaign(monkeypatch, tmp_path)
     aid, vid = overlay.create_character(cid, "Winifred")
+    sync.promote(cid, "characters", aid)
+
+    wroot = worlds.world_root(wid)
+    card = characters.read_card(wroot, aid, vid)
+    card["data"]["description"] = "changed in the library"
+    characters.update_version(wroot, aid, vid, card)
+
+    assert [p["status"] for p in sync.incoming(cid)] == ["update"]
+
+
+def test_promoting_an_npc_who_already_walked_on_leaves_nothing_incoming(monkeypatch, tmp_path):
+    """The flagship #60 case. Casting an emergent NPC locks a version in
+    appearances.json with an EMPTY world base -- there was no world actor to
+    hash -- and `_actor_incoming` reads that record in preference to sync.md.
+    Without advancing it, the promotion that just succeeded reports itself as a
+    conflict to the campaign that made it."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    aid, vid = overlay.create_character(cid, "Winifred")
+    appearances.appear(cid, "scene-1", "characters", aid, vid, "npc", narrate=False)
+
+    sync.promote(cid, "characters", aid)
+
+    assert sync.incoming(cid) == []
+    assert characters.read_character(worlds.world_root(wid), aid)["meta"]["name"] == "Winifred"
+
+
+def test_a_promoted_locked_actor_still_takes_library_edits(monkeypatch, tmp_path):
+    # the advanced base has to be the world's real hash, not merely non-empty:
+    # a wrong one would silence the update as well as the false conflict
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    aid, vid = overlay.create_character(cid, "Winifred")
+    appearances.appear(cid, "scene-1", "characters", aid, vid, "npc", narrate=False)
     sync.promote(cid, "characters", aid)
 
     wroot = worlds.world_root(wid)
@@ -790,3 +823,85 @@ def test_a_demoted_greeting_leaves_the_worlds_plot_map_clean(monkeypatch, tmp_pa
 
     assert gid not in json.dumps(greetings.read_plotmap(wroot))
     assert overlay.read_greeting(cid, gid)["body"].strip() == "She waits."
+
+
+def test_promote_refuses_a_greeting_whose_cast_entry_is_not_a_usable_id(monkeypatch, tmp_path):
+    """`greetings._tags_list` does not strip, so `present: mara, winifred` is
+    read as the literal id " winifred". Validating the stripped form would pass
+    a greeting that then fails to seat its cast in every campaign."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Winifred")
+    other, _ = characters.create_character(wroot, "Mara")
+    # written by hand with the space a person would type; the store's own
+    # writer joins on "," with none
+    gid = overlay.create_greeting(cid, "At the gate", aid, vid, "They wait.",
+                                  present=[other, aid])
+    p = campaigns.campaign_root(cid) / "greetings" / f"{gid}.md"
+    p.write_text(p.read_text(encoding="utf-8").replace(
+        f"present: {other},{aid}", f"present: {other}, {aid}"), encoding="utf-8")
+    assert f"present: {other}, {aid}" in p.read_text(encoding="utf-8")
+
+    with pytest.raises(sync.DanglingReferenceError):
+        sync.promote(cid, "greetings", gid)
+
+
+def test_push_refuses_when_only_the_records_leftovers_are_in_the_world(monkeypatch, tmp_path):
+    """A world delete that could not finish leaves an assets directory. That is
+    enough to block a PROMOTE -- it is content a promotion would adopt -- but
+    push's precondition is the record itself, and reporting a conflict instead
+    offers a force that recreates the record around the dead one's images."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    entities.create_entity(wroot, "locations", "Saltmarch", "v1")
+    overlay.update_entity(cid, "locations", "saltmarch", body="mine")
+    _world_art(wid, "locations", "saltmarch")
+    (wroot / "locations" / "saltmarch.md").unlink()      # the record, not its assets
+
+    with pytest.raises(sync.NotInLibraryError):
+        sync.push(cid, "locations", "saltmarch")
+
+
+# ---- deleting what the campaign created (#60) ------------------------------
+
+def test_an_emergent_character_can_be_deleted(monkeypatch, tmp_path):
+    """Creating one you cannot remove is not a finished feature: the world side
+    has always had a delete, and version-delete refuses the last version."""
+    _wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    aid, _vid = overlay.create_character(cid, "Winifred")
+
+    overlay.delete_actor(cid, "characters", aid)
+
+    assert [c["id"] for c in overlay.list_characters(cid)] == []
+    assert f"characters/{aid}" not in overlay.deleted(cid)   # nothing to hide
+
+
+def test_deleting_an_inherited_character_hides_it_without_touching_the_library(
+        monkeypatch, tmp_path):
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    aid, _vid = characters.create_character(worlds.world_root(wid), "Winifred")
+
+    overlay.delete_actor(cid, "characters", aid)
+
+    assert [c["id"] for c in overlay.list_characters(cid)] == []
+    assert [c["id"] for c in characters.list_characters(worlds.world_root(wid))] == [aid]
+
+
+def test_deleting_an_actor_drops_its_appearance_record(monkeypatch, tmp_path):
+    # it holds a version lock and a per-version base, and `_actor_incoming`
+    # reads it in preference to sync.md -- left behind it offers updates for an
+    # actor this campaign no longer has
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    aid, vid = characters.create_character(worlds.world_root(wid), "Winifred")
+    appearances.appear(cid, "scene-1", "characters", aid, vid, "npc", narrate=False)
+
+    overlay.delete_actor(cid, "characters", aid)
+
+    assert appearances.record(cid) == {}
+    assert sync.incoming(cid) == []
+
+
+def test_deleting_an_actor_that_is_nowhere_is_a_not_found(monkeypatch, tmp_path):
+    _wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    with pytest.raises(characters.CharacterNotFound):
+        overlay.delete_actor(cid, "characters", "nobody")

@@ -132,7 +132,7 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
   async function deletePC() {
     if (!detail) return;
     if (!window.confirm(`Delete PC '${detail.meta.name}'?`)) return;
-    await api.deletePC(wid, detail.meta.id);
+    await api.deletePC(scope, detail.meta.id);
     setDetail(null);
     await reload();
   }
@@ -305,7 +305,7 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
                           createRecord={(n) => (worldScope
                             ? api.createPC(wid, { name: n }).then((r) => r.pc)
                             : api.createCampaignPC(scope.id, { name: n }).then((r) => r.pc))}
-                          deleteRecord={worldScope ? (id) => api.deletePC(wid, id).then(() => {}) : undefined}
+                          deleteRecord={worldScope ? (id) => api.deletePC(scope, id).then(() => {}) : undefined}
                           onDone={async (id) => {
                             setWizardOpen(false);
                             await reload();

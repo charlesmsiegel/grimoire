@@ -65,6 +65,21 @@ def _write(cid: str, data: dict) -> None:
     atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
+def forget(cid: str, kind: str, actor_id: str) -> None:
+    """Drop an actor's appearance record because the actor itself is gone.
+
+    A record holds a version lock and a per-version sync base, and
+    `sync._actor_incoming` reads it in preference to sync.md -- so one left
+    behind by a delete keeps offering updates for an actor this campaign no
+    longer has, under an id a later create can hand back (#225).
+
+    Idempotent: an actor that never appeared has no record to drop.
+    """
+    data = record(cid)
+    if data.pop(_ref(kind, actor_id), None) is not None:
+        _write(cid, data)
+
+
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     """Follow renamed scene ids in every appearance's scenes list.
 

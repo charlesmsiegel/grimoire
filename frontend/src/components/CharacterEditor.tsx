@@ -1187,8 +1187,12 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   }
 
   async function deleteCharacter(cid: string, name: string) {
-    if (!window.confirm(`Delete character '${name}'?`)) return;
-    await api.deleteCharacter(wid, cid);
+    // The two scopes delete different things, and the prompt has to say which:
+    // in a campaign this removes the character from that campaign only, and
+    // the library keeps its own.
+    const where = worldScope ? "the library" : "this campaign";
+    if (!window.confirm(`Delete character '${name}' from ${where}?`)) return;
+    await api.deleteCharacter(scope, cid);
     backToGrid();
   }
 
@@ -1535,7 +1539,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       <div className="character-editor">
         <CreationWizard scope={scope} kind="characters" module={module}
                         createRecord={(n) => api.createCharacter(scope, { name: n }).then((r) => r.character)}
-                        deleteRecord={(id) => api.deleteCharacter(wid, id).then(() => {})}
+                        deleteRecord={(id) => api.deleteCharacter(scope, id).then(() => {})}
                         onDone={async (id) => { setWizardOpen(false); await reload(); await openEdit(id); }}
                         onCancel={() => setWizardOpen(false)} />
       </div>
@@ -1691,7 +1695,11 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                 </button>
                 <div className="char-card-actions">
                   <button className="subtle" onClick={() => openEdit(c.id)}>Edit</button>
-                  {worldScope && <button className="subtle" onClick={() => deleteCharacter(c.id, c.name)}>Delete</button>}
+                  {/* Both scopes since #60: in campaign scope this removes the
+                      character from THIS campaign and leaves the library's
+                      alone. Shipping a create with no delete left an NPC
+                      invented by mistake unremovable (Codex review). */}
+                  <button className="subtle" onClick={() => deleteCharacter(c.id, c.name)}>Delete</button>
                 </div>
               </div>
             ))}
@@ -2077,7 +2085,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
             <div className="card-pane-actions">
               <button className="primary" onClick={() => setMode("edit")}>Edit</button>
               {worldScope && <ExportMenu wid={wid} cid={detail.meta.id} vid={vid} />}
-              {worldScope && <button className="subtle" onClick={() => deleteCharacter(detail.meta.id, detail.meta.name)}>Delete</button>}
+              <button className="subtle" onClick={() => deleteCharacter(detail.meta.id, detail.meta.name)}>Delete</button>
             </div>
           </section>
 
