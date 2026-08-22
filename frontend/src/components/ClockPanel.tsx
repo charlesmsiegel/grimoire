@@ -145,7 +145,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   // same reason: answering "checkpoint, then advance" against a span the prompt
   // was never about would fork for one skip and take another.
   useEffect(() => {
-    setDigest(null); setOutcome("preview");
+    setDigest(null); setOutcome("preview"); setPricedNow(null);
     setGate(null); setCheckpointed(false); setSaved(""); setError(null);
   }, [cid, mode, days, target]);
 
@@ -217,6 +217,11 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     // the mildest of the things that go wrong.
     if (!stillShowing(cid)) return;
     setDigest(r.digest);
+    // The digest on screen is now a RESULT, not a preview, so nothing is
+    // priced. Kept in step with `digest` at every site rather than left to the
+    // `outcome` check in the effect below: two fields that must agree, kept in
+    // agreement by a third, is the shape every bug in this panel has had.
+    setPricedNow(null);
     setOutcome(r.moved ? "moved" : "unchanged");
     setGate(null);
     setCheckpointed(false);
