@@ -4818,6 +4818,44 @@ test("a Speak send still offers Retry", async () => {
   expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
 });
 
+test("a recovered note waits for a Speak draft rather than merging into it", async () => {
+  // Codex round 3, and the author's call on how to resolve it. `giveBackPrompt`
+  // prepends, and one composer carries one mode — so merging a recovered note
+  // into dialogue typed since gives the combined text one mode that is wrong
+  // for half of it. The note waits instead, and says so, until the box frees.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, total: 0, messages: [] });
+  let fail: () => void = () => {};
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) =>
+      new Promise<void>((resolve) => {
+        fail = () => { onEvent({ error: { detail: "the provider gave up" } }); resolve(); };
+      }));
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Direct" }));
+  fireEvent.change(screen.getByPlaceholderText(/direct the scene/i),
+                   { target: { value: "the storm intensifies" } });
+  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
+  await screen.findByText(/🎬 the storm intensifies/);
+
+  // the player switches to Speak and starts a line of their own
+  fireEvent.click(screen.getByRole("button", { name: "Speak" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "I draw my blade." } });
+  fail();
+
+  // the dialogue is untouched and still staged as dialogue...
+  await screen.findByText(/note held/i);
+  expect(screen.getByRole("textbox")).toHaveValue("I draw my blade.");
+  expect(screen.getByRole("button", { name: "Speak" })).toHaveAttribute("aria-pressed", "true");
+
+  // ...and clearing the box hands the note back, as a note
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "" } });
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("the storm intensifies"));
+  expect(screen.getByRole("button", { name: "Direct" }))
+    .toHaveAttribute("aria-pressed", "true");
+  expect(screen.queryByText(/note held/i)).toBeNull();
+});
+
 test("a running scene's director note does not show in another scene", async () => {
   // Codex P2. `busy` is global and the note carried no scene, so a Direct turn
   // left running in one scene rendered its note inside whatever transcript the
