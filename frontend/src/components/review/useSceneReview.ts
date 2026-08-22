@@ -324,6 +324,12 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     // same reason Cancel stays live during a retry.
     releaseRetries();
     setAbsorbing(true);
+    // The scene being absorbed, recorded BEFORE the request rather than when it
+    // answers. `absorbSid` is what scopes the scene lock, and it can be holding
+    // some earlier review's scene -- a stale record adopted on another scene,
+    // say -- so leaving it until the review lands unlocks the composer for the
+    // whole of an absorb, which is the one window it exists to cover.
+    setAbsorbSid(activeId);
     clearError();
     setStaleReview(null);
     setEditFailures([]);

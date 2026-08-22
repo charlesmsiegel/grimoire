@@ -146,7 +146,12 @@ def read(cid: str, sid: str) -> dict | None:
     """
     with locks.campaign_lock(cid):
         record = _read_raw(cid, sid)
-    return record
+    # Assigned and then returned rather than returned from inside the hold, and
+    # the two gates disagree about it: mypy cannot see that `campaign_lock`
+    # never suppresses, so a `return` inside the `with` reads to it as a path
+    # with no return at all. The lock is released either way -- the value is
+    # decided under it, which is what the caller needs.
+    return record  # noqa: RET504
 
 
 def publish(cid: str, sid: str, generation: str, review: dict,

@@ -1269,6 +1269,52 @@ test("an absorb whose run was reaped is recovered from the store", async () => {
   }
 });
 
+test("a failed run does not hand back the review that was already there", async () => {
+  // The fallback matches on GENERATION, not on something being stored. A scene
+  // can be holding an earlier review the reader never saved, and handing that
+  // back for a run that genuinely failed shows a stale summary as this
+  // absorb's result -- a wrong answer presented as a right one.
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
+                                             attempt_id: null, next_index: 0 },
+                                      generation: "gen2" }))
+      .mockResolvedValueOnce(runResponse("failed", {
+        error: { kind: "run_failed", detail: "the extractor blew up", status: 409 } }))
+      .mockResolvedValueOnce(jsonOk({ review: { one_line: "An older review." },
+                                      generation: "gen1", stale: null }));
+    globalThis.fetch = fetchMock;
+    const failed = api.absorbScene("run", "s1").then(
+      () => { throw new Error("resolved"); }, (e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect((await failed as ApiError).kind).toBe("run_failed");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a landed run whose record belongs to another review is refused", async () => {
+  // Discarded and re-absorbed from a second tab while this one waited. The
+  // record on disk is a review, and it is not this one's.
+  vi.useFakeTimers();
+  try {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "landed", cls: "review",
+                                             attempt_id: null, next_index: 0 },
+                                      generation: "gen1" }))
+      .mockResolvedValueOnce(jsonOk({ review: { one_line: "Somebody else's." },
+                                      generation: "gen2", stale: null }));
+    globalThis.fetch = fetchMock;
+    const failed = api.absorbScene("run", "s1").then(
+      () => { throw new Error("resolved"); }, (e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect((await failed as ApiError).kind).toBe("review_stale");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("a reaped run with nothing on disk still reports the failure", async () => {
   // The counterweight: the fallback must not swallow a real failure into
   // silence. Nothing stored means the absorb really is gone.

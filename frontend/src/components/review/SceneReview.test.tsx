@@ -2574,3 +2574,30 @@ test("an abandoned wait does not clear the next scene's own", async () => {
   });
   expect(screen.getByRole("button", { name: /Ending…/ })).toBeInTheDocument();
 });
+
+test("the scene being absorbed is locked from the moment End scene is pressed", async () => {
+  // `absorbSid` scopes the lock, and it can be holding some earlier review's
+  // scene -- a stale record adopted on another scene. Left until the review
+  // lands, the composer and every scene control stay live for the whole of an
+  // absorb, which is the one window the lock exists to cover.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Old", model: "", created: "", updated: "" },
+    { id: "s2", title: "Newer", model: "", created: "", updated: "" }]);
+  (api.getScene as any).mockResolvedValue(
+    { meta: {}, messages: [{ role: "user", content: "hi" }] });
+  // Scene 1 leaves a stale review behind, so `absorbSid` points at it...
+  (api.pendingReview as any).mockImplementation(async (_cid: string, sid: string) =>
+    (sid === "s1"
+      ? { review: null, generation: "gen-A", stale: { prepared_posts: 4, current_posts: 7 } }
+      : { review: null, generation: null, stale: null }));
+  (api.absorbScene as any).mockReturnValue(new Promise(() => { /* still absorbing */ }));
+  renderCampaign();
+  await screen.findByText(/The scene changed after its review was prepared/);
+
+  // ...and scene 2 is the one actually being ended.
+  await openScene(/Newer/);
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+
+  await waitFor(() => expect(api.absorbScene).toHaveBeenCalledWith("run", "s2"));
+  expect(screen.getByRole("button", { name: "Rename scene" })).toBeDisabled();
+});

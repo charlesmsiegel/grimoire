@@ -169,14 +169,21 @@ function request<T>(method: string, path: string, body?: unknown,
   return p;
 }
 
-/** How often a computing run is polled while it works.
+/** How often a computing run is polled while it works, and how far that backs
+ *  off once it is clearly going to take a while.
  *
- *  An absorb is minutes long, so this is a heartbeat rather than a spin: the
- *  request is local, the answer is a few hundred bytes, and the only cost of
- *  asking is one round trip that never leaves the machine. Exported so a test
- *  can drive it rather than infer it from a sleep.
+ *  The request is local and the answer is a few hundred bytes, so a second is
+ *  cheap for the case that matters -- an audit retry that answers in ten -- but
+ *  an absorb runs for minutes, and asking six hundred times to learn the same
+ *  thing is noise in every log the user might read. So it stays at
+ *  `RUN_POLL_MS` for the first `RUN_POLL_QUICK` asks and then settles at
+ *  `RUN_POLL_SLOW_MS`, which is the most a reader ever waits to be told their
+ *  review is ready. Exported so a test can drive the cadence rather than infer
+ *  it from a sleep.
  */
 export const RUN_POLL_MS = 1000;
+export const RUN_POLL_QUICK = 10;
+export const RUN_POLL_SLOW_MS = 5000;
 
 /** Wait for a detached run to stop running, and answer with what it became.
  *
@@ -197,8 +204,9 @@ export const RUN_POLL_MS = 1000;
 async function awaitRun(cid: string, sid: string, started: RunHandle,
                         signal?: AbortSignal): Promise<RunHandle> {
   let run = started;
-  while (run.state === "running") {
-    await sleepUnlessAborted(RUN_POLL_MS, signal);
+  for (let asked = 0; run.state === "running"; asked++) {
+    await sleepUnlessAborted(
+      asked < RUN_POLL_QUICK ? RUN_POLL_MS : RUN_POLL_SLOW_MS, signal);
     run = (await request<{ run: RunHandle }>(
       "GET", `/api/campaigns/${cid}/scenes/${sid}/runs/${run.id}`,
       undefined, { fresh: true })).run;
@@ -1652,21 +1660,29 @@ export const api = {
       // longer than that: the poll then 404s on a run whose review landed
       // perfectly well and is sitting on disk. Failing there would report the
       // one loss this whole change exists to prevent.
+      //
+      // MATCHED ON THE GENERATION, not merely on something being stored. A
+      // scene can already be holding an EARLIER review the reader never saved,
+      // and handing that back for a run that genuinely failed would show them
+      // a stale summary as this absorb's result -- a wrong answer presented as
+      // a right one, which is worse than the failure it replaced.
       const recovered = await api.pendingReview(cid, sid).catch(() => null);
-      if (!recovered?.review) throw err;
-      return { review: recovered.review, generation: recovered.generation ?? "" };
+      if (!recovered?.review || recovered.generation !== started.generation) throw err;
+      return { review: recovered.review, generation: recovered.generation };
     }
     const pending = await api.pendingReview(cid, sid);
-    if (!pending.review) {
-      // The run landed and the record is not there. The scene moved on between
-      // the two -- a turn appended, a post was cut -- which is exactly what the
-      // watermark exists to catch; reporting it as the refusal it is beats
-      // handing the panel a null it would render as an empty review.
+    if (!pending.review || pending.generation !== started.generation) {
+      // The run landed and this run's record is not what is there. Either the
+      // scene moved on between the two -- a turn appended, a post was cut,
+      // which is what the watermark exists to catch -- or the review was
+      // discarded while it was being prepared. Reporting the refusal beats
+      // handing the panel a null it would render as an empty review, or
+      // somebody else's review as this one's.
       throw new ApiError(409, "the scene changed while the review was being "
         + "prepared — end the scene again", "review_stale",
         pending.stale ?? undefined);
     }
-    return { review: pending.review, generation: pending.generation ?? "" };
+    return { review: pending.review, generation: pending.generation };
   },
   saveChronicle: (cid: string, sid: string,
                   body: { one_line: string; summary: string; keywords: string[];
