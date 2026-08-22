@@ -300,14 +300,22 @@ def _commit_tagline(root, cid: str, vid: str, card: dict, tagline: str) -> str:
       check can tell the two apart. Its card can -- unless it is byte-identical,
       which is deliberately not distinguished: a sentence derived from exactly
       the text the new card holds describes it exactly as well.
-    - **Edited, or re-pointed to another default version.** The sentence
-      describes text that is no longer there. Leaving it blank is what lets a
-      re-run derive it from what the card says now.
+    - **Edited.** The sentence describes text that is no longer there. Leaving
+      it blank is what lets a re-run derive it from what the card says now.
+    - **Re-pointed to another default version.** This one the card comparison
+      does NOT catch on its own, and that is why the default is checked
+      separately: re-pointing leaves the old version file untouched, so the
+      bytes still match while the character it describes has moved. A tagline
+      is character-wide, so writing the old version's sentence would put it on
+      a character whose card now says something else -- and no later run would
+      fix it, because it is no longer blank.
 
     And the blank once more, for the same reason it is checked before the call:
     a sentence saved by hand during the generation is not this run's to replace.
     """
     try:
+        if store.characters.read_character(root, cid)["meta"]["default_version"] != vid:
+            return "changed"
         if store.characters.read_card(root, cid, vid) != card:
             return "changed"
     except (store.characters.CharacterNotFound, store.characters.VersionNotFound):
@@ -364,10 +372,15 @@ async def post_world_taglines_generate(wid: str, client: LLMClient = Depends(get
     second pass costs only the calls the first one never made, so resumability
     here is a property of the work rather than something built around it. The
     one thing that buys elsewhere and not here: `PUT /config/data-dir` is
-    refused while a *run* is live but not while this streams, so a root change
-    mid-derive leaves the rest of the run writing into the tree it scanned. The
-    same idempotence covers it -- those characters are still blank in the new
-    root, and deriving there fills them.
+    refused while a *run* is live, and this is not one, so nothing stops the
+    storage location moving mid-derive. What that would cost is not symmetric
+    -- `root` is captured here, so taglines would keep landing in the tree this
+    scanned, while `store.usage` resolves the ledger's home per row and would
+    file the cost against the newly chosen library. So the loop notices instead:
+    a root that no longer matches stops the run. That is narrower than the
+    refusal a run gets (the move still succeeds) but it ends the spending, and
+    the idempotence covers the rest -- those characters are still blank in the
+    new root, and deriving there fills them.
     """
     root = _world_root_or_404(wid)
     conn = _require_connection()
@@ -388,6 +401,16 @@ async def post_world_taglines_generate(wid: str, client: LLMClient = Depends(get
             for done, c in enumerate(targets, start=1):
                 cid = c["id"]
                 frame = {"done": done, "character": cid, "name": c["name"]}
+                if store.worlds.world_root(wid) != root:
+                    # The storage location moved under the run (see above).
+                    # Checked per character rather than once, because the whole
+                    # point is to stop paying into a library nobody is looking
+                    # at, and the next call is where that money goes.
+                    stopped = True
+                    yield _sse({**frame, "error": {
+                        "detail": "the storage location changed while this was running",
+                        "kind": "store_moved"}})
+                    break
                 card, vid, skip = _tagline_target(root, cid)
                 if card is None:
                     skipped += 1
