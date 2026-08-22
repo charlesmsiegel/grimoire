@@ -317,6 +317,36 @@ test("the bulk report survives a reload that empties or fails the roster", async
   expect(screen.getByText(/The cast could not be read: gone/)).toBeInTheDocument();
 });
 
+test("a bound module that does not validate is not called an unbound campaign", async () => {
+  // `binding.resolve` answers null for a module that is missing OR whose pack
+  // fails validation, so the route returns {setting: "pool-basic",
+  // resolved: null}. Reading only `resolved` told the reader to bind a module
+  // they had already bound.
+  (api.getCampaignModule as any).mockResolvedValue(
+    { setting: "pool-basic", resolved: null, source: null });
+  (api.getCampaignSheetRoster as any).mockResolvedValue({ roster: {} });
+  renderSheets();
+  await screen.findByText(/bound to .*pool-basic.*which is missing or does not validate/);
+  expect(screen.queryByText(/no mechanics bound/i)).toBeNull();
+  expect(screen.getByRole("link", { name: /Fix the module/ })).toBeInTheDocument();
+  expect(column().getByText("The bound module is unusable.")).toBeInTheDocument();
+});
+
+test("a failed reload does not leave the stale cast and a live button on screen", async () => {
+  // The table was the one roster-dependent branch without the guard, so the
+  // rail printed "The cast could not be read." directly above the full stale
+  // cast, with an enabled create button built from data just disclaimed.
+  renderSheets();
+  await screen.findByRole("table");
+  (api.getCampaignSheetRoster as any).mockRejectedValue(new Error("gone"));
+  fireEvent.click(screen.getByRole("button", { name: /Create missing sheets/ }));
+
+  await screen.findByText(/The cast could not be read: gone/);
+  expect(screen.queryByRole("table")).toBeNull();
+  expect(screen.queryByRole("button", { name: /Create missing sheets/ })).toBeNull();
+  expect(column().queryByRole("button", { name: /Winifred/ })).toBeNull();
+});
+
 test("a failed create surfaces the reason rather than a silent no-op", async () => {
   (api.createMissingSheets as any).mockRejectedValue(new Error("no module resolved"));
   renderSheets();

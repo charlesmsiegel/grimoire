@@ -56,7 +56,13 @@ def advance(cid: str, kind: str, eid: str, field_key: str) -> dict:
         sheet_type = data.get("sheet_type") if isinstance(data, dict) else None
         fields = data.get("fields") if isinstance(data, dict) and isinstance(data.get("fields"), dict) else {}
         sheets_def = modules_pack.load_pack(mid)["sheets"]
-        st = sheets_def.get("sheet_types", {}).get(sheet_type) if isinstance(sheet_type, str) else None
+        # The str check is its own statement rather than a guard inside the
+        # lookup: same behaviour, same message, but it narrows `sheet_type` for
+        # the rest of the function instead of only `st` -- which is what the
+        # five things below that take it as a `str` have always relied on.
+        if not isinstance(sheet_type, str):
+            raise SheetError("sheet has no valid sheet type")
+        st = sheets_def.get("sheet_types", {}).get(sheet_type)
         if not isinstance(st, dict):
             raise SheetError("sheet has no valid sheet type")
         adv = st.get("advancement")
@@ -83,6 +89,7 @@ def advance(cid: str, kind: str, eid: str, field_key: str) -> dict:
         pool_max = pool_val.get("max", balance) if isinstance(pool_val, dict) else 0
         new_fields = {**fields, field_key: new,
                       pool_key: {"current": balance - cost, "max": pool_max}}
-        paths._atomic_write_json(path, {"sheet_type": sheet_type, "fields": new_fields,
-                                        "gen": data.get("gen")})
+        paths._atomic_write_json(path, paths._sheet_doc(
+            sheet_type, new_fields, data.get("gen"),
+            creation=paths._creation_mark(path, sheet_type)))
         return reader._read_path(path, kind, mid)

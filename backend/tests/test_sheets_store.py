@@ -1206,6 +1206,73 @@ def test_creation_pending_names_the_pools_a_default_sheet_never_ran():
     assert sheets.creation_pending(d, "ghost", {}) == []
 
 
+def test_creation_pending_trusts_the_stored_mark_over_the_values(monkeypatch, tmp_path):
+    """Regression, and the reason provenance is stored rather than derived.
+
+    A creation spend is free to land exactly on the schema defaults: spend
+    `pool-basic`'s attribute pool evenly at its minimum -- vigor, grace and
+    wits each 1, which is 6 of a 6 budget -- and `write_creation` produces a
+    file byte-identical to the one a bulk create writes. Any test over the
+    fields alone must call one of those two cases wrong, and this one did: a
+    finished character was reported as never created."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara")
+    sheets.write_creation(cid, "characters", "mara", "medium",
+                          {"attributes": {"vigor": 1, "grace": 1, "wits": 1}}, expected=None)
+
+    s = sheets.read(cid, "characters", "mara")
+    assert s["fields"] == sheets.default_fields(_pool_basic_sheets_def(), "medium")
+    assert s["creation"] is True
+    assert sheets.roster(cid)["characters"][0]["creation_pending"] == []
+
+
+def test_the_creation_mark_outlives_an_edit_but_not_a_type_change(monkeypatch, tmp_path):
+    """It is a fact about the sheet's identity, not its numbers -- so every
+    value writer carries it, on exactly `_next_gen`'s rule. A type change is
+    logically a new sheet, and nobody has run the NEW type's creation step."""
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara")
+    sheets.write_creation(cid, "characters", "mara", "medium",
+                          {"attributes": {"vigor": 3}}, expected=None)
+
+    def live():
+        return sheets.read(cid, "characters", "mara")
+
+    def snap(s):
+        return {"sheet_type": s["sheet_type"], "fields": s["fields"], "gen": s["gen"]}
+
+    s = live()
+    sheets.write(cid, "characters", "mara", "medium", {**s["fields"], "brawl": 2},
+                 expected=snap(s))
+    assert live()["creation"] is True                      # a whole-sheet edit
+    sheets.set_field(cid, "characters", "mara", "gear", ["a rope"], [])
+    assert live()["creation"] is True                      # a per-field apply
+
+    s = live()
+    sheets.write(cid, "characters", "mara", "medium",
+                 {**s["fields"], "xp": {"current": 20, "max": 999}}, expected=snap(s))
+    sheets.advance(cid, "characters", "mara", "wits")
+    assert live()["creation"] is True                      # an advancement
+
+    s = live()
+    clean = {k: v for k, v in s["fields"].items() if k in ("fury", "health", "quirk", "gear")}
+    sheets.write(cid, "characters", "mara", "shifter", clean, expected=snap(s))
+    assert live()["creation"] is False                     # ...but not a type change
+
+
+def test_a_legacy_sheet_without_the_mark_reads_as_uncreated(monkeypatch, tmp_path):
+    """Absent and false are the same answer: a store written before the mark
+    existed must read exactly like one written today, and `_sheet_doc` omits
+    the key rather than writing it false."""
+    import json as _json
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara")
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
+    p = sheets._campaign_path(cid, "characters", "mara")
+    assert "creation" not in _json.loads(p.read_text(encoding="utf-8"))
+    assert sheets.read(cid, "characters", "mara")["creation"] is False
+
+
 def test_creation_pending_is_silent_once_anyone_has_touched_the_sheet(monkeypatch, tmp_path):
     """The test is "still exactly the schema defaults", which is the state a
     bulk create leaves a sheet in -- not arithmetic over whatever the values

@@ -1043,6 +1043,7 @@
     }
   },
   "sheets.read[the-drowned-ledger/characters/seraphine]": {
+    "creation": false,
     "derived": {
       "dex_mod": 0,
       "melee_bonus": 1,

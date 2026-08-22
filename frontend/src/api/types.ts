@@ -1576,8 +1576,8 @@ export type SheetExpected = { sheet_type: string | null; fields: Record<string, 
 export type SheetCoverage = Record<string, { total: number; sheeted: number; invalid: number }>;
 
 /** One cast member on the sheets roster: `coverage` counts these, this names
- *  them. `sheet_type`/`errors`/`unspent` describe the stored sheet and are the
- *  empty answers when `sheeted` is false. */
+ *  them. `sheet_type`/`errors`/`creation_pending` describe the stored sheet and
+ *  are the empty answers when `sheeted` is false. */
 export type SheetRosterRow = {
   id: string;
   name: string;

@@ -54,8 +54,11 @@ def _checked_write(path: Path, mid: str, file_kind: str, eid: str,
         errs = modules_validate.validate_sheet_values(sheets_def, sheet_type, fields)
         if errs:
             raise SheetError("; ".join(errs))
-    paths._atomic_write_json(path, {"sheet_type": sheet_type, "fields": fields,
-                                    "gen": paths._next_gen(path, sheet_type)})
+    paths._atomic_write_json(path, paths._sheet_doc(
+        sheet_type, fields, paths._next_gen(path, sheet_type),
+        # A whole-sheet value write is not a creation step, and it is not an
+        # undoing of one either: an edit to a created sheet leaves it created.
+        creation=paths._creation_mark(path, sheet_type)))
 
 
 def _stored_snapshot(path: Path) -> dict | None:
@@ -178,8 +181,9 @@ def set_field_locked(mid: str, cid: str, kind: str, eid: str,
     errs = modules_validate.validate_sheet_values(sheets_def, stored["sheet_type"], new_fields)
     if errs:
         raise SheetError("; ".join(errs))
-    paths._atomic_write_json(path, {"sheet_type": stored["sheet_type"],
-                                    "fields": new_fields, "gen": stored["gen"]})
+    paths._atomic_write_json(path, paths._sheet_doc(
+        stored["sheet_type"], new_fields, stored["gen"],
+        creation=paths._creation_mark(path, stored["sheet_type"])))
 
 
 def set_field(cid: str, kind: str, eid: str, field_key: str, value, expect) -> None:
