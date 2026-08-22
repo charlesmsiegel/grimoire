@@ -27,6 +27,7 @@ import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
 
+from . import review_runs
 from .llm_fakes import FakeLLM
 
 
@@ -100,7 +101,11 @@ def _drive_absorb(client, wid, cid, sid):
     # that reaches a provider -- which is what lets the assertions here be "every
     # request went to this connection" rather than "one of them did". The
     # fan-out's own routing is `test_absorbs_phases_each_follow_their_own_route`.
-    client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    #
+    # Driven to its answer rather than posted at: absorb is detached (#396), so
+    # the POST returns before a single phase has reached the fake and "which
+    # connection was used" has nothing to read yet.
+    review_runs.absorb(client, cid, sid)
 
 
 def _drive_dossier(client, wid, cid, sid):
@@ -108,7 +113,14 @@ def _drive_dossier(client, wid, cid, sid):
     # reaches no provider at all.
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                 json={"kind": "characters", "id": "mara"})
-    client.post(f"/api/campaigns/{cid}/scenes/{sid}/dossiers")
+    # The route is a RETRY of one phase of an open review (#396), so the absorb
+    # that opens the review is setup rather than the call under test -- and its
+    # extraction runs on the absorb route, which would leave a second connection
+    # in the set the caller is about to read. So: absorb, forget what it used,
+    # then retry the phase this route actually names.
+    review_runs.absorb(client, cid, sid)
+    client.app.dependency_overrides[routes.get_llm]().requests.clear()
+    review_runs.dossiers(client, cid, sid)
 
 
 def _drive_summary(client, wid, cid, sid):
@@ -232,7 +244,7 @@ def test_absorbs_phases_each_follow_their_own_route(client):
     client.put("/api/routing", json={"routes": {"absorb": extraction, "dossier": dossiers}})
     fake = _fake(client)
 
-    client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    review_runs.absorb(client, cid, sid)
 
     used = {r["conn"]["id"] for r in fake.requests}
     assert extraction in used, "the extraction did not use the absorb route"
@@ -254,14 +266,15 @@ def test_a_misrouted_secondary_phase_reports_itself_and_leaves_absorb_standing(c
     client.put("/api/routing", json={"routes": {"dossier": keyless}})
     _fake(client)
 
-    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    r = review_runs.absorb(client, cid, sid)
 
-    assert r.status_code == 200, r.text
+    assert r.status_code == 200, r.json()
     dossiers = r.json()["dossiers"]
     assert dossiers["status"] == "failed"
     assert "key" in (dossiers["reason"] or "").lower()
-    # And the absorb itself landed: a 200 carrying an extraction is exactly what
-    # "the dossier route did not take this down with it" looks like.
+    # And the absorb itself landed: a stored review carrying an extraction is
+    # exactly what "the dossier route did not take this down with it" looks
+    # like.
     assert r.json()["one_line"] is not None
 
 
