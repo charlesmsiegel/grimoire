@@ -10,6 +10,7 @@ import logging
 import threading
 import time
 import uuid
+from typing import NamedTuple
 
 from fastapi import (
     APIRouter,
@@ -2132,6 +2133,26 @@ def _contradictions(cid: str, sid: str, edits: list) -> list[dict]:
 #   destroy the absorb's prose, its staged edits and its commit token.
 
 
+class _Prepared(NamedTuple):
+    """Everything an absorb decides before it starts generating.
+
+    One value rather than seven parameters, and it is not only tidiness: these
+    are the snapshot -- read under one campaign-lock hold, at one instant, and
+    the review is built from all of them or none. Threaded individually through
+    the handoff they read as seven unrelated arguments that a later change is
+    free to source from somewhere fresher, which is the exact mistake #271
+    warns about (`epoch` read at collection instead of at snapshot).
+    """
+
+    epoch: int
+    scene: dict
+    ledger: list
+    facts: dict
+    transcript: str
+    messages: list
+    watermark: dict
+
+
 class _ReviewCancelledError(Exception):
     """The reviewer dismissed this review while the run was still preparing it."""
 
@@ -2283,99 +2304,124 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
     # the commit epoch (`commits.reserve` is called from exactly one place),
     # so the token alone would let a summary of a transcript that has moved
     # save with every check returning green.
-    mark = store.pending_reviews.watermark(scene["messages"])
     facts = store.chronicle.scene_facts(cid, sid)
     transcript = store.chronicle.transcript_text(scene["messages"])
-    messages = store.absorb.build_prompt(
-        transcript, facts,
-        store.absorb.state_snapshot(cid, sid), store.absorb.relationships_snapshot(cid, sid),
-        store.absorb.plot_snapshot(cid), store.absorb.group_snapshot(cid),
-        store.absorb.commitment_snapshot(cid), store.absorb.fact_snapshot(cid, sid))
+    prepared = _Prepared(
+        epoch=epoch, scene=scene, ledger=ledger, facts=facts, transcript=transcript,
+        messages=store.absorb.build_prompt(
+            transcript, facts,
+            store.absorb.state_snapshot(cid, sid),
+            store.absorb.relationships_snapshot(cid, sid),
+            store.absorb.plot_snapshot(cid), store.absorb.group_snapshot(cid),
+            store.absorb.commitment_snapshot(cid), store.absorb.fact_snapshot(cid, sid)),
+        watermark=store.pending_reviews.watermark(scene["messages"]))
 
     async def work():
-        return await _absorb_work(cid, sid, client, conn, run, generation, epoch,
-                                  scene, ledger, facts, transcript, messages, mark)
+        return await _absorb_work(cid, sid, client, conn, run, generation, prepared)
 
     runs.start_computing(request.app, run, work)
     return _accepted(run, generation)
 
 
 async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
-                       generation: str, epoch: int, scene: dict, ledger: list,
-                       facts: dict, transcript: str, messages: list,
-                       mark: dict) -> dict:
+                       generation: str, prepared: _Prepared) -> dict:
     """The four phases, and the durable write that is this run's whole value."""
     abandoned = _review_abandoned(run)
     budget = _Budget(store.config.absorb_budget())
-    # All four phases AT ONCE. Nothing here ever needed the one before it:
-    # `_run_audit` re-reads the scene and transcript itself and never touches
-    # `parsed`, and both per-NPC phases take only `transcript`, captured from
-    # the snapshot above -- so what read as a pipeline was only ever a fan-out
-    # written as a chain. Ten sequential calls on a five-NPC scene become one
-    # round.
-    #
-    # The extraction is first in the list so it claims the first semaphore slot:
-    # it is the one phase whose failure is fatal, so it must never be the one
-    # left queued.
-    # Each phase resolves its OWN connection (#142): they are four different
-    # routes -- extraction, the per-NPC dossier loop, voice drift and the
-    # mechanics audit -- and sharing one `conn` would make three of those four
-    # settings do nothing whenever an absorb was what ran them.
-    #
-    # All three resolved HERE, before the meter opens and before a single
-    # coroutine is built. Resolved inline in the `_gather_phases(...)` argument
-    # list instead, a failure from the third would leave the first two
-    # coroutines created and never awaited.
-    #
-    # And resolved through `_phase_connection`, which reports instead of
-    # raising: these three promise never to fail an absorb, so a route pointing
-    # one of them at a keyless connection has to come back as that phase's
-    # status rather than as a 409 that discards the extraction's result too.
-    dossier_conn, dossier_why = _soft_connection(
-        lambda: _require_connection("dossier", cid))
-    voice_conn, voice_why = _soft_connection(
-        lambda: _require_connection("voice-drift", cid))
-    audit_conn, audit_why = _soft_connection(
-        lambda: _require_connection("audit", cid))
-    with store.usage.meter("absorb", campaign=cid, scene=sid) as m:
-        results = await _gather_phases(
-            budget.run(client.complete(messages, conn, m.usage),
-                       on_timeout=_noting(client, conn, m.usage)),
-            _stage_dossiers(cid, sid, transcript, client, dossier_conn, budget,
-                            unroutable=dossier_why),
-            _stage_voice_drift(cid, sid, transcript, client, voice_conn, budget,
-                               unroutable=voice_why),
-            _run_audit(cid, sid, client, audit_conn, budget, unroutable=audit_why),
-            limit=store.config.absorb_concurrency())
-    text, dossier_result, voice_result, audit_result = results
-    if isinstance(text, BaseException):
-        # Only the extraction is fatal, and a budget overrun on it is included:
-        # nothing has been produced yet, so there is nothing to degrade to. The
-        # other three never raise for absorb (each has its own failure
-        # boundary), so an exception in one of them is a bug in that boundary
-        # rather than a state to report -- `_phase_or_raise` says so.
-        if isinstance(text, LLMError):
-            raise _llm_http_error(text) from text
-        raise text
-    parsed = store.absorb.parse_output(text)
-    # Both halves come from the SAME snapshot, and for the same reason: a reroll
-    # or an append landing while the call was in flight would otherwise have the
-    # citations (#112) judged against text the model never saw, and promotion
-    # (#121) measure a ledger this review does not summarize.
-    edits = store.absorb.materialize(cid, sid, parsed, scene["messages"],
-                                     turn_ledger=ledger)
-    # Unpacked in the order the phases were listed, not the order they
-    # finished, so `edits` reads the same way every time.
-    dossier_edits, dossiers = _phase_or_raise(dossier_result)
-    voice_edits, voice = _phase_or_raise(voice_result)
-    audit_edits, mechanics = _phase_or_raise(audit_result)
+    try:
+        # All four phases AT ONCE. Nothing here ever needed the one before it:
+        # `_run_audit` re-reads the scene and transcript itself and never
+        # touches `parsed`, and both per-NPC phases take only `transcript`,
+        # captured from the snapshot above -- so what read as a pipeline was
+        # only ever a fan-out written as a chain.
+        #
+        # The extraction is first in the list so it claims the first semaphore
+        # slot: it is the one phase whose failure is fatal, so it must never be
+        # the one left queued.
+        #
+        # Each phase resolves its OWN connection (#142): they are four
+        # different routes -- extraction, the per-NPC dossier loop, voice drift
+        # and the mechanics audit -- and sharing one `conn` would make three of
+        # those four settings do nothing whenever an absorb was what ran them.
+        #
+        # All three resolved HERE, before the meter opens and before a single
+        # coroutine is built. Resolved inline in the `_gather_phases(...)`
+        # argument list instead, a failure from the third would leave the first
+        # two coroutines created and never awaited.
+        #
+        # And resolved through `_phase_connection`, which reports instead of
+        # raising: these three promise never to fail an absorb, so a route
+        # pointing one of them at a keyless connection has to come back as that
+        # phase's status rather than as a 409 that discards the extraction's
+        # result too.
+        dossier_conn, dossier_why = _soft_connection(
+            lambda: _require_connection("dossier", cid))
+        voice_conn, voice_why = _soft_connection(
+            lambda: _require_connection("voice-drift", cid))
+        audit_conn, audit_why = _soft_connection(
+            lambda: _require_connection("audit", cid))
+        with store.usage.meter("absorb", campaign=cid, scene=sid) as m:
+            # ONE race, around the whole fan-out, rather than a predicate
+            # threaded into each phase. Two reasons, and the second is the one
+            # that decided it:
+            #
+            # * it covers the extraction, which has no per-NPC loop to check in
+            #   and is the phase most likely to be the one wedged;
+            # * it changes nothing about how the phases are scheduled.
+            #   `_watched` puts its subject on the loop as a task of its own,
+            #   and wrapping each phase individually inserts a hop before its
+            #   first statement -- long enough, with a tight budget, for a
+            #   sibling to spend the clock the extraction was about to read.
+            #
+            # `_gather_phases` already cancels and detaches its children when
+            # the task holding it is cancelled, which is exactly what
+            # `_watched` does to it here.
+            results = await _watched(_gather_phases(
+                budget.run(client.complete(prepared.messages, conn, m.usage),
+                           on_timeout=_noting(client, conn, m.usage)),
+                _stage_dossiers(cid, sid, prepared.transcript, client, dossier_conn,
+                                budget, unroutable=dossier_why),
+                _stage_voice_drift(cid, sid, prepared.transcript, client, voice_conn,
+                                   budget, unroutable=voice_why),
+                _run_audit(cid, sid, client, audit_conn, budget, unroutable=audit_why),
+                limit=store.config.absorb_concurrency()), abandoned)
+        text, dossier_result, voice_result, audit_result = results
+        if isinstance(text, BaseException):
+            # Only the extraction is fatal, and a budget overrun on it is
+            # included: nothing has been produced yet, so there is nothing to
+            # degrade to. The other three never raise for absorb except to
+            # report abandonment (each has its own failure boundary), so
+            # anything else from one of them is a bug in that boundary rather
+            # than a state to report -- `_phase_or_raise` says so.
+            raise text
+        parsed = store.absorb.parse_output(text)
+        # Both halves come from the SAME snapshot, and for the same reason: a
+        # reroll or an append landing while the call was in flight would
+        # otherwise have the citations (#112) judged against text the model
+        # never saw, and promotion (#121) measure a ledger this review does not
+        # summarize.
+        edits = store.absorb.materialize(cid, sid, parsed, prepared.scene["messages"],
+                                         turn_ledger=prepared.ledger)
+        # Unpacked in the order the phases were listed, not the order they
+        # finished, so `edits` reads the same way every time.
+        dossier_edits, dossiers = _phase_or_raise(dossier_result)
+        voice_edits, voice = _phase_or_raise(voice_result)
+        audit_edits, mechanics = _phase_or_raise(audit_result)
+    except Abandoned:
+        # The reviewer cancelled while this was generating. The record is
+        # already gone (the DELETE removed it under the lock that flagged this
+        # run), so there is nothing to write and nothing to report but the
+        # state.
+        return {"state": "cancelled", "error": _cancelled_error()}
+    except LLMError as exc:
+        return {"state": "failed", "error": _run_error(_llm_http_error(exc))}
     edits += dossier_edits
     edits += voice_edits
     staged = edits + audit_edits
     review = {
         "one_line": parsed["one_line"], "summary": parsed["summary"],
         "keywords": parsed["keywords"], "timeline_events": parsed["timeline_events"],
-        **facts, "edits": staged, "mechanics": mechanics,
+        **prepared.facts, "edits": staged, "mechanics": mechanics,
         # Which staged rows a LATER scene has already answered differently
         # (#78). Empty for the ordinary case -- absorbing the newest scene,
         # which has no later scene to disagree with -- so the pass is
@@ -2393,10 +2439,10 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
         # carries the scene's commit epoch as captured at the TOP of this
         # run -- what tells a save that some OTHER review of the scene
         # committed while this one was being prepared or sat open (#271).
-        "commit_token": store.commits.mint(epoch)}
+        "commit_token": store.commits.mint(prepared.epoch)}
     return await _persist_review(
         cid, sid, run, generation,
-        lambda: store.pending_reviews.publish(cid, sid, generation, review, mark))
+        lambda: store.pending_reviews.publish(cid, sid, generation, review, prepared.watermark))
 
 
 async def _persist_review(cid: str, sid: str, run, generation: str, write,
