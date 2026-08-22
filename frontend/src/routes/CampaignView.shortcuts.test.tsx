@@ -130,6 +130,42 @@ test("the send chord does not fire alongside an inline action that owns Enter", 
   expect(api.chat).not.toHaveBeenCalled();
 });
 
+// The scene-rename box answers Enter the same modifier-blind way, and a send
+// racing a rename is exactly what `renamesInFlight` exists to stop -- both
+// handlers read it as 0 in the render the chord lands on.
+test("the send chord does not fire alongside a scene rename either", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.renameScene as any).mockResolvedValue({ id: "s1", title: "Low tide" });
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  // Two rename affordances render (the scene bar and the scene head); either
+  // opens the same box.
+  fireEvent.click(screen.getAllByRole("button", { name: /rename scene/i })[0]);
+  const box = (await screen.findAllByLabelText("Rename scene"))[0];
+  fireEvent.change(box, { target: { value: "Low tide" } });
+  box.focus();
+  press("Enter", { metaKey: true }, box);
+  await waitFor(() => expect(api.renameScene).toHaveBeenCalledTimes(1));
+  expect(api.chat).not.toHaveBeenCalled();
+});
+
+// ...but an open edit form is NOT one of these: that textarea answers no key
+// at all, so there is nothing to double-fire, and a chord refused there would
+// be stricter than the Send button beside it -- the exact fault this review
+// found twice in my Escape guards.
+test("the send chord still works while an edit form is open", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue(ONE_EXCHANGE);
+  renderCampaign();
+  await screen.findByText("old reply");
+  fireEvent.click(screen.getAllByTitle("Edit message")[1]);
+  await screen.findByLabelText("Edit message");
+  // By placeholder: with an edit form open there are two textboxes.
+  fireEvent.change(screen.getByPlaceholderText(/speak your intent/i), { target: { value: "hello" } });
+  press("Enter", { metaKey: true });
+  await waitFor(() => expect(api.chat).toHaveBeenCalledTimes(1));
+});
+
 test("R is inert when there is no reply to reroll", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
