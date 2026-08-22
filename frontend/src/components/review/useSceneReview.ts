@@ -91,6 +91,22 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   // failed. Bumped rather than a boolean, so a Stop belongs to one absorb: a
   // flag would still be set when the next End scene answered.
   const absorbStopRef = useRef(0);
+  // A Discard still on its way to the server. `DELETE .../pending-review`
+  // answers only once the runs it flagged have really stopped, and until it
+  // does they are still holding the scene's exclusion key -- so an End scene
+  // issued in that window is refused with `run_in_flight` by a review the
+  // reader has already dismissed. Held rather than awaited at the Cancel
+  // itself, because closing the panel must stay instant: a retry runs on an
+  // unbounded budget, and Cancel is the only way out of a request that may
+  // never answer.
+  const discardRef = useRef<Promise<unknown> | null>(null);
+
+  function noteDiscard(p: Promise<unknown>) {
+    discardRef.current = p;
+    void p.catch(() => {}).then(() => {
+      if (discardRef.current === p) discardRef.current = null;
+    });
+  }
   // …and which retry, within one review. `openReviewRef` cannot separate two
   // retries of the SAME review: both capture the same token, so both pass that
   // check whatever order they answer in, and a first request that returns
@@ -349,6 +365,15 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       // and it would cost something real: the re-absorb below asks for
       // confirmation, and a reader who declines would have lost the review
       // they were looking at to a question they answered "no" to.
+      // A Discard still settling holds this scene's exclusion key until the
+      // server has really stopped what it flagged. Waited on here rather than
+      // at the Cancel that sent it, so closing a panel stays instant and only
+      // the one operation that actually needs the scene free pays for it.
+      const settling = discardRef.current;
+      if (settling) {
+        await settling.catch(() => {});
+        if (campaignRef.current !== cid || absorbStopRef.current !== stopGen) return;
+      }
       // The generation, minutes before the review. It is what `stopAbsorb`
       // names, and without it a reader watching "Ending…" has no way to stop a
       // run that is holding their scene against play.
@@ -483,8 +508,10 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     setAbsorbing(false);
     setGeneration(null);
     if (!sid || !gen) return;
+    const stopping = api.discardReview(cid, sid, gen);
+    noteDiscard(stopping);
     try {
-      await api.discardReview(cid, sid, gen);
+      await stopping;
     } catch (err: unknown) {
       // Reported, unlike the panel's Cancel: there the record is refused at
       // save anyway, but here the reader is being told a scene is free that
@@ -507,7 +534,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     // nothing else can do now that closing the connection is not a cancel.
     const sid = absorbSid ?? activeId;
     const gen = generationRef.current;
-    if (sid && gen) void api.discardReview(cid, sid, gen).catch(() => {});
+    if (sid && gen) noteDiscard(api.discardReview(cid, sid, gen).catch(() => {}));
     setAbsorb(null);
     setAbsorbSid(null);
     setGeneration(null);

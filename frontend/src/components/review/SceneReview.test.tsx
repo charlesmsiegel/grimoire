@@ -2638,3 +2638,31 @@ test("Stop ends an absorb that is holding the scene, before there is a review", 
   });
   expect(screen.queryByDisplayValue("A stored summary.")).toBeNull();
 });
+
+test("End scene waits for a Discard that is still stopping the last review", async () => {
+  // `DELETE .../pending-review` answers only once the runs it flagged have
+  // really stopped, and until it does they still hold the scene's exclusion
+  // key -- so an End scene issued in that window is refused with
+  // `run_in_flight` by a review the reader has already dismissed. Cancel stays
+  // instant; the wait is paid by the one operation that needs the scene free.
+  withScene();
+  await openAbsorb();
+  let stopped: (v: unknown) => void = () => {};
+  (api.discardReview as any).mockReturnValue(new Promise((r) => { stopped = r; }));
+
+  fireEvent.click(screen.getByRole("button", { name: /Cancel absorb/ }));
+  // Instant: the panel is gone before the server has answered.
+  await waitFor(() => expect(screen.queryByText("Review scene summary")).toBeNull());
+
+  // One call so far: the End scene that opened the review being cancelled.
+  expect(api.absorbScene).toHaveBeenCalledTimes(1);
+  fireEvent.click(await screen.findByRole("button", { name: /^End scene$/ }));
+  await act(async () => { await Promise.resolve(); });
+  expect(api.absorbScene).toHaveBeenCalledTimes(1);
+
+  await act(async () => {
+    stopped({ removed: true, stopped: 1 });
+    await Promise.resolve();
+  });
+  await waitFor(() => expect(api.absorbScene).toHaveBeenCalledTimes(2));
+});
