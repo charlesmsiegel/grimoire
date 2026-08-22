@@ -80,7 +80,7 @@ from ..campaigns import paths as campaigns_paths
 _REASONS: dict[str, str] = {
     "character_state": "this character's state changed since the scene was absorbed",
     "group_state": "this group's state changed since the scene was absorbed",
-    "lore": "this entry changed since the scene was absorbed",
+    "lore": "this record changed since the scene was absorbed",
     "authored": "this card field changed since the scene was absorbed",
     "relationship": "this relationship changed since the scene was absorbed",
     "bond": "this bond changed since the scene was absorbed",
