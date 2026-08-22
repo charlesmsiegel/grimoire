@@ -141,6 +141,19 @@ def test_summary_can_be_scoped_to_one_module_or_one_campaign(home):
     assert errors.summary(30, campaign="realm")["modules"][0]["module"] == "dossier"
 
 
+def test_the_window_can_be_named_outright(home):
+    """#156 asks for `?since=` by name. It resolves through the same helper the
+    log page uses, ceiling included, so a typed date cannot ask for more
+    history than a number can."""
+    logs.record("error", "llm", "old", kind="network", ts="2026-08-14T01:00:00.000Z")
+    logs.record("error", "llm", "new", kind="network", ts="2026-08-20T01:00:00.000Z")
+
+    out = errors.summary(since="2026-08-18", until="2026-08-21")
+
+    assert [r["message"] for r in out["rows"]] == ["new"]
+    assert out["since"] == "2026-08-18" and out["until"] == "2026-08-21"
+
+
 def test_a_silly_window_is_clamped_rather_than_refused(home):
     out = errors.summary(100000)
 

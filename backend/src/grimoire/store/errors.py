@@ -132,7 +132,7 @@ def mark_recorded(exc: BaseException) -> None:
 
 
 def summary(days: int = DEFAULT_DAYS, *, module: str = "", campaign: str = "",
-            rows: int = DEFAULT_ROWS) -> dict:
+            since: str = "", until: str = "", rows: int = DEFAULT_ROWS) -> dict:
     """Errors over a window: the recent ones, and what they add up to.
 
     Counted over every row in the window and *listed* only up to ``rows`` --
@@ -150,7 +150,11 @@ def summary(days: int = DEFAULT_DAYS, *, module: str = "", campaign: str = "",
     library with `rate_limit` in `llm` and `bad_response` in `dossier` produces
     exactly the same two top-level lists as one with them the other way round.
     """
-    since, until = logs.window(days)
+    # `since`/`until` name a window outright; `days` is the one derived from
+    # today when they do not. #156 asks for `?since=` by name, and the two
+    # resolve through the same helper the log page uses -- including its
+    # ceiling, so a named date cannot ask for more history than a number can.
+    since, until = logs.span(since, until, days)
     by_module: dict[str, dict] = {}
     by_kind: dict[str, int] = {}
     daily: dict[str, int] = {}

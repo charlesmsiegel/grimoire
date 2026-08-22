@@ -68,15 +68,21 @@ def get_stats(days: int = _DAYS, campaign: str = Query("")):
 @router.get("/errors")
 def get_errors(days: int = _DAYS, module: str = Query(""),
                campaign: str = Query(""),
+               since: str = Query(""), until: str = Query(""),
                limit: int = Query(store.errors.DEFAULT_ROWS)):
     """Recorded failures over the window, aggregated per module (#156).
+
+    The window is `days` back from today unless `since`/`until` name one,
+    matching `GET /logs` so the two views of the same file take the same
+    vocabulary.
 
     `total` and every grouping are computed over *every* row in the window;
     `rows` is only the newest `limit` of them, and `truncated` says when those
     two differ. A rollup that silently counted one page would report its
     smallest number exactly when the real one mattered most.
     """
-    return store.errors.summary(days, module=module, campaign=campaign, rows=limit)
+    return store.errors.summary(days, module=module, campaign=campaign,
+                                since=since, until=until, rows=limit)
 
 
 @router.get("/logs")

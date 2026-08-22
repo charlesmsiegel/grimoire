@@ -504,8 +504,13 @@ def window(days: int) -> tuple[str, str]:
     return (today - timedelta(days=span - 1)).isoformat(), today.isoformat()
 
 
-def _span(since: object, until: object, days: int) -> tuple[str, str]:
+def span(since: object, until: object, days: int) -> tuple[str, str]:
     """The ``[since, until]`` pair a read covers, always bounded.
+
+    Public because `store.errors` takes the same window vocabulary over the
+    same file, and two readers resolving "which window is this" separately is
+    how one of them ends up scanning an install's whole history -- which is
+    precisely the bug this helper was extracted to fix.
 
     An unparseable or absent ``until`` is today; an unparseable or absent
     ``since`` is ``days`` back from it. A reversed pair is read rather than
@@ -609,7 +614,7 @@ def read(*, level: str = "debug", module: str = "", since: str = "", until: str 
     `DEFAULT_DAYS`.
     """
     floor = level_name(level)
-    since, until = _span(since, until, days)
+    since, until = span(since, until, days)
     cap = max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
     modules: set[str] = set()
     counts = dict.fromkeys(LEVELS, 0)
@@ -650,7 +655,7 @@ def scan(*, level: str = "debug", module: str = "", since: str = "", until: str 
     scanning an install's whole history.
     """
     floor = level_name(level)
-    since, until = _span(since, until, days)
+    since, until = span(since, until, days)
     for path in _window_files(since, until):
         for row in _lines(path):
             if _matches(row, floor, module, since, until, contains, campaign):
