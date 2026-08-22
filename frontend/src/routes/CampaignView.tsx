@@ -2389,6 +2389,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // A director turn that did is a turn whose note was SPENT, even though the
     // transcript did not grow -- see the recovery condition below.
     let proposed = false;
+    // Set below, once the transcript has been re-read: this turn finished but
+    // wrote nothing, so it did not land however cleanly it ended.
+    let producedNothing = false;
     let unreached = false;  // the request never reached the server
     // The server answered with a status instead of a stream. A fourth question,
     // because it is the one outcome that is *complete* on arrival: `streamPost`
@@ -2702,6 +2705,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         // growing is not "nothing happened" in that case.
         const finishedWithNothing = ephemeral && finished && !errored
           && nothingLanded && !proposed;
+        // Recorded for the RETURN as well as the recovery (Codex review). This
+        // turn reached the provider and came back with nothing at all, so
+        // reporting it as landed hands the caller a lie with a cost: `send`
+        // spends the one-shot response-length override on it, and the override
+        // was promised to the next REPLY. The note is being handed back for
+        // another attempt; the knob chosen for that attempt goes with it.
+        producedNothing = finishedWithNothing;
         if (((unreached || refused) && (unverifiable || nothingLanded))
             || (interrupted && nothingLanded) || diedWithNothing
             || finishedWithNothing) {
@@ -2759,8 +2769,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         askAfterPost(id, seen);
       }
     }
-    // Landed means the backend said so, not that the promise resolved.
-    return finished && !errored;
+    // Landed means the backend said so, not that the promise resolved -- and
+    // not that it produced anything: an ephemeral turn that finished cleanly
+    // with no reply is being recovered, not completed.
+    return finished && !errored && !producedNothing;
   }
 
   async function send() {
