@@ -66,7 +66,14 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
   // controlled <select> can only ever offer what has loaded, so a location
   // this pane hasn't shown yet must not be able to reach setSceneLocation.
   const [locationsLoading, setLocationsLoading] = useState(true);
+  // Whether that read SUCCEEDED, which is what decides if this pane may claim
+  // to own the scene's location (see the startFromGreeting call in `create`).
+  // Distinct from `locationsLoading`: both a pending and a failed read leave
+  // the picker unable to show anything, but only the failure is terminal.
+  const [locationsOk, setLocationsOk] = useState(false);
   const [locationsNotice, setLocationsNotice] = useState<string | null>(null);
+  // Fixed for the life of this pane: a draft never changes source under it.
+  const seedsFromGreeting = draft.source === "greeting";
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [pcs, setPCs] = useState<PCSummary[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
@@ -94,6 +101,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
       .then((ls) => {
         setLocations(ls);
         setLocationsLoading(false);
+        setLocationsOk(true);
         // The same guarantee the catch below makes, for the case where the read
         // SUCCEEDS and simply does not contain the pre-filled id -- deleted
         // between the draft being composed and this pane opening. The <select>
@@ -118,7 +126,15 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
         setLocations([]);
         setLocationsLoading(false);
         setLocation((prev) => {
-          if (prev) setLocationsNotice("Locations failed to load — the pre-filled location was cleared.");
+          if (prev) {
+            setLocationsNotice(seedsFromGreeting
+              // The greeting's location is not lost when this read fails: the
+              // pane simply stops owning the decision, and the server seeds
+              // the greeting's own (see `create`). Saying "cleared" here would
+              // describe an outcome that does not happen.
+              ? "Locations couldn't be loaded — the scene will open at the greeting's own location."
+              : "Locations failed to load — the pre-filled location was cleared.");
+          }
           return "";
         });
       });
@@ -131,7 +147,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
     api.listCharacters({ kind: "campaign", id: cid }).then(setChars).catch(() => setChars([]));
     api.listCampaignPCs(cid).then(setPCs).catch(() => setPCs([]));
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
-  }, [cid]);
+  }, [cid, seedsFromGreeting]);
 
   // pcless scenes never seat players, matching start_from_greeting's guards.
   // Filtering `pcs` alone is NOT enough: a player can be seated as a
@@ -299,12 +315,15 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
     //    scene goes; anything after has, so nothing does.
     if (draft.source === "greeting" && firstPost === "greeting") {
       try {
-        // `false`: this pane owns the location. Its picker is pre-filled from
-        // the greeting, so whatever sits in it at Create is the reader's
-        // answer -- and an empty one means they cleared it, not that nobody
-        // looked. Letting the server seed would put the greeting's location
-        // back on a scene they deliberately emptied (#218).
-        const r = await api.startFromGreeting(cid, sid, draft.gid, false);
+        // Seed only when this pane could NOT own the decision. With a working
+        // picker (pre-filled from the greeting) whatever sits in it at Create
+        // is the reader's answer -- an empty one means they cleared it, not
+        // that nobody looked, and seeding would put the location back on a
+        // scene they deliberately emptied. When the read failed there is no
+        // picker to have answered with, so discarding the greeting's own
+        // location would lose it to an infrastructure fault the reader had no
+        // say in (#218).
+        const r = await api.startFromGreeting(cid, sid, draft.gid, !locationsOk);
         sid = r.id;
       } catch (err: any) {
         if (live.current) { setError(await deleteAndReport(sid, errorText(err))); setWriting(false); }
@@ -362,7 +381,12 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
       </div>
 
       <div className="role">Where</div>
-      <select aria-label="Location" value={location} disabled={locked}
+      {/* Disabled while the read is in flight, for the same reason Create is:
+          until the options exist no <option> matches a pre-filled id, so the
+          browser shows index 0 ("— no location —") while the state still holds
+          the location. Picking that option then fires no change event, and the
+          value the reader believes they cleared reappears when the list lands. */}
+      <select aria-label="Location" value={location} disabled={locked || locationsLoading}
               onChange={(e) => setLocation(e.target.value)}>
         <option value="">— no location —</option>
         {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
