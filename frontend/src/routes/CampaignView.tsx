@@ -1026,8 +1026,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // flipping the mode — is already a re-render.
   const heldForScene = activeId
     ? parkedPrompts.current.get(parkKey(cid, activeId)) : undefined;
-  const heldNote = !!heldForScene && heldForScene.director && !!input.trim()
-    && heldForScene.director !== directing;
+  // EITHER kind, not just the note (Codex review). The hold rule is symmetric —
+  // a rolled-back post waits behind a note being drafted exactly as a note
+  // waits behind dialogue — so a notice that only fired for notes left the
+  // player's own words waiting in a place nothing on screen named, which is
+  // the whole failure the notice exists to prevent.
+  const heldKind: "note" | "post" | null =
+    heldForScene && !!input.trim() && heldForScene.director !== directing
+      ? (heldForScene.director ? "note" : "post")
+      : null;
   const [parkedTick, setParkedTick] = useState(0);
 
   // Appending, not replacing: the composer stays editable while a turn runs,
@@ -4308,9 +4315,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 other kind holds the box. Without this it waits in a place with
                 nothing on screen naming it, which is its own way of losing
                 what somebody wrote. */}
-            {heldNote && (
+            {heldKind && (
               <span className="composer-meta-hint">
-                🎬 note held · clear the box to get it back
+                {heldKind === "note" ? "🎬 note held" : "post held"}
+                {" · clear the box to get it back"}
               </span>
             )}
             <label className="composer-meta-label" htmlFor="response-length">Response</label>
