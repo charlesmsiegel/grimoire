@@ -1099,15 +1099,55 @@ def test_a_deduplicated_take_is_re_stamped_when_only_the_route_changed(
 def test_a_deduplicated_take_is_re_stamped_with_the_route_that_produced_it(
         monkeypatch, tmp_path):
     """Two identical takes are one variant, but the second reroll is what is on
-    screen — so an override-free repeat must not leave the earlier take's route
-    labelling it."""
+    screen — so a repeat must not leave the earlier take's route labelling it.
+
+    Landing back on the take that WAS stamped, which is the direction that
+    exercises the re-stamp: review caught the original of this test doing the
+    reverse, where the matched run's stamp was already "" and the assertion
+    held for the wrong reason.
+    """
     cid = _campaign(monkeypatch, tmp_path)
     sid = _scene_with_reply(cid)
     _reroll(cid, sid, [_seg("Gulls over the pilings.")], model="local/llama3")
-    _reroll(cid, sid, [_seg("Fog over the pilings.")], model="")   # back to the first take
+    _reroll(cid, sid, [_seg("Fog over the pilings.")], model="other/model")
+    _reroll(cid, sid, [_seg("Gulls over the pilings.")], model="third/model")
 
     state = alternates.state(cid, sid)
-    assert state["runs"][state["active"]]["model"] == ""
+    active = state["runs"][state["active"]]
+    assert active["segments"] == [_seg("Gulls over the pilings.")]
+    assert active["model"] == "third/model"     # not the llama3 that first produced it
+
+
+def test_a_take_matched_with_nothing_pending_keeps_the_route_it_was_stamped_with(
+        monkeypatch, tmp_path):
+    """The limit of the stamp, stated rather than discovered.
+
+    A generation that records NO pending pair — Retry and the empty send, which
+    re-aim a dead reroll's pair to nothing before streaming (`routes.scenes
+    ._disown_dead_pending`) — cannot re-stamp the variant it lands on, because
+    `_resolve` is a pure read and an empty pending record is indistinguishable
+    from no reroll at all. Closing that needs the "a replacement is expected"
+    flag this module's docstring rejects by name, and which a read could not
+    clear.
+
+    So the field names *a* route that produced this exact text, latest recorded
+    wins — not necessarily the one that produced the copy on screen. It is only
+    reachable when two routes generate byte-identical takes, which is also the
+    only case where the two are one variant at all.
+    """
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = _scene_with_reply(cid)
+    _reroll(cid, sid, [_seg("Gulls over the pilings.")], model="local/llama3")
+    _reroll(cid, sid, [_seg("Fog over the pilings.")], model="other/model")
+
+    # what Retry does: re-aim the dead pair to nothing, then stream
+    alternates.archive(cid, sid, guidance="", model="")
+    scenes.remove_trailing_assistant_run(cid, sid)
+    scenes.append_reply(cid, sid, [_seg("Gulls over the pilings.")])
+    alternates.reconcile(cid, sid)
+
+    state = alternates.state(cid, sid)
+    assert state["runs"][state["active"]]["model"] == "local/llama3"
 
 
 def test_disowning_a_pending_pair_takes_the_model_back_with_the_hint(

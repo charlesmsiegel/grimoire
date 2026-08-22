@@ -3092,6 +3092,24 @@ test("Retry after a failed reroll repeats its route, not just its guidance", asy
   expect((api.regenerate as any).mock.calls[1][3].connection_id).toBe("local");
 });
 
+test("Enter commits the reroll from the model box, not just the guidance", async () => {
+  // All three controls commit alike now. Typing a model id and pressing Enter
+  // used to do nothing at all, because only the guidance input bound Enter.
+  rerollableScene();
+  renderCampaign();
+  await screen.findByText("old reply");
+  fireEvent.click(await screen.findByTitle("Reroll"));
+  const box = await screen.findByLabelText("Reroll model");
+
+  fireEvent.change(box, { target: { value: "vendor/bigger" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
+    "run", "s1", expect.any(Function),
+    { guidance: "", connection_id: "", model: "vendor/bigger" },
+    expect.any(AbortSignal), expect.any(String), expect.any(Function)));
+});
+
 test("a variant generated elsewhere says so on the swipe control", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [

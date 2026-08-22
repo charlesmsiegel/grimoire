@@ -4546,17 +4546,73 @@ def test_a_blank_override_is_the_standing_configuration_rather_than_a_refusal(cl
     assert fake.conn["model"] == "campaign/model"
 
 
-def test_an_absurd_model_override_leaves_the_variant_unstamped(client):
-    """Clipping an identifier invents a different one. The reroll still runs on
-    what it was told to run on — this is only about what gets recorded."""
+def test_an_absurd_model_override_is_refused_at_the_boundary(client):
+    """Bounded where it ARRIVES, not at each place it is recorded. Review found
+    the sidecar's own ceiling covering one sink of three: the same string also
+    reached `prompt_log`'s index and the usage ledger, neither of which the
+    store can clamp without changing what is actually sent."""
     fake, cid, sid = _rerollable(client)
     absurd = "m" * (store.alternates.MAX_MODEL_CHARS + 1)
 
-    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate", json={"model": absurd})
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate", json={"model": absurd})
 
-    assert fake.conn["model"] == absurd
-    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
-    assert body["alternates"][1]["model"] == ""
+    assert r.status_code == 400
+    assert fake.calls == 0
+    # and nothing anywhere is carrying it
+    assert client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"] == []
+    assert [m["content"] for m in client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]] == ["hi", "old reply"]
+
+
+def test_a_route_with_no_model_is_not_filed_under_the_campaigns(client):
+    """The overloaded "" review caught: a custom endpoint with no model
+    configured generates fine on the provider's own default, and filing that
+    reroll under the campaign's model is the exact mislabel #77 exists to
+    prevent — `SceneInspector` sizes the frozen prompt against what is
+    recorded here."""
+    fake, cid, sid = _rerollable(client)
+    modelless = client.post("/api/llm-connections",
+                            json={"kind": "openai_compatible", "name": "Bare",
+                                  "base_url": "http://localhost:11434/v1"}).json()["id"]
+
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                       json={"connection_id": modelless}).status_code == 200
+
+    assert fake.conn["id"] == modelless          # it really ran there
+    rows = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
+    latest = next(r for r in rows if r["task"] == "regenerate")
+    assert latest["model"] == ""                 # no model named, not the campaign's
+    assert latest["model"] != "campaign/model"
+
+
+def test_naming_the_active_connection_is_not_an_override(client):
+    """`routed` has to mean "this ran somewhere other than where it would have
+    anyway", not "the caller typed something" — otherwise an explicit but
+    identical route displaces the snapshot stamp that `store.prompt_log`
+    reserves for a turn that really did go elsewhere."""
+    _fake, cid, sid = _rerollable(client)
+    client.put("/api/llm-connections/openrouter", json={"model": "repointed/model"})
+
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                json={"connection_id": "openrouter"})
+
+    rows = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
+    latest = next(r for r in rows if r["task"] == "regenerate")
+    assert latest["model"] == "campaign/model"   # the scene's stamp, as for any plain reroll
+
+
+def test_naming_the_active_connection_with_a_different_model_is_an_override(client):
+    """The other half of the same rule: same connection, different model, is
+    somewhere else."""
+    _fake, cid, sid = _rerollable(client)
+
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                json={"connection_id": "openrouter", "model": "vendor/bigger"})
+
+    rows = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
+    latest = next(r for r in rows if r["task"] == "regenerate")
+    assert latest["model"] == "vendor/bigger"
 
 
 def test_a_sidecar_that_cannot_be_written_does_not_fail_the_landed_reply(client, monkeypatch):

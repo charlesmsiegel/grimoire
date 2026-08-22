@@ -311,3 +311,32 @@ def test_get_active_none_when_unset(monkeypatch, tmp_path):
     s.llm_connections.list_connections()  # let migration complete first (writes the .migrated marker)
     s.write_config(active_connection_id="")  # simulate an explicit clear, e.g. via delete_connection
     assert s.llm_connections.get_active() is None
+
+
+# ---- the one constant the client has to know (#77)
+def test_the_frontends_claude_fallback_matches_the_dispatchers(monkeypatch, tmp_path):
+    """`CLAUDE_FALLBACK_MODEL` in `ConnectionForm.tsx` is a hand-copy of
+    `llm.CLAUDE_DEFAULT_MODEL`, and it exists because the reroll picker has to
+    tell the reader what an empty model box will run — the one kind whose
+    stored model and effective model differ.
+
+    Pinned here rather than trusted, in the idiom `test_install_scripts` uses
+    for the Python and Node floors: these ids move (the pinned-alias list in
+    that same file is evidence), and a drift would leave the picker promising a
+    model the dispatcher no longer substitutes — the exact wrong-model label
+    the placeholder was added to prevent.
+
+    The durable fix is for `GET /llm-connections` to report the effective model
+    the way `GET /config` already does for the active one, at which point the
+    client needs neither the rule nor the constant and this test goes away with
+    them.
+    """
+    import re
+    from pathlib import Path
+
+    from grimoire import llm
+
+    src = Path(__file__).resolve().parents[2] / "frontend/src/components/ConnectionForm.tsx"
+    found = re.search(r'CLAUDE_FALLBACK_MODEL\s*=\s*"([^"]+)"', src.read_text(encoding="utf-8"))
+    assert found, "ConnectionForm.tsx no longer declares CLAUDE_FALLBACK_MODEL"
+    assert found.group(1) == llm.CLAUDE_DEFAULT_MODEL

@@ -36,6 +36,14 @@ export default function ModelCombobox({
         )
       : models;
 
+  // What is actually ON SCREEN, named once. `open` alone is not it: the list
+  // also needs a model to show and no error, so a box focused against an empty
+  // catalog is open-but-invisible. The key handler below gates on this rather
+  // than on `open`, because review caught it swallowing Escape for a list that
+  // was not there — leaving Escape a dead key for every custom endpoint with
+  // nothing cached, which is most of them.
+  const listShown = open && !error && matches.length > 0;
+
   function select(id: string) {
     onChange(id);
     setOpen(false);
@@ -61,11 +69,24 @@ export default function ModelCombobox({
         onBlur={() => {
           blurTimer.current = window.setTimeout(() => setOpen(false), 120);
         }}
+        onKeyDown={(e) => {
+          // Escape and Enter both act on the LIST first, and only while it is
+          // on screen. Without this they bubble straight past — and the reroll
+          // popover, which dismisses on Escape and commits on Enter (#77),
+          // took the whole thing down, or sent the reroll with half-typed
+          // text, while the reader was still choosing a model. A second press,
+          // with the list shut, bubbles as before, so neither key is lost.
+          if (!listShown) return;
+          if (e.key === "Escape" || e.key === "Enter") {
+            e.stopPropagation();
+            setOpen(false);
+          }
+        }}
       />
       {error && (
         <div className="combobox-note">couldn’t load model list — type a model id</div>
       )}
-      {open && !error && matches.length > 0 && (
+      {listShown && (
         <ul className="combobox-list">
           {matches.map((m) => (
             <li

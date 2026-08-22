@@ -83,6 +83,17 @@ test("a custom endpoint offers the models its own refresh cached", async () => {
   expect(getModels).not.toHaveBeenCalled();
 });
 
+test("a claude connection's blank box names the model the dispatcher substitutes", async () => {
+  // The two sources disagree for this one kind: /config reports the EFFECTIVE
+  // model, /llm-connections the raw stored one. A blank box would say nothing
+  // about a reroll that will run `opus`.
+  (api.listConnections as any).mockResolvedValue([OPENROUTER, { ...CLAUDE, model: "" }]);
+  render(<RerollRoutePicker value={{ connection_id: "claude", model: "" }}
+                            onChange={() => {}} active={ACTIVE} />);
+
+  expect(await screen.findByPlaceholderText("opus")).toBeInTheDocument();
+});
+
 test("a claude connection offers the model ids the connection form knows", async () => {
   render(<RerollRoutePicker value={{ connection_id: "claude", model: "" }}
                             onChange={() => {}} active={ACTIVE} />);
@@ -93,6 +104,85 @@ test("a claude connection offers the model ids the connection form knows", async
   expect(await screen.findByText("Opus (latest)")).toBeInTheDocument();
   expect(getModels).not.toHaveBeenCalled();
   expect(api.readConnection).not.toHaveBeenCalled();
+});
+
+test.each([
+  ["an endpoint with nothing cached", () => {
+    (api.readConnection as any).mockResolvedValue({ ...LOCAL, models: [], fetched_at: "" });
+    return { connection_id: "local", model: "" };
+  }],
+  ["a catalog that would not load", () => {
+    (getModels as any).mockRejectedValue(new Error("offline"));
+    return NO_REROLL_ROUTE;
+  }],
+])("Escape is not swallowed when the list is open but invisible — %s", async (_l, arrange) => {
+  // `open` is set on focus, but the list also needs a model to show and no
+  // error. Gating the swallow on `open` alone made Escape a dead key for every
+  // route with nothing to offer, which is most custom endpoints.
+  const value = arrange();
+  const onOuterEscape = vi.fn();
+  render(
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
+    <div onKeyDown={(e) => { if (e.key === "Escape") onOuterEscape(); }}>
+      <RerollRoutePicker value={value} onChange={() => {}} active={ACTIVE} />
+    </div>);
+  const box = await screen.findByLabelText("Reroll model");
+  fireEvent.focus(box);
+
+  fireEvent.keyDown(box, { key: "Escape" });
+
+  expect(onOuterEscape).toHaveBeenCalledTimes(1);
+});
+
+test("Enter closes the model dropdown before it commits anything above it", async () => {
+  (getModels as any).mockResolvedValue(
+    [{ id: "vendor/bigger", name: "Bigger", context: 200000, prompt: null, completion: null }]);
+  const onOuterEnter = vi.fn();
+  render(
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
+    <div onKeyDown={(e) => { if (e.key === "Enter") onOuterEnter(); }}>
+      <RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} active={ACTIVE} />
+    </div>);
+  await waitFor(() => expect(getModels).toHaveBeenCalled());
+  const box = screen.getByLabelText("Reroll model");
+  fireEvent.focus(box);
+  expect(await screen.findByText("Bigger")).toBeInTheDocument();
+
+  // Enter while choosing a model must not send the reroll with half-typed text
+  fireEvent.keyDown(box, { key: "Enter" });
+
+  await waitFor(() => expect(screen.queryByText("Bigger")).toBeNull());
+  expect(onOuterEnter).not.toHaveBeenCalled();
+
+  fireEvent.keyDown(box, { key: "Enter" });
+  expect(onOuterEnter).toHaveBeenCalledTimes(1);
+});
+
+test("Escape closes the model dropdown before it closes anything above it", async () => {
+  (getModels as any).mockResolvedValue(
+    [{ id: "vendor/bigger", name: "Bigger", context: 200000, prompt: null, completion: null }]);
+  const onOuterEscape = vi.fn();
+  render(
+    // Stands in for the reroll popover, which handles Escape on its container
+    // for exactly the reason the rule objects to — see CampaignView.
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
+    <div onKeyDown={(e) => { if (e.key === "Escape") onOuterEscape(); }}>
+      <RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} active={ACTIVE} />
+    </div>);
+  await waitFor(() => expect(getModels).toHaveBeenCalled());
+  const box = screen.getByLabelText("Reroll model");
+  fireEvent.focus(box);
+  expect(await screen.findByText("Bigger")).toBeInTheDocument();
+
+  fireEvent.keyDown(box, { key: "Escape" });
+
+  // the list is gone, and the popover around it never heard about it
+  await waitFor(() => expect(screen.queryByText("Bigger")).toBeNull());
+  expect(onOuterEscape).not.toHaveBeenCalled();
+
+  // a second Escape, with the list already shut, reaches the popover
+  fireEvent.keyDown(box, { key: "Escape" });
+  expect(onOuterEscape).toHaveBeenCalledTimes(1);
 });
 
 test("an openrouter reroll offers the catalog", async () => {

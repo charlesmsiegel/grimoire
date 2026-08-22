@@ -23,7 +23,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from .. import store
-from ..llm import LLMClient
+from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
 
@@ -265,7 +265,7 @@ def _turn_override(body) -> dict | None:
 
 
 def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
-                   *, model: str = "") -> None:
+                   *, model: str | None = None) -> None:
     """Freeze what this turn's model is about to see (#157).
 
     Called with the breakdown from the SAME `context.compose_*` call that
@@ -274,8 +274,14 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     scene is repointed at another one.
 
     `model` overrides that stamp for the one caller that KNOWS the turn did not
-    run on it: a reroll carrying a per-call route override (#77). Keyword-only
-    and defaulted to "", so every other caller keeps the shared-inaccuracy rule
+    run on it: a reroll carrying a per-call route override (#77). **None and ""
+    are different answers**, which review caught this defaulting away: None is
+    "I have nothing to say, use the scene's stamp", and "" is "this ran on a
+    route that names no model at all" — a custom endpoint with none configured,
+    which generates perfectly well on the provider's own default. Collapsing
+    the two filed such a reroll under the campaign's model, which is the exact
+    mislabel #77's third bullet exists to prevent. Keyword-only and defaulted
+    to None, so every other caller keeps the shared-inaccuracy rule
     `store.prompt_log`'s docstring argues for — the frozen panel and the live
     one agreeing about a scene matters more than either being exactly right.
     That argument is about a *drifted* stamp, though, and it does not cover a
@@ -323,8 +329,10 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
             # proves the scene is still here, which is the check this whole
             # critical section exists for.
             meta = store.scenes.read_scene_meta(cid, sid)
-            store.prompt_log.record(cid, sid, task, breakdown,
-                                    model=model or meta.get("model", ""))
+            # `is None`, not `or`: see the docstring. "" is a real answer.
+            store.prompt_log.record(
+                cid, sid, task, breakdown,
+                model=meta.get("model", "") if model is None else model)
     except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound,
             store.locks.StoreBusy, OSError):
         return   # gone, contended, or unreadable: capture nothing, cost nothing
@@ -777,23 +785,29 @@ def _require_connection() -> dict:
     return conn
 
 
-def _override_connection(body) -> dict | None:
-    """The connection ONE call asked to run on, or None for "no override" (#77).
+def _override_connection(body) -> tuple[dict, bool]:
+    """Where ONE call runs, and whether that is somewhere it would not have gone
+    anyway (#77).
 
-    Reads `connection_id` and `model` off any request body that carries them
-    (`RegenerateBody` today) and returns a connection dict the LLM facade can be
-    handed directly. **None means neither field was set**, so a caller writes
+    Returns `(connection, routed)` — always the resolved connection, never a
+    sentinel the caller has to re-resolve:
 
-        override = _override_connection(body)
-        routed = override is not None
-        conn = override if override is not None else _require_connection()
+        conn, routed = _override_connection(body)
 
-    and gets the standing configuration by doing nothing — while `routed` is
-    the one honest answer to "did the caller choose a route", which the stamps
-    downstream need and which re-reading the body a second time would let
-    drift. Tested against None rather than for truth: a connection dict is
-    never empty today, but a falsy check would silently start falling back the
-    first time that stopped being true.
+    A tuple rather than "None means no override", which is what this was and
+    which review broke in two ways at once. It could not say *both* "the caller
+    named something" and "that something differs from the standing route", so
+    the second meaning silently took over the first; and answering None for a
+    named-but-identical connection made the caller re-read the active one,
+    opening a window where another tab repointing it between the two reads
+    served an explicitly pinned reroll from somewhere else entirely — the exact
+    invisible substitution the refusals below exist to prevent.
+
+    `routed` is compared on the EFFECTIVE model, not the stored one. They
+    differ for exactly one kind: a `claude` connection with no model configured
+    still runs `llm.CLAUDE_DEFAULT_MODEL`, so naming that model — which is what
+    the picker now advertises in its placeholder — is naming the standing route,
+    not leaving it.
 
     The two fields compose. `connection_id` alone runs the named connection at
     its own model; `model` alone runs the ACTIVE connection at that model; both
@@ -803,8 +817,13 @@ def _override_connection(body) -> dict | None:
     that makes possible live on a connection), and a bare connection id cannot
     say "the same provider, its bigger model".
 
-    Three refusals, and which one fires matters to the caller:
+    Four refusals, and which one fires matters to the caller:
 
+    - a model id longer than `alternates.MAX_MODEL_CHARS` is a **400**. Bounded
+      where it arrives rather than at each place it is recorded: the same body
+      string reaches the alternates sidecar, `prompt_log`'s index (read on every
+      listing) and the usage ledger, and the latter two cannot be clamped
+      downstream without changing what is actually sent.
     - an id naming no connection is a **400**, not a 404. The routes that take
       an override are scene routes whose 404 already means "this scene is gone"
       and is acted on as such by the client (it stops the turn and re-reads the
@@ -838,7 +857,14 @@ def _override_connection(body) -> dict | None:
     conn_id = (getattr(body, "connection_id", None) or "").strip() if body else ""
     model = (getattr(body, "model", None) or "").strip() if body else ""
     if not conn_id and not model:
-        return None
+        return _require_connection(), False
+    if len(model) > store.alternates.MAX_MODEL_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail="That is too long to be a model id — check it and try again.")
+    # Read ONCE and reused for both roles below: resolving a `model`-only
+    # override, and deciding whether the result differs from it.
+    active = store.llm_connections.get_active()
     if not conn_id:
         conn = _require_connection()
     else:
@@ -866,7 +892,10 @@ def _override_connection(body) -> dict | None:
     # Last, so it applies to the active connection and to a named one alike.
     # A copy, never a mutation: `conn` is the dict the store handed back, and
     # writing through it would be a per-call override editing shared state.
-    return {**conn, "model": model} if model else conn
+    resolved = {**conn, "model": model} if model else conn
+    same = (active is not None and resolved["id"] == active["id"]
+            and effective_model(resolved) == effective_model(active))
+    return resolved, not same
 
 
 def _require_scene(cid: str, sid: str) -> dict:
