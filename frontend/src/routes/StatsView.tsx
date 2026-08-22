@@ -342,9 +342,14 @@ export default function StatsView() {
   usePaletteSource(paletteSource);
 
   const current = SECTIONS.find((s) => s.key === section) ?? SECTIONS[0];
-  // Whichever is current: the section's own filtered read once it has landed,
-  // the stats copy until then, so opening Errors does not blank the page.
-  const errors: ErrorSummary | null = errorSummary ?? stats?.errors ?? null;
+  // The section's own read once it lands. The stats copy stands in ONLY while
+  // nothing is filtered -- it is the same unfiltered window, so opening Errors
+  // does not blank the page. With a module picked it must not stand in at all:
+  // whole-library numbers under a filtered heading are worse than a moment of
+  // "reading…", and that is exactly what a pending or failed
+  // `/api/errors?module=…` used to render.
+  const errors: ErrorSummary | null =
+    errorSummary ?? (errorModule ? null : stats?.errors ?? null);
   // The RAIL counts the window, never the filter. `errors` above is the
   // filtered read, and a rail row labelled just "Errors" showing one module's
   // total is a number that does not say what it is counting.

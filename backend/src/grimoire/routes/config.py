@@ -237,6 +237,12 @@ def put_data_dir(update: DataDirUpdate, request: Request):
     # leaves byte counts charged against files the new tree does not have --
     # which would cap a fresh log at the old one's size (`logs.forget_file_sizes`).
     store.logs.forget_file_sizes()
+    # And the threshold belongs to the store, not to the process: `log_level`
+    # lives in the config of whichever library is open, so a root that moved
+    # without this kept writing at the OLD tree's floor while `GET /config`
+    # (reading the new tree) reported the new one -- two endpoints disagreeing
+    # about one setting, with rows going to disk under the wrong one.
+    store.logs.apply_level()
     return store.data_dir_info()
 
 

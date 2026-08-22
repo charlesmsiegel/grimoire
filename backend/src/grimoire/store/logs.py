@@ -621,11 +621,13 @@ def read(*, level: str = "debug", module: str = "", since: str = "", until: str 
     newest = Newest(cap)
     for path in _window_files(since, until):
         for row in _lines(path):
-            # `modules` is collected WITHOUT the module filter applied, so the
-            # dropdown a reader picked a module from still offers the others.
-            # Narrowing it to the selection is a control that removes every way
-            # back out of itself -- the same bug the errors view had.
-            if _matches(row, floor, "", since, until, contains, campaign):
+            # `modules` is the WINDOW's vocabulary, which is what this claims
+            # to be: collected with no level, module or text filter applied, so
+            # every control built from it offers the same options whatever the
+            # others are set to. Filtering it made the selected module vanish
+            # from its own dropdown -- raising the level was enough -- leaving a
+            # select rendered blank while it was still filtering by it.
+            if _matches(row, "debug", "", since, until, "", campaign):
                 modules.add(str(row.get("module", "")))
             if not _matches(row, floor, module, since, until, contains, campaign):
                 continue
@@ -802,10 +804,15 @@ def tail(from_cursor: str = "", budget: int = MAX_TAIL_BYTES, **filters) -> dict
         more = filled or left <= 0
         if left <= 0:
             break                          # budget spent; the rest waits a poll
-        # Only move on once the current file is EXHAUSTED. Advancing while
-        # bytes remain in it is the same row-loss the docstring describes,
-        # wearing a different shape.
-        if index + 1 < len(files) and _at_end(files[index], offset):
+        # Move on once this file has no more COMPLETE ROWS to give -- which is
+        # `used == 0`, not "the cursor reached the last byte". A newer month
+        # existing means this one is finished: nothing is ever appended to a
+        # past month, so trailing bytes that are not yet a row there will never
+        # become one. Waiting for the end of the file parked the tail in a dead
+        # month forever on a torn final line, and the rollover this exists for
+        # never happened. Advancing only on `used == 0` still reads every whole
+        # row first, so nothing is lost on the way past.
+        if index + 1 < len(files) and (used == 0 or _at_end(files[index], offset)):
             index, offset = index + 1, 0   # month rolled over
             continue
         break

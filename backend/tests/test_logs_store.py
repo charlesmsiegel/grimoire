@@ -543,6 +543,40 @@ def test_the_tail_follows_the_month_over(home):
     assert out["cursor"].startswith("2026-08.jsonl:")
 
 
+def test_a_torn_line_in_a_finished_month_does_not_park_the_tail_there(home):
+    """The rollover guarantee, against the one thing that silently defeated it.
+    A past month never gets another byte, so trailing bytes that are not yet a
+    row there will never become one -- and waiting for the end of the file
+    before moving on left the tail in a dead July while August grew."""
+    logs.record("info", "runner", "july", ts="2026-07-31T23:00:00.000Z")
+    july = home / "logs" / "2026-07.jsonl"
+    drained = july.stat().st_size
+    with july.open("a", encoding="utf-8") as fh:
+        fh.write('{"torn": ')                     # the month ends mid-line
+    logs.record("info", "runner", "august", ts="2026-08-01T00:05:00.000Z")
+
+    out = logs.tail(f"2026-07.jsonl:{drained}")
+
+    assert [r["message"] for r in out["rows"]] == ["august"]
+    assert out["cursor"].startswith("2026-08.jsonl:")
+
+
+def test_every_whole_row_is_read_before_the_month_is_left_behind(home):
+    """Moving on when a file has no COMPLETE rows left must not mean moving on
+    while it still has some."""
+    for i in range(5):
+        logs.record("info", "runner", f"july {i}", ts=f"2026-07-31T2{i}:00:00.000Z")
+    logs.record("info", "runner", "august", ts="2026-08-01T00:05:00.000Z")
+
+    seen, cur, more = [], "2026-07.jsonl:0", True
+    while more:
+        out = logs.tail(cur, budget=120)
+        cur, more = out["cursor"], out["more"]
+        seen += [r["message"] for r in out["rows"]]
+
+    assert seen == [f"july {i}" for i in range(5)] + ["august"]
+
+
 def test_an_offset_past_the_end_restarts_the_file_rather_than_reading_garbage(home):
     logs.record("info", "runner", "kept", ts="2026-08-12T01:00:00.000Z")
 
