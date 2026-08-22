@@ -113,7 +113,8 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   //: rule is one sentence: the request belongs to the campaign it named, the
   //: panel belongs to whoever is on screen now, and only the first of those is
   //: fixed when the call was made.
-  const stillShowing = (forCid: string) => showing.current === forCid;
+  //: Stable, so the reads below can depend on it without re-subscribing.
+  const stillShowing = useCallback((forCid: string) => showing.current === forCid, []);
   // `useLayoutEffect` rather than a write during render, and declared above
   // every effect that starts a request: layout effects run first, so the ref is
   // already current by the time anything below can fire. Same shape and same
@@ -127,15 +128,15 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
   // would misprice the next skip and mislabel the header line while doing it.
   const reload = useCallback(
     () => api.getCampaignClock(cid)
-      .then((c) => { if (showing.current === cid) setClock(c); })
-      .catch(() => { if (showing.current === cid) setClock(null); }),
-    [cid]);
+      .then((c) => { if (stillShowing(cid)) setClock(c); })
+      .catch(() => { if (stillShowing(cid)) setClock(null); }),
+    [cid, stillShowing]);
   useEffect(() => { reload(); }, [reload, refreshKey]);
   useEffect(() => {
     api.getCalendarConfig({ kind: "campaign", id: cid })
-      .then((c) => { if (showing.current === cid) setCfg(c); })
-      .catch(() => { if (showing.current === cid) setCfg(null); });
-  }, [cid]);
+      .then((c) => { if (stillShowing(cid)) setCfg(c); })
+      .catch(() => { if (stillShowing(cid)) setCfg(null); });
+  }, [cid, stillShowing]);
 
   // A digest belongs to the request that produced it. Changing the target (or
   // the campaign) invalidates it, and showing a stale one next to new inputs is
@@ -193,7 +194,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     setBusy(true);
     try {
       const r = await api.previewAdvance(cid, request());
-      if (showing.current !== cid) return;    // the reader moved on; this is A's answer
+      if (!stillShowing(cid)) return;         // the reader moved on; this is A's answer
       setDigest(r.digest);
       setPricedNow(clock?.now ?? "");
       setOutcome("preview");
@@ -262,7 +263,7 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
       const { digest: priced } = await api.previewAdvance(cid, request());
       // Never install a verdict for a campaign that is no longer on screen: the
       // question would be answered with the current campaign's id.
-      if (showing.current !== cid) return;
+      if (!stillShowing(cid)) return;
       setDigest(priced);
       setPricedNow(clock?.now ?? "");
       setOutcome("preview");
