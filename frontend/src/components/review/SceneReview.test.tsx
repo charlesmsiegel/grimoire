@@ -2666,3 +2666,32 @@ test("End scene waits for a Discard that is still stopping the last review", asy
   });
   await waitFor(() => expect(api.absorbScene).toHaveBeenCalledTimes(2));
 });
+
+test("Stop on an absorb this browser only found does not blame the reader", async () => {
+  // Stop is offered for an ADOPTED absorb too -- one that was already running
+  // when the scene was opened, which is what a locked phone leaves behind. The
+  // run it stops then answers `review_cancelled`, and that is the reader's own
+  // request coming back: a banner there tells them their Stop broke something,
+  // and "Ending…" left on screen tells them it did not work.
+  withScene();
+  (api.pendingReview as any).mockResolvedValue(
+    { review: null, generation: null, stale: null });
+  (api.liveReview as any).mockResolvedValue(
+    { id: "r9", attempt_id: null, state: "running", next_index: 0,
+      cls: "review", review_generation: "gen-live" });
+  let refuse: (e: unknown) => void = () => {};
+  (api.awaitRun as any).mockReturnValue(new Promise((_r, reject) => { refuse = reject; }));
+  renderCampaign();
+
+  fireEvent.click(await screen.findByRole("button", { name: /^Stop$/ }));
+  await waitFor(() => expect(api.discardReview)
+    .toHaveBeenCalledWith("run", "s1", "gen-live"));
+  expect(await screen.findByRole("button", { name: /^End scene$/ })).toBeEnabled();
+
+  await act(async () => {
+    refuse(Object.assign(new Error("the review this was for was closed before it finished"),
+                         { kind: "review_cancelled", detail: "closed before it finished" }));
+    await Promise.resolve();
+  });
+  expect(screen.queryByText(/closed before it finished/)).toBeNull();
+});
