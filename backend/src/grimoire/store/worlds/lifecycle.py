@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import shutil
-import stat
 from pathlib import Path
 
 from .. import atomic
@@ -141,7 +140,7 @@ def fork_world(wid: str, name: str) -> str:
         # it, which is the whole point of it owning both halves.
         shutil.copytree(root, dest, ignore=_skip_write_temps,
                         copy_function=shutil.copyfile, dirs_exist_ok=True)
-        _make_writable(dest)
+        staging.make_writable(dest)
         mp = dest / "world.md"
         meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
         now = now_iso()
@@ -168,26 +167,6 @@ def _skip_write_temps(directory: str | Path, names: list[str]) -> set[str]:
     return {n for n in names
             if atomic.is_write_temp(Path(directory) / n)
             and (Path(directory) / n).is_file()}
-
-
-def _make_writable(root: Path) -> None:
-    """Give the owner write access to every directory in the staged copy.
-
-    `copytree` applies `copystat` to each destination DIRECTORY whatever
-    `copy_function` is, so a `0555` directory in the source arrives `0555` here
-    -- and then `repoint_urls` cannot create the sibling temp `store.atomic`
-    publishes through, the fork fails, and the cleanup cannot unlink out of
-    that directory either, so the whole staged copy is left behind (Codex
-    review). Dropping the file metadata was only half the fix.
-
-    Owner-write is added rather than the mode being replaced: nothing here
-    needs to widen a directory for anyone else, and the published fork keeps
-    whatever the source said about group and other.
-    """
-    for d in [root, *(p for p in root.rglob("*") if p.is_dir())]:
-        mode = d.stat().st_mode
-        if not mode & stat.S_IWUSR:
-            d.chmod(stat.S_IMODE(mode) | stat.S_IRWXU)
 
 
 def rename_world(wid: str, name: str) -> None:

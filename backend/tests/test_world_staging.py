@@ -11,6 +11,9 @@ callers.
 
 from __future__ import annotations
 
+import os
+import pathlib
+import stat
 from pathlib import Path
 
 import pytest
@@ -99,6 +102,47 @@ def test_publish_cannot_replace_a_world_that_was_just_created(monkeypatch, tmp_p
     assert worlds.read_world(wid)["meta"]["name"] == "Saltmarch"
     assert not (worlds.world_root(wid) / "marker.md").exists()
     assert (worlds.world_root(got) / "marker.md").read_text(encoding="utf-8") == "the copy"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+def test_a_failure_leaves_nothing_even_behind_a_read_only_directory(
+        monkeypatch, tmp_path):
+    """The cleanup path's own version of the read-only problem.
+
+    A copy applies the source's mode to each destination directory as it
+    finishes it, so a copy that RAISES part-way returns here with `0555`
+    directories already in place -- and `rmtree(ignore_errors=True)` cannot
+    unlink out of one. Normalizing after a successful copy does not help here,
+    because the successful copy is exactly what did not happen (Codex review).
+    """
+    _home(monkeypatch, tmp_path)
+    # Asserted on the mode the tree has WHEN `rmtree` is reached, not on
+    # whether the removal happened: root can unlink out of a `0555` directory,
+    # so "it went away" is true for the wrong reason when the suite runs as
+    # root -- the same trap the read-only *record* test sidesteps.
+    seen: dict[str, int] = {}
+    real_rmtree = staging.shutil.rmtree
+
+    def spy(path, *a, **kw):
+        sealed = pathlib.Path(path) / "world" / "lore"
+        if sealed.is_dir():
+            seen["mode"] = sealed.stat().st_mode
+        return real_rmtree(path, *a, **kw)
+
+    work = None
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(staging.shutil, "rmtree", spy)
+        with pytest.raises(RuntimeError), staging.staging_tree() as tree:
+            work = tree.parent
+            sealed = tree / "lore"
+            sealed.mkdir()
+            (sealed / "a.md").write_text("half a record", encoding="utf-8")
+            sealed.chmod(0o555)                    # as `copystat` would leave it
+            raise RuntimeError("disk full")
+
+    assert seen.get("mode"), "cleanup never reached the staged tree"
+    assert seen["mode"] & stat.S_IWUSR, oct(seen["mode"])
+    assert work is not None and not work.exists()
 
 
 def test_two_staging_trees_do_not_collide(monkeypatch, tmp_path):

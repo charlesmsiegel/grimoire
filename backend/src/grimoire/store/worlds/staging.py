@@ -36,6 +36,7 @@ at.
 from __future__ import annotations
 
 import shutil
+import stat
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -90,7 +91,42 @@ def staging_tree() -> Iterator[Path]:
         tree.mkdir(parents=True)
         yield tree
     finally:
+        # Writable FIRST, then remove. `rmtree(ignore_errors=True)` cannot
+        # unlink out of a `0555` directory on POSIX, and a copy can leave one:
+        # `copytree` applies the source's mode to each destination directory as
+        # it finishes it, so a failure part-way through -- a vanished file, a
+        # full disk -- returns here with read-only directories already in place
+        # and a potentially world-sized tree behind them (Codex review). The
+        # success path has its own reason to call this, earlier; this is the
+        # one that runs when the copy raised.
+        make_writable(work)
         shutil.rmtree(work, ignore_errors=True)
+
+
+def make_writable(root: Path) -> None:
+    """Give the owner write access to every directory under `root`. Never raises.
+
+    A staged tree is this process's to write and to delete, but a copy brings
+    the source's directory modes with it -- `shutil.copytree` applies
+    `copystat` to each destination directory whatever `copy_function` it was
+    given, so a `0555` directory in a world arrives `0555` here. Nothing can
+    then publish a record into it (`store.atomic` writes a sibling temp), and
+    nothing can remove it either.
+
+    Best effort throughout: this runs on the cleanup path, where raising would
+    replace the error that caused the cleanup with a less useful one.
+    """
+    try:
+        entries = [root, *(p for p in root.rglob("*") if p.is_dir())]
+    except OSError:
+        return
+    for d in entries:
+        try:
+            mode = d.stat().st_mode
+            if not mode & stat.S_IWUSR:
+                d.chmod(stat.S_IMODE(mode) | stat.S_IRWXU)
+        except OSError:
+            continue
 
 
 def repoint_urls(staging: Path, old_wid: str, new_wid: str) -> int:
